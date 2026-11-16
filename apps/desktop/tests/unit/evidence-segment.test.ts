@@ -98,9 +98,9 @@ describe('segmentAnswerBlocks — the markdown zoo (plan §6 tests)', () => {
   })
 
   it('inline code spans keep their [S{n}] literal (marker in code vs prose)', () => {
-    const blocks = segmentAnswerBlocks('Prose cites [S1], but the token `[S1]` in code stays literal.')
+    const blocks = segmentAnswerBlocks('Prose cites [S1], but the token `[S2]` in code stays literal.')
     expect(blocks).toHaveLength(1)
-    expect(blocks[0]!.markers).toEqual(['S1']) // once, from prose — the code-span copy is excluded
+    expect(blocks[0]!.markers).toEqual(['S1']) // from prose only — the code-span [S2] is excluded
   })
 
   it('deduplicates repeated markers per block, first-appearance order (spec §13.1)', () => {
@@ -117,14 +117,6 @@ describe('segmentAnswerBlocks — stable keys (spec Risk 7)', () => {
     })
     expect(blocks[0]!.blockKey).not.toBe(blocks[2]!.blockKey) // ordinal differs
     expect(blocks[0]!.blockKey.split('-')[2]).toBe(blocks[2]!.blockKey.split('-')[2]) // same content hash
-  })
-
-  it('is deterministic: the same snapshot always segments to the same blocks and keys', () => {
-    const md = '# T\n\nA [S1] paragraph.\n\n- one\n- two\n\n```\ncode\n```\n\n> quote\n\n| a |\n| b |'
-    const first = segmentAnswerBlocks(md)
-    const second = segmentAnswerBlocks(md)
-    expect(second).toEqual(first)
-    expect(new Set(first.map((b) => b.blockKey)).size).toBe(first.length) // unique within the answer
   })
 
   it('ordinals are contiguous render order', () => {
@@ -150,7 +142,7 @@ function rewrittenMarkers(raw: string): string[] {
 describe('extractCitationMarkers ≡ localizeCitationMarkers exclusion behavior', () => {
   const FIXTURES = [
     'See [S1] and [S2] for the clause.',
-    'Prose cites [S1], but the token `[S1]` in code stays literal.',
+    'Prose cites [S1], but the token `[S2]` in code stays literal.',
     'Real cite [S2].\n```\nlog[S1] = value\n```\nAfter [S3].',
     'The [START] tag and [Section] head.', // no digits → no markers on either side
     'Unclosed fence stays code:\n```\n[S4]', // trailing fence swallows to end on both sides
@@ -169,16 +161,6 @@ describe('extractCitationMarkers ≡ localizeCitationMarkers exclusion behavior'
     const blocks = segmentAnswerBlocks(md)
     const union = [...new Set(blocks.flatMap((b) => b.markers))].sort()
     expect(union).toEqual(rewrittenMarkers(md))
-  })
-
-  it('code-span exclusion inside ONE block matches the display exactly', () => {
-    const raw = 'Prose cites [S1], but the token `[S1]` in code stays literal.'
-    // Display: prose copy rewritten, code copy verbatim.
-    expect(localizeServerCopy(tDe, raw)).toBe(
-      'Prose cites [Q1], but the token `[S1]` in code stays literal.'
-    )
-    // Extraction: the prose copy counts once; the code copy never does.
-    expect(extractCitationMarkers(raw)).toEqual(['S1'])
   })
 
   // ---- Code regions SPANNING block boundaries (Phase-1 review FIX-3) -------------------

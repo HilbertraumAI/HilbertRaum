@@ -170,7 +170,7 @@ interface StoredFreshnessAck {
 /** Tolerant parse of `freshness_ack_json` (the parseCitations idiom): malformed → null
  *  (reads as "never acknowledged" — the safe direction; a broken record never unlocks the
  *  export gate). */
-export function parseFreshnessAck(json: string | null): StoredFreshnessAck | null {
+function parseFreshnessAck(json: string | null): StoredFreshnessAck | null {
   if (!json) return null
   try {
     const v = JSON.parse(json) as unknown

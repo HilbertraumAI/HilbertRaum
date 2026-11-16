@@ -1,14 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import {
-  DEFAULT_CODE_BLOCK_EXTENSION,
-  codeBlockDefaultFileName,
-  codeBlockExtension,
-  codeBlockLanguageToken
-} from '../../src/shared/code-block-export'
+import { codeBlockExtension } from '../../src/shared/code-block-export'
 
 // #286 (owner decision D6): the fence info string → extension map is a FIXED allowlist. The info
 // string is model output, so this is the only step between it and a filename/filter/audit row —
-// every alias, the fallback and the token/strip rule are pinned here.
+// every alias, the fallback and the token/strip rule are pinned here. The default file name
+// (`code.<ext>`) is pinned through the real handler in chat-ipc.test.ts (#286).
 
 describe('codeBlockExtension (#286 D6 allowlist)', () => {
   it.each([
@@ -44,7 +40,6 @@ describe('codeBlockExtension (#286 D6 allowlist)', () => {
   })
 
   it('falls back to txt for an unknown language, an empty string and whitespace', () => {
-    expect(DEFAULT_CODE_BLOCK_EXTENSION).toBe('txt')
     expect(codeBlockExtension('rust')).toBe('txt')
     expect(codeBlockExtension('')).toBe('txt')
     expect(codeBlockExtension('   ')).toBe('txt')
@@ -63,12 +58,13 @@ describe('codeBlockExtension (#286 D6 allowlist)', () => {
     expect(codeBlockExtension('PowerShell')).toBe('ps1')
   })
 
-  it('strips everything outside [a-z0-9+#.-] before the lookup', () => {
-    expect(codeBlockLanguageToken('h!t@m$l')).toBe('html')
+  it('strips everything outside [a-z0-9+#.-] before the lookup; a kept + # . - blocks the lookup', () => {
     expect(codeBlockExtension('h!t@m$l')).toBe('html')
-    // The kept punctuation is a language alphabet (c++, c#, objective-c, d.ts) — still not in
-    // the allowlist, so it falls back rather than becoming a filename.
-    expect(codeBlockLanguageToken('C++')).toBe('c++')
+    // `+ # . -` survive the strip (a language alphabet: c++, c#, d.ts), and no allowlist key carries one,
+    // so a token that keeps one falls back instead of mapping (stripping them would turn these into html/py/js).
+    expect(codeBlockExtension('html.')).toBe('txt')
+    expect(codeBlockExtension('py+')).toBe('txt')
+    expect(codeBlockExtension('js-')).toBe('txt')
     expect(codeBlockExtension('c++')).toBe('txt')
     expect(codeBlockExtension('c#')).toBe('txt')
   })
@@ -79,16 +75,13 @@ describe('codeBlockExtension (#286 D6 allowlist)', () => {
     expect(codeBlockExtension('html/../x')).toBe('txt')
     expect(codeBlockExtension('<script>')).toBe('txt')
     expect(codeBlockExtension('\u0000html')).toBe('html') // control char stripped, token kept
+    // Lower-casing and the strip turn these into `proto` / `tostring` / `hasownproperty` before the lookup, so they
+    // prove the normalization, not the guard.
     expect(codeBlockExtension('__proto__')).toBe('txt')
-    expect(codeBlockExtension('constructor')).toBe('txt')
     expect(codeBlockExtension('toString')).toBe('txt')
     expect(codeBlockExtension('hasOwnProperty')).toBe('txt')
-  })
-
-  it('the default file name is fixed and never derived from content', () => {
-    expect(codeBlockDefaultFileName('html')).toBe('code.html')
-    expect(codeBlockDefaultFileName('html title="Secret plan"')).toBe('code.html')
-    expect(codeBlockDefaultFileName('')).toBe('code.txt')
-    expect(codeBlockDefaultFileName('anything-secret')).toBe('code.txt')
+    // `constructor` is the one Object.prototype member that survives normalization: it is the assert that reaches the
+    // `Object.hasOwn` guard.
+    expect(codeBlockExtension('constructor')).toBe('txt')
   })
 })

@@ -20,7 +20,6 @@ export interface SaveResultTableInput {
   table: TableSpec<object>
   /** Content-free origin discriminator (e.g. 'bank-statement'). */
   source?: string
-  now?: () => string
 }
 
 /** Persist a message's result table. Returns false (persisting nothing) when the table is empty,
@@ -38,7 +37,7 @@ export function saveResultTable(db: Db, input: SaveResultTableInput): boolean {
   } catch {
     return false
   }
-  const at = (input.now ?? (() => new Date().toISOString()))()
+  const at = new Date().toISOString()
   db.prepare(
     `INSERT INTO result_tables (id, message_id, conversation_id, columns_json, rows_json, row_count, source, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`

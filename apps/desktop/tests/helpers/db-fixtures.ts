@@ -22,6 +22,20 @@ export function openFreshDb(label: string): Db {
 }
 
 /**
+ * `openFreshDb` plus its root, for suites that also write files beside the DB (export destinations, a reopen of the
+ * same `<root>/test.sqlite`). Replaces the local copies at 27bd0b0d: evidence-freshness.test.ts:93 and
+ * evidence-pack-export.test.ts:69 (`freshDb`), evidence-pack-export-async-fs.test.ts:126 (`freshWorkspace`),
+ * evidence-pack-export-concurrent.test.ts:137-138 (`beforeEach`), and the temp-root + DB halves of
+ * evidence-snapshot.test.ts:22, evidence-reviews.test.ts:55, evidence-review-batch-ops.test.ts:62,
+ * evidence-source-context-overlap.test.ts:29, evidence-reviews-ipc.test.ts:147 and evidence-review-open-perf.test.ts:77
+ * (each a local `mkdtempSync`).
+ */
+export function freshWorkspaceDb(label: string): { db: Db; root: string } {
+  const root = tempRoot(label)
+  return { db: openDatabase(join(root, 'test.sqlite')), root }
+}
+
+/**
  * A raw `node:sqlite` handle on `path`, outside `openDatabase` (no migrations run): for building or inspecting a file
  * the way an older binary sees it. `DatabaseSync` is read off the CommonJS module object at CALL time, so the #460
  * tracker (`tests/setup-temp-roots.ts`) records the handle; a bare `import 'node:sqlite'` does not resolve under Vite.

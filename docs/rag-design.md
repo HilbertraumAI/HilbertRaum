@@ -3305,8 +3305,11 @@ the figures they support are quoted in the text.
   locator (`packId` + `articlePath`), never a live document lookup, so `packs:getArticle`
   resolves it by UUID even after the pack is renamed; a removed, disabled or
   currently-unplugged pack reports the same honest "unavailable" state as chat, and a
-  pre-P2 row with no locator renders no button at all. Tested for unavailable/renamed/deleted
-  packs (`ReviewEvidencePane.test.tsx`, `ReviewScreen.test.tsx`).
+  pre-P2 row with no locator renders no button at all. Tested for a renamed pack, and for a
+  deleted, disabled or unplugged one: those three reach the renderer as the same `null`, so
+  one leg covers them (`ReviewEvidencePane.test.tsx`, `ReviewScreen.test.tsx` "deleted or
+  unavailable pack: the bridge resolves null, the viewer says so, the row still offers the
+  article and the card is untouched").
 - **D-Z6 — registered in place; kiwix-manage is the metadata reader.** Packs are multi-GB,
   public, read-only — the deliberate exception to the §1 copy-into-workspace rule. One
   `kiwix-manage add` into a throwaway library.xml reads the archive header and yields
@@ -4192,7 +4195,7 @@ UI acceptance row, seven legs (a)–(g): every pack/scope/outcome state in both 
 empty source sets, 200-character non-ASCII titles, popover/modal keyboard + focus-trap +
 Escape + restoration, disabled controls emit nothing, the live searchability refresh, the
 outcomes notice over every reason code); `ReviewEvidencePane.test.tsx` / `ReviewScreen.test.tsx`
-(the review-row "Open article": unavailable/renamed/deleted); NEW
+(the review-row "Open article": renamed, and deleted or unavailable as one `null` leg); NEW
 `tests/unit/zim-ui-layout-rules.test.ts` (the wrap/ellipsis/24px-target CSS rules); `i18n.test.ts`
 (the house-dash repairs).
 

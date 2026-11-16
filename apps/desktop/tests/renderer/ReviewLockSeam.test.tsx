@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { render, screen, cleanup, within, waitFor, fireEvent } from '@testing-library/react'
+import type { PreloadApi } from '../../src/preload'
 import { App } from '../../src/renderer/App'
 import {
   editReviewItem,
@@ -14,8 +14,9 @@ import {
   type WorkspaceStateInfo
 } from '../../src/shared/types'
 
-import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
+import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
 import { appShellStubs } from '../helpers/app-shell'
+import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // EP-1 Phase 2 review FIX-3 — the review store's LOCK SEAM, pinned end-to-end through the
 // real `App.lockNow`. The wiring under test (App.tsx + lockPurge.ts):
@@ -25,6 +26,10 @@ import { appShellStubs } from '../helpers/app-shell'
 //   3. purgeSessionStores()  — the resident decrypted review content is dropped.
 // Deleting the purge, or moving the flush after the lock, must redden THIS suite — before
 // it, the whole suite stayed green with either mutation.
+// The order is asserted synchronously after `fireEvent.click`: nothing awaits between the edit
+// and the click, so the 600 ms debounce timer can never be the writer. #832: the suite runs
+// `assertNoUnexpectedApiCalls()`; the one call App makes beyond `appShellStubs` is the gate's
+// `perfMark('gate_visible')`, stubbed locally.
 
 const unlockedEncrypted: WorkspaceStateInfo = {
   state: 'unlocked',
@@ -38,11 +43,18 @@ const lockedState: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
+// #832: once the lock shows the gate, App marks it (App.tsx:231-233). Local on purpose: appShellStubs stays unchanged
+// (AppLock and I18n reach the same call outside this group).
+const gateMark: Partial<PreloadApi> = { perfMark: () => {} }
 
 afterEach(() => {
-  cleanup()
-  purgeReviewSession()
-  vi.restoreAllMocks()
+  try {
+    cleanup()
+    assertNoUnexpectedApiCalls()
+  } finally {
+    purgeReviewSession()
+    vi.restoreAllMocks()
+  }
 })
 
 describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then purges (FIX-3)', () => {
@@ -53,6 +65,7 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
     )
     stubReviewApi(
       appShellStubs({
+        ...gateMark,
         getWorkspaceState: vi.fn(async () => unlockedEncrypted),
         lockWorkspace,
         getEvidenceReview: vi.fn(async () => makeDetail()),
@@ -60,7 +73,6 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
       })
     )
 
-    const user = userEvent.setup()
     render(<App />)
     const nav = await screen.findByRole('navigation')
     const lockBtn = within(nav).getByRole('button', { name: 'Lock now' })
@@ -69,16 +81,15 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
     // with a note edit still inside the debounce window (pending, NOT yet written).
     await openReviewSession({ reviewId: 'r1' })
     editReviewItem('i1', { reviewerNote: 'typed just before lock' })
+    // Guard → synchronous trigger → synchronous assert (no await between the edit and the click).
     expect(getReviewSessionSnapshot().saveState).toBe('pending')
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
-
-    await user.click(lockBtn)
-
-    // The pending note was WRITTEN (not lost) — and written BEFORE the vault locked.
-    expect(updateEvidenceReviewItem).toHaveBeenCalledWith('i1', {
-      reviewerNote: 'typed just before lock'
-    })
-    expect(lockWorkspace).toHaveBeenCalledTimes(1)
+    fireEvent.click(lockBtn)
+    // lockNow's flush reached the IPC before any await; the lock has not been asked yet. The
+    // pending note was WRITTEN (not lost) — and written BEFORE the vault locked.
+    expect(updateEvidenceReviewItem).toHaveBeenCalledWith('i1', { reviewerNote: 'typed just before lock' })
+    expect(lockWorkspace).not.toHaveBeenCalled()
+    await waitFor(() => expect(lockWorkspace).toHaveBeenCalledTimes(1))
     expect(Math.max(...updateEvidenceReviewItem.mock.invocationCallOrder)).toBeLessThan(
       lockWorkspace.mock.invocationCallOrder[0]
     )
@@ -98,27 +109,34 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
 
   it('a failed pre-lock flush never blocks the lock (the security action wins)', async () => {
     const lockWorkspace = vi.fn(async () => lockedState)
+    const updateEvidenceReviewItem = vi.fn(async () => {
+      throw new Error('disk full')
+    })
     stubReviewApi(
       appShellStubs({
+        ...gateMark,
         getWorkspaceState: vi.fn(async () => unlockedEncrypted),
         lockWorkspace,
         getEvidenceReview: vi.fn(async () => makeDetail()),
-        updateEvidenceReviewItem: vi.fn(async () => {
-          throw new Error('disk full')
-        })
+        updateEvidenceReviewItem
       })
     )
 
-    const user = userEvent.setup()
     render(<App />)
     const nav = await screen.findByRole('navigation')
 
     await openReviewSession({ reviewId: 'r1' })
     editReviewItem('i1', { reviewerNote: 'will fail to save' })
 
-    await user.click(within(nav).getByRole('button', { name: 'Lock now' }))
-    expect(lockWorkspace).toHaveBeenCalledTimes(1)
+    expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
+    fireEvent.click(within(nav).getByRole('button', { name: 'Lock now' }))
+    // The pre-lock flush WAS attempted (the title's premise), before the lock.
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1)
+    expect(lockWorkspace).not.toHaveBeenCalled()
+    await waitFor(() => expect(lockWorkspace).toHaveBeenCalledTimes(1))
     // The store is still purged — nothing resident after lock, even on a failed flush.
     await waitFor(() => expect(getReviewSessionSnapshot().detail).toBeNull())
+    // #832: end on the gate, so its `gate_visible` mark is always part of the run.
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
   })
 })

@@ -37,7 +37,9 @@ import { useT, type I18n } from '../i18n'
 // reviews one persisted answer against its FROZEN source snapshots. Everything renders
 // from `EvidenceReviewDetail` (the snapshot), never the live message; opening and
 // operating the screen performs ZERO model-runtime and ZERO network activity (spec
-// FR-2/FR-12) — every call on this surface is a local `evidence:*` SQLite round trip.
+// FR-2/FR-12) — every call on this surface is local: the `evidence:*` SQLite round trips,
+// the offline article read (`packs:getArticle`, "Open article") and the clipboard copy of
+// a recorded hash.
 //
 // Layout (spec §11.1): two panes — answer (immutable snapshot text via AssistantMarkdown,
 // item boundaries, decision chips, notes) and evidence (source cards + honesty captions).
@@ -568,13 +570,6 @@ function SaveStateLine({
 }
 
 /**
- * Perf-test render probe (DOC-2, #142 — the PERF-5 recipe): per-item-id render counter so the
- * memoization test can assert an untouched row did NOT re-render on a note keystroke. A Map
- * write per row render — effectively free; production behaviour is identical without it.
- */
-export const __reviewItemRowRenderCounts = new Map<string, number>()
-
-/**
  * One review item (spec §12): the frozen block text, its evidence-marker honesty note,
  * linked-evidence chips, the 6-value decision radio group, and the note field. Focusing
  * ANY control inside selects the item (keyboard parity with click — spec §28.10).
@@ -609,8 +604,6 @@ const ReviewItemRow = memo(function ReviewItemRow({
   onOpenDrawer: (itemId: string) => void
   t: I18n['t']
 }): JSX.Element {
-  if (import.meta.env.DEV)
-    __reviewItemRowRenderCounts.set(item.id, (__reviewItemRowRenderCounts.get(item.id) ?? 0) + 1)
   const isSelection = item.kind === 'selection'
   // DOC-2: the snapshot never changes — localize it once per (t, snapshot), not per keystroke
   // in this row (the memo already spares the OTHER rows).

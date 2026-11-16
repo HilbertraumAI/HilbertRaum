@@ -157,11 +157,11 @@ export async function openReviewSession(target: ReviewHandoffTarget): Promise<vo
 /**
  * P4: fetch the open review's freshness verdict (spec §21.2 — a cheap stored-fact
  * comparison main-side; no hashing, no model, no network). Runs automatically after every
- * successful open; callable again for an explicit re-check. A failure leaves `freshness`
+ * successful open (module-internal). A failure leaves `freshness`
  * untouched — the UI simply keeps its last honest state (absence, never an invented
  * verdict). Every post-await write is `openToken`-guarded (the store convention).
  */
-export async function refreshReviewFreshness(): Promise<void> {
+async function refreshReviewFreshness(): Promise<void> {
   const reviewId = state.detail?.id
   if (!reviewId) return
   const token = openToken
@@ -718,13 +718,6 @@ export function bulkClearDecisions(): Promise<void> {
 export function bulkMarkUndecidedFollowUp(): Promise<void> {
   return applyBulkAction('undecided_follow_up')
 }
-
-/** The decisions a bulk action may WRITE (guard rail mirrored by tests): never 'supported'. */
-export const BULK_WRITABLE_DECISIONS: readonly ReviewDecision[] = [
-  'not_applicable',
-  'not_reviewed',
-  'follow_up'
-]
 
 /**
  * Drop the resident review content at the workspace-lock seam (lockPurge.ts). Does NOT

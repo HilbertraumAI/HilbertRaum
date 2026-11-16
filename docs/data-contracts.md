@@ -1490,8 +1490,11 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   contract: ids/counts ONLY — never titles, notes, reviewer labels, snippets, or paths.
   (The exhaustive Diagnostics label record forced the matching `diag.audit.*` EN/DE keys to
   land now; behaviorally inert until an event exists.)
-✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix + pure snapshot parsers) +
+✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix, the FIX-4 renderer-mirror
+  equivalence, the pure snapshot parsers, and the spec-§9.1 `isReviewEligible` rule) +
   `tests/integration/evidence-reviews.test.ts` (schema on fresh/reopened DBs via `listTables`;
+  decided items, notes and the reviewer label surviving a reopen (the restart leg, moved from
+  `evidence-reviews-ipc.test.ts`); a pre-P4 workspace gaining `freshness_ack_json`;
   full round-trip incl. Unicode/markdown/hostile strings; malformed-JSON tolerance; cascade
   through the REAL `deleteConversation`; service-level status derivation; citation enrichment
   pinned at sites 1–5 incl. byte-identical legacy parsing) + the EP-1 enrichment leg in
@@ -1607,15 +1610,20 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   two-sided — FIX-3) + `tests/integration/evidence-snapshot.test.ts` (per-answer-class
   builds: relevance auto-links, whole-doc/extract ZERO links, unknown-present-mode weakest
   class — FIX-1, legacy no-citation, unresolved-title, deleted-source, empty answer,
-  default-title fallback, determinism, end-to-end display-parity links, and the FIX-2
-  atomicity leg: an injected SQLite-trigger failure mid-build rolls back all four tables and
-  surfaces the original error) + `tests/integration/evidence-reviews-ipc.test.ts` (full
-  round trips over the mocked-electron harness for all four answer classes incl. a
-  documentId-resolved source and a real selection deletion, payload guards, reviewer-origin
-  forcing, freshness stub, idempotent create, markReady already-ready no-op — FIX-5,
-  **runtime-tripwire + real offline connect-guard asserted in every test of the file** —
-  the plan §6 no-model/no-network assertions) + new legs in `audit-ipc.test.ts` and
-  `ipc-lock-coverage.test.ts`.
+  default-title fallback, nearest-preceding question turn, determinism, end-to-end
+  display-parity links, and the FIX-2 atomicity leg: an injected SQLite-trigger failure
+  mid-build rolls back the three tables the build writes (head, items, links) and surfaces
+  the original error) + `tests/integration/evidence-reviews-ipc.test.ts` (the full
+  create→read→update→decide→select→link→ready→reopen→refresh→delete round trip over the
+  mocked-electron harness incl. a documentId-resolved source and a real selection deletion —
+  the four answer classes are the builder's, pinned in `evidence-snapshot.test.ts` — payload
+  guards, reviewer-origin forcing, the real freshness verdict over the wire, idempotent
+  create, markReady already-ready no-op — FIX-5, **runtime tripwire + the real offline
+  connect-guard asserted after every test of the file** (`tripwireRuntime` /
+  `useOfflineGuard`, `tests/helpers/evidence-fixtures.ts`) — the plan §6
+  no-model/no-network assertions) + new legs in `audit-ipc.test.ts` and
+  `ipc-lock-coverage.test.ts`; the spec §9.1 `isReviewEligible` rule is pinned in
+  `tests/unit/evidence-review-gate.test.ts`.
 
 **Phase 3 — evidence-pack export, self-contained HTML (as built):**
 
@@ -1743,7 +1751,9 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
   (+friendly copy, rendered inline in the panel). A token change (lock/switch) landing
   AFTER a successful export still returns 'exported' (state untouched — the export is
-  real; only a genuine rejection reports 'failed').
+  real; only a genuine rejection reports 'failed'; the lock case is pinned in
+  `reviewSession.test.ts` › "an export that %s after the lock purge reports the truthful
+  outcome and leaves the purged store empty").
 ✅ **Phase-3 tests:** `tests/unit/evidence-pack-model.test.ts` ×13 (option boundary, §16.1
   normalization, honesty-mapping reuse pin, option matrix) +
   `tests/unit/evidence-pack-html.test.ts` ×26 (escapeHtml, §29.4 injection suite incl.
@@ -1753,15 +1763,18 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   `tests/integration/evidence-pack-export.test.ts` ×15 (the five §29.5 GOLDEN packs under
   `tests/fixtures/evidence-packs/` — relevance/whole-doc/partial-coverage/missing-source/
   German, normalized timestamps + pack ids, regenerate via `UPDATE_EVIDENCE_PACK_GOLDENS=1`;
-  atomicity: failing write AND failing rename leave no file/no tmp/no row; the two
-  POST-rename record-failure paths — injected INSERT trigger, review deleted mid-dialog —
-  unlink the destination and throw `EvidencePackRecordError`; cancel → nothing; no-BOM
-  encoding; recorded-hash-matches-file-bytes; ready-review export; real offline guard
-  across every test) + export legs in `evidence-reviews-ipc.test.ts` (ready-review export
-  over the wire, cancel, post-rename failure surfaces the LOCALIZED distinct copy with no
-  file/row/audit event, boundary guards, hostile options → resolved defaults persisted,
-  runtime tripwire) and `audit-ipc.test.ts` (path-sentinel destination; event =
-  `{reviewId, format}` exactly) + `tests/renderer/ReviewExport.test.tsx` ×9 (panel
+  atomicity (failing write, short write and failing rename leave no file, no tmp, no row:
+  `evidence-pack-export-async-fs.test.ts`); the two POST-rename record-failure paths —
+  injected INSERT trigger, review deleted mid-dialog — unlink the destination and throw
+  `EvidencePackRecordError`; cancel → nothing; no-BOM encoding;
+  recorded-hash-matches-file-bytes; ready-review export; real offline guard across every
+  test) + export legs in `evidence-reviews-ipc.test.ts` (cancel; both
+  post-rename failures surface their LOCALIZED distinct copy — `exportNotRecorded` with the
+  file removed, `exportFileNotRecorded` with the file kept unrecorded — with no row and no
+  audit event; malformed/unknown ids → null without opening the dialog; hostile options →
+  resolved defaults persisted; runtime tripwire) and `audit-ipc.test.ts` (a ready review
+  exported over the wire to a path-sentinel destination; event = `{reviewId, format}`
+  exactly) + `tests/renderer/ReviewExport.test.tsx` ×9 (panel
   defaults, payload shape, history merge, cancel/failure, flush-before-export ordering,
   flush-FAILURE refusal, ready-review export, hash display + full-hash copy;
   `exportEvidencePack` in the stub sets under the structural no-call tripwire).
@@ -1809,7 +1822,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   RE-change of an already-changed fact (sha ff→ee after acknowledging aa→ff), a second
   answer edit, changed→recovered→changed-again (no stale-ack resurrection), and a NEW
   deletion (adds a fact). Hashes only, inside the encrypted row. Also exports
-  `compareStoredHashes`, `parseFreshnessAck`.
+  `compareStoredHashes` (the ack parser is module-private).
 ✅ **Read overlay (IPC boundary):** `evidence:get` + `evidence:getForMessage` responses
   carry the REAL computed `outdated` (the chat chip + a fresh open render truthfully);
   SERVICE-level reads and every write-path return (`update`/`markReady`/`reopen`/`create`)
@@ -1832,10 +1845,11 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   by the injected verdict + `EvidencePackSource.currentState` (null = no verdict, P3 shape).
 ✅ **Source-in-context (`main/services/evidence-pack/source-context.ts`, D-5):**
   `getEvidenceSourceContext(db, reviewId, sourceKey)` — see the IPC table row for the full
-  resolution ladder + security posture. `CONTEXT_WINDOW_CHARS = 1200` per side.
+  resolution ladder + security posture. The context window is 1200 stored-text characters per
+  side (`CONTEXT_WINDOW_CHARS`, module-private).
 ✅ **Renderer:** store (`reviewSession.ts`) gains `freshness` state +
-  `refreshReviewFreshness()` (fired automatically after every successful open —
-  fire-and-forget, `openToken`-guarded; a failed check leaves the last honest state) +
+  `refreshReviewFreshness()` (module-internal; fired automatically after every successful
+  open — fire-and-forget, `openToken`-guarded; a failed check leaves the last honest state) +
   `acknowledgeReviewFreshness()`. ReviewScreen: Outdated banner (drift facts + §21.3
   options + acknowledge action / acknowledged stamp; role=status) + an ADDITIONAL
   `⚠ Outdated` chip (Draft/Ready never replaced); EvidencePane cards gain freshness badges
@@ -1850,53 +1864,61 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   `review.status.outdated`, +13 `packExport.*` freshness keys,
   `main.evidenceReviews.exportOutdated` — EN+DE (DE draft register at P4 close; the
   native pass landed in P5 — design-guidelines §11.13 — and removed the draft flags).
-✅ **Phase-4 tests:** `tests/integration/evidence-freshness.test.ts` ×28 (engine verdicts
+✅ **Phase-4 tests:** `tests/integration/evidence-freshness.test.ts` ×31 (engine verdicts
   incl. unresolved-never-changed under mutation AND deletion of same-titled docs,
   hash-absent unverifiable, answer/coverage drift, reserialized-coverage false-positive
   pin, ready-not-erased; acknowledge persist/no-op/lapse-on-new-drift/malformed-record/
   lifecycle-stamps-untouched + the FIX-1 value-bearing-fingerprint legs (re-change lapse,
   second answer edit, changed→recovered→changed-again no-resurrect, canonical stored
-  shape); export gate refused-before-dialog + §28.6 pack recording + §28.7 deleted-source
-  export + MIXED changed+deleted drift end-to-end incl. new-deletion-lapses-acknowledge;
-  IPC legs for the new channels + real read overlay + the LOCALIZED outdated-export
-  rejection over the wire; source-context located/mismatch/stale-chunk-id/
-  foreign-chunk-id-leak-guard/missing/not-located/truncated-snippet — all under the REAL
-  offline guard, with NO document files on disk anywhere) + the 6th GOLDEN
+  shape); the export gate's two other proofs live in `evidence-pack-export.test.ts`
+  (refused before any dialog or print: "outdated-unacknowledged refuses BEFORE any dialog
+  or print work — the P4 order holds for PDF"; the §28.6 pack recording: the
+  `outdated-acknowledged` golden) + §28.7 deleted-source export + MIXED changed+deleted
+  drift end-to-end incl. new-deletion-lapses-acknowledge; IPC legs for the new channels +
+  real read overlay + the LOCALIZED outdated-export rejection over the wire (FIX-6: no row,
+  no audit event); source-context located/mismatch/stale-chunk-id/
+  foreign-chunk-id-leak-guard/missing/not-located/truncated-snippet — all
+  under the REAL offline guard, with NO document files on disk anywhere) + the 6th GOLDEN
   `outdated-acknowledged` (+ regenerated 5 — freshness note + at-export column) + P4
-  describe blocks in `evidence-pack-html.test.ts` ×5, `ReviewScreen.test.tsx` ×8 (refresh
+  describe blocks in `evidence-pack-html.test.ts` ×5, `ReviewScreen.test.tsx` ×10 (refresh
   ON OPEN, banner/chip/badges, banner names newly-missing facts, acknowledge flow,
-  missing-without-banner, unresolved-badge-only, context modal ×2), `ReviewExport.test.tsx`
+  missing-without-banner, unresolved-badge-only, resolved-cannot-verify badge,
+  creation-missing keeps only its creation badge, context modal ×2), `ReviewExport.test.tsx`
   ×3 (export gate), `reviewSession.test.ts` ×5 (refresh-on-open, no-refresh-on-failed-open,
   openToken purge guard, acknowledge merge/failure), `ReviewEntryPoints.test.tsx` (Outdated
   chip joins Ready), `GermanSmoke` (outdated overlay DE). Review renderer test files
   (incl. `lockPurge.test.ts`'s review leg) stub the refresh structurally via
   `stubReviewApi` (`tests/helpers/evidenceReview.ts`).
-✅ **Phase-6 tests (PDF):** `tests/unit/evidence-pack-print-pdf.test.ts` ×9, ×12 since #563 (fake
-  electron: the D-1 option literals + footer no-@font-face/escaping pins, preload-free
-  sandboxed posture + deny-all navigation, teardown on success/print-failure/load-failure/
+✅ **Phase-6 tests (PDF):** `tests/unit/evidence-pack-print-pdf.test.ts` ×9, ×12 since #563,
+  ×10 since the 2026-11 test audit (the served-once and two-print rows were duplicates of
+  `app-protocol.test.ts` and `evidence-pack-export-concurrent.test.ts`; fake electron: the
+  D-1 option literals + footer no-@font-face/escaping pins, preload-free sandboxed posture
+  + deny-all navigation, teardown on success/print-failure/load-failure/
   app-quit-mid-print/step-timeout — runs everywhere incl. CI) + `evidence-pack-export.
-  test.ts` P6 describe ×6 (seam contract: verbatim html + the per-export
-  `${dest}.<packId token>.print.tmp.html` (since #563: `{packId}` only, and nothing but the
-  PDF beside the destination) + the
-  PDF self-description line; extension-override both directions incl. the format line
-  following the EFFECTIVE format; cancel-under-PDF ⇒ no render/no print/no file/no row;
-  killed-print ⇒ no file/no siblings/no row; outdated-refusal BEFORE dialog AND print;
-  post-rename unlink on PDF) + helpers +3 new (Buffer atomic write, both format
-  resolvers; the pre-existing `suggestedPackFileName` test extended for the format
-  param) + `evidence-pack-html.test.ts` +2 (format-line branch: PDF wording on cover AND
-  integrity, byte-level one-line-swap equivalence pin, DE leg) +
+  test.ts` P6 describe ×6, ×5 since the 2026-11 test audit (seam contract: verbatim html +
+  the per-export `${dest}.<packId token>.print.tmp.html` (since #563: `{packId}` only, and
+  nothing but the PDF beside the destination) + the PDF self-description line;
+  extension-override both directions incl. the format line following the EFFECTIVE
+  format; cancel-under-PDF ⇒ no print/no file/no row;
+  killed-print ⇒ no file/no siblings/no row; outdated-refusal BEFORE dialog AND print) +
+  the post-rename unlink on PDF, now the `FIX-1b (pdf)` row of the atomicity describe +
+  helpers +3 new (Buffer atomic write, both format resolvers; the pre-existing
+  `suggestedPackFileName` test extended for the format param) +
+  `evidence-pack-html.test.ts` +1 (format-line branch: PDF wording on
+  cover AND integrity, byte-level one-line-swap equivalence pin) +
   `evidence-reviews-ipc.test.ts` ×2 (dialog
   filter list both-formats/requested-first through the REAL handler + REAL harness on a
   fake BrowserWindow; audit `{reviewId, format:'pdf'}`; malformed format → html-first) +
   `ReviewExport.test.tsx` +1 (PDF sends `format:'pdf'`; the defaults test now pins the
   radio: HTML checked) + `window-security.test.ts` +1 (print window preload-free) +
-  **`evidence-pack-pdf-smoke.test.ts` ×6 — REAL Electron** (spawns the installed binary
+  **`evidence-pack-pdf-smoke.test.ts` ×11 — REAL Electron** (spawns the installed binary
   on an esbuild bundle of the REAL harness; SKIPS where the binary/display is absent —
   CI never installs Electron — and always runs on the Windows dev box): EN+DE golden
   prints verified with pdfjs — page count, CURRENT-catalog sentinels (DE umlauts/ß),
   pack-id + `1/{totalPages}` footer, outline depth EXACTLY 3 with catalog section titles,
-  `/MarkInfo Marked` (tagged) true, kill-after-load rejection with no output, and EVERY
-  Chromium request `file://` + the REAL offline guard silent across the run.
+  `/MarkInfo Marked` (tagged) true, kill-after-load rejection with no output, and every
+  Chromium request a `hilbertraum://print/<token>` page (#563), one per print, with the REAL
+  offline guard silent across the run.
 
 ### Image understanding (vision) — wave #117–#124 additions (2026-08-09)
 

@@ -233,6 +233,12 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   production module needs a DEV-only counter. Keep a positive control that shows the counter moves.
   That wrapper never sees a component's own state updates, so `HomeScreenPoll` counts commits with a
   `<Profiler>` instead, with a row that shows a changed poll does commit.
+- **A memo that is not exported is counted through a child that is no memo and gets a fresh prop**, so
+  it renders exactly when the memo does: TranscriptMemo counts `MessageBlock` through `MessageActions`
+  (#743), ReviewItemMemo counts `ReviewItemRow` through `DecisionControl`. Take the positive control's
+  "before" after any render the setup causes on its own. Focusing a review note selects its row and
+  renders it once, so with "before" taken earlier the edited row's count still rose when the
+  keystrokes' local update was deleted.
 - **A media query that changes mid-test** uses the one firable `matchMedia` fake in
   `tests/helpers/match-media.ts` (Theme, ReviewGateA11y, ReviewScreen and ChatRestructure's narrow-window fold):
   `fakeMatchMedia(matches)` before the render, `removeMatchMedia()` in `afterEach`.

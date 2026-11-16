@@ -1,10 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
-import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { EvidencePane } from '../../src/renderer/review/EvidencePane'
 import { ReviewSummaryView } from '../../src/renderer/review/ReviewSummaryView'
-import { PROVENANCE_CARD_CAP } from '../../src/renderer/chat/SourcesDisclosure'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import {
   t,
@@ -14,10 +11,10 @@ import {
   type MessageParams,
   type UiLanguage
 } from '../../src/shared/i18n'
-import type { EvidenceSourceSnapshot } from '../../src/shared/types'
-import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
-import { makeDetail, makeFreshness, stubReviewApi } from '../helpers/evidenceReview'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { makeDetail, makeFreshness } from '../helpers/evidenceReview'
 import { fakeMatchMedia, removeMatchMedia, type MatchMediaFake } from '../helpers/match-media'
+import { renderReview } from '../helpers/review-screen'
 
 // Presentation-state and copy defects on the review surface — none of them can move data,
 // all of them mislead the person doing the reviewing:
@@ -36,8 +33,11 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  cleanup()
-  assertNoUnexpectedApiCalls()
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
 })
 
 function noop(): void {}
@@ -72,6 +72,8 @@ describe('summary export toggle — disclosure state follows the gate (AUD-09)',
   }
 
   it('an outdated verdict landing on an OPEN panel resets aria-expanded and never re-opens it', () => {
+    // #832: the file's first row runs with no window.api at all, so an optional-chained call would pass silently.
+    stubApi({})
     const { rerender } = render(renderSummary(null))
     const toggle = screen.getByRole('button', { name: t('en', 'review.export.action') })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -114,8 +116,7 @@ describe('narrow-window evidence drawer — closed on leaving narrow mode (AUD-1
   })
 
   it('widening the window closes the drawer for good — narrowing again does not re-open it', async () => {
-    stubReviewApi({ getEvidenceReview: vi.fn(async () => makeDetail()) })
-    render(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />)
+    await renderReview({ detail: makeDetail() })
     await screen.findByText('Beta')
 
     const items = screen.getAllByRole('listitem')
@@ -146,54 +147,12 @@ describe('narrow-window evidence drawer — closed on leaving narrow mode (AUD-1
   })
 })
 
+// The reveal button's accessible name is pinned on a 60-source pane by ReviewEvidencePane.test.tsx ("large sets: …");
+// the row below pins the copy itself, literally, in both languages.
 describe('evidence-pane reveal control counts SOURCES (AUD-11)', () => {
-  function makeSources(n: number): EvidenceSourceSnapshot[] {
-    const base = makeDetail().sources[0]!
-    return Array.from({ length: n }, (_, i) => ({
-      ...base,
-      key: `s${i + 1}`,
-      machineLabel: `S${i + 1}`,
-      documentTitle: `doc-${i + 1}.pdf`,
-      snippet: `Snippet number ${i + 1}`
-    }))
-  }
-
-  function renderPane(lang: UiLanguage): void {
-    const l = bound(lang)
-    render(
-      <EvidencePane
-        sources={makeSources(60)}
-        coverage={{ mode: 'relevance', chunksCovered: 2, chunksTotal: 9 }}
-        selectedItem={null}
-        readOnly={false}
-        freshness={null}
-        onLink={vi.fn()}
-        onUnlink={vi.fn()}
-        onSetRelation={vi.fn()}
-        t={l.t}
-        tCount={l.tCount}
-      />
-    )
-  }
-
-  it.each([['en'], ['de']] as Array<[UiLanguage]>)(
-    'the reveal button and the count line agree about the noun (%s)',
-    (lang) => {
-      renderPane(lang)
-      const reveal = document.querySelector('.sources-more')
-      expect(reveal?.textContent).toBe(tCount(lang, 'review.evidence.more', PROVENANCE_CARD_CAP))
-      // The line directly above it says "sources"; the button used to say "sections",
-      // borrowed from the chat's whole-document copy.
-      expect(reveal?.textContent).not.toBe(tCount(lang, 'chat.sources.more', PROVENANCE_CARD_CAP))
-      expect(
-        screen.getByText(
-          t(lang, 'review.evidence.shownCount', { shown: PROVENANCE_CARD_CAP, total: 60 })
-        )
-      ).toBeInTheDocument()
-    }
-  )
-
   it('the final batch declines the singular correctly in both languages', () => {
+    // #832: reset the bookkeeping the screen row above leaves behind (stubApi is the only reset).
+    stubApi({})
     for (const lang of ['en', 'de'] as UiLanguage[]) {
       expect(tCount(lang, 'review.evidence.more', 1)).not.toBe(
         tCount(lang, 'review.evidence.more', 2)

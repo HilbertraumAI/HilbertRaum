@@ -1,12 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect } from 'vitest'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { createEvidenceReviewFromMessage } from '../../src/main/services/evidence-pack/snapshot'
+import type { Db } from '../../src/main/services/db'
 import {
   exportEvidencePackToFile,
   packFormatForDestination,
@@ -29,14 +24,25 @@ import {
 } from '../../src/main/services/evidence-reviews'
 import { sha256Of } from '../../src/main/services/assets'
 import { t } from '../../src/shared/i18n'
-import type { Citation, CoverageInfo } from '../../src/shared/types'
+import { tempRoot, freshWorkspaceDb } from '../helpers/db-fixtures'
+import {
+  exportDeps,
+  NEVER_PDF,
+  normalizePack,
+  seedAssistantAnswer,
+  seedEvidenceReview,
+  seedSourceDocument,
+  useOfflineGuard,
+  type SeedAnswerOptions
+} from '../helpers/evidence-fixtures'
 
 // EP-1 plan §8 exit gate (spec §30 Phase-2 gate) — the export pipeline end to end against
 // a real SQLite workspace: DETERMINISTIC GOLDEN PACKS for the five spec §29.5 classes
 // (relevance / whole-doc / partial-coverage / missing-source / German) plus the P4
 // outdated-acknowledged pack (spec §28.6) plus the two ZIM archive-mixed packs (PR #294
-// review M11 — eight goldens total), the §20.3/§28.9
-// ATOMICITY guarantees (failure ⇒ no destination file, no export row), encoding (UTF-8,
+// review M11 — eight goldens total), the post-rename (§28.9) failure semantics; the
+// write/rename failure paths live in evidence-pack-export-async-fs.test.ts (AUD-15
+// instrumentation), encoding (UTF-8,
 // NO BOM, meta charset), recorded-hash-matches-file-bytes, options persisted, export on a
 // READY review (the write-guard covers item mutations only — verified, not assumed), and
 // cancel ⇒ no row. The REAL offline network guard runs across every test; the pipeline
@@ -50,88 +56,27 @@ const GOLDEN_DIR = join(__dirname, '..', 'fixtures', 'evidence-packs')
 const FIXED_PACK_ID = '00000000-0000-4000-8000-00000000e9a1'
 const FIXED_NOW = '2026-07-18T12:00:00.000Z'
 
-let offlineViolations: string[] = []
-let uninstallGuard: () => void = () => {}
+useOfflineGuard()
 
-beforeEach(() => {
-  offlineViolations = []
-  uninstallGuard = installOfflineNetworkGuard({
-    isOffline: () => true,
-    onViolation: (host) => offlineViolations.push(host)
+/** The golden inputs, stated here rather than inherited from the helper's defaults: the conversation title (the
+ *  suggested file name and the pack's cover), the model id and the question all render into the packs. */
+const seedPackAnswer = (db: Db, o: SeedAnswerOptions): ReturnType<typeof seedAssistantAnswer> =>
+  seedAssistantAnswer(db, {
+    title: 'Contract questions',
+    modelId: 'test-model-q4',
+    question: 'What about termination?',
+    ...o
   })
-})
 
-afterEach(() => {
-  uninstallGuard()
-  expect(offlineViolations).toEqual([])
-})
+/** The generation metadata every golden pack records. */
+const GOLDEN_DEPS = { appVersion: '0.1.52-test', modelDisplayName: () => 'Test Model' }
 
-function freshDb(): { db: Db; root: string } {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-eppack-'))
-  return { db: openDatabase(join(root, 'test.sqlite')), root }
-}
-
-function seedDocument(db: Db, opts: { title: string; sha256?: string; mime?: string }): string {
-  const id = randomUUID()
-  const now = new Date().toISOString()
-  db.prepare(
-    `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'indexed', ?, ?)`
-  ).run(id, opts.title, opts.mime ?? 'application/pdf', opts.sha256 ?? 'ab'.repeat(32), now, now)
-  return id
-}
-
-function seedAnswer(
-  db: Db,
-  opts: {
-    content: string
-    citations?: Citation[] | null
-    coverage?: CoverageInfo | null
-    question?: string
-    title?: string
-    truncated?: boolean
-  }
-): string {
-  const conv = createConversation(db, { title: opts.title ?? 'Contract questions', modelId: 'test-model-q4' })
-  appendMessage(db, {
-    conversationId: conv.id,
-    role: 'user',
-    content: opts.question ?? 'What about termination?'
-  })
-  const msg = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
-    content: opts.content,
-    citations: opts.citations ?? null,
-    coverage: opts.coverage ?? null,
-    truncated: opts.truncated
-  })
-  return msg.id
-}
-
-/** P6: the printer seam is REQUIRED — this stub doubles as the assertion that no
- *  HTML-format path ever touches the hidden-window print harness. */
-const NEVER_PDF: Parameters<typeof exportEvidencePackToFile>[3]['renderPdf'] = async () => {
-  throw new Error('renderPdf must not be called for an HTML export')
-}
-
-const EXPORT_DEPS = (dest: string): Parameters<typeof exportEvidencePackToFile>[3] => ({
-  chooseDestination: async () => dest,
-  renderPdf: NEVER_PDF,
-  newPackId: () => FIXED_PACK_ID,
-  now: () => FIXED_NOW
-})
-
-/** Normalize the run-dependent bytes exactly as spec §29.5 prescribes: timestamps + pack
- *  ids (every timestamp renders through the ONE deterministic formatter). */
-function normalize(html: string): string {
-  return html
-    .replaceAll(FIXED_PACK_ID, 'PACK_ID')
-    .replace(/\b\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\b/g, 'TIMESTAMP')
-}
+/** The goldens' fixed pack id and clock (spec §29.5 normalizes both away again). */
+const goldenExport = (dest: string): ReturnType<typeof exportDeps> =>
+  exportDeps(dest, { newPackId: () => FIXED_PACK_ID, now: () => FIXED_NOW })
 
 function compareGolden(name: string, html: string): void {
-  const normalized = normalize(html)
+  const normalized = normalizePack(html, [FIXED_PACK_ID])
   const goldenPath = join(GOLDEN_DIR, `${name}.html`)
   if (process.env.UPDATE_EVIDENCE_PACK_GOLDENS) {
     mkdirSync(GOLDEN_DIR, { recursive: true })
@@ -147,9 +92,9 @@ function compareGolden(name: string, html: string): void {
 
 describe('golden packs (deterministic; spec §29.5)', () => {
   it('relevance pack — ready review, notes, links, ready-review export allowed', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32), mime: 'application/pdf' })
+    const answer = seedPackAnswer(db, {
       content:
         '# Findings\n\nTermination requires 30 days notice. [S1]\n\nThe fee is fixed. [S2]\n\n`[S1] stays literal in code`',
       citations: [
@@ -165,10 +110,7 @@ describe('golden packs (deterministic; spec §29.5)', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 10 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     for (const item of detail.items) {
       if (item.blockKind !== 'heading') {
         updateEvidenceReviewItem(db, item.id, { decision: 'supported', reviewerNote: 'Verified on page 12.' })
@@ -180,25 +122,22 @@ describe('golden packs (deterministic; spec §29.5)', () => {
 
     // Export the READY review — the write-guard must not block it (P2 handoff: verify).
     const dest = join(root, 'relevance.html')
-    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, goldenExport(dest))
     expect(record).not.toBeNull()
     compareGolden('relevance', readFileSync(dest, 'utf8'))
   })
 
   it('whole-document pack — provenance wording, zero auto-links', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'report.pdf', sha256: 'cd'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'report.pdf', sha256: 'cd'.repeat(32), mime: 'application/pdf' })
+    const answer = seedPackAnswer(db, {
       content: 'The report concludes X.\n\nSection provenance follows. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'report.pdf', documentId: docId, snippet: 'Chapter 2 overview.' }],
       coverage: { mode: 'tree', chunksCovered: 40, chunksTotal: 40 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     const dest = join(root, 'whole-doc.html')
-    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, goldenExport(dest))
     expect(record).not.toBeNull()
     const html = readFileSync(dest, 'utf8')
     // The load-bearing §24.3 claim: provenance, never citations; zero answer_marker links.
@@ -208,32 +147,29 @@ describe('golden packs (deterministic; spec §29.5)', () => {
   })
 
   it('partial-coverage pack — capped mode + recorded output truncation warn honestly', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'ledger.xlsx', mime: 'application/vnd.ms-excel', sha256: 'ee'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'ledger.xlsx', mime: 'application/vnd.ms-excel', sha256: 'ee'.repeat(32) })
+    const answer = seedPackAnswer(db, {
       content: 'Partial listing of entries.\n\nOnly the beginning was analyzed.',
       citations: [{ label: 'S1', sourceTitle: 'ledger.xlsx', documentId: docId, snippet: 'Rows 1-100.' }],
       coverage: { mode: 'capped', chunksCovered: 3, chunksTotal: 9, truncated: true },
       truncated: true
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     const dest = join(root, 'partial-coverage.html')
-    await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    await exportEvidencePackToFile(db, detail.id, { language: 'en' }, goldenExport(dest))
     const html = readFileSync(dest, 'utf8')
     expect(html).toContain('3 of 9')
     compareGolden('partial-coverage', html)
   })
 
   it('missing-source pack — resolved-but-missing DISTINCT from unresolved identity', async () => {
-    const { db, root } = freshDb()
+    const { db, root } = freshWorkspaceDb('eppack')
     // Two docs with the SAME title → the legacy citation stays identity:'unresolved';
     // a documentId pointing at NO row → resolved + availability 'missing'.
-    seedDocument(db, { title: 'notes.docx' })
-    seedDocument(db, { title: 'notes.docx' })
-    const messageId = seedAnswer(db, {
+    seedSourceDocument(db, { title: 'notes.docx' })
+    seedSourceDocument(db, { title: 'notes.docx' })
+    const answer = seedPackAnswer(db, {
       content: 'Claim about the deleted source. [S1]\n\nClaim about the ambiguous source. [S2]',
       citations: [
         { label: 'S1', sourceTitle: 'gone.pdf', documentId: 'no-such-doc', snippet: 'Old excerpt.' },
@@ -241,12 +177,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 2 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     const dest = join(root, 'missing-source.html')
-    await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    await exportEvidencePackToFile(db, detail.id, { language: 'en' }, goldenExport(dest))
     const html = readFileSync(dest, 'utf8')
     expect(html).toContain('could not be verified')
     expect(html).toContain('already missing')
@@ -254,9 +187,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
   })
 
   it('outdated-acknowledged pack — P4 (spec §28.6): the pack records the mismatch + acknowledge', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32), mime: 'application/pdf' })
+    const answer = seedPackAnswer(db, {
       content: 'Termination requires 30 days notice. [S1]',
       citations: [
         {
@@ -269,17 +202,14 @@ describe('golden packs (deterministic; spec §29.5)', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 10 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     // The source document CHANGES after the review (stored hash updated by re-ingestion) —
     // the review is outdated; export works only after the explicit acknowledge (§28.6).
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     expect(acknowledgeEvidenceReviewFreshness(db, detail.id)?.acknowledgedAt).toBeTruthy()
 
     const dest = join(root, 'outdated-acknowledged.html')
-    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, goldenExport(dest))
     expect(record).not.toBeNull()
     const html = readFileSync(dest, 'utf8')
     // Cover warning + coverage-section mismatch record + acknowledge stamp + §16.1.7 cell.
@@ -291,9 +221,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
   })
 
   it('German pack — DE copy + [Q{n}] markers, frozen at generation', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'vertrag.pdf', sha256: 'ab'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'vertrag.pdf', sha256: 'ab'.repeat(32), mime: 'application/pdf' })
+    const answer = seedPackAnswer(db, {
       title: 'Vertragsfragen',
       question: 'Was gilt bei Kündigung?',
       content: 'Die Kündigungsfrist beträgt 30 Tage. [S1]\n\nDie Gebühr ist fest vereinbart.',
@@ -308,12 +238,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 4 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     const dest = join(root, 'german.html')
-    await exportEvidencePackToFile(db, detail.id, { language: 'de' }, EXPORT_DEPS(dest))
+    await exportEvidencePackToFile(db, detail.id, { language: 'de' }, goldenExport(dest))
     const html = readFileSync(dest, 'utf8')
     expect(html).toContain('<html lang="de">')
     expect(html).toContain('[Q1]') // DE display marker
@@ -333,9 +260,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
   const ARCHIVE_ARTICLE_PATH = 'Treibhausgas/Übersicht_ß'
 
   it('archive-mixed pack (EN) — a knowledge-pack article beside a document source: locator, archive warning, escaped hostile title', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32), mime: 'application/pdf' })
+    const answer = seedPackAnswer(db, {
       content:
         'Termination requires 30 days notice. [S1]\n\nMethane from agriculture is a greenhouse gas. [S2]',
       citations: [
@@ -362,12 +289,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 9 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     const dest = join(root, 'archive-mixed.html')
-    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, EXPORT_DEPS(dest))
+    const record = await exportEvidencePackToFile(db, detail.id, { language: 'en' }, goldenExport(dest))
     expect(record).not.toBeNull()
     const html = readFileSync(dest, 'utf8')
     // The load-bearing M11 claims, stated here as well as pinned by the golden bytes.
@@ -378,6 +302,8 @@ describe('golden packs (deterministic; spec §29.5)', () => {
     expect(html).not.toContain(t('en', 'packExport.evidence.identityUnresolved'))
     expect(html).toContain(t('en', 'packExport.sources.typeArchive'))
     expect(html).toContain(t('en', 'packExport.sources.availabilityArchive'))
+    // The §16.1.6 archive count, singular form (one archive source).
+    expect(html).toContain(t('en', 'review.summary.sourcesArchive.one', { count: 1 }))
     // Hostile markup never survives raw, and the document's hash appears ONCE (its own row).
     expect(html).not.toContain('Klimawandel <b>')
     expect(html.split('ab'.repeat(32)).length - 1).toBe(1)
@@ -385,9 +311,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
   })
 
   it('archive-mixed-de pack (DE) — the same mixed shape in German: umlaut/ß locator through the DE catalog', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'vertrag.pdf', sha256: 'cd'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'vertrag.pdf', sha256: 'cd'.repeat(32), mime: 'application/pdf' })
+    const answer = seedPackAnswer(db, {
       title: 'Vertragsfragen',
       question: 'Was gilt bei Kündigung und wie entsteht Treibhausgas?',
       content:
@@ -414,12 +340,9 @@ describe('golden packs (deterministic; spec §29.5)', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 6 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {
-      appVersion: '0.1.52-test',
-      modelDisplayName: () => 'Test Model'
-    })
+    const detail = seedEvidenceReview(db, answer, GOLDEN_DEPS)
     const dest = join(root, 'archive-mixed-de.html')
-    await exportEvidencePackToFile(db, detail.id, { language: 'de' }, EXPORT_DEPS(dest))
+    await exportEvidencePackToFile(db, detail.id, { language: 'de' }, goldenExport(dest))
     const html = readFileSync(dest, 'utf8')
     expect(html).toContain('<html lang="de">')
     expect(html).toContain('[Q2]') // DE display marker on the archive card
@@ -437,51 +360,17 @@ describe('golden packs (deterministic; spec §29.5)', () => {
 
 // ---- Pipeline guarantees -----------------------------------------------------------
 
+/** The printer's stand-in output for the PDF rows. */
+const PDF_BYTES = Buffer.from('%PDF-1.7\nfake-pack-pdf-bytes\n%%EOF', 'utf8')
+
 describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
-  it('a failing write leaves NO destination file, NO tmp sibling, NO export row', async () => {
-    const { db, root } = freshDb()
-    const messageId = seedAnswer(db, {
-      content: 'Plain claim.',
-      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
-    })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
-    // Destination inside a directory that does not exist → openSync throws mid-pipeline.
-    const dest = join(root, 'no-such-dir', 'pack.html')
-    await expect(
-      exportEvidencePackToFile(db, detail.id, {}, EXPORT_DEPS(dest))
-    ).rejects.toThrow()
-    expect(existsSync(dest)).toBe(false)
-    expect(listEvidenceExports(db, detail.id)).toEqual([])
-    // The review itself stays usable (spec §28.9).
-    expect(getEvidenceReview(db, detail.id)?.status).toBe('draft')
-  })
-
-  it('a failure AFTER the tmp write (rename refused) removes the tmp and records nothing', async () => {
-    const { db, root } = freshDb()
-    const messageId = seedAnswer(db, {
-      content: 'Another claim.',
-      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
-    })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
-    // The destination IS an existing non-empty DIRECTORY → renameSync throws after the
-    // bytes hit the tmp sibling — the interrupted-mid-pipeline case.
-    const dest = join(root, 'occupied')
-    mkdirSync(join(dest, 'child'), { recursive: true })
-    await expect(
-      exportEvidencePackToFile(db, detail.id, {}, EXPORT_DEPS(dest))
-    ).rejects.toThrow()
-    expect(existsSync(`${dest}.tmp`)).toBe(false)
-    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
-    expect(listEvidenceExports(db, detail.id)).toEqual([])
-  })
-
   it('cancel (no destination chosen) records nothing and writes nothing', async () => {
-    const { db, root } = freshDb()
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const answer = seedPackAnswer(db, {
       content: 'Cancelled claim.',
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, answer)
     const result = await exportEvidencePackToFile(db, detail.id, {}, {
       chooseDestination: async () => null,
       renderPdf: NEVER_PDF
@@ -492,12 +381,12 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
   })
 
   it('FIX-1a: a record failure AFTER the rename unlinks the file — no destination, no row, distinct error', async () => {
-    const { db, root } = freshDb()
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const answer = seedPackAnswer(db, {
       content: 'Post-rename claim.',
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, answer)
     const dest = join(root, 'post-rename.html')
     await expect(
       exportEvidencePackToFile(db, detail.id, {}, {
@@ -524,31 +413,42 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
     expect(getEvidenceReview(db, detail.id)?.status).toBe('draft')
   })
 
-  it('FIX-1b: review deleted while the save dialog was open → file unlinked, thrown — NEVER a silent cancel-shaped null', async () => {
-    const { db, root } = freshDb()
-    const messageId = seedAnswer(db, {
+  // One row per format: the PDF leg is the SAME post-rename tail (P3 FIX-1b), reached through the print arm.
+  it.each([
+    ['html', { ext: '.html', request: {}, prints: false }],
+    ['pdf', { ext: '.pdf', request: { format: 'pdf' }, prints: true }]
+  ] as const)('FIX-1b (%s): review deleted while the save dialog was open → file unlinked, thrown — NEVER a silent cancel-shaped null', async (_format, row) => {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const answer = seedPackAnswer(db, {
       content: 'Deleted-mid-dialog claim.',
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
-    const dest = join(root, 'deleted-mid-dialog.html')
+    const detail = seedEvidenceReview(db, answer)
+    const dest = join(root, `deleted-mid-dialog${row.ext}`)
+    let printed = false
     await expect(
-      exportEvidencePackToFile(db, detail.id, {}, {
+      exportEvidencePackToFile(db, detail.id, row.request, exportDeps(dest, {
         chooseDestination: async () => {
           // Another window deletes the review while this one's dialog is open —
           // recordEvidenceExport will return null (its no-orphan-rows guard).
           expect(deleteEvidenceReview(db, detail.id)).toBe(true)
           return dest
         },
-        renderPdf: NEVER_PDF
-      })
+        renderPdf: row.prints
+          ? async () => {
+              printed = true
+              return PDF_BYTES
+            }
+          : NEVER_PDF
+      }))
     ).rejects.toBeInstanceOf(EvidencePackRecordError)
+    expect(printed).toBe(row.prints) // the pdf leg really took the PDF arm
     expect(existsSync(dest)).toBe(false)
     expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 
   it('unknown review id → null, no dialog shown', async () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('eppack')
     let dialogShown = false
     const result = await exportEvidencePackToFile(db, 'no-such-review', {}, {
       chooseDestination: async () => {
@@ -566,19 +466,23 @@ describe('atomicity + failure semantics (spec §20.3/§28.9)', () => {
 // tested — here the seam contract, the shared atomic tail, and the format rules) --------
 
 describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => {
-  const PDF_BYTES = Buffer.from('%PDF-1.7\nfake-pack-pdf-bytes\n%%EOF', 'utf8')
-
   function seedSimpleReview(db: Db): string {
-    const messageId = seedAnswer(db, {
+    const answer = seedPackAnswer(db, {
       content: 'PDF claim.',
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    return createEvidenceReviewFromMessage(db, messageId, {}).id
+    return seedEvidenceReview(db, answer).id
   }
 
   it('prints the rendered HTML verbatim, writes the PDF bytes atomically, records format "pdf"', async () => {
-    const { db, root } = freshDb()
+    const { db, root } = freshWorkspaceDb('eppack')
     const reviewId = seedSimpleReview(db)
+    // D-1 one template: the same review exported as HTML first; its history row is removed so the PDF render below
+    // reads identical stored state (recording an export touches no review column, evidence-reviews.ts:1146-1177).
+    const htmlDest = join(root, 'verbatim.html')
+    await exportEvidencePackToFile(db, reviewId, {}, goldenExport(htmlDest))
+    const asHtml = readFileSync(htmlDest, 'utf8')
+    db.prepare('DELETE FROM evidence_exports WHERE review_id = ?').run(reviewId)
     const dest = join(root, 'pack.pdf')
     const suggested: Array<[string, string]> = []
     let printed: { html: string; opts: Record<string, unknown> } | null = null
@@ -596,13 +500,16 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
     })
     // The suggested name follows the requested format; the dialog is told the format too.
     expect(suggested).toEqual([['Contract questions.pdf', 'pdf']])
-    // The print harness got the Phase-3 render output UNCHANGED (D-1: one template)…
-    expect(printed!.html.startsWith('<!DOCTYPE html>')).toBe(true)
-    expect(printed!.html).toContain(FIXED_PACK_ID)
+    // The print harness got the Phase-3 render output UNCHANGED (D-1: one template): byte for byte the HTML pack,
+    // except the one format line…
+    const htmlLine = t('en', 'packExport.meta.formatValue', { version: 1 })
+    const pdfLine = t('en', 'packExport.meta.formatValuePdf', { version: 1 })
+    expect(printed!.html).toBe(asHtml.replaceAll(htmlLine, pdfLine))
     // …and it self-describes as a PDF (FIX-1): the printed rendition line, never the
-    // "Self-contained HTML" claim, on the artifact a verifier actually reads.
-    expect(printed!.html).toContain(t('en', 'packExport.meta.formatValuePdf', { version: 1 }))
-    expect(printed!.html).not.toContain(t('en', 'packExport.meta.formatValue', { version: 1 }))
+    // "Self-contained HTML" claim, on the artifact a verifier actually reads. (This pair also proves the line is
+    // there at all: without it the replaceAll above would be a no-op.)
+    expect(printed!.html).toContain(pdfLine)
+    expect(printed!.html).not.toContain(htmlLine)
     // …and the pipeline's pack id for the footer — nothing else: no print-source path, because
     // the printer holds the page in memory (#563; it used to be a `.print.tmp.html` sibling).
     expect(printed!.opts).toEqual({ packId: FIXED_PACK_ID })
@@ -620,7 +527,7 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
   })
 
   it('the chosen extension has the final word: a .html destination under a PDF request stays HTML (and vice versa)', async () => {
-    const { db, root } = freshDb()
+    const { db, root } = freshWorkspaceDb('eppack')
     const reviewId = seedSimpleReview(db)
 
     // Requested PDF, saved as .html via the dialog's type dropdown → real HTML, no print.
@@ -647,7 +554,7 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
   })
 
   it('kill mid-print (a rejecting printer) leaves NO destination file, NO siblings, NO row', async () => {
-    const { db, root } = freshDb()
+    const { db, root } = freshWorkspaceDb('eppack')
     const reviewId = seedSimpleReview(db)
     const dest = join(root, 'killed.pdf')
     await expect(
@@ -666,16 +573,16 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
   })
 
   it('outdated-unacknowledged refuses BEFORE any dialog or print work — the P4 order holds for PDF', async () => {
-    const { db, root } = freshDb()
-    const docId = seedDocument(db, { title: 'drift.pdf', sha256: 'ab'.repeat(32) })
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const docId = seedSourceDocument(db, { title: 'drift.pdf', sha256: 'ab'.repeat(32), mime: 'application/pdf' })
+    const answer = seedPackAnswer(db, {
       content: 'Drifting claim. [S1]',
       citations: [
         { label: 'S1', sourceTitle: 'drift.pdf', documentId: docId, snippet: 'The drifting fact.' }
       ],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const reviewId = createEvidenceReviewFromMessage(db, messageId, {}).id
+    const reviewId = seedEvidenceReview(db, answer).id
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
 
     let dialogShown = false
@@ -706,8 +613,8 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
     expect(record!.format).toBe('pdf')
   })
 
-  it('cancel under a PDF request: no print, no file, no row (FIX-3 — also pins render-after-dialog: a cancel does no render work)', async () => {
-    const { db, root } = freshDb()
+  it('cancel under a PDF request: no print, no file, no row (FIX-3)', async () => {
+    const { db, root } = freshWorkspaceDb('eppack')
     const reviewId = seedSimpleReview(db)
     let printCalled = false
     const result = await exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
@@ -722,36 +629,19 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
     expect(readdirSync(root).filter((f) => !f.startsWith('test.sqlite'))).toEqual([])
     expect(listEvidenceExports(db, reviewId)).toEqual([])
   })
-
-  it('post-rename record failure unlinks the PDF too — the SAME tail semantics (P3 FIX-1b)', async () => {
-    const { db, root } = freshDb()
-    const reviewId = seedSimpleReview(db)
-    const dest = join(root, 'unrecorded.pdf')
-    await expect(
-      exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
-        chooseDestination: async () => {
-          expect(deleteEvidenceReview(db, reviewId)).toBe(true)
-          return dest
-        },
-        renderPdf: async () => PDF_BYTES
-      })
-    ).rejects.toBeInstanceOf(EvidencePackRecordError)
-    expect(existsSync(dest)).toBe(false)
-    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
-  })
 })
 
 describe('encoding + hash + record contents', () => {
   it('writes UTF-8 WITHOUT a BOM, meta charset present, umlauts intact; recorded hash matches the file bytes', async () => {
-    const { db, root } = freshDb()
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const answer = seedPackAnswer(db, {
       content: 'Größenmaßstäbe prüfen — ausschließlich örtlich. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'maß.pdf', snippet: 'Straße & Größe <> "quote" \'tick\'' }],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, answer)
     const dest = join(root, 'encoding.html')
-    const record = await exportEvidencePackToFile(db, detail.id, { language: 'de' }, EXPORT_DEPS(dest))
+    const record = await exportEvidencePackToFile(db, detail.id, { language: 'de' }, goldenExport(dest))
     const bytes = readFileSync(dest)
     // No BOM: the file opens with '<' (0x3C) — the bomFor policy deliberately excludes
     // .html (the meta charset is the encoding contract).
@@ -782,12 +672,12 @@ describe('encoding + hash + record contents', () => {
   })
 
   it('two exports of one review append history newest-first and the pack states the previous export', async () => {
-    const { db, root } = freshDb()
-    const messageId = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('eppack')
+    const answer = seedPackAnswer(db, {
       content: 'History claim.',
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, answer)
     const first = await exportEvidencePackToFile(db, detail.id, {}, {
       chooseDestination: async () => join(root, 'one.html'),
       renderPdf: NEVER_PDF,
@@ -824,7 +714,7 @@ describe('helpers', () => {
   // AUD-17: the tmp sibling is named from the EXPORT's pack id, so two exports to one
   // destination never write the same scratch file (`packTmpPath`).
   it('writePackFileAtomic writes-through and returns the on-disk hash', async () => {
-    const { root } = freshDb()
+    const { root } = freshWorkspaceDb('eppack')
     const dest = join(root, 'atomic.html')
     const hash = await writePackFileAtomic(dest, 'content-ä', FIXED_PACK_ID)
     expect(readFileSync(dest, 'utf8')).toBe('content-ä')
@@ -835,7 +725,7 @@ describe('helpers', () => {
   })
 
   it('writePackFileAtomic writes Buffer content VERBATIM (P6: the printToPDF bytes)', async () => {
-    const { root } = freshDb()
+    const { root } = freshWorkspaceDb('eppack')
     const dest = join(root, 'atomic.pdf')
     const bytes = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff, 0x80])
     const hash = await writePackFileAtomic(dest, bytes, FIXED_PACK_ID)
@@ -862,5 +752,21 @@ describe('helpers', () => {
     expect(packFormatForDestination('/x/pack.dat', 'pdf')).toBe('pdf')
     expect(packFormatForDestination('/x/pack', 'pdf')).toBe('pdf')
     expect(packFormatForDestination('/x/pack', 'html')).toBe('html')
+  })
+
+  // AUD-17: the one owner of the `packTmpPath` naming rule (moved from evidence-pack-export-concurrent.test.ts).
+  it('the tmp-sibling naming rule keeps a hostile pack id out of the file system', () => {
+    const A = '11111111-1111-4111-8111-111111111111'
+    const B = '22222222-2222-4222-8222-222222222222'
+    const dest = join(tempRoot('eppack'), 'pack.pdf')
+    // An id that sanitises away entirely (only reachable through an injected mint) still yields
+    // a unique hex name rather than a bare dot.
+    const empty = packTmpPath(dest, '///')
+    expect(empty.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.tmp$/)
+    expect(packTmpPath(dest, '///')).not.toBe(empty)
+    expect(packTmpPath(dest, A)).toBe(`${dest}.${A.replace(/-/g, '')}.tmp`)
+    expect(packTmpPath(dest, A)).not.toBe(packTmpPath(dest, B))
+    expect(packTmpPath(dest, '../../etc/passwd')).toBe(`${dest}.etcpasswd.tmp`)
+    expect(packTmpPath(dest, 'z'.repeat(500))).toBe(`${dest}.${'z'.repeat(32)}.tmp`)
   })
 })

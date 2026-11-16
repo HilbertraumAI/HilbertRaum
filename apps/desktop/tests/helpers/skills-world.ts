@@ -94,9 +94,14 @@ export interface RagAuditEvent {
   meta?: Record<string, unknown>
 }
 
-/** The AppContext the RAG-ask suites hand to registerRagIpc; `audit` records `{ type, meta }` (unread by the noop-audit suites). */
+/**
+ * The AppContext the RAG-ask suites hand to registerRagIpc; `audit` records `{ type, meta }` (unread by the noop-audit
+ * suites). `skills` is optional: without it the context has no `skills` key at all (the regenerate suites' shape,
+ * regenerate-fixtures.ts `regenWorkspace`; replaces their `makeCtx` at 27bd0b0d: regenerate-evidence-review-guard.test.ts:95
+ * and regenerate-result-table-restore.test.ts:127).
+ */
 export function makeRagAskContext(
-  w: Pick<SkillsWorld, 'db' | 'root' | 'workspacePath' | 'skills'>,
+  w: Pick<SkillsWorld, 'db' | 'root' | 'workspacePath'> & { skills?: SkillRegistry },
   runtime: ModelRuntime
 ): { ctx: AppContext; audit: RagAuditEvent[] } {
   const audit: RagAuditEvent[] = []
@@ -116,7 +121,7 @@ export function makeRagAskContext(
     audit: (type: string, _message: string, meta?: Record<string, unknown>) => {
       audit.push({ type, meta })
     },
-    skills: w.skills,
+    ...(w.skills ? { skills: w.skills } : {}),
     // #477: pendingModelSwitches is required - the ask path's occupancy snapshot reads it unconditionally.
     pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext

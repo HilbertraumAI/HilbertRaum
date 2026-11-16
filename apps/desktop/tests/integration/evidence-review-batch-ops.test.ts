@@ -1,7 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { randomUUID } from 'node:crypto'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // Conversation-scoped batch reads + transactional bulk decision sweeps for the
@@ -44,24 +41,27 @@ import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceR
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { createEvidenceReviewFromMessage } from '../../src/main/services/evidence-pack/snapshot'
 import {
   applyEvidenceReviewBulkAction,
+  countEvidenceReviewsForConversation,
   getEvidenceReview,
   getEvidenceReviewForMessage,
   listEvidenceReviewSummariesForConversation,
   markEvidenceReviewReady,
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
-import type { AppContext } from '../../src/main/services/context'
 import type { Citation, EvidenceReviewItem, EvidenceReviewSummary } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import { capturePrepares } from '../helpers/db-spy'
+import { evidenceIpcContext, seedEvidenceReview, seedSourceDocument } from '../helpers/evidence-fixtures'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-evbatch-')), 'test.sqlite'))
-}
+/** An id node:sqlite cannot bind (measured on Node v24.13.0: ERR_INVALID_ARG_TYPE), so only the
+ *  handler's `safeId` turns it into an unknown id. `{}` or an array would not do: `{}` binds as an
+ *  empty named-parameter bag (reads NULL) and an array throws a different named-parameter error. */
+const UNBINDABLE_ID: unknown = true
 
 /**
  * A Db facade that RECORDS the SQL text of every statement it executes. `prepareCached`
@@ -125,12 +125,7 @@ function seedConversation(
   db: Db,
   answers: number
 ): { conversationId: string; messageIds: string[]; documentId: string } {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-     VALUES (?, 'contract.pdf', 'application/pdf', ?, 'indexed', ?, ?)`
-  ).run(docId, 'ab'.repeat(32), now, now)
+  const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'ab'.repeat(32) })
   const conv = createConversation(db, { title: 'Batch chat', modelId: 'm1' })
   const messageIds: string[] = []
   for (let i = 1; i <= answers; i++) {
@@ -157,17 +152,6 @@ function seedConversation(
   return { conversationId: conv.id, messageIds, documentId: docId }
 }
 
-function ctxFor(db: Db): AppContext {
-  return {
-    trustedSenders: ANY_SENDER,
-    db,
-    workspace: { isUnlocked: () => true, isLocking: () => false },
-    paths: { workspacePath: '/tmp', rootPath: '/tmp', configPath: '/tmp/config.json' },
-    manifestsDir: null,
-    isDev: true
-  } as unknown as AppContext
-}
-
 beforeEach(() => {
   ipcState.handlers.clear()
 })
@@ -177,23 +161,9 @@ beforeEach(() => {
 describe('AUD-12 — evidence-review chip state loads per CONVERSATION, not per message', () => {
   it('reads a 30-answer conversation in a FIXED number of statements (was one head+item read per message)', () => {
     const REVIEWS = 30
-    const raw = freshDb()
+    const raw = freshWorkspaceDb('evbatch').db
     const { conversationId, messageIds } = seedConversation(raw, REVIEWS)
-    for (const id of messageIds) createEvidenceReviewFromMessage(raw, id, {})
-
-    // The per-message read, for the record: one head SELECT + one item SELECT EACH.
-    const perMessage = recordingDb(raw)
-    for (const id of messageIds) getEvidenceReviewForMessage(perMessage.db, id)
-    const perMessageHeadReads = countMatching(
-      perMessage.executed,
-      'FROM evidence_reviews WHERE message_id = ?'
-    )
-    const perMessageItemReads = countMatching(
-      perMessage.executed,
-      'FROM evidence_review_items WHERE review_id = ?'
-    )
-    expect(perMessageHeadReads).toBe(REVIEWS)
-    expect(perMessageItemReads).toBe(REVIEWS)
+    for (const id of messageIds) seedEvidenceReview(raw, { messageId: id })
 
     // The batch read: TWO statements for the whole conversation, whatever its length.
     const batch = recordingDb(raw)
@@ -205,9 +175,9 @@ describe('AUD-12 — evidence-review chip state loads per CONVERSATION, not per 
   })
 
   it('is summary-for-summary IDENTICAL to the per-message read (gate included)', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('evbatch').db
     const { conversationId, messageIds } = seedConversation(db, 3)
-    const created = messageIds.map((id) => createEvidenceReviewFromMessage(db, id, {}))
+    const created = messageIds.map((id) => seedEvidenceReview(db, { messageId: id }))
     // Decide one required item of the middle review so the gates genuinely differ.
     const middle = created[1]!
     const required = middle.items.find((i) => i.blockKind !== 'heading')!
@@ -229,11 +199,11 @@ describe('AUD-12 — evidence-review chip state loads per CONVERSATION, not per 
   })
 
   it('scopes strictly to the conversation, and reads empty for one with no reviews', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('evbatch').db
     const a = seedConversation(db, 2)
     const b = seedConversation(db, 2)
-    createEvidenceReviewFromMessage(db, a.messageIds[0]!, {})
-    createEvidenceReviewFromMessage(db, b.messageIds[1]!, {})
+    seedEvidenceReview(db, { messageId: a.messageIds[0]! })
+    seedEvidenceReview(db, { messageId: b.messageIds[1]! })
 
     expect(listEvidenceReviewSummariesForConversation(db, a.conversationId).map((s) => s.messageId)).toEqual([
       a.messageIds[0]
@@ -245,11 +215,11 @@ describe('AUD-12 — evidence-review chip state loads per CONVERSATION, not per 
   })
 
   it('over IPC: one call carries the whole conversation WITH the derived outdated overlay', async () => {
-    const db = freshDb()
+    const { db, root } = freshWorkspaceDb('evbatch')
     const { conversationId, messageIds, documentId } = seedConversation(db, 2)
-    const first = createEvidenceReviewFromMessage(db, messageIds[0]!, {})
-    createEvidenceReviewFromMessage(db, messageIds[1]!, {})
-    registerEvidenceReviewsIpc(ctxFor(db))
+    const first = seedEvidenceReview(db, { messageId: messageIds[0]! })
+    seedEvidenceReview(db, { messageId: messageIds[1]! })
+    registerEvidenceReviewsIpc(evidenceIpcContext(db, root).ctx)
 
     const before = (
       await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, conversationId)
@@ -271,12 +241,15 @@ describe('AUD-12 — evidence-review chip state loads per CONVERSATION, not per 
   })
 
   it('over IPC: a malformed conversation id reads as "no reviews" (never a throw)', async () => {
-    const db = freshDb()
-    registerEvidenceReviewsIpc(ctxFor(db))
+    const { db, root } = freshWorkspaceDb('evbatch')
+    registerEvidenceReviewsIpc(evidenceIpcContext(db, root).ctx)
     expect((await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, '')).result).toEqual([])
     expect((await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, 42)).result).toEqual([])
     expect(
       (await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, null)).result
+    ).toEqual([])
+    expect(
+      (await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, UNBINDABLE_ID)).result
     ).toEqual([])
   })
 })
@@ -293,34 +266,17 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
   /** A review whose items span every case a sweep has to handle. */
   function seedReviewForSweep(db: Db): { reviewId: string; items: EvidenceReviewItem[] } {
     const { messageIds } = seedConversation(db, 1)
-    const detail = createEvidenceReviewFromMessage(db, messageIds[0]!, {})
+    const detail = seedEvidenceReview(db, { messageId: messageIds[0]! })
     return { reviewId: detail.id, items: detail.items }
   }
 
   it('sweeps N items with ONE guard read, ONE update and ONE head stamp (was N of each)', () => {
-    const raw = freshDb()
+    const raw = freshWorkspaceDb('evbatch').db
     const { reviewId, items } = seedReviewForSweep(raw)
     const undecided = items.filter((i) => i.decision === 'not_reviewed')
     expect(undecided.length).toBeGreaterThan(1) // the sweep must be genuinely plural
 
-    // The per-item shape, for the record: each write re-read the head for the ready guard,
-    // re-stamped the head, and re-read the item back.
-    const perItem = recordingDb(raw)
-    for (const item of undecided) {
-      updateEvidenceReviewItem(perItem.db, item.id, { decision: 'follow_up' })
-    }
-    expect(countMatching(perItem.executed, 'SELECT * FROM evidence_reviews WHERE id = ?')).toBe(
-      undecided.length
-    )
-    expect(
-      countMatching(perItem.executed, 'UPDATE evidence_reviews SET updated_at = ? WHERE id = ?')
-    ).toBe(undecided.length)
-    expect(
-      countMatching(perItem.executed, 'UPDATE evidence_review_items SET decision = ?')
-    ).toBe(undecided.length)
-
-    // Reset, then the batched action: constant statement counts.
-    expect(applyEvidenceReviewBulkAction(raw, reviewId, 'clear_decisions')).not.toBeNull()
+    // The batched action: constant statement counts, however many items it sweeps.
     const batched = recordingDb(raw)
     const after = applyEvidenceReviewBulkAction(batched.db, reviewId, 'undecided_follow_up')
     expect(after).not.toBeNull()
@@ -339,7 +295,7 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
   })
 
   it('ATOMIC: a failure part-way through leaves the review COMPLETELY unchanged', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('evbatch').db
     const { reviewId } = seedReviewForSweep(db)
     // Give the review a mixed starting state worth preserving.
     const start = getEvidenceReview(db, reviewId)!
@@ -371,7 +327,7 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
   })
 
   it('headings→N/A touches ONLY headings; follow-up spares already-decided items', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('evbatch').db
     const { reviewId } = seedReviewForSweep(db)
     const start = getEvidenceReview(db, reviewId)!
     const heading = start.items.find((i) => i.blockKind === 'heading')!
@@ -396,7 +352,7 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
   })
 
   it('a sweep that matches nothing writes nothing — the activity stamp does not move', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('evbatch').db
     const { reviewId } = seedReviewForSweep(db)
     expect(applyEvidenceReviewBulkAction(db, reviewId, 'clear_decisions')).not.toBeNull()
     const stamp = getEvidenceReview(db, reviewId)!.updatedAt
@@ -409,7 +365,7 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
   })
 
   it('refuses on an unknown id and on a READY review (reopen first)', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('evbatch').db
     const { reviewId } = seedReviewForSweep(db)
     expect(applyEvidenceReviewBulkAction(db, 'no-such-review', 'clear_decisions')).toBeNull()
 
@@ -423,14 +379,19 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
   })
 
   it('over IPC: applies once, refuses unknown ids AND unrecognized action names', async () => {
-    const db = freshDb()
+    const { db, root } = freshWorkspaceDb('evbatch')
     const { reviewId } = seedReviewForSweep(db)
-    registerEvidenceReviewsIpc(ctxFor(db))
+    registerEvidenceReviewsIpc(evidenceIpcContext(db, root).ctx)
 
     const applied = (
       await invoke(handlers, IPC.applyEvidenceReviewBulkAction, reviewId, 'undecided_follow_up')
     ).result as EvidenceReviewItem[]
-    expect(applied.some((i) => i.decision === 'follow_up')).toBe(true)
+    expect(applied.map((i) => [i.blockKind, i.decision])).toEqual([
+      ['heading', 'not_applicable'],
+      ['paragraph', 'follow_up'],
+      ['paragraph', 'follow_up']
+    ])
+    const afterApply = decisionsOf(db, reviewId)
 
     // The forbidden blanket claim has no name on this channel; nor does anything malformed.
     for (const bad of ['supported', 'mark_all_supported', 'CLEAR_DECISIONS', '', null, 7, {}]) {
@@ -438,58 +399,71 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
         (await invoke(handlers, IPC.applyEvidenceReviewBulkAction, reviewId, bad)).result
       ).toBeNull()
     }
-    // …and none of those refusals moved a decision.
-    const after = getEvidenceReview(db, reviewId)!
-    expect(after.items.every((i) => i.decision !== 'supported')).toBe(true)
+    // …and none of those refusals moved a decision (a mis-routed clear or follow-up sweep would).
+    expect(decisionsOf(db, reviewId)).toEqual(afterApply)
     expect(
       (await invoke(handlers, IPC.applyEvidenceReviewBulkAction, '', 'clear_decisions')).result
+    ).toBeNull()
+    expect(
+      (await invoke(handlers, IPC.applyEvidenceReviewBulkAction, UNBINDABLE_ID, 'clear_decisions')).result
     ).toBeNull()
   })
 })
 
 // ---- AUD-14: the conversation_id index ------------------------------------------------
 
-// TS-5 idiom: assert the index NAME the planner picks, never its phrasing — EXPLAIN QUERY
-// PLAN detail strings ("SCAN", "COVERING", "USE TEMP B-TREE") are unstable planner output
-// that shifts with the SQLite bundled by the pinned Node, with no behavior change. Which
-// INDEX serves the query is the actual contract. The one place a phrase IS asserted is the
-// TEETH test, where dropping the index must produce a SCAN — that is the finding itself.
+// TS-5 idiom: assert the index NAME the planner picks for the statements production PREPARES
+// (captured with capturePrepares), never its phrasing — EXPLAIN QUERY PLAN detail strings
+// ("SCAN", "COVERING", "USE TEMP B-TREE") are unstable planner output that shifts with the
+// SQLite bundled by the pinned Node, with no behavior change. Which INDEX serves the query is
+// the actual contract. Only TEETH asserts SCAN: dropping the index must produce one — that is
+// the finding itself. The COUNT row also asserts SEARCH: a covering-index scan names the index too.
 describe('AUD-14 — conversation-scoped review reads are index SEARCHes, not table SCANs', () => {
   const COUNT_SQL = 'SELECT COUNT(*) AS n FROM evidence_reviews WHERE conversation_id = ?'
-  const BATCH_SQL = 'SELECT * FROM evidence_reviews WHERE conversation_id = ?'
+  /** The two conversation-scoped HEAD reads; the batch item read (`JOIN evidence_reviews r ON …`) does not match. */
+  const HEAD_STATEMENT = /FROM evidence_reviews WHERE /
 
-  it('the delete-confirm COUNT is served by idx_evidence_reviews_conversation', () => {
-    const db = freshDb()
-    const p = plan(db, COUNT_SQL, 'c1')
+  it('the delete-confirm COUNT is served by idx_evidence_reviews_conversation', async () => {
+    const db = freshWorkspaceDb('evbatch').db // fresh: prepareCached prepares once per Db
+    const sql = await capturePrepares(db, HEAD_STATEMENT, () => countEvidenceReviewsForConversation(db, 'c1'))
+    expect(sql).toHaveLength(1)
+    const p = plan(db, sql[0]!, 'c1')
     expect(p).toContain('idx_evidence_reviews_conversation')
+    // The COUNT needs only the indexed column, so even a filter the index cannot serve
+    // (`lower(conversation_id) = …`) SCANs the covering index and names it: the name alone
+    // cannot tell the two apart here.
     expect(p).toContain('SEARCH evidence_reviews')
   })
 
-  it('the chip-state batch head read is served by the same index', () => {
-    const db = freshDb()
-    const p = plan(db, BATCH_SQL, 'c1')
-    expect(p).toContain('idx_evidence_reviews_conversation')
-    expect(p).toContain('SEARCH evidence_reviews')
+  it('the chip-state batch head read is served by the same index', async () => {
+    const db = freshWorkspaceDb('evbatch').db
+    const sql = await capturePrepares(db, HEAD_STATEMENT, () => listEvidenceReviewSummariesForConversation(db, 'c1'))
+    expect(sql).toHaveLength(1)
+    expect(plan(db, sql[0]!, 'c1')).toContain('idx_evidence_reviews_conversation')
   })
 
-  it('TEETH: without the index both queries fall back to a full table SCAN', () => {
-    const db = freshDb()
+  it('TEETH: without the index both queries fall back to a full table SCAN', async () => {
+    const db = freshWorkspaceDb('evbatch').db
     db.exec('DROP INDEX idx_evidence_reviews_conversation')
-    for (const sql of [COUNT_SQL, BATCH_SQL]) {
-      const p = plan(db, sql, 'c1')
+    const sql = await capturePrepares(db, HEAD_STATEMENT, () => {
+      countEvidenceReviewsForConversation(db, 'c1')
+      listEvidenceReviewSummariesForConversation(db, 'c1')
+    })
+    expect(sql).toHaveLength(2)
+    for (const s of sql) {
+      const p = plan(db, s, 'c1')
       expect(p).not.toContain('idx_evidence_reviews_conversation')
       expect(p).toContain('SCAN evidence_reviews')
     }
   })
 
   it('the index reaches an EXISTING workspace too (additive ensure-on-open)', () => {
-    const path = join(mkdtempSync(join(tmpdir(), 'hilbertraum-evbatch-mig-')), 'test.sqlite')
-    const first = openDatabase(path)
+    const { db: first, root } = freshWorkspaceDb('evbatch-mig')
     first.exec('DROP INDEX IF EXISTS idx_evidence_reviews_conversation')
     expect(plan(first, COUNT_SQL, 'c1')).not.toContain('idx_evidence_reviews_conversation')
     first.close()
     // Re-opening the SAME file re-applies the schema, index included.
-    const reopened = openDatabase(path)
+    const reopened = openDatabase(join(root, 'test.sqlite'))
     expect(plan(reopened, COUNT_SQL, 'c1')).toContain('idx_evidence_reviews_conversation')
   })
 })

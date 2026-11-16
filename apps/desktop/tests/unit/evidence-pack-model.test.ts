@@ -5,28 +5,24 @@ import {
   EVIDENCE_PACK_SCHEMA_VERSION,
   PACK_DECISION_ORDER
 } from '../../src/main/services/evidence-pack/pack-model'
-import { sourceKindForMode } from '../../src/main/services/evidence-pack/snapshot'
 import {
   EVIDENCE_PACK_OPTION_DEFAULTS,
-  evidencePaneMode,
   packLanguageFor,
-  packLanguageLineKey
+  packLanguageLineKey,
+  type EvidencePaneMode
 } from '../../src/shared/evidence-review'
 import { UI_LANGUAGES, uiLanguageInfo, type UiLanguageInfo } from '../../src/shared/i18n'
-import type { CoverageInfo, EvidencePackLanguage, EvidencePackOptions } from '../../src/shared/types'
-import { makeDetail, makeItem } from '../helpers/evidenceReview'
+import type { CoverageInfo, EvidencePackLanguage } from '../../src/shared/types'
+import { archiveSource, makeDetail, makeItem, packOptions } from '../helpers/evidenceReview'
 
 // EP-1 plan §8.1 — the pure pack model: §16.2 option resolution at the untrusted boundary
 // (defaults + tolerance), the nine-section §16.1 normalization from stored review data
-// only, the honesty-mode REUSE pin (pack mapping ≡ evidencePaneMode ≡ the P1
-// sourceKindForMode semantics — unknown-PRESENT modes stay WEAK), and the malformed→
-// "Unavailable" (null, never invented) degradations.
+// only, the honesty-mode REUSE pin (the pack's class per coverage mode, as literals —
+// unknown-PRESENT modes stay WEAK; evidencePaneMode's own table is evidence-pane-mode.test.ts),
+// and the malformed→"Unavailable" (null, never invented) degradations.
 
+// This suite's own pack metadata (the nine-section row reads the 'pack-1' id back).
 const META = { packId: 'pack-1', generatedAt: '2026-07-18T12:00:00.000Z', format: 'html' } as const
-
-function opts(over: Partial<EvidencePackOptions> = {}): EvidencePackOptions {
-  return { language: 'en', ...EVIDENCE_PACK_OPTION_DEFAULTS, ...over }
-}
 
 describe('resolveEvidencePackOptions (spec §16.2 boundary)', () => {
   it('applies the shared defaults — privacy-sensitive technical extras OFF', () => {
@@ -126,7 +122,7 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
         }
       ]
     })
-    const model = buildEvidencePackModel(detail, opts(), META)
+    const model = buildEvidencePackModel(detail, packOptions(), META)
     expect(model.packId).toBe('pack-1')
     expect(model.schemaVersion).toBe(EVIDENCE_PACK_SCHEMA_VERSION)
     expect(model.format).toBe('html')
@@ -158,26 +154,23 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
   })
 
   it('reuses the shared honesty mapping — unknown-PRESENT modes stay WEAK (whole-doc)', () => {
-    const cases: Array<CoverageInfo | null> = [
-      null,
-      { mode: 'relevance', chunksCovered: 1, chunksTotal: 2 },
-      { mode: 'tree', chunksCovered: 5, chunksTotal: 5 },
-      { mode: 'capped', chunksCovered: 3, chunksTotal: 9 },
-      { mode: 'extract', chunksCovered: 2, chunksTotal: 2 },
+    // The pack's class per mode, as literals (the same classes the review pane shows).
+    const cases: Array<[CoverageInfo | null, EvidencePaneMode]> = [
+      [null, 'relevance'],
+      [{ mode: 'relevance', chunksCovered: 1, chunksTotal: 2 }, 'relevance'],
+      [{ mode: 'tree', chunksCovered: 5, chunksTotal: 5 }, 'whole_doc'],
+      [{ mode: 'capped', chunksCovered: 3, chunksTotal: 9 }, 'whole_doc'],
+      // #643: a capped whole read whose sections were supplied as labelled excerpts reads as relevance.
+      [{ mode: 'capped', chunksCovered: 9, chunksTotal: 9, labelledExcerpts: true }, 'relevance'],
+      [{ mode: 'extract', chunksCovered: 2, chunksTotal: 2 }, 'structured'],
       // A future/unknown mode a NEWER app version persisted (reachable: parseCoverage
       // accepts any string) — must stay WEAK.
-      { mode: 'hologram-v9', chunksCovered: 1, chunksTotal: 1 } as unknown as CoverageInfo
+      [{ mode: 'hologram-v9', chunksCovered: 1, chunksTotal: 1 } as unknown as CoverageInfo, 'whole_doc']
     ]
-    for (const coverage of cases) {
-      const model = buildEvidencePackModel(makeDetail({ coverageSnapshot: coverage }), opts(), META)
-      // The pack's mode IS evidencePaneMode's — never a re-derived map.
-      expect(model.honesty.paneMode).toBe(evidencePaneMode(coverage))
+    for (const [coverage, expected] of cases) {
+      const model = buildEvidencePackModel(makeDetail({ coverageSnapshot: coverage }), packOptions(), META)
+      expect(model.honesty.paneMode, JSON.stringify(coverage)).toBe(expected)
     }
-    // And evidencePaneMode agrees with the P1 kind map on the weak direction: any mode the
-    // snapshot builder calls whole_document_provenance renders the whole-doc caption.
-    const weird = { mode: 'hologram-v9' } as unknown as CoverageInfo
-    expect(sourceKindForMode(weird.mode)).toBe('whole_document_provenance')
-    expect(evidencePaneMode(weird)).toBe('whole_doc')
   })
 
   it('degrades absent metadata to null — never invented (spec §20.2/§25.5)', () => {
@@ -193,7 +186,7 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
         items: [makeItem({ id: 'i1' })],
         exports: []
       }),
-      opts(),
+      packOptions(),
       META
     )
     expect(model.question).toBeNull()
@@ -206,64 +199,22 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
     expect(model.evidence).toHaveLength(0)
   })
 
-  it('ZIM wave (#294 review M11): an archive source carries the four provenance fields', () => {
-    const detail = makeDetail({
-      sources: [
-        {
-          key: 's1',
-          machineLabel: 'S1',
-          kind: 'direct_excerpt',
-          identity: 'unresolved',
-          documentId: null,
-          documentTitle: 'Treibhausgas',
-          documentSha256: null,
-          mimeType: null,
-          pageNumber: null,
-          sectionLabel: 'Landwirtschaft',
-          snippet: 'Methan entsteht…',
-          sourceChunkId: null,
-          availabilityAtCreation: null,
-          sourceKind: 'archive',
-          archiveTitle: 'Wikipedia (DE)',
-          packId: 'pack-uuid-1',
-          articlePath: 'A/Treibhausgas'
-        }
-      ]
-    })
-    const model = buildEvidencePackModel(detail, opts(), META)
-    expect(model.evidence[0]).toMatchObject({
-      sourceKind: 'archive',
-      archiveTitle: 'Wikipedia (DE)',
-      packId: 'pack-uuid-1',
-      articlePath: 'A/Treibhausgas'
-    })
-  })
-
   it('ZIM wave (#294 review M11): honesty counts split — archiveSources vs unresolvedSources never double-count one source', () => {
     const archiveOnly = makeDetail({
       sources: [
-        {
+        // identity 'unresolved' stated: the double-count guard only matters for an unresolved archive.
+        archiveSource({
           key: 's1',
           machineLabel: 'S1',
-          kind: 'direct_excerpt',
           identity: 'unresolved',
-          documentId: null,
           documentTitle: 'Treibhausgas',
-          documentSha256: null,
-          mimeType: null,
-          pageNumber: null,
-          sectionLabel: null,
-          snippet: null,
-          sourceChunkId: null,
-          availabilityAtCreation: null,
-          sourceKind: 'archive',
           archiveTitle: 'Wikipedia (DE)',
           packId: 'pack-uuid-1',
           articlePath: 'A/Treibhausgas'
-        }
+        })
       ]
     })
-    const archiveModel = buildEvidencePackModel(archiveOnly, opts(), META)
+    const archiveModel = buildEvidencePackModel(archiveOnly, packOptions(), META)
     expect(archiveModel.honesty.archiveSources).toBe(1)
     expect(archiveModel.honesty.unresolvedSources).toBe(0)
 
@@ -287,13 +238,13 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
         }
       ]
     })
-    const documentModel = buildEvidencePackModel(documentUnresolved, opts(), META)
+    const documentModel = buildEvidencePackModel(documentUnresolved, packOptions(), META)
     expect(documentModel.honesty.unresolvedSources).toBe(1)
     expect(documentModel.honesty.archiveSources).toBe(0)
   })
 
   it('ZIM wave (#294 review M11): sourceKind defaults to "document" when the snapshot lacks it', () => {
-    const model = buildEvidencePackModel(makeDetail(), opts(), META)
+    const model = buildEvidencePackModel(makeDetail(), packOptions(), META)
     expect(model.evidence[0]!.sourceKind).toBe('document')
     expect(model.evidence[0]!.archiveTitle).toBeNull()
     expect(model.evidence[0]!.packId).toBeNull()
@@ -335,7 +286,7 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
         }
       ]
     })
-    const model = buildEvidencePackModel(detail, opts(), META)
+    const model = buildEvidencePackModel(detail, packOptions(), META)
     expect(model.honesty.unresolvedSources).toBe(1)
     expect(model.honesty.missingSources).toBe(1)
   })
@@ -350,23 +301,23 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
     })
 
     it('includeReviewerNotes: false nulls item notes AND the general note', () => {
-      const model = buildEvidencePackModel(detail, opts({ includeReviewerNotes: false }), META)
+      const model = buildEvidencePackModel(detail, packOptions({ includeReviewerNotes: false }), META)
       expect(model.items.every((i) => i.note === null)).toBe(true)
       expect(model.summary.generalNote).toBeNull()
     })
 
     it('includeSourceExcerpts: false nulls register snippets', () => {
-      const model = buildEvidencePackModel(detail, opts({ includeSourceExcerpts: false }), META)
+      const model = buildEvidencePackModel(detail, packOptions({ includeSourceExcerpts: false }), META)
       expect(model.evidence.every((s) => s.snippet === null)).toBe(true)
     })
 
     it('includeDocumentHashes: false nulls register hashes', () => {
-      const model = buildEvidencePackModel(detail, opts({ includeDocumentHashes: false }), META)
+      const model = buildEvidencePackModel(detail, packOptions({ includeDocumentHashes: false }), META)
       expect(model.evidence.every((s) => s.documentSha256 === null)).toBe(true)
     })
 
     it('includeUnreviewedItems: false hides not_reviewed items but COUNTS them honestly and keeps their register relations', () => {
-      const model = buildEvidencePackModel(detail, opts({ includeUnreviewedItems: false }), META)
+      const model = buildEvidencePackModel(detail, packOptions({ includeUnreviewedItems: false }), META)
       expect(model.items).toHaveLength(1)
       expect(model.items[0]!.decision).toBe('supported')
       expect(model.excludedItemCount).toBe(1)
@@ -380,7 +331,7 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
     })
 
     it('defaults include everything except technical details', () => {
-      const model = buildEvidencePackModel(detail, opts(), META)
+      const model = buildEvidencePackModel(detail, packOptions(), META)
       expect(model.options.includeTechnicalDetails).toBe(false)
       expect(model.items[0]!.note).toBe('note-1')
       expect(model.excludedItemCount).toBe(0)
@@ -393,7 +344,7 @@ describe('buildEvidencePackModel (spec §16.1 normalization)', () => {
         makeItem({ id: 'i1', links: [{ evidenceKey: 'ghost-key', origin: 'reviewer', relation: null }] })
       ]
     })
-    const model = buildEvidencePackModel(detail, opts(), META)
+    const model = buildEvidencePackModel(detail, packOptions(), META)
     expect(model.items[0]!.links[0]).toMatchObject({ sourceIndex: null, label: 'ghost-key' })
   })
 })

@@ -1,100 +1,60 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
 
 // EP-1 Phase 1 (plan §6.4) — the evidence-review IPC surface through the mocked-electron
-// harness: full create→read→update→delete round trips for all four answer classes, payload
-// guards, the reviewer-origin forcing rule, the freshness stub, the idempotent create — and
-// the phase's MANDATORY no-model/no-network assertions: the runtime is a tripwire that
-// fails the suite if ANY handler touches it, and the real offline connect-guard must stay
-// silent across the entire flow (spec FR-2/FR-12; plan §6 exit gate).
+// harness: the full create→read→update→delete round trip (the four answer classes are the
+// builder's, pinned in evidence-snapshot.test.ts), payload guards, the reviewer-origin forcing
+// rule, the real freshness verdict over the wire, the idempotent create — and the phase's
+// MANDATORY no-model/no-network assertions: the runtime is a tripwire that fails the suite if
+// ANY handler touches it, and the real offline connect-guard must stay silent after EVERY test
+// (`useOfflineGuard`; spec FR-2/FR-12; plan §6 exit gate).
 
 const ipcState = vi.hoisted(() => ({
-  handlers: new Map<string, unknown>(),
-  // Phase 3 (plan §8.3): the export handler's native save dialog, test-controlled. P6
-  // records the options the handler passed (the filter-list "offers PDF and HTML" pin).
+  handlers: new Map() as IpcHandlers,
+  // The export handler's native save dialog, test-controlled; `lastOptions` is what the handler passed.
   saveDialog: {
     canceled: true as boolean,
     filePath: undefined as string | undefined,
     lastOptions: undefined as Record<string, unknown> | undefined
   },
-  // P6: what the REAL print harness saw on the fake hidden window (bytes it returns,
-  // the loaded file, whether the print source existed on disk at load time).
-  pdf: {
-    bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]), // "%PDF-"
-    loadedUrl: undefined as string | undefined,
-    /** What the app's scheme handler served for that URL at load time (#563). */
-    servedAtLoad: undefined as { status: number; body: string } | undefined
-  }
+  // The REAL print harness on the shared fake hidden window (#563: it fetches through the app's real scheme handler).
+  print: { windows: [] as FakePrintWindow[], appListeners: new Map() } as FakePrintElectronState
 }))
 vi.mock('electron', async () => {
-  // P6: a constructible hidden-window fake — the REAL printEvidencePackHtmlToPdf drives
-  // it (loadURL → fonts → printToPDF → destroy); only Electron itself is faked. #563: the load
-  // fetches its URL through the app's REAL scheme handler, as Chromium would.
-  const { createAppProtocolHandler, printPages } = await import('../../src/main/app-protocol')
-  const handler = createAppProtocolHandler({
-    files: new Set(),
-    readFile: async () => {
-      throw new Error('no app files in this test')
-    },
-    printPages
-  })
-  class BrowserWindow {
-    static getFocusedWindow(): null {
-      return null
-    }
-    destroyed = false
-    webContents = {
-      setWindowOpenHandler: (): void => {},
-      on: (): void => {},
-      executeJavaScript: async (): Promise<boolean> => true,
-      printToPDF: async (): Promise<Uint8Array> => ipcState.pdf.bytes
-    }
-    async loadURL(url: string): Promise<void> {
-      ipcState.pdf.loadedUrl = url
-      const res = await handler(new Request(url))
-      ipcState.pdf.servedAtLoad = { status: res.status, body: await res.text() }
-    }
-    isDestroyed(): boolean {
-      return this.destroyed
-    }
-    destroy(): void {
-      this.destroyed = true
-    }
-  }
-  return {
-    ipcMain: {
-      handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
-      removeHandler: (channel: string) => ipcState.handlers.delete(channel)
-    },
-    app: {
-      getVersion: () => '0.0.0-test',
-      once: (): void => {},
-      removeListener: (): void => {}
-    },
-    BrowserWindow,
+  const { fakePrintElectron } = await import('../helpers/fake-print-window')
+  const { fakeIpcMain } = await import('../helpers/ipc')
+  // The fake `app.getVersion()` is '0.0.0-test': create stamps it into the generation snapshot (IP1 reads it).
+  return fakePrintElectron(ipcState.print, {
+    ipcMain: fakeIpcMain(ipcState.handlers),
     dialog: {
       showSaveDialog: async (options: Record<string, unknown>) => {
         ipcState.saveDialog.lastOptions = options
-        return {
-          canceled: ipcState.saveDialog.canceled,
-          filePath: ipcState.saveDialog.filePath
-        }
+        return { canceled: ipcState.saveDialog.canceled, filePath: ipcState.saveDialog.filePath }
       }
+    }
+  })
+})
+
+// node:fs/promises passes through, except an armed `rm` of ONE path (the G1 cleanup failure).
+const fsState = vi.hoisted(() => ({ failRmFor: null as string | null }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      if (fsState.failRmFor !== null && String(args[0]) === fsState.failRmFor) {
+        throw Object.assign(new Error('EPERM: operation not permitted, unlink (injected)'), { code: 'EPERM' })
+      }
+      return actual.rm(...args)
     }
   }
 })
 
-import { randomUUID } from 'node:crypto'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
+import { listAuditEvents } from '../../src/main/services/audit'
 import { IPC } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
-import { isReviewEligible } from '../../src/shared/evidence-review'
-import type { AppContext } from '../../src/main/services/context'
+import { t as tShared } from '../../src/shared/i18n'
 import type {
   Citation,
   CoverageInfo,
@@ -106,99 +66,17 @@ import type {
   EvidenceReviewItem,
   EvidenceReviewSummary
 } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import {
+  evidenceIpcContext,
+  seedAssistantAnswer,
+  seedSourceDocument,
+  useOfflineGuard
+} from '../helpers/evidence-fixtures'
+import type { FakePrintElectronState, FakePrintWindow } from '../helpers/fake-print-window'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
 
-const handlers = ipcState.handlers as unknown as IpcHandlers
-
-/** Model tripwire: every runtime touch is recorded — the suite asserts ZERO touches. */
-function tripwireRuntime(touched: string[]): AppContext['runtime'] {
-  return {
-    active: () => {
-      touched.push('active')
-      return null
-    },
-    activeModelId: () => {
-      touched.push('activeModelId')
-      return null
-    },
-    start: async () => {
-      touched.push('start')
-      throw new Error('model runtime must never start on the evidence surface')
-    },
-    stop: async () => {
-      touched.push('stop')
-    },
-    status: () => {
-      touched.push('status')
-      return { running: false, modelId: null, port: null, healthy: false, message: '' }
-    }
-  } as unknown as AppContext['runtime']
-}
-
-interface Harness {
-  ctx: AppContext
-  db: Db
-  runtimeTouched: string[]
-  root: string
-}
-
-/** `root` reopens an existing workspace file (the restart legs); `unlocked` makes the
- *  lock state test-controllable (the vault lock/unlock legs). Defaults unchanged. */
-function makeHarness(opts: { root?: string; unlocked?: () => boolean } = {}): Harness {
-  const root = opts.root ?? mkdtempSync(join(tmpdir(), 'hilbertraum-epipc-'))
-  const db = openDatabase(join(root, 'test.sqlite'))
-  const runtimeTouched: string[] = []
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
-    workspace: { isUnlocked: opts.unlocked ?? (() => true) },
-    runtime: tripwireRuntime(runtimeTouched),
-    embedder: {
-      id: 'tripwire-embedder',
-      dimensions: 1,
-      embed: async () => {
-        runtimeTouched.push('embed')
-        return []
-      }
-    },
-    manifestsDir: null,
-    isDev: true,
-    audit: createAuditRecorder(() => db)
-  } as unknown as AppContext
-  return { ctx, db, runtimeTouched, root }
-}
-
-function seedDocument(db: Db, opts: { title: string; sha256?: string; mime?: string }): string {
-  const id = randomUUID()
-  const now = new Date().toISOString()
-  db.prepare(
-    `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'indexed', ?, ?)`
-  ).run(id, opts.title, opts.mime ?? 'application/pdf', opts.sha256 ?? 'ab'.repeat(32), now, now)
-  return id
-}
-
-function seedAnswer(
-  db: Db,
-  opts: {
-    content: string
-    citations?: Citation[] | null
-    coverage?: CoverageInfo | null
-    title?: string
-  }
-): { conversationId: string; messageId: string } {
-  const conv = createConversation(db, { title: opts.title ?? 'IPC review chat', modelId: 'm1' })
-  appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Question?' })
-  const msg = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
-    content: opts.content,
-    citations: opts.citations ?? null,
-    coverage: opts.coverage ?? null
-  })
-  return { conversationId: conv.id, messageId: msg.id }
-}
+const handlers = ipcState.handlers
 
 const RELEVANCE = {
   content: '# H\n\nClaim one. [S1]\n\nClaim two. [S2]',
@@ -209,42 +87,40 @@ const RELEVANCE = {
   coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 9 } as CoverageInfo
 }
 
-// The REAL offline tripwire is installed for every test in this file; any remote connect
-// attempt during the evidence flows fails the suite (loopback exempt, as in production).
-let offlineViolations: string[] = []
-let uninstallGuard: () => void = () => {}
+const PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]) // "%PDF-"
 
+// The REAL offline tripwire is installed for every test in this file and asserted silent after
+// each one; any remote connect attempt during the evidence flows fails the suite (loopback
+// exempt, as in production).
+useOfflineGuard()
 beforeEach(() => {
   ipcState.handlers.clear()
-  offlineViolations = []
-  uninstallGuard = installOfflineNetworkGuard({
-    isOffline: () => true,
-    onViolation: (host) => offlineViolations.push(host)
-  })
+  fsState.failRmFor = null
 })
 
-afterEach(() => {
-  uninstallGuard()
-})
+/** One workspace + the real registrar on H's tripwired context. */
+function harness(o: { unlocked?: () => boolean } = {}) {
+  const { db, root } = freshWorkspaceDb('epipc')
+  const c = evidenceIpcContext(db, root, o)
+  registerEvidenceReviewsIpc(c.ctx)
+  return { db, root, ...c }
+}
 
 describe('evidence-review IPC round trips (mocked-electron harness)', () => {
   it('create→read→update→decide→select→link→ready→reopen→refresh→delete, model never touched, offline guard silent', async () => {
-    const { ctx, db, runtimeTouched } = makeHarness()
-    registerEvidenceReviewsIpc(ctx)
+    const { db, runtimeTouched } = harness()
     // FIX-4c: one citation WITH a documentId (the byId resolution branch) and one without
     // (title-unmatched → unresolved) — both resolved under the tripwire-asserted flow.
-    const docId = seedDocument(db, { title: 'A.pdf', sha256: 'aa'.repeat(32) })
-    const { messageId } = seedAnswer(db, {
+    const docId = seedSourceDocument(db, { title: 'A.pdf', sha256: 'aa'.repeat(32) })
+    const { messageId } = seedAssistantAnswer(db, {
       content: RELEVANCE.content,
       citations: [
         { label: 'S1', sourceTitle: 'A.pdf', documentId: docId, chunkId: 'c1' },
         { label: 'S2', sourceTitle: 'B.pdf' }
       ],
-      coverage: RELEVANCE.coverage
+      coverage: RELEVANCE.coverage,
+      modelId: 'm1'
     })
-
-    // The shared eligibility rule the renderer will use (plan §6.5): this answer qualifies.
-    expect(isReviewEligible({ role: 'assistant', citations: RELEVANCE.citations, coverage: RELEVANCE.coverage })).toBe(true)
 
     // -- create
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
@@ -385,59 +261,13 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect(types).toContain('evidence_review_ready')
     expect(types).toContain('evidence_review_deleted')
 
-    // -- the phase's hard rules, asserted over the WHOLE flow:
+    // -- the phase's hard rule, asserted over the WHOLE flow (the offline guard: after every test):
     expect(runtimeTouched).toEqual([]) // model runtime never consulted, never started
-    expect(offlineViolations).toEqual([]) // no remote connect attempt anywhere
-  })
-
-  it('exit gate: create→read→update→delete works for all four answer classes from persisted data only', async () => {
-    const { ctx, db, runtimeTouched } = makeHarness()
-    registerEvidenceReviewsIpc(ctx)
-
-    const classes = [
-      { name: 'relevance', ...RELEVANCE },
-      {
-        name: 'whole-doc tree',
-        content: 'Derived summary.\n\nSecond point. [S1]',
-        citations: [{ label: 'S1', sourceTitle: 'R.pdf' }] as Citation[],
-        coverage: { mode: 'tree', chunksCovered: 5, chunksTotal: 5 } as CoverageInfo
-      },
-      {
-        name: 'extract',
-        content: 'Three amounts found. [S1]',
-        citations: [{ label: 'S1', sourceTitle: 'I.pdf' }] as Citation[],
-        coverage: { mode: 'extract', chunksCovered: 3, chunksTotal: 3 } as CoverageInfo
-      },
-      { name: 'legacy no-citation', content: 'Plain legacy answer.', citations: null, coverage: null }
-    ] as const
-
-    for (const cls of classes) {
-      const { messageId } = seedAnswer(db, cls)
-      const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
-      const created = createdRaw as EvidenceReviewDetail
-      expect(created.items.length).toBeGreaterThan(0)
-      if (cls.coverage?.mode === 'tree' || cls.coverage?.mode === 'extract') {
-        // Spec §13.3 hard rule through the REAL handler: zero auto-links.
-        expect(created.items.every((i) => i.links.length === 0)).toBe(true)
-      }
-      const { result: read } = await invoke(handlers, IPC.getEvidenceReview, created.id)
-      expect((read as EvidenceReviewDetail).id).toBe(created.id)
-      const { result: renamed } = await invoke(handlers, IPC.updateEvidenceReview, created.id, {
-        title: `${cls.name} pass`
-      })
-      expect((renamed as EvidenceReview).title).toBe(`${cls.name} pass`)
-      const { result: deleted } = await invoke(handlers, IPC.deleteEvidenceReview, created.id)
-      expect(deleted).toBe(true)
-    }
-
-    expect(runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
   })
 
   it('payload guards: malformed ids and shapes read as unknown; create refuses garbage loudly', async () => {
-    const { ctx, db, runtimeTouched } = makeHarness()
-    registerEvidenceReviewsIpc(ctx)
-    const { messageId } = seedAnswer(db, RELEVANCE)
+    const { db, runtimeTouched } = harness()
+    const { messageId } = seedAssistantAnswer(db, RELEVANCE)
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
 
@@ -448,9 +278,19 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect((await invoke(handlers, IPC.deleteEvidenceSelection, null)).result).toBe(false)
     expect((await invoke(handlers, IPC.removeEvidenceLink, created.items[0]!.id, 7)).result).toBe(false)
     expect((await invoke(handlers, IPC.deleteEvidenceReview, undefined)).result).toBe(false)
+    // The legs above bind and match no row (null contract; {} is read as an empty named-parameter bag). `true` cannot be bound by node:sqlite: only safeId keeps these from throwing (undefined, above, already reaches that guard).
+    expect((await invoke(handlers, IPC.getEvidenceReview, true)).result).toBeNull()
+    expect((await invoke(handlers, IPC.getEvidenceReviewForMessage, true)).result).toBeNull()
+    expect((await invoke(handlers, IPC.updateEvidenceReview, true, { title: 'x' })).result).toBeNull()
+    expect((await invoke(handlers, IPC.deleteEvidenceSelection, true)).result).toBe(false)
+    expect((await invoke(handlers, IPC.removeEvidenceLink, created.items[0]!.id, true)).result).toBe(false)
     await expect(invoke(handlers, IPC.createEvidenceReview, { not: 'a string' })).rejects.toThrow(
-      /review request/i
+      tShared('en', 'main.evidenceReviews.invalidRequest')
     )
+    // Unknown and non-assistant messages: the builder's ids-only errors cross the wire unmapped.
+    await expect(invoke(handlers, IPC.createEvidenceReview, 'missing-msg')).rejects.toThrow('missing-msg')
+    const userTurn = seedAssistantAnswer(db, { content: 'A', question: 'Q' })
+    await expect(invoke(handlers, IPC.createEvidenceReview, userTurn.questionId!)).rejects.toThrow(userTurn.questionId!)
 
     // A malformed item patch DROPS the bad fields: an unknown decision literal never
     // reaches storage and never clears the stored decision.
@@ -462,13 +302,11 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     })
     expect(junkPatch as EvidenceReviewItem).toMatchObject({ decision: 'supported', reviewerNote: null })
 
-    // A malformed head patch keeps the stored title (empty-title renames are ignored too).
-    const { result: kept } = await invoke(handlers, IPC.updateEvidenceReview, created.id, {
-      title: '   '
-    })
-    expect((kept as EvidenceReview).title).toBe(created.title)
+    // A malformed head patch DROPS the bad field: a non-string reviewer label never reaches storage.
+    const { result: labelKept } = await invoke(handlers, IPC.updateEvidenceReview, created.id, { reviewerLabel: 42 })
+    expect(labelKept as EvidenceReview).toMatchObject({ reviewerLabel: null })
 
-    // A malformed selection input refuses without touching the service.
+    // A malformed selection input refuses. The two shapes below are refused by the service too ('' matches no block, '0' is not an integer).
     expect(
       (await invoke(handlers, IPC.createEvidenceSelection, created.id, { blockKey: '', startOffset: 0, endOffset: 1 }))
         .result
@@ -477,29 +315,17 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
       (await invoke(handlers, IPC.createEvidenceSelection, created.id, { blockKey: item.blockKey, startOffset: '0', endOffset: 1 }))
         .result
     ).toBeNull()
+    // A TRUTHY non-object passes the handler's `id && selection` check unless sanitizeSelectionInput turns it into null:
+    // the service would read `(42).blockKey`, bind undefined and throw.
+    expect((await invoke(handlers, IPC.createEvidenceSelection, created.id, 42)).result).toBeNull()
 
     // FIX-4b: the hard rules hold across the guard flows too.
     expect(runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
-  })
-
-  it('creating a review for an unknown or non-assistant message throws ids-only errors', async () => {
-    const { ctx, db, runtimeTouched } = makeHarness()
-    registerEvidenceReviewsIpc(ctx)
-    await expect(invoke(handlers, IPC.createEvidenceReview, 'missing-msg')).rejects.toThrow('missing-msg')
-    const conv = createConversation(db, { title: 'T' })
-    const user = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Q' })
-    await expect(invoke(handlers, IPC.createEvidenceReview, user.id)).rejects.toThrow(user.id)
-
-    // FIX-4b: the hard rules hold across the refusal flows too.
-    expect(runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
   })
 
   it('FIX-5: markReady on an already-ready review is a NO-OP — original completed_at kept, exactly one audit event', async () => {
-    const { ctx, db, runtimeTouched } = makeHarness()
-    registerEvidenceReviewsIpc(ctx)
-    const { messageId } = seedAnswer(db, {
+    const { db, runtimeTouched } = harness()
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Single claim. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'A.pdf' }],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
@@ -525,58 +351,17 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'evidence_review_ready')).toHaveLength(1)
 
     expect(runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
   })
 })
 
-// ---- Phase 2 (plan §7): the review survives restart and vault lock/unlock -------------
-describe('review persistence across restart + lock (EP-1 plan §7 exit gate)', () => {
-  it('a decided review reopens INTACT after DB close + reopen (app restart), zero model/network', async () => {
-    const first = makeHarness()
-    registerEvidenceReviewsIpc(first.ctx)
-    const docId = seedDocument(first.db, { title: 'A.pdf' })
-    const { messageId } = seedAnswer(first.db, {
-      content: RELEVANCE.content,
-      citations: [{ label: 'S1', sourceTitle: 'A.pdf', documentId: docId }],
-      coverage: RELEVANCE.coverage
-    })
-    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
-    const created = createdRaw as EvidenceReviewDetail
-    const target = created.items.find((i) => i.blockKind === 'paragraph')!
-    await invoke(handlers, IPC.updateEvidenceReviewItem, target.id, {
-      decision: 'supported',
-      reviewerNote: 'checked against page 12'
-    })
-    await invoke(handlers, IPC.updateEvidenceReview, created.id, { reviewerLabel: 'QA' })
-
-    // "Restart": close the DB, reopen the SAME workspace file, re-register the handlers.
-    first.db.close()
-    ipcState.handlers.clear()
-    const second = makeHarness({ root: first.root })
-    registerEvidenceReviewsIpc(second.ctx)
-
-    const { result: reloadedRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
-    const reloaded = reloadedRaw as EvidenceReviewDetail
-    expect(reloaded.reviewerLabel).toBe('QA')
-    const reloadedItem = reloaded.items.find((i) => i.id === target.id)!
-    expect(reloadedItem.decision).toBe('supported')
-    expect(reloadedItem.reviewerNote).toBe('checked against page 12')
-    // The frozen snapshots also survived (the review renders THESE, never the live message).
-    expect(reloaded.answerSnapshot).toBe(RELEVANCE.content)
-    expect(reloaded.sources[0]!.documentTitle).toBe('A.pdf')
-
-    expect(first.runtimeTouched).toEqual([])
-    expect(second.runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
-  })
-
+// ---- Phase 2 (plan §7): the vault lock gate and the D-2 count (the restart leg lives in evidence-reviews.test.ts) ----
+describe('vault lock + the D-2 delete-confirm count (EP-1 plan §7 exit gate)', () => {
   // The EVERY-channel lock guarantee lives in ipc-lock-coverage.test.ts (it enumerates all
   // registered handlers); this leg samples read/write/count through a REAL lock→unlock cycle.
   it('vault lock refuses sampled evidence channels (read/write/count) with the friendly copy; unlock restores the data', async () => {
     let unlocked = true
-    const h = makeHarness({ unlocked: () => unlocked })
-    registerEvidenceReviewsIpc(h.ctx)
-    const { conversationId, messageId } = seedAnswer(h.db, {
+    const h = harness({ unlocked: () => unlocked })
+    const { conversationId, messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
       citations: RELEVANCE.citations,
       coverage: RELEVANCE.coverage
@@ -603,14 +388,12 @@ describe('review persistence across restart + lock (EP-1 plan §7 exit gate)', (
     // The pre-lock decision is intact; the locked-out write never landed.
     expect(after.items.find((i) => i.id === target.id)!.decision).toBe('follow_up')
     expect(h.runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
   })
 
   it('countEvidenceReviewsForConversation (D-2): per-conversation counts, ids-only, malformed → 0', async () => {
-    const h = makeHarness()
-    registerEvidenceReviewsIpc(h.ctx)
-    const a = seedAnswer(h.db, { content: RELEVANCE.content, citations: RELEVANCE.citations })
-    const b = seedAnswer(h.db, { content: 'Other. [S1]', citations: RELEVANCE.citations })
+    const h = harness()
+    const a = seedAssistantAnswer(h.db, { content: RELEVANCE.content, citations: RELEVANCE.citations })
+    const b = seedAssistantAnswer(h.db, { content: 'Other. [S1]', citations: RELEVANCE.citations })
 
     expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, a.conversationId)).result).toBe(0)
     await invoke(handlers, IPC.createEvidenceReview, a.messageId)
@@ -620,8 +403,9 @@ describe('review persistence across restart + lock (EP-1 plan §7 exit gate)', (
     // Malformed ids read as "no reviews", matching the surface's unknown-id results.
     expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, 42)).result).toBe(0)
     expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, '')).result).toBe(0)
+    // 42 and '' bind and count nothing (the null contract); `true` cannot be bound: only safeId keeps it from throwing.
+    expect((await invoke(handlers, IPC.countEvidenceReviewsForConversation, true)).result).toBe(0)
     expect(h.runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
   })
 })
 
@@ -630,64 +414,13 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     ipcState.saveDialog.canceled = true
     ipcState.saveDialog.filePath = undefined
     ipcState.saveDialog.lastOptions = undefined
-    ipcState.pdf.loadedUrl = undefined
-    ipcState.pdf.servedAtLoad = undefined
-  })
-
-  it('exports a READY review: file written, record returned, exports on the detail, audit ids-only, no model/no network', async () => {
-    const h = makeHarness()
-    registerEvidenceReviewsIpc(h.ctx)
-    const { messageId } = seedAnswer(h.db, {
-      content: RELEVANCE.content,
-      citations: RELEVANCE.citations,
-      coverage: RELEVANCE.coverage
-    })
-    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
-    const created = createdRaw as EvidenceReviewDetail
-    for (const item of created.items) {
-      if (item.blockKind !== 'heading') {
-        await invoke(handlers, IPC.updateEvidenceReviewItem, item.id, { decision: 'supported' })
-      }
-    }
-    const { result: readyRaw } = await invoke(handlers, IPC.markEvidenceReviewReady, created.id)
-    expect((readyRaw as { review: EvidenceReview }).review.status).toBe('ready')
-
-    // Export the ready review — the ready-state write-guard must NOT block this (P2
-    // handoff: verify, don't assume).
-    const dest = join(h.root, 'ready-pack.html')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
-    const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
-      language: 'en'
-    })
-    const record = recordRaw as EvidenceExportRecord
-    expect(record).not.toBeNull()
-    expect(record.format).toBe('html')
-    expect(record.fileName).toBe('ready-pack.html')
-    expect(existsSync(dest)).toBe(true)
-    expect(readFileSync(dest, 'utf8')).toContain('Evidence pack')
-
-    // The detail read now carries the export row (the renderer history source).
-    const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
-    const detail = detailRaw as EvidenceReviewDetail
-    expect(detail.exports).toHaveLength(1)
-    expect(detail.exports[0]!.fileSha256).toBe(record.fileSha256)
-
-    // Audit: exactly {reviewId, format} — never the path, never the title.
-    const exported = listAuditEvents(h.db, { limit: 100 }).find(
-      (e) => e.type === 'evidence_pack_exported'
-    )
-    expect(exported?.message).toBe('Evidence pack exported')
-    expect(exported?.metadata).toEqual({ reviewId: created.id, format: 'html' })
-
-    expect(h.runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
+    ipcState.print.windows.length = 0
+    ipcState.print.printToPDF = async () => PDF_BYTES
   })
 
   it('cancel → null, no file, no row, no audit event', async () => {
-    const h = makeHarness()
-    registerEvidenceReviewsIpc(h.ctx)
-    const { messageId } = seedAnswer(h.db, {
+    const h = harness()
+    const { messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
       citations: RELEVANCE.citations,
       coverage: RELEVANCE.coverage
@@ -699,16 +432,13 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(result).toBeNull()
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
     expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
-    expect(
-      listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')
-    ).toBe(false)
+    expect(listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')).toBe(false)
     expect(h.runtimeTouched).toEqual([])
   })
 
   it('FIX-1: a post-rename record failure surfaces as the LOCALIZED distinct error — file removed, no row, no audit event, never null', async () => {
-    const h = makeHarness()
-    registerEvidenceReviewsIpc(h.ctx)
-    const { messageId } = seedAnswer(h.db, {
+    const h = harness()
+    const { messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
       citations: RELEVANCE.citations,
       coverage: RELEVANCE.coverage
@@ -729,22 +459,50 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(existsSync(dest)).toBe(false)
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
     expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
-    expect(
-      listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')
-    ).toBe(false)
+    expect(listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')).toBe(false)
     expect(h.runtimeTouched).toEqual([])
   })
 
+  it('FIX-1: a post-rename record failure whose cleanup also fails surfaces the exportFileNotRecorded copy — the file stays, no row, no audit event', async () => {
+    const { db, root, runtimeTouched } = harness()
+    const { messageId } = seedAssistantAnswer(db, {
+      content: RELEVANCE.content,
+      citations: RELEVANCE.citations,
+      coverage: RELEVANCE.coverage
+    })
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
+    const created = createdRaw as EvidenceReviewDetail
+    const dest = join(root, 'unrecorded-ipc.html')
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = dest
+    // The record INSERT fails after the rename, and the unlink that would restore "no file" fails too.
+    db.exec("CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected'); END")
+    fsState.failRmFor = dest
+    try {
+      await expect(invoke(handlers, IPC.exportEvidencePack, created.id, {})).rejects.toThrow(
+        tShared('en', 'main.evidenceReviews.exportFileNotRecorded')
+      )
+    } finally {
+      fsState.failRmFor = null
+      db.exec('DROP TRIGGER fail_export')
+    }
+    // The one named residual state (security-model "named, never silent"): the file exists and nothing records it.
+    expect(existsSync(dest)).toBe(true)
+    const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
+    expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
+    expect(listAuditEvents(db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')).toBe(false)
+    expect(runtimeTouched).toEqual([])
+  })
+
   it('guards the boundary: malformed id → null without a dialog; hostile options resolve to defaults', async () => {
-    const h = makeHarness()
-    registerEvidenceReviewsIpc(h.ctx)
-    // Unknown/malformed ids never reach the dialog (canceled=true would return null
-    // anyway — assert the null comes back for both shapes).
+    const h = harness()
+    // Unknown/malformed ids never reach the dialog: the dialog would also answer null (it is cancelled), so read what it was asked.
     expect((await invoke(handlers, IPC.exportEvidencePack, 42, {})).result).toBeNull()
     expect((await invoke(handlers, IPC.exportEvidencePack, '', {})).result).toBeNull()
     expect((await invoke(handlers, IPC.exportEvidencePack, 'no-such-review', {})).result).toBeNull()
+    expect(ipcState.saveDialog.lastOptions).toBeUndefined() // no dialog for a malformed or unknown id
 
-    const { messageId } = seedAnswer(h.db, {
+    const { messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
       citations: RELEVANCE.citations,
       coverage: RELEVANCE.coverage
@@ -774,9 +532,8 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
   })
 
   it('P6: PDF over the SAME channel — dialog offers BOTH formats (PDF first), the REAL harness prints, row + audit say "pdf"', async () => {
-    const h = makeHarness()
-    registerEvidenceReviewsIpc(h.ctx)
-    const { messageId } = seedAnswer(h.db, {
+    const h = harness()
+    const { messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
       citations: RELEVANCE.citations,
       coverage: RELEVANCE.coverage
@@ -802,33 +559,32 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     // The REAL print harness ran: it loaded the pack FROM MEMORY on the print host under a
     // random token (#563), served once by the app's own scheme handler — and nothing beside the
     // destination but the destination itself.
-    expect(String(ipcState.pdf.loadedUrl)).toMatch(/^hilbertraum:\/\/print\/[0-9a-f]{64}$/)
-    expect(ipcState.pdf.servedAtLoad?.status).toBe(200)
-    expect(ipcState.pdf.servedAtLoad?.body.startsWith('<!DOCTYPE html>')).toBe(true)
+    expect(ipcState.print.windows).toHaveLength(1)
+    expect(String(ipcState.print.windows[0]!.loadedUrl)).toMatch(/^hilbertraum:\/\/print\/[0-9a-f]{64}$/)
+    expect(ipcState.print.windows[0]!.served?.status).toBe(200)
+    expect(ipcState.print.windows[0]!.served?.body.startsWith('<!DOCTYPE html>')).toBe(true)
     expect(readdirSync(h.root).filter((f) => f.startsWith('pack.pdf'))).toEqual(['pack.pdf'])
 
     // The destination holds the printer's bytes; the row + audit record 'pdf'.
-    expect(new Uint8Array(readFileSync(dest))).toEqual(ipcState.pdf.bytes)
+    expect(new Uint8Array(readFileSync(dest))).toEqual(PDF_BYTES)
     expect(record.format).toBe('pdf')
     expect(record.fileName).toBe('pack.pdf')
     expect(record.options).not.toHaveProperty('format')
-    const exported = listAuditEvents(h.db, { limit: 100 }).find(
-      (e) => e.type === 'evidence_pack_exported'
-    )
+    const exported = listAuditEvents(h.db, { limit: 100 }).find((e) => e.type === 'evidence_pack_exported')
     expect(exported?.metadata).toEqual({ reviewId: created.id, format: 'pdf' })
 
-    // The history read shows the raw stored format (display passthrough).
+    // The history read shows the raw stored format (display passthrough) and the recorded hash.
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
-    expect((detailRaw as EvidenceReviewDetail).exports[0]!.format).toBe('pdf')
+    expect((detailRaw as EvidenceReviewDetail).exports).toEqual([
+      expect.objectContaining({ format: 'pdf', fileName: 'pack.pdf', fileSha256: record.fileSha256 })
+    ])
 
     expect(h.runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
   })
 
   it('P6: absent or malformed format reads html — HTML filter first, both still offered', async () => {
-    const h = makeHarness()
-    registerEvidenceReviewsIpc(h.ctx)
-    const { messageId } = seedAnswer(h.db, {
+    const h = harness()
+    const { messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
       citations: RELEVANCE.citations,
       coverage: RELEVANCE.coverage
@@ -844,20 +600,5 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     ])
     expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
     expect(h.runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
-  })
-})
-
-describe('isReviewEligible (spec §9.1 — the shared entry-point rule)', () => {
-  it('assistant + citations, assistant + coverage, or assistant in a documents conversation', () => {
-    const citations = [{ label: 'S1', sourceTitle: 'A.pdf' }]
-    const coverage: CoverageInfo = { mode: 'tree', chunksCovered: 1, chunksTotal: 1 }
-    expect(isReviewEligible({ role: 'assistant', citations })).toBe(true)
-    expect(isReviewEligible({ role: 'assistant', coverage })).toBe(true)
-    expect(isReviewEligible({ role: 'assistant' }, { mode: 'documents' })).toBe(true)
-    // Not eligible: user turns, plain chat answers without document grounding.
-    expect(isReviewEligible({ role: 'user', citations })).toBe(false)
-    expect(isReviewEligible({ role: 'assistant' })).toBe(false)
-    expect(isReviewEligible({ role: 'assistant', citations: [] }, { mode: 'chat' })).toBe(false)
   })
 })

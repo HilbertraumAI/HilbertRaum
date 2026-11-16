@@ -1494,10 +1494,12 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
 Tests: `ReviewScreen.test.tsx` (journey, exact-key wording, D-7 gating, bulk absence,
 keyboard walk §28.10, drawer focus-return), `ReviewEntryPoints.test.tsx` (visibility matrix +
 D-2 delete-confirm count), `reviewSession.test.ts` (debounce/loss-free/purge), plus
-`GermanSmoke`/`InformationArchitecture`/`LazyScreens` legs and the restart + lock/unlock
-integration legs in `evidence-reviews-ipc.test.ts`. German copy is a DRAFT pending the
-native review pass (Phase 6, D-L7 — flagged in `de.ts`). **(Superseded: the native pass
-landed in P5 — §11.13; the draft flags are gone.)**
+`GermanSmoke`/`InformationArchitecture`/`LazyScreens` legs, the lock/unlock integration leg
+in `evidence-reviews-ipc.test.ts` and the restart leg in `evidence-reviews.test.ts`
+("re-opening an existing DB is idempotent and preserves review data across restarts").
+German copy is a DRAFT pending the native review pass (Phase 6, D-L7 — flagged in
+`de.ts`). **(Superseded: the native pass landed in P5 — §11.13; the draft flags are
+gone.)**
 
 ### 11.13 Evidence-review polish — EP-1 Phase 5 rollout (IMPLEMENTED 2026-07-18, plan §10)
 
@@ -1569,15 +1571,16 @@ Selections, source filter, back-to-conversation, the German native pass, and the
 Tests: `ReviewSelections.test.tsx` (raw-source surface EN + DE — the DE leg pins the
 textarea carrying the RAW `[S1]` snapshot while the rendered block shows `[Q1]`; exact
 UTF-16 offsets incl. astral chars; refusal hint; delete; READY hides the composer and
-disables Remove; D-7 exemption; back-nav callback), `ReviewEvidencePane.test.tsx`
-(cap/stepped reveal/reveal-reset-on-filter-change/filter facets incl. DE `Q3` + section +
-page/empty state/`aria-describedby` tie + no-dangling case),
+disables Remove; the D-7 exemption through the screen's own gate),
+`ReviewEvidencePane.test.tsx` (cap/stepped reveal/reveal-reset-on-filter-change/filter
+facets incl. DE `Q3` + section + page/empty state/`aria-describedby` tie + no-dangling case),
 `ChatBackToConversation.test.tsx` (handoff select incl. the mirrored mode; the deleted-id
 degrade and the no-handoff baseline as one table; and the
 App-LEVEL one-shot-slot test: review → back → Documents → "Ask these documents" wins —
-the FIX-1 blocker repro, mutation-verified), `reviewSession.test.ts` selection token-race
-legs (post-purge create/delete + post-switch create), `evidence-review-open-perf.test.ts`
-(spec §26 tripwire + numbers above).
+the FIX-1 blocker repro, mutation-verified; its first step, the review's ‹ Back reopening
+the originating conversation, is the back-nav proof), `reviewSession.test.ts` selection
+token-race legs (post-purge create/delete + post-switch create),
+`evidence-review-open-perf.test.ts` (spec §26 tripwire + numbers above).
 
 ### 11.14 Token-aligned `<select>`, runnable-first picker order, German closers (IMPLEMENTED 2026-07-24)
 

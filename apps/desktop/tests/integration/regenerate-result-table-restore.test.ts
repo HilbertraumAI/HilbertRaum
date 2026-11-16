@@ -1,7 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // A "regenerate" turn must never silently destroy the result table of an answer it then puts BACK.
 //
@@ -35,13 +32,10 @@ vi.mock('electron', () => ({
 }))
 
 import { IPC } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
+import type { Db } from '../../src/main/services/db'
 import { MockEmbedder } from '../../src/main/services/embeddings'
-import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import {
   appendMessage,
-  createConversation,
   deleteLastAssistantMessage,
   emptyAssistantMessage,
   listMessages,
@@ -50,16 +44,14 @@ import {
 import { loadResultTable, saveResultTable } from '../../src/main/services/tables/store'
 import type { TableSpec } from '../../src/main/services/tables'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
-import { withRegenerateGuard, type ChatStreamRunFn } from '../../src/main/ipc/chat-stream'
+import { withRegenerateGuard } from '../../src/main/ipc/chat-stream'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import type { AppContext } from '../../src/main/services/context'
-import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
-import { runningManager } from '../helpers/chat-runtime-stub'
 import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { driveGuarded, regenWorkspace, seedAnsweredTurn } from '../helpers/regenerate-fixtures'
 import { failingRuntime } from '../helpers/scripted-runtime'
+import { makeRagAskContext } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -81,7 +73,7 @@ const TABLE: TableSpec = {
 
 /** A SECOND table on the same message: `result_tables.message_id` carries only an index, not a
  *  UNIQUE constraint, so the schema permits more than one row per message and the snapshot has
- *  to capture (and replay) all of them in a deterministic order. */
+ *  to capture (and replay) all of them in `created_at ASC, rowid ASC` order. */
 const SECOND_TABLE: TableSpec = {
   columns: [
     { key: 'category', label: 'category' },
@@ -117,87 +109,43 @@ function totalResultTables(db: Db): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM result_tables').get() as unknown as { n: number }).n
 }
 
-function freshDb(): { db: Db; workspacePath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-regentable-'))
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  return { db, workspacePath: join(root, 'workspace') }
-}
+const WORKSPACE = 'regentable'
+type Turn = { conversationId: string; answer: Message }
 
-function makeCtx(db: Db, workspacePath: string, runtime: ModelRuntime): AppContext {
-  return {
-    trustedSenders: ANY_SENDER,
-    paths: { rootPath: workspacePath, workspacePath },
-    get db() {
-      return db
-    },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    runtime: runningManager(runtime),
-    embedder: createMockEmbedder(),
-    reranker: null,
-    ocrEngine: undefined,
-    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
-    // unconditionally now (no more `??` fallback).
-    pendingModelSwitches: createPendingModelSwitchCounter()
-  } as unknown as AppContext
+/** Attach a result table to a seeded answer (the artifact behind its "Export CSV" action). */
+function attachTable(db: Db, turn: Turn, table: TableSpec = TABLE): void {
+  expect(
+    saveResultTable(db, {
+      messageId: turn.answer.id,
+      conversationId: turn.conversationId,
+      table,
+      source: 'app:bank-statement'
+    })
+  ).toBe(true)
 }
 
 /** A documents conversation ending in a skill-stamped answer that CARRIES a result table — the
  *  exact shape the bank/analysis "Export CSV" affordance hangs off. */
-async function seedDocumentsTurnWithTable(
-  db: Db,
-  embedder: MockEmbedder
-): Promise<{ conversationId: string; answer: Message }> {
+async function seedDocumentsTurnWithTable(db: Db, embedder: MockEmbedder): Promise<Turn> {
   const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', [QUESTION])
-  const conv = createConversation(db, {
+  const turn = seedAnsweredTurn(db, {
+    question: QUESTION,
+    answer: PRIOR_ANSWER,
     mode: 'documents',
-    scope: { collectionIds: [], documentIds: [docId] }
-  })
-  appendMessage(db, { conversationId: conv.id, role: 'user', content: QUESTION })
-  const answer = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
-    content: PRIOR_ANSWER,
+    documentIds: [docId],
     citations: [{ label: 'S1', sourceTitle: 'statement.pdf', pageNumber: 1 }],
     skillId: 'app:bank-statement',
     autoFired: true
   })
-  expect(
-    saveResultTable(db, {
-      messageId: answer.id,
-      conversationId: conv.id,
-      table: TABLE,
-      source: 'app:bank-statement'
-    })
-  ).toBe(true)
-  return { conversationId: conv.id, answer }
+  attachTable(db, turn)
+  return turn
 }
 
 /** A plain-CHAT conversation ending in an assistant answer that carries a result table. */
-function seedChatTurnWithTable(db: Db): { conversationId: string; answer: Message } {
-  const conv = createConversation(db, {})
-  appendMessage(db, { conversationId: conv.id, role: 'user', content: QUESTION })
-  const answer = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
-    content: PRIOR_ANSWER
-  })
-  expect(
-    saveResultTable(db, {
-      messageId: answer.id,
-      conversationId: conv.id,
-      table: TABLE,
-      source: 'app:bank-statement'
-    })
-  ).toBe(true)
-  return { conversationId: conv.id, answer }
-}
-
-/** Drive a guarded runFn with a real abort signal + inert senders. */
-function drive(wrapped: ChatStreamRunFn): Promise<Message> {
-  const signal = new AbortController().signal
-  const noop = (): void => {}
-  return wrapped(signal, noop, noop, noop, noop, noop)
+function seedChatTurnWithTable(db: Db): Turn {
+  const turn = seedAnsweredTurn(db, { question: QUESTION, answer: PRIOR_ANSWER })
+  attachTable(db, turn)
+  return turn
 }
 
 beforeEach(() => {
@@ -207,13 +155,14 @@ beforeEach(() => {
 
 describe('regenerate restore legs — the answer comes back WITH its result table', () => {
   it('a regenerate whose grounded generation FAILS restores the table byte-identically', async () => {
-    const { db, workspacePath } = freshDb()
+    const w = regenWorkspace(WORKSPACE)
+    const { db } = w
     const embedder = new MockEmbedder()
     const { conversationId, answer } = await seedDocumentsTurnWithTable(db, embedder)
     const before = rawResultTables(db, answer.id)
     expect(before).toHaveLength(1)
 
-    registerRagIpc(makeCtx(db, workspacePath, failingRuntime()))
+    registerRagIpc(makeRagAskContext(w, failingRuntime()).ctx)
 
     await expect(
       invoke(handlers, IPC.askDocuments, conversationId, QUESTION, null, /* regenerate */ true)
@@ -238,7 +187,7 @@ describe('regenerate restore legs — the answer comes back WITH its result tabl
     // The empty-resolve leg: the run resolves (it does not throw) with an unpersisted empty
     // message, and the wrapper replays the snapshot. Two clicks (Try again, Stop) used to leave
     // the answer looking fully restored with its table silently erased.
-    const { db } = freshDb()
+    const { db } = regenWorkspace(WORKSPACE)
     const { conversationId, answer } = seedChatTurnWithTable(db)
     const before = rawResultTables(db, answer.id)
     expect(before).toHaveLength(1)
@@ -246,7 +195,7 @@ describe('regenerate restore legs — the answer comes back WITH its result tabl
     const wrapped = withRegenerateGuard(db, conversationId, true, async () =>
       emptyAssistantMessage(conversationId)
     )
-    const result = await drive(wrapped)
+    const result = await driveGuarded(wrapped)
 
     // chat:done carries the restored answer straight back to the UI, so the flag that drives the
     // "Export CSV" affordance has to be lit on the returned object too — not only in the DB.
@@ -262,14 +211,14 @@ describe('regenerate restore legs — the answer comes back WITH its result tabl
     // The fix must be confined to the restore legs: a completed re-answer legitimately replaces
     // the reply, and the new answer carries its own table (or none). Resurrecting the old table
     // onto a replaced answer would mis-label a fresh answer with stale rows.
-    const { db } = freshDb()
+    const { db } = regenWorkspace(WORKSPACE)
     const { conversationId, answer } = seedChatTurnWithTable(db)
     expect(totalResultTables(db)).toBe(1)
 
     const wrapped = withRegenerateGuard(db, conversationId, true, async () =>
       appendMessage(db, { conversationId, role: 'assistant', content: 'a fresh answer' })
     )
-    const result = await drive(wrapped)
+    const result = await driveGuarded(wrapped)
 
     expect(result.content).toBe('a fresh answer')
     const history = listMessages(db, conversationId)
@@ -281,50 +230,49 @@ describe('regenerate restore legs — the answer comes back WITH its result tabl
 })
 
 describe('deleted-message snapshot — result-table capture and replay', () => {
-  it('replays EVERY table on the message, in a deterministic order (message_id is not unique)', () => {
-    const db = freshDb().db
-    const { conversationId, answer } = seedChatTurnWithTable(db)
-    // A second row on the same message, stamped later so the order is unambiguous.
-    expect(
-      saveResultTable(db, {
-        messageId: answer.id,
-        conversationId,
-        table: SECOND_TABLE,
-        source: 'app:bank-statement',
-        now: () => '2099-01-01T00:00:00.000Z'
-      })
-    ).toBe(true)
-    const before = rawResultTables(db, answer.id)
-    expect(before).toHaveLength(2)
-
-    const snapshot = deleteLastAssistantMessage(db, conversationId)
-    expect(snapshot).not.toBeNull()
-    expect(totalResultTables(db)).toBe(0) // the FK cascade took both
-
-    restoreMessage(db, snapshot!)
-    expect(rawResultTables(db, answer.id)).toEqual(before)
-    // `loadResultTable` reads the newest row, so the ordering the replay preserves is observable.
-    expect(loadResultTable(db, answer.id)).toEqual(SECOND_TABLE)
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
-  it('a table-less answer round-trips unchanged (the common case adds nothing)', () => {
-    const db = freshDb().db
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
-    const answer = appendMessage(db, {
-      conversationId: conv.id,
-      role: 'assistant',
-      content: 'pong'
-    })
+  it('replays EVERY table on the message; the newest stays the exported one (message_id is not unique)', () => {
+    const { db } = regenWorkspace(WORKSPACE)
+    const turn = seedAnsweredTurn(db, { question: QUESTION, answer: PRIOR_ANSWER })
+    vi.setSystemTime(new Date('2026-03-01T10:00:00.000Z'))
+    attachTable(db, turn)
+    vi.setSystemTime(new Date('2026-03-01T10:00:01.000Z'))
+    attachTable(db, turn, SECOND_TABLE)
+    vi.useRealTimers()
+    const before = rawResultTables(db, turn.answer.id)
+    expect(before.map((r) => r.created_at)).toEqual(['2026-03-01T10:00:00.000Z', '2026-03-01T10:00:01.000Z'])
 
-    const snapshot = deleteLastAssistantMessage(db, conv.id)
+    const snapshot = deleteLastAssistantMessage(db, turn.conversationId)
     expect(snapshot).not.toBeNull()
+    expect(totalResultTables(db)).toBe(0) // the FK cascade took both
     restoreMessage(db, snapshot!)
+    expect(rawResultTables(db, turn.answer.id)).toEqual(before)
+    // `loadResultTable` exports the newest row by created_at, which the replay copies verbatim.
+    expect(loadResultTable(db, turn.answer.id)).toEqual(SECOND_TABLE)
+  })
 
-    expect(totalResultTables(db)).toBe(0)
-    const restored = listMessages(db, conv.id).at(-1)
-    expect(restored?.id).toBe(answer.id)
-    expect(restored?.content).toBe('pong')
-    expect(restored?.hasResultTable).toBeUndefined()
+  // What this row can tell apart: a capture whose tie-break REVERSES equal stamps (`rowid DESC`). It cannot tell a
+  // dropped `rowid ASC` from a kept one: the capture reads through idx_result_tables_message, whose entries for one
+  // message sit in rowid order, and the ORDER BY sorter keeps that scan order for equal keys, so `ORDER BY created_at
+  // ASC` alone already returns equal stamps in rowid order. No input tells them apart (measured on node:sqlite: rowids
+  // reassigned out of insertion order, or PRAGMA reverse_unordered_selects, and both queries still agree), so the
+  // explicit tie-break is belt and braces.
+  it('replays tables stamped in the same millisecond in insertion order; a reversed tie-break fails', () => {
+    const { db } = regenWorkspace(WORKSPACE)
+    const turn = seedAnsweredTurn(db, { question: QUESTION, answer: PRIOR_ANSWER })
+    vi.setSystemTime(new Date('2026-03-01T10:00:00.000Z')) // one frozen stamp: created_at cannot order these two
+    attachTable(db, turn)
+    attachTable(db, turn, SECOND_TABLE)
+    vi.useRealTimers()
+    const before = rawResultTables(db, turn.answer.id)
+    expect(before.map((r) => r.created_at)).toEqual(['2026-03-01T10:00:00.000Z', '2026-03-01T10:00:00.000Z'])
+    expect(before.map((r) => (JSON.parse(r.columns_json) as Array<{ key: string }>)[0]?.key)).toEqual(['date', 'category'])
+
+    restoreMessage(db, deleteLastAssistantMessage(db, turn.conversationId)!)
+    // A reversed capture (`rowid DESC`) would re-insert SECOND_TABLE first, and the rowid order below would flip.
+    expect(rawResultTables(db, turn.answer.id)).toEqual(before)
   })
 })

@@ -1,17 +1,25 @@
 import { describe, it, expect } from 'vitest'
-import {
-  buildEvidencePackModel,
-  resolveEvidencePackOptions
-} from '../../src/main/services/evidence-pack/pack-model'
+import { buildEvidencePackModel } from '../../src/main/services/evidence-pack/pack-model'
 import {
   escapeHtml,
   formatPackTimestamp,
   renderEvidencePackHtml
 } from '../../src/main/services/evidence-pack/render-html'
-import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
-import { t } from '../../src/shared/i18n'
-import type { EndedEarly, EvidencePackOptions, EvidenceReviewDetail } from '../../src/shared/types'
-import { makeDetail, makeItem } from '../helpers/evidenceReview'
+import { t, tCount } from '../../src/shared/i18n'
+import type {
+  EndedEarly,
+  EvidencePackOptions,
+  EvidenceReviewDetail,
+  EvidenceSourceSnapshot
+} from '../../src/shared/types'
+import {
+  archiveSource,
+  makeDetail,
+  makeFreshness,
+  makeItem,
+  PACK_META,
+  packOptions
+} from '../helpers/evidenceReview'
 
 // EP-1 plan §8.2 — the pure HTML renderer: the new `escapeHtml` primitive, the spec §29.4
 // injection suite (hostile markdown/HTML/script in answer, snippets, notes, titles →
@@ -20,18 +28,11 @@ import { makeDetail, makeItem } from '../helpers/evidenceReview'
 // h1–h3 semantic hierarchy, system fonts, grayscale warnings), EN/DE localization frozen
 // at generation, and byte determinism.
 
-const META = {
-  packId: '00000000-0000-4000-8000-000000000001',
-  generatedAt: '2026-07-18T12:34:00.000Z',
-  format: 'html'
-} as const
-
-function opts(over: Partial<EvidencePackOptions> = {}): EvidencePackOptions {
-  return { language: 'en', ...EVIDENCE_PACK_OPTION_DEFAULTS, ...over }
-}
+/** The pack metadata these rows render with (a fixed UUID-shaped id, 12:34 UTC, format 'html'). */
+const META = PACK_META
 
 function render(detail: EvidenceReviewDetail, over: Partial<EvidencePackOptions> = {}): string {
-  return renderEvidencePackHtml(buildEvidencePackModel(detail, opts(over), META))
+  return renderEvidencePackHtml(buildEvidencePackModel(detail, packOptions(over), META))
 }
 
 describe('escapeHtml (the widened xmlEscape primitive)', () => {
@@ -39,9 +40,7 @@ describe('escapeHtml (the widened xmlEscape primitive)', () => {
     expect(escapeHtml(`<script>alert("x&y'z")</script>`)).toBe(
       '&lt;script&gt;alert(&quot;x&amp;y&#39;z&quot;)&lt;/script&gt;'
     )
-  })
-
-  it('leaves plain text (incl. unicode) untouched', () => {
+    // …and ONLY those five: plain text, unicode included, passes untouched.
     expect(escapeHtml('Straße § 12 — geändert ✓')).toBe('Straße § 12 — geändert ✓')
   })
 })
@@ -55,6 +54,9 @@ describe('formatPackTimestamp (deterministic, locale-independent)', () => {
 
   it('passes unparseable input through verbatim (never invents a date)', () => {
     expect(formatPackTimestamp('not-a-date')).toBe('not-a-date')
+    // Zoned, so the zone check passes and the NaN guard (render-html.ts:77) decides.
+    expect(formatPackTimestamp('garbageZ')).toBe('garbageZ')
+    expect(formatPackTimestamp('2026-13-45T99:99:00Z')).toBe('2026-13-45T99:99:00Z')
   })
 
   it('passes ZONE-LESS input through verbatim — host-local parsing would be TZ-dependent and stamping UTC would invent a zone (FIX-4)', () => {
@@ -110,7 +112,18 @@ describe('injection suite (spec §29.4)', () => {
           snippet: `${HOSTILE} snippet`,
           sourceChunkId: null,
           availabilityAtCreation: 'available'
-        }
+        },
+        // A hostile ARCHIVE source: title, pack id and article path all render on the card.
+        archiveSource({
+          key: 's2',
+          machineLabel: 'S2',
+          documentTitle: `${HOSTILE} article`,
+          archiveTitle: HOSTILE,
+          packId: `${HOSTILE}-id`,
+          articlePath: `Klimawandel – Übersicht/ß/${HOSTILE}`,
+          sectionLabel: null,
+          snippet: null
+        })
       ],
       generationSnapshot: {
         generatedAt: '2026-07-18T09:00:00.000Z',
@@ -141,6 +154,10 @@ describe('injection suite (spec §29.4)', () => {
     // Every internal anchor stays index-derived even with a hostile source KEY.
     expect(html).not.toMatch(/href="(?!#)/)
     expect(html).toContain('id="src-1"')
+    expect(html).toContain('href="#src-1"')
+    // The archive locator is escaped, never dropped (non-ASCII intact).
+    expect(html).toContain(`${escapeHtml(HOSTILE)}-id`)
+    expect(html).toContain(`Klimawandel – Übersicht/ß/${escapeHtml(HOSTILE)}`)
     // The CSP meta survives the hostile render unchanged and unduplicated (#253).
     expect(html.match(/http-equiv="Content-Security-Policy"/g)).toHaveLength(1)
     expect(html).toContain(`content="default-src 'none'; style-src 'unsafe-inline'"`)
@@ -205,12 +222,6 @@ describe('self-containment (spec §17.2) + print contract (plan §4 D-1)', () =>
   it('warning blocks are grayscale-readable (border + icon + text, never color-only)', () => {
     expect(html).toContain('class="warning"')
     expect(html).toContain('⚠')
-  })
-
-  it('anchors are index-derived and internal only', () => {
-    expect(html).toContain('id="src-1"')
-    expect(html).toContain('href="#src-1"')
-    expect(html).not.toMatch(/href="(?!#)/)
   })
 })
 
@@ -279,7 +290,9 @@ describe('option flags in the rendered pack (spec §16.2)', () => {
 
   it('technical details render only when opted in', () => {
     const html = render(detail, { includeTechnicalDetails: true })
-    expect(html).toContain(t('en', 'packExport.generation.technical'))
+    // The SECTION heading (the bare label is also the option echo's, so it cannot tell on its own).
+    expect(html).toContain(`<h3>${t('en', 'packExport.generation.technical')}</h3>`)
+    expect(html).toContain(t('en', 'packExport.generation.techMode'))
     expect(html).toContain('relevance')
   })
 
@@ -301,68 +314,23 @@ describe('option flags in the rendered pack (spec §16.2)', () => {
 })
 
 describe('ZIM wave (#294 review M11) — archive provenance survives the HTML renderer', () => {
-  function archiveDetail(over: Partial<import('../../src/shared/types').EvidenceSourceSnapshot> = {}) {
+  function archiveDetail(over: Partial<EvidenceSourceSnapshot> = {}): EvidenceReviewDetail {
     return makeDetail({
       sources: [
-        {
+        archiveSource({
           key: 's1',
           machineLabel: 'S1',
-          kind: 'direct_excerpt',
-          identity: 'unresolved',
-          documentId: null,
           documentTitle: 'Klimawandel',
-          documentSha256: null,
-          mimeType: null,
-          pageNumber: null,
           sectionLabel: 'Übersicht',
           snippet: 'Auszug…',
-          sourceChunkId: null,
-          availabilityAtCreation: null,
-          sourceKind: 'archive',
           archiveTitle: 'Wikipedia (DE)',
           packId: 'pack-uuid-1',
           articlePath: 'A/Klimawandel',
           ...over
-        }
+        })
       ]
     })
   }
-
-  it('renders the archive title, pack id and article path', () => {
-    const html = render(archiveDetail())
-    expect(html).toContain(`${t('en', 'packExport.evidence.archive')}: Wikipedia (DE)`)
-    expect(html).toContain(`${t('en', 'packExport.evidence.packId')}: pack-uuid-1`)
-    expect(html).toContain(`${t('en', 'packExport.evidence.article')}: A/Klimawandel`)
-  })
-
-  it('escapes a hostile archiveTitle/articlePath/packId — never renders them raw', () => {
-    const HOSTILE = `<script>alert("x&y'z")</script>`
-    const NON_ASCII = 'Klimawandel – Übersicht/ß'
-    const html = render(
-      archiveDetail({
-        archiveTitle: HOSTILE,
-        packId: `${HOSTILE}-id`,
-        articlePath: `${NON_ASCII}/${HOSTILE}`
-      })
-    )
-    expect(html).not.toContain(HOSTILE)
-    expect(html).toContain('&lt;script&gt;alert(&quot;x&amp;y&#39;z&quot;)&lt;/script&gt;')
-    expect(html).toContain(NON_ASCII)
-  })
-
-  it('shows the archive warning, never identityUnresolved, for an archive card', () => {
-    const html = render(archiveDetail())
-    expect(html).toContain(t('en', 'packExport.evidence.archiveIdentity'))
-    expect(html).not.toContain(t('en', 'packExport.evidence.identityUnresolved'))
-  })
-
-  it('the source-register table row shows the archive type + availability strings, no SHA', () => {
-    const html = render(archiveDetail())
-    expect(html).toContain(t('en', 'packExport.sources.typeArchive'))
-    expect(html).toContain(t('en', 'packExport.sources.availabilityArchive'))
-    // No hash exists for an archive article — the existing "unavailable" string, never invented.
-    expect(html).not.toContain('ab'.repeat(32))
-  })
 
   it('DE renders the archive strings localized', () => {
     const html = render(archiveDetail(), { language: 'de' })
@@ -370,15 +338,8 @@ describe('ZIM wave (#294 review M11) — archive provenance survives the HTML re
     expect(html).toContain(t('de', 'packExport.evidence.archiveIdentity'))
     expect(html).toContain(t('de', 'packExport.sources.typeArchive'))
     expect(html).toContain(t('de', 'packExport.sources.availabilityArchive'))
-  })
-
-  it('the §16.1.6 archive plural warning fires only when archiveSources > 0 (EN + DE)', () => {
-    const withArchive = render(archiveDetail())
-    expect(withArchive).toContain(t('en', 'review.summary.sourcesArchive.one', { count: 1 }))
-    const withArchiveDe = render(archiveDetail(), { language: 'de' })
-    expect(withArchiveDe).toContain(t('de', 'review.summary.sourcesArchive.one', { count: 1 }))
-    const documentOnly = render(makeDetail())
-    expect(documentOnly).not.toContain(t('en', 'review.summary.sourcesArchive.one', { count: 1 }))
+    // The §16.1.6 archive count, DE singular form.
+    expect(html).toContain(t('de', 'review.summary.sourcesArchive.one', { count: 1 }))
   })
 
   it('a document-only detail renders no archive strings at all', () => {
@@ -387,59 +348,49 @@ describe('ZIM wave (#294 review M11) — archive provenance survives the HTML re
     expect(html).not.toContain(t('en', 'packExport.evidence.archiveIdentity'))
     expect(html).not.toContain(t('en', 'packExport.sources.typeArchive'))
     expect(html).not.toContain(t('en', 'packExport.sources.availabilityArchive'))
-    expect(html).not.toContain(t('en', 'review.source.archive'))
+    // …and no archive count in either plural form (a `>= 0` guard would render "0 sources …").
+    for (const count of [0, 1]) expect(html).not.toContain(tCount('en', 'review.summary.sourcesArchive', count))
+  })
+
+  it('#301 P6: with document hashes excluded an archive row keeps "Unavailable" in its SHA cell; only the document row says "Excluded by export options"', () => {
+    const detail = makeDetail({
+      sources: [makeDetail().sources[0]!, archiveSource({ key: 's2', machineLabel: 'S2', documentTitle: 'Klimawandel' })]
+    })
+    const html = renderEvidencePackHtml(
+      buildEvidencePackModel(
+        detail,
+        packOptions({ includeDocumentHashes: false }),
+        META,
+        makeFreshness({
+          sources: [
+            { key: 's1', state: 'unchanged' },
+            { key: 's2', state: 'unverifiable' }
+          ]
+        })
+      )
+    )
+    expect(html).toContain(
+      `<tr><td><a href="#src-2">Klimawandel</a></td><td>${t('en', 'packExport.sources.typeArchive')}</td><td>${t('en', 'review.summary.unavailable')}</td><td>${t('en', 'packExport.sources.availabilityArchive')}</td></tr>`
+    )
+    expect(html).toContain(
+      `<tr><td><a href="#src-1">contract.pdf</a></td><td>application/pdf</td><td>${t('en', 'packExport.sources.hashExcluded')}</td><td>${t('en', 'packExport.sources.availabilityAvailable')}</td></tr>`
+    )
   })
 })
 
 describe('honesty rendering', () => {
-  it('unresolved identity and resolved-but-missing sources get DISTINCT copy', () => {
-    const detail = makeDetail({
-      sources: [
-        {
-          key: 's1',
-          machineLabel: null,
-          kind: 'whole_document_provenance',
-          identity: 'unresolved',
-          documentId: null,
-          documentTitle: 'ambiguous.pdf',
-          documentSha256: null,
-          mimeType: null,
-          pageNumber: null,
-          sectionLabel: null,
-          snippet: null,
-          sourceChunkId: null,
-          availabilityAtCreation: null
-        },
-        {
-          key: 's2',
-          machineLabel: null,
-          kind: 'whole_document_provenance',
-          identity: 'resolved',
-          documentId: 'gone',
-          documentTitle: 'deleted.pdf',
-          documentSha256: null,
-          mimeType: null,
-          pageNumber: null,
-          sectionLabel: null,
-          snippet: null,
-          sourceChunkId: null,
-          availabilityAtCreation: 'missing'
-        }
-      ],
-      coverageSnapshot: { mode: 'tree', chunksCovered: 4, chunksTotal: 4 }
-    })
-    const html = render(detail)
-    expect(html).toContain(t('en', 'packExport.evidence.identityUnresolved'))
-    expect(html).toContain(t('en', 'packExport.evidence.missingAtCreation'))
-    expect(html).toContain(t('en', 'packExport.sources.availabilityUnknown'))
-    expect(html).toContain(t('en', 'packExport.sources.availabilityMissing'))
-    // Whole-document honesty caption (§24.3) — provenance, never citations.
-    expect(html).toContain(t('en', 'packExport.coverage.modeWholeDoc'))
-  })
-
   it('absent generation metadata renders "Unavailable" — never invented', () => {
     const html = render(makeDetail({ generationSnapshot: null }))
-    expect(html).toContain(t('en', 'review.summary.unavailable'))
+    // Every generation cell, not just one of them: a single invented value would otherwise pass.
+    const unavailable = t('en', 'review.summary.unavailable')
+    for (const key of [
+      'packExport.generation.model',
+      'packExport.generation.modelId',
+      'packExport.generation.generatedAt',
+      'packExport.generation.appVersion'
+    ] as const) {
+      expect(html).toContain(`<dt>${t('en', key)}</dt><dd>${unavailable}</dd>`)
+    }
   })
 
   it('no-truncation-record is stated as "no record", never as "complete"', () => {
@@ -469,6 +420,26 @@ describe('honesty rendering', () => {
   it('always states that file paths are never included', () => {
     expect(render(makeDetail())).toContain(t('en', 'packExport.sources.pathNote'))
   })
+
+  it('a reviewer-made link reads "Reviewer linked" with its relation, never "Cited by the answer", and the register lists the relation (§4)', () => {
+    const html = render(
+      makeDetail({
+        items: [
+          makeItem({
+            id: 'i1',
+            ordinal: 0,
+            decision: 'supported',
+            links: [{ evidenceKey: 's1', origin: 'reviewer', relation: 'contradicts' }]
+          })
+        ]
+      })
+    )
+    expect(html).toContain(
+      `<li><a href="#src-1">[S1] contract.pdf</a> · ${t('en', 'review.link.reviewer')} · ${t('en', 'review.relation.contradicts')}</li>`
+    )
+    expect(html).toContain(`<p>${t('en', 'packExport.evidence.relations')}: ${t('en', 'review.relation.contradicts')}</p>`)
+    expect(html).not.toContain(t('en', 'review.link.cited'))
+  })
 })
 
 describe('P4 freshness in the pack (spec §16.1.7/§28.6 — INJECTED verdict, model stays pure)', () => {
@@ -482,18 +453,58 @@ describe('P4 freshness in the pack (spec §16.1.7/§28.6 — INJECTED verdict, m
   }
 
   it('WITHOUT a verdict: the P3 shape — not-re-verified note, creation-availability column, null currentState', () => {
-    const model = buildEvidencePackModel(makeDetail(), opts(), META)
+    // One resolved-available, one unresolved and one resolved-but-missing-at-creation source: the three
+    // at-creation cells of the register.
+    const detail = makeDetail({
+      sources: [
+        makeDetail().sources[0]!,
+        {
+          key: 's2',
+          machineLabel: null,
+          kind: 'whole_document_provenance',
+          identity: 'unresolved',
+          documentId: null,
+          documentTitle: 'ambiguous.pdf',
+          documentSha256: null,
+          mimeType: null,
+          pageNumber: null,
+          sectionLabel: null,
+          snippet: null,
+          sourceChunkId: null,
+          availabilityAtCreation: null
+        },
+        {
+          key: 's3',
+          machineLabel: null,
+          kind: 'whole_document_provenance',
+          identity: 'resolved',
+          documentId: 'gone',
+          documentTitle: 'deleted.pdf',
+          documentSha256: null,
+          mimeType: null,
+          pageNumber: null,
+          sectionLabel: null,
+          snippet: null,
+          sourceChunkId: null,
+          availabilityAtCreation: 'missing'
+        }
+      ]
+    })
+    const model = buildEvidencePackModel(detail, packOptions(), META)
     expect(model.freshness).toBeNull()
-    expect(model.evidence[0]!.currentState).toBeNull()
+    expect(model.evidence.map((s) => s.currentState)).toEqual([null, null, null])
     const html = renderEvidencePackHtml(model)
     expect(html).toContain(t('en', 'packExport.coverage.freshnessNote'))
     expect(html).not.toContain(t('en', 'packExport.coverage.freshnessChecked'))
     expect(html).toContain(t('en', 'packExport.sources.colAvailability'))
     expect(html).not.toContain(t('en', 'packExport.sources.colAvailabilityExport'))
+    expect(html).toContain(`<td>${t('en', 'packExport.sources.availabilityAvailable')}</td></tr>`)
+    expect(html).toContain(`<td>${t('en', 'packExport.sources.availabilityUnknown')}</td></tr>`)
+    expect(html).toContain(`<td>${t('en', 'packExport.sources.availabilityMissing')}</td></tr>`)
   })
 
   it('WITH a verdict: at-export column + per-card state + conditionalized note', () => {
-    const model = buildEvidencePackModel(makeDetail(), opts(), META, {
+    const model = buildEvidencePackModel(makeDetail(), packOptions(), META, {
       reviewId: 'r1',
       outdated: false,
       answerState: 'unchanged',
@@ -509,11 +520,10 @@ describe('P4 freshness in the pack (spec §16.1.7/§28.6 — INJECTED verdict, m
     expect(html).toContain(t('en', 'packExport.sources.colAvailabilityExport'))
     // Not outdated → no cover warning, no acknowledge line.
     expect(html).not.toContain(t('en', 'packExport.coverage.outdated'))
-    expect(html).not.toContain('acknowledged this change')
   })
 
   it('outdated + acknowledged: cover warning, mismatch record, acknowledge stamp, changed cell (spec §28.6)', () => {
-    const model = buildEvidencePackModel(makeDetail(), opts(), META, outdatedFreshness)
+    const model = buildEvidencePackModel(makeDetail(), packOptions(), META, outdatedFreshness)
     expect(model.outdated).toBe(true) // the verdict overrides the detail's constant-false
     const html = renderEvidencePackHtml(model)
     expect(html).toContain(t('en', 'packExport.coverage.outdated'))
@@ -537,7 +547,7 @@ describe('P4 freshness in the pack (spec §16.1.7/§28.6 — INJECTED verdict, m
         }
       ]
     })
-    const model = buildEvidencePackModel(detail, opts(), META, {
+    const model = buildEvidencePackModel(detail, packOptions(), META, {
       reviewId: 'r1',
       outdated: false,
       answerState: 'unchanged',
@@ -560,7 +570,7 @@ describe('P4 freshness in the pack (spec §16.1.7/§28.6 — INJECTED verdict, m
   })
 
   it('a source key absent from the verdict degrades to unverifiable, never to a claim', () => {
-    const model = buildEvidencePackModel(makeDetail(), opts(), META, {
+    const model = buildEvidencePackModel(makeDetail(), packOptions(), META, {
       reviewId: 'r1',
       outdated: false,
       answerState: 'unchanged',
@@ -580,18 +590,11 @@ function escapeForRegex(s: string): string {
 }
 
 describe('determinism (plan §8 boundary)', () => {
-  it('same detail + options + language ⇒ byte-identical output', () => {
-    const detail = makeDetail()
-    const a = renderEvidencePackHtml(buildEvidencePackModel(detail, opts(), META))
-    const b = renderEvidencePackHtml(buildEvidencePackModel(detail, opts(), META))
-    expect(a).toBe(b)
-  })
-
   it('only packId + generatedAt vary between two exports of the same review', () => {
     const detail = makeDetail()
-    const a = renderEvidencePackHtml(buildEvidencePackModel(detail, opts(), META))
+    const a = renderEvidencePackHtml(buildEvidencePackModel(detail, packOptions(), META))
     const b = renderEvidencePackHtml(
-      buildEvidencePackModel(detail, opts(), {
+      buildEvidencePackModel(detail, packOptions(), {
         packId: '00000000-0000-4000-8000-000000000002',
         generatedAt: '2026-07-19T00:01:00.000Z',
         format: 'html'
@@ -603,14 +606,8 @@ describe('determinism (plan §8 boundary)', () => {
         .replaceAll('00000000-0000-4000-8000-000000000002', 'PACK_ID')
         .replace(/\b\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\b/g, 'TS')
     expect(normalize(a)).toBe(normalize(b))
-  })
-
-  it('resolved options round through the boundary resolver identically', () => {
-    const detail = makeDetail()
-    const viaResolver = renderEvidencePackHtml(
-      buildEvidencePackModel(detail, resolveEvidencePackOptions({ language: 'en' }), META)
-    )
-    expect(viaResolver).toBe(renderEvidencePackHtml(buildEvidencePackModel(detail, opts(), META)))
+    // …and the same inputs render byte-identically (determinism, no hidden clock or randomness).
+    expect(a).toBe(renderEvidencePackHtml(buildEvidencePackModel(detail, packOptions(), META)))
   })
 })
 
@@ -622,9 +619,9 @@ describe('P6 format line (FIX-1 — the ONE model-format-dependent line)', () =>
     const pdfLine = t('en', 'packExport.meta.formatValuePdf', { version: 1 })
     const htmlLine = t('en', 'packExport.meta.formatValue', { version: 1 })
     const asPdf = renderEvidencePackHtml(
-      buildEvidencePackModel(detail, opts(), { ...META, format: 'pdf' })
+      buildEvidencePackModel(detail, packOptions(), { ...META, format: 'pdf' })
     )
-    const asHtml = renderEvidencePackHtml(buildEvidencePackModel(detail, opts(), META))
+    const asHtml = renderEvidencePackHtml(buildEvidencePackModel(detail, packOptions(), META))
     // A .pdf artifact never self-describes as "Self-contained HTML" (cover + integrity —
     // the section a verifier reads next to the hash note).
     expect(count(asPdf, pdfLine)).toBe(2)
@@ -634,13 +631,5 @@ describe('P6 format line (FIX-1 — the ONE model-format-dependent line)', () =>
     // The strong pin: swapping that one line converts one output into the other byte-for-
     // byte — the format branches exactly one line, so the HTML goldens stay green.
     expect(asHtml.replaceAll(htmlLine, pdfLine)).toBe(asPdf)
-  })
-
-  it('DE: the PDF line localizes from the current catalog like every pack string', () => {
-    const html = renderEvidencePackHtml(
-      buildEvidencePackModel(makeDetail(), opts({ language: 'de' }), { ...META, format: 'pdf' })
-    )
-    expect(html).toContain(t('de', 'packExport.meta.formatValuePdf', { version: 1 }))
-    expect(html).not.toContain(t('de', 'packExport.meta.formatValue', { version: 1 }))
   })
 })

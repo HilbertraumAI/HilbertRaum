@@ -1,18 +1,22 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ConversationList } from '../../src/renderer/chat/ConversationList'
 import { t } from '../../src/shared/i18n'
-import type { Conversation, EvidenceReviewSummary, Message } from '../../src/shared/types'
-import { makeCitations, makeMessage, userMsg } from '../helpers/chat-fixtures'
+import type { Message } from '../../src/shared/types'
+import { makeCitations, makeConversation, makeMessage, userMsg } from '../helpers/chat-fixtures'
+import { deferred } from '../helpers/deferred'
+import { makeSummary } from '../helpers/evidenceReview'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { renderTranscript } from '../helpers/transcript'
 
 // EP-1 plan §7.2 — the review entry points: the per-message "Review evidence" /
 // "Continue review" action + Draft/Ready chip (spec §9.1/§9.4), the quiet
 // SourcesDisclosure footer action (spec §9.2), and the D-2 delete-confirm review-count
-// warning (spec §25.4). The visibility matrix pins the shared `isReviewEligible` gate:
-// eligible / ineligible / streaming / plain-chat.
+// warning (spec §25.4). The visibility matrix pins how the transcript wires the shared
+// `isReviewEligible` gate (eligible / ineligible / streaming / plain-chat); the user-turn row is
+// stopped earlier, by MessageActions mounting for assistant turns only (Transcript.tsx:662). The
+// predicate's own matrix lives in tests/unit/evidence-review-gate.test.ts (IP15's move).
 //
 // Zero-model/zero-network (review FIX-5, structural): every test runs against a FRESH
 // stubApi (an empty install for the pure-prop matrix tests; D-2 tests re-install their
@@ -24,27 +28,16 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  cleanup()
-  assertNoUnexpectedApiCalls()
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
 })
 
 function noop(): void {}
 
 const CITED: Partial<Message> = { content: 'Answer text [S1]', citations: makeCitations(1) }
-
-function summary(over: Partial<EvidenceReviewSummary> = {}): EvidenceReviewSummary {
-  return {
-    id: 'r1',
-    conversationId: 'c1',
-    messageId: 'm1',
-    title: 'Evidence review',
-    status: 'draft',
-    outdated: false,
-    gate: { eligible: false, requiredTotal: 2, decidedTotal: 0 },
-    updatedAt: '2026-07-18T10:00:00.000Z',
-    ...over
-  }
-}
 
 const START = t('en', 'review.action.start')
 const CONTINUE = t('en', 'review.action.continue')
@@ -112,7 +105,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
-      reviewSummaries: new Map([['m1', summary({ status: 'draft' })]]),
+      reviewSummaries: new Map([['m1', makeSummary({ status: 'draft' })]]),
       reviewConversation: { mode: 'documents' }
     })
     expect(screen.getByRole('button', { name: CONTINUE })).toBeInTheDocument()
@@ -123,7 +116,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
-      reviewSummaries: new Map([['m1', summary({ status: 'ready' })]]),
+      reviewSummaries: new Map([['m1', makeSummary({ status: 'ready' })]]),
       reviewConversation: { mode: 'documents' }
     })
     expect(screen.getByText(t('en', 'review.status.ready'))).toBeInTheDocument()
@@ -133,7 +126,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
-      reviewSummaries: new Map([['m1', summary({ status: 'ready', outdated: true })]]),
+      reviewSummaries: new Map([['m1', makeSummary({ status: 'ready', outdated: true })]]),
       reviewConversation: { mode: 'documents' }
     })
     // BOTH chips: the completion fact is never erased by the overlay.
@@ -145,7 +138,7 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
-      reviewSummaries: new Map([['m1', summary({ status: 'draft', outdated: false })]]),
+      reviewSummaries: new Map([['m1', makeSummary({ status: 'draft', outdated: false })]]),
       reviewConversation: { mode: 'documents' }
     })
     expect(screen.queryByText(t('en', 'review.status.outdated'))).toBeNull()
@@ -194,25 +187,10 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
 
 // ---- D-2: conversation-delete confirm names the review count (spec §25.4) --------------
 
-function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'Contract chat',
-    createdAt: '2026-07-18T09:00:00.000Z',
-    updatedAt: '2026-07-18T10:00:00.000Z',
-    modelId: 'm',
-    mode: 'documents',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  } as Conversation
-}
-
 function openDeleteConfirm(): void {
   render(
     <ConversationList
-      conversations={[conv()]}
+      conversations={[makeConversation({ id: 'c1', title: 'Contract chat', modelId: 'm', mode: 'documents' })]}
       activeId={null}
       streaming={false}
       mode="chat"
@@ -243,16 +221,20 @@ describe('conversation-delete confirm — review-count warning (D-2)', () => {
   })
 
   it('stays quiet when the conversation has no reviews', async () => {
-    stubApi({ countEvidenceReviewsForConversation: vi.fn(async () => 0) })
+    const count = deferred<number>()
+    const countEvidenceReviewsForConversation = vi.fn(() => count.promise)
+    stubApi({ countEvidenceReviewsForConversation })
     openDeleteConfirm()
     const dialog = await screen.findByRole('dialog')
+    expect(countEvidenceReviewsForConversation).toHaveBeenCalledWith('c1')
+    // Settle the count INSIDE act, then read synchronously: a waitFor around a negative passes on its first poll,
+    // which could run before the 0 had committed.
+    await act(async () => {
+      count.resolve(0)
+    })
     // The base delete body renders; no review line appears.
     expect(within(dialog).getByText(/permanently removed/i)).toBeInTheDocument()
-    await waitFor(() => {
-      expect(
-        within(dialog).queryByText(/evidence review/i)
-      ).toBeNull()
-    })
+    expect(within(dialog).queryByText(/evidence review/i)).toBeNull()
   })
 
   it('warns GENERICALLY when the count cannot be read — never silent about the cascade', async () => {
