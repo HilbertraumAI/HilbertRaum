@@ -27,6 +27,14 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-16 — the 2026-11-16 evidence review + export test audit entry retired verbatim (PR #836 merged)
+
+Retired from `BUILD_STATE.md` on 2026-11-16, when PR #836 merged as `c9017830`; a short outcome entry with the open
+follow-ups replaces it there. Its record is unchanged: architecture.md "Evidence Pack / Review Mode — design record" §7 (the
+test inventory). Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-11-16 — **Evidence review + export test audit: PR #836 open; follow-ups #837 (review save failures), #838 (export writers), #839 (coverage gaps), #840 (doc drift).** The 34 review and export suites go from 476 to 447 tests (full suite 10,879 → 10,850, same run time): duplicate proofs removed, about 70 assertions that could pass on broken code repaired, ten untested contracts pinned, the shared setup moved to `tests/helpers/` (evidence-fixtures, fake-print-window, regenerate-fixtures, review-screen). The `__reviewItemRowRenderCounts` seam, six test-only exports and a test-only parameter are gone; #832 is done for these suites. Test inventory: architecture.md "Evidence Pack / Review Mode — design record" §7._
+
 ## 2026-11-15 — the 2026-11-14 open-issues wave entry retired verbatim (wave closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-15, when the wave closed (PR #827 merged as `a102ec32`, the last
