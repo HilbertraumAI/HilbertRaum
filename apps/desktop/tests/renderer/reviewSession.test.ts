@@ -99,6 +99,8 @@ describe('reviewSession — open', () => {
     await openReviewSession({ messageId: 'm1' })
     expect(getReviewSessionSnapshot().detail?.id).toBe('r1')
 
+    // The re-install below resets the unmocked-call record: check the first leg before it.
+    assertNoUnexpectedApiCalls()
     stubReviewApi({
       createEvidenceReview: vi.fn(async () => {
         throw new Error("Error invoking remote method 'evidence:create': Error: This review request is not valid.")
