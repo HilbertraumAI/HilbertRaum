@@ -456,6 +456,11 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     'src/main/ipc/registerDownloadIpc.ts :: const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork',
     // Engine-download gate: same shape, same reasoning as the model-download gate above.
     'src/main/ipc/registerEngineIpc.ts :: const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork',
+    // The unlock handler's already-open answer (#858): an open workspace gets its state back and
+    // the post-unlock steps do NOT run (no unverified audit event, no duplicated log, no restarts).
+    // It starts no work, it skips it; `workspaceAdmitsWork` would be false mid-teardown and would
+    // run the steps the check exists to skip.
+    'src/main/ipc/registerWorkspaceIpc.ts :: if (ctx.workspace.isUnlocked()) return { ok: true, state: ctx.workspace.getState() }',
     // The lock latch's own disarm-on-failure path: it must disarm ONLY while the workspace is
     // genuinely still open. A lock that already closed the DB must KEEP the latch, so the bare
     // check is precisely the intended question here — `workspaceAdmitsWork` would be false

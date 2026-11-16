@@ -130,6 +130,24 @@ describe('registerWorkspaceIpc', () => {
     }
   })
 
+  it('an unlock on an already-open workspace answers its state and re-runs nothing: no unverified audit event (#858)', async () => {
+    const audit = vi.fn()
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { audit } }))
+    try {
+      // Control: the unlock from locked runs the post-unlock steps, the audit event among them.
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(audit).toHaveBeenCalledWith('workspace_unlocked', expect.any(String))
+      audit.mockClear()
+      const again = await invoke(handlers, IPC.unlockWorkspace, 'not-the-password')
+      expect(again.result).toEqual({ ok: true, state: ctrl.getState() })
+      expect(ctrl.getState().state).toBe('unlocked')
+      expect(audit).not.toHaveBeenCalled()
+    } finally {
+      ctrl.lock()
+    }
+  })
+
   // M-S2: the renderer is the untrusted boundary — a non-string password must NOT throw
   // an unhandled TypeError at the IPC layer (password.length used to run before the try).
   it('handles a non-string create password as a clean refusal (no throw)', async () => {
@@ -554,6 +572,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         how: 'a recovery file another program holds',
         arrange: () => ({
           workspace: {
+            isUnlocked: () => false, // the handler answers an open workspace before it unlocks (#858)
             unlock: () => {
               throw new VaultRecoveryBlockedError()
             }

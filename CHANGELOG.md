@@ -68,6 +68,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **An unlock request on a workspace that is already open no longer pretends to unlock it.** The
+  lock screen never sends one, but if one arrived it answered "unlocked" whatever the password,
+  wrote a "Workspace unlocked" entry to the activity log, repeated earlier lines in the
+  diagnostics log, and ran the start-up steps for the model and the local API again. It now only
+  reports that the workspace is open (#858).
 - **The local API reports a stop as a stop.** A request still streaming when the endpoint stopped
   could end with `preempted_by_user` and a "retry shortly" hint instead of `server_stopped`: when
   a settings change was still being applied at the moment of the lock or quit, and always when the

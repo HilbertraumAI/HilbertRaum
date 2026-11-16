@@ -1597,7 +1597,9 @@ because arming a latch ahead of multi-second work creates a failure mode the pre
 not have — a throw between `beginLock()` and `lock()` would leave the workspace **open** with
 every guard reporting locked, and `unlock()` cannot rescue that (it early-returns on an
 already-unlocked controller, deliberately, so an `unlockWorkspace` landing mid-teardown cannot
-re-open the admission window either). Two further no-op cases are covered: `lock()` disarms itself
+re-open the admission window either). The IPC handler answers such an unlock with the workspace's
+state and stops there (#858): it records no `workspace_unlocked` audit event for the unchecked
+password, re-attaches no log key and restarts nothing. Two further no-op cases are covered: `lock()` disarms itself
 whenever it returns with the DB still open (a `plaintext_dev` workspace has no vault to
 re-encrypt, so its "Lock now" is a deliberate no-op and must not brick the dev session).
 

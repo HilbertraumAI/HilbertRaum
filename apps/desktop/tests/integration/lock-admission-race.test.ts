@@ -662,6 +662,12 @@ describe('admission during the lock teardown (AUD-02)', () => {
     const { result } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
     expect(result).toMatchObject({ ok: true }) // already unlocked → a no-op success
     expect(h.ctrl.isLocking()).toBe(true) // …but the latch is untouched
+    // The IPC answers an open workspace before it reaches the controller (#858), so hold the
+    // controller's own early return to the same contract: a direct unlock keeps the latch and the epoch.
+    const epoch = h.ctrl.unlockEpoch()
+    expect(h.ctrl.unlock('right-password').state).toBe('unlocked')
+    expect(h.ctrl.isLocking()).toBe(true)
+    expect(h.ctrl.unlockEpoch()).toBe(epoch)
     await expect(
       invoke(handlers, IPC.startDocTask, {
         kind: 'translation',

@@ -181,6 +181,13 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     if (typeof password !== 'string') {
       return { ok: false, reason: 'wrong_password', message: tMain('main.workspace.wrongPassword') }
     }
+    // #858: an unlock on a workspace that is already open verifies nothing: the controller returns
+    // early, deliberately, so an unlock landing mid-teardown cannot re-open the admission window
+    // (AUD-02). Answer with the state and stop. Running the post-unlock steps here would record a
+    // `workspace_unlocked` audit event for a password nobody checked, fold the persisted
+    // diagnostics log into a buffer that already holds it (duplicating it), and restart the model,
+    // the local API and the knowledge-pack session.
+    if (ctx.workspace.isUnlocked()) return { ok: true, state: ctx.workspace.getState() }
     try {
       const unlockT0 = performance.now()
       const state = ctx.workspace.unlock(password)
