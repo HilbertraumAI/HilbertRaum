@@ -133,7 +133,9 @@ password recovery — are documented in
   the second instance's startup sweep can still destroy the live session's **working file**
   (its delta since the last lock); the lock-path SQLite-header guard then refuses to
   re-encrypt the garbage, so the at-rest `.enc` — the vault itself — survives and the next
-  unlock recovers the last locked snapshot. A workspace-level cross-process lock file would
+  unlock recovers the last locked snapshot. On macOS and Linux the sweep deletes the file
+  instead of overwriting it; since #853 the refused lock no longer re-creates it as an empty
+  database, which a retry or the quit used to encrypt over `.enc`. A workspace-level cross-process lock file would
   close the corner fully; not built (stale-lock handling on hard-killed processes needs its
   own design). A pre-0.1.59 build takes no lock at all: the drive launchers refuse to start
   while two app versions sit at the drive root (#235), but starting an artifact directly

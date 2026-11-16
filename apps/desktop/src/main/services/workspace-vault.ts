@@ -1904,8 +1904,30 @@ export class WorkspaceController {
         // and restore `_db` so the controller stays consistently UNLOCKED and usable;
         // keep the key so a retry (after freeing space) can succeed; surface a typed,
         // content-free error for the IPC layer to map to friendly copy.
+        //
+        // #853 — re-open ONLY a working file that is still there and still a database.
+        // `openDatabase` CREATES a missing file: if something outside the app removed the live
+        // working file (POSIX lets an open file be unlinked), the re-open would leave the
+        // controller holding a fresh, EMPTY database, and the next lock (a retry, or
+        // `shutdown()` at quit) would pass the header guard and encrypt it over the good
+        // `.enc`. With no file to re-open, the session's delta is gone either way; keeping the
+        // closed handle (below) refuses every later lock and keeps `.enc` as the last good
+        // snapshot, which the next launch opens. A main file that is GONE also leaves its
+        // `-wal`/`-shm` behind (SQLite sees the database moved and skips the delete on close):
+        // plaintext pages no main file can replay, so they are shredded now rather than left
+        // on the drive until the next launch's sweep. Only when the file is gone: beside an
+        // existing file, an un-checkpointed WAL (a checkpoint that hit the full disk) may hold
+        // data the next launch's salvage still needs.
+        const dbPath = this.vaultPaths.dbPath
+        let reopenable = false
         try {
-          this._db = openDatabase(this.vaultPaths.dbPath)
+          reopenable = fileHasSqliteHeader(dbPath)
+        } catch {
+          /* missing or unreadable working file: never create a database in its place */
+        }
+        try {
+          if (reopenable) this._db = openDatabase(dbPath)
+          else if (!existsSync(dbPath)) cleanSidecars(dbPath)
         } catch {
           // Re-open is best-effort: if the disk is too broken even for that, keep the
           // closed handle — isUnlocked() stays true, so no unlock can decrypt the STALE
