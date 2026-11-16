@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { t } from '../../src/shared/i18n'
 import { ensureDomMatrixPolyfill } from '../../src/main/services/ingestion/parsers/dommatrix-polyfill'
+import { tempRoot } from '../helpers/db-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // EP-1 plan §11 — the REAL-Electron PDF smoke: the actual `printEvidencePackHtmlToPdf`
@@ -200,7 +200,7 @@ describe.skipIf(!enabled)(
   'evidence-pack PDF smoke — REAL Electron printToPDF + pdfjs (skips where the Electron binary/display is absent, e.g. CI)',
   () => {
     beforeAll(async () => {
-      root = mkdtempSync(join(tmpdir(), 'hilbertraum-pdfsmoke-'))
+      root = tempRoot('pdfsmoke')
 
       // 1. Bundle the runner (which imports the REAL harness from source) for the child
       // Electron main process. CJS output — the classic Electron-main path, no ESM edge.

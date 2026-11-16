@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Unit tests for the shared save-export writers (ipc/save-export.ts): `bomFor` (the plain-text BOM rule), the #90 binary
@@ -74,6 +73,7 @@ vi.mock('electron', () => ({
 }))
 
 import { bomFor, saveBinaryExport, saveTextExport, type SaveExportDialogOptions } from '../../src/main/ipc/save-export'
+import { tempRoot } from '../helpers/db-fixtures'
 
 /** Bytes that are NOT valid UTF-8 — a text-decode round-trip would corrupt them. */
 const BINARY_BYTES = Buffer.concat([
@@ -89,7 +89,7 @@ beforeEach(() => {
 })
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-saveexport-'))
+  return tempRoot('saveexport')
 }
 
 const OPTIONS = {
