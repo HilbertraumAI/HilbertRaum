@@ -305,7 +305,7 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     const { result: labelKept } = await invoke(handlers, IPC.updateEvidenceReview, created.id, { reviewerLabel: 42 })
     expect(labelKept as EvidenceReview).toMatchObject({ reviewerLabel: null })
 
-    // A malformed selection input refuses. The two shapes below are refused by the service too ('' matches no block, '0' is not an integer); only a non-object input reaches the IPC sanitizer alone.
+    // A malformed selection input refuses. The two shapes below are refused by the service too ('' matches no block, '0' is not an integer).
     expect(
       (await invoke(handlers, IPC.createEvidenceSelection, created.id, { blockKey: '', startOffset: 0, endOffset: 1 }))
         .result
@@ -314,7 +314,9 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
       (await invoke(handlers, IPC.createEvidenceSelection, created.id, { blockKey: item.blockKey, startOffset: '0', endOffset: 1 }))
         .result
     ).toBeNull()
-    expect((await invoke(handlers, IPC.createEvidenceSelection, created.id, null)).result).toBeNull()
+    // A TRUTHY non-object passes the handler's `id && selection` check unless sanitizeSelectionInput turns it into null:
+    // the service would read `(42).blockKey`, bind undefined and throw.
+    expect((await invoke(handlers, IPC.createEvidenceSelection, created.id, 42)).result).toBeNull()
 
     // FIX-4b: the hard rules hold across the guard flows too.
     expect(runtimeTouched).toEqual([])
