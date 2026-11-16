@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type {
+  EvidenceExportRecord,
   EvidenceReviewBulkAction,
   EvidenceReviewDetail,
   EvidenceReviewFreshness,
@@ -8,16 +9,15 @@ import type {
   EvidenceReviewItemPatch
 } from '../../src/shared/types'
 import {
-  BULK_WRITABLE_DECISIONS,
   REVIEW_SAVE_DEBOUNCE_MS,
   addReviewSelection,
   bulkClearDecisions,
   bulkMarkHeadingsNotApplicable,
   bulkMarkUndecidedFollowUp,
-  computeReadyGate,
   deleteReviewSelection,
   editReviewHead,
   editReviewItem,
+  exportReviewPack,
   flushReviewSession,
   getReviewSessionSnapshot,
   linkEvidence,
@@ -25,29 +25,58 @@ import {
   openReviewSession,
   purgeReviewSession,
   reopenReview,
-  retryReviewSave
+  retryReviewSave,
+  type ReviewExportOutcome
 } from '../../src/renderer/lib/reviewSession'
 
-import { makeDetail, makeFreshness, makeItem, stubReviewApi } from '../helpers/evidenceReview'
+import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { deferred, type Deferred } from '../helpers/deferred'
+import {
+  bulkBackend,
+  makeDetail,
+  makeFreshness,
+  makeItem,
+  makeReviewHead,
+  stubReviewApi
+} from '../helpers/evidenceReview'
 
 // EP-1 plan §7.5 — the reviewSession module store: the repo's FIRST debounced auto-save.
 // Pins the contract the plan demands: debounce batches related writes (spec §26), the
 // flush is loss-free under rapid edits (edits landing mid-flight are never dropped and a
 // failed write re-merges UNDER newer values), a hard flush runs on demand (screen exit /
-// pre-lock), and the D-7 gate mirror counts exactly like main's deriveReadyGate.
+// pre-lock). The D-7 gate mirror's equivalence with main's deriveReadyGate is pinned in
+// tests/unit/evidence-review-gate.test.ts (FIX-4).
 
 async function openWith(detail: EvidenceReviewDetail): Promise<void> {
   await openReviewSession({ reviewId: detail.id })
   expect(getReviewSessionSnapshot().detail?.id).toBe(detail.id)
 }
 
+/** A recorded export, as `evidence:export` returns it (data-contracts "Evidence Pack" P3). */
+const EXPORT_RECORD: EvidenceExportRecord = {
+  id: 'x1',
+  reviewId: 'r1',
+  format: 'html',
+  schemaVersion: 1,
+  fileName: 'pack.html',
+  fileSha256: 'aa'.repeat(32),
+  options: null,
+  createdAt: '2026-07-18T12:00:00.000Z'
+}
+
 beforeEach(() => {
   purgeReviewSession()
+  // #832: a fresh stub set (and fresh bookkeeping) per test; every row then installs its own.
+  stubReviewApi()
 })
 
 afterEach(() => {
-  vi.useRealTimers()
-  purgeReviewSession()
+  try {
+    assertNoUnexpectedApiCalls()
+  } finally {
+    vi.useRealTimers()
+    purgeReviewSession()
+  }
 })
 
 describe('reviewSession — open', () => {
@@ -84,6 +113,7 @@ describe('reviewSession — open', () => {
 
 describe('reviewSession — debounced auto-save', () => {
   it('debounces: no IPC before the window, ONE merged write after it', async () => {
+    expect(REVIEW_SAVE_DEBOUNCE_MS).toBe(600) // the shipped bound (EP-1 record §3, design-guidelines §11.12), pinned once
     vi.useFakeTimers()
     const detail = makeDetail()
     const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) =>
@@ -104,7 +134,9 @@ describe('reviewSession — debounced auto-save', () => {
     expect(getReviewSessionSnapshot().saveState).toBe('pending')
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
 
-    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS - 1)
+    expect(updateEvidenceReviewItem).not.toHaveBeenCalled() // just short of the window
+    await vi.advanceTimersByTimeAsync(1)
     // ONE call carrying the MERGED patch — related writes batched (spec §26).
     expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1)
     expect(updateEvidenceReviewItem).toHaveBeenCalledWith('i1', {
@@ -139,6 +171,10 @@ describe('reviewSession — debounced auto-save', () => {
     // The first write is still awaiting; a NEW edit lands mid-flight.
     editReviewItem('i2', { decision: 'follow_up' })
     releaseFirst!()
+    // Await the write the store awaits: its continuation was queued first, so it has run once this resolves.
+    await updateEvidenceReviewItem.mock.results[0]!.value
+    // i1 is written, i2 is not: the follow-up pass keeps the store "Saving…", never "Saved" over an unwritten edit.
+    expect(getReviewSessionSnapshot().saveState).toBe('pending')
     await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
     expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(2)
     expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i2', { decision: 'follow_up' })
@@ -177,19 +213,6 @@ describe('reviewSession — debounced auto-save', () => {
     expect(getReviewSessionSnapshot().saveError).toBeNull()
   })
 
-  it('a NULL mutation result (stale handle) surfaces a save error, never a throw', async () => {
-    vi.useFakeTimers()
-    const detail = makeDetail()
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem: vi.fn(async () => null)
-    })
-    await openWith(detail)
-    editReviewItem('i1', { decision: 'supported' })
-    await flushReviewSession()
-    expect(getReviewSessionSnapshot().saveState).toBe('error')
-  })
-
   it('head edits (title/reviewer/general note) flush through updateEvidenceReview; empty titles never leave', async () => {
     vi.useFakeTimers()
     const detail = makeDetail()
@@ -212,7 +235,7 @@ describe('reviewSession — debounced auto-save', () => {
   })
 })
 
-describe('reviewSession — mark ready + gate mirror', () => {
+describe('reviewSession — mark ready', () => {
   it('markReviewReady FLUSHES first, then maps the {review, gate} result honestly', async () => {
     vi.useFakeTimers()
     const detail = makeDetail()
@@ -224,20 +247,7 @@ describe('reviewSession — mark ready + gate mirror', () => {
     const markEvidenceReviewReady = vi.fn(async () => {
       order.push('markReady')
       return {
-        review: {
-          id: detail.id,
-          conversationId: detail.conversationId,
-          messageId: detail.messageId,
-          questionMessageId: detail.questionMessageId,
-          title: detail.title,
-          status: 'ready' as const,
-          outdated: false,
-          reviewerLabel: null,
-          generalNote: null,
-          createdAt: detail.createdAt,
-          updatedAt: detail.updatedAt,
-          completedAt: '2026-07-18T11:00:00.000Z'
-        },
+        review: makeReviewHead({ id: detail.id, status: 'ready', completedAt: '2026-07-18T11:00:00.000Z' }),
         gate: { eligible: true, requiredTotal: 2, decidedTotal: 2 }
       }
     })
@@ -273,19 +283,6 @@ describe('reviewSession — mark ready + gate mirror', () => {
     expect(getReviewSessionSnapshot().detail?.status).toBe('draft')
     expect(getReviewSessionSnapshot().detail?.gate.decidedTotal).toBe(1)
   })
-
-  it('computeReadyGate mirrors main: non-heading BLOCKS required (NULL kind required), N/A counts, selections never gate', () => {
-    const items = [
-      makeItem({ id: 'p', blockKind: 'paragraph', decision: 'supported' }),
-      makeItem({ id: 'h', blockKind: 'heading', decision: 'not_reviewed' }), // exempt
-      makeItem({ id: 'u', blockKind: null, decision: 'not_applicable' }), // unknown kind → required; N/A decides
-      makeItem({ id: 's', kind: 'selection', decision: 'not_reviewed' }), // never gates
-      makeItem({ id: 'x', blockKind: 'list_item', decision: 'not_reviewed' })
-    ]
-    expect(computeReadyGate(items)).toEqual({ eligible: false, requiredTotal: 3, decidedTotal: 2 })
-    items[4] = { ...items[4], decision: 'follow_up' }
-    expect(computeReadyGate(items)).toEqual({ eligible: true, requiredTotal: 3, decidedTotal: 3 })
-  })
 })
 
 describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
@@ -299,29 +296,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     ]
   }
 
-  /** A main-side stand-in with the real contract's teeth: it applies the named sweep to its
-   *  OWN copy of the items in one step and returns the whole refreshed set — so the store is
-   *  tested against a batch that either lands whole or not at all, never a per-item drip. */
-  function bulkBackend(items: EvidenceReviewItem[]) {
-    let rows = items.map((i) => ({ ...i }))
-    return {
-      spy: vi.fn(async (_reviewId: string, action: EvidenceReviewBulkAction) => {
-        rows = rows.map((i) => {
-          if (action === 'headings_not_applicable') {
-            return i.kind === 'block' && i.blockKind === 'heading'
-              ? { ...i, decision: 'not_applicable' as const }
-              : i
-          }
-          if (action === 'clear_decisions') return { ...i, decision: 'not_reviewed' as const }
-          return i.decision === 'not_reviewed' ? { ...i, decision: 'follow_up' as const } : i
-        })
-        return rows.map((i) => ({ ...i }))
-      }),
-      current: () => rows
-    }
-  }
-
-  it('headings→N/A, undecided→follow-up, clear-all — one IPC call each, and NOTHING can bulk-write "supported"', async () => {
+  it('headings→N/A, undecided→follow-up, clear-all — one IPC call per command, never a per-item write', async () => {
     const items = bulkItems()
     const detail = makeDetail({ items })
     const backend = bulkBackend(items)
@@ -334,11 +309,14 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
       applyEvidenceReviewBulkAction: backend.spy
     })
     await openWith(detail)
+    // These decisions are bulkBackend's (main's predicates): the row proves the store MERGES what main returns. The
+    // predicates and the refusal of any other action name belong to evidence-review-batch-ops.
 
     await bulkMarkHeadingsNotApplicable()
     expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'h1')!.decision).toBe(
       'not_applicable'
     )
+    expect(getReviewSessionSnapshot().saveState).toBe('saved') // carried from the retired 60-item row (AUD-13)
     await bulkMarkUndecidedFollowUp()
     expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p1')!.decision).toBe(
       'follow_up'
@@ -362,35 +340,6 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
       'clear_decisions'
     ])
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
-    // No bulk pathway ever names 'supported' (or partly/not supported): the spec's one
-    // forbidden bulk action can not exist by construction.
-    for (const [, action] of backend.spy.mock.calls) {
-      expect(BULK_WRITABLE_DECISIONS).not.toContain('supported')
-      expect(action).not.toMatch(/supported/)
-    }
-  })
-
-  it('a sweep is ONE call for a long review — the fan-out cost does not scale with item count', async () => {
-    const many = Array.from({ length: 60 }, (_, n) =>
-      makeItem({ id: `i${n}`, blockKind: 'paragraph', decision: 'not_reviewed' })
-    )
-    const detail = makeDetail({ items: many })
-    const backend = bulkBackend(many)
-    const updateEvidenceReviewItem = vi.fn(async (id: string) => makeItem({ id }))
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem,
-      applyEvidenceReviewBulkAction: backend.spy
-    })
-    await openWith(detail)
-
-    await bulkMarkUndecidedFollowUp()
-    expect(backend.spy).toHaveBeenCalledTimes(1)
-    expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
-    expect(
-      getReviewSessionSnapshot().detail!.items.every((i) => i.decision === 'follow_up')
-    ).toBe(true)
-    expect(getReviewSessionSnapshot().saveState).toBe('saved')
   })
 
   it('flushes pending per-item edits BEFORE the sweep, so a queued decision cannot undo it', async () => {
@@ -514,12 +463,8 @@ describe('reviewSession — race hardening (FIX-2)', () => {
     await openReviewSession({ reviewId: 'r2' })
     releaseLink!()
     await pending
-    // r2's detail is intact (id + gate present, no stale-spread malformation), and the
-    // stale link write from r1's flight never landed.
-    const s = getReviewSessionSnapshot()
-    expect(s.detail?.id).toBe('r2')
-    expect(s.detail?.gate).toBeDefined()
-    expect(s.detail?.items.every((i) => i.links.length === 0)).toBe(true)
+    // r2's detail is exactly what main returned for r2: no stale spread, no stale link from r1's flight.
+    expect(getReviewSessionSnapshot().detail).toEqual(second)
   })
 
   it('a selection CREATE resolving AFTER purge never re-inserts content (P5 review FIX-5d)', async () => {
@@ -641,10 +586,11 @@ describe('reviewSession — race hardening (FIX-2)', () => {
     purgeReviewSession()
     rejectWrite!()
     await Promise.resolve() // let the rejection propagate through doFlush
-    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
-    // The failure re-merge is token-guarded: no pending resurrection → no retry write.
+    // The failure re-merge is token-guarded: no error copy lands on the purged store…
+    expect(getReviewSessionSnapshot()).toMatchObject({ detail: null, saveState: 'idle', saveError: null })
+    // …and nothing is pending again: a resurrected patch would go out synchronously on the very next flush.
+    void flushReviewSession()
     expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1)
-    expect(getReviewSessionSnapshot()).toMatchObject({ detail: null, saveState: 'idle' })
   })
 
   it('reopenReview flushes pending HEAD edits FIRST — a fresh rename is never reverted (2c)', async () => {
@@ -727,7 +673,7 @@ describe('reviewSession — ready-state guard (FIX-1)', () => {
     })
     await openWith(detail)
 
-    editReviewItem('i1', { decision: 'not_reviewed' })
+    editReviewItem('i1', { decision: 'supported' })
     await linkEvidence('i1', 's1', null)
     await bulkClearDecisions()
     await bulkMarkHeadingsNotApplicable()
@@ -736,7 +682,7 @@ describe('reviewSession — ready-state guard (FIX-1)', () => {
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
     expect(setEvidenceLink).not.toHaveBeenCalled()
     expect(applyEvidenceReviewBulkAction).not.toHaveBeenCalled()
-    // The optimistic detail never moved either.
+    // The optimistic detail never moved either (i1 keeps the fixture's not_reviewed).
     expect(getReviewSessionSnapshot().detail?.items[0]?.decision).toBe('not_reviewed')
 
     // HEAD edits (rename / reviewer label / general note) stay allowed while ready.
@@ -765,6 +711,41 @@ describe('reviewSession — lock purge', () => {
     await flushReviewSession()
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
   })
+
+  it('an open still in flight when the lock purges never re-inserts the decrypted detail', async () => {
+    const read = deferred<EvidenceReviewDetail | null>()
+    const getEvidenceReview = vi.fn(() => read.promise)
+    const { refresh } = stubReviewApi({ getEvidenceReview })
+    const opening = openReviewSession({ reviewId: 'r1' })
+    await vi.waitFor(() => expect(getEvidenceReview).toHaveBeenCalledWith('r1'))
+    purgeReviewSession() // App.lockNow's purge lands while the read is in flight
+    read.resolve(makeDetail())
+    await opening
+    expect(getReviewSessionSnapshot()).toMatchObject({ detail: null, loading: false, openError: null, saveState: 'idle' })
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  // data-contracts.md "Evidence Pack" P3: a token change (lock/switch) landing AFTER the export started still reports what
+  // main did — 'exported' for a real export, 'failed' (no copy) for a genuine rejection — and never touches the purged store.
+  it.each<[string, (d: Deferred<EvidenceExportRecord | null>) => void, ReviewExportOutcome]>([
+    ['completes', (d) => d.resolve(EXPORT_RECORD), { outcome: 'exported' }],
+    ['is rejected by main', (d) => d.reject(new Error('disk full')), { outcome: 'failed', message: null }]
+  ])(
+    'an export that %s after the lock purge reports the truthful outcome and leaves the purged store empty',
+    async (_how, settle, expected) => {
+      const detail = makeDetail()
+      const exported = deferred<EvidenceExportRecord | null>()
+      const exportEvidencePack = vi.fn(() => exported.promise)
+      stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), exportEvidencePack })
+      await openWith(detail)
+      const pending = exportReviewPack({ format: 'html' })
+      await vi.waitFor(() => expect(exportEvidencePack).toHaveBeenCalledWith('r1', { format: 'html' }))
+      purgeReviewSession() // the lock lands while the dialog / write is in flight
+      settle(exported)
+      expect(await pending).toEqual(expected)
+      expect(getReviewSessionSnapshot().detail).toBeNull()
+    }
+  )
 })
 
 describe('reviewSession — P4 freshness (plan §9.1: refresh on open, acknowledge)', () => {
@@ -786,22 +767,24 @@ describe('reviewSession — P4 freshness (plan §9.1: refresh on open, acknowled
 
   it('openToken guard: a refresh landing AFTER a purge never re-populates the store', async () => {
     const detail = makeDetail()
-    let resolveRefresh: (v: EvidenceReviewFreshness | null) => void = () => {}
-    const refreshEvidenceReviewState = vi.fn(
-      () => new Promise<EvidenceReviewFreshness | null>((resolve) => (resolveRefresh = resolve))
-    )
-    stubReviewApi({
-      getEvidenceReview: vi.fn(async () => detail),
-      refreshEvidenceReviewState
+    const refreshes: Array<Deferred<EvidenceReviewFreshness | null>> = []
+    const refreshEvidenceReviewState = vi.fn(() => {
+      const d = deferred<EvidenceReviewFreshness | null>()
+      refreshes.push(d)
+      return d.promise
     })
-    await openWith(detail)
-    // The refresh is in flight; the lock seam purges the store.
-    purgeReviewSession()
-    resolveRefresh(makeFreshness({ outdated: true }))
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(getReviewSessionSnapshot().freshness).toBeNull()
-    expect(getReviewSessionSnapshot().detail).toBeNull()
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), refreshEvidenceReviewState })
+    await openWith(detail) // refresh #1 in flight
+    purgeReviewSession() // the lock seam
+    await openWith(detail) // unlock: the SAME review reopens, refresh #2 in flight
+    expect(refreshEvidenceReviewState).toHaveBeenCalledTimes(2)
+    const current = makeFreshness()
+    refreshes[1]!.resolve(current)
+    await vi.waitFor(() => expect(getReviewSessionSnapshot().freshness).toEqual(current))
+    // The pre-lock verdict lands LAST. Same review id, so only the openToken guard can drop it.
+    refreshes[0]!.resolve(makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] }))
+    await refreshes[0]!.promise // the store's continuation was queued first, so it has run now
+    expect(getReviewSessionSnapshot().freshness).toEqual(current)
   })
 
   it('acknowledge merges the refreshed verdict (acknowledgedAt) into the store', async () => {

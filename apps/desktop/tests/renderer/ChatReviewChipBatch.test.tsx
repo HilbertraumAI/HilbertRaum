@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { act, waitFor, cleanup } from '@testing-library/react'
-import type { Conversation, EvidenceReviewSummary, Message } from '../../src/shared/types'
+import type { Conversation, Message } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
 import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
+import { makeSummary } from '../helpers/evidenceReview'
 
 // AUD-12 — the chat transcript's evidence-review chip state costs ONE IPC round trip per
 // conversation open, no matter how long the history is.
@@ -42,25 +43,12 @@ function longHistory(): Message[] {
   return messages
 }
 
-function summary(messageId: string, over: Partial<EvidenceReviewSummary> = {}): EvidenceReviewSummary {
-  return {
-    id: `r-${messageId}`,
-    conversationId: 'c1',
-    messageId,
-    title: 'Evidence review',
-    status: 'draft',
-    outdated: false,
-    gate: { eligible: false, requiredTotal: 2, decidedTotal: 0 },
-    updatedAt: '2026-07-18T10:00:00.000Z',
-    ...over
-  }
-}
-
 afterEach(() => {
+  // Unmount first, so a call ChatScreen makes while unmounting is checked against the same stub set.
   try {
+    cleanup()
     assertNoUnexpectedApiCalls()
   } finally {
-    cleanup()
     vi.restoreAllMocks()
     window.localStorage.clear()
   }
@@ -92,8 +80,8 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
   it(`opens a ${HISTORY_ANSWERS}-answer conversation with exactly ONE batch call and ZERO per-message calls`, async () => {
     const messages = longHistory()
     const getEvidenceReviewSummariesForConversation = vi.fn(async () => [
-      summary('a3'),
-      summary('a7', { status: 'ready' })
+      makeSummary({ id: 'r-a3', messageId: 'a3' }),
+      makeSummary({ id: 'r-a7', messageId: 'a7', status: 'ready' })
     ])
     const getEvidenceReviewForMessage = vi.fn(async () => null)
     const listMessages = vi.fn(async () => messages)
@@ -134,7 +122,7 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
     expect(getEvidenceReviewSummariesForConversation).toHaveBeenCalledWith('c1')
   })
 
-  it('a failing batch read leaves every chip hidden and does NOT retry per message', async () => {
+  it('a failing batch read is not retried, neither as a batch nor per message', async () => {
     const messages = longHistory()
     const getEvidenceReviewSummariesForConversation = vi.fn(async () => {
       throw new Error('Workspace is locked.')
