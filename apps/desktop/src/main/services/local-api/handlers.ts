@@ -4,10 +4,11 @@ import { isStrictLoopbackHostname } from '../../../shared/local-api'
 import { APP_SCHEME } from '../../app-protocol'
 
 // Local-API request pipeline (local-api wave P3): the pure(ish) checks and the OpenAI
-// envelope/error synthesis. The ORDER of the checks is part of the security contract —
-// Host (DNS-rebinding backstop) → Origin (browser lockout) → content-type → auth — so
-// nothing is readable pre-auth on either route. All of this is exercised by
-// local-api-server.test.ts against a real listener.
+// envelope/error synthesis. The ORDER of the checks (run by server.ts) is part of the security
+// contract — Host (DNS-rebinding backstop) → OPTIONS (refused, no CORS) → Origin (browser
+// lockout) → content-type → auth → route — so nothing is readable pre-auth on either route.
+// All of this is exercised by local-api-server.test.ts against a real listener; its
+// "check order: %s" rows pin the order.
 
 // ---- Response/error envelope ------------------------------------------------------------
 

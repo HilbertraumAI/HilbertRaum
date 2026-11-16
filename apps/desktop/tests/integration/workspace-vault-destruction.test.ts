@@ -1,27 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import {
-  vaultPathsFrom,
-  createEncryptedVaultOnDisk,
   unlockEncryptedVault,
   lockEncryptedVault,
-  encryptFile,
   stageRekey,
   VaultDamagedError,
   VaultLockError,
   WorkspaceController,
   WrongPasswordError,
-  REKEY_SUFFIX,
-  type VaultPaths
+  REKEY_SUFFIX
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { PrivacyPolicy } from '../../src/shared/types'
 import type { Db } from '../../src/main/services/db'
-import type { KdfParams } from '../../src/main/services/security/crypto'
+import { ENCRYPTION_REQUIRED, damagedVault, freshVaultPaths, lockedVault } from '../helpers/vault-fixtures'
 
 // Issue #208 — an encrypted workspace was destroyed ON DISK: `.enc` ended up holding the
 // app's own encryption of a 483 kB random-noise file (a shred survivor), so every unlock
@@ -40,29 +32,12 @@ import type { KdfParams } from '../../src/main/services/security/crypto'
 // (The fourth guard — app.requestSingleInstanceLock in main/index.ts — is Electron-level
 // and covered by the release smoke, not unit-testable here.)
 
-const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
-
-const ENCRYPTION_REQUIRED: PrivacyPolicy = {
-  ...DEFAULT_POLICY,
-  workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
-}
-
-function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-vault-208-'))
-  mkdirSync(join(root, 'config'), { recursive: true })
-  mkdirSync(join(root, 'workspace'), { recursive: true })
-  return vaultPathsFrom({
-    configPath: join(root, 'config'),
-    dbPath: join(root, 'workspace', 'hilbertraum.sqlite')
-  })
-}
-
 /** A stub whose checkpoint/close are irrelevant to the guard under test. */
 const closedDbStub = { exec: () => {}, close: () => {} } as unknown as Db
 
 describe('issue #208 — the vault must never be overwritten with authenticated garbage', () => {
   it('end to end: a second instance startup sweep + first instance lock-on-quit must not destroy the vault', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault-208')
 
     // Instance A: create + unlock the workspace and write session data (stays open, like
     // a user-visible session — WAL sidecars live on disk).
@@ -104,7 +79,7 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
   })
 
   it('a lock refused because the working file vanished never creates a database there: a retry and the quit keep the last good snapshot (#853)', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault-208')
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctrl.init()
     ctrl.create('correct horse battery', 'encrypted')
@@ -141,8 +116,7 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
   })
 
   it('lockEncryptedVault refuses to encrypt a non-SQLite working file over .enc (guard pin)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault-208', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     lockEncryptedVault(vp, db, key) // a good lock; `.enc` is the reference snapshot
     const encBefore = readFileSync(vp.encPath)
@@ -161,8 +135,7 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
   })
 
   it('stageRekey refuses a non-SQLite working file (the rekey journal must not stage garbage)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault-208', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     lockEncryptedVault(vp, db, key)
 
@@ -173,16 +146,11 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
   })
 
   it('unlocking a destroyed vault throws VaultDamagedError (not wrong-password) and shreds the leftover', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
-    const { db, key } = unlockEncryptedVault(vp, 'pw')
-    lockEncryptedVault(vp, db, key)
-
     // Reproduce the reporter's exact on-disk state: `.enc` = the app's own encryption of
-    // random noise under the REAL data key (valid tag, decrypts fine, not a database).
-    const noise = `${vp.dbPath}.noise-src`
-    writeFileSync(noise, randomBytes(483_328))
-    encryptFile(noise, vp.encPath, key)
+    // 483,328 bytes of random noise under the REAL data key (valid tag, decrypts fine, not a
+    // database).
+    const vp = damagedVault(lockedVault('vault-208', 'pw'), 'pw', 483_328)
+    const damagedEnc = readFileSync(vp.encPath)
 
     // A wrong password is still rejected by the verifier FIRST — the two failures must
     // stay distinguishable (that is the whole point of the typed error).
@@ -197,7 +165,7 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(`${vp.dbPath}.tmp`)).toBe(false)
 
-    // And the damaged `.enc` is left untouched as evidence/recovery material.
-    expect(statSync(vp.encPath).size).toBeGreaterThan(483_328)
+    // And the damaged `.enc` is left untouched, byte for byte, as evidence/recovery material.
+    expect(readFileSync(vp.encPath).equals(damagedEnc)).toBe(true)
   })
 })

@@ -530,7 +530,7 @@ running as you**. Two doors exist:
 | **Off by default; explicit consent dialog** | The door does not exist until the user opens it, knowing what it means. |
 | **Policy ceiling** `network.allow_local_api` (restrict-only) | A managed/commercial drive can forbid the feature outright; the user setting can never override it. A drive that forbids it must say so EXPLICITLY (`allow_local_api: false` — what `prepare-drive` writes): an absent key predates the feature and inherits the permissive default, so existing drives are not silently denied (O4b). A junk value or a malformed policy file still fails closed. |
 | **Exists only while unlocked** | A locked vault serves nothing — settings and the access key live inside it, and lock/quit tear the listener down before the sidecars. |
-| **Binds `127.0.0.1` + `::1` only** | Anything off-machine. There is no LAN mode, no `0.0.0.0`, no proxy or forward capability, and no setting that could produce one. Test-pinned. |
+| **Binds `127.0.0.1` + `::1` only** | Anything off-machine. There is no LAN mode, no `0.0.0.0`, no proxy or forward capability, and no setting that could produce one. The two listen calls (`127.0.0.1`, then `::1` on the same port) are pinned by `local-api-server.test.ts` "listens on 127.0.0.1 AND ::1, never 0.0.0.0; the two listeners share the port". |
 | **`Host` header validation (absent ⇒ 403)** | DNS rebinding — a page that resolves an attacker domain to 127.0.0.1 still fails the Host check. |
 | **`http(s)` non-loopback `Origin` and `Origin: null` refused; `OPTIONS` refused; no CORS header ever emitted; JSON content-type required** | Drive-by browser access. A loopback-origin page is not refused by the Origin check itself — the refused preflight and the absent CORS headers are what stop a browser reading any response. Absent and custom-scheme origins (`app://`, `vscode-webview://`) pass, because that is what Electron-based local clients send — except this app's own `hilbertraum:` scheme, refused since #560 (its renderer talks to main over IPC). |
 | **Bearer access key, on by default, constant-time compared** | Casual use by any other program on the machine. Turning it off is a confirmed user choice. |
@@ -1539,8 +1539,8 @@ re-encrypts (the bullet below).
   only abandoning the wait. The preview IPC re-checks admission after its awaits and rejects with
   the locked copy rather than returning text. Pinned by `tests/integration/lock-admission-race.test.ts`
   (a parked photo preview across a real lock and a real `performShutdown`, both engine flavours; a
-  `readdirSync` name sweep of `documents/` and `images/` at the "locked" instant; the stored
-  copies beside the transient survive) and `tests/unit/plaintext-ops.test.ts`.
+  `readdirSync` name sweep of `documents/`, where the preview transient lands, at the "locked"
+  instant; the stored copies beside the transient survive) and `tests/unit/plaintext-ops.test.ts`.
 
 ### The lock latch — admission during the teardown (AUD-02 / AUD-03)
 
@@ -1573,6 +1573,19 @@ anyway. Each site keeps its **own** localized copy (`main.task.workspaceLocked`,
 **services** too (`DocTaskManager.startDocTask`, `TranslateJobService.start`,
 `VisionService.analyze` — via an injected `isWorkspaceLocking` seam), not only in the IPC
 handlers, so non-IPC callers inherit them.
+
+How it is proved: `ipc-lock-coverage.test.ts` drives every registrar in its `MODULES` list in two
+postures, locked and mid-lock (`isUnlocked()` still true, `isLocking()` set), and every handler
+that is not exempt must refuse with its module's copy, so a first guard that goes back to a bare
+`isUnlocked()` turns that module's row red. `lock-admission-race.test.ts` drives a real lock parked
+mid-teardown and refuses the work that would respawn a sidecar or write: a translation doc task, a
+Translate-view start, an image analyze, an import, and the password change (which answers a
+refusal instead of throwing; the descriptor is untouched). Three guards have no row of their own:
+dictation's (its suite checks a locked workspace only), `DocTaskManager.startDocTask`'s and
+`VisionService.analyze`'s (`vision/index.ts`; non-IPC callers rely on both service guards, but every
+row reaches them through the IPC guard, which refuses first). The third service guard,
+`TranslateJobService.start`'s, has its own row: `translate-ipc.test.ts` "#163 (T-1): the
+SERVICE-level isWorkspaceLocking refusal (the non-IPC callers' guard)".
 
 Clearing rules: **cleared** whenever the handler leaves the teardown by a throw *while the
 workspace is still open* (the failed re-encrypt — realistically ENOSPC — restores the controller

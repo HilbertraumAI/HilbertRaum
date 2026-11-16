@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, SCHEMA_VERSION, WorkspaceNewerError } from '../../src/main/services/db'
+import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 
 // #247 (owner decision #225 — "ratify"): the workspace database carries `PRAGMA user_version`
 // = SCHEMA_VERSION so an OLDER build refuses a NEWER workspace instead of opening it and
@@ -14,36 +13,37 @@ import { openDatabase, SCHEMA_VERSION, WorkspaceNewerError } from '../../src/mai
 // Builds ≤ 0.1.59 ignore the stamp — the guard protects only pairs where the OLDER build is
 // newer than this change.
 
-// The raw driver, bypassing `openDatabase`, so a test can stamp a file the way a NEWER build
-// would have (db.ts itself resolves `node:sqlite` the same way).
-const { DatabaseSync } = createRequire(process.execPath)('node:sqlite') as typeof import('node:sqlite')
-
 function freshPath(): string {
-  return join(mkdtempSync(join(tmpdir(), 'hilbertraum-user-version-')), 'workspace.sqlite')
+  return join(tempRoot('user-version'), 'workspace.sqlite')
 }
 
-function stamp(path: string, version: number): void {
-  const raw = new DatabaseSync(path)
-  raw.exec(`PRAGMA user_version = ${version};`)
-  raw.close()
+/** Run `sql` on a raw handle (no migrations), the way an older or a newer build wrote the file. */
+function rawExec(path: string, sql: string): void {
+  const raw = openRawDb(path)
+  try {
+    raw.exec(sql)
+  } finally {
+    raw.close()
+  }
 }
 
+/** The file's stamp, read through a READ-ONLY handle: the check can neither create the file nor write to it. */
 function readVersion(path: string): number {
-  const raw = new DatabaseSync(path, { readOnly: true })
-  const row = raw.prepare('PRAGMA user_version').get() as { user_version: number }
-  raw.close()
-  return row.user_version
+  const raw = openRawDb(path, { readOnly: true })
+  try {
+    return (raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+  } finally {
+    raw.close()
+  }
 }
 
 const sha = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex')
 
 describe('PRAGMA user_version (#247)', () => {
-  it('SCHEMA_VERSION is a positive integer', () => {
+  it('a fresh database is migrated and stamped with SCHEMA_VERSION', () => {
+    // A positive integer, or "stamped with SCHEMA_VERSION" would hold for a file never stamped.
     expect(Number.isInteger(SCHEMA_VERSION)).toBe(true)
     expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(1)
-  })
-
-  it('a fresh database is migrated and stamped with SCHEMA_VERSION', () => {
     const p = freshPath()
     const db = openDatabase(p)
     db.close()
@@ -53,10 +53,13 @@ describe('PRAGMA user_version (#247)', () => {
   it('an existing pre-stamp database (version 0) upgrades in place; a second open is a no-op', () => {
     const p = freshPath()
     openDatabase(p).close()
-    stamp(p, 0) // every database written before this change
+    // Every database written before this change: stamp 0, and (as an older build left it)
+    // missing a column a later migration adds.
+    rawExec(p, 'ALTER TABLE documents DROP COLUMN ocr_meta_json; PRAGMA user_version = 0;')
     const db = openDatabase(p)
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION)
-    // The migrations still ran — the schema is complete (an additive column from `ensureColumn`).
+    // The migrations ran on the version-0 file — the schema is complete again (an additive
+    // column from `ensureColumn`).
     expect(db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('documents') WHERE name = 'ocr_meta_json'").get()).toEqual({ n: 1 })
     db.close()
     expect(readVersion(p)).toBe(SCHEMA_VERSION)
@@ -72,7 +75,7 @@ describe('PRAGMA user_version (#247)', () => {
   it('a database stamped by a NEWER build is refused with WorkspaceNewerError — closed, no writes', () => {
     const p = freshPath()
     openDatabase(p).close()
-    stamp(p, SCHEMA_VERSION + 1)
+    rawExec(p, `PRAGMA user_version = ${SCHEMA_VERSION + 1};`)
     const before = sha(p)
     let caught: unknown
     try {
@@ -97,7 +100,7 @@ describe('PRAGMA user_version (#247)', () => {
 
   it('a far-future stamp is refused the same way (the check is >, not ===)', () => {
     const p = freshPath()
-    stamp(p, SCHEMA_VERSION + 1000)
+    rawExec(p, `PRAGMA user_version = ${SCHEMA_VERSION + 1000};`)
     expect(() => openDatabase(p)).toThrow(WorkspaceNewerError)
   })
 })

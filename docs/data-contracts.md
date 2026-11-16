@@ -370,12 +370,15 @@ excluded).
 client-facing rendering of this same contract is [`local-api.md`](local-api.md) §6, which must be
 updated in the same change whenever anything below moves):**
 `LocalApiServer` (`services/local-api/server.ts` + `handlers.ts`) binds **127.0.0.1 AND ::1**
-(O5; never 0.0.0.0; no-IPv6 machines degrade to v4-only), default port **4980** (O1).
+(O5; never 0.0.0.0; no-IPv6 machines degrade to v4-only; the two listen calls, `127.0.0.1` and
+then `::1` on the same port, are pinned by `local-api-server.test.ts` "listens on 127.0.0.1 AND
+::1, never 0.0.0.0; the two listeners share the port"), default port **4980** (O1).
 Every response carries `Server: HilbertRaum/<version>`. Pipeline order (security contract):
-Host (loopback names only; absent ⇒ 403) → Origin (`http(s)` non-loopback + literal `null` ⇒
-403; absent/custom app schemes pass; OPTIONS ⇒ 403; **no CORS header is ever emitted**) →
-content-type (POST = `application/json`, charset tolerated; else 415) → Bearer auth
-(constant-time; when token NOT required a present Authorization is IGNORED; both routes gated).
+Host (loopback names only; absent ⇒ 403) → OPTIONS ⇒ 403 `no_cors` (before the Origin check;
+**no CORS header is ever emitted**) → Origin (`http(s)` non-loopback + literal `null` ⇒ 403;
+absent/custom app schemes pass) → content-type (POST = `application/json`, charset tolerated; else
+415) → Bearer auth (constant-time; when token NOT required a present Authorization is IGNORED; both
+routes gated) → route.
 Routes (D6 — nothing else): **GET `/v1/models`** → `{object:'list', data:[{id, object:'model',
 owned_by:'hilbertraum', context_window}]}`; never consumes an admission slot; distinct probe
 outcomes: 200 running · 503 `model_starting` + Retry-After · 503 `model_not_loaded`.
@@ -1064,9 +1067,10 @@ head's own weights + KV.
 ✅ **`services/security/crypto.ts`** (spec §3.5) — pure KDF + AEAD, no I/O.
 - **KDF:** `deriveKey(password, salt, params)` → 32-byte key. `KdfParams` is per-algo
   (`argon2id: m/t/p` · `scrypt: N/r/p`); `DEFAULT_KDF = { argon2id, m=19456, t=2, p=1, keyLen=32 }`
-  for NEW vaults, `SCRYPT_KDF = { scrypt, N=32768, r=8, p=1 }` still unlocks legacy vaults (see the
-  §3 KDF decision). `generateSalt()` → 16 random bytes. Deterministic for the same
-  password+salt+params.
+  for NEW vaults. A legacy vault unlocks from the params its descriptor recorded (the unlock derives
+  with `descriptor.kdf`, scrypt or Argon2id); `SCRYPT_KDF = { scrypt, N=32768, r=8, p=1 }` is an
+  exported constant that no code reads (see the §3 KDF decision). `generateSalt()` → 16 random
+  bytes. Deterministic for the same password+salt+params.
 - **AEAD:** `encrypt(key, plaintext) → { iv(12), tag(16), ciphertext }` (AES-256-GCM, fresh IV),
   `decrypt(key, blob)` (throws on wrong key/tamper). `serializeBlob`/`deserializeBlob`
   (`MAGIC(8)|iv|tag|ct` on-disk frame). `makeVerifier(key)`/`verifyKey(key, verifier)` (password

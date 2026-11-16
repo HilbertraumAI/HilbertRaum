@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 
 // IPC-layer tests for registerWorkspaceIpc — the exception→result mapping the unlock gate
 // depends on (a wrong password / policy refusal / weak password must be a NORMAL
@@ -20,8 +18,9 @@ vi.mock('electron', () => ({
 // vault re-encrypts — but it was only proven at the unit tier, never that the lock IPC actually
 // CALLS it. Spy on `purgeResidentVectors` (calling THROUGH to the real impl, sharing the real
 // `caches` singleton, mirroring the resident-cache-incremental decode-spy idiom) so the lock
-// handler's WIRING is asserted at the IPC layer. The other lock tests above run with `ctx.db`
-// undefined → harmless `purge(undefined)` no-ops, so the spy is mockClear'd per assertion below.
+// handler's WIRING is asserted at the IPC layer. Every lock row's ctx reads the live DB through the
+// controller getter (`workspaceIpcCtx`), so each purges its own; the spy is mockClear'd before the
+// assertion below.
 const { purgeSpy } = vi.hoisted(() => ({ purgeSpy: vi.fn() }))
 vi.mock('../../src/main/services/embeddings', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/services/embeddings')>()
@@ -29,7 +28,7 @@ vi.mock('../../src/main/services/embeddings', async (importOriginal) => {
   return { ...actual, purgeResidentVectors: purgeSpy }
 })
 
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { encodeVector, getResidentVectors } from '../../src/main/services/embeddings'
 import type { IpcMainInvokeEvent } from 'electron'
 import { inFlightStreams, streamSettled } from '../../src/main/ipc/inflight'
@@ -39,18 +38,13 @@ import { appendMessage, createConversation, generateAssistantMessage, listMessag
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import { MIN_PASSWORD_LENGTH, type PrivacyPolicy, type WorkspaceActionResult } from '../../src/shared/types'
 import {
-  WorkspaceController,
-  vaultPathsFrom,
-  createEncryptedVaultOnDisk,
-  unlockEncryptedVault,
-  lockEncryptedVault,
-  encryptFile,
-  VaultRecoveryBlockedError,
-  type VaultPaths
-} from '../../src/main/services/workspace-vault'
-import { SCHEMA_VERSION } from '../../src/main/services/db'
+  MIN_PASSWORD_LENGTH,
+  type PrivacyPolicy,
+  type WorkspaceActionResult,
+  type WorkspaceStateInfo
+} from '../../src/shared/types'
+import { WorkspaceController, VaultRecoveryBlockedError, type VaultPaths } from '../../src/main/services/workspace-vault'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 import {
@@ -59,93 +53,50 @@ import {
   type WorkspaceFailureReason
 } from '../../src/shared/workspace-failure-keys'
 import { catalogOf } from '../helpers/i18n-catalogs'
-import { openRawDb } from '../helpers/db-fixtures'
-import type { KdfParams } from '../../src/main/services/security/crypto'
 import type { AppContext } from '../../src/main/services/context'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import {
+  ENCRYPTION_REQUIRED,
+  damagedVault,
+  freshVaultPaths,
+  lockedVault,
+  newerPlaintext,
+  newerVault,
+  unlockedController,
+  workspaceIpcCtx,
+  type WorkspaceIpcCtxOptions
+} from '../helpers/vault-fixtures'
 import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
 import { seedStoredTextDoc } from '../helpers/doc-fixtures'
 import { killableRuntime } from '../helpers/killable-runtime'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
-const ENCRYPTION_REQUIRED: PrivacyPolicy = {
-  ...DEFAULT_POLICY,
-  workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
+const PW = 'right-password'
+
+/** A controller that ran `init()` over `vp`: its state is whatever the disk holds. */
+function startedOn(vp: VaultPaths, policy: PrivacyPolicy = ENCRYPTION_REQUIRED, devMode = false): WorkspaceController {
+  const ctrl = new WorkspaceController(vp, policy, devMode)
+  ctrl.init()
+  return ctrl
 }
 
-function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-wsipc-'))
-  mkdirSync(join(root, 'config'), { recursive: true })
-  mkdirSync(join(root, 'workspace'), { recursive: true })
-  return vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'hilbertraum.sqlite') })
-}
+/** A fresh encrypted vault under `PW`, unlocked. */
+const unlockedVault = (): WorkspaceController => unlockedController(lockedVault('wsipc', PW), PW)
 
-/** #208's on-disk state: the password verifies and `.enc` authenticates, but it holds our own
- *  encryption of pure noise under the real key, not a database. */
-function damagedVault(password: string): VaultPaths {
-  const vp = freshVault()
-  createEncryptedVaultOnDisk(vp, password, FAST_KDF)
-  const { db, key } = unlockEncryptedVault(vp, password)
-  lockEncryptedVault(vp, db, key)
-  const noise = `${vp.dbPath}.noise-src`
-  writeFileSync(noise, randomBytes(64 * 1024))
-  encryptFile(noise, vp.encPath, key)
-  return vp
-}
-
-function ctxWith(
-  ctrl: WorkspaceController,
-  sidecars?: {
-    stopRuntime?: () => Promise<void>
-    stopEmbedder?: () => Promise<void>
-    stopVision?: () => Promise<void>
-  }
-): AppContext {
-  return {
-    trustedSenders: ANY_SENDER,
-    workspace: ctrl,
-    runtime: { stop: sidecars?.stopRuntime ?? (async () => {}), activeModelId: () => null },
-    embedder: { stop: sidecars?.stopEmbedder ?? (async () => {}) },
-    ...(sidecars?.stopVision ? { vision: { stop: sidecars.stopVision } } : {})
-  } as unknown as AppContext
-}
+/** #208's on-disk state: the password verifies and `.enc` authenticates, but holds 64 KiB of our own noise. */
+const damagedOnDisk = (): VaultPaths => damagedVault(lockedVault('wsipc', PW), PW, 64 * 1024)
 
 beforeEach(() => ipcState.handlers.clear())
 
 describe('registerWorkspaceIpc', () => {
-  it('refuses a too-short encrypted password as a normal result (no throw, no KDF)', async () => {
-    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
-    const { result } = await invoke(handlers, IPC.createWorkspace, 'short', 'encrypted')
-    const r = result as WorkspaceActionResult
-    expect(r.ok).toBe(false)
-    expect(r).toMatchObject({ reason: 'refused' })
-    expect((r as { message: string }).message).toMatch(/at least 8/)
-    expect(ctrl.isUnlocked()).toBe(false)
-  })
-
-  it('creates an encrypted workspace with a long-enough password', async () => {
-    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
-    const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'encrypted')
-    const r = result as WorkspaceActionResult
-    expect(r.ok).toBe(true)
-    expect(r.ok && r.state.state).toBe('unlocked')
-    expect(r.ok && r.state.mode).toBe('encrypted')
-    ctrl.lock()
-  })
-
   // Main's own floors, at the boundary. The gate and the Settings card hold the same
   // MIN_PASSWORD_LENGTH (WorkspaceGate.test.tsx, ChangePassword.test.tsx), so they never send
   // main a password one short of it; only these rows reach main's checks there.
   it('create refuses an encrypted password one short of MIN_PASSWORD_LENGTH and creates one at it', async () => {
-    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
+    const vp = freshVaultPaths('wsipc')
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const short = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH - 1), 'encrypted')
     expect(short.result).toEqual({
       ok: false,
@@ -153,184 +104,96 @@ describe('registerWorkspaceIpc', () => {
       message: tMain('main.workspace.passwordTooShort', { min: MIN_PASSWORD_LENGTH })
     })
     expect(ctrl.isUnlocked()).toBe(false)
+    // A normal result before any KDF: no vault was built, half or whole.
+    expect(existsSync(vp.descriptorPath)).toBe(false)
+    expect(existsSync(vp.encPath)).toBe(false)
     const atFloor = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH), 'encrypted')
     expect(atFloor.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
     ctrl.lock()
   })
 
   it('change password refuses a new password one short of MIN_PASSWORD_LENGTH and takes one at it', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
-    registerWorkspaceIpc(ctxWith(ctrl))
+    const ctrl = unlockedVault()
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     try {
-      const short = await invoke(
-        handlers,
-        IPC.changeWorkspacePassword,
-        'right-password',
-        'a'.repeat(MIN_PASSWORD_LENGTH - 1)
-      )
+      const short = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'a'.repeat(MIN_PASSWORD_LENGTH - 1))
       expect(short.result).toEqual({
         ok: false,
         reason: 'refused',
         message: tMain('main.workspace.newPasswordTooShort', { min: MIN_PASSWORD_LENGTH })
       })
       // The refusal left the vault alone: the current password still verifies for the change at the floor.
-      const atFloor = await invoke(
-        handlers,
-        IPC.changeWorkspacePassword,
-        'right-password',
-        'a'.repeat(MIN_PASSWORD_LENGTH)
-      )
+      const atFloor = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'a'.repeat(MIN_PASSWORD_LENGTH))
       expect(atFloor.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
     } finally {
       ctrl.lock()
     }
   })
 
-  it('maps a wrong password to { ok:false, reason:"wrong_password" } instead of throwing', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF) // descriptor uses FAST params
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    expect(ctrl.getState().state).toBe('locked')
-    registerWorkspaceIpc(ctxWith(ctrl))
-
-    const { result } = await invoke(handlers, IPC.unlockWorkspace, 'wrong-password')
-    expect(result).toMatchObject({ ok: false, reason: 'wrong_password' })
-    expect(ctrl.isUnlocked()).toBe(false)
-  })
-
-  // #208: a vault whose `.enc` authenticates but does not decrypt to a database must NOT
-  // wear the wrong-password (or generic openFailed) copy — the reporter's destroyed vault
-  // looked like a forgotten password across three releases, and the troubleshooting step
-  // that suggests ("create a new workspace") erases the recovery evidence.
-  it('maps a damaged vault to { ok:false, reason:"vault_damaged" }, distinct from wrong_password', async () => {
-    const vp = damagedVault('right-password')
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
-
-    const wrong = await invoke(handlers, IPC.unlockWorkspace, 'wrong-password')
-    expect(wrong.result).toMatchObject({ ok: false, reason: 'wrong_password' })
-
-    const { result } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
-    expect(result).toMatchObject({ ok: false, reason: 'vault_damaged' })
-    // The copy must carry the damage + backup guidance, not the "check it and try again"
-    // retry framing of the wrong-password copy.
-    expect((result as { message: string }).message).toMatch(/damaged/i)
-    expect((result as { message: string }).message).toMatch(/backup/i)
-    expect(ctrl.isUnlocked()).toBe(false)
-  })
-
   // M-S2: the renderer is the untrusted boundary — a non-string password must NOT throw
   // an unhandled TypeError at the IPC layer (password.length used to run before the try).
   it('handles a non-string create password as a clean refusal (no throw)', async () => {
-    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
+    const ctrl = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     // A throwing handler would reject this await — the no-throw guarantee IS the test.
     const { result } = await invoke(handlers, IPC.createWorkspace, 12345 as unknown as string, 'encrypted')
     expect(result).toMatchObject({ ok: false, reason: 'refused' })
     expect(ctrl.isUnlocked()).toBe(false)
   })
 
-  it('rejects an unknown create mode as a clean result (no throw)', async () => {
-    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
-    const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'bogus' as never)
-    expect(result).toMatchObject({ ok: false })
-    expect(ctrl.isUnlocked()).toBe(false)
+  // The gate reads the state before any unlock (getStatus MUST work pre-unlock), so the locked row is the one that
+  // catches a guard added to the handler; the plaintext row is the only IPC read of an open `plaintext_dev` workspace.
+  it.each<[string, () => WorkspaceController, WorkspaceStateInfo]>([
+    [
+      'a locked encrypted vault, before any unlock',
+      () => startedOn(lockedVault('wsipc', PW)),
+      { state: 'locked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true }
+    ],
+    [
+      'an open plaintext_dev workspace',
+      () => startedOn(freshVaultPaths('wsipc'), DEFAULT_POLICY, true), // dev → plaintext opens
+      { state: 'unlocked', mode: 'plaintext_dev', plaintextAllowed: true, encryptionRequired: false }
+    ]
+  ])('returns the current workspace state: %s', async (_case, open, expected) => {
+    const ctrl = open()
+    try {
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+      const { result } = await invoke(handlers, IPC.getWorkspaceState)
+      expect(result).toEqual(expected)
+    } finally {
+      ctrl.shutdown()
+    }
   })
 
-  it('handles a non-string unlock password as wrong_password (no throw)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
-    const { result } = await invoke(handlers, IPC.unlockWorkspace, { evil: true } as unknown as string)
-    expect(result).toMatchObject({ ok: false, reason: 'wrong_password' })
-    expect(ctrl.isUnlocked()).toBe(false)
-  })
-
-  it('maps a policy-forbidden plaintext create to { ok:false, reason:"refused" }', async () => {
-    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, true)
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
-    const { result } = await invoke(handlers, IPC.createWorkspace, 'whatever8', 'plaintext_dev')
-    expect(result).toMatchObject({ ok: false, reason: 'refused' })
-  })
-
-  it('returns the current workspace state', async () => {
-    const ctrl = new WorkspaceController(freshVault(), DEFAULT_POLICY, true) // dev → plaintext opens
-    ctrl.init()
-    registerWorkspaceIpc(ctxWith(ctrl))
-    const { result } = await invoke(handlers, IPC.getWorkspaceState)
-    expect(result).toMatchObject({ state: 'unlocked', mode: 'plaintext_dev' })
-  })
-
-  it('lockWorkspace stops both sidecars before re-encrypting (Lock now)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
-    const order: string[] = []
-    const stopRuntime = vi.fn(async () => {
-      order.push('runtime')
+  // "Lock now" must leave nothing user-derived running: each boundary is torn down ONCE and while the DB is still
+  // open (the fake records `isUnlocked()` at call time), i.e. before the vault re-encrypts. The embedder row has no
+  // `suspend`, so it drives the `?? stop()` fallback the mock embedder takes. BE-5 (ocr-audit 2026-07-18): the idle
+  // warm tesseract worker holds decoded page bytes in main-process RAM; the lock must `suspend()` it, never `stop()`
+  // (stop() latches permanently, and the engine is held on ctx for the session). Every fake is async: a `suspend`
+  // returning `undefined` would fall through `??` to its sibling.
+  it.each<[string, (call: () => Promise<void>, latchingStop: () => Promise<void>) => WorkspaceIpcCtxOptions, boolean]>([
+    ['the chat runtime', (call) => ({ stopRuntime: call }), false],
+    ['the embedder through its stop fallback (no suspend)', (call) => ({ stopEmbedder: call }), false],
+    ['the vision sidecar (its KV cache holds the image + prompt)', (call) => ({ stopVision: call }), false],
+    [
+      'the OCR engine through suspend, never its latching stop (BE-5)',
+      (call, latchingStop) => ({ extra: { ocrEngine: { suspend: call, stop: latchingStop } } }),
+      true
+    ]
+  ])('lockWorkspace tears down %s while the DB is still open', async (_boundary, install, hasLatchingStop) => {
+    const ctrl = unlockedVault()
+    const atCall: boolean[] = []
+    const call = vi.fn(async () => {
+      atCall.push(ctrl.isUnlocked())
     })
-    const stopEmbedder = vi.fn(async () => {
-      order.push('embedder')
-    })
-    registerWorkspaceIpc(ctxWith(ctrl, { stopRuntime, stopEmbedder }))
+    const latchingStop = vi.fn(async () => {})
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, install(call, latchingStop)))
 
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(ctrl.isUnlocked()).toBe(false)
-    expect(stopRuntime).toHaveBeenCalledTimes(1)
-    expect(stopEmbedder).toHaveBeenCalledTimes(1)
-    // Both sidecars were stopped (order between them doesn't matter, but both ran).
-    expect(order.sort()).toEqual(['embedder', 'runtime'])
-  })
-
-  it('lockWorkspace stops the vision sidecar too (its KV cache holds the image + prompt)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
-    const stopVision = vi.fn(async () => {})
-    registerWorkspaceIpc(ctxWith(ctrl, { stopVision }))
-
-    const { result } = await invoke(handlers, IPC.lockWorkspace)
-    expect(result).toMatchObject({ state: 'locked' })
-    expect(stopVision).toHaveBeenCalledTimes(1)
-  })
-
-  // BE-5 (ocr-audit 2026-07-18): the idle warm tesseract WASM worker holds decoded page bytes in
-  // main-process RAM, so the lock must terminate it before the vault re-encrypts. `suspend()` (not
-  // `stop()`): the engine is held on ctx for the session, so it must come back lazily after unlock;
-  // stop() latches permanently. Watched fail pre-fix (the lock teardown omitted the OCR engine).
-  it('lockWorkspace suspends the OCR engine too (an idle worker holds decoded page bytes)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
-    const suspendOcr = vi.fn(async () => {})
-    const stopOcr = vi.fn(async () => {})
-    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
-    base.ocrEngine = { suspend: suspendOcr, stop: stopOcr }
-    registerWorkspaceIpc(base as unknown as AppContext)
-
-    const { result } = await invoke(handlers, IPC.lockWorkspace)
-    expect(result).toMatchObject({ state: 'locked' })
-    expect(suspendOcr).toHaveBeenCalledTimes(1)
-    expect(stopOcr).not.toHaveBeenCalled() // stop() latches permanently — lock must not
+    expect(atCall).toEqual([true]) // once, before the vault re-encrypted
+    if (hasLatchingStop) expect(latchingStop).not.toHaveBeenCalled()
   })
 
   it('lockWorkspace suspends the translator, FLUSHES the doc-task queue (TA-1 H2) AND aborts the Translate-view job (TG-4)', async () => {
@@ -342,22 +205,27 @@ describe('registerWorkspaceIpc', () => {
     // It must suspend — not permanently stop — the translator, and await the running task's
     // settle. TG-4: a running Translate-VIEW job (`ctx.translateJobs`) shares the same sidecar,
     // so it is aborted here too (its next window would likewise respawn the suspended server).
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
-    const suspendTranslator = vi.fn(async () => {})
+    const ctrl = unlockedVault()
+    const order: string[] = []
+    const suspendTranslator = vi.fn(async () => {
+      order.push('translator.suspend')
+    })
     const stopTranslator = vi.fn(async () => {})
     const cancelAllDocTasks = vi.fn()
     const awaitActiveTaskSettled = vi.fn(async () => {})
     const abortActiveBuild = vi.fn()
-    const stopTranslateJobs = vi.fn(async () => {})
-    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
-    base.translator = { suspend: suspendTranslator, stop: stopTranslator }
-    base.docTasks = { cancelAllDocTasks, awaitActiveTaskSettled, abortActiveBuild }
-    base.translateJobs = { stop: stopTranslateJobs }
-    registerWorkspaceIpc(base as unknown as AppContext)
+    const stopTranslateJobs = vi.fn(async () => {
+      order.push('translateJobs.stop')
+    })
+    registerWorkspaceIpc(
+      workspaceIpcCtx(ctrl, {
+        extra: {
+          translator: { suspend: suspendTranslator, stop: stopTranslator },
+          docTasks: { cancelAllDocTasks, awaitActiveTaskSettled, abortActiveBuild },
+          translateJobs: { stop: stopTranslateJobs }
+        }
+      })
+    )
 
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
@@ -366,10 +234,9 @@ describe('registerWorkspaceIpc', () => {
     // abort-unwind settle is awaited before the vault re-encrypts.
     expect(cancelAllDocTasks).toHaveBeenCalledTimes(1)
     expect(awaitActiveTaskSettled).toHaveBeenCalledTimes(1)
-    // TG-4: the view job is aborted, and BEFORE the translator suspend (its abort loop is
+    // TG-4: the view job is aborted once, and BEFORE the translator suspend (its abort loop is
     // synchronous, so a queued next window can't reach translate() after the sidecar dies).
-    expect(stopTranslateJobs).toHaveBeenCalledTimes(1)
-    expect(suspendTranslator).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['translateJobs.stop', 'translator.suspend'])
     expect(stopTranslator).not.toHaveBeenCalled() // stop() latches permanently — lock must not
   })
 
@@ -395,16 +262,12 @@ describe('registerWorkspaceIpc', () => {
       }
     ]
   ])('lockWorkspace awaits the cancelled %s settle before re-encrypting', async (_lane, install) => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
+    const ctrl = unlockedVault()
     expect(ctrl.isUnlocked()).toBe(true)
 
     let unwind!: () => void
     const settled = { done: false }
-    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
+    const base = workspaceIpcCtx(ctrl) as unknown as Record<string, unknown>
     const cancel = install(
       base,
       () =>
@@ -434,13 +297,9 @@ describe('registerWorkspaceIpc', () => {
   })
 
   it('lockWorkspace still locks when a sidecar stop fails (allSettled)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
+    const ctrl = unlockedVault()
     registerWorkspaceIpc(
-      ctxWith(ctrl, {
+      workspaceIpcCtx(ctrl, {
         stopRuntime: async () => {
           throw new Error('sidecar wedged')
         }
@@ -452,11 +311,7 @@ describe('registerWorkspaceIpc', () => {
   })
 
   it('lockWorkspace purges the resident decoded-vector cache (RAG-6 security wiring, T2)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
+    const ctrl = unlockedVault()
     const db = ctrl.requireDb()
 
     // Seed a REAL resident decoded-vector map for this db (doc → chunk → embedding), so the lock
@@ -478,10 +333,10 @@ describe('registerWorkspaceIpc', () => {
     ).run(chunkId, 'mock', encodeVector(vec), vec.length, now)
     expect(getResidentVectors(db).size).toBe(1) // the decoded vector is resident in main-process RAM
 
-    // The lock handler reads ctx.db at call time — give it the LIVE workspace db so the purge
-    // target is the genuine cache key, not undefined.
-    registerWorkspaceIpc({ ...ctxWith(ctrl), db } as unknown as AppContext)
-    purgeSpy.mockClear() // ignore any earlier lock tests' purge(undefined) no-ops
+    // `ctx.db` is the production getter (`requireDb()` on every read): a purge moved after `lock()` throws here as
+    // it would in the app. A static `db` on the ctx kept that green.
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    purgeSpy.mockClear() // ignore the earlier lock rows' purges of their own databases
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
 
@@ -498,12 +353,7 @@ describe('registerWorkspaceIpc', () => {
   // DB — instead of relying on runtime.stop() outrunning the abort-unwind. The lock handler reads
   // the module-singleton inFlightStreams + streamSettled, so this populates those directly.
   it('lockWorkspace awaits each in-flight stream settle before re-encrypting (R1)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
-    const db = ctrl.requireDb()
+    const ctrl = unlockedVault()
     expect(ctrl.isUnlocked()).toBe(true)
 
     const controller = new AbortController()
@@ -521,7 +371,7 @@ describe('registerWorkspaceIpc', () => {
     )
 
     try {
-      registerWorkspaceIpc({ ...ctxWith(ctrl), db } as unknown as AppContext)
+      registerWorkspaceIpc(workspaceIpcCtx(ctrl))
       const lockP = invoke(handlers, IPC.lockWorkspace)
 
       const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -547,11 +397,7 @@ describe('registerWorkspaceIpc', () => {
   // unlock it read as a finished answer. Driven end to end: a real chat turn through the stream
   // lifecycle on the unlocked vault's database, the lock handler, then a fresh unlock that reads it back.
   it('lockWorkspace ends an in-flight answer so it still reads "Reply stopped" after the next unlock (#612)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
+    const ctrl = unlockedVault()
     const db = ctrl.requireDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Tell me about lighthouses.' })
@@ -586,12 +432,12 @@ describe('registerWorkspaceIpc', () => {
     )
     await parked
 
-    registerWorkspaceIpc({ ...ctxWith(ctrl), db } as unknown as AppContext)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     await expect(turn).resolves.toMatchObject({ content: 'Lighthouses guide ships', endedEarly: 'lock' })
 
-    ctrl.unlock('right-password')
+    ctrl.unlock(PW)
     try {
       const saved = listMessages(ctrl.requireDb(), conv.id)
       expect(saved.map((m) => [m.role, m.content, m.endedEarly])).toEqual([
@@ -608,11 +454,7 @@ describe('registerWorkspaceIpc', () => {
   // back to the rule-based floor and opened its save dialog over the lock screen (real app, 2026-10-06).
   // Driven with the real redaction seam and run controller on the unlocked vault's database.
   it('lockWorkspace cancels a skill run and the benchmark before it stops the model; nothing is saved (#606)', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('right-password')
+    const ctrl = unlockedVault()
     const db = ctrl.requireDb()
     const documentId = seedStoredTextDoc(db, 'Anna Berger lives at Lindenweg 4 in Freiburg.', { label: 'wsipc' })
 
@@ -643,19 +485,19 @@ describe('registerWorkspaceIpc', () => {
       order.push('runtime.stop')
       await model.stop()
     }
-    registerWorkspaceIpc({
-      ...ctxWith(ctrl, { stopRuntime }),
-      db,
-      skillRuns: runs,
-      cancelBenchmark: () => order.push('benchmark.cancel')
-    } as unknown as AppContext)
+    registerWorkspaceIpc(
+      workspaceIpcCtx(ctrl, {
+        stopRuntime,
+        extra: { skillRuns: runs, cancelBenchmark: () => order.push('benchmark.cancel') }
+      })
+    )
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
 
     expect(runs.get(runHandle)?.state).toBe('cancelled')
     expect(saveTextFile).not.toHaveBeenCalled() // before #606: the rule-based copy's save dialog
     expect(order).toEqual(['benchmark.cancel', 'runtime.stop'])
-    ctrl.unlock('right-password')
+    ctrl.unlock(PW)
     try {
       // Recorded before the vault re-encrypted (before #606 a late write failed: "could not be saved").
       expect(ctrl.requireDb().prepare('SELECT status FROM skill_runs').all()).toEqual([{ status: 'cancelled' }])
@@ -674,7 +516,8 @@ describe('registerWorkspaceIpc', () => {
 // once for every language main can speak (equal text in all of them stands in for the same key).
 // Where a table holds `null` the gate shows main's `message` as it came, which keeps the screen in
 // one language only while that message is free text: the same in every language, and no catalog
-// value.
+// value. Every row also leaves the workspace as it found it (still locked, still uninitialized, …):
+// a refusal is a normal result the gate re-prompts on, never a changed state.
 describe('main’s unlock/create failure copy is the copy the gate’s tables pick (UI-languages owner call D-17 (a))', () => {
   type Call = 'unlock' | 'create'
   /** One way into a branch of a handler: the workspace it sees and the arguments it gets. */
@@ -687,43 +530,21 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
   /** Typecheck makes every reason either driven (at least once) or declared never sent. */
   type Provocations = Record<WorkspaceFailureReason, readonly [Provocation, ...Provocation[]] | typeof NEVER_SENT>
 
-  const PW = 'right-password'
-  const startedOn = (vp: VaultPaths, policy = ENCRYPTION_REQUIRED, devMode = false): WorkspaceController => {
-    const ctrl = new WorkspaceController(vp, policy, devMode)
-    ctrl.init()
-    return ctrl
-  }
-  const lockedVault = (): VaultPaths => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, PW, FAST_KDF)
-    return vp
-  }
-  /** Databases a newer build stamped (#247, as in workspace-newer.test.ts). */
-  const newerVault = (): VaultPaths => {
-    const vp = lockedVault()
-    const { db, key } = unlockEncryptedVault(vp, PW)
-    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1};`)
-    lockEncryptedVault(vp, db, key)
-    return vp
-  }
-  const newerPlaintext = (): VaultPaths => {
-    const vp = freshVault()
-    const raw = openRawDb(vp.dbPath)
-    raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1};`)
-    raw.close()
-    return vp
-  }
-
   const UNLOCK: Provocations = {
     wrong_password: [
-      { how: 'a wrong password', arrange: () => ({ workspace: startedOn(lockedVault()), args: ['wrong-password'] }) },
+      { how: 'a wrong password', arrange: () => ({ workspace: startedOn(lockedVault('wsipc', PW)), args: ['wrong-password'] }) },
       {
         how: 'a password that is not a string',
-        arrange: () => ({ workspace: startedOn(lockedVault()), args: [{ evil: true }] })
+        arrange: () => ({ workspace: startedOn(lockedVault('wsipc', PW)), args: [{ evil: true }] })
+      },
+      // #208: on a vault whose data is damaged, a WRONG password still reads as a wrong password, not as damage.
+      {
+        how: 'a wrong password on a damaged vault',
+        arrange: () => ({ workspace: startedOn(damagedOnDisk()), args: ['wrong-password'] })
       }
     ],
     vault_damaged: [
-      { how: 'a vault that decrypts to noise', arrange: () => ({ workspace: startedOn(damagedVault(PW)), args: [PW] }) }
+      { how: 'a vault that decrypts to noise', arrange: () => ({ workspace: startedOn(damagedOnDisk()), args: [PW] }) }
     ],
     // A real hold takes an `fs` mock (vault-recovery-guards.test.ts drives one into this handler);
     // the handler only sees the controller's typed refusal, so a workspace whose unlock throws it
@@ -742,10 +563,13 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       }
     ],
     workspace_newer: [
-      { how: 'a database a newer build stamped', arrange: () => ({ workspace: startedOn(newerVault()), args: [PW] }) }
+      {
+        how: 'a database a newer build stamped',
+        arrange: () => ({ workspace: startedOn(newerVault(lockedVault('wsipc', PW), PW)), args: [PW] })
+      }
     ],
     refused: NEVER_SENT,
-    error: [{ how: 'no vault to unlock', arrange: () => ({ workspace: startedOn(freshVault()), args: [PW] }) }]
+    error: [{ how: 'no vault to unlock', arrange: () => ({ workspace: startedOn(freshVaultPaths('wsipc')), args: [PW] }) }]
   }
 
   const CREATE: Provocations = {
@@ -755,7 +579,10 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     workspace_newer: [
       {
         how: 'a plaintext database a newer build stamped',
-        arrange: () => ({ workspace: startedOn(newerPlaintext(), DEFAULT_POLICY, true), args: ['', 'plaintext_dev'] })
+        arrange: () => ({
+          workspace: startedOn(newerPlaintext(freshVaultPaths('wsipc')), DEFAULT_POLICY, true),
+          args: ['', 'plaintext_dev']
+        })
       }
     ],
     // Not a row: main's too-short refusal (a password under MIN_PASSWORD_LENGTH, or not a string),
@@ -765,20 +592,20 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       {
         how: 'a plaintext workspace the policy forbids',
         arrange: () => ({
-          workspace: startedOn(freshVault(), ENCRYPTION_REQUIRED, true),
+          workspace: startedOn(freshVaultPaths('wsipc'), ENCRYPTION_REQUIRED, true),
           args: ['whatever8', 'plaintext_dev']
         })
       },
       {
         how: 'a vault already on the drive',
-        arrange: () => ({ workspace: startedOn(lockedVault()), args: ['longenough', 'encrypted'] })
+        arrange: () => ({ workspace: startedOn(lockedVault('wsipc', PW)), args: ['longenough', 'encrypted'] })
       }
     ],
     error: [
-      { how: 'an unknown mode', arrange: () => ({ workspace: startedOn(freshVault()), args: ['longenough', 'bogus'] }) },
+      { how: 'an unknown mode', arrange: () => ({ workspace: startedOn(freshVaultPaths('wsipc')), args: ['longenough', 'bogus'] }) },
       {
         how: 'a workspace already open',
-        arrange: () => ({ workspace: startedOn(freshVault(), DEFAULT_POLICY, true), args: ['', 'plaintext_dev'] })
+        arrange: () => ({ workspace: startedOn(freshVaultPaths('wsipc'), DEFAULT_POLICY, true), args: ['', 'plaintext_dev'] })
       }
     ]
   }
@@ -799,8 +626,10 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     '%s %s (%s): main says what the gate shows, in every language main speaks',
     async (call, reason, _how, provocation) => {
       const { workspace, args } = provocation.arrange()
-      registerWorkspaceIpc(ctxWith(workspace))
+      registerWorkspaceIpc(workspaceIpcCtx(workspace))
       const key = TABLES[call][reason]
+      // The recovery-blocked stand-in has no state of its own to keep.
+      const stateBefore = workspace instanceof WorkspaceController ? workspace.getState() : null
       const before = mainUiLanguage()
       const messages: string[] = []
       try {
@@ -812,6 +641,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
           if (key !== null) expect(message, code).toBe(tMain(key))
           messages.push(message)
         }
+        if (stateBefore !== null) expect(workspace.getState()).toEqual(stateBefore)
       } finally {
         applyUiLanguageSetting(before)
         if (workspace instanceof WorkspaceController) workspace.shutdown()

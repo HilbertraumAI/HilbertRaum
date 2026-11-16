@@ -1,14 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import {
-  mkdtempSync,
-  mkdirSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  utimesSync
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -16,13 +7,13 @@ import net from 'node:net'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { openDatabase } from '../../src/main/services/db'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { PrivacyPolicy } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type PrivacyPolicy } from '../../src/shared/types'
 import {
-  vaultPathsFrom,
   createEncryptedVaultOnDisk,
   unlockEncryptedVault,
   lockEncryptedVault,
   plaintextAllowed,
+  readVaultDescriptor,
   shredStalePlaintext,
   encryptFile,
   decryptFile,
@@ -34,38 +25,21 @@ import {
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
   WorkspaceController,
-  WrongPasswordError,
-  VaultLockError,
-  type VaultPaths
+  WrongPasswordError
 } from '../../src/main/services/workspace-vault'
 import { randomBytes } from 'node:crypto'
-import {
-  encrypt,
-  decrypt,
-  serializeBlob,
-  deserializeBlob,
-  type KdfParams
-} from '../../src/main/services/security/crypto'
+import { encrypt, decrypt, serializeBlob, deserializeBlob } from '../../src/main/services/security/crypto'
 import * as vaultCrypto from '../../src/main/services/security/crypto'
-
-// Fast KDF so the suite stays quick — unlock reads the params back from the descriptor,
-// so creating with cheap params keeps the round-trip honest while shaving scrypt cost.
-const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
-
-/** Build a fresh temp workspace layout + its vault paths. */
-function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-vault-'))
-  const configPath = join(root, 'config')
-  const workspacePath = join(root, 'workspace')
-  mkdirSync(configPath, { recursive: true })
-  mkdirSync(workspacePath, { recursive: true })
-  return vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
-}
-
-const ENCRYPTION_REQUIRED: PrivacyPolicy = {
-  ...DEFAULT_POLICY,
-  workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
-}
+import { tempRoot } from '../helpers/db-fixtures'
+import {
+  ENCRYPTION_REQUIRED,
+  FAST_KDF,
+  backdate,
+  failedLockState,
+  freshVaultPaths,
+  lockedVault,
+  unlockedController
+} from '../helpers/vault-fixtures'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -75,7 +49,7 @@ afterEach(() => {
 
 describe('encrypted vault lifecycle', () => {
   it('creates LOCKED on disk: descriptor + .enc exist, no plaintext working file', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
     expect(existsSync(vp.descriptorPath)).toBe(true)
     expect(existsSync(vp.encPath)).toBe(true)
@@ -83,8 +57,7 @@ describe('encrypted vault lifecycle', () => {
   })
 
   it('round-trips data through lock and unlock; shreds the plaintext on lock', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
 
     const first = unlockEncryptedVault(vp, 'pw')
     expect(existsSync(vp.dbPath)).toBe(true) // decrypted working file present while unlocked
@@ -103,16 +76,8 @@ describe('encrypted vault lifecycle', () => {
     second.db.close()
   })
 
-  it('rejects a wrong password and never writes a plaintext working file', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
-    expect(() => unlockEncryptedVault(vp, 'wrong-password')).toThrow(WrongPasswordError)
-    expect(existsSync(vp.dbPath)).toBe(false)
-  })
-
-  it('zeroes the KDF-derived key on the wrong-password path (L-6)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+  it('rejects a wrong password with WrongPasswordError, writes no plaintext working file, and zeroes the derived key (L-6)', () => {
+    const vp = lockedVault('vault', 'right-password')
     // TEST-N5: assert the OBSERVABLE (the actual key bytes are all zero after the throw), not the
     // zeroing MECHANISM. A passthrough spy captures the very Buffer deriveKey returned — which the
     // unlock path zeroes IN PLACE before throwing — so this holds for fill(0)/.set/randomFill alike
@@ -121,6 +86,8 @@ describe('encrypted vault lifecycle', () => {
     const deriveSpy = vi.spyOn(vaultCrypto, 'deriveKey')
     try {
       expect(() => unlockEncryptedVault(vp, 'wrong-password')).toThrow(WrongPasswordError)
+      // The verifier refuses before any decrypt, so nothing plaintext reached the disk.
+      expect(existsSync(vp.dbPath)).toBe(false)
       const derived = deriveSpy.mock.results.find((r) => r.type === 'return')?.value as Buffer | undefined
       expect(derived).toBeInstanceOf(Buffer)
       expect(derived!.length).toBe(FAST_KDF.keyLen)
@@ -133,8 +100,7 @@ describe('encrypted vault lifecycle', () => {
   // H4 (audit round 4): `.enc` IS the user's data; creating over it would irreversibly
   // replace chats/documents/settings with an empty vault.
   it('refuses to create over an existing .enc (the data must never be wiped)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     const encBefore = readFileSync(vp.encPath)
     expect(() => createEncryptedVaultOnDisk(vp, 'other-pw', FAST_KDF)).toThrow(/already exists/)
     // The original encrypted database is untouched.
@@ -144,8 +110,7 @@ describe('encrypted vault lifecycle', () => {
   })
 
   it('a corrupt descriptor with an intact .enc gives a restore hint, not "no workspace"', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
     expect(() => unlockEncryptedVault(vp, 'pw')).toThrow(/missing or unreadable/)
   })
@@ -155,15 +120,14 @@ describe('encrypted vault lifecycle', () => {
 
 describe('streaming file crypto (M5)', () => {
   function tmpFile(name: string, data: Buffer | string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-stream-'))
-    const p = join(dir, name)
+    const p = join(tempRoot('stream'), name)
     writeFileSync(p, data)
     return p
   }
 
   it('streamed encryptFile output decrypts via the in-memory blob path (same frame)', () => {
     const key = randomBytes(32)
-    const plaintext = randomBytes(3 * 1024 * 1024 + 17) // > one chunk boundary, odd size
+    const plaintext = randomBytes(3 * 1024 * 1024 + 17) // odd size, inside one 8 MiB chunk
     const src = tmpFile('plain.bin', plaintext)
     const enc = `${src}.enc`
     encryptFile(src, enc, key)
@@ -197,10 +161,16 @@ describe('streaming file crypto (M5)', () => {
     expect(existsSync(`${out}.tmp`)).toBe(false) // the partial output was shredded
   })
 
-  it('shredFile unlinks even large-ish files via chunked overwrite', () => {
-    const p = tmpFile('shred-me.bin', randomBytes(1024 * 1024))
-    shredFile(p)
-    expect(existsSync(p)).toBe(false)
+  // A frame of a format this build does not write (a future version, #845) is refused by name
+  // before any decrypt, by both readers. Past the magic check its next 28 bytes would be taken as
+  // `iv | tag`, and only the GCM tag failure would stop it, under a misleading message.
+  it('a frame with a foreign magic (a future format) is refused by name before any decrypt, by the sync and the async reader', async () => {
+    const enc = tmpFile('future.enc', Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(12 + 16 + 64)]))
+    const out = `${enc}.plain`
+    expect(() => decryptFile(enc, out, randomBytes(32))).toThrow(/unrecognised header/)
+    await expect(decryptFileAsync(enc, out, randomBytes(32))).rejects.toThrow(/unrecognised header/)
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(`${out}.tmp`)).toBe(false)
   })
 })
 
@@ -212,8 +182,7 @@ describe('streaming file crypto (M5)', () => {
 
 describe('async vault crypto (PERF-1)', () => {
   function tmpFile(name: string, data: Buffer | string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-async-crypto-'))
-    const p = join(dir, name)
+    const p = join(tempRoot('async-crypto'), name)
     writeFileSync(p, data)
     return p
   }
@@ -246,11 +215,17 @@ describe('async vault crypto (PERF-1)', () => {
 
   it('async round-trips its own output and rejects a tampered .enc (GCM auth), leaving no plaintext', async () => {
     const key = randomBytes(32)
-    const src = tmpFile('plain3.bin', randomBytes(256 * 1024))
+    const plaintext = randomBytes(256 * 1024)
+    const src = tmpFile('plain3.bin', plaintext)
     const enc = `${src}.enc`
     await encryptFileAsync(src, enc, key)
 
-    // Flip a ciphertext byte past the 36-byte header → GCM auth must fail.
+    // The async reader decrypts what the async writer produced …
+    const back = `${enc}.back`
+    await decryptFileAsync(enc, back, key)
+    expect(readFileSync(back).equals(plaintext)).toBe(true)
+
+    // … and refuses it once a ciphertext byte past the 36-byte header is flipped (GCM auth).
     const blob = readFileSync(enc)
     blob[100] ^= 0xff
     writeFileSync(enc, blob)
@@ -260,29 +235,23 @@ describe('async vault crypto (PERF-1)', () => {
     expect(existsSync(`${out}.tmp`)).toBe(false) // partial output shredded
   })
 
-  it('yields to the event loop between chunks (the sync version blocks it)', async () => {
+  // The async encrypt must not hold the main thread for the whole file: a macrotask queued just
+  // before it runs before it finishes. (The sync twin needs no row: no timer can pre-empt
+  // synchronous JS.) This proves the encrypt yields, not that it yields between every pair of
+  // chunks. A 0 ms timer, not a setImmediate counter: that one starves the poll phase the fs
+  // callbacks land in (#258).
+  it('the async encrypt yields to the event loop while it runs (a timer queued first fires before it finishes)', async () => {
     const key = randomBytes(32)
     const data = randomBytes(FILE_CHUNK_BYTES * 3 + 7) // several chunk boundaries → several awaits
     const src = tmpFile('big.bin', data)
 
-    // SYNC: a macrotask scheduled right before a synchronous call cannot run until it returns.
-    // JS is single-threaded, so this is deterministic — the timer can't preempt the sync loop.
-    let firedDuringSync = false
-    const ts = setTimeout(() => {
-      firedDuringSync = true
-    }, 0)
-    encryptFile(src, `${src}.s.enc`, key)
-    expect(firedDuringSync).toBe(false)
-    clearTimeout(ts)
-
-    // ASYNC: the same macrotask DOES run, because each chunk read/write awaits (yields the loop).
-    let firedDuringAsync = false
-    const ta = setTimeout(() => {
-      firedDuringAsync = true
+    let fired = false
+    const t = setTimeout(() => {
+      fired = true
     }, 0)
     await encryptFileAsync(src, `${src}.a.enc`, key)
-    clearTimeout(ta)
-    expect(firedDuringAsync).toBe(true)
+    clearTimeout(t)
+    expect(fired).toBe(true)
   })
 })
 
@@ -290,8 +259,7 @@ describe('async vault crypto (PERF-1)', () => {
 
 describe('WorkspaceController — create-over-existing-vault guard (H4)', () => {
   it('reports LOCKED (not uninitialized) when the descriptor is corrupt but .enc exists', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     writeFileSync(vp.descriptorPath, '{ corrupted-not-json', 'utf8')
 
     const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
@@ -304,11 +272,12 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
   })
 
   it('refuses create while a vault exists (locked state), keeping the data intact', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
     ctl.init()
+    // Re-reading an existing encrypted vault starts LOCKED and says it is encrypted.
     expect(ctl.getState().state).toBe('locked')
+    expect(ctl.getState().mode).toBe('encrypted')
 
     expect(() => ctl.create('new-password', 'encrypted')).toThrow(/already exists/)
     expect(() => ctl.create('', 'plaintext_dev')).toThrow(/already exists/)
@@ -320,24 +289,36 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
   })
 })
 
-// ---- password is never persisted ------------------------------------------------
+// ---- password is never persisted; the locked vault holds no plaintext -------------
 
 describe('no plaintext password persisted', () => {
-  it('keeps the password out of the descriptor and the encrypted blob', () => {
-    const vp = freshVault()
+  it('keeps the password out of the descriptor, and the locked .enc holds no plaintext database bytes', () => {
     const SECRET = 'super-secret-passphrase-9k2x'
-    createEncryptedVaultOnDisk(vp, SECRET, FAST_KDF)
+    const MARKER = 'at-rest-marker-7f3c9e1a'
+    const vp = lockedVault('vault', SECRET)
 
     const descriptor = readFileSync(vp.descriptorPath, 'utf8')
     expect(descriptor).not.toContain(SECRET)
-    // Descriptor stores only salt + KDF params + an authenticated verifier.
+    // The descriptor is the v2 envelope: salt + KDF params + an authenticated verifier + the
+    // data key wrapped under the password key. Nothing else.
     const parsed = JSON.parse(descriptor)
-    expect(parsed.saltB64).toBeTruthy()
-    expect(parsed.kdf.algo).toBe('scrypt')
-    expect(parsed.verifier).toBeTruthy()
+    expect(Object.keys(parsed).sort()).toEqual(['dataKey', 'kdf', 'mode', 'saltB64', 'verifier', 'version'])
+    expect(parsed.version).toBe(2)
+    expect(parsed.kdf).toEqual(FAST_KDF)
 
+    // At rest the database is ciphertext: a value written while unlocked is in neither the
+    // locked `.enc` nor does the file carry SQLite's header (a copy-instead-of-encrypt would).
+    const { db, key } = unlockEncryptedVault(vp, SECRET)
+    updateSettings(db, { activeModelId: MARKER })
+    lockEncryptedVault(vp, db, key)
     const enc = readFileSync(vp.encPath)
+    expect(enc.includes(Buffer.from(MARKER))).toBe(false)
+    expect(enc.includes(Buffer.from('SQLite format 3'))).toBe(false)
     expect(enc.includes(Buffer.from(SECRET))).toBe(false)
+    // Positive control: the marker IS in the plaintext the next unlock decrypts.
+    const again = unlockEncryptedVault(vp, SECRET)
+    expect(readFileSync(vp.dbPath).includes(Buffer.from(MARKER))).toBe(true)
+    again.db.close()
   })
 })
 
@@ -350,8 +331,15 @@ describe('plaintextAllowed gating', () => {
     expect(plaintextAllowed(DEFAULT_POLICY, { isDev: false })).toBe(false)
   })
 
-  it('refuses plaintext when encryption is required by policy', () => {
-    expect(plaintextAllowed(ENCRYPTION_REQUIRED, { isDev: true })).toBe(false)
+  // The absolute veto, alone: this policy still ALLOWS plaintext dev mode, so only
+  // `encryptionRequired` can refuse. (ENCRYPTION_REQUIRED flips both flags, and its
+  // `allowPlaintextDevMode: false` would refuse with the veto deleted.)
+  it('refuses plaintext when encryption is required by policy, even with plaintext dev mode allowed (the absolute veto)', () => {
+    const policy: PrivacyPolicy = {
+      ...DEFAULT_POLICY,
+      workspace: { encryptionRequired: true, allowPlaintextDevMode: true }
+    }
+    expect(plaintextAllowed(policy, { isDev: true })).toBe(false)
   })
 
   it('refuses plaintext when the policy disables plaintext dev mode', () => {
@@ -367,7 +355,7 @@ describe('plaintextAllowed gating', () => {
 
 describe('WorkspaceController', () => {
   it('opens plaintext immediately in dev (no descriptor needed)', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     const ctrl = new WorkspaceController(vp, DEFAULT_POLICY, true)
     ctrl.init()
     const s = ctrl.getState()
@@ -382,7 +370,7 @@ describe('WorkspaceController', () => {
   // cleanly and worsen hard-unplug outcomes. lock() is a deliberate no-op for
   // plaintext_dev, so the quit path calls shutdown() (checkpoint + close) instead.
   it('shutdown() closes a plaintext_dev DB so no -wal/-shm sidecars remain at rest (issue #51)', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     const ctrl = new WorkspaceController(vp, DEFAULT_POLICY, true)
     ctrl.init()
     // A write guarantees the WAL sidecars exist on disk during the session.
@@ -406,11 +394,8 @@ describe('WorkspaceController', () => {
   })
 
   it('shutdown() locks an unlocked encrypted vault and is safe to call when already locked (issue #51)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    ctrl.unlock('pw')
+    const vp = lockedVault('vault', 'pw')
+    const ctrl = unlockedController(vp, 'pw')
     updateSettings(ctrl.requireDb(), { contextTokens: 7777 })
 
     ctrl.shutdown()
@@ -423,15 +408,13 @@ describe('WorkspaceController', () => {
     expect(ctrl.getState().state).toBe('locked')
     ctrl.shutdown() // idempotent on an already-locked vault
 
-    const again = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    again.init()
-    again.unlock('pw')
+    const again = unlockedController(vp, 'pw')
     expect(getSettings(again.requireDb()).contextTokens).toBe(7777)
     again.lock()
   })
 
   it('drives the encrypted uninitialized → unlocked → locked → unlocked lifecycle', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     // Commercial posture: encryption required, not a dev build → onboarding, no plaintext.
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctrl.init()
@@ -442,6 +425,11 @@ describe('WorkspaceController', () => {
     const created = ctrl.create('master-pass', 'encrypted')
     expect(created.state).toBe('unlocked')
     expect(created.mode).toBe('encrypted')
+    // A NEW vault is a v2 envelope under the shipped default KDF (argon2id, m 19 MiB, t 2, p 1;
+    // docs/security-model.md), recorded in its descriptor so every later unlock re-derives the key.
+    const descriptor = readVaultDescriptor(vp.descriptorPath)
+    expect(descriptor?.version).toBe(2)
+    expect(descriptor?.kdf).toEqual({ algo: 'argon2id', m: 19456, t: 2, p: 1, keyLen: 32 })
     updateSettings(ctrl.requireDb(), { contextTokens: 4242 })
 
     const locked = ctrl.lock()
@@ -456,27 +444,18 @@ describe('WorkspaceController', () => {
   })
 
   it('refuses plaintext creation when policy forbids it', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, true)
     ctrl.init()
     expect(() => ctrl.create('x', 'plaintext_dev')).toThrow(/not permitted/i)
   })
 
-  it('re-reading an existing encrypted vault starts LOCKED', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
-    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctrl.init()
-    expect(ctrl.getState().state).toBe('locked')
-    expect(ctrl.getState().mode).toBe('encrypted')
-  })
-
   it('shreds a leftover plaintext DB from a crash on startup, staying LOCKED (H1)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     // Simulate a hard crash before lock-on-quit: a decrypted working file + WAL/SHM are
-    // left next to the .enc.
+    // left next to the .enc, and so is decryptFile's whole-DB temp from before its atomic rename.
     writeFileSync(vp.dbPath, 'leftover plaintext database bytes')
+    writeFileSync(`${vp.dbPath}.tmp`, 'leftover decrypt temp')
     writeFileSync(`${vp.dbPath}-wal`, 'wal')
     writeFileSync(`${vp.dbPath}-shm`, 'shm')
 
@@ -484,8 +463,10 @@ describe('WorkspaceController', () => {
     ctrl.init()
 
     // The stray plaintext (+ sidecars) must be gone; the encrypted artifact is untouched;
-    // the workspace stays locked until the user provides the password.
+    // the workspace stays locked until the user provides the password. (Checked before the
+    // unlock below, which writes its own `<db>.tmp` again.)
     expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}.tmp`)).toBe(false)
     expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
     expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
     expect(existsSync(vp.encPath)).toBe(true)
@@ -496,21 +477,8 @@ describe('WorkspaceController', () => {
     ctrl.lock()
   })
 
-  it('shredStalePlaintext removes the working file + WAL/SHM', () => {
-    const vp = freshVault()
-    writeFileSync(vp.dbPath, 'x')
-    writeFileSync(`${vp.dbPath}.tmp`, 'x') // decryptFile's whole-DB temp before its atomic rename
-    writeFileSync(`${vp.dbPath}-wal`, 'x')
-    writeFileSync(`${vp.dbPath}-shm`, 'x')
-    shredStalePlaintext(vp)
-    expect(existsSync(vp.dbPath)).toBe(false)
-    expect(existsSync(`${vp.dbPath}.tmp`)).toBe(false)
-    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
-    expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
-  })
-
   it('shredStalePlaintext sweeps crash-left .parse/.tmp transients under documents/ AND images/, keeping stored copies', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     const workspaceDir = dirname(vp.dbPath)
     const docsDir = join(workspaceDir, 'documents')
     const imagesDir = join(workspaceDir, 'images')
@@ -539,7 +507,7 @@ describe('WorkspaceController', () => {
   })
 
   it('applyPendingRekey swaps every swappable sidecar even when one is stuck (BUG vuln-scan-2026-06-21)', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     const docsDir = join(dirname(vp.dbPath), 'documents')
     mkdirSync(docsDir, { recursive: true })
     // Two normal staged sidecars: target = old ciphertext, `.new` = the freshly re-keyed one.
@@ -572,65 +540,17 @@ describe('WorkspaceController', () => {
 //
 // CODE-1 (High): a failed re-encrypt on lock (ENOSPC is realistic — during lock the
 // plaintext DB + old `.enc` + new `.enc.tmp` coexist) must never strand the controller
-// half-locked (1a), and the next launch's crash sweep must never shred a working file
-// that is NEWER than `.enc` — the only fresh copy of the session's data (1b).
+// half-locked (1a; driven through a real full-drive write in vault-recovery-guards.test.ts),
+// and the next launch's crash sweep must never shred a working file that is NEWER than
+// `.enc` — the only fresh copy of the session's data (1b).
 // CODE-10: the re-encrypt fsyncs before its atomic rename, so quit → unplug-without-eject
 // cannot leave a truncated `.enc` after the plaintext was already durably shredded.
 // CODE-14: fresh-vault creation commits at the DESCRIPTOR write (the rekey-journal
 // ordering) — a crash mid-create leaves `uninitialized`, never a bricked onboarding.
 
 describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
-  /** The exact disk state a failed lock leaves behind: a checkpointed, cleanly CLOSED
-   *  plaintext working file (no -wal/-shm sidecars) newer than the stale `.enc`. */
-  function failedLockState(vp: VaultPaths): void {
-    const { db } = unlockEncryptedVault(vp, 'pw')
-    updateSettings(db, { contextTokens: 7171 })
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
-    db.close()
-    // Deterministic mtime ordering even on coarse-timestamp filesystems: backdate `.enc`.
-    const past = new Date(Date.now() - 60_000)
-    utimesSync(vp.encPath, past, past)
-  }
-
-  it('CODE-1a: a failed re-encrypt on lock() leaves the controller unlocked and usable; retry locks', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
-    // The CODE-1 seam: the first lock attempt fails like a full drive, later ones succeed.
-    let failNext = true
-    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, (src, dest, key) => {
-      if (failNext) {
-        failNext = false
-        throw new Error('ENOSPC: no space left on device, write')
-      }
-      encryptFile(src, dest, key)
-    })
-    ctl.init()
-    ctl.unlock('pw')
-    updateSettings(ctl.requireDb(), { contextTokens: 5150 })
-    const encBefore = readFileSync(vp.encPath)
-
-    // The failure surfaces as the TYPED, content-free error …
-    expect(() => ctl.lock()).toThrow(VaultLockError)
-    // … the stale `.enc` (last good snapshot) is untouched …
-    expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
-    // … and the controller is consistently UNLOCKED and USABLE: state, reads AND writes
-    // (the old behavior kept a CLOSED handle in `_db` — every later DB call failed raw).
-    expect(ctl.getState().state).toBe('unlocked')
-    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5150)
-    updateSettings(ctl.requireDb(), { contextTokens: 5151 })
-
-    // The key was kept, so a retry (after "freeing space") locks cleanly …
-    expect(ctl.lock().state).toBe('locked')
-    expect(existsSync(vp.dbPath)).toBe(false)
-    // … and nothing was lost: the unlock reads back the post-failure write.
-    ctl.unlock('pw')
-    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
-    ctl.lock()
-  })
-
   it('CODE-1b: init() preserves a working file newer than .enc; unlock rolls it forward', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     failedLockState(vp)
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
@@ -652,8 +572,7 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
   })
 
   it('CODE-1b: a wrong password neither consumes nor destroys the recovery snapshot', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     failedLockState(vp)
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
@@ -667,25 +586,26 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
   })
 
   it('CODE-1b: a STALE working file (older than .enc) is still shredded as today', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     // A leftover OLDER than the at-rest snapshot (e.g. crash after lock's encryptFile
-    // succeeded but before the shred) is derived data — shredding loses nothing.
-    writeFileSync(vp.dbPath, 'stale leftover')
-    const past = new Date(Date.now() - 60_000)
-    utimesSync(vp.dbPath, past, past)
+    // succeeded but before the shred) is derived data — shredding loses nothing. The fixture is
+    // a real, cleanly closed SQLite file with no sidecars (holding 7171), so the header and
+    // sidecar checks would both let it through: only the mtime guard refuses it.
+    failedLockState(vp) // `.enc` backdated 60 s …
+    backdate(vp.dbPath, 120_000) // … and the working file older still
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
     expect(ctl.unlock('pw').state).toBe('unlocked')
+    // The `.enc` snapshot opened, not the shredded leftover.
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
     ctl.lock()
   })
 
   it('CODE-1b: a mid-session crash leftover (live -wal/-shm) is still shredded — the documented power-cut trade-off', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     failedLockState(vp)
     // Live WAL sidecars = the mid-session crash state: the main file can be mid-checkpoint
     // (torn), so it must NOT be rolled forward over the intact stale `.enc`.
@@ -698,18 +618,16 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
     // The stale `.enc` snapshot wins (the 7171 write is gone — the accepted trade-off).
     ctl.unlock('pw')
-    expect(getSettings(ctl.requireDb()).contextTokens).not.toBe(7171)
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
     ctl.lock()
   })
 
   it('CODE-1b: a non-SQLite (garbage) newer working file is still shredded, never rolled forward', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     // E.g. a failed shred's random-overwrite survived its unlink: newer than `.enc`, no
     // sidecars — but rolling THAT forward would replace the intact `.enc` with garbage.
     writeFileSync(vp.dbPath, 'garbage that is not a database')
-    const past = new Date(Date.now() - 60_000)
-    utimesSync(vp.encPath, past, past)
+    backdate(vp.encPath)
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
@@ -727,8 +645,7 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
   // (shred-garbage encrypted over the good `.enc`).
 
   it('CODE-1b guard (F1): a stale .recovery that outlived its shred never rolls back a fresher .enc', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     failedLockState(vp) // `.enc` stale; the working file holds 7171
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init() // → `.recovery` snapshot (7171)
@@ -741,8 +658,7 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
 
     // The failed-unlink aftermath: the spent snapshot re-appears, OLDER than `.enc`.
     writeFileSync(recoveryPath, staleSnapshot)
-    const past = new Date(Date.now() - 60_000)
-    utimesSync(recoveryPath, past, past)
+    backdate(recoveryPath)
 
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(9292) // NOT rolled back to 7171
@@ -755,42 +671,35 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
   })
 
   it('CODE-1b guard (F1): a garbage (shred-overwritten) .recovery is never encrypted over the good .enc', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     updateSettings(db, { contextTokens: 6161 })
     lockEncryptedVault(vp, db, key)
+    // `.enc` backdated, so the leftover below is strictly NEWER and the freshness check lets it
+    // through: only the header guard stands between it and the vault (an mtime tie on a coarse
+    // clock would let the freshness check refuse it instead).
+    backdate(vp.encPath)
 
-    // The failed-unlink aftermath of a shred whose OVERWRITE ran: random bytes, not
-    // older than `.enc`, no SQLite header. Unguarded, unlock would encrypt this over
-    // `.enc` (GCM verifies fine — it is our own ciphertext) and openDatabase would then
-    // fail: the workspace destroyed.
+    // The failed-unlink aftermath of a shred whose OVERWRITE ran: random bytes, newer than
+    // `.enc`, no SQLite header. Unguarded, unlock would encrypt this over `.enc` (GCM
+    // verifies fine — it is our own ciphertext) and openDatabase would then fail: the
+    // workspace destroyed.
     const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
     writeFileSync(recoveryPath, randomBytes(4096))
 
-    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-    ctl.init()
-    ctl.unlock('pw')
+    const ctl = unlockedController(vp, 'pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161) // data intact
     expect(existsSync(recoveryPath)).toBe(false) // leftover shredded, not rolled forward
     ctl.lock()
   })
 
-  // NB: the CODE-10 fsync-before-rename and CODE-14 rename-ordering WIRING pins live in
-  // workspace-vault-durability.test.ts — they need `vi.mock('node:fs')` (a plain spy on
-  // the externalized builtin does not intercept the module's internal calls).
-
-  it('CODE-14: creation leaves no staged leftovers (end-state pin)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
-    // End state unchanged by the CODE-14 reorder: descriptor + `.enc`, no staged file.
-    expect(existsSync(vp.encPath)).toBe(true)
-    expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
-    expect(existsSync(vp.dbPath)).toBe(false)
-  })
+  // NB: the CODE-10 fsync-before-rename and CODE-14 rename-ordering WIRING pins, and the
+  // CODE-14 end state after a create, live in workspace-vault-durability.test.ts — they need
+  // `vi.mock('node:fs')` (a plain spy on the externalized builtin does not intercept the
+  // module's internal calls).
 
   it('CODE-14: crash BEFORE the descriptor write → still uninitialized; onboarding retries cleanly', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     // Replicate createEncryptedVaultOnDisk up to but NOT including the descriptor write
     // (the commit point): seeded DB → staged `.enc.new` → plaintext shredded.
     const db = openDatabase(vp.dbPath)
@@ -813,8 +722,7 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
   })
 
   it('CODE-14: crash AFTER the descriptor commit, BEFORE the swap → rolls forward on next start', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault', 'pw')
     // Undo the final swap — exactly the disk state of a crash between the descriptor
     // commit and the staged rename.
     renameSync(vp.encPath, `${vp.encPath}${REKEY_SUFFIX}`)
@@ -839,7 +747,7 @@ describe('offline guarantee (vault create + unlock + lock)', () => {
     const socketConnectSpy = vi.spyOn(net.Socket.prototype, 'connect')
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault')
     createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     lockEncryptedVault(vp, db, key)

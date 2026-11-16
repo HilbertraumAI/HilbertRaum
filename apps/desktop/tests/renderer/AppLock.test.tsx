@@ -3,28 +3,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
-import {
-  adoptActiveJob,
-  clearTranslateSession,
-  getTranslateSession
-} from '../../src/renderer/lib/translateSession'
-import {
-  clearFileTranslate,
-  getFileTranslate,
-  translateDroppedFiles
-} from '../../src/renderer/lib/fileTranslateSession'
-import {
-  getVisionSession,
-  loadSession,
-  clearVisionSession
-} from '../../src/renderer/lib/visionSession'
-import {
-  type WorkspaceStateInfo,
-  type TranslateJob,
-  type ImportJob
-} from '../../src/shared/types'
+import { getVisionSession, loadSession, clearVisionSession } from '../../src/renderer/lib/visionSession'
+import type { WorkspaceStateInfo } from '../../src/shared/types'
+import { t } from '../../src/shared/i18n'
 import { appShellStubs } from '../helpers/app-shell'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { selectedImage } from '../helpers/vision-fixtures'
 
 // F-41 (audit-2026-07-16): the stubApi payloads are typed against the real PreloadApi bridge
@@ -33,8 +16,10 @@ import { selectedImage } from '../helpers/vision-fixtures'
 
 // TA-2 / H3: the renderer session-store purge must fire at the REAL lock seam. A screen-effect
 // purge was dead code (lock unmounts the screen before the effect could observe `locked`); the
-// purge now lives in `App.lockNow`. This drives the real flow — seed all three module stores, click
-// "Lock now" in the rail, and assert main's `lockWorkspace` ran and every store is back to EMPTY.
+// purge now lives in `App.lockNow`. This drives the real flow — seed a module store, click "Lock
+// now" in the rail, and assert main's `lockWorkspace` ran, the store is back to EMPTY and the gate
+// shows. What `purgeSessionStores` clears, store by store, is lockPurge.test.ts's; the review
+// store's flush → lock → purge order is ReviewLockSeam.test.tsx's.
 
 const unlockedEncrypted: WorkspaceStateInfo = {
   state: 'unlocked',
@@ -49,30 +34,39 @@ const lockedState: WorkspaceStateInfo = {
   encryptionRequired: true
 }
 
-const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
+/** A resident vision session: an image and one answered turn, the content a lock must drop. */
+function seedVisionSession(): void {
+  loadSession(
+    selectedImage('secret.png', { sizeBytes: 42 }),
+    [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
+    'sess1'
+  )
+}
 
+// #832: an unmocked window.api call fails the row (cleanup first; the stores clear whatever happens).
 afterEach(() => {
-  cleanup()
-  clearTranslateSession()
-  clearFileTranslate()
-  clearVisionSession()
-  vi.restoreAllMocks()
+  try {
+    cleanup()
+  } finally {
+    try {
+      assertNoUnexpectedApiCalls()
+    } finally {
+      clearVisionSession()
+      vi.restoreAllMocks()
+    }
+  }
 })
 
 describe('App.lockNow — purges the session stores at the real lock seam (TA-2)', () => {
-  it('empties the text, document, and vision stores when the workspace locks', async () => {
+  it('runs the whole session-store purge when the workspace locks (the vision store emptied), then shows the gate', async () => {
     const lockWorkspace = vi.fn(async () => lockedState)
+    // Once the lock shows the gate, App marks it for opt-in measurement runs (benchmark.md "gate_visible").
+    const perfMark = vi.fn()
     stubApi(
       appShellStubs({
         getWorkspaceState: vi.fn(async () => unlockedEncrypted),
         lockWorkspace,
-        // Seeds: a running text job to re-adopt + a never-resolving document import.
-        getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
-        onTranslateToken: vi.fn(() => () => {}),
-        onTranslateDone: vi.fn(() => () => {}),
-        onTranslateError: vi.fn(() => () => {}),
-        getDroppedFilePath: vi.fn(() => 'C:\\docs\\secret.pdf'),
-        importDocuments: vi.fn(() => new Promise<ImportJob>(() => {}))
+        perfMark
       })
     )
 
@@ -83,30 +77,19 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     const nav = await screen.findByRole('navigation')
     const lockBtn = within(nav).getByRole('button', { name: 'Lock now' })
 
-    // Seed all three stores non-idle. Document store FIRST (its start clears the text store), then
-    // the text store, then the vision store — mirroring the real one-at-a-time reset order.
-    void translateDroppedFiles([new File(['%PDF'], 'secret.pdf', { type: 'application/pdf' })], CHOICE)
-    await adoptActiveJob()
-    loadSession(
-      selectedImage('secret.png', { sizeBytes: 42 }),
-      [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
-      'sess1'
-    )
-    expect(getFileTranslate().busy).toBe(true)
-    expect(getTranslateSession().output).toBe('geheim')
+    // The vision store: not the review store, so it is emptied only if lockNow runs the WHOLE purge.
+    seedVisionSession()
     expect(getVisionSession().selected).not.toBeNull()
 
     await user.click(lockBtn)
 
     expect(lockWorkspace).toHaveBeenCalledTimes(1)
     await waitFor(() => {
-      expect(getTranslateSession().state).toBe('idle')
-      expect(getTranslateSession().output).toBe('')
-      expect(getFileTranslate().state).toBe('idle')
-      expect(getFileTranslate().busy).toBe(false)
       expect(getVisionSession().selected).toBeNull()
       expect(getVisionSession().turns).toHaveLength(0)
     })
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(perfMark).toHaveBeenCalledWith('gate_visible')
   })
 
   // full-audit 2026-07-11 CODE-26: a FAILED lock (main restored the unlocked vault, CODE-1a)
@@ -114,10 +97,10 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
   // security-sensitive control. Now the friendly copy surfaces on a banner, the session
   // stores are NOT purged (the workspace really is still unlocked), and the shell stays up.
   it('surfaces a failed lock on a banner — stores kept, shell still unlocked (CODE-26)', async () => {
+    // What main throws when the re-encrypt fails (registerWorkspaceIpc), behind Electron's IPC transport prefix.
+    const lockFailed = t('en', 'main.workspace.lockFailed')
     const lockWorkspace = vi.fn(async () => {
-      throw new Error(
-        "Error invoking remote method 'workspace:lock': Error: The workspace could not be locked — free some disk space and try again."
-      )
+      throw new Error(`Error invoking remote method 'workspace:lock': Error: ${lockFailed}`)
     })
     stubApi(
       appShellStubs({
@@ -131,20 +114,13 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     const nav = await screen.findByRole('navigation')
 
     // Seed one session store so the "stores NOT purged" half has teeth.
-    loadSession(
-      selectedImage('secret.png', { sizeBytes: 42 }),
-      [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
-      'sess1'
-    )
+    seedVisionSession()
 
     await user.click(within(nav).getByRole('button', { name: 'Lock now' }))
     expect(lockWorkspace).toHaveBeenCalledTimes(1)
 
-    // The friendly main-process copy, stripped of the IPC transport prefix, on an alert banner.
-    const banner = await screen.findByText(
-      'The workspace could not be locked — free some disk space and try again.'
-    )
-    expect(banner.textContent).not.toContain('Error invoking remote method')
+    // The friendly main-process copy, stripped of the IPC transport prefix (an exact match: the prefix would fail it).
+    expect(await screen.findByText(lockFailed)).toBeInTheDocument()
 
     // Shell still unlocked: the rail (with its Lock button) is up, not the WorkspaceGate.
     expect(within(nav).getByRole('button', { name: 'Lock now' })).toBeInTheDocument()
@@ -154,8 +130,6 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
 
     // The banner is dismissible (retry stays available).
     await user.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(
-      screen.queryByText('The workspace could not be locked — free some disk space and try again.')
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText(lockFailed)).not.toBeInTheDocument()
   })
 })

@@ -20,8 +20,8 @@ const MAX_SETTINGS_ARRAY = 10_000
  *  the SEC-1 bounding style so a buggy/hostile renderer can't bloat the encrypted settings
  *  blob. Generous on purpose: model ids are short slugs; `gpuLastError` is a one-line
  *  timestamped reason (`persistGpuFailure` truncates it to 2 000 chars before it gets here). */
-export const MAX_SETTINGS_ID_LENGTH = 512
-export const MAX_SETTINGS_ERROR_LENGTH = 4096
+const MAX_SETTINGS_ID_LENGTH = 512
+const MAX_SETTINGS_ERROR_LENGTH = 4096
 
 /** Serialized-JSON ceiling for the object-valued settings (`checksumCache` map, plus the
  *  `lastBenchmark`/`gpuProbe` result blobs). These are read on start/hot paths and persist into
@@ -29,7 +29,7 @@ export const MAX_SETTINGS_ERROR_LENGTH = 4096
  *  so a buggy/hostile renderer could otherwise bloat the blob without bound (CODE-16,
  *  full-audit 2026-07-11). 256 KB dwarfs a real benchmark/probe blob and a large checksum map
  *  (~120 B/entry ⇒ ~2 000 weights) — an over-cap payload is dropped, SEC-1 bounding style. */
-export const MAX_SETTINGS_OBJECT_BYTES = 256 * 1024
+const MAX_SETTINGS_OBJECT_BYTES = 256 * 1024
 
 /** Floor for `contextTokens` (HIGH_BUG vuln-scan-2026-06-21). The doc-task window budget is
  *  derived from this; below this floor the summary-tree builder's per-level node summaries can
@@ -46,11 +46,6 @@ const MIN_CONTEXT_TOKENS = 2048
  *  silent cap, and a start that doesn't fit falls down the GPU ladder to CPU or fails with a
  *  friendly error rather than wedging the app. */
 export const MAX_CONTEXT_TOKENS_OVERRIDE = 131_072
-
-/** Bounds for `localApiPort` (local-api wave P2) — defined in shared/ so the Settings
- *  card's number field and this write gate can never disagree. A value outside the range
- *  is pulled to the nearest bound here. */
-export { MIN_LOCAL_API_PORT, MAX_LOCAL_API_PORT } from '../../shared/local-api'
 
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.

@@ -1,18 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { existsSync, writeFileSync, readFileSync, statSync } from 'node:fs'
 import {
-  mkdtempSync,
-  mkdirSync,
-  existsSync,
-  writeFileSync,
-  readFileSync,
-  statSync,
-  utimesSync
-} from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import {
-  vaultPathsFrom,
-  createEncryptedVaultOnDisk,
   unlockEncryptedVault,
   lockEncryptedVault,
   WorkspaceController,
@@ -22,13 +10,17 @@ import {
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { IPC } from '../../src/shared/ipc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import type { PrivacyPolicy } from '../../src/shared/types'
-import type { KdfParams } from '../../src/main/services/security/crypto'
-import type { AppContext } from '../../src/main/services/context'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import {
+  ENCRYPTION_REQUIRED,
+  backdate,
+  failedLockState,
+  lockedVault,
+  unlockedController,
+  workspaceIpcCtx
+} from '../helpers/vault-fixtures'
 
 // full-audit 2026-07-12 REL-1 / REL-2 — forced-failure guards on the `.recovery` salvage path,
 // plus the held-recovery-file and full-drive cases of #242.
@@ -148,45 +140,9 @@ beforeEach(() => {
   ipcState.handlers.clear()
 })
 
-// Fast KDF so the suite stays quick (the workspace-vault.test.ts fixture).
-const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
-
-const ENCRYPTION_REQUIRED: PrivacyPolicy = {
-  ...DEFAULT_POLICY,
-  workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
-}
-
-/** Build a fresh temp workspace layout + its vault paths. */
-function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-recovery-guards-'))
-  const configPath = join(root, 'config')
-  const workspacePath = join(root, 'workspace')
-  mkdirSync(configPath, { recursive: true })
-  mkdirSync(workspacePath, { recursive: true })
-  return vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
-}
-
-/** The minimal AppContext the unlock handler's failure path reads. */
-function ctxWith(ctrl: WorkspaceController): AppContext {
-  return {
-    trustedSenders: ANY_SENDER,
-    workspace: ctrl,
-    runtime: { stop: async () => {}, activeModelId: () => null },
-    embedder: { stop: async () => {} }
-  } as unknown as AppContext
-}
-
-/** The exact disk state a failed lock leaves behind: a checkpointed, cleanly CLOSED plaintext
- *  working file (no -wal/-shm) holding `marker`, newer than the stale `.enc` (the
- *  workspace-vault.test.ts helper). */
-function failedLockState(vp: VaultPaths, marker = 7171): void {
-  const { db } = unlockEncryptedVault(vp, 'pw')
-  updateSettings(db, { contextTokens: marker })
-  db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
-  db.close()
-  const past = new Date(Date.now() - 60_000)
-  utimesSync(vp.encPath, past, past)
-}
+// The vault fixtures (tests/helpers/vault-fixtures.ts) go through this file's mocked `node:fs`
+// too: every wrapper is pass-through until armed, so each row builds its vault state before
+// arming a failure.
 
 /** The spent leftover of an earlier salvage whose best-effort unlink failed (Windows hold),
  *  still sitting on the rename target at the next launch. Backdated like `.enc`. */
@@ -194,15 +150,13 @@ const LEFTOVER = 'spent leftover that outlived its unlink'
 function plantLeftover(vp: VaultPaths): string {
   const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
   writeFileSync(recoveryPath, LEFTOVER)
-  const past = new Date(Date.now() - 60_000)
-  utimesSync(recoveryPath, past, past)
+  backdate(recoveryPath)
   return recoveryPath
 }
 
 describe('`.recovery` guards (full-audit 2026-07-12 REL-1/REL-2)', () => {
   it('REL-1: a spent .recovery blocking the rename no longer costs the only fresh copy', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('recovery-guards', 'pw')
     failedLockState(vp) // the working file (7171) is the only fresh copy
     const recoveryPath = plantLeftover(vp)
 
@@ -246,8 +200,7 @@ describe('`.recovery` guards (full-audit 2026-07-12 REL-1/REL-2)', () => {
   })
 
   it('REL-2: a probe error on a SPENT (older) .recovery no longer fails the unlock; the snapshot is preserved for retry', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('recovery-guards', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     updateSettings(db, { contextTokens: 6161 })
     lockEncryptedVault(vp, db, key) // `.enc` holds 6161 (mtime ~now)
@@ -257,8 +210,7 @@ describe('`.recovery` guards (full-audit 2026-07-12 REL-1/REL-2)', () => {
     // so unlocking into it loses nothing — the leftover is left for a later probe to shred.
     const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
     writeFileSync(recoveryPath, 'held leftover the probe cannot read')
-    const past = new Date(Date.now() - 60_000)
-    utimesSync(recoveryPath, past, past)
+    backdate(recoveryPath)
 
     failures.openThrowOnRecoveryPath = true
     try {
@@ -288,9 +240,8 @@ describe('`.recovery` guards (full-audit 2026-07-12 REL-1/REL-2)', () => {
   })
 
   it('a hold on a FRESH .recovery at unlock refuses instead of opening the stale snapshot and later shredding the fresh copy (#242)', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
-    failedLockState(vp, 4242) // working file (4242) newer than the stale `.enc` (3072)
+    const vp = lockedVault('recovery-guards', 'pw')
+    failedLockState(vp, 4242) // working file (4242) newer than the stale `.enc` (the seeded default)
 
     // No hold at init → the working file is preserved as `.recovery` (newer than `.enc`).
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
@@ -326,13 +277,12 @@ describe('`.recovery` guards (full-audit 2026-07-12 REL-1/REL-2)', () => {
 
 describe('a held .recovery: the startup salvage refuses to sweep instead of losing the fresh copy (#242)', () => {
   it('a hold defeating the pre-shred AND the rename leaves the working file in place and blocks the unlock until it clears', async () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('recovery-guards', 'pw')
     failedLockState(vp, 7171) // the working file (7171) is the only fresh copy
     const recoveryPath = plantLeftover(vp)
     const leftoverSize = statSync(recoveryPath).size
     const workingBytes = readFileSync(vp.dbPath)
-    const encBefore = readFileSync(vp.encPath) // the stale snapshot (3072, the seeded default)
+    const encBefore = readFileSync(vp.encPath) // the stale snapshot (the seeded default)
     expect(existsSync(vp.dbPath)).toBe(true)
 
     holdRecovery(true)
@@ -360,7 +310,7 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       // A subsequent unlock is REFUSED — the typed error at the controller, its own reason
       // and copy at the IPC — rather than decrypting the stale `.enc` over the fresh file.
       expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
-      registerWorkspaceIpc(ctxWith(ctl))
+      registerWorkspaceIpc(workspaceIpcCtx(ctl))
       const { result } = await invoke(handlers, IPC.unlockWorkspace, 'pw')
       expect(result).toMatchObject({ ok: false, reason: 'vault_recovery_blocked' })
       expect((result as { message: string }).message).toMatch(/recovery file/i)
@@ -386,8 +336,7 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
   })
 
   it('control: without the hold the salvage preserves the working file and the roll-forward yields the fresh data', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('recovery-guards', 'pw')
     failedLockState(vp, 7171)
     const recoveryPath = plantLeftover(vp)
 
@@ -407,8 +356,7 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
   })
 
   it('a full drive at the lock write: the failed lock is reported, the stale snapshot and the plaintext working file survive, and the next launch salvages it', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('recovery-guards', 'pw')
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     ctl.unlock('pw')
@@ -444,8 +392,7 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
     // Next launch (space freed): the salvage preserves the working file and the unlock rolls
     // it forward — nothing since the failed lock is lost. (`.enc` backdated for a
     // deterministic mtime order on coarse-timestamp filesystems, as in failedLockState.)
-    const past = new Date(Date.now() - 60_000)
-    utimesSync(vp.encPath, past, past)
+    backdate(vp.encPath)
     const ctl2 = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl2.init()
     expect(ctl2.isRecoveryBlocked()).toBe(false)
@@ -455,5 +402,39 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
     expect(getSettings(ctl2.requireDb()).contextTokens).toBe(8181)
     expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
     ctl2.lock()
+  })
+})
+
+describe('a full drive at the lock write, in the same session (full-audit 2026-07-11 CODE-1a)', () => {
+  // The interactive half of the full-drive row above: after the refused lock the session is
+  // not only readable but WRITABLE (the re-opened working file), and once space is freed a
+  // retry in the same session locks under the key the failure kept: nothing is lost.
+  it('CODE-1a: after a full-drive lock failure the session keeps writing, and a retry once space is freed locks with the kept key and loses nothing', () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    const ctl = unlockedController(vp, 'pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 5150 })
+    const encBefore = readFileSync(vp.encPath)
+
+    failures.enospcOnEncTmpWrite = true
+    try {
+      expect(() => ctl.lock()).toThrow(VaultLockError)
+      expect(failures.hits.writeSync).toBeGreaterThan(0)
+    } finally {
+      failures.enospcOnEncTmpWrite = false
+      failures.encTmpFds.clear()
+    }
+    expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    // The controller is consistently UNLOCKED and usable: reads AND writes.
+    expect(ctl.getState().state).toBe('unlocked')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5150)
+    updateSettings(ctl.requireDb(), { contextTokens: 5151 }) // the session writes on
+
+    // Space freed: the retry locks cleanly in the same session …
+    expect(ctl.lock().state).toBe('locked')
+    expect(existsSync(vp.dbPath)).toBe(false)
+    // … and the next unlock reads the write made after the failure.
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    ctl.lock()
   })
 })

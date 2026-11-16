@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync, DatabaseSyncOptions } from 'node:sqlite'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { TEMP_ROOT_PREFIXES } from './temp-roots'
 
@@ -39,10 +39,22 @@ export function freshWorkspaceDb(label: string): { db: Db; root: string } {
  * A raw `node:sqlite` handle on `path`, outside `openDatabase` (no migrations run): for building or inspecting a file
  * the way an older binary sees it. `DatabaseSync` is read off the CommonJS module object at CALL time, so the #460
  * tracker (`tests/setup-temp-roots.ts`) records the handle; a bare `import 'node:sqlite'` does not resolve under Vite.
+ * `options` go to the driver as given (`{ readOnly: true }` for a check that must not create or alter the file).
  */
-export function openRawDb(path: string): DatabaseSync {
+export function openRawDb(path: string, options?: DatabaseSyncOptions): DatabaseSync {
   const { DatabaseSync: Raw } = createRequire(process.execPath)('node:sqlite') as typeof import('node:sqlite')
-  return new Raw(path)
+  return options === undefined ? new Raw(path) : new Raw(path, options)
+}
+
+/**
+ * The STORED value of setting `key`: its `value_json` row parsed, `undefined` when there is no row. Read straight from
+ * the table, past `getSettings`, which re-normalizes what it reads: a row about what the WRITE path persisted must look
+ * here, since a read-back through `getSettings` passes even when the write stored junk. Trap: a planted row that is not
+ * JSON throws here (read it with SQL instead). Replaces settings-write-gate's `rowFor` and db-settings' raw reads.
+ */
+export function rawSetting(db: Db, key: string): unknown {
+  const row = db.prepare('SELECT value_json FROM settings WHERE key = ?').get(key) as { value_json: string } | undefined
+  return row === undefined ? undefined : JSON.parse(row.value_json)
 }
 
 /**

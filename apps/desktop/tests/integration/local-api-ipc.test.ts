@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdirSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Local-API wave P4 — the three access-key IPC channels + the AppStatus surface.
 // What these pin: the FULL key never crosses IPC (only a mask), copying happens
 // main-side, rotation also aborts the streams the old key let in (SEC-F6), the advertised
-// server address follows the RUNNING port, and every handler refuses a locked workspace.
+// server address follows the RUNNING port, and every handler refuses while a lock is under way
+// (the AUD-02 latch; the plainly locked vault is ipc-lock-coverage.test.ts's generic row).
 
 const clipboardState = vi.hoisted(() => ({ text: '', cleared: 0 }))
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
@@ -38,7 +38,10 @@ import { seedSettings, updateSettings } from '../../src/main/services/settings'
 import { readToken } from '../../src/main/services/local-api/token'
 import type { AppContext } from '../../src/main/services/context'
 import type { AppStatus, LocalApiConnectionInfo, LocalApiStatus } from '../../src/shared/types'
+import { t } from '../../src/shared/i18n'
+import { tempRoot } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { localApiStatus } from '../helpers/status'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -49,22 +52,8 @@ interface Harness {
   status: LocalApiStatus
 }
 
-function localApiStatus(over: Partial<LocalApiStatus> = {}): LocalApiStatus {
-  return {
-    running: true,
-    port: 4980,
-    tokenRequired: true,
-    requestsServed: 2,
-    rejectedCount: 1,
-    lastError: null,
-    externalActive: false,
-    lastPreemptedAt: null,
-    ...over
-  }
-}
-
-function makeHarness(opts: { unlocked?: boolean; localApi?: boolean } = {}): Harness {
-  const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-localapi-ipc-'))
+function makeHarness(opts: { unlocked?: boolean; locking?: boolean; localApi?: boolean } = {}): Harness {
+  const rootPath = tempRoot('localapi-ipc')
   const workspacePath = join(rootPath, 'workspace')
   const configPath = join(rootPath, 'config')
   mkdirSync(workspacePath, { recursive: true })
@@ -72,8 +61,10 @@ function makeHarness(opts: { unlocked?: boolean; localApi?: boolean } = {}): Har
   const db = openDatabase(join(workspacePath, 'test.sqlite'))
   seedSettings(db)
   const aborted: string[] = []
-  const status = localApiStatus()
+  // Non-zero counters, so the AppStatus forward below shows them.
+  const status = localApiStatus({ requestsServed: 2, rejectedCount: 1 })
   const unlocked = opts.unlocked ?? true
+  const locking = opts.locking ?? false
   const ctx = {
     trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath, configPath },
@@ -81,7 +72,7 @@ function makeHarness(opts: { unlocked?: boolean; localApi?: boolean } = {}): Har
     isDev: true,
     workspace: {
       isUnlocked: () => unlocked,
-      isLocking: () => false,
+      isLocking: () => locking,
       getState: () => ({ state: unlocked ? 'unlocked' : 'locked', mode: 'plaintext_dev' }),
       documentCipher: () => null
     },
@@ -152,7 +143,11 @@ describe('local API — copy + rotate', () => {
     expect((await invoke(handlers, IPC.localApiCopyKey)).result).toBe(true)
     const full = readToken(db)!
     expect(clipboardState.text).toBe(full)
-    await vi.advanceTimersByTimeAsync(60_000)
+    // PRIV-M5 / data-contracts: cleared after 60 s. Just short of it the key is still there.
+    await vi.advanceTimersByTimeAsync(59_999)
+    expect(clipboardState.cleared).toBe(0)
+    expect(clipboardState.text).toBe(full)
+    await vi.advanceTimersByTimeAsync(1)
     expect(clipboardState.cleared).toBe(1)
     expect(clipboardState.text).toBe('')
   })
@@ -184,17 +179,20 @@ describe('local API — copy + rotate', () => {
 })
 
 describe('local API — locked workspace', () => {
-  it('every key channel refuses while the workspace does not admit work (AUD-02)', async () => {
-    const { ctx } = makeHarness({ unlocked: false })
+  // Still unlocked, but the lock teardown has begun: the token store is about to be re-encrypted, so a bare
+  // isUnlocked() here would mint, copy or rotate a key mid-lock.
+  it('every key channel refuses while a lock is under way (the AUD-02 latch)', async () => {
+    const { ctx, db } = makeHarness({ unlocked: true, locking: true })
     registerLocalApiIpc(ctx)
     for (const channel of [
       IPC.localApiConnectionInfo,
       IPC.localApiCopyKey,
       IPC.localApiRegenerateToken
     ]) {
-      await expect(invoke(handlers, channel)).rejects.toThrow()
+      await expect(invoke(handlers, channel), channel).rejects.toThrow(t('en', 'main.settings.locked'))
     }
     expect(clipboardState.text).toBe('')
+    expect(readToken(db)).toBeNull() // nothing minted
   })
 })
 
@@ -203,18 +201,9 @@ describe('local API — AppStatus surface', () => {
     const { ctx, status } = makeHarness()
     registerCoreIpc(ctx)
     const withServer = (await invoke(handlers, IPC.getAppStatus)).result as AppStatus
+    // Forwarded as the server reports it. That the REAL status() holds counts and flags only (D1) is
+    // local-api-hardening.test.ts's sentinel row.
     expect(withServer.localApi).toEqual(status)
-    // Counts and flags only — nothing that could describe a caller or a prompt (D1).
-    expect(Object.keys(withServer.localApi!).sort()).toEqual([
-      'externalActive',
-      'lastError',
-      'lastPreemptedAt',
-      'port',
-      'rejectedCount',
-      'requestsServed',
-      'running',
-      'tokenRequired'
-    ])
 
     ipcState.handlers.clear()
     const bare = makeHarness({ localApi: false })

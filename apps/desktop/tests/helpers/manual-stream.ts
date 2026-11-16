@@ -1,8 +1,9 @@
 // A hand-cranked async token source for runtime/gate/admission tests: the test controls
 // exactly when tokens flow, end, or fail, and the stream honours an AbortSignal the way
 // the real runtimes do (an abort ends the stream cleanly on the next wait/pull).
-// Shared by runtime-manager.test.ts and local-api-admission.test.ts — the wake/abort
-// race here is subtle (re-check `aborted` after every wake), so there must be ONE copy.
+// Shared by runtime-manager.test.ts and tests/helpers/local-api-harness.ts (the local API
+// server and hardening suites) — the wake/abort race here is subtle (re-check `aborted`
+// after every wake), so there must be ONE copy.
 
 export interface ManualSource {
   push(value: string): void

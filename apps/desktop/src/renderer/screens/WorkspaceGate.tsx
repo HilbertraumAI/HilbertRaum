@@ -25,11 +25,6 @@ import {
   type WorkspaceFailureReason
 } from '@shared/workspace-failure-keys'
 
-// The password field + strength meter live in `components/PasswordField`
-// (the Settings "Change password" card reuses them); re-exported here so existing
-// import sites (tests) stay valid.
-export { passwordStrength, type PasswordStrength } from '../components'
-
 // The pre-app gate (spec §7.1 "show onboarding if first run" + unlock). Rendered before
 // the normal sidebar whenever the workspace is `uninitialized` or `locked`.
 //

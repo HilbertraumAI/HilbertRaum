@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 // AUD-02 — the lock-teardown ADMISSION window.
 //
@@ -58,15 +57,7 @@ import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
 import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { PrivacyPolicy } from '../../src/shared/types'
-import {
-  WorkspaceController,
-  vaultPathsFrom,
-  createEncryptedVaultOnDisk,
-  workspaceAdmitsWork,
-  type VaultPaths
-} from '../../src/main/services/workspace-vault'
-import type { KdfParams } from '../../src/main/services/security/crypto'
+import { WorkspaceController, workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
 import type { AppContext } from '../../src/main/services/context'
 import { DocTaskManager } from '../../src/main/services/doctasks'
 import { TranslateJobService } from '../../src/main/services/translation/jobs'
@@ -77,9 +68,19 @@ import type { OcrEngine } from '../../src/main/services/ocr'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
 import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { performShutdown } from '../../src/main/shutdown'
-import { t } from '../../src/shared/i18n'
+import { t, type MessageKey } from '../../src/shared/i18n'
 import { CATALOG_MANIFESTS } from '../helpers/gpu-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { deferred } from '../helpers/deferred'
+import { until } from '../helpers/hang-budget'
+import {
+  ENCRYPTION_REQUIRED,
+  FAST_KDF,
+  freshVaultPaths,
+  lockedVault,
+  workspaceIpcCtx,
+  type FreshVaultPaths
+} from '../helpers/vault-fixtures'
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { startModelRuntime } from '../../src/main/ipc/registerModelIpc'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
@@ -91,11 +92,6 @@ import type { LocalApiServer } from '../../src/main/services/local-api/server'
 import type { Message } from '../../src/shared/types'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
-const ENCRYPTION_REQUIRED: PrivacyPolicy = {
-  ...DEFAULT_POLICY,
-  workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
-}
 
 /**
  * One real macrotask (≥ 1 ms). Used only as a bounded CEILING for "nothing else happened".
@@ -103,15 +99,6 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
  * waiting on real file I/O (the async decrypt of a preview) would never see it progress (#258).
  */
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
-
-/** Drain up to `ceiling` ticks, resolving as soon as `pred` holds. Never a fixed sleep. */
-async function waitUntil(pred: () => boolean, ceiling = 200): Promise<boolean> {
-  for (let i = 0; i < ceiling; i++) {
-    if (pred()) return true
-    await tick()
-  }
-  return pred()
-}
 
 /**
  * A minimal PNG whose HEADER parses (signature + a 2x2 IHDR): the main-side analyze validation
@@ -135,6 +122,7 @@ const fakeEmbedder: Embedder = {
 }
 
 interface Harness {
+  vp: FreshVaultPaths
   ctrl: WorkspaceController
   ctx: AppContext
   documentId: string
@@ -190,15 +178,9 @@ interface HarnessOptions {
 }
 
 async function harness(opts: HarnessOptions = {}): Promise<Harness> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-lockrace-'))
-  mkdirSync(join(root, 'config'), { recursive: true })
-  const workspacePath = join(root, 'workspace')
-  mkdirSync(workspacePath, { recursive: true })
-  const vp: VaultPaths = vaultPathsFrom({
-    configPath: join(root, 'config'),
-    dbPath: join(workspacePath, 'hilbertraum.sqlite')
-  })
-  createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+  const vp = lockedVault('lockrace', 'right-password')
+  const root = vp.root
+  const workspacePath = dirname(vp.dbPath)
   const ctrl = new WorkspaceController(
     vp,
     ENCRYPTION_REQUIRED,
@@ -225,9 +207,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   expect(imported.status).toBe('indexed')
 
   // The photo for the plaintext-operation cases: imported (and OCR'd once, unparked) so its
-  // stored copy is an `.enc` whose preview must decrypt to a transient. `images/` exists so the
-  // name sweeps below can read it.
-  mkdirSync(join(workspacePath, 'images'), { recursive: true })
+  // stored copy is an `.enc` whose preview must decrypt to a transient.
   let photoId: string | null = null
   if (opts.ocrEngine) {
     const photoPath = join(root, 'photo.png')
@@ -340,19 +320,19 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     getStoreDir: () => storeDir,
     getIngestionDeps: () => ({ embedder: fakeEmbedder, cipher: ctrl.documentCipher() }),
     beginDocumentWork: () => ctrl.beginDocumentWork(),
-    isWorkspaceLocking: () => ctrl.isLocking?.() ?? false
+    isWorkspaceLocking: () => ctrl.isLocking()
   })
   ctx.translateJobs = new TranslateJobService({
     getTranslator: () => ctx.translator ?? null,
     hasActiveDocTask: () => ctx.docTasks?.hasActiveTask() ?? false,
-    isWorkspaceLocking: () => ctrl.isLocking?.() ?? false
+    isWorkspaceLocking: () => ctrl.isLocking()
   })
   const analyzer: VisionAnalyzer = { analyze: async () => 'an answer', stop: async () => {} }
   const createRuntime = vi.fn(() => analyzer)
   ctx.vision = new VisionService({
     getStatus: async () => ({ available: true, modelId: 'fake-vision', modelDisplayName: 'Fake' }),
     createRuntime,
-    isWorkspaceLocking: () => ctrl.isLocking?.() ?? false
+    isWorkspaceLocking: () => ctrl.isLocking()
   })
 
   registerWorkspaceIpc(ctx)
@@ -363,6 +343,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   if (opts.chatEngine) registerChatIpc(ctx)
 
   return {
+    vp,
     ctrl,
     ctx,
     documentId: queued.id,
@@ -377,6 +358,11 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   }
 }
 
+/** Rows in the harness workspace's `documents` table. */
+function documentCount(h: Harness): number {
+  return (h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }).n
+}
+
 /**
  * Park the lock handler inside its awaited teardown and assert the DB is still open there.
  * The in-flight lock promise is returned WRAPPED — an `async` function that returned it bare
@@ -384,10 +370,67 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
  */
 async function parkedLock(h: Harness): Promise<{ lockP: Promise<{ result: unknown }> }> {
   const lockP = invoke(handlers, IPC.lockWorkspace)
-  expect(await waitUntil(() => h.suspendEntered())).toBe(true)
+  await until(() => h.suspendEntered(), 'the lock teardown reaching the gated sidecar suspend')
   // THE window: the teardown is running, the vault has NOT re-encrypted, `isUnlocked()` is true.
   expect(h.ctrl.isUnlocked()).toBe(true)
   return { lockP }
+}
+
+/**
+ * A content surface the latch must refuse: its call, its module's own locked sentence, and the harm an admitted call
+ * would leave behind (`untouched` snapshots before the park and returns the check, run after a bounded drain).
+ */
+interface Surface {
+  call: (h: Harness) => Promise<unknown>
+  lockedCopy: MessageKey
+  untouched: (h: Harness) => () => void
+}
+
+const SURFACES = {
+  startDocTask: {
+    call: (h) =>
+      invoke(handlers, IPC.startDocTask, {
+        kind: 'translation',
+        documentIds: [h.documentId],
+        params: { sourceLang: 'en', targetLang: 'de' }
+      }),
+    lockedCopy: 'main.task.workspaceLocked',
+    untouched: (h) => () => {
+      expect(h.translator.translate).not.toHaveBeenCalled()
+      expect(h.ctx.docTasks?.hasActiveTask()).toBe(false)
+    }
+  },
+  translateStart: {
+    call: () => invoke(handlers, IPC.translateStart, { sourceLang: 'en', targetLang: 'de', text: 'hello world' }),
+    lockedCopy: 'main.docs.locked',
+    untouched: (h) => () => expect(h.translator.translate).not.toHaveBeenCalled()
+  },
+  imageAnalyze: {
+    call: () =>
+      invoke(handlers, IPC.imageAnalyze, { imageBytes: validPngBytes(), mimeType: 'image/png', question: 'what is this?' }),
+    lockedCopy: 'main.docs.locked',
+    untouched: (h) => () => expect(h.createRuntime).not.toHaveBeenCalled()
+  },
+  importDocuments: {
+    call: (h) => {
+      const dropped = join(h.ctx.paths.rootPath, 'dropped.txt')
+      writeFileSync(dropped, 'some text to import', 'utf8')
+      return invoke(handlers, IPC.importDocuments, [dropped])
+    },
+    lockedCopy: 'main.docs.locked',
+    untouched: (h) => {
+      const before = documentCount(h)
+      return () => expect(documentCount(h)).toBe(before)
+    }
+  }
+} satisfies Record<string, Surface>
+
+/** The quit teardown's deps: no in-flight streams, the real log key untouched, a silent log. */
+const quitDeps = {
+  inFlightStreams: new Map<string, AbortController>(),
+  streamSettled: new Map<string, Promise<void>>(),
+  detachVaultKey: (): void => {},
+  log: { error: (): undefined => undefined, info: (): undefined => undefined }
 }
 
 beforeEach(() => {
@@ -400,93 +443,74 @@ describe('admission during the lock teardown (AUD-02)', () => {
   it('stops the local API BEFORE the sidecar suspends (local-api D7 — the lock-path ordering pin)', async () => {
     // The quit-path twin lives in shutdown.test.ts; without THIS pin a runLockTeardown
     // reorder could let an external stream hold the model while the vault re-encrypts.
+    // The API's stop is held open: the teardown must AWAIT it before the sidecar block, not merely call it first.
+    // The fake only records (an assertion thrown inside it would land in the teardown's best-effort catch).
     const h = await harness()
-    const stop = vi.fn(async () => {
-      // The API must die before the teardown reaches the gated sidecar block.
-      expect(h.suspendEntered()).toBe(false)
-    })
-    ;(h.ctx as { localApi?: { stop: () => Promise<void> } }).localApi = { stop }
-    const { lockP } = await parkedLock(h)
-    expect(stop).toHaveBeenCalledTimes(1)
+    const apiStopped = deferred()
+    let stopCalls = 0
+    let suspendEnteredAtStop: boolean | null = null
+    ;(h.ctx as { localApi?: { stop: () => Promise<void> } }).localApi = {
+      stop: () => {
+        stopCalls += 1
+        suspendEnteredAtStop = h.suspendEntered()
+        return apiStopped.promise
+      }
+    }
+    const lockP = invoke(handlers, IPC.lockWorkspace)
+    await until(() => stopCalls === 1, 'the lock teardown stopping the local API')
+    // A bounded drain while the API's stop is still pending: the teardown must not move on.
+    for (let i = 0; i < 20; i++) await tick()
+    expect(suspendEnteredAtStop).toBe(false)
+    expect(h.suspendEntered()).toBe(false)
+
+    apiStopped.resolve()
+    await until(() => h.suspendEntered(), 'the lock teardown reaching the gated sidecar suspend')
+    expect(stopCalls).toBe(1)
     h.releaseSuspend()
     await lockP
     expect(h.ctrl.isUnlocked()).toBe(false)
   })
 
-  it('refuses startDocTask("translation") while the lock teardown is parked — no sidecar respawn', async () => {
+  // Each surface refuses with its module's EXACT sentence (the shared "Workspace is locked." prefix cannot tell
+  // them apart), and the harm an admitted call would cause never happens. Two guards stop a doc task (the IPC's and
+  // DocTaskManager's own); ipc-lock-coverage's locking pass isolates the IPC one.
+  it.each<[string, string, Surface]>([
+    ['startDocTask("translation")', 'no sidecar respawn (the IPC guard or the manager guard)', SURFACES.startDocTask],
+    ['translateStart', 'no sidecar respawn', SURFACES.translateStart],
+    ['imageAnalyze', 'no vision runtime is built', SURFACES.imageAnalyze],
+    ['importDocuments', 'no document row is queued', SURFACES.importDocuments]
+  ])('refuses %s while the lock teardown is parked — %s', async (_surface, _harm, surface) => {
     const h = await harness()
+    const expectUntouched = surface.untouched(h)
     const { lockP } = await parkedLock(h)
 
-    await expect(
-      invoke(handlers, IPC.startDocTask, {
-        kind: 'translation',
-        documentIds: [h.documentId],
-        params: { sourceLang: 'en', targetLang: 'de' }
-      })
-    ).rejects.toThrow(/Workspace is locked\./)
-    // Teeth: give the queue/pump a bounded budget to prove nothing reached the sidecar.
+    await expect(surface.call(h)).rejects.toMatchObject({ message: t('en', surface.lockedCopy) })
+    // Teeth: give the queue/pump a bounded budget to prove nothing reached the sidecar or the store.
     for (let i = 0; i < 20; i++) await tick()
-    expect(h.translator.translate).not.toHaveBeenCalled()
-    expect(h.ctx.docTasks?.hasActiveTask()).toBe(false)
-
-    h.releaseSuspend()
-    await lockP
-    expect(h.ctrl.isUnlocked()).toBe(false)
-  })
-
-  it('refuses translateStart while the lock teardown is parked — no sidecar respawn', async () => {
-    const h = await harness()
-    const { lockP } = await parkedLock(h)
-
-    await expect(
-      invoke(handlers, IPC.translateStart, { sourceLang: 'en', targetLang: 'de', text: 'hello world' })
-    ).rejects.toThrow(/Workspace is locked\./)
-    for (let i = 0; i < 20; i++) await tick()
-    expect(h.translator.translate).not.toHaveBeenCalled()
-
-    h.releaseSuspend()
-    await lockP
-    expect(h.ctrl.isUnlocked()).toBe(false)
-  })
-
-  it('refuses imageAnalyze while the lock teardown is parked — no vision runtime is built', async () => {
-    const h = await harness()
-    const { lockP } = await parkedLock(h)
-
-    await expect(
-      invoke(handlers, IPC.imageAnalyze, {
-        imageBytes: validPngBytes(),
-        mimeType: 'image/png',
-        question: 'what is this?'
-      })
-    ).rejects.toThrow(/Workspace is locked\./)
-    for (let i = 0; i < 20; i++) await tick()
-    expect(h.createRuntime).not.toHaveBeenCalled()
+    expectUntouched()
 
     h.releaseSuspend()
     await lockP
     expect(h.ctrl.isUnlocked()).toBe(false)
   })
 
-  it('refuses importDocuments while the lock teardown is parked — no document row is queued', async () => {
+  // D24 + AUD-02: a password change re-wraps the descriptor (and on a v1 vault re-encrypts every `.enc` sidecar),
+  // which must never interleave with the lock's own re-encrypt of the working DB. `isUnlocked()` stays true for the
+  // whole teardown, so only the latch refuses the change here.
+  it('refuses changeWorkspacePassword while the lock teardown is parked — the descriptor is untouched', async () => {
     const h = await harness()
-    const before = (
-      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
-    ).n
+    const descriptorBefore = readFileSync(h.vp.descriptorPath)
     const { lockP } = await parkedLock(h)
 
-    const dropped = join(h.ctx.paths.rootPath, 'dropped.txt')
-    writeFileSync(dropped, 'some text to import', 'utf8')
-    await expect(invoke(handlers, IPC.importDocuments, [dropped])).rejects.toThrow(/Workspace is locked\./)
-    for (let i = 0; i < 20; i++) await tick()
-    const after = (
-      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
-    ).n
-    expect(after).toBe(before)
+    const { result } = await invoke(handlers, IPC.changeWorkspacePassword, 'right-password', 'next-password-1')
+    expect(result).toEqual({ ok: false, reason: 'refused', message: t('en', 'main.workspace.unlockBeforeChange') })
+    expect(readFileSync(h.vp.descriptorPath).equals(descriptorBefore)).toBe(true)
 
     h.releaseSuspend()
     await lockP
     expect(h.ctrl.isUnlocked()).toBe(false)
+    // Nothing was re-wrapped: the OLD password still opens the vault.
+    expect(h.ctrl.unlock('right-password').state).toBe('unlocked')
   })
 
   // #274: the import walk is asynchronous, so a lock can now land WHILE a dropped folder is being
@@ -496,9 +520,7 @@ describe('admission during the lock teardown (AUD-02)', () => {
   // as "documents are still being imported". Real encrypted vault, real controller, real handlers.
   it('a lock landing mid-walk fails the import cleanly — no row queued, no lease held (#274)', async () => {
     const h = await harness()
-    const before = (
-      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
-    ).n
+    const before = documentCount(h)
     const probe = `probe-${Math.random().toString(36).slice(2)}`
     const folder = join(h.ctx.paths.rootPath, `${probe}-folder`)
     mkdirSync(folder)
@@ -514,10 +536,7 @@ describe('admission during the lock teardown (AUD-02)', () => {
     await expect(importP).rejects.toThrow(/Workspace is locked\./)
     for (let i = 0; i < 20; i++) await tick()
     // The DB is still open here (the teardown is parked): no row was queued by the aborted import.
-    const after = (
-      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
-    ).n
-    expect(after).toBe(before)
+    expect(documentCount(h)).toBe(before)
 
     h.releaseSuspend()
     await lockP
@@ -535,47 +554,21 @@ describe('admission during the lock teardown (AUD-02)', () => {
   // must keep working; a latch left armed there would refuse every content surface for the rest of
   // the session with the workspace wide open and no recovery short of a relaunch.
   //
-  // Driven through the REAL lock handler (not by poking the controller's setters), with the
-  // failure injected at the controller's own `encryptFileImpl` seam.
-  it('a FAILED lock (disk full) leaves the workspace usable — real handler, real failure seam', async () => {
-    const h = await harness({ failReEncrypt: true })
-
-    // The friendly localized copy, never the raw ENOSPC string.
-    await expect(invoke(handlers, IPC.lockWorkspace)).rejects.toThrow(
-      t('en', 'main.workspace.lockFailed')
-    )
-    await expect(invoke(handlers, IPC.lockWorkspace)).rejects.not.toThrow(/ENOSPC/)
-
-    // The workspace is genuinely still open, and the latch did NOT survive the failure.
-    expect(h.ctrl.isUnlocked()).toBe(true)
-    expect(h.ctrl.isLocking()).toBe(false)
-
-    // …and a content surface actually ADMITS again — the property that matters, asserted by
-    // driving one rather than by reading the flag.
-    const { result } = await invoke(handlers, IPC.startDocTask, {
-      kind: 'translation',
-      documentIds: [h.documentId],
-      params: { sourceLang: 'en', targetLang: 'de' }
-    })
-    expect(result).toMatchObject({ jobId: expect.any(String) })
-    h.ctx.docTasks?.cancelAllDocTasks()
-    await h.ctx.docTasks?.awaitActiveTaskSettled()
-  })
-
   // #344 (the owner's T19 leg (vii) on the real K: drive): the teardown stops EVERY sidecar before
   // the vault re-encrypts, and a failed lock never reaches the post-unlock seam that brings the two
   // EAGER ones back — the chat runtime (`runtime.stop()`) and an opted-in local API
-  // (`localApi.stop()`). The latch disarmed and every content surface admitted work again (the case
-  // above), but the next question met `assertChatStreamReady`'s "No AI model is running" until the
-  // user re-started the model by hand. Everything else the teardown suspended restarts lazily on
-  // its next use (the #301 P3b/P5 non-latching pattern); these two need the restart re-run.
+  // (`localApi.stop()`). The latch disarmed and every content surface admitted work again, but the
+  // next question met `assertChatStreamReady`'s "No AI model is running" until the user re-started
+  // the model by hand. Everything else the teardown suspended restarts lazily on its next use (the
+  // #301 P3b/P5 non-latching pattern); these two need the restart re-run.
   //
-  // Real vault, real handler, the real failure seam, the REAL `RuntimeManager` lifecycle and the
-  // real `startModelRuntime` install gate (the owner's model resolves to the mock fallback in a dev
-  // context, so no weights are needed); the ask goes through the real chat IPC. The oracle is the
-  // RESULT — an assistant reply after the failed lock, the local API running again — never a call
-  // count; the wait is bounded, never a fixed sleep. Reverting the two re-arm lines in the lock
-  // handler's catch turns this red at the second ask (verified by hand before the fix landed).
+  // Real vault, real handler, the real failure seam (the controller's own `encryptFileImpl`), the
+  // REAL `RuntimeManager` lifecycle and the real `startModelRuntime` install gate (the owner's model
+  // resolves to the mock fallback in a dev context, so no weights are needed); the ask goes through
+  // the real chat IPC. The oracle is the RESULT — an assistant reply after the failed lock, the local
+  // API running again — never a call count; the wait is bounded, never a fixed sleep. Reverting the
+  // two re-arm lines in the lock handler's catch turns this red at the second ask (verified by hand
+  // before the fix landed).
   it('a FAILED lock re-arms the chat engine and the local API — an ask through the chat path answers again, in the SAME session (#344)', async () => {
     const runtime = new RuntimeManager((opts) => createMockRuntime(opts))
     // A state-holding local-API stand-in: `stop()` is the teardown's call, `applySettings` the
@@ -603,8 +596,11 @@ describe('admission during the lock teardown (AUD-02)', () => {
     const epochBefore = h.ctrl.unlockEpoch()
 
     // The lock runs its whole teardown — the runtime and the API are stopped — then fails at the
-    // re-encrypt and rejects with the friendly copy; the workspace is genuinely open again.
-    await expect(invoke(handlers, IPC.lockWorkspace)).rejects.toThrow(t('en', 'main.workspace.lockFailed'))
+    // re-encrypt and rejects with the friendly copy, exactly (never the raw ENOSPC appended to it);
+    // the workspace is genuinely open again.
+    await expect(invoke(handlers, IPC.lockWorkspace)).rejects.toMatchObject({
+      message: t('en', 'main.workspace.lockFailed')
+    })
     expect(h.ctrl.isUnlocked()).toBe(true)
     expect(h.ctrl.isLocking()).toBe(false)
     expect(workspaceAdmitsWork(h.ctrl)).toBe(true)
@@ -612,7 +608,7 @@ describe('admission during the lock teardown (AUD-02)', () => {
     // The re-arm is the post-unlock restart, fire-and-forget: the model comes back in the
     // background (the mock start is quick; a real one takes the load window, which is why the
     // Chat screen keeps polling `runtime:status` until it flips), the API at once.
-    expect(await waitUntil(() => runtime.activeModelId() === modelId, 400)).toBe(true)
+    await until(() => runtime.activeModelId() === modelId, 'the chat runtime back up after the failed lock')
     expect(apiRunning).toBe(true)
     // …in the SAME session: no new unlock epoch — a failed lock is not an unlock.
     expect(h.ctrl.unlockEpoch()).toBe(epochBefore)
@@ -684,25 +680,10 @@ describe('admission during the lock teardown (AUD-02)', () => {
   // workspace never unlocks again — a "Lock now" there would otherwise refuse every content
   // surface for the rest of the session with nothing able to undo it.
   it('does not leave a plaintext_dev workspace latched after its no-op lock', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-lockrace-plain-'))
-    mkdirSync(join(root, 'config'), { recursive: true })
-    mkdirSync(join(root, 'workspace'), { recursive: true })
-    const ctrl = new WorkspaceController(
-      vaultPathsFrom({
-        configPath: join(root, 'config'),
-        dbPath: join(root, 'workspace', 'hilbertraum.sqlite')
-      }),
-      DEFAULT_POLICY,
-      true // dev → the plaintext workspace opens at init()
-    )
+    const ctrl = new WorkspaceController(freshVaultPaths('lockrace-plain'), DEFAULT_POLICY, true) // dev → opens at init()
     ctrl.init()
     expect(ctrl.isUnlocked()).toBe(true)
-    registerWorkspaceIpc({
-      trustedSenders: ANY_SENDER,
-      workspace: ctrl,
-      runtime: { stop: async () => {}, activeModelId: () => null },
-      embedder: { stop: async () => {} }
-    } as unknown as AppContext)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
 
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'unlocked', mode: 'plaintext_dev' })
@@ -714,6 +695,7 @@ describe('admission during the lock teardown (AUD-02)', () => {
   // the NEXT unlock is what clears it, so the workspace is fully usable again afterwards.
   it('clears the latch on the next unlock (a locked-then-unlocked session admits work again)', async () => {
     const h = await harness()
+    const epochBefore = h.ctrl.unlockEpoch()
     const { lockP } = await parkedLock(h)
     h.releaseSuspend()
     await lockP
@@ -723,9 +705,9 @@ describe('admission during the lock teardown (AUD-02)', () => {
     h.ctrl.unlock('right-password')
     expect(h.ctrl.isUnlocked()).toBe(true)
     expect(h.ctrl.isLocking()).toBe(false)
-    // The unlock also advances the session epoch, which is what invalidates a stale model start
+    // The unlock also starts a NEW session epoch, which is what invalidates a stale model start
     // whose multi-GB weight hash spanned the whole lock → unlock cycle (AUD-03).
-    expect(h.ctrl.unlockEpoch()).toBeGreaterThan(0)
+    expect(h.ctrl.unlockEpoch()).toBe(epochBefore + 1)
   })
 })
 
@@ -733,64 +715,36 @@ describe('admission during the lock teardown (AUD-02)', () => {
 // awaits the sidecar stops, the stream settles and the doc-task settle — up to ~10 s before
 // `app.exit(0)`. Most sidecars are safe there because quit uses the permanently-latching `stop()`
 // where lock uses the non-latching `suspend()`, so an admitted call fails at `ensureStarted`
-// rather than respawning. Two are not, and are covered here.
+// rather than respawning. Two are not, and are covered here. `performShutdown` arms the latch as its
+// first act; these rows are that arm's only proof (shutdown.test.ts's stand-in workspace has no
+// `beginLock`).
 describe('admission during the QUIT teardown (AUD-02)', () => {
-  const quitDeps = {
-    inFlightStreams: new Map<string, AbortController>(),
-    streamSettled: new Map<string, Promise<void>>(),
-    detachVaultKey: (): void => {},
-    log: { error: (): undefined => undefined, info: (): undefined => undefined }
-  }
-
   /** Park `performShutdown` inside its awaited sidecar-stop window (wrapped — see `parkedLock`). */
   async function parkedQuit(h: Harness): Promise<{ quitP: Promise<void> }> {
     const quitP = performShutdown(h.ctx, quitDeps)
-    expect(await waitUntil(() => h.suspendEntered())).toBe(true)
+    await until(() => h.suspendEntered(), 'the quit teardown reaching the gated sidecar stop')
     expect(h.ctrl.isUnlocked()).toBe(true) // the vault has not re-encrypted yet
     return { quitP }
   }
 
-  // VisionService rebuilds its runtime per analyze and clears its own `tearingDown` flag in
-  // `stop()`'s `finally`, so the moment quit's `vision.stop()` resolves inside the `allSettled`
-  // an admitted analyze builds a FRESH ~4.6 GB llama-server — which then orphans at
-  // `app.exit(0)`, holding a loopback port and GBs of RAM.
-  it('refuses imageAnalyze — no fresh vision sidecar to orphan at app.exit', async () => {
+  // - Vision: VisionService rebuilds its runtime per analyze and clears its own `tearingDown` flag in
+  //   `stop()`'s `finally`, so the moment quit's `vision.stop()` resolves inside the `allSettled`
+  //   an admitted analyze builds a FRESH ~4.6 GB llama-server — which then orphans at
+  //   `app.exit(0)`, holding a loopback port and GBs of RAM.
+  // - Import: an import admitted during quit decrypts a document to a plaintext transient; `app.exit(0)`
+  //   landing between that write and the `finally` that shreds it strands plaintext on the drive
+  //   until the next launch's crash sweep.
+  it.each<[string, string, Surface]>([
+    ['imageAnalyze', 'no fresh vision sidecar to orphan at app.exit', SURFACES.imageAnalyze],
+    ['importDocuments', 'no plaintext transient stranded by app.exit', SURFACES.importDocuments]
+  ])('refuses %s — %s', async (_surface, _harm, surface) => {
     const h = await harness()
+    const expectUntouched = surface.untouched(h)
     const { quitP } = await parkedQuit(h)
 
-    await expect(
-      invoke(handlers, IPC.imageAnalyze, {
-        imageBytes: validPngBytes(),
-        mimeType: 'image/png',
-        question: 'what is this?'
-      })
-    ).rejects.toThrow(/Workspace is locked\./)
+    await expect(surface.call(h)).rejects.toMatchObject({ message: t('en', surface.lockedCopy) })
     for (let i = 0; i < 20; i++) await tick()
-    expect(h.createRuntime).not.toHaveBeenCalled()
-
-    h.releaseSuspend()
-    await quitP
-    expect(h.ctrl.isUnlocked()).toBe(false)
-  })
-
-  // An import admitted during quit decrypts a document to a plaintext transient; `app.exit(0)`
-  // landing between that write and the `finally` that shreds it strands plaintext on the drive
-  // until the next launch's crash sweep.
-  it('refuses importDocuments — no plaintext transient stranded by app.exit', async () => {
-    const h = await harness()
-    const before = (
-      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
-    ).n
-    const { quitP } = await parkedQuit(h)
-
-    const dropped = join(h.ctx.paths.rootPath, 'dropped-on-quit.txt')
-    writeFileSync(dropped, 'some text to import', 'utf8')
-    await expect(invoke(handlers, IPC.importDocuments, [dropped])).rejects.toThrow(/Workspace is locked\./)
-    for (let i = 0; i < 20; i++) await tick()
-    const after = (
-      h.ctrl.requireDb().prepare('SELECT COUNT(*) AS n FROM documents').get() as unknown as { n: number }
-    ).n
-    expect(after).toBe(before)
+    expectUntouched()
 
     h.releaseSuspend()
     await quitP
@@ -814,7 +768,8 @@ describe('admission during the QUIT teardown (AUD-02)', () => {
 // shredded under the parser at the settle bound (sweep-bounded) and the preview handler's
 // admission re-check refuses the text afterwards. The real tesseract `suspend()` would also
 // terminate its worker mid-recognition; the fake's no-op `suspend()`/`stop()` remove that partial
-// mitigation so the photo stands in for the parsers that have none.
+// mitigation so the photo stands in for the parsers that have none. The transient lands under
+// `documents/` (the photo is a stored document), so that is the directory the name sweeps read.
 //
 // Does not prove: that quit residue survives a real process exit (asserted at `performShutdown`
 // resolution, the instant `app.exit(0)` would run), nor pdf/docx parses themselves.
@@ -899,36 +854,37 @@ function storedCopies(dir: string): string[] {
 async function parkedPreview(
   h: Harness,
   ocr: GatedOcrEngine
-): Promise<{ previewP: Promise<{ result: unknown }>; docs: string; images: string }> {
+): Promise<{ previewP: Promise<{ result: unknown }>; docs: string }> {
   const docs = documentsDir(h.ctx.paths.workspacePath)
-  const images = join(h.ctx.paths.workspacePath, 'images')
   ocr.parkNext()
   const previewP = invoke(handlers, IPC.previewDocument, h.photoId)
   previewP.catch(() => undefined) // asserted later; never an unhandled rejection meanwhile
-  // A real async decrypt + row read precede the park — a generous ceiling for a starved runner.
-  expect(await waitUntil(() => ocr.entered(), 1_000)).toBe(true)
+  // A real async decrypt + row read precede the park — a generous bound for a starved runner, still
+  // under the local testTimeout so a park that never happens names itself.
+  await until(() => ocr.entered(), 'the preview parking in the gated OCR engine', 10_000)
   const during = transientNames(docs)
   expect(during).toHaveLength(1)
   expect(during[0]).toMatch(/\.parse-preview-/)
-  return { previewP, docs, images }
+  return { previewP, docs }
 }
 
 describe('plaintext operations across the lock boundary (#237)', () => {
-  it('lock aborts a parked preview, waits for it to unwind, and reports locked with no transient on the drive', async () => {
+  // The WAIT for the parser's unwind is the next row's proof: this parser honours the abort and unwinds during the
+  // teardown's earlier awaits, so the settle finds nothing left to wait for.
+  it('lock aborts a parked preview and reports locked with no transient on the drive', async () => {
     const ocr = gatedOcrEngine({ honoursSignal: true })
     const h = await harness({ ocrEngine: ocr })
     h.releaseSuspend() // the sidecar gate is not the subject here
-    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const { previewP, docs } = await parkedPreview(h, ocr)
     const storedBefore = storedCopies(docs)
     expect(storedBefore).toHaveLength(2) // the text document + the photo
 
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(h.ctrl.isUnlocked()).toBe(false)
-    // At the instant lock reported locked: nothing decrypted is left under documents/ or images/
+    // At the instant lock reported locked: nothing decrypted is left under documents/
     // (a name sweep, not the registry's view of itself).
     expect(transientNames(docs)).toEqual([])
-    expect(transientNames(images)).toEqual([])
     // …and the stored copies beside the transient were never touched.
     expect(storedCopies(docs)).toEqual(storedBefore)
     // The abort reached the parser — nothing had to release it.
@@ -951,10 +907,10 @@ describe('plaintext operations across the lock boundary (#237)', () => {
     })
     lockP.catch(() => undefined)
     // Gate on the teardown actually reaching the plaintext settle — the window under test — rather
-    // than assuming a fixed drain got there. The helper's default ceiling (200 ticks, ~3 s here) is
-    // deliberate: a longer one would outlast the local `testTimeout`, so a settle that is never
-    // entered would report a vitest timeout instead of this assertion.
-    expect(await waitUntil(() => h.settleEntered())).toBe(true)
+    // than assuming a fixed drain got there. The bound (3 s locally, widened on CI) is deliberate: a
+    // longer one would outlast the testTimeout, so a settle that is never entered would report a
+    // vitest timeout instead of naming itself.
+    await until(() => h.settleEntered(), 'the lock reaching the plaintext-operation settle', 3_000)
     // A SHORT drain over real time: it observes that the lock does not return on its own, and that
     // nothing settled early, while the parser is parked. Ten ticks is ~3 % of the bound on a slow
     // Windows runner, where the old 50-tick drain burned ~15 % of it (≈777 ms) inside the very
@@ -991,14 +947,13 @@ describe('plaintext operations across the lock boundary (#237)', () => {
     const ocr = gatedOcrEngine({ honoursSignal: false })
     const h = await harness({ ocrEngine: ocr, settleBoundMs: 100 })
     h.releaseSuspend()
-    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const { previewP, docs } = await parkedPreview(h, ocr)
     const storedBefore = storedCopies(docs)
 
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(h.ctrl.isUnlocked()).toBe(false)
     expect(transientNames(docs)).toEqual([])
-    expect(transientNames(images)).toEqual([])
     expect(storedCopies(docs)).toEqual(storedBefore)
     // The negative control for the proof above: here the BOUND won, and the registry says so (#389).
     expect(h.settleOutcomes()).toEqual([false])
@@ -1011,25 +966,22 @@ describe('plaintext operations across the lock boundary (#237)', () => {
 })
 
 describe('plaintext operations across the QUIT boundary (#237)', () => {
-  const quitDeps = {
-    inFlightStreams: new Map<string, AbortController>(),
-    streamSettled: new Map<string, Promise<void>>(),
-    detachVaultKey: (): void => {},
-    log: { error: (): undefined => undefined, info: (): undefined => undefined }
-  }
-
-  it('performShutdown resolves only after the parked preview unwound — no transient left for app.exit', async () => {
+  // As on the lock path, this parser honours the abort. The quit path waits on its own settle call
+  // (shutdown.ts `awaitPlaintextOpsSettled`), which the lock-path rows never run: its proof is
+  // tests/unit/shutdown.test.ts "aborts, settles and sweeps the plaintext operations — abort before the
+  // sidecars, sweep before lock (#237)" (settle before the sweep, by call order), plus the next row's
+  // settle-outcome count.
+  it('performShutdown aborts a parked preview — no transient left for app.exit', async () => {
     const ocr = gatedOcrEngine({ honoursSignal: true })
     const h = await harness({ ocrEngine: ocr })
     h.releaseSuspend()
-    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const { previewP, docs } = await parkedPreview(h, ocr)
     const storedBefore = storedCopies(docs)
 
     await performShutdown(h.ctx, quitDeps)
     // The instant `app.exit(0)` would run:
     expect(h.ctrl.isUnlocked()).toBe(false)
     expect(transientNames(docs)).toEqual([])
-    expect(transientNames(images)).toEqual([])
     expect(storedCopies(docs)).toEqual(storedBefore)
     expect(ocr.abortSeen()).toBe(true)
     await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
@@ -1039,13 +991,12 @@ describe('plaintext operations across the QUIT boundary (#237)', () => {
     const ocr = gatedOcrEngine({ honoursSignal: false })
     const h = await harness({ ocrEngine: ocr, settleBoundMs: 100 })
     h.releaseSuspend()
-    const { previewP, docs, images } = await parkedPreview(h, ocr)
+    const { previewP, docs } = await parkedPreview(h, ocr)
     const storedBefore = storedCopies(docs)
 
     await performShutdown(h.ctx, quitDeps)
     expect(h.ctrl.isUnlocked()).toBe(false)
     expect(transientNames(docs)).toEqual([])
-    expect(transientNames(images)).toEqual([])
     expect(storedCopies(docs)).toEqual(storedBefore)
     // The negative control on the quit path too: `performShutdown` settles once, and the BOUND won.
     expect(h.settleOutcomes()).toEqual([false])
@@ -1053,6 +1004,6 @@ describe('plaintext operations across the QUIT boundary (#237)', () => {
     ocr.release()
     await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
     // The reproduction's post-quit self-heal check, carried: the parser's own shred finds nothing.
-    expect(await waitUntil(() => transientNames(docs).length === 0, 300)).toBe(true)
+    await until(() => transientNames(docs).length === 0, "the parser's own finally leaving nothing to shred")
   })
 })
