@@ -30,11 +30,6 @@ export interface LocalApiAdmissionDeps {
   hasActiveDocTask(): boolean
   /** workspaceAdmitsWork(workspace) ∧ the owning server is not stopping. */
   admitsWork(): boolean
-  /** Cap on how long the single queued waiter may park (default 30 s). */
-  queueWaitMs?: number
-  // Test seams (fake timers):
-  setTimeoutFn?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
-  clearTimeoutFn?: (t: ReturnType<typeof setTimeout>) => void
 }
 
 export interface Admission {
@@ -61,7 +56,8 @@ export interface Admission {
 
 export type AdmitOutcome = Admission | 'busy' | 'locked' | 'aborted'
 
-const DEFAULT_QUEUE_WAIT_MS = 30_000
+/** Cap on how long the single queued waiter may park (docs/local-api.md §6.7: "one waiting up to ~30 s"). */
+const QUEUE_WAIT_MS = 30_000
 
 interface AdmissionRecord {
   id: string
@@ -76,15 +72,8 @@ interface AdmissionRecord {
 export class LocalApiAdmission {
   private active: AdmissionRecord | null = null
   private queued: AdmissionRecord | null = null
-  private readonly queueWaitMs: number
-  private readonly setTimeoutFn: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
-  private readonly clearTimeoutFn: (t: ReturnType<typeof setTimeout>) => void
 
-  constructor(private readonly deps: LocalApiAdmissionDeps) {
-    this.queueWaitMs = deps.queueWaitMs ?? DEFAULT_QUEUE_WAIT_MS
-    this.setTimeoutFn = deps.setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms))
-    this.clearTimeoutFn = deps.clearTimeoutFn ?? ((t) => clearTimeout(t))
-  }
+  constructor(private readonly deps: LocalApiAdmissionDeps) {}
 
   /** The model is free for an external generation RIGHT NOW. */
   private idleNow(): boolean {
@@ -114,9 +103,9 @@ export class LocalApiAdmission {
     // The single queued waiter: parks until the active request releases, bounded.
     const record = this.makeRecord(id, callerSignal)
     this.queued = record
-    record.queueTimer = this.setTimeoutFn(() => {
+    record.queueTimer = setTimeout(() => {
       this.refuse(record, 'queue wait timed out')
-    }, this.queueWaitMs)
+    }, QUEUE_WAIT_MS)
     // Node-only: don't let a parked waiter keep the process alive.
     ;(record.queueTimer as { unref?: () => void })?.unref?.()
     return this.toAdmission(record)
@@ -185,7 +174,7 @@ export class LocalApiAdmission {
   /** Resolve `ready` (idempotently — Promise resolution is first-wins) + clear the timer. */
   private settle(record: AdmissionRecord, held: boolean): void {
     if (record.queueTimer != null) {
-      this.clearTimeoutFn(record.queueTimer)
+      clearTimeout(record.queueTimer)
       record.queueTimer = null
     }
     record.resolveReady(held)

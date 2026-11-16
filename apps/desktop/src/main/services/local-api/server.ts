@@ -74,7 +74,6 @@ export interface LocalApiServerDeps {
   appVersion: string
   log?: { info(msg: string, meta?: unknown): void; warn(msg: string, meta?: unknown): void }
   // Test seams:
-  queueWaitMs?: number
   drainTimeoutMs?: number
   headersTimeoutMs?: number
   bodyTotalTimeoutMs?: number
@@ -130,8 +129,7 @@ export class LocalApiServer {
     this.admission = new LocalApiAdmission({
       runtimeBusy: () => deps.runtime.isExternallyBusy(),
       hasActiveDocTask: () => deps.hasActiveDocTask(),
-      admitsWork: () => deps.admitsWork() && !this.stopping,
-      queueWaitMs: deps.queueWaitMs
+      admitsWork: () => deps.admitsWork() && !this.stopping
     })
   }
 

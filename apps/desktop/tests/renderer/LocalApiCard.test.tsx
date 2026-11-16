@@ -12,43 +12,18 @@ import {
   type PolicyStatus,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
-import { appStatus, makePolicyStatus } from '../helpers/status'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import { appStatus, localApiStatus as apiStatus, makePolicyStatus, runtimeStatus } from '../helpers/status'
 
 // Local-API wave P4 — the Settings → Privacy card. This is the consent surface the whole
 // feature rests on, so the pins here are about TRUTHFULNESS as much as behaviour: the
 // policy ceiling disables the card with a reason instead of hiding it, nothing is written
-// until the acknowledgement is ticked, the renderer never receives the full access key,
-// the pasteable server address is exact and port-reactive, and the concurrent-use warning
-// appears only while it is actually true.
+// until the acknowledgement is ticked, the access key shows only as main's mask, the
+// pasteable server address is exactly what main advertises (re-read after a port change),
+// and the concurrent-use warning appears only while it is actually true.
 
 function settings(over: Partial<AppSettings> = {}): AppSettings {
   return { ...DEFAULT_SETTINGS, ...over }
-}
-
-function apiStatus(over: Partial<LocalApiStatus> = {}): LocalApiStatus {
-  return {
-    running: true,
-    port: 4980,
-    tokenRequired: true,
-    requestsServed: 0,
-    rejectedCount: 0,
-    lastError: null,
-    externalActive: false,
-    lastPreemptedAt: null,
-    ...over
-  }
-}
-
-function runtimeStatus(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  return {
-    running: true,
-    modelId: 'qwen3-4b-instruct-q4',
-    port: 8080,
-    healthy: true,
-    message: 'ok',
-    ...over
-  }
 }
 
 interface StubOpts {
@@ -60,6 +35,7 @@ interface StubOpts {
   runtime?: RuntimeStatus
   maskedKey?: string | null
   port?: number
+  getLocalApiConnectionInfo?: Mock
   updateSettings?: Mock
   copyLocalApiKey?: Mock
   regenerateLocalApiToken?: Mock
@@ -74,10 +50,12 @@ function renderCard(opts: StubOpts = {}): { current: AppSettings } {
       appStatus({ localApi: opts.localApi === undefined ? apiStatus() : opts.localApi })
     ),
     getRuntimeStatus: vi.fn(async () => opts.runtime ?? runtimeStatus()),
-    getLocalApiConnectionInfo: vi.fn(async () => ({
-      serverAddress: localApiServerAddress(port),
-      maskedKey: opts.maskedKey === undefined ? 'hr-…wxyz' : opts.maskedKey
-    })),
+    getLocalApiConnectionInfo:
+      opts.getLocalApiConnectionInfo ??
+      vi.fn(async () => ({
+        serverAddress: localApiServerAddress(port),
+        maskedKey: opts.maskedKey === undefined ? 'hr-…wxyz' : opts.maskedKey
+      })),
     updateSettings: opts.updateSettings ?? vi.fn(async (p: Partial<AppSettings>) => ({ ...current, ...p })),
     copyToClipboard: opts.copyToClipboard ?? vi.fn(async () => true),
     copyLocalApiKey: opts.copyLocalApiKey ?? vi.fn(async () => true),
@@ -100,7 +78,21 @@ function renderCard(opts: StubOpts = {}): { current: AppSettings } {
   return state
 }
 
-afterEach(cleanup)
+/** A second card state inside one row. stubApi starts a fresh record of unmocked calls, so check the first render's first. */
+function rerenderCard(opts: StubOpts): { current: AppSettings } {
+  assertNoUnexpectedApiCalls()
+  cleanup()
+  return renderCard(opts)
+}
+
+// #832: every window.api call the card makes is stubbed above; an unmocked one fails the row (cleanup first).
+afterEach(() => {
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
+})
 
 describe('LocalApiCard — off + policy states', () => {
   it('is off by default: the switch is unchecked and no connect block is shown', () => {
@@ -176,20 +168,31 @@ describe('LocalApiCard — the consent dialog', () => {
 })
 
 describe('LocalApiCard — the connect block', () => {
-  it('shows the exact pasteable server address, and it follows the port', async () => {
-    renderCard({ settings: settings({ localApiEnabled: true }) })
+  it('shows the exact pasteable server address main advertises, and re-reads it after a port change', async () => {
+    const user = userEvent.setup()
+    const info = (port: number): { serverAddress: string; maskedKey: string } => ({
+      serverAddress: localApiServerAddress(port),
+      maskedKey: 'hr-…wxyz'
+    })
+    const getLocalApiConnectionInfo = vi.fn(async () => info(4980))
+    renderCard({ settings: settings({ localApiEnabled: true }), getLocalApiConnectionInfo })
+    expect(await screen.findByText('Connect another app')).toBeInTheDocument()
     expect(await screen.findByText('http://127.0.0.1:4980/v1')).toBeInTheDocument()
 
-    cleanup()
-    renderCard({ settings: settings({ localApiEnabled: true, localApiPort: 4981 }) })
+    // Main re-binds and advertises the new port; the card reads that back instead of predicting it from the field.
+    getLocalApiConnectionInfo.mockImplementation(async () => info(4981))
+    const field = screen.getByLabelText('Port number')
+    await user.clear(field)
+    await user.type(field, '4981')
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
     expect(await screen.findByText('http://127.0.0.1:4981/v1')).toBeInTheDocument()
+    expect(getLocalApiConnectionInfo).toHaveBeenCalledTimes(2)
   })
 
-  it('shows the access key MASKED and never receives the full value', async () => {
-    const full = 'hr-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ'
+  // The full key never reaches the renderer at all: main hands over only the mask (local-api-ipc.test.ts).
+  it('shows the access key MASKED, as main hands it over', async () => {
     renderCard({ settings: settings({ localApiEnabled: true }), maskedKey: 'hr-…IJKL' })
     expect(await screen.findByText('hr-…IJKL')).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain(full)
   })
 
   it('copies the key MAIN-side and warns that the clipboard may be synced', async () => {
@@ -221,8 +224,7 @@ describe('LocalApiCard — live state', () => {
       await screen.findByText('A model is running — other apps can get answers.')
     ).toBeInTheDocument()
 
-    cleanup()
-    renderCard({
+    rerenderCard({
       settings: settings({ localApiEnabled: true }),
       runtime: runtimeStatus({ running: false, modelId: null })
     })
@@ -254,8 +256,7 @@ describe('LocalApiCard — live state', () => {
     })
     expect(await screen.findByText(/interrupted an app’s request a moment ago/)).toBeInTheDocument()
 
-    cleanup()
-    renderCard({
+    rerenderCard({
       settings: settings({ localApiEnabled: true }),
       // Older than the warning window: the collision is history, not a standing scold.
       localApi: apiStatus({ lastPreemptedAt: Date.now() - 10 * 60_000 })

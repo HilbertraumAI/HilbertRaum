@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { LocalApiAdmission, type Admission, type LocalApiAdmissionDeps } from '../../src/main/services/local-api/admission'
 import { RuntimeManager } from '../../src/main/services/runtime'
-import { manualSource, type ManualSource } from '../helpers/manual-stream'
 
 // Admission unit tests (local-api P1). The module guards the single external slot in
 // front of the RuntimeManager generation gate: fail-closed via the manager-owned
 // `isExternallyBusy` predicate (covers the start window incl. the #109 warm-up, which
 // generates while active() is null), shallow 0–1 queue, in-app pre-emption/teardown via
-// `abortAll` (cancels the active stream AND the parked waiter), and the lock latch
-// refusing admission outright. Invariant pinned throughout: ready:false ⇒ signal aborted.
+// `abortAll` (cancels the active stream AND the parked waiter), and the lock latch.
+// Invariant pinned throughout: ready:false ⇒ signal aborted. The refusals that have an HTTP
+// answer (busy on any lane, a doc task, a locked workspace) and the real pre-emption wiring
+// are proved over HTTP in local-api-server.test.ts; this file keeps the state machine the
+// server cannot reach (vault + local API test campaign, 2026-11-16).
 
 afterEach(() => {
   vi.useRealTimers()
@@ -28,19 +30,20 @@ function admitted(outcome: ReturnType<LocalApiAdmission['tryAdmit']>): Admission
   return outcome as Admission
 }
 
-describe('LocalApiAdmission', () => {
-  it('admits one request when idle; ready resolves true immediately', async () => {
-    const admission = new LocalApiAdmission(makeDeps())
-    const a = admitted(admission.tryAdmit('r1'))
-    await expect(a.ready).resolves.toBe(true)
-    expect(a.signal.aborted).toBe(false)
-    a.release()
-  })
+/** What `ready` has settled to one microtask from now, or null while the waiter is still parked. */
+async function settledYet(ready: Promise<boolean>): Promise<boolean | null> {
+  let value: boolean | null = null
+  void ready.then((v) => (value = v))
+  await Promise.resolve()
+  return value
+}
 
-  it('serial admission: second request queues (depth 1), third is refused outright', () => {
+describe('LocalApiAdmission', () => {
+  it('serial admission: second request queues (depth 1), third is refused outright', async () => {
     const admission = new LocalApiAdmission(makeDeps())
     admitted(admission.tryAdmit('r1'))
-    admitted(admission.tryAdmit('r2')) // the single queued waiter
+    const r2 = admitted(admission.tryAdmit('r2')) // the single queued waiter
+    expect(await settledYet(r2.ready)).toBeNull() // parked, not a second holder of the slot
     expect(admission.tryAdmit('r3')).toBe('busy') // beyond the shallow queue → fast 429
   })
 
@@ -57,39 +60,17 @@ describe('LocalApiAdmission', () => {
     c.release()
   })
 
-  it('refuses while the lock/teardown latch is armed (AUD-02 class: never admit mid-teardown)', () => {
-    const admission = new LocalApiAdmission(makeDeps({ admitsWork: () => false }))
-    expect(admission.tryAdmit('r1')).toBe('locked')
-  })
-
-  it('refuses while ANY generation lane is active — incl. a direct chatStream call no registry sees', async () => {
-    // Back runtimeBusy with a REAL manager and drive a generation the way the benchmark /
-    // a skill run does: straight through active().chatStream, registered nowhere. The
-    // gate still counts it, so admission refuses.
-    const sources: ManualSource[] = []
-    const mgr = new RuntimeManager((opts) => ({
-      modelId: opts.modelId,
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: '', port: null }),
-      chatStream(_m, options) {
-        const src = manualSource()
-        sources.push(src)
-        return src.stream(options?.signal)
-      }
-    }))
-    await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
-    const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => mgr.isExternallyBusy() }))
-    const direct = mgr.active()!.chatStream([{ role: 'user', content: 'benchmark-style' }])
-    const pull = direct.next()
-    await Promise.resolve()
-    sources[0].push('tok')
-    await pull // the lane is live
-    expect(admission.tryAdmit('r1')).toBe('busy')
-    sources[0].end()
-    await direct.return()
-    admitted(admission.tryAdmit('r2')).release()
-    await mgr.stop()
+  // AUD-02 at promotion: the entry check (`tryAdmit` → 'locked') is local-api-server's "locked workspace → 503
+  // workspace_locked"; a waiter parked BEFORE the lock latch armed is only stopped by the re-check at promotion.
+  it('a queued waiter promoted after the lock latch armed is refused, not admitted mid-teardown (AUD-02)', async () => {
+    let admits = true
+    const admission = new LocalApiAdmission(makeDeps({ admitsWork: () => admits }))
+    const a = admitted(admission.tryAdmit('r1'))
+    const b = admitted(admission.tryAdmit('r2'))
+    admits = false // the lock (or quit) teardown began while b waited
+    a.release()
+    await expect(b.ready).resolves.toBe(false)
+    expect(b.signal.aborted).toBe(true) // ready:false ⇒ aborted invariant
   })
 
   it('FAILS CLOSED: no active runtime (start window / #109 warm-up) refuses admission', () => {
@@ -99,11 +80,6 @@ describe('LocalApiAdmission', () => {
     })
     const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => mgr.isExternallyBusy() }))
     expect(mgr.isExternallyBusy()).toBe(true)
-    expect(admission.tryAdmit('r1')).toBe('busy')
-  })
-
-  it('refuses while a doc task is active', () => {
-    const admission = new LocalApiAdmission(makeDeps({ hasActiveDocTask: () => true }))
     expect(admission.tryAdmit('r1')).toBe('busy')
   })
 
@@ -132,12 +108,15 @@ describe('LocalApiAdmission', () => {
     expect(b.signal.aborted).toBe(true) // ready:false ⇒ aborted invariant
   })
 
-  it('caps the queued wait (default 30 s): ready false, signal aborted, queue slot freed', async () => {
+  it('caps the queued wait (30 s, docs/local-api.md §6.7): ready false, signal aborted, queue slot freed', async () => {
     vi.useFakeTimers()
     const admission = new LocalApiAdmission(makeDeps())
     admitted(admission.tryAdmit('r1'))
     const b = admitted(admission.tryAdmit('r2'))
-    vi.advanceTimersByTime(30_000)
+    vi.advanceTimersByTime(29_999) // just short of the shipped bound: still waiting
+    expect(await settledYet(b.ready)).toBeNull()
+    expect(b.signal.aborted).toBe(false)
+    vi.advanceTimersByTime(1)
     await expect(b.ready).resolves.toBe(false)
     expect(b.signal.aborted).toBe(true)
     // The queue slot is free again for a fresh waiter.
@@ -169,10 +148,7 @@ describe('LocalApiAdmission', () => {
     caller.abort() // client vanishes mid-stream — the stream is still draining
     expect(a.signal.aborted).toBe(true)
     // No promotion yet — b still parked (would have been refused under the old code).
-    let bSettled: boolean | null = null
-    void b.ready.then((v) => (bSettled = v))
-    await Promise.resolve()
-    expect(bSettled).toBeNull()
+    expect(await settledYet(b.ready)).toBeNull()
     // The holder's stream tears down, the gate count drops, THEN the holder releases.
     busy = false
     a.release()
@@ -194,59 +170,17 @@ describe('LocalApiAdmission', () => {
     a.release()
     a.release()
     await expect(b.ready).resolves.toBe(true)
+    // b holds the slot: the second release of a vacated nothing, so the next caller parks and the one after is refused.
+    const c = admitted(admission.tryAdmit('r3'))
+    expect(await settledYet(c.ready)).toBeNull()
+    expect(admission.tryAdmit('r4')).toBe('busy')
     b.release()
     b.release()
-    admitted(admission.tryAdmit('r3')).release()
-  })
-
-  it('END-TO-END with the manager gate: in-app entry pre-empts the admitted external stream', async () => {
-    // Wire admission ↔ gate exactly as the local API will: the manager's pre-emption
-    // hook calls abortAll; the gate awaits the external stream's real teardown.
-    const sources: ManualSource[] = []
-    const mgr = new RuntimeManager((opts) => ({
-      modelId: opts.modelId,
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: '', port: null }),
-      chatStream(_m, options) {
-        const src = manualSource()
-        sources.push(src)
-        return src.stream(options?.signal)
-      }
-    }))
-    await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
-    const admission = new LocalApiAdmission(makeDeps({ runtimeBusy: () => mgr.isExternallyBusy() }))
-    mgr.setExternalPreemption((reason) => admission.abortAll(reason))
-
-    // External request: admitted, streaming.
-    const adm = admitted(admission.tryAdmit('ext-1'))
-    await expect(adm.ready).resolves.toBe(true)
-    const external = mgr.active()!.chatStream([{ role: 'user', content: 'x' }], {
-      lane: 'external',
-      signal: adm.signal
-    })
-    const extFirst = external.next()
-    await Promise.resolve()
-    sources[0].push('e1')
-    expect((await extFirst).value).toBe('e1')
-
-    // In-app turn enters: hook aborts the external signal; the gate awaits teardown.
-    const externalRun = (async () => {
-      // The external consumer contract: drain until the abort ends the stream, THEN release.
-      for (;;) {
-        const r = await external.next()
-        if (r.done) break
-      }
-      adm.release()
-    })()
-    const inApp = mgr.active()!.chatStream([{ role: 'user', content: 'q' }])
-    const inAppFirst = inApp.next()
-    await externalRun // settles only because pre-emption aborted the external stream
-    expect(adm.signal.aborted).toBe(true)
-    sources[1].push('a1')
-    expect((await inAppFirst).value).toBe('a1')
-    await inApp.return()
-    mgr.setExternalPreemption(null)
-    await mgr.stop()
+    await expect(c.ready).resolves.toBe(true)
+    const d = admitted(admission.tryAdmit('r5'))
+    expect(await settledYet(d.ready)).toBeNull() // c holds it now: promoted once, not freed twice
+    c.release()
+    await expect(d.ready).resolves.toBe(true)
+    d.release()
   })
 })

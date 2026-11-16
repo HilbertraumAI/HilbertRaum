@@ -82,7 +82,7 @@ function estimateBusySeconds(ctx: AppContext): number {
 }
 
 /** Policy ∧ setting (spec §3.6 precedence): may the endpoint run right now? */
-export function localApiShouldRun(ctx: AppContext): boolean {
+function localApiShouldRun(ctx: AppContext): boolean {
   const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m), { isDev: ctx.isDev })
   return localApiEffectivelyEnabled(
     policy,

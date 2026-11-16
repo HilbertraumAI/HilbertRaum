@@ -47,19 +47,21 @@ describe('local-api token store', () => {
     expect(second).not.toBe(first)
     expect(second).toMatch(/^hr-[A-Za-z0-9_-]{43}$/)
     expect(readToken(db)).toBe(second)
-    // Exactly one row can ever exist.
+    // Exactly one row can ever exist: the rotation upserted row 1, and the schema refuses a second id outright.
     const rows = db.prepare('SELECT COUNT(*) AS n FROM local_api_token').get() as { n: number }
     expect(rows.n).toBe(1)
+    expect(() =>
+      db.prepare(`INSERT INTO local_api_token (id, token, updated_at) VALUES (2, 'hr-x', '2026-01-01T00:00:00Z')`).run()
+    ).toThrow(/CHECK constraint failed/)
   })
 
   it('maskToken shows only the prefix and the last 4 chars; malformed values mask fully', () => {
     const { db } = freshDb()
     const token = getOrCreateToken(db)
     const masked = maskToken(token)
+    // The masked form can never reconstruct the key: 43 secret chars, 4 shown.
     expect(masked).toBe(`hr-…${token.slice(-4)}`)
     expect(masked.length).toBeLessThan(10)
-    // The masked form can never reconstruct the key (43 secret chars, 4 shown).
-    expect(token).not.toContain(masked)
     // A tampered/short row must never "mask" into full disclosure (review 2026-08-18).
     expect(maskToken('hr-abc')).toBe('hr-…')
     expect(maskToken('short')).toBe('hr-…')
