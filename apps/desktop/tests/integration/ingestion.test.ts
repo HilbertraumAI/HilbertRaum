@@ -36,7 +36,7 @@ import { documentIdsInCollection, seedMixedCorpus } from '../helpers/doc-fixture
 import { countPrepares } from '../helpers/db-spy'
 
 // `save-export.ts` (the export side of the F-22/F-10 round-trip tests below) imports electron at module
-// top; on CI the electron binary is absent — mock the transport like save-export-bom.test.ts does.
+// top; on CI the electron binary is absent — mock the transport like save-export.test.ts does.
 // `bomFor` itself is pure.
 vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },

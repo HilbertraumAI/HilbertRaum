@@ -41,14 +41,14 @@ const EXTENSION_BY_LANGUAGE: Readonly<Record<string, string>> = {
 }
 
 /** The fallback for an unknown or empty language. */
-export const DEFAULT_CODE_BLOCK_EXTENSION = 'txt'
+const DEFAULT_CODE_BLOCK_EXTENSION = 'txt'
 
 /**
  * Normalize a fence info string to its language token: the first whitespace-separated token
  * (CommonMark's "info string" may carry attributes such as `html title="x"`), lower-cased, with
  * everything outside `[a-z0-9+#.-]` removed. Returns '' for an empty/blank info string.
  */
-export function codeBlockLanguageToken(info: string): string {
+function codeBlockLanguageToken(info: string): string {
   const first = info.trim().split(/\s+/, 1)[0] ?? ''
   return first.toLowerCase().replace(/[^a-z0-9+#.-]/g, '')
 }
