@@ -32,7 +32,18 @@ describe('console password prompt (#190) — the non-TTY path', () => {
   })
 
   it('fails fast with the copy-pasteable recipe when there is no console, and never echoes', async () => {
-    await expect(promptHiddenPassword('pw: ', () => null)).rejects.toThrow(PASSWORD_ENV_VAR)
+    // No console, or one whose `setRawMode` failed: `openConsolePrompt` returns `null` for both, and the prompt must
+    // treat that as absent (a cooked read echoes the workspace password onto the screen): one look, no retry, no
+    // fallback read.
+    let opened = 0
+    const noConsole = (): ConsolePrompt | null => {
+      opened += 1
+      return null
+    }
+    const refused = promptHiddenPassword('pw: ', noConsole)
+    await expect(refused).rejects.toThrow(PASSWORD_ENV_VAR)
+    await expect(refused).rejects.toThrow(/no console is available/)
+    expect(opened).toBe(1)
     const msg = consoleUnavailableMessage()
 
     // It must name the env var and a recipe that WORKS from the operator's shell...
@@ -49,18 +60,6 @@ describe('console password prompt (#190) — the non-TTY path', () => {
     expect(msg.toLowerCase()).not.toContain('interactive shell')
     // The hazard of the fallback is stated where the operator reads it.
     expect(msg).toContain('shell history')
-  })
-
-  it('never resolves a password from a console it could not put into raw mode', async () => {
-    // A console whose `setRawMode` fails must be treated as absent, not read in cooked mode —
-    // a cooked read echoes the workspace password onto the screen.
-    let opened = 0
-    const refusing = (): ConsolePrompt | null => {
-      opened += 1
-      return null // exactly what `openConsolePrompt` returns when the raw-mode probe throws
-    }
-    await expect(promptHiddenPassword('pw: ', refusing)).rejects.toThrow(/no console is available/)
-    expect(opened).toBe(1)
   })
 
   it('opening the console is safe to attempt anywhere: it yields a raw stream or null', () => {
