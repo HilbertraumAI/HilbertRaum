@@ -9,8 +9,7 @@ import { join } from 'node:path'
 // `node:fs/promises` is a pass-through whose next `open` can be armed to fail its fsync or to short-write once.
 
 const dialogState = vi.hoisted(() => ({
-  result: { canceled: true as boolean, filePath: undefined as string | undefined },
-  lastOptions: null as Record<string, unknown> | null
+  result: { canceled: true as boolean, filePath: undefined as string | undefined }
 }))
 // Pass-through `node:fs` wrapper that only RECORDS the synchronous write-side calls — every
 // call still hits the real filesystem (#256, the pattern of the evidence-pack async-fs test).
@@ -65,10 +64,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: {
-    showSaveDialog: async (options: Record<string, unknown>) => {
-      dialogState.lastOptions = options
-      return dialogState.result
-    }
+    showSaveDialog: async () => dialogState.result
   }
 }))
 
@@ -83,7 +79,6 @@ const BINARY_BYTES = Buffer.concat([
 
 beforeEach(() => {
   dialogState.result = { canceled: true, filePath: undefined }
-  dialogState.lastOptions = null
   fsFaults.failSync = false
   fsFaults.shortWrite = false
 })

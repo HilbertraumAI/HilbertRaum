@@ -5,19 +5,19 @@
 import { join } from 'node:path'
 import type { ChatStreamRunFn } from '../../src/main/ipc/chat-stream'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import type { Citation, Message } from '../../src/shared/types'
-import { tempRoot } from './db-fixtures'
+import { freshWorkspaceDb } from './db-fixtures'
 
 /**
- * A fresh `hilbertraum-<label>-` root with a seeded-settings workspace DB at `<root>/test.sqlite`; `workspacePath` is
- * `<root>/workspace` (not created). Pass it to `makeRagAskContext` as the world. Replaces `freshDb` at 27bd0b0d:
- * regenerate-evidence-review-guard.test.ts:88 and regenerate-result-table-restore.test.ts:120.
+ * `freshWorkspaceDb(label)` (a `hilbertraum-<label>-` root with its workspace DB at `<root>/test.sqlite`) plus
+ * `seedSettings`; `workspacePath` is `<root>/workspace` (not created). Pass it to `makeRagAskContext` as the world.
+ * Replaces `freshDb` at 27bd0b0d: regenerate-evidence-review-guard.test.ts:88 and
+ * regenerate-result-table-restore.test.ts:120.
  */
 export function regenWorkspace(label: string): { db: Db; root: string; workspacePath: string } {
-  const root = tempRoot(label)
-  const db = openDatabase(join(root, 'test.sqlite'))
+  const { db, root } = freshWorkspaceDb(label)
   seedSettings(db)
   return { db, root, workspacePath: join(root, 'workspace') }
 }

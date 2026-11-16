@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect } from 'vitest'
-import { createAuditRecorder, type AuditRecorder } from '../../src/main/services/audit'
+import { createAuditRecorder } from '../../src/main/services/audit'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
@@ -214,75 +214,72 @@ export function seedEvidenceReview(
   return createEvidenceReviewFromMessage(db, answer.messageId, deps)
 }
 
-/** The members the evidence-surface tripwire covers (the copies' set). */
-const RUNTIME_MEMBERS = ['active', 'activeModelId', 'start', 'stop', 'status'] as const
+/**
+ * A Proxy that trips on EVERY string-keyed read: the read itself pushes `entry(member)` into `touched` and throws,
+ * so a handler that reaches for ANY member (named here or not) is on record before its own try/catch can swallow
+ * the error. Symbol keys read undefined (inspection, `Symbol.toPrimitive`), and so does `then`: an `await` of the
+ * service, or a promise check on it, never treats it as a thenable and never trips the wire.
+ */
+function tripwire<T>(touched: string[], service: 'runtime' | 'embedder', entry: (member: string) => string): T {
+  const what = service === 'runtime' ? 'the model runtime' : 'the embedder'
+  return new Proxy(
+    {},
+    {
+      get(_target, member) {
+        if (typeof member !== 'string' || member === 'then') return undefined
+        touched.push(entry(member))
+        throw new Error(`${what} must never be touched on the evidence surface (${service}.${member})`)
+      }
+    }
+  ) as T
+}
 
 /**
- * A model-runtime TRIPWIRE: every touch of a member is recorded in `touched` AND throws, so a handler that reaches
- * for the runtime fails loudly even where it would swallow a null. Suites assert `touched` stays `[]`.
+ * A model-runtime TRIPWIRE: reading ANY member (`active`, `start`, `isGenerating`, `onChange`, …) records its bare
+ * name in `touched` AND throws, so a handler that reaches for the runtime is caught even inside its own try/catch.
+ * Suites assert `touched` stays `[]`.
  * Replaces at 27bd0b0d: evidence-reviews-ipc.test.ts:114 and evidence-review-open-perf.test.ts:53 (recorded, returned
- * null) and the throwing runtime of evidence-freshness.test.ts:648 (`makeCtx`).
+ * null) and the throwing runtime of evidence-freshness.test.ts:648 (`makeCtx`), which each faked five members only.
  */
 export function tripwireRuntime(touched: string[]): AppContext['runtime'] {
-  const runtime: Record<string, () => never> = {}
-  for (const member of RUNTIME_MEMBERS) {
-    runtime[member] = () => {
-      touched.push(member)
-      throw new Error(`model runtime must never be touched on the evidence surface (runtime.${member})`)
-    }
-  }
-  return runtime as unknown as AppContext['runtime']
+  return tripwire<AppContext['runtime']>(touched, 'runtime', (member) => member)
 }
 
-/** The embedder tripwire beside `tripwireRuntime`: `embed` records `'embed'` into the same list and throws. */
+/** The embedder tripwire beside `tripwireRuntime`: reading ANY member (`embed`, `id`, …) records
+ *  `'embedder.<member>'` into the same list and throws. */
 function tripwireEmbedder(touched: string[]): Embedder {
-  return {
-    id: 'tripwire-embedder',
-    dimensions: 1,
-    embed: async () => {
-      touched.push('embed')
-      throw new Error('the embedder must never be touched on the evidence surface')
-    }
-  }
+  return tripwire<Embedder>(touched, 'embedder', (member) => `embedder.${member}`)
 }
 
 /**
- * The AppContext the evidence IPC suites hand to `registerEvidenceReviewsIpc`: paths under `root`, `isUnlocked` from
- * `o.unlocked` (default always unlocked), `tripwireRuntime` + a tripwire embedder (both feed `runtimeTouched`),
- * `manifestsDir` (default null), `isDev: true`. `audit` records `{ type, meta }` into the returned list AND writes
- * through the real `createAuditRecorder`, so `listAuditEvents(db, …)` reads the same events.
+ * The AppContext the evidence IPC suites hand to `registerEvidenceReviewsIpc`: paths under `root`, the production
+ * workspace admission shape (`isUnlocked` from `o.unlocked`, default always unlocked; `isLocking` from `o.locking`,
+ * default never locking: the AUD-02 `workspaceAdmitsWork` latch reads both), `tripwireRuntime` + a tripwire embedder
+ * (both feed `runtimeTouched`), `manifestsDir` (default null), `isDev: true`. `audit` is the real
+ * `createAuditRecorder` over `db`, which swallows a failed insert: suites read what PERSISTED
+ * (`listAuditEvents(db, …)`), never a list of what the handler passed.
  * Replaces at 27bd0b0d: evidence-reviews-ipc.test.ts:147 (`makeHarness`), evidence-review-open-perf.test.ts:77
  * (`makeHarness`), evidence-freshness.test.ts:648 (`makeCtx`) and evidence-review-batch-ops.test.ts:160 (`ctxFor`,
- * which had no runtime and no audit at all).
+ * which had no runtime and no audit at all but did carry `isLocking: () => false`).
  */
 export function evidenceIpcContext(
   db: Db,
   root: string,
-  o: { unlocked?: () => boolean; manifestsDir?: string | null } = {}
-): {
-  ctx: AppContext
-  runtimeTouched: string[]
-  audit: Array<{ type: string; meta?: Record<string, unknown> }>
-} {
+  o: { unlocked?: () => boolean; locking?: () => boolean; manifestsDir?: string | null } = {}
+): { ctx: AppContext; runtimeTouched: string[] } {
   const runtimeTouched: string[] = []
-  const audit: Array<{ type: string; meta?: Record<string, unknown> }> = []
-  const persist = createAuditRecorder(() => db)
-  const recorder: AuditRecorder = (type, message, meta) => {
-    audit.push({ type, meta })
-    persist(type, message, meta)
-  }
   const ctx = {
     trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
-    workspace: { isUnlocked: o.unlocked ?? (() => true) },
+    workspace: { isUnlocked: o.unlocked ?? (() => true), isLocking: o.locking ?? (() => false) },
     runtime: tripwireRuntime(runtimeTouched),
     embedder: tripwireEmbedder(runtimeTouched),
     manifestsDir: o.manifestsDir ?? null,
     isDev: true,
-    audit: recorder
+    audit: createAuditRecorder(() => db)
   } as unknown as AppContext
-  return { ctx, runtimeTouched, audit }
+  return { ctx, runtimeTouched }
 }
 
 /**

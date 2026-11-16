@@ -254,10 +254,16 @@ describe('deleted-message snapshot — result-table capture and replay', () => {
     expect(loadResultTable(db, turn.answer.id)).toEqual(SECOND_TABLE)
   })
 
-  it('replays tables stamped in the same millisecond in capture order (created_at ASC, rowid ASC)', () => {
+  // What this row can tell apart: a capture whose tie-break REVERSES equal stamps (`rowid DESC`). It cannot tell a
+  // dropped `rowid ASC` from a kept one: the capture reads through idx_result_tables_message, whose entries for one
+  // message sit in rowid order, and the ORDER BY sorter keeps that scan order for equal keys, so `ORDER BY created_at
+  // ASC` alone already returns equal stamps in rowid order. No input tells them apart (measured on node:sqlite: rowids
+  // reassigned out of insertion order, or PRAGMA reverse_unordered_selects, and both queries still agree), so the
+  // explicit tie-break is belt and braces.
+  it('replays tables stamped in the same millisecond in insertion order; a reversed tie-break fails', () => {
     const { db } = regenWorkspace(WORKSPACE)
     const turn = seedAnsweredTurn(db, { question: QUESTION, answer: PRIOR_ANSWER })
-    vi.setSystemTime(new Date('2026-03-01T10:00:00.000Z')) // one frozen stamp: only the rowid orders these two
+    vi.setSystemTime(new Date('2026-03-01T10:00:00.000Z')) // one frozen stamp: created_at cannot order these two
     attachTable(db, turn)
     attachTable(db, turn, SECOND_TABLE)
     vi.useRealTimers()
@@ -266,7 +272,7 @@ describe('deleted-message snapshot — result-table capture and replay', () => {
     expect(before.map((r) => (JSON.parse(r.columns_json) as Array<{ key: string }>)[0]?.key)).toEqual(['date', 'category'])
 
     restoreMessage(db, deleteLastAssistantMessage(db, turn.conversationId)!)
-    // A reversed capture would re-insert SECOND_TABLE first, and the rowid order below would flip.
+    // A reversed capture (`rowid DESC`) would re-insert SECOND_TABLE first, and the rowid order below would flip.
     expect(rawResultTables(db, turn.answer.id)).toEqual(before)
   })
 })

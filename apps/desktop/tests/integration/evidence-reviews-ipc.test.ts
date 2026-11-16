@@ -52,6 +52,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
+import { listAuditEvents } from '../../src/main/services/audit'
 import { IPC } from '../../src/shared/ipc'
 import { t as tShared } from '../../src/shared/i18n'
 import type {
@@ -107,7 +108,7 @@ function harness(o: { unlocked?: () => boolean } = {}) {
 
 describe('evidence-review IPC round trips (mocked-electron harness)', () => {
   it('create→read→update→decide→select→link→ready→reopen→refresh→delete, model never touched, offline guard silent', async () => {
-    const { db, runtimeTouched, audit } = harness()
+    const { db, runtimeTouched } = harness()
     // FIX-4c: one citation WITH a documentId (the byId resolution branch) and one without
     // (title-unmatched → unresolved) — both resolved under the tripwire-asserted flow.
     const docId = seedSourceDocument(db, { title: 'A.pdf', sha256: 'aa'.repeat(32) })
@@ -146,7 +147,7 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     // -- idempotent create: the SAME review comes back; no duplicate; ONE audit event.
     const { result: againRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     expect((againRaw as EvidenceReviewDetail).id).toBe(created.id)
-    expect(audit.filter((e) => e.type === 'evidence_review_created')).toHaveLength(1)
+    expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'evidence_review_created')).toHaveLength(1)
 
     // -- entry-point read
     const { result: summaryRaw } = await invoke(handlers, IPC.getEvidenceReviewForMessage, messageId)
@@ -217,7 +218,7 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     const refused = refusedRaw as { review: EvidenceReview; gate: EvidenceReadyGate }
     expect(refused.review.status).toBe('draft')
     expect(refused.gate).toEqual({ eligible: false, requiredTotal: 2, decidedTotal: 1 })
-    expect(audit.some((e) => e.type === 'evidence_review_ready')).toBe(false)
+    expect(listAuditEvents(db, { limit: 100 }).some((e) => e.type === 'evidence_review_ready')).toBe(false)
 
     // …then succeeds once every required block is decided ('not_applicable' counts).
     const itemB = created.items[2]!
@@ -255,7 +256,7 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect(deleted).toBe(true)
     const { result: goneRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
     expect(goneRaw).toBeNull()
-    const types = audit.map((e) => e.type)
+    const types = listAuditEvents(db, { limit: 100 }).map((e) => e.type)
     expect(types).toContain('evidence_review_created')
     expect(types).toContain('evidence_review_ready')
     expect(types).toContain('evidence_review_deleted')
@@ -323,7 +324,7 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
   })
 
   it('FIX-5: markReady on an already-ready review is a NO-OP — original completed_at kept, exactly one audit event', async () => {
-    const { db, runtimeTouched, audit } = harness()
+    const { db, runtimeTouched } = harness()
     const { messageId } = seedAssistantAnswer(db, {
       content: 'Single claim. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'A.pdf' }],
@@ -347,7 +348,7 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     // The service-internal transition flag never crosses the wire.
     expect('becameReady' in (againRaw as Record<string, unknown>)).toBe(false)
     // Exactly ONE ready event across the double call.
-    expect(audit.filter((e) => e.type === 'evidence_review_ready')).toHaveLength(1)
+    expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'evidence_review_ready')).toHaveLength(1)
 
     expect(runtimeTouched).toEqual([])
   })
@@ -431,7 +432,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(result).toBeNull()
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
     expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
-    expect(h.audit.some((e) => e.type === 'evidence_pack_exported')).toBe(false)
+    expect(listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')).toBe(false)
     expect(h.runtimeTouched).toEqual([])
   })
 
@@ -458,12 +459,12 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(existsSync(dest)).toBe(false)
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
     expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
-    expect(h.audit.some((e) => e.type === 'evidence_pack_exported')).toBe(false)
+    expect(listAuditEvents(h.db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')).toBe(false)
     expect(h.runtimeTouched).toEqual([])
   })
 
   it('FIX-1: a post-rename record failure whose cleanup also fails surfaces the exportFileNotRecorded copy — the file stays, no row, no audit event', async () => {
-    const { db, root, runtimeTouched, audit } = harness()
+    const { db, root, runtimeTouched } = harness()
     const { messageId } = seedAssistantAnswer(db, {
       content: RELEVANCE.content,
       citations: RELEVANCE.citations,
@@ -489,7 +490,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(existsSync(dest)).toBe(true)
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
     expect((detailRaw as EvidenceReviewDetail).exports).toEqual([])
-    expect(audit.some((e) => e.type === 'evidence_pack_exported')).toBe(false)
+    expect(listAuditEvents(db, { limit: 100 }).some((e) => e.type === 'evidence_pack_exported')).toBe(false)
     expect(runtimeTouched).toEqual([])
   })
 
@@ -569,10 +570,8 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect(record.format).toBe('pdf')
     expect(record.fileName).toBe('pack.pdf')
     expect(record.options).not.toHaveProperty('format')
-    expect(h.audit.find((e) => e.type === 'evidence_pack_exported')?.meta).toEqual({
-      reviewId: created.id,
-      format: 'pdf'
-    })
+    const exported = listAuditEvents(h.db, { limit: 100 }).find((e) => e.type === 'evidence_pack_exported')
+    expect(exported?.metadata).toEqual({ reviewId: created.id, format: 'pdf' })
 
     // The history read shows the raw stored format (display passthrough) and the recorded hash.
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)

@@ -561,7 +561,7 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
 
   it('FIX-6: an outdated-unacknowledged export over the WIRE rejects with the LOCALIZED copy — no file, no row, no audit event', async () => {
     const { db, root } = freshWorkspaceDb('epfresh')
-    const { ctx, audit } = evidenceIpcContext(db, root)
+    const { ctx } = evidenceIpcContext(db, root)
     registerEvidenceReviewsIpc(ctx)
     const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
@@ -571,7 +571,10 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     )
     expect(listEvidenceExports(db, reviewId)).toEqual([])
     // No dialog was reached, so no file could exist; and no export audit event fired.
-    expect(audit.filter((e) => e.type === 'evidence_pack_exported')).toEqual([])
+    const events = db
+      .prepare("SELECT event_type FROM runtime_events WHERE event_type = 'evidence_pack_exported'")
+      .all()
+    expect(events).toEqual([])
     // After the acknowledge the SAME wire call proceeds to the (mocked, cancelled) dialog
     // and resolves null — the refusal is specifically the unacknowledged state.
     acknowledgeEvidenceReviewFreshness(db, reviewId)
