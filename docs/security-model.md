@@ -902,7 +902,10 @@ boundary is made explicit and everything around it stays inside the data-class r
   the path, not the file name, not the title (which seeds the suggested name and is
   content). Sentinel-swept in `audit-ipc.test.ts` with a path-sentinel destination.
 - **No model, no network:** the pipeline is pure SQLite read → pure render → local write;
-  the real offline connect-guard is asserted silent across every export test.
+  the real offline connect-guard is asserted silent after every test of the export suites
+  (`evidence-pack-export`, its async-fs and concurrent siblings, `evidence-reviews-ipc`,
+  `evidence-freshness`), and the real-Electron PDF smoke asserts its child process's own
+  guard.
 
 ## Document original export boundary (issue #90)
 
@@ -928,7 +931,8 @@ same posture applies:
   already in memory).
 - **Atomicity:** tmp sibling (per-call random token, the AUD-17 naming posture) → short-
   write check → fsync → rename; any failure up to the rename leaves NO destination file and
-  removes the tmp sibling best-effort. No hash is recorded — unlike the evidence pack there
+  removes the tmp sibling best-effort (pinned in `save-export.test.ts` › "the shared atomic
+  tail, both writers (#90, #256)"). No hash is recorded — unlike the evidence pack there
   is no provenance row to keep honest; the export is the user's own original bytes.
 - **Audit:** `document_exported` records `{documentId}` and nothing else — not the path,
   not the file name, not the title (which seeds the suggested name and is content, S1).
