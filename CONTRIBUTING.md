@@ -203,10 +203,16 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   that scripts finish reasons, caps and a Stop. The whole-doc truncation and map-reduce suites carried
   verbatim copies of the harness, and rag.test and the map-reduce suite each had their own finish fake.
 - **A registrar's locked-vault proof is its `MODULES` entry in `ipc-lock-coverage.test.ts`**, which
-  drives every channel and names each exempt one with its reason. A hand-picked lock test in the
+  drives every channel in both `POSTURES` (a locked workspace, and an open one mid-lock with the
+  AUD-02 latch armed) and names each exempt one with its reason. A hand-picked lock test in the
   module's own suite drifts: docs-ipc's checked 5 of the 14 gated `docs:*` channels, and
   doctasks-ipc's checked 1 of 3. A module with its own locked sentence names it (`lockedCopy`): the shared
   "Workspace is locked." prefix matched chat throwing the benchmark's sentence.
+- **A lock-latch proof arms the teardown latch, not only a locked workspace.** "Lock now" keeps the
+  database open for its whole teardown, so a guard reverted to a bare `isUnlocked()` still refuses a
+  locked workspace and admits the call mid-lock. local-api-ipc's key-channel row and the lifecycle's
+  start refusal stayed green with that revert. Drive `{ isUnlocked: () => true, isLocking: () => true }`
+  too, or park a real lock as `lock-admission-race.test.ts` does.
 - **An IPC copy of a service guard needs an IPC-specific risk** (routing, a sender check, the lock
   gate, error mapping). doctasks-ipc re-proved the manager's "refuse while chat streams" and
   "exactly two documents" checks through a handler that forwards them unchanged, while the one IPC
@@ -386,6 +392,14 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   settle with `flushFakeTimers()` (`tests/helpers/chat-screen.tsx`) and type with `fireEvent`. Dictation's no-signal
   rows fake `setInterval`, `clearInterval` and `Date` only and drive the shipped 2 s default, where a test-only 80 ms
   prop used to stand in for it. The conversation-search debounce row types with `fireEvent.change`.
+- **Never put an `expect` inside a bare `try { … } catch {}`.** The catch swallows the
+  `AssertionError` along with the error it was meant for: the local API's bind row fetched `[::1]`
+  that way and passed with `::1` never bound. Gate an optional leg on something observable instead
+  (that row now reads the server's own "IPv6 loopback bind failed" log line) and assert outside any catch.
+- **When the read path normalizes again, assert the stored row.** `getSettings` re-sanitizes what it
+  reads, so the benchmark-history and model-placement write-gate rows, which checked the read-back,
+  stayed green with the write-side normalizer deleted and junk stored. Read the raw `value_json` with
+  `rawSetting` (`tests/helpers/db-fixtures.ts`).
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the
