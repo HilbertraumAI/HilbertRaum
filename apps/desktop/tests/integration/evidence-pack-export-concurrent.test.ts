@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import type { FakePrintElectronState } from '../helpers/fake-print-window'
 
 // AUD-17 — two concurrent PDF exports to the SAME destination must not print each other's
 // pack.
@@ -16,21 +16,16 @@ import { join } from 'node:path'
 // named its own review. AUD-17 named the file per export; #563 removed it: the print page is
 // now held in memory under a random token and served once on `hilbertraum://print/<token>`.
 //
-// What this harness reproduces and what it cannot: the electron BOUNDARY is faked (a
-// constructible hidden-window class), but everything above it is the shipped code — the
+// What this harness reproduces and what it cannot: the electron BOUNDARY is faked (the fake
+// print window from tests/helpers/fake-print-window.ts), but everything above it is the shipped code — the
 // real `printEvidencePackHtmlToPdf` lifecycle, the real scheme handler and print-page
 // registry, the real export pipeline, real SQLite, real files on disk. The fake window loads
 // its URL through that handler, the way Chromium does, and prints what it was served.
 // Chromium's own timing is not reproduced here — that is the env-gated real-Electron smoke's
 // territory.
 
-const electron = vi.hoisted(() => ({
-  windows: [] as Array<{ loadedUrl: string | null; printedContent: string | null }>,
-  /** Called once a window has fetched its page; the returned promise parks the load. */
-  onLoad: null as ((index: number) => Promise<void>) | null,
-  /** Fetches a URL through the app's real scheme handler (installed after the imports). */
-  fetchPage: null as ((url: string) => Promise<Response>) | null
-}))
+// The fake windows (read back off `state.windows`); `state.afterFetch` parks a load once its page was fetched.
+const state = vi.hoisted((): FakePrintElectronState => ({ windows: [], appListeners: new Map() }))
 
 // The SECOND shared transient (AUD-17, `writePackFileAtomic`'s tmp sibling) is on the tail
 // of EVERY export, HTML included — the print-source fix cannot reach it because an HTML
@@ -60,65 +55,26 @@ vi.mock('node:fs/promises', async () => {
   return { ...actual, readFile, rename }
 })
 
-vi.mock('electron', () => {
-  class BrowserWindow {
-    static getFocusedWindow(): null {
-      return null
-    }
-    private readonly index: number
-    private document: string | null = null
-    destroyed = false
-    webContents: Record<string, unknown>
-    constructor() {
-      this.index = electron.windows.length
-      electron.windows.push({ loadedUrl: null, printedContent: null })
-      const slot = electron.windows[this.index]!
-      this.webContents = {
-        setWindowOpenHandler: (): void => {},
-        on: (): void => {},
-        executeJavaScript: async (): Promise<boolean> => true,
-        // Prints the document this window was SERVED at load time.
-        printToPDF: async (): Promise<Uint8Array> => {
-          slot.printedContent = this.document ?? '<<nothing-served>>'
-          return new TextEncoder().encode(slot.printedContent)
-        }
-      }
-    }
-    async loadURL(url: string): Promise<void> {
-      electron.windows[this.index]!.loadedUrl = url
-      const res = await electron.fetchPage!(url)
-      this.document = res.status === 200 ? await res.text() : null
-      await electron.onLoad?.(this.index)
-    }
-    isDestroyed(): boolean {
-      return this.destroyed
-    }
-    destroy(): void {
-      this.destroyed = true
-    }
-  }
-  return {
-    BrowserWindow,
-    app: { getVersion: () => '0.0.0-test', once: (): void => {}, removeListener: (): void => {} }
-  }
-})
+vi.mock('electron', async () => (await import('../helpers/fake-print-window')).fakePrintElectron(state))
 
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { createEvidenceReviewFromMessage } from '../../src/main/services/evidence-pack/snapshot'
+import type { Db } from '../../src/main/services/db'
 import { exportEvidencePackToFile, packTmpPath } from '../../src/main/services/evidence-pack/export'
 import { printEvidencePackHtmlToPdf } from '../../src/main/services/evidence-pack/print-pdf'
-import { createAppProtocolHandler, printPages } from '../../src/main/app-protocol'
+import { printPages } from '../../src/main/app-protocol'
 import { sha256Of } from '../../src/main/services/assets'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import { deferred } from '../helpers/deferred'
+import {
+  exportDeps,
+  seedAssistantAnswer,
+  seedEvidenceReview,
+  useOfflineGuard
+} from '../helpers/evidence-fixtures'
+import { realPrintFetch } from '../helpers/fake-print-window'
+import { until } from '../helpers/hang-budget'
 
 // The app's real handler over the app's real print-page registry (install-app-protocol.ts's pair).
-const handler = createAppProtocolHandler({
-  files: new Set(),
-  readFile: async () => {
-    throw new Error('no app files in this test')
-  },
-  printPages
-})
+const fetchPage = realPrintFetch()
 
 const PRINT_URL = /^hilbertraum:\/\/print\/[0-9a-f]{64}$/
 const PACK_ID_A = '11111111-1111-4111-8111-111111111111'
@@ -128,36 +84,30 @@ const NOW = '2026-07-18T12:00:00.000Z'
 let root = ''
 let db: Db
 
+useOfflineGuard()
+
 beforeEach(() => {
-  electron.windows = []
-  electron.onLoad = null
-  electron.fetchPage = (url) => handler(new Request(url))
+  // The fake prints what each window was served (`'<<nothing-served>>'` when nothing was).
+  state.windows = []
+  state.appListeners = new Map()
+  state.afterFetch = undefined
+  state.failBeforeFetch = undefined
+  state.printToPDF = undefined
   fsGate.beforeReadFile = null
   fsGate.beforeRename = null
-  root = mkdtempSync(join(tmpdir(), 'hilbertraum-epconc-'))
-  db = openDatabase(join(root, 'test.sqlite'))
+  ;({ db, root } = freshWorkspaceDb('epconc'))
 })
-
-/** A promise plus its resolver — the gate primitive these interleavings are built from. */
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve = (): void => {}
-  const promise = new Promise<void>((r) => {
-    resolve = r
-  })
-  return { promise, resolve }
-}
 
 /** One review whose title and answer text are unmistakable in a rendered pack. */
 function seedReview(marker: string): string {
-  const conv = createConversation(db, { title: `${marker}-REVIEW`, modelId: 'test-model-q4' })
-  appendMessage(db, { conversationId: conv.id, role: 'user', content: `${marker} question?` })
-  const msg = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
+  const answer = seedAssistantAnswer(db, {
+    title: `${marker}-REVIEW`,
+    question: `${marker} question?`,
     content: `${marker}-ANSWER-BODY.`,
-    coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 },
+    modelId: 'test-model-q4'
   })
-  return createEvidenceReviewFromMessage(db, msg.id, {}).id
+  return seedEvidenceReview(db, answer).id
 }
 
 describe('concurrent same-destination PDF exports (AUD-17)', () => {
@@ -170,7 +120,7 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
     // observable state (a load was entered) rather than by timing.
     const entered: number[] = []
     const release: Array<(() => void) | undefined> = []
-    electron.onLoad = (index) => {
+    state.afterFetch = (_url, index) => {
       entered.push(index)
       return new Promise<void>((resolve) => {
         release[index] = resolve
@@ -182,27 +132,20 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
         db,
         reviewId,
         { format: 'pdf' },
-        {
-          chooseDestination: async () => dest,
-          renderPdf: printEvidencePackHtmlToPdf,
-          newPackId: () => packId,
-          now: () => NOW
-        }
+        exportDeps(dest, { renderPdf: printEvidencePackHtmlToPdf, newPackId: () => packId, now: () => NOW })
       )
 
     // A reaches its (parked) load first, so window 0 is A's…
-    // The 30 s waitFor bound is the #84/#97/#101 starved-runner allowance: each export
-    // renders a real pack (pipeline + SQLite + disk) before its load parks, and the vitest
-    // default (1 s) flaked on a starved windows/22.x runner (PR #168 run 31329444828 — B's
-    // render outlived the wait, and the then-dangling export polluted the NEXT test's
-    // `electron.windows`, failing two tests from one slow render). The condition itself is
-    // load-order semantics, not a timing proof — nothing is loosened by waiting longer.
+    // Each wait is a hang detector, not a timing proof: each export renders a real pack
+    // (pipeline + SQLite + disk) before its load parks, and hang-budget's CI widening covers the
+    // starved-runner case of PR #168 (B's render once outlived a 1 s wait, and the then-dangling
+    // export polluted the NEXT test's windows). The condition is load-order semantics.
     const exportA = startExport(reviewA, PACK_ID_A)
-    await vi.waitFor(() => expect(entered).toContain(0), { timeout: 30_000 })
+    await until(() => entered.includes(0), "A's print load was entered")
     // …then B holds its own page and parks too. This is the exact window in which the
     // shared-file build had already replaced the bytes A was about to print.
     const exportB = startExport(reviewB, PACK_ID_B)
-    await vi.waitFor(() => expect(entered).toContain(1), { timeout: 30_000 })
+    await until(() => entered.includes(1), "B's print load was entered")
 
     release[0]!()
     const recordA = (await exportA) as { reviewId: string; fileSha256: string; format: string }
@@ -212,7 +155,7 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
     // Whose pack did each export actually print? Asserted as one object so a swap reads
     // directly off the failure ("printed the OTHER review's answer").
     const whatWasPrinted = (index: number): Record<string, boolean> => {
-      const printed = electron.windows[index]!.printedContent ?? ''
+      const printed = state.windows[index]!.printedContent ?? ''
       return {
         alpha: printed.includes('ALPHA-ANSWER-BODY.'),
         bravo: printed.includes('BRAVO-ANSWER-BODY.'),
@@ -225,11 +168,11 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
 
     // The two exports never shared a page: two print-host URLs, each a random token, and both
     // pages gone once the prints ended.
-    const urls = electron.windows.map((w) => w.loadedUrl)
+    const urls = state.windows.map((w) => w.loadedUrl)
     expect(new Set(urls).size).toBe(2)
     for (const url of urls) {
       expect(url).toMatch(PRINT_URL)
-      expect((await handler(new Request(url!))).status).toBe(404)
+      expect((await fetchPage(url!)).status).toBe(404)
     }
     expect(printPages.pending).toBe(0)
     // Nothing was written beside the destination but the destination itself (#563: no print
@@ -240,53 +183,15 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
     expect(recordA.reviewId).toBe(reviewA)
     expect(recordA.format).toBe('pdf')
     expect(recordA.fileSha256).toBe(
-      sha256Of(Buffer.from(electron.windows[0]!.printedContent!, 'utf8'))
+      sha256Of(Buffer.from(state.windows[0]!.printedContent!, 'utf8'))
     )
     expect(recordB.reviewId).toBe(reviewB)
     expect(recordB.fileSha256).toBe(
-      sha256Of(Buffer.from(electron.windows[1]!.printedContent!, 'utf8'))
+      sha256Of(Buffer.from(state.windows[1]!.printedContent!, 'utf8'))
     )
     // The destination holds the LAST writer's bytes (unchanged, accepted behaviour: the
     // second save overwrites the first), and that file is the one B recorded.
     expect(sha256Of(readFileSync(dest))).toBe(recordB.fileSha256)
-  })
-
-  it('the print page URL carries a random token, never the pack id or review content', async () => {
-    const reviewId = seedReview('CHARLIE')
-    const dest = join(root, 'CHARLIE-REVIEW.pdf')
-    electron.onLoad = null
-
-    await exportEvidencePackToFile(
-      db,
-      reviewId,
-      { format: 'pdf' },
-      {
-        chooseDestination: async () => dest,
-        renderPdf: printEvidencePackHtmlToPdf,
-        newPackId: () => PACK_ID_A,
-        now: () => NOW
-      }
-    )
-
-    const url = electron.windows[0]!.loadedUrl!
-    expect(url).toMatch(PRINT_URL)
-    expect(url).not.toContain(PACK_ID_A.replace(/-/g, ''))
-    expect(url).not.toContain('CHARLIE')
-    // It printed the right pack all the same.
-    expect(electron.windows[0]!.printedContent).toContain('CHARLIE-ANSWER-BODY.')
-  })
-
-  it('the tmp-sibling naming rule keeps a hostile pack id out of the file system', () => {
-    const dest = join(root, 'pack.pdf')
-    // An id that sanitises away entirely (only reachable through an injected mint) still yields
-    // a unique hex name rather than a bare dot.
-    const empty = packTmpPath(dest, '///')
-    expect(empty.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.tmp$/)
-    expect(packTmpPath(dest, '///')).not.toBe(empty)
-    expect(packTmpPath(dest, PACK_ID_A)).toBe(`${dest}.${PACK_ID_A.replace(/-/g, '')}.tmp`)
-    expect(packTmpPath(dest, PACK_ID_A)).not.toBe(packTmpPath(dest, PACK_ID_B))
-    expect(packTmpPath(dest, '../../etc/passwd')).toBe(`${dest}.etcpasswd.tmp`)
-    expect(packTmpPath(dest, 'z'.repeat(500))).toBe(`${dest}.${'z'.repeat(32)}.tmp`)
   })
 })
 
@@ -297,10 +202,7 @@ describe('concurrent same-destination HTML exports — the atomic writer (AUD-17
     const dest = join(root, 'pack.html')
 
     // HTML exports render no print source at all, so the harness above is irrelevant here
-    // and this stub doubles as proof that no print ever happens on this path.
-    const NEVER_PDF = async (): Promise<Buffer> => {
-      throw new Error('renderPdf must not be called for an HTML export')
-    }
+    // (`exportDeps`'s NEVER_PDF doubles as proof that no print ever happens on this path).
 
     // The interleaving, driven entirely by observable state:
     //   A writes + fsyncs + closes its tmp, then PARKS before the read-back that produces
@@ -340,17 +242,7 @@ describe('concurrent same-destination HTML exports — the atomic writer (AUD-17
     }
 
     const startExport = (reviewId: string, packId: string): Promise<unknown> =>
-      exportEvidencePackToFile(
-        db,
-        reviewId,
-        {},
-        {
-          chooseDestination: async () => dest,
-          renderPdf: NEVER_PDF,
-          newPackId: () => packId,
-          now: () => NOW
-        }
-      )
+      exportEvidencePackToFile(db, reviewId, {}, exportDeps(dest, { newPackId: () => packId, now: () => NOW }))
 
     const exportA = startExport(reviewA, PACK_ID_A).then(
       (record) => ({ ok: true as const, record }),

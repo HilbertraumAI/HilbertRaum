@@ -3,9 +3,10 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { t } from '../../src/shared/i18n'
 import { ensureDomMatrixPolyfill } from '../../src/main/services/ingestion/parsers/dommatrix-polyfill'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // EP-1 plan §11 — the REAL-Electron PDF smoke: the actual `printEvidencePackHtmlToPdf`
 // (bundled FROM SOURCE, not reimplemented) runs inside the locally installed Electron
@@ -343,7 +344,7 @@ describe.skipIf(!enabled)(
           `[pdf-smoke] ${r.name}: ${r.ms} ms, html ${r.htmlBytes} B, peak browser ${r.peakBrowserKiB} KiB, peak renderer ${r.peakRendererKiB} KiB`
         )
       }
-    }, 240_000)
+    }, testBudgetMs(240_000))
 
     afterAll(() => {
       if (root) rmSync(root, { recursive: true, force: true })
@@ -476,10 +477,12 @@ describe.skipIf(!enabled)(
       expect(de!.marked).toBe(true)
     })
 
-    it('kill-mid-print (app quit after load): the REAL quit hook rejects the print, no output, source cleaned', () => {
+    it('kill-mid-print (app quit after load): the REAL quit hook rejects the print, no output, page released', () => {
       const kill = result!.results.find((r) => r.name === 'kill')!
       expect(kill.ok).toBe(false)
       expect(kill.error).toBeTruthy()
+      // The quit hook's own rejection, not a step timeout of a hung destroyed renderer nor a refused slot.
+      expect(kill.error).not.toMatch(/took too long|too many prints/)
       expect(kill.outExists).toBe(false)
       expect(existsSync(killOut)).toBe(false)
       // The killed print gave its page back too.
@@ -500,6 +503,7 @@ describe.skipIf(!enabled)(
 
     it('#563: each print requested its page exactly once, on the print host, under its own token', () => {
       const PRINT_URL = /^hilbertraum:\/\/print\/[0-9a-f]{64}$/
+      expect(result!.results).toHaveLength(6) // every job reported: an empty list would pass the loop below
       const tokens = new Set<string>()
       for (const job of result!.results) {
         expect(job.requests, job.name).toHaveLength(1)
@@ -517,10 +521,12 @@ describe.skipIf(!enabled)(
       )
       const outputs = new Set([enPdf, dePdf, arEnPdf, arDePdf, largePdf])
       const holders: string[] = []
+      const visited: string[] = []
       const walk = (dir: string): void => {
         for (const name of readdirSync(dir)) {
           const full = join(dir, name)
           const st = statSync(full)
+          if (st.isFile()) visited.push(full)
           if (st.isDirectory()) walk(full)
           else if (st.isFile() && !outputs.has(full) && !inputHtml.includes(full)) {
             const bytes = readFileSync(full)
@@ -530,6 +536,10 @@ describe.skipIf(!enabled)(
       }
       walk(root)
       expect(holders).toEqual([])
+      // Positive controls: the walk reached the Electron profile, and the sentinels do match what they guard (all
+      // five inputs carry the EN or the DE one).
+      expect(visited.some((p) => p.includes(`${sep}electron-profile${sep}`))).toBe(true)
+      expect(inputHtml.filter((p) => sentinels.some((sv) => readFileSync(p).includes(sv)))).toHaveLength(inputHtml.length)
     })
 
     it('no network across the entire run: every Chromium request is a print page, the offline guard stayed silent', () => {
