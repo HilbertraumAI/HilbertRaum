@@ -1054,7 +1054,14 @@ explicitly:
   **unlocked** state (key kept for the retry); the IPC layer surfaces "could not lock — free
   space and retry" (`main.workspace.lockFailed`) and audits a content-free
   `workspace_lock_failed`. The stale `.enc` is untouched (`encryptFile` is atomic
-  tmp→rename), so the last good snapshot always survives.
+  tmp→rename), so the last good snapshot always survives. The re-open runs only while the
+  working file still exists and starts with the SQLite header (#853): `openDatabase` creates a
+  missing file, so after something removed the live working file (POSIX allows unlinking an
+  open file) a re-open would hand the session an empty database, and the next lock (a retry,
+  or `shutdown()` at quit) would encrypt it over `.enc`. Without a file the controller keeps
+  its closed handle and shreds the orphaned `-wal`/`-shm` (plaintext pages SQLite leaves behind
+  when its main file was unlinked), every later lock is refused, and the next launch opens the
+  last snapshot.
 - **Newer-file roll-forward (CODE-1b).** If the app exits after a failed lock, the startup
   crash sweep must NOT shred the working file — it is the only fresh copy of the session's
   data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer

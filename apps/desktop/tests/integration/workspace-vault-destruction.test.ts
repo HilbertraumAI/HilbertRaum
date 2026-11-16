@@ -82,8 +82,11 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     // Instance A quits: lock-on-quit re-encrypts the working file over `.enc`. Pre-fix
     // (Windows) this SUCCEEDED silently and `.enc` became authenticated noise — the
     // destroyed vault of #208. The guard must refuse instead (mapped to VaultLockError
-    // by the controller, like any failed lock).
-    expect(() => a.lock()).toThrowError(VaultLockError)
+    // by the controller, like any failed lock). The quit goes through `shutdown()`, the
+    // call main/shutdown.ts makes: modelling it with `lock()` hid #853 on POSIX, where the
+    // refused lock's re-open created an empty database that shutdown then left at rest
+    // and the next unlock rolled forward over `.enc`.
+    expect(() => a.shutdown()).toThrowError(VaultLockError)
 
     // The at-rest snapshot survived, byte for byte.
     expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
@@ -98,6 +101,43 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     expect(c.getState().state).toBe('unlocked')
     expect(getSettings(c.requireDb()).workspaceMode).toBe('encrypted')
     c.lock()
+  })
+
+  it('a lock refused because the working file vanished never creates a database there: a retry and the quit keep the last good snapshot (#853)', () => {
+    const vp = freshVault()
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.create('correct horse battery', 'encrypted')
+    updateSettings(ctrl.requireDb(), { contextTokens: 7171 }) // not the default (4096)
+    ctrl.lock() // the good snapshot now holds the marker
+    ctrl.unlock('correct horse battery')
+    const encBefore = readFileSync(vp.encPath)
+
+    // Something outside the app removes the live working file. POSIX unlinks the open file;
+    // Windows refuses that while SQLite holds it, so the handle is closed first there. Both
+    // reach the controller's lock-failure recovery with no working file on disk.
+    if (process.platform === 'win32') ctrl.requireDb().close()
+    rmSync(vp.dbPath)
+
+    expect(() => ctrl.lock()).toThrowError(VaultLockError)
+    // The recovery must not re-open (and so create) a database at the vanished path, and
+    // the orphaned WAL sidecars (plaintext pages) must not stay on the drive.
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
+    expect(() => ctrl.lock()).toThrowError(VaultLockError) // "Lock now" again
+    expect(() => ctrl.shutdown()).toThrowError(VaultLockError) // the quit
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+
+    // Next launch: the right password opens the last good snapshot, marker included.
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    next.unlock('correct horse battery')
+    const settings = getSettings(next.requireDb())
+    expect(settings.contextTokens).toBe(7171)
+    expect(settings.workspaceMode).toBe('encrypted')
+    next.lock()
   })
 
   it('lockEncryptedVault refuses to encrypt a non-SQLite working file over .enc (guard pin)', () => {

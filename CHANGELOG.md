@@ -68,6 +68,13 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **On macOS and Linux, a lock that fails because the workspace's working file disappeared no
+  longer empties your workspace.** If something outside HilbertRaum deleted the open working
+  copy of an encrypted workspace, the lock was refused correctly, but trying again, or quitting
+  the app, then saved an empty workspace over your encrypted one. Now every further lock is
+  refused, and the next start opens your workspace as it was at its last successful lock.
+  Changes made after that lock are lost, because the file that held them is gone. Windows was
+  not affected (#853).
 - **Unlock and setup errors now appear in the language the lock screen shows.** If the language
   you chose in Settings differs from your operating system's, the lock screen was already in your
   language, but a wrong password or a problem opening or creating the workspace was reported in
