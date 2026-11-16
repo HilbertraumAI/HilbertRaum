@@ -1,9 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, it, expect, onTestFinished, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   createConversation,
   appendMessage,
@@ -13,8 +10,11 @@ import {
 } from '../../src/main/services/chat'
 import { generateGroundedAnswer, ragSettingsFrom } from '../../src/main/services/rag'
 import { MockEmbedder } from '../../src/main/services/embeddings'
+import { log } from '../../src/main/services/logging'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { until } from '../helpers/hang-budget'
 
 // R1 (full-audit-2026-06-30, Phase C): a workspace LOCK / quit aborts an in-flight chat stream while
 // its partial reply is still unwinding to `appendMessage`. Phase C makes the teardown await each
@@ -24,11 +24,8 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 // defense-in-depth guard swallows a partial-persist against an already-CLOSED DB cleanly (no
 // unhandled rejection) instead of crashing the teardown.
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-lockpersist-')), 'test.sqlite'))
-}
-
-const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+/** The line the guard logs when it drops a partial: the conversation id only, never the content. */
+const DROPPED = 'chat: dropped partial reply — workspace locked during persist'
 
 /**
  * A runtime whose chatStream yields ONE token, then parks on `gate`. On release it observes the
@@ -57,7 +54,7 @@ function gatedRuntime(gate: Promise<void>): ModelRuntime {
 
 describe('R1 — chat partial persistence vs a locking DB', () => {
   it('persists the aborted partial while the DB is still open', async () => {
-    const db = freshDb()
+    const db = openFreshDb('lockpersist')
     const conv = createConversation(db, { modelId: 'mock' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
 
@@ -69,7 +66,7 @@ describe('R1 — chat partial persistence vs a locking DB', () => {
       signal: ctrl.signal,
       onToken: (t) => (token += t)
     })
-    while (!token) await tick() // the partial token streamed; the generator is parked at the gate
+    await until(() => token !== '', 'the partial token streaming') // the generator is parked at the gate
 
     ctrl.abort() // the lock/quit aborts the stream
     release() // …and the abort-unwind proceeds to appendMessage on the still-OPEN db
@@ -81,7 +78,7 @@ describe('R1 — chat partial persistence vs a locking DB', () => {
   })
 
   it('swallows a locked-DB partial-persist cleanly — no rejection escapes (R1 guard)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('lockpersist')
     const conv = createConversation(db, { modelId: 'mock' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
 
@@ -93,7 +90,7 @@ describe('R1 — chat partial persistence vs a locking DB', () => {
       signal: ctrl.signal,
       onToken: (t) => (token += t)
     })
-    while (!token) await tick()
+    await until(() => token !== '', 'the partial token streaming')
 
     ctrl.abort()
     db.close() // the lock CLOSED the DB before the abort-unwind reached appendMessage
@@ -106,7 +103,7 @@ describe('R1 — chat partial persistence vs a locking DB', () => {
   })
 
   it('a genuine persistence error on an OPEN DB still propagates (the guard is narrow)', async () => {
-    const db = freshDb()
+    const db = openFreshDb('lockpersist')
     const conv = createConversation(db, { modelId: 'mock' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
 
@@ -120,11 +117,11 @@ describe('R1 — chat partial persistence vs a locking DB', () => {
       signal: ctrl.signal,
       onToken: (t) => (token += t)
     })
-    while (!token) await tick()
+    await until(() => token !== '', 'the partial token streaming')
     ctrl.abort()
     db.exec('DROP TABLE messages') // DB stays OPEN, but the insert will fail
     release()
-    await expect(p).rejects.toThrow()
+    await expect(p).rejects.toThrow(/no such table: messages/) // that error, not some other failure on the way
   })
 })
 
@@ -149,10 +146,12 @@ describe('CODE-18 — the shared persistAssistantMessage guard on the grounded p
   }
 
   it('a grounded (whole-document) Stop+lock race quietly drops the partial — no rejection', async () => {
-    const db = freshDb()
+    const db = openFreshDb('lockpersist')
     const docId = seedDoc(db)
     const conv = createConversation(db, { mode: 'documents' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'what does it say?' })
+    const warn = vi.spyOn(log, 'warn')
+    onTestFinished(() => warn.mockRestore())
 
     const ctrl = new AbortController()
     let token = ''
@@ -167,7 +166,7 @@ describe('CODE-18 — the shared persistAssistantMessage guard on the grounded p
       ragSettingsFrom(DEFAULT_SETTINGS),
       { signal: ctrl.signal, onToken: (t) => (token += t), wholeDocument: { documentId: docId } }
     )
-    while (!token) await tick()
+    await until(() => token !== '', 'the partial token streaming')
 
     ctrl.abort()
     db.close() // the lock CLOSED the DB before the abort-unwind reached the grounded persist
@@ -175,13 +174,25 @@ describe('CODE-18 — the shared persistAssistantMessage guard on the grounded p
 
     // Pre-fix this REJECTED ("database is not open"); the shared guard drops the partial quietly.
     await expect(p).resolves.toMatchObject({ content: '' })
+    // …and it was the guard that answered, at the grounded persist: an empty result alone is also what a path that
+    // never reached the persist would return.
+    expect(warn).toHaveBeenCalledWith(DROPPED, { conversationId: conv.id })
   })
 
   it('persistAssistantMessage: guard fires ONLY on aborted+closed; open-DB errors propagate', () => {
-    const db = freshDb()
+    const db = openFreshDb('lockpersist')
     const conv = createConversation(db, {})
     const aborted = new AbortController()
     aborted.abort()
+
+    // Aborted + OPEN DB with a genuine persistence error → it propagates (the guard keys on the closed DB).
+    const open = openFreshDb('lockpersist')
+    const openConv = createConversation(open, {})
+    open.exec('DROP TABLE messages')
+    expect(() =>
+      persistAssistantMessage(open, { conversationId: openConv.id, role: 'assistant', content: 'partial' }, aborted.signal)
+    ).toThrow(/no such table: messages/)
+    open.close()
 
     // Aborted + closed DB → quiet drop (the unpersisted empty message).
     db.close()
@@ -195,6 +206,6 @@ describe('CODE-18 — the shared persistAssistantMessage guard on the grounded p
     // NOT aborted + closed DB → the genuine error still propagates (the guard is narrow).
     expect(() =>
       persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content: 'x' })
-    ).toThrow()
+    ).toThrow(/database is not open/)
   })
 })
