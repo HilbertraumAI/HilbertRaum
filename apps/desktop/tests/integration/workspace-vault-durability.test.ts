@@ -1,17 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, existsSync, openSync, fsyncSync, renameSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync, openSync, fsyncSync, renameSync } from 'node:fs'
 import {
-  vaultPathsFrom,
   createEncryptedVaultOnDisk,
   unlockEncryptedVault,
   lockEncryptedVault,
-  REKEY_SUFFIX,
-  type VaultPaths
+  REKEY_SUFFIX
 } from '../../src/main/services/workspace-vault'
 import { updateSettings } from '../../src/main/services/settings'
-import type { KdfParams } from '../../src/main/services/security/crypto'
+import { FAST_KDF, freshVaultPaths, lockedVault } from '../helpers/vault-fixtures'
 
 // full-audit 2026-07-11 CODE-10 / CODE-14 — WIRING pins with teeth, in the spirit of
 // binary-verify-spawn.test.ts: they drive the REAL vault functions and assert the
@@ -40,23 +36,12 @@ const spies = {
   renameSync: vi.mocked(renameSync)
 }
 
-// Fast KDF so the suite stays quick (same fixture as workspace-vault.test.ts).
-const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
-
-/** Build a fresh temp workspace layout + its vault paths. */
-function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-vault-durability-'))
-  const configPath = join(root, 'config')
-  const workspacePath = join(root, 'workspace')
-  mkdirSync(configPath, { recursive: true })
-  mkdirSync(workspacePath, { recursive: true })
-  return vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
-}
+// The vault fixtures go through this file's mocked `node:fs` too (pass-through), so they are
+// built ABOVE each `mockClear()`: only the measured call lands in the recorded calls.
 
 describe('vault lock durability — fs-call wiring (full-audit 2026-07-11 CODE-10/14)', () => {
   it('CODE-10: lock fsyncs the freshly written .enc tmp before the atomic rename', () => {
-    const vp = freshVault()
-    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const vp = lockedVault('vault-durability', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     updateSettings(db, { contextTokens: 4096 })
 
@@ -84,7 +69,7 @@ describe('vault lock durability — fs-call wiring (full-audit 2026-07-11 CODE-1
   })
 
   it('CODE-14: creation stages the .enc and commits at the descriptor write (ordering pin)', () => {
-    const vp = freshVault()
+    const vp = freshVaultPaths('vault-durability')
     spies.renameSync.mockClear()
     createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
 

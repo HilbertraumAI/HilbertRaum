@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { randomBytes } from 'node:crypto'
 import {
   DEFAULT_KDF,
-  SCRYPT_KDF,
   generateSalt,
   deriveKey,
   encrypt,
@@ -12,20 +12,16 @@ import {
   verifyKey,
   type KdfParams
 } from '../../src/main/services/security/crypto'
+import { FAST_ARGON, FAST_KDF as FAST_SCRYPT } from '../helpers/vault-fixtures'
 
 // Phase 9 — KDF + AEAD primitives (pure, no I/O).
 
 // Fast params for the bulk of tests (they only need *a* key, not a costly one). The real
-// DEFAULT_KDF (argon2id, ~0.5 s) is exercised in a couple of targeted tests below.
-const FAST_SCRYPT: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
-const FAST_ARGON: KdfParams = { algo: 'argon2id', m: 256, t: 1, p: 1, keyLen: 32 }
+// DEFAULT_KDF (argon2id, ~0.5 s) is exercised by the known-answer vector below. That new vaults
+// get it is pinned at the vault boundary (workspace-vault.test.ts, the encrypted lifecycle row
+// reads the created descriptor's `kdf`).
 
 describe('deriveKey', () => {
-  it('defaults new vaults to argon2id', () => {
-    expect(DEFAULT_KDF.algo).toBe('argon2id')
-    expect(SCRYPT_KDF.algo).toBe('scrypt')
-  })
-
   for (const params of [FAST_SCRYPT, FAST_ARGON]) {
     describe(params.algo, () => {
       it('is deterministic: same password + salt + params → same 32-byte key', () => {
@@ -51,11 +47,6 @@ describe('deriveKey', () => {
     })
   }
 
-  it('argon2id and scrypt yield different keys for the same password+salt', () => {
-    const salt = generateSalt()
-    expect(deriveKey('pw', salt, FAST_ARGON).equals(deriveKey('pw', salt, FAST_SCRYPT))).toBe(false)
-  })
-
   it('rejects an unsupported algorithm', () => {
     const salt = generateSalt()
     expect(() => deriveKey('pw', salt, { ...FAST_SCRYPT, algo: 'pbkdf2' as 'scrypt' })).toThrow(
@@ -70,17 +61,28 @@ describe('deriveKey', () => {
   })
 
   // SEC-B (audit round 4): the descriptor is unencrypted + attacker-writable. Unbounded
-  // params would make every unlock attempt a multi-GB allocation (vault DoS); a foreign
-  // keyLen silently changes the AES key size. Both must fail loudly instead.
-  it('rejects out-of-bounds params from a tampered descriptor', () => {
-    const salt = generateSalt()
-    expect(() =>
-      deriveKey('pw', salt, { algo: 'argon2id', m: 2_000_000_000, t: 2, p: 1, keyLen: 32 })
-    ).toThrow(/out of bounds/)
-    expect(() =>
-      deriveKey('pw', salt, { algo: 'scrypt', N: 1000, r: 8, p: 1, keyLen: 32 }) // not a power of two
-    ).toThrow(/out of bounds/)
-    expect(() => deriveKey('pw', salt, { ...FAST_SCRYPT, keyLen: 64 })).toThrow(/keyLen/)
+  // params would make every unlock attempt a multi-GB allocation or an endless derive (vault
+  // DoS); a foreign keyLen silently changes the AES key size. Both must fail loudly instead.
+  // One row per bound, every other param cheap and in range, so each row reaches one clause of
+  // the bounds check: with that clause deleted the value reaches the library, which either
+  // derives (a hang-sized `t`, a 17-lane `p`) or fails with its own, different message.
+  it.each<[string, KdfParams, RegExp]>([
+    ['argon2id m above the 2 GiB ceiling', { ...FAST_ARGON, m: 2_000_000_000 }, /out of bounds/],
+    ['argon2id m below the floor of 8', { ...FAST_ARGON, m: 7 }, /out of bounds/],
+    ['argon2id t of 0', { ...FAST_ARGON, t: 0 }, /out of bounds/],
+    ['argon2id t above 64', { ...FAST_ARGON, t: 65 }, /out of bounds/],
+    ['argon2id p of 0', { ...FAST_ARGON, p: 0 }, /out of bounds/],
+    ['argon2id p above 16', { ...FAST_ARGON, p: 17 }, /out of bounds/],
+    ['scrypt N below the 1024 floor', { ...FAST_SCRYPT, N: 512 }, /out of bounds/],
+    ['scrypt N that is not a power of two', { ...FAST_SCRYPT, N: 1536 }, /out of bounds/],
+    ['scrypt N above 2^22', { ...FAST_SCRYPT, N: 2 ** 23 }, /out of bounds/],
+    ['scrypt r of 0', { ...FAST_SCRYPT, r: 0 }, /out of bounds/],
+    ['scrypt r above 32', { ...FAST_SCRYPT, r: 33 }, /out of bounds/],
+    ['scrypt p of 0', { ...FAST_SCRYPT, p: 0 }, /out of bounds/],
+    ['scrypt p above 16', { ...FAST_SCRYPT, p: 17 }, /out of bounds/],
+    ['keyLen other than 32', { ...FAST_SCRYPT, keyLen: 64 }, /keyLen must be 32/]
+  ])('rejects an out-of-bounds %s from a tampered descriptor', (_bound, params, error) => {
+    expect(() => deriveKey('pw', generateSalt(), params)).toThrow(error)
   })
 })
 
@@ -141,9 +143,16 @@ describe('serializeBlob / deserializeBlob', () => {
     expect(decrypt(key, parsed).equals(pt)).toBe(true)
   })
 
-  it('rejects a buffer with a foreign/short header', () => {
-    expect(() => deserializeBlob(Buffer.from('not-a-paid-blob'))).toThrow()
-    expect(() => deserializeBlob(Buffer.alloc(4))).toThrow()
+  it('rejects a buffer shorter than the 36-byte header', () => {
+    expect(() => deserializeBlob(Buffer.from('not-a-paid-blob'))).toThrow(/too short/)
+    expect(() => deserializeBlob(Buffer.alloc(4))).toThrow(/too short/)
+  })
+
+  // A frame long enough to pass the length check, with a magic this build does not write (a
+  // future format version, #845): it must be refused by name, never parsed as `iv | tag | ct`.
+  it('rejects a header-sized frame with a foreign magic (a future format)', () => {
+    const foreign = Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(12 + 16)])
+    expect(() => deserializeBlob(foreign)).toThrow(/unrecognised header/)
   })
 })
 
@@ -156,12 +165,6 @@ describe('password verifier', () => {
 
     const wrongKey = deriveKey('not-the-password', salt, FAST_ARGON)
     expect(verifyKey(wrongKey, verifier)).toBe(false)
-  })
-
-  it('round-trips a key derived with the real default KDF (argon2id)', () => {
-    const salt = generateSalt()
-    const key = deriveKey('real-default-kdf', salt, DEFAULT_KDF)
-    expect(verifyKey(key, makeVerifier(key))).toBe(true)
   })
 
   // Existing vaults must keep unlocking across library updates: the default KDF has to

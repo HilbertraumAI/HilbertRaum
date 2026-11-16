@@ -1,24 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import {
-  vaultPathsFrom,
-  createEncryptedVaultOnDisk,
-  decryptFile,
-  WorkspaceController,
-  ENCRYPTED_DOC_SUFFIX,
-  type VaultPaths
-} from '../../src/main/services/workspace-vault'
+import { decryptFile, ENCRYPTED_DOC_SUFFIX } from '../../src/main/services/workspace-vault'
 import {
   createQueuedDocument,
   prepareDocument,
   documentsDir
 } from '../../src/main/services/ingestion'
-import { DEFAULT_POLICY } from '../../src/main/services/policy'
-import type { PrivacyPolicy } from '../../src/shared/types'
-import type { KdfParams } from '../../src/main/services/security/crypto'
 import { testBudgetMs } from '../helpers/hang-budget'
+import { tempRoot } from '../helpers/db-fixtures'
+import { lockedVault, unlockedController } from '../helpers/vault-fixtures'
 
 // full-audit 2026-07-12 SEC-1 — a DocumentCipher captured BEFORE "Lock now" must fail closed
 // when invoked AFTER lock() zeroed the vault key. Previously `documentCipher()` closed over the
@@ -33,7 +24,8 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // deterministically lands inside the window. Kept in its own file because the module mock
 // must not leak into the behavioral ingestion/vault suites.
 //
-// Explicit 60 s per-test timeouts (the issue-#84 / PR-#86 pattern): this file is ~1.5 s end to
+// Explicit per-test budgets, `testBudgetMs(60_000)` (60 s locally, widened on CI; the issue-#84 /
+// PR-#86 pattern, made CI-aware by #458): this file is ~1.5 s end to
 // end on a healthy runner (FAST_KDF — real scrypt at N=1024, real AES-GCM, real SQLite, real
 // fs), but a STARVED shared CI runner can stall any of these real-vault fixtures past vitest's
 // global 15 s budget — the master push run of 2026-07-24 (run 30080155163, windows/22.x) timed
@@ -76,43 +68,16 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
   }
 })
 
-// Fast KDF so the suite stays quick (the workspace-vault.test.ts fixture).
-const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
 const SECRET_TEXT = 'strictly confidential: the vault must not leak this after Lock now'
 const ZERO_KEY = Buffer.alloc(32)
 
-const ENCRYPTION_REQUIRED: PrivacyPolicy = {
-  ...DEFAULT_POLICY,
-  workspace: { encryptionRequired: true, allowPlaintextDevMode: false }
-}
-
-/** Build a fresh temp workspace layout + its vault paths. */
-function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-lock-cipher-'))
-  const configPath = join(root, 'config')
-  const workspacePath = join(root, 'workspace')
-  mkdirSync(configPath, { recursive: true })
-  mkdirSync(workspacePath, { recursive: true })
-  return vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
-}
-
-/** An unlocked controller over a fresh encrypted vault. */
-function unlockedController(vp: VaultPaths): WorkspaceController {
-  createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
-  const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
-  ctl.init()
-  ctl.unlock('pw')
-  return ctl
-}
-
 describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
   it('a captured cipher THROWS the typed error after lock() instead of encrypting under the zeroed key', async () => {
-    const vp = freshVault()
-    const ctl = unlockedController(vp)
+    const ctl = unlockedController(lockedVault('lock-cipher', 'pw'), 'pw')
     const cipher = ctl.documentCipher()
     expect(cipher).not.toBeNull()
 
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-lock-cipher-files-'))
+    const dir = tempRoot('lock-cipher-files')
     const plain = join(dir, 'note.txt')
     writeFileSync(plain, SECRET_TEXT)
 
@@ -146,8 +111,7 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
   }, testBudgetMs(60_000))
 
   it('a cipher captured across lock → unlock reads the LIVE key again (per-invocation read)', async () => {
-    const vp = freshVault()
-    const ctl = unlockedController(vp)
+    const ctl = unlockedController(lockedVault('lock-cipher', 'pw'), 'pw')
     const cipher = ctl.documentCipher()!
 
     ctl.lock()
@@ -156,7 +120,7 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
     // Fix-impact Q3 decision: no consumer legitimately spans a lock/unlock cycle (each IPC
     // call / import job captures a fresh cipher), but one that did now picks up the live
     // data key — the SAME key bytes the fresh cipher would use — instead of a zeroed Buffer.
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-lock-cipher-relock-'))
+    const dir = tempRoot('lock-cipher-relock')
     const plain = join(dir, 'note.txt')
     writeFileSync(plain, SECRET_TEXT)
     const enc = join(dir, 'note.enc')
@@ -170,13 +134,13 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
 
 describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)', () => {
   it('a lock during the pre-encrypt hash fails the prepare cleanly — no zero-key sidecar lands', async () => {
-    const vp = freshVault()
-    const ctl = unlockedController(vp)
+    const vp = lockedVault('lock-cipher', 'pw')
+    const ctl = unlockedController(vp, 'pw')
     const db = ctl.requireDb()
     const cipher = ctl.documentCipher()!
     const store = documentsDir(dirname(vp.dbPath))
 
-    const srcDir = mkdtempSync(join(tmpdir(), 'hilbertraum-lock-cipher-src-'))
+    const srcDir = tempRoot('lock-cipher-src')
     const file = join(srcDir, 'contract.txt')
     writeFileSync(file, SECRET_TEXT)
     const doc = createQueuedDocument(db, file)
@@ -205,13 +169,13 @@ describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)
   }, testBudgetMs(60_000))
 
   it('an ordinary unlocked import still writes a real-key sidecar (happy path unchanged)', async () => {
-    const vp = freshVault()
-    const ctl = unlockedController(vp)
+    const vp = lockedVault('lock-cipher', 'pw')
+    const ctl = unlockedController(vp, 'pw')
     const db = ctl.requireDb()
     const cipher = ctl.documentCipher()!
     const store = documentsDir(dirname(vp.dbPath))
 
-    const srcDir = mkdtempSync(join(tmpdir(), 'hilbertraum-lock-cipher-src2-'))
+    const srcDir = tempRoot('lock-cipher-src2')
     const file = join(srcDir, 'contract.txt')
     writeFileSync(file, SECRET_TEXT)
     const doc = createQueuedDocument(db, file)
