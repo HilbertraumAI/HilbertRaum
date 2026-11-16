@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, listTables, type Db } from '../../src/main/services/db'
 import {
@@ -27,6 +25,7 @@ import {
   updateEvidenceReview,
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
+import { computeEvidenceReviewFreshness } from '../../src/main/services/evidence-pack/freshness'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import {
   answerWholeDocFromChunks,
@@ -39,6 +38,13 @@ import { documentLeafProvenance } from '../../src/main/services/analysis/coverag
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import { DEFAULT_SETTINGS, type EvidenceSourceSnapshot, type ReviewDecision } from '../../src/shared/types'
 import { chunkIdsOf, seedEmbeddedDoc, seedReadyTree } from '../helpers/doc-fixtures'
+import { freshWorkspaceDb, legacyDbPath } from '../helpers/db-fixtures'
+import {
+  seedAssistantAnswer,
+  seedEvidenceReview,
+  seedReviewChain,
+  seedSourceDocument
+} from '../helpers/evidence-fixtures'
 
 // EP-1 Phase 0 (evidence-pack plan §5) — the persisted layer: schema creation, full
 // round-trips through SQLite (incl. Unicode/markdown/hostile strings), tolerant parsing of
@@ -52,21 +58,8 @@ const EVIDENCE_TABLES = [
   'evidence_exports'
 ] as const
 
-function freshDbPath(): string {
-  return join(mkdtempSync(join(tmpdir(), 'hilbertraum-epreviews-')), 'test.sqlite')
-}
-
-function freshDb(): Db {
-  return openDatabase(freshDbPath())
-}
-
-/** One conversation + one assistant answer, via the REAL chat service. */
-function seedAnswer(db: Db, content = 'The contract allows termination. [S1]'): { conversationId: string; messageId: string } {
-  const conv = createConversation(db, { title: 'Contract questions' })
-  appendMessage(db, { conversationId: conv.id, role: 'user', content: 'What about termination?' })
-  const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content })
-  return { conversationId: conv.id, messageId: msg.id }
-}
+/** The assistant answer every review here is created on (`seedAssistantAnswer`, the REAL chat service). */
+const ANSWER = 'The contract allows termination. [S1]'
 
 const HOSTILE = {
   title: `Über-Prüfung 📋 <script>alert('x')</script> '; DROP TABLE evidence_reviews;--`,
@@ -110,38 +103,74 @@ const SOURCES: EvidenceSourceSnapshot[] = [
   }
 ]
 
-describe('schema (plan §5 item 3)', () => {
-  it('a fresh DB creates all four evidence tables', () => {
-    const tables = listTables(freshDb())
-    for (const t of EVIDENCE_TABLES) expect(tables).toContain(t)
-  })
+/** `evidence_reviews` as P0–P3 wrote it: every column except P4's freshness_ack_json. */
+const P3_EVIDENCE_REVIEWS = `CREATE TABLE evidence_reviews (
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL, question_message_id TEXT,
+  title TEXT NOT NULL, status TEXT NOT NULL, reviewer_label TEXT, general_note TEXT,
+  answer_snapshot TEXT NOT NULL, question_snapshot TEXT NOT NULL, source_snapshot_json TEXT,
+  coverage_snapshot_json TEXT, generation_snapshot_json TEXT, created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL, completed_at TEXT,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+)`
 
+describe('schema (plan §5 item 3)', () => {
   it('re-opening an existing DB is idempotent and preserves review data across restarts', () => {
-    const path = freshDbPath()
-    let db = openDatabase(path)
-    const { messageId } = seedAnswer(db)
-    const review = createEvidenceReview(db, {
+    const { db: first, root } = freshWorkspaceDb('epreviews')
+    const fresh = listTables(first)
+    for (const t of EVIDENCE_TABLES) expect(fresh).toContain(t) // A1: a fresh DB creates all four
+    const { messageId } = seedAssistantAnswer(first, { content: ANSWER })
+    const review = createEvidenceReview(first, {
       messageId,
       title: HOSTILE.title,
       answerSnapshot: HOSTILE.answer,
       questionSnapshot: HOSTILE.question,
       sources: SOURCES
     })
-    db.close()
+    // IP6 (moved from evidence-reviews-ipc): decided items, notes and the reviewer label survive the restart too.
+    const [item] = createEvidenceReviewItems(first, review.id, [
+      {
+        kind: 'block',
+        blockKey: 'b0-paragraph-restart',
+        blockKind: 'paragraph',
+        textSnapshot: 'Termination requires **30 days** notice. [S1]'
+      }
+    ])
+    updateEvidenceReviewItem(first, item!.id, { decision: 'supported', reviewerNote: HOSTILE.note })
+    updateEvidenceReview(first, review.id, { reviewerLabel: 'QA' })
+    first.close()
 
-    db = openDatabase(path) // the restart: migrations re-run, IF NOT EXISTS must not clobber
+    const db = openDatabase(join(root, 'test.sqlite')) // the restart: migrations re-run, IF NOT EXISTS must not clobber
     const tables = listTables(db)
     for (const t of EVIDENCE_TABLES) expect(tables).toContain(t)
     const detail = getEvidenceReview(db, review.id)
     expect(detail?.title).toBe(HOSTILE.title)
     expect(detail?.answerSnapshot).toBe(HOSTILE.answer)
+    expect(detail?.reviewerLabel).toBe('QA')
+    expect(detail?.sources[0]?.documentTitle).toBe(SOURCES[0]!.documentTitle)
+    expect(detail?.items.map((i) => [i.id, i.decision, i.reviewerNote])).toEqual([[item!.id, 'supported', HOSTILE.note]])
+  })
+
+  it('a workspace written before EP-1 P4 (no freshness_ack_json) gains the acknowledge column on open', () => {
+    const db = openDatabase(legacyDbPath('epreviews-p3', (raw) => raw.exec(P3_EVIDENCE_REVIEWS)))
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('evidence_reviews') WHERE name = 'freshness_ack_json'").get()
+    ).toEqual({ n: 1 })
+    // Every freshness read selects the column, so a review on the upgraded table opens with an honest verdict.
+    const docId = seedSourceDocument(db, { title: 'contract.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
+      content: 'Claim. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'contract.pdf', documentId: docId }],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const review = seedEvidenceReview(db, { messageId })
+    expect(computeEvidenceReviewFreshness(db, review.id)).toMatchObject({ outdated: false, acknowledgedAt: null })
   })
 })
 
 describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile strings)', () => {
   it('review + items + links + exports round-trip byte-identically', () => {
-    const db = freshDb()
-    const { conversationId, messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { conversationId, messageId } = seedAssistantAnswer(db, { content: ANSWER })
 
     const review = createEvidenceReview(db, {
       messageId,
@@ -220,15 +249,40 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
     expect(detail?.answerSnapshot).toBe(HOSTILE.answer)
     expect(detail?.questionSnapshot).toBe(HOSTILE.question)
     expect(detail?.reviewerLabel).toBe('Dr. Käthe Müller-Lüdenscheidt')
-    expect(detail?.sources).toEqual(SOURCES.map((s) => expect.objectContaining({ key: s.key, documentTitle: s.documentTitle })))
-    expect(detail?.sources[0]).toMatchObject({
-      kind: 'direct_excerpt',
-      identity: 'resolved',
-      documentId: 'doc-abc',
-      snippet: SOURCES[0].snippet
+    expect(detail?.sources).toEqual([
+      { ...SOURCES[0], sourceKind: 'document', archiveTitle: null, packId: null, articlePath: null },
+      {
+        key: 'S2',
+        machineLabel: null,
+        kind: 'whole_document_provenance',
+        identity: 'unresolved',
+        documentId: null,
+        documentTitle: 'legacy-title-only.txt',
+        documentSha256: null,
+        mimeType: null,
+        pageNumber: null,
+        sectionLabel: null,
+        snippet: null,
+        sourceChunkId: null,
+        availabilityAtCreation: null,
+        sourceKind: 'document',
+        archiveTitle: null,
+        packId: null,
+        articlePath: null
+      }
+    ])
+    expect(detail?.coverageSnapshot).toMatchObject({ mode: 'relevance', chunksCovered: 3, chunksTotal: 12 }) // parseCoverage is chat.ts's
+    expect(detail?.generationSnapshot).toEqual({
+      generatedAt: '2026-07-18T09:00:00.000Z',
+      modelId: 'qwen3-4b-instruct-q4',
+      modelDisplayName: null,
+      skillId: null,
+      skillDisplayName: null,
+      appVersion: '0.1.52',
+      answerTruncated: false,
+      answerEndedEarly: null,
+      answerMode: 'relevance'
     })
-    expect(detail?.coverageSnapshot).toMatchObject({ mode: 'relevance', chunksCovered: 3, chunksTotal: 12 })
-    expect(detail?.generationSnapshot).toMatchObject({ modelId: 'qwen3-4b-instruct-q4', appVersion: '0.1.52' })
     expect(detail?.items).toHaveLength(3)
     expect(detail?.items.map((i) => i.ordinal)).toEqual([0, 1, 2])
     const roundPara = detail?.items.find((i) => i.id === para.id)
@@ -240,9 +294,11 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
     expect(detail?.items.find((i) => i.id === heading.id)?.decision).toBe('not_applicable')
     expect(detail?.exports).toHaveLength(1)
     expect(detail?.exports[0]).toMatchObject({
+      reviewId: review.id,
       format: 'html',
       schemaVersion: 1,
       fileName: 'Prüfbericht — Vertrag §5 🧾.html',
+      fileSha256: 'ab'.repeat(32),
       options: { includeNotes: true, includePaths: false }
     })
 
@@ -257,8 +313,8 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
     // Deterministic repro of the CI flake: two rows with IDENTICAL created_at and ids
     // chosen ADVERSE to insertion order — an `ORDER BY … id` tie-break would flip them;
     // the rowid tie-break must hold insertion order regardless of timing or uuid luck.
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 'Ordering',
@@ -304,8 +360,8 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
   })
 
   it('head patch: rename (D-6) + reviewer label (D-3) + note; empty title is ignored', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 'Initial',
@@ -323,8 +379,8 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
   })
 
   it('one ACTIVE review per message (service-enforced, not a constraint)', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     createEvidenceReview(db, { messageId, title: 't', answerSnapshot: 'a', questionSnapshot: 'q' })
     expect(() =>
       createEvidenceReview(db, { messageId, title: 't2', answerSnapshot: 'a', questionSnapshot: 'q' })
@@ -340,15 +396,28 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
   })
 
   it('creating a review for an unknown message throws (ids only in the error)', () => {
-    const db = freshDb()
-    expect(() =>
-      createEvidenceReview(db, { messageId: 'nope', title: 't', answerSnapshot: 'a', questionSnapshot: 'q' })
-    ).toThrow(/message not found/)
+    const db = freshWorkspaceDb('epreviews').db
+    const SENTINEL = 'SENTINEL-CONTENT-7f3a'
+    let err: unknown
+    try {
+      createEvidenceReview(db, {
+        messageId: 'nope',
+        title: `${SENTINEL} title`,
+        answerSnapshot: `${SENTINEL} answer`,
+        questionSnapshot: `${SENTINEL} question`
+      })
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/message not found/)
+    expect((err as Error).message).toContain('nope')
+    expect((err as Error).message).not.toContain(SENTINEL)
   })
 
   it('the D-6 "never unnamed" invariant holds at birth: an empty/whitespace title is refused, a padded one is trimmed', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     expect(() =>
       createEvidenceReview(db, { messageId, title: '   ', answerSnapshot: 'a', questionSnapshot: 'q' })
     ).toThrow(/title must not be empty/)
@@ -365,8 +434,8 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
   })
 
   it('write-side decision hygiene: a garbage PATCHED decision never enters storage', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, { messageId, title: 't', answerSnapshot: 'a', questionSnapshot: 'q' })
     const [item] = createEvidenceReviewItems(db, review.id, [
       { kind: 'block', blockKey: 'b0', blockKind: 'paragraph', textSnapshot: 'a', decision: 'supported' }
@@ -385,8 +454,8 @@ describe('round-trip through SQLite (plan §5 tests — Unicode/markdown/hostile
 
 describe('tolerant parsing of stored rows (malformed → safe defaults, never a throw)', () => {
   it('malformed snapshot JSON columns degrade to []/null and unknown enum values to honest defaults', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 't',
@@ -439,27 +508,9 @@ describe('tolerant parsing of stored rows (malformed → safe defaults, never a 
     expect(detail?.gate).toEqual({ eligible: false, requiredTotal: 1, decidedTotal: 0 })
   })
 
-  it('a partially valid source array keeps the valid elements only', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
-    const review = createEvidenceReview(db, {
-      messageId,
-      title: 't',
-      answerSnapshot: 'a',
-      questionSnapshot: 'q'
-    })
-    db.prepare('UPDATE evidence_reviews SET source_snapshot_json = ? WHERE id = ?').run(
-      JSON.stringify([{ key: 'S1', documentTitle: 'ok.pdf' }, 42, { documentTitle: 'no key' }]),
-      review.id
-    )
-    const detail = getEvidenceReview(db, review.id)
-    expect(detail?.sources).toHaveLength(1)
-    expect(detail?.sources[0]).toMatchObject({ key: 'S1', identity: 'unresolved', kind: 'whole_document_provenance' })
-  })
-
   it('an archive snapshot round-trips its locator through the stored row but never gains a document identity from it (PR #294 review H2/M11)', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 't',
@@ -545,31 +596,15 @@ describe('cascade behavior (plan §5 tests — through the REAL deleteConversati
     return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
   }
 
+  /** One review chain with exactly one item, one link and one export (H's `seedReviewChain`). */
   function seedFullReview(db: Db): { conversationId: string; reviewId: string } {
-    const { conversationId, messageId } = seedAnswer(db)
-    const review = createEvidenceReview(db, {
-      messageId,
-      title: 't',
-      answerSnapshot: 'a [S1]',
-      questionSnapshot: 'q',
-      sources: SOURCES
-    })
-    const [item] = createEvidenceReviewItems(db, review.id, [
-      { kind: 'block', blockKey: 'b0', blockKind: 'paragraph', textSnapshot: 'a [S1]' }
-    ])
-    setEvidenceLink(db, item.id, 'S1', { origin: 'answer_marker' })
-    recordEvidenceExport(db, {
-      reviewId: review.id,
-      format: 'html',
-      schemaVersion: 1,
-      fileName: 'f.html',
-      fileSha256: '00'.repeat(32)
-    })
-    return { conversationId, reviewId: review.id }
+    const { conversationId, messageId } = seedAssistantAnswer(db, { content: 'a [S1]' })
+    const { reviewId } = seedReviewChain(db, messageId, { sources: SOURCES })
+    return { conversationId, reviewId }
   }
 
   it('deleteConversation removes messages → reviews → items → links → exports; other conversations untouched', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const doomed = seedFullReview(db)
     const survivor = seedFullReview(db)
     expect(tableCount(db, 'evidence_reviews')).toBe(2)
@@ -593,7 +628,7 @@ describe('cascade behavior (plan §5 tests — through the REAL deleteConversati
   })
 
   it('deleteEvidenceReview cascades its own items/links/exports only', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const a = seedFullReview(db)
     const b = seedFullReview(db)
     expect(deleteEvidenceReview(db, a.reviewId)).toBe(true)
@@ -608,8 +643,8 @@ describe('cascade behavior (plan §5 tests — through the REAL deleteConversati
 
 describe('status derivation through the service (D-7 + spec §18.4)', () => {
   it('mark-ready is refused while a required block is undecided, flips when decided, reopen clears', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 't',
@@ -645,8 +680,8 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
   })
 
   it('a READY review refuses every ITEM-LEVEL mutation until reopened; head edits stay allowed (FIX-1)', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 't',
@@ -696,8 +731,8 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
   })
 
   it('a heading left not_reviewed never blocks readiness; a selection never blocks either', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 't',
@@ -715,8 +750,8 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
   })
 
   it('selection guards: unknown block key and out-of-range offsets are refused, never clamped', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 't',
@@ -734,8 +769,8 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
   })
 
   it('selection offsets inside a surrogate pair are refused — a lone surrogate never persists (F-15)', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db)
+    const db = freshWorkspaceDb('epreviews').db
+    const { messageId } = seedAssistantAnswer(db, { content: ANSWER })
     const review = createEvidenceReview(db, {
       messageId,
       title: 't',
@@ -767,7 +802,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
   const paged = (texts: string[]): Array<{ text: string; page: number }> => texts.map((text, i) => ({ text, page: i + 1 }))
 
   it('relevance retrieval citations now carry documentId + chunkId', async () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const embedder = new MockEmbedder()
     const docId = await seedEmbeddedDoc(db, embedder, 'science.pdf', paged([
       'photosynthesis converts sunlight into chemical energy in plants',
@@ -788,7 +823,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
   })
 
   it('whole-document read citations carry them too', async () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const embedder = new MockEmbedder()
     const docId = await seedEmbeddedDoc(db, embedder, 'doc.txt', paged([
       'first section text here',
@@ -801,7 +836,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
   })
 
   it('deep-index leaf provenance citations carry them too', async () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const embedder = new MockEmbedder()
     const docId = await seedEmbeddedDoc(db, embedder, 'tree.txt', paged([
       'leaf one text',
@@ -816,7 +851,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
   })
 
   it('chunk map-reduce rep citations (answerWholeDocFromChunks) carry them too', async () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const embedder = new MockEmbedder()
     const docId = await seedEmbeddedDoc(db, embedder, 'big.txt', paged([
       'alpha section body text here',
@@ -852,7 +887,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
   })
 
   it('compare-diff citations (retrieveCompareDiff) carry them too', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     // The rag-compare-diff-truncation seeding idiom: one chunk per doc; three shared 'keep'
     // words per changed token keep the changed fraction under the precise-diff usefulness bar.
     const now = new Date().toISOString()
@@ -879,7 +914,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
   })
 
   it('enriched citations round-trip through messages.citations_json', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const conv = createConversation(db, { title: 'c' })
     appendMessage(db, {
       conversationId: conv.id,
@@ -902,7 +937,7 @@ describe('citation enrichment (plan §5 item 2 — additive documentId/chunkId)'
   })
 
   it('LEGACY rows (no documentId) still parse byte-identically — and malformed identity fields drop the element, not the message', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epreviews').db
     const conv = createConversation(db, { title: 'c' })
     const now = new Date().toISOString()
     const legacyJson = JSON.stringify([

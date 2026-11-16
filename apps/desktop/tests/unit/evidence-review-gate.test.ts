@@ -4,10 +4,12 @@ import {
   parseGenerationSnapshot,
   parseSourceSnapshots
 } from '../../src/main/services/evidence-reviews'
-import type { AnswerBlockKind, ReviewDecision } from '../../src/shared/types'
+import { isReviewEligible } from '../../src/shared/evidence-review'
+import type { AnswerBlockKind, CoverageInfo, ReviewDecision } from '../../src/shared/types'
 
 // EP-1 Phase 0 (plan §5) — the D-7 ready-gate derivation matrix + the pure tolerant
-// snapshot parsers. Storage-level behavior lives in tests/integration/evidence-reviews.test.ts.
+// snapshot parsers + the shared spec §9.1 eligibility predicate (`isReviewEligible`).
+// Storage-level behavior lives in tests/integration/evidence-reviews.test.ts.
 
 function item(
   kind: 'block' | 'selection',
@@ -181,6 +183,20 @@ describe('parseGenerationSnapshot (tolerant — absent = "Unavailable", never in
 
   it('an unknown answerMode drops to null (never a guessed mode)', () => {
     expect(parseGenerationSnapshot(JSON.stringify({ answerMode: 'psychic' }))?.answerMode).toBeNull()
+  })
+})
+
+describe('isReviewEligible (spec §9.1 — the shared entry-point rule)', () => {
+  it('assistant + citations, assistant + coverage, or assistant in a documents conversation', () => {
+    const citations = [{ label: 'S1', sourceTitle: 'A.pdf' }]
+    const coverage: CoverageInfo = { mode: 'tree', chunksCovered: 1, chunksTotal: 1 }
+    expect(isReviewEligible({ role: 'assistant', citations })).toBe(true)
+    expect(isReviewEligible({ role: 'assistant', coverage })).toBe(true)
+    expect(isReviewEligible({ role: 'assistant' }, { mode: 'documents' })).toBe(true)
+    // Not eligible: user turns, plain chat answers without document grounding.
+    expect(isReviewEligible({ role: 'user', citations })).toBe(false)
+    expect(isReviewEligible({ role: 'assistant' })).toBe(false)
+    expect(isReviewEligible({ role: 'assistant', citations: [] }, { mode: 'chat' })).toBe(false)
   })
 })
 

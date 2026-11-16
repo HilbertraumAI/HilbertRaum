@@ -1,9 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import {
   buildEvidenceSourceSnapshots,
@@ -11,72 +6,15 @@ import {
   sourceKindForMode
 } from '../../src/main/services/evidence-pack/snapshot'
 import { deleteEvidenceReview } from '../../src/main/services/evidence-reviews'
-import type { Citation, CoverageInfo, EndedEarly } from '../../src/shared/types'
+import type { CoverageInfo, EndedEarly } from '../../src/shared/types'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import { seedAssistantAnswer, seedSourceDocument } from '../helpers/evidence-fixtures'
 
 // EP-1 Phase 1 (plan §6.3) — the snapshot builder: a complete, honest, deterministic draft
 // review per answer class, from PERSISTED data only. Classes: relevance (auto-links land),
 // whole-doc tree (ZERO auto-links — spec §13.3 hard rule), extract, legacy no-citation,
 // unresolved-title legacy, deleted-source. Everything runs against a real SQLite workspace;
 // documents are seeded as rows (ingestion is out of scope here).
-
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-epsnap-')), 'test.sqlite'))
-}
-
-function seedDocument(
-  db: Db,
-  opts: { title: string; sha256?: string; mime?: string }
-): string {
-  const id = randomUUID()
-  const now = new Date().toISOString()
-  db.prepare(
-    `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'indexed', ?, ?)`
-  ).run(id, opts.title, opts.mime ?? 'application/pdf', opts.sha256 ?? 'ab'.repeat(32), now, now)
-  return id
-}
-
-interface SeededAnswer {
-  conversationId: string
-  messageId: string
-}
-
-function seedAnswer(
-  db: Db,
-  opts: {
-    content: string
-    citations?: Citation[] | null
-    coverage?: CoverageInfo | null
-    question?: string | null
-    title?: string
-    modelId?: string | null
-    truncated?: boolean
-    endedEarly?: EndedEarly
-  }
-): SeededAnswer {
-  const conv = createConversation(db, {
-    title: opts.title ?? 'Contract questions',
-    // `null` must pass through as an explicit "no model recorded" (?? would swallow it).
-    modelId: opts.modelId !== undefined ? opts.modelId : 'test-model-q4'
-  })
-  if (opts.question !== null) {
-    appendMessage(db, {
-      conversationId: conv.id,
-      role: 'user',
-      content: opts.question ?? 'What about termination?'
-    })
-  }
-  const msg = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
-    content: opts.content,
-    citations: opts.citations ?? null,
-    coverage: opts.coverage ?? null,
-    truncated: opts.truncated,
-    endedEarly: opts.endedEarly
-  })
-  return { conversationId: conv.id, messageId: msg.id }
-}
 
 const RELEVANCE_ANSWER = [
   '# Findings',
@@ -90,18 +28,23 @@ const RELEVANCE_ANSWER = [
 
 describe('createEvidenceReviewFromMessage — relevance answers (auto-links land)', () => {
   it('builds resolved sources, block items with kinds, heading N/A default, and answer_marker links', () => {
-    const db = freshDb()
-    const docA = seedDocument(db, { title: 'Vertrag.pdf', sha256: 'aa'.repeat(32), mime: 'application/pdf' })
-    const docB = seedDocument(db, { title: 'Anhang.pdf', sha256: 'bb'.repeat(32), mime: 'application/pdf' })
-    const { conversationId, messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const docA = seedSourceDocument(db, { title: 'Vertrag.pdf', sha256: 'aa'.repeat(32), mime: 'application/pdf' })
+    const docB = seedSourceDocument(db, { title: 'Anhang.pdf', sha256: 'bb'.repeat(32), mime: 'application/pdf' })
+    const { conversationId, messageId, questionId } = seedAssistantAnswer(db, {
       content: RELEVANCE_ANSWER,
       citations: [
         { label: 'S1', sourceTitle: 'Vertrag.pdf', documentId: docA, chunkId: 'chunk-1', pageNumber: 5, section: '§5', snippet: '30 Tage' },
         { label: 'S2', sourceTitle: 'Anhang.pdf', documentId: docB, chunkId: 'chunk-2', snippet: 'fixed fee' }
       ],
       coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 10 },
-      truncated: true
+      truncated: true,
+      title: 'Contract questions',
+      question: 'What about termination?',
+      modelId: 'test-model-q4'
     })
+    // A fixed answer time, so the generation snapshot is pinned to the ANSWER's own stamp.
+    db.prepare('UPDATE messages SET created_at = ? WHERE id = ?').run('2026-01-02T03:04:05.000Z', messageId)
 
     const detail = createEvidenceReviewFromMessage(db, messageId, {
       appVersion: '9.9.9-test',
@@ -115,7 +58,7 @@ describe('createEvidenceReviewFromMessage — relevance answers (auto-links land
     expect(detail.title).toBe('Contract questions')
     expect(detail.answerSnapshot).toBe(RELEVANCE_ANSWER)
     expect(detail.questionSnapshot).toBe('What about termination?')
-    expect(detail.questionMessageId).toBeTruthy()
+    expect(detail.questionMessageId).toBe(questionId)
     expect(detail.coverageSnapshot).toMatchObject({ mode: 'relevance', chunksCovered: 2, chunksTotal: 10 })
 
     // Generation snapshot (plan §1.3): synthesized, never invented.
@@ -126,7 +69,7 @@ describe('createEvidenceReviewFromMessage — relevance answers (auto-links land
       answerTruncated: true,
       answerMode: 'relevance'
     })
-    expect(detail.generationSnapshot?.generatedAt).toBeTruthy()
+    expect(detail.generationSnapshot?.generatedAt).toBe('2026-01-02T03:04:05.000Z')
 
     // Sources: resolved by documentId, direct excerpts with machine labels + doc hashes.
     expect(detail.sources.map((s) => s.key)).toEqual(['S1', 'S2'])
@@ -165,9 +108,9 @@ describe('createEvidenceReviewFromMessage — relevance answers (auto-links land
   })
 
   it('is deterministic: recreating the review yields identical block keys and links', () => {
-    const db = freshDb()
-    const doc = seedDocument(db, { title: 'Doc.pdf' })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const doc = seedSourceDocument(db, { title: 'Doc.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
       content: RELEVANCE_ANSWER,
       citations: [{ label: 'S1', sourceTitle: 'Doc.pdf', documentId: doc }],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 4 }
@@ -180,22 +123,15 @@ describe('createEvidenceReviewFromMessage — relevance answers (auto-links land
     expect(second.items.map((i) => i.blockKey)).toEqual(firstKeys)
     expect(second.items.map((i) => i.links)).toEqual(firstLinks)
   })
-
-  it('a second create for the same message throws (one active review per message, ids-only error)', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db, { content: 'Answer. [S1]' })
-    createEvidenceReviewFromMessage(db, messageId)
-    expect(() => createEvidenceReviewFromMessage(db, messageId)).toThrow(messageId)
-  })
 })
 
 describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
   it("mode:'tree' → whole_document_provenance sources, NULL machine labels, ZERO auto-links", () => {
-    const db = freshDb()
-    const doc = seedDocument(db, { title: 'Report.pdf', sha256: 'cc'.repeat(32) })
+    const db = freshWorkspaceDb('epsnap').db
+    const doc = seedSourceDocument(db, { title: 'Report.pdf', sha256: 'cc'.repeat(32) })
     // The answer TEXT deliberately contains a literal [S1]: even then, a whole-doc answer
     // must get zero auto-links — provenance is never a citation (rag-design §14.4 M2).
-    const { messageId } = seedAnswer(db, {
+    const { messageId } = seedAssistantAnswer(db, {
       content: '# Summary\n\nThe report concludes X. [S1]\n\n- point one\n- point two',
       citations: [
         { label: 'S1', sourceTitle: 'Report.pdf', documentId: doc, chunkId: 'leaf-1', snippet: 'leaf a' },
@@ -218,23 +154,25 @@ describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
   })
 
   it("mode:'capped' also maps to whole_document_provenance with zero links", () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Partial summary. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'Nowhere.pdf' }],
       coverage: { mode: 'capped', chunksCovered: 10, chunksTotal: 80, truncated: true }
     })
     const detail = createEvidenceReviewFromMessage(db, messageId)
     expect(detail.sources[0]!.kind).toBe('whole_document_provenance')
+    expect(detail.items).toHaveLength(1)
+    expect(detail.sources[0]!.machineLabel).toBeNull()
     expect(detail.items.every((i) => i.links.length === 0)).toBe(true)
   })
 
   // #643: a document read whole in ONE grounded turn showed the model every section under its [Sn]
   // label, so its citations are the relevance contract — labelled, and the answer's markers link.
   it("mode:'capped' + labelledExcerpts → direct_excerpt sources, machine labels, marker auto-links", () => {
-    const db = freshDb()
-    const doc = seedDocument(db, { title: 'Letter.pdf', sha256: 'dd'.repeat(32) })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const doc = seedSourceDocument(db, { title: 'Letter.pdf', sha256: 'dd'.repeat(32) })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'The letter names the patient. [S2]',
       citations: [
         { label: 'S1', sourceTitle: 'Letter.pdf', documentId: doc, chunkId: 'c1', snippet: 'first' },
@@ -254,15 +192,16 @@ describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
   })
 
   it("mode:'extract' → structured_record sources, zero auto-links", () => {
-    const db = freshDb()
-    const doc = seedDocument(db, { title: 'Invoices.pdf' })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const doc = seedSourceDocument(db, { title: 'Invoices.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Found 3 amounts. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'Invoices.pdf', documentId: doc, chunkId: 'c1' }],
       coverage: { mode: 'extract', chunksCovered: 12, chunksTotal: 12 }
     })
     const detail = createEvidenceReviewFromMessage(db, messageId)
     expect(detail.sources[0]!.kind).toBe('structured_record')
+    expect(detail.items).toHaveLength(1)
     expect(detail.items.every((i) => i.links.length === 0)).toBe(true)
     expect(detail.generationSnapshot?.answerMode).toBe('extract')
   })
@@ -285,9 +224,9 @@ describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
   })
 
   it("FIX-1: an unknown PRESENT mode (e.g. 'hybrid' from a newer app) → weakest kind, no labels, ZERO auto-links", () => {
-    const db = freshDb()
-    const doc = seedDocument(db, { title: 'Future.pdf' })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const doc = seedSourceDocument(db, { title: 'Future.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'A future-mode answer. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'Future.pdf', documentId: doc, snippet: 'kept' }],
       coverage: { mode: 'hybrid', chunksCovered: 1, chunksTotal: 1 } as unknown as CoverageInfo
@@ -309,9 +248,9 @@ describe('whole-document and extract answers (spec §13.3 hard rule)', () => {
 
 describe('atomic creation (Phase-1 review FIX-2)', () => {
   it('an injected mid-build failure rolls back EVERY row across all four tables and surfaces the ORIGINAL error', () => {
-    const db = freshDb()
-    const doc = seedDocument(db, { title: 'Doc.pdf' })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const doc = seedSourceDocument(db, { title: 'Doc.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Claim. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'Doc.pdf', documentId: doc }],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 2 }
@@ -345,9 +284,9 @@ describe('atomic creation (Phase-1 review FIX-2)', () => {
 
 describe('display-parity auto-links across block boundaries (Phase-1 review FIX-3, end-to-end)', () => {
   it('repro (a): the [S1] the chat UI renders as literal code mints NO answer_marker link', () => {
-    const db = freshDb()
-    const doc = seedDocument(db, { title: 'A.pdf' })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const doc = seedSourceDocument(db, { title: 'A.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'To fence, type ``` in markdown.\n\nThe clause requires notice. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'A.pdf', documentId: doc }],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 2 }
@@ -358,10 +297,10 @@ describe('display-parity auto-links across block boundaries (Phase-1 review FIX-
   })
 
   it('repro (b): the [S2] the chat UI renders as a citation keeps its link; the in-code [S1] does not', () => {
-    const db = freshDb()
-    const docA = seedDocument(db, { title: 'A.pdf' })
-    const docB = seedDocument(db, { title: 'B.pdf' })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const docA = seedSourceDocument(db, { title: 'A.pdf' })
+    const docB = seedSourceDocument(db, { title: 'B.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'start ``` code [S1]\n\nstill code ``` end [S2]',
       citations: [
         { label: 'S1', sourceTitle: 'A.pdf', documentId: docA },
@@ -382,16 +321,16 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
     (cause) => {
       // A model stop, the Stop button, or a lock / quit cut the answer; the partial was kept and marked.
       // Its review must say so: the pack would otherwise state "No output truncation was recorded".
-      const db = freshDb()
-      const { messageId } = seedAnswer(db, { content: 'The contract ends wh', endedEarly: cause })
+      const db = freshWorkspaceDb('epsnap').db
+      const { messageId } = seedAssistantAnswer(db, { content: 'The contract ends wh', endedEarly: cause })
       const detail = createEvidenceReviewFromMessage(db, messageId)
       expect(detail.generationSnapshot).toMatchObject({ answerTruncated: null, answerEndedEarly: cause })
     }
   )
 
   it('a no-citation legacy answer reviews with zero sources, zero links, honest generation gaps', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'A plain grounded-sounding answer with no persisted sources.',
       citations: null,
       coverage: null,
@@ -413,11 +352,11 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
   })
 
   it('legacy title-resolution: a unique title match resolves; zero or multiple matches stay unresolved', () => {
-    const db = freshDb()
-    seedDocument(db, { title: 'Unique.pdf', sha256: 'dd'.repeat(32), mime: 'text/plain' })
-    seedDocument(db, { title: 'Twin.pdf' })
-    seedDocument(db, { title: 'Twin.pdf' })
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const uniqueId = seedSourceDocument(db, { title: 'Unique.pdf', sha256: 'dd'.repeat(32), mime: 'text/plain' })
+    seedSourceDocument(db, { title: 'Twin.pdf' })
+    seedSourceDocument(db, { title: 'Twin.pdf' })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Cites three ways. [S1] [S2] [S3]',
       citations: [
         { label: 'S1', sourceTitle: 'Unique.pdf', snippet: 'unique snippet' },
@@ -435,7 +374,7 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
       documentSha256: 'dd'.repeat(32),
       mimeType: 'text/plain'
     })
-    expect(unique!.documentId).toBeTruthy()
+    expect(unique!.documentId).toBe(uniqueId)
     // >1 exact title match: NEVER guess which one was meant.
     expect(twin).toMatchObject({ identity: 'unresolved', documentId: null, documentSha256: null })
     expect(twin!.availabilityAtCreation).toBeNull() // unresolved ≠ missing
@@ -450,8 +389,8 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
   })
 
   it('a deleted source (documentId no longer present) is RESOLVED identity + missing availability', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db, {
+    const db = freshWorkspaceDb('epsnap').db
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Cites a shredded doc. [S1]',
       citations: [
         { label: 'S1', sourceTitle: 'Shredded.pdf', documentId: 'doc-gone', chunkId: 'c9', snippet: 'kept snippet' }
@@ -471,16 +410,16 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
   })
 
   it('an archive citation never resolves to a same-titled document and keeps its locator (PR #294 review H2/M11)', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epsnap').db
     // A library document whose title IS the cited article's title: the legacy title branch
     // would otherwise hand the archive source this document's id, sha and availability.
-    seedDocument(db, { title: 'Treibhausgas', sha256: 'ee'.repeat(32), mime: 'application/pdf' })
-    const docId = seedDocument(db, {
+    seedSourceDocument(db, { title: 'Treibhausgas', sha256: 'ee'.repeat(32), mime: 'application/pdf' })
+    const docId = seedSourceDocument(db, {
       title: 'Klimabericht.pdf',
       sha256: 'ff'.repeat(32),
       mime: 'application/pdf'
     })
-    const { messageId } = seedAnswer(db, {
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Aus dem Archiv. [S1]\n\nAus der Bibliothek. [S2]',
       citations: [
         {
@@ -543,41 +482,61 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
   })
 
   it('an empty answer yields an item-less review (nothing to decide; gate vacuously eligible)', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db, { content: '' })
+    const db = freshWorkspaceDb('epsnap').db
+    const { messageId } = seedAssistantAnswer(db, { content: '' })
     const detail = createEvidenceReviewFromMessage(db, messageId)
     expect(detail.items).toEqual([])
     expect(detail.gate).toEqual({ eligible: true, requiredTotal: 0, decidedTotal: 0 })
   })
 
   it('falls back to the persist-canonical default title when the conversation title trims empty', () => {
-    const db = freshDb()
-    const { conversationId, messageId } = seedAnswer(db, { content: 'Answer.' })
+    const db = freshWorkspaceDb('epsnap').db
+    const { conversationId, messageId } = seedAssistantAnswer(db, { content: 'Answer.' })
     db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run('   ', conversationId)
     const detail = createEvidenceReviewFromMessage(db, messageId)
     expect(detail.title).toBe('Evidence review')
   })
 
   it('a first-turn answer with no preceding user message snapshots an empty question, honestly', () => {
-    const db = freshDb()
-    const { messageId } = seedAnswer(db, { content: 'Orphan answer.', question: null })
+    const db = freshWorkspaceDb('epsnap').db
+    const { messageId } = seedAssistantAnswer(db, { content: 'Orphan answer.', question: null })
     const detail = createEvidenceReviewFromMessage(db, messageId)
     expect(detail.questionMessageId).toBeNull()
     expect(detail.questionSnapshot).toBe('')
   })
 
+  it('the question is the NEAREST PRECEDING user turn: an earlier answer never takes a later question', () => {
+    const db = freshWorkspaceDb('epsnap').db
+    const conv = createConversation(db, { title: 'Two turns' })
+    const q1 = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'First question?' })
+    const a1 = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'First answer.' })
+    const q2 = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Second question?' })
+    const a2 = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'Second answer.' })
+    const first = createEvidenceReviewFromMessage(db, a1.id)
+    expect([first.questionMessageId, first.questionSnapshot]).toEqual([q1.id, 'First question?'])
+    const second = createEvidenceReviewFromMessage(db, a2.id)
+    expect([second.questionMessageId, second.questionSnapshot]).toEqual([q2.id, 'Second question?'])
+  })
+
   it('refuses a non-assistant message and an unknown message with ids-only errors', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epsnap').db
     const conv = createConversation(db, { title: 'T' })
-    const user = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Question?' })
-    expect(() => createEvidenceReviewFromMessage(db, user.id)).toThrow(user.id)
+    const user = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'SENTINEL-QUESTION-7f3a' })
+    let err: unknown
+    try {
+      createEvidenceReviewFromMessage(db, user.id)
+    } catch (e) {
+      err = e
+    }
+    expect((err as Error).message).toContain(user.id)
+    expect((err as Error).message).not.toContain('SENTINEL-QUESTION-7f3a')
     expect(() => createEvidenceReviewFromMessage(db, 'missing-id')).toThrow('missing-id')
   })
 })
 
 describe('buildEvidenceSourceSnapshots — key uniqueness (defensive)', () => {
   it('uniquifies duplicate citation labels so links can never merge two sources', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epsnap').db
     const sources = buildEvidenceSourceSnapshots(
       db,
       [
