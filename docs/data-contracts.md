@@ -400,7 +400,7 @@ both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invali
 502 `runtime_unresponsive` · 503 `model_starting`/`model_not_loaded`/`workspace_locked`/
 `server_stopped` (`model_starting` from the start REQUEST on, its weight check included — #599). **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
 `{"error":{type:'server_error', code:'preempted_by_user'}}` frame, stream closes **without**
-`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. **A deliberate model
+`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way: for the active request, for the one waiting in the queue, and for a request that arrives while a stop, a disable or a re-port is pending or running (#859). **A deliberate model
 stop or switch (#600)** ends the active request first with the model gate's own code — `model_not_loaded`
 after a stop, `model_starting` (+ Retry-After) after a switch or a stop the app follows with a start
 (`stop({ startFollows })`: an engine update, the demo → real engine restart); 503 before any bytes, the

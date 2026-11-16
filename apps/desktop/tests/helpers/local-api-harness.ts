@@ -78,6 +78,9 @@ export interface LocalApiHarness {
   setDocTask: (busy: boolean) => void
   /** Rotate the key the server validates against (the regenerate flow). */
   setToken: (token: string) => void
+  /** The `localApiPort` the server's `getSettings` reports from now on (0, the default, binds an ephemeral port).
+   *  Set it to `port` to reach `applySettings`'s same-port path, or to another free port for a re-port. */
+  setSettingsPort: (port: number) => void
   /** The answer of `admitsWork()` from now on (false = the workspace locked / a lock under way). */
   setAdmitsWork: (admits: boolean) => void
   /** How many `admitsWork()` checks ran: each request's `tryAdmit` asks once, synchronously, before it parks. */
@@ -142,13 +145,14 @@ export async function localApiHarness(opts: LocalApiHarnessOptions = {}): Promis
   let admitChecks = 0
   let tokenCalls = 0
   let liveToken = HARNESS_TOKEN
+  let settingsPort = 0
   const logged: string[] = []
   const record = (msg: string, meta?: unknown): void => {
     logged.push(`${msg} ${JSON.stringify(meta ?? null)}`)
   }
   const server = new LocalApiServer(
     localApiDeps(mgr, {
-      getSettings: () => ({ localApiPort: 0, localApiTokenRequired: opts.tokenRequired ?? true }),
+      getSettings: () => ({ localApiPort: settingsPort, localApiTokenRequired: opts.tokenRequired ?? true }),
       getToken: () => {
         tokenCalls++
         return liveToken
@@ -183,6 +187,7 @@ export async function localApiHarness(opts: LocalApiHarnessOptions = {}): Promis
     lastOptions: () => optionsSeen[optionsSeen.length - 1],
     setDocTask: (busy) => (docTask = busy),
     setToken: (token) => (liveToken = token),
+    setSettingsPort: (p) => (settingsPort = p),
     setAdmitsWork: (value) => (admits = value),
     admitChecks: () => admitChecks,
     tokenCalls: () => tokenCalls,
@@ -217,4 +222,31 @@ export function rawHttp(port: number, request: string, holdMs = 3_000): Promise<
     timer = setTimeout(done, hangBudgetMs(holdMs))
     timer.unref?.()
   })
+}
+
+/** Bind `host:port` (0 = ephemeral) and release it again: the port it got, or the bind's error code. */
+async function probeBind(host: string, port: number): Promise<number | string> {
+  const probe = net.createServer()
+  const bound = await new Promise<number | string>((resolve) => {
+    probe.once('error', (err: NodeJS.ErrnoException) => resolve(err.code ?? String(err)))
+    probe.listen(port, host, () => resolve((probe.address() as net.AddressInfo).port))
+  })
+  if (typeof bound === 'number') await new Promise<void>((resolve) => probe.close(() => resolve()))
+  return bound
+}
+
+/**
+ * A port nothing listens on right now on EITHER loopback the server binds: 127.0.0.1 from the OS's ephemeral
+ * allocator, then the same port on ::1, where a taken port is fatal to the server's start (PortInUseError) exactly as
+ * on v4. Any other ::1 bind error (a host without IPv6 loopback) is the one the server degrades to v4-only on, so the
+ * port is good.
+ */
+export async function freePort(): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const port = await probeBind('127.0.0.1', 0)
+    if (typeof port !== 'number') throw new Error(`no free 127.0.0.1 port: ${port}`)
+    const v6 = await probeBind('::1', port)
+    if (v6 !== 'EADDRINUSE') return port
+  }
+  throw new Error('no port free on both 127.0.0.1 and ::1 in 20 tries')
 }

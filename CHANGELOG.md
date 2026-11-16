@@ -68,6 +68,12 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The local API reports a stop as a stop.** A request still streaming when the endpoint stopped
+  could end with `preempted_by_user` and a "retry shortly" hint instead of `server_stopped`: when
+  a settings change was still being applied at the moment of the lock or quit, and always when the
+  endpoint moved to another port. A request waiting in the queue got 429 `busy` with a
+  `Retry-After`, and a new request arriving during the stop was told the workspace was locked, or
+  was let in only to be cut off. All of these now get `server_stopped` (#859).
 - **On macOS and Linux, a lock that fails because the workspace's working file disappeared no
   longer empties your workspace.** If something outside HilbertRaum deleted the open working
   copy of an encrypted workspace, the lock was refused correctly, but trying again, or quitting

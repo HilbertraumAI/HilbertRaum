@@ -5,7 +5,7 @@ import { RuntimeManager } from '../../src/main/services/runtime'
 import { LocalApiServer, PortInUseError } from '../../src/main/services/local-api/server'
 import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { until, within } from '../helpers/hang-budget'
-import { authed, localApiDeps, localApiHarness, rawHttp, type LocalApiHarness } from '../helpers/local-api-harness'
+import { authed, freePort, localApiDeps, localApiHarness, rawHttp, type LocalApiHarness } from '../helpers/local-api-harness'
 
 // LocalApiServer integration pins (local-api wave P3): a REAL listener on an ephemeral
 // port, driven over real HTTP, against a real RuntimeManager (gated fake runtimes; the shared
@@ -551,6 +551,126 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
     expect(last.error?.code).toBe('server_stopped')
     await expect(fetch(`${h.base}/v1/models`, { headers: authed(h.token) })).rejects.toThrow()
+  })
+
+  it('a stop queued behind a same-port settings re-apply still ends the running stream with server_stopped (#859)', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    h.setSettingsPort(h.port) // the re-apply below takes the same-port path, which used to clear `stopping`
+    const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    h.sources[0].push('some ')
+    const res = await resPromise
+    // A Settings save just before Lock now: the re-apply is queued first, then the lock's stop.
+    void h.server.applySettings({ shouldRun: true })
+    await h.server.stop()
+    const payloads = ssePayloads(await res.text())
+    const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
+    expect(last.error?.code).toBe('server_stopped')
+    expect(h.server.status().running).toBe(false)
+  })
+
+  it('a request queued behind a running one is refused with 503 server_stopped when the endpoint stops, not 429 busy (#859)', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const running = post(h, { messages: [{ role: 'user', content: 'x' }] })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    const queued = post(h, { messages: [{ role: 'user', content: 'y' }] })
+    await until(() => h.admitChecks() === 2, 'the second request parking in the queue')
+    await h.server.stop()
+    for (const res of [await running, await queued]) {
+      expect(res.status).toBe(503)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('server_stopped')
+      expect(res.headers.has('retry-after')).toBe(false)
+    }
+  })
+
+  // #859: the admission gate. The request's headers are in (its key was checked) but its body is still
+  // uploading when the stop lands, so it reaches admission DURING the teardown: the gate must answer it
+  // 503 server_stopped. Before, a plain stop answered workspace_locked (the gate fed the lock check), and
+  // a same-port re-apply queued first, or a re-port, let it in for the close to cut off.
+  it.each([
+    ['a stop', async (h: LocalApiHarness) => void h.server.stop()],
+    [
+      'a same-port settings re-apply, then a stop',
+      async (h: LocalApiHarness) => {
+        h.setSettingsPort(h.port)
+        void h.server.applySettings({ shouldRun: true })
+        void h.server.stop()
+      }
+    ],
+    [
+      'a re-port',
+      async (h: LocalApiHarness) => {
+        h.setSettingsPort(await freePort())
+        return h.server.applySettings({ shouldRun: true })
+      }
+    ]
+  ])('a request that reaches admission during %s gets 503 server_stopped (#859)', async (_label, trigger) => {
+    const h = await localApiHarness()
+    let finishBody!: () => void
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"messages":[{"role":"user",'))
+        finishBody = () => {
+          controller.enqueue(new TextEncoder().encode('"content":"x"}]}'))
+          controller.close()
+        }
+      }
+    })
+    const resPromise = fetch(`${h.base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: authed(h.token),
+      body,
+      duplex: 'half'
+    } as RequestInit)
+    await until(() => h.tokenCalls() === 1, 'the server checking the key on the headers')
+    const settled = trigger(h)
+    finishBody()
+    const res = await resPromise
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('server_stopped')
+    await settled // a re-port's applySettings must not reject (a lost port would)
+  })
+
+  // #859: the other half of the gate. A bookkeeping slip in the stop-request count would leave a live
+  // listener answering every request 503 server_stopped: after each way the gate closes, it must open again.
+  it('the gate opens again: a start after a stop, a start after a stop queued behind a re-apply, and a re-port all serve (#859)', async () => {
+    const h = await localApiHarness()
+    const complete = async (): Promise<number> => {
+      const res = await fetch(`http://127.0.0.1:${h.server.status().port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: authed(h.token),
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] })
+      })
+      await res.text()
+      return res.status
+    }
+    await h.server.stop()
+    await h.server.start()
+    expect(await complete()).toBe(200)
+    h.setSettingsPort(h.server.status().port!)
+    void h.server.applySettings({ shouldRun: true })
+    await h.server.stop()
+    await h.server.start()
+    h.setSettingsPort(0)
+    expect(await complete()).toBe(200)
+    h.setSettingsPort(await freePort())
+    await h.server.applySettings({ shouldRun: true })
+    expect(await complete()).toBe(200)
+  })
+
+  it('a re-port ends the streams on the old port with server_stopped, not a "retry shortly" preemption (#859)', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const nextPort = await freePort() // free on both loopbacks the server binds
+    const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    h.sources[0].push('some ')
+    const res = await resPromise
+    h.setSettingsPort(nextPort)
+    await h.server.applySettings({ shouldRun: true })
+    const payloads = ssePayloads(await res.text())
+    const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
+    expect(last.error?.code).toBe('server_stopped')
+    expect(h.server.status()).toMatchObject({ running: true, port: nextPort })
   })
 
   it('413 via COUNTED bytes on a chunked body (no Content-Length to trust)', async () => {
