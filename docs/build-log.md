@@ -27,6 +27,13 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-16 — the 2026-11-16 vault + local API test audit entry retired verbatim (PR #857 merged)
+
+Retired from `BUILD_STATE.md` on 2026-11-16, when PR #857 merged as `03d5a180`; a short outcome entry with the open
+follow-ups replaces it there. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-11-16 — **Vault + local API test audit: PR #857 open; follow-ups #858 (workspace hardening), #859 (local API stop label), #860 (coverage gaps), #861 (doc drift).** The 31 vault and local API suites go from 383 to 358 tests in 30 files (`workspace-init` folded into the workspace unit suite), and `ipc-lock-coverage` gains a locking pass (16 → 30 tests) that drives the lock latch for the 14 IPC families in its module list. Assertions that passed on broken code are repaired (no test pinned the local API to loopback; the encryption-required veto was never isolated; the settings write gate read back through a second normaliser), the shared setup moved to `tests/helpers/` (vault-fixtures, local-api-harness), 19 `as never` casts went (ratchet 32 → 13), and #832 is done for five more suites. The audit found #853 (fixed by PR #854)._
+
 ## 2026-11-16 — the 2026-11-16 evidence review + export test audit entry retired verbatim (PR #836 merged)
 
 Retired from `BUILD_STATE.md` on 2026-11-16, when PR #836 merged as `c9017830`; a short outcome entry with the open
