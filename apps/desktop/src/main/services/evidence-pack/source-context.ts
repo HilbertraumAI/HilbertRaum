@@ -36,7 +36,7 @@ import { compareStoredHashes } from './freshness'
 // before the join — see `sharedRunLength` (AUD-08).
 
 /** Max stored-text characters returned on each side of the located excerpt. */
-export const CONTEXT_WINDOW_CHARS = 1200
+const CONTEXT_WINDOW_CHARS = 1200
 
 interface ChunkRow {
   id: string

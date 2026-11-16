@@ -1,16 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { createEvidenceReviewFromMessage } from '../../src/main/services/evidence-pack/snapshot'
+import type { Db } from '../../src/main/services/db'
 import { getEvidenceSourceContext } from '../../src/main/services/evidence-pack/source-context'
 import { chunkSegments, type DocumentChunk } from '../../src/main/services/ingestion/chunker'
 import { truncateSnippet } from '../../src/main/services/rag'
 import type { Citation } from '../../src/shared/types'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import {
+  seedAssistantAnswer,
+  seedEvidenceChunk,
+  seedEvidenceReview,
+  seedSourceDocument
+} from '../helpers/evidence-fixtures'
 
 // AUD-08 — "Open source in context" must not print the chunker's overlap twice.
 //
@@ -26,59 +27,13 @@ import type { Citation } from '../../src/shared/types'
 // they assert on is the one production actually produces, and they assert on the DUPLICATED
 // SUBSTRING itself, never merely on a length.
 
-function freshDb(): Db {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-epctx-'))
-  return openDatabase(join(root, 'test.sqlite'))
-}
-
-function seedDocument(db: Db, title: string): string {
-  const id = randomUUID()
-  const now = new Date().toISOString()
-  db.prepare(
-    `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-     VALUES (?, ?, 'application/pdf', ?, 'indexed', ?, ?)`
-  ).run(id, title, 'ab'.repeat(32), now, now)
-  return id
-}
-
-function seedChunk(
-  db: Db,
-  opts: {
-    documentId: string
-    index: number
-    text: string
-    page?: number | null
-    section?: string | null
-  }
-): string {
-  const id = randomUUID()
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    opts.documentId,
-    opts.index,
-    opts.text,
-    `S${opts.index + 1}`,
-    opts.page ?? null,
-    opts.section ?? null,
-    new Date().toISOString()
-  )
-  return id
-}
-
 function seedReviewForCitation(db: Db, citation: Citation): string {
-  const conv = createConversation(db, { title: 'Overlap chat', modelId: 'm1' })
-  appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Question?' })
-  const msg = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
+  const answer = seedAssistantAnswer(db, {
     content: 'Claim. [S1]',
     citations: [citation],
     coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 3 }
   })
-  return createEvidenceReviewFromMessage(db, msg.id, {}).id
+  return seedEvidenceReview(db, answer).id
 }
 
 /**
@@ -143,9 +98,9 @@ function contextForChunkedDocument(
   located: number,
   labels: { page: number | null; section: string | null }
 ): ReturnType<typeof getEvidenceSourceContext> {
-  const docId = seedDocument(db, 'contract.pdf')
+  const docId = seedSourceDocument(db, { title: 'contract.pdf' })
   const ids = chunks.map((c) =>
-    seedChunk(db, {
+    seedEvidenceChunk(db, {
       documentId: docId,
       index: c.chunkIndex,
       text: c.text,
@@ -165,7 +120,7 @@ function contextForChunkedDocument(
 
 describe('source-in-context — chunk overlap is stripped on join (AUD-08)', () => {
   it('the shipped 500/80 chunker: the run shared with the previous chunk appears ONCE', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epctx').db
     // Production configuration — no options passed, so CHUNK_DEFAULTS (500 tokens, 80
     // overlap) apply, exactly as ingestion runs it.
     const chunks = chunkSegments([
@@ -192,7 +147,7 @@ describe('source-in-context — chunk overlap is stripped on join (AUD-08)', () 
   })
 
   it('both boundaries de-overlap: neither neighbour repeats the located chunk (real chunker, tight windows)', () => {
-    const db = freshDb()
+    const db = freshWorkspaceDb('epctx').db
     // The same real chunker at a window small enough that BOTH stored neighbours fit
     // inside the fixed ±1200-character context window, so the following-chunk boundary is
     // observable too (at 500-token windows the located chunk alone fills the window).
@@ -219,16 +174,16 @@ describe('source-in-context — chunk overlap is stripped on join (AUD-08)', () 
   })
 
   it('neighbours from a DIFFERENT segment are never trimmed (only same-segment windows overlap)', () => {
-    const db = freshDb()
-    const docId = seedDocument(db, 'mixed.pdf')
+    const db = freshWorkspaceDb('epctx').db
+    const docId = seedSourceDocument(db, { title: 'mixed.pdf' })
     // Two separate pages that happen to share a long run of text. The chunker only
     // introduces overlap WITHIN a segment, so a shared run across a page boundary is
     // genuine repeated content in the document and must survive verbatim.
     const shared = prose(40)
     const first = `Page one opener. ${shared}`
     const second = `${shared} Page two closer.`
-    const firstId = seedChunk(db, { documentId: docId, index: 0, text: first, page: 1 })
-    seedChunk(db, { documentId: docId, index: 1, text: second, page: 2 })
+    const firstId = seedEvidenceChunk(db, { documentId: docId, index: 0, text: first, page: 1 })
+    seedEvidenceChunk(db, { documentId: docId, index: 1, text: second, page: 2 })
     const reviewId = seedReviewForCitation(db, {
       label: 'S1',
       sourceTitle: 'mixed.pdf',

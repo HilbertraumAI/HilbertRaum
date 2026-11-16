@@ -231,11 +231,11 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
   )
 
   // AUD-12: the WHOLE transcript's chip state in one round trip. The per-message channel
-  // above stays (a single freshly-created review still reads through it), but a conversation
-  // open asks ONCE: the renderer used to await one invoke per candidate answer, each of them
-  // a full item-row load plus a freshness recompute, so opening a long documents-mode
-  // conversation paid a serial cost proportional to its history. The derived overlay is
-  // applied per review here, exactly as the single-message read does.
+  // above stays (no renderer code has read it since AUD-12; removing it is its own change), but
+  // a conversation open asks ONCE: the renderer used to await one invoke per candidate answer,
+  // each of them a full item-row load plus a freshness recompute, so opening a long
+  // documents-mode conversation paid a serial cost proportional to its history. The derived
+  // overlay is applied per review here, exactly as the single-message read does.
   ipcHandle(
     IPC.getEvidenceReviewSummariesForConversation,
     (_e, conversationId: unknown): EvidenceReviewSummary[] => {

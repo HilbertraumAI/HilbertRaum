@@ -1,13 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // EP-1 P5 — the spec §26 performance pass, as a REGRESSION TRIPWIRE, not a benchmark:
 //   (a) opening a review must not start ANY model runtime/sidecar — the runtime and the
-//       embedder are tripwires that record (and, for start, throw on) every touch, and the
-//       REAL offline connect-guard is installed across the whole flow;
+//       embedder are tripwires that record and throw on every touch, and the REAL offline
+//       connect-guard is installed across the whole flow and asserted silent after it;
 //   (b) a review with MORE than the spec's 24-source norm opens through the real IPC
 //       handlers by awaiting the same two calls the renderer's open path makes
 //       (evidence:get + evidence:refreshState) — no fixed sleeps anywhere, the gate is the
@@ -20,116 +16,51 @@ import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard
 // together they are the plan-§10 "measure BEFORE virtualizing" record: the cap+reveal
 // keeps both the data read and the DOM bounded, so @tanstack/react-virtual stays out.
 
-const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
-    removeHandler: (channel: string) => ipcState.handlers.delete(channel)
-  },
+const ipcState = vi.hoisted(() => ({ handlers: new Map() as IpcHandlers }))
+vi.mock('electron', async () => ({
+  ipcMain: (await import('../helpers/ipc')).fakeIpcMain(ipcState.handlers),
   app: { getVersion: () => '0.0.0-test' },
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: { showSaveDialog: async () => ({ canceled: true, filePath: undefined }) }
 }))
 
-import { randomUUID } from 'node:crypto'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { IPC } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { createAuditRecorder } from '../../src/main/services/audit'
-import type { AppContext } from '../../src/main/services/context'
 import type {
   Citation,
   EvidenceReviewDetail,
   EvidenceReviewFreshness
 } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import {
+  evidenceIpcContext,
+  seedAssistantAnswer,
+  seedSourceDocument,
+  useOfflineGuard
+} from '../helpers/evidence-fixtures'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
 
-const handlers = ipcState.handlers as unknown as IpcHandlers
+const handlers = ipcState.handlers
 
 /** How many sources the perf review carries — ABOVE the spec §26 24-card norm. */
 const SOURCE_COUNT = 30
 
-function tripwireRuntime(touched: string[]): AppContext['runtime'] {
-  return {
-    active: () => {
-      touched.push('active')
-      return null
-    },
-    activeModelId: () => {
-      touched.push('activeModelId')
-      return null
-    },
-    start: async () => {
-      touched.push('start')
-      throw new Error('model runtime must never start on the evidence surface')
-    },
-    stop: async () => {
-      touched.push('stop')
-    },
-    status: () => {
-      touched.push('status')
-      return { running: false, modelId: null, port: null, healthy: false, message: '' }
-    }
-  } as unknown as AppContext['runtime']
-}
-
-function makeHarness(): { ctx: AppContext; db: Db; runtimeTouched: string[] } {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-epperf-'))
-  const db = openDatabase(join(root, 'test.sqlite'))
-  const runtimeTouched: string[] = []
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
-    workspace: { isUnlocked: () => true },
-    runtime: tripwireRuntime(runtimeTouched),
-    embedder: {
-      id: 'tripwire-embedder',
-      dimensions: 1,
-      embed: async () => {
-        runtimeTouched.push('embed')
-        return []
-      }
-    },
-    manifestsDir: null,
-    isDev: true,
-    audit: createAuditRecorder(() => db)
-  } as unknown as AppContext
-  return { ctx, db, runtimeTouched }
-}
-
-let offlineViolations: string[] = []
-let uninstallGuard: () => void = () => {}
-
+useOfflineGuard()
 beforeEach(() => {
   ipcState.handlers.clear()
-  offlineViolations = []
-  uninstallGuard = installOfflineNetworkGuard({
-    isOffline: () => true,
-    onViolation: (host) => offlineViolations.push(host)
-  })
-})
-
-afterEach(() => {
-  uninstallGuard()
 })
 
 describe('evidence-review open performance (spec §26, plan §10)', () => {
   it(`opens a ${SOURCE_COUNT}-source review with zero runtime touches, offline guard silent, well inside the §26 budget`, async () => {
-    const { ctx, db, runtimeTouched } = makeHarness()
+    const { db, root } = freshWorkspaceDb('epperf')
+    const { ctx, runtimeTouched } = evidenceIpcContext(db, root)
     registerEvidenceReviewsIpc(ctx)
 
     // Seed SOURCE_COUNT resolvable documents + one answer citing every one of them.
-    const now = new Date().toISOString()
     const citations: Citation[] = []
     const paragraphs: string[] = []
     for (let i = 1; i <= SOURCE_COUNT; i++) {
-      const docId = randomUUID()
-      db.prepare(
-        `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-         VALUES (?, ?, 'application/pdf', ?, 'indexed', ?, ?)`
-      ).run(docId, `doc-${i}.pdf`, String(i).padStart(2, '0').repeat(32), now, now)
+      const docId = seedSourceDocument(db, { title: `doc-${i}.pdf`, sha256: String(i).padStart(2, '0').repeat(32) })
       citations.push({
         label: `S${i}`,
         sourceTitle: `doc-${i}.pdf`,
@@ -138,11 +69,7 @@ describe('evidence-review open performance (spec §26, plan §10)', () => {
       } as Citation)
       paragraphs.push(`Claim number ${i} rests on its own source. [S${i}]`)
     }
-    const conv = createConversation(db, { title: 'Perf review chat', modelId: 'm1' })
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Big question?' })
-    const msg = appendMessage(db, {
-      conversationId: conv.id,
-      role: 'assistant',
+    const { messageId } = seedAssistantAnswer(db, {
       content: paragraphs.join('\n\n'),
       citations,
       coverage: { mode: 'relevance', chunksCovered: SOURCE_COUNT, chunksTotal: SOURCE_COUNT * 2 }
@@ -151,7 +78,7 @@ describe('evidence-review open performance (spec §26, plan §10)', () => {
     // Creation (spec §26 "review creation should use persisted message and source data") —
     // timed for the record; the assert below covers the OPEN path the norm names.
     const tCreate = performance.now()
-    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, msg.id)
+    const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const createMs = performance.now() - tCreate
     const created = createdRaw as EvidenceReviewDetail
     expect(created.sources).toHaveLength(SOURCE_COUNT)
@@ -171,9 +98,9 @@ describe('evidence-review open performance (spec §26, plan §10)', () => {
     expect((freshRaw as EvidenceReviewFreshness).outdated).toBe(false)
     expect((freshRaw as EvidenceReviewFreshness).sources).toHaveLength(SOURCE_COUNT)
 
-    // (a) No sidecar/model start — the FR-2/FR-12 hard rule, tripwire-proven.
+    // (a) No sidecar/model start — the FR-2/FR-12 hard rule, tripwire-proven (the offline
+    // guard is asserted silent after the test by `useOfflineGuard`).
     expect(runtimeTouched).toEqual([])
-    expect(offlineViolations).toEqual([])
 
     // (b) The §26 wall-clock budget (≤1 s with 24 cards on the target laptop) as an
     // order-of-magnitude tripwire: measured single-digit ms here — see the header note.

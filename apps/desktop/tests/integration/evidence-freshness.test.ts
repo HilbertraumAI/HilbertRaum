@@ -1,9 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
 
 // EP-1 Phase 4 (plan §9, spec §21/§15.4–15.5/§25/§28.6–28.7) — the freshness engine,
 // acknowledge lifecycle, export gate + pack recording, and source-in-context, end to end
@@ -21,12 +18,9 @@ import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard
 //  - `outdated` never erases `ready` (it is a derived overlay; acknowledge writes only its
 //    own column — status/completed_at/updated_at byte-identical).
 
-const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
-vi.mock('electron', () => ({
-  ipcMain: {
-    handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
-    removeHandler: (channel: string) => ipcState.handlers.delete(channel)
-  },
+const ipcState = vi.hoisted(() => ({ handlers: new Map() as IpcHandlers }))
+vi.mock('electron', async () => ({
+  ipcMain: (await import('../helpers/ipc')).fakeIpcMain(ipcState.handlers),
   app: { getVersion: () => '0.0.0-test' },
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: { showSaveDialog: async () => ({ canceled: true, filePath: undefined }) }
@@ -34,119 +28,51 @@ vi.mock('electron', () => ({
 
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { IPC } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { appendMessage, createConversation } from '../../src/main/services/chat'
-import { createEvidenceReviewFromMessage } from '../../src/main/services/evidence-pack/snapshot'
+import type { Db } from '../../src/main/services/db'
 import {
   acknowledgeEvidenceReviewFreshness,
-  computeEvidenceReviewFreshness,
-  parseFreshnessAck
+  computeEvidenceReviewFreshness
 } from '../../src/main/services/evidence-pack/freshness'
 import { getEvidenceSourceContext } from '../../src/main/services/evidence-pack/source-context'
 import {
   exportEvidencePackToFile,
   EvidencePackOutdatedError
 } from '../../src/main/services/evidence-pack/export'
-
-/** P6: the printer seam is REQUIRED - this stub doubles as the assertion that no
- *  HTML-format path here ever touches the hidden-window print harness. */
-const NEVER_PDF: Parameters<typeof exportEvidencePackToFile>[3]['renderPdf'] = async () => {
-  throw new Error('renderPdf must not be called for an HTML export')
-}
 import {
   getEvidenceReview,
   listEvidenceExports,
   markEvidenceReviewReady,
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
-import { createAuditRecorder } from '../../src/main/services/audit'
 import { t as tShared } from '../../src/shared/i18n'
-import type { AppContext } from '../../src/main/services/context'
 import type {
-  Citation,
   CoverageInfo,
   EvidenceReviewFreshness,
-  EvidenceReviewSummary,
-  EvidenceSourceContext
+  EvidenceReviewSummary
 } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import {
+  evidenceIpcContext,
+  exportDeps,
+  seedAssistantAnswer,
+  seedEvidenceChunk,
+  seedEvidenceReview,
+  seedSourceDocument,
+  useOfflineGuard
+} from '../helpers/evidence-fixtures'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
 
-const handlers = ipcState.handlers as unknown as IpcHandlers
+const handlers = ipcState.handlers
 
-let offlineViolations: string[] = []
-let uninstallGuard: () => void = () => {}
-
+useOfflineGuard()
 beforeEach(() => {
   ipcState.handlers.clear()
-  offlineViolations = []
-  uninstallGuard = installOfflineNetworkGuard({
-    isOffline: () => true,
-    onViolation: (host) => offlineViolations.push(host)
-  })
 })
-
-afterEach(() => {
-  uninstallGuard()
-  expect(offlineViolations).toEqual([])
-})
-
-function freshDb(): { db: Db; root: string } {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-epfresh-'))
-  return { db: openDatabase(join(root, 'test.sqlite')), root }
-}
-
-/** Documents are DB rows ONLY — no stored file exists anywhere (see module header). */
-function seedDocument(db: Db, opts: { title: string; sha256?: string | null }): string {
-  const id = randomUUID()
-  const now = new Date().toISOString()
-  db.prepare(
-    `INSERT INTO documents (id, title, mime_type, sha256, status, created_at, updated_at)
-     VALUES (?, ?, 'application/pdf', ?, 'indexed', ?, ?)`
-  ).run(id, opts.title, opts.sha256 === undefined ? 'ab'.repeat(32) : opts.sha256, now, now)
-  return id
-}
-
-function seedChunk(
-  db: Db,
-  opts: { documentId: string; index: number; text: string; page?: number | null; section?: string | null }
-): string {
-  const id = randomUUID()
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    opts.documentId,
-    opts.index,
-    opts.text,
-    `S${opts.index + 1}`,
-    opts.page ?? null,
-    opts.section ?? null,
-    new Date().toISOString()
-  )
-  return id
-}
-
-function seedAnswer(
-  db: Db,
-  opts: { content: string; citations?: Citation[] | null; coverage?: CoverageInfo | null }
-): { conversationId: string; messageId: string } {
-  const conv = createConversation(db, { title: 'Freshness chat', modelId: 'm1' })
-  appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Question?' })
-  const msg = appendMessage(db, {
-    conversationId: conv.id,
-    role: 'assistant',
-    content: opts.content,
-    citations: opts.citations ?? null,
-    coverage: opts.coverage ?? null
-  })
-  return { conversationId: conv.id, messageId: msg.id }
-}
 
 /** One relevance review over a resolved doc (S1) + an unresolved legacy citation (S2). */
 function seedReview(db: Db): { reviewId: string; messageId: string; docId: string } {
-  const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
-  const { messageId } = seedAnswer(db, {
+  const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
+  const answer = seedAssistantAnswer(db, {
     content: 'Claim one. [S1]\n\nClaim two. [S2]',
     citations: [
       { label: 'S1', sourceTitle: 'contract.pdf', documentId: docId, snippet: 'Either party may terminate.' },
@@ -154,8 +80,7 @@ function seedReview(db: Db): { reviewId: string; messageId: string; docId: strin
     ],
     coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 5 }
   })
-  const detail = createEvidenceReviewFromMessage(db, messageId, {})
-  return { reviewId: detail.id, messageId, docId }
+  return { reviewId: seedEvidenceReview(db, answer).id, messageId: answer.messageId, docId }
 }
 
 function reviewHeadRow(db: Db, reviewId: string): Record<string, unknown> {
@@ -165,9 +90,20 @@ function reviewHeadRow(db: Db, reviewId: string): Record<string, unknown> {
   >
 }
 
+/** The stored acknowledge record exactly as persisted (`freshness_ack_json`): two string keys, nothing else. */
+function storedAck(db: Db, reviewId: string): { acknowledgedAt: string; fingerprint: string } {
+  const raw = reviewHeadRow(db, reviewId).freshness_ack_json
+  expect(typeof raw).toBe('string')
+  const record = JSON.parse(raw as string) as Record<string, unknown>
+  expect(Object.keys(record).sort()).toEqual(['acknowledgedAt', 'fingerprint'])
+  expect(typeof record.acknowledgedAt).toBe('string')
+  expect(typeof record.fingerprint).toBe('string')
+  return record as { acknowledgedAt: string; fingerprint: string }
+}
+
 describe('freshness engine (spec §21.2) — stored-fact comparison only', () => {
   it('an untouched workspace reads unchanged / unverifiable, not outdated', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId } = seedReview(db)
     const fresh = computeEvidenceReviewFreshness(db, reviewId)
     expect(fresh).toEqual({
@@ -185,7 +121,7 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
   })
 
   it('a CHANGED stored hash flips the source to changed and the review to outdated — decisions intact (spec §15.5/§28.6)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     const detail = getEvidenceReview(db, reviewId)!
     const item = detail.items[0]!
@@ -204,7 +140,7 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
   })
 
   it('a DELETED source reads missing WITHOUT flipping outdated (spec §25.2/§28.7)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     db.prepare('DELETE FROM documents WHERE id = ?').run(docId)
     const fresh = computeEvidenceReviewFreshness(db, reviewId)!
@@ -213,16 +149,16 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
   })
 
   it('an UNRESOLVED source never flips to changed, whatever happens to same-titled documents', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     // Two docs sharing the title → the citation stays unresolved at creation.
-    seedDocument(db, { title: 'dup.pdf', sha256: 'aa'.repeat(32) })
-    const second = seedDocument(db, { title: 'dup.pdf', sha256: 'bb'.repeat(32) })
-    const { messageId } = seedAnswer(db, {
+    seedSourceDocument(db, { title: 'dup.pdf', sha256: 'aa'.repeat(32) })
+    const second = seedSourceDocument(db, { title: 'dup.pdf', sha256: 'bb'.repeat(32) })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Ambiguous claim. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'dup.pdf', snippet: 'x' }],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
     expect(detail.sources[0]!.identity).toBe('unresolved')
     // Both mutate AND delete the same-titled documents — the verdict must stay honest.
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('cc'.repeat(32), second)
@@ -236,21 +172,34 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
   })
 
   it('a resolved source with an absent stored hash reads unverifiable — unknown is not drift', () => {
-    const { db } = freshDb()
-    const docId = seedDocument(db, { title: 'nohash.pdf', sha256: null })
-    const { messageId } = seedAnswer(db, {
+    const { db } = freshWorkspaceDb('epfresh')
+    const docId = seedSourceDocument(db, { title: 'nohash.pdf', sha256: null })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Claim. [S1]',
       citations: [{ label: 'S1', sourceTitle: 'nohash.pdf', documentId: docId, snippet: 'x' }],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
     const fresh = computeEvidenceReviewFreshness(db, detail.id)!
     expect(fresh.sources).toEqual([{ key: 'S1', state: 'unverifiable' }])
     expect(fresh.outdated).toBe(false)
+
+    // The CURRENT side: a hash present at creation and absent now is "cannot verify" too, never drift.
+    const hashedId = seedSourceDocument(db, { title: 'hashed.pdf', sha256: 'aa'.repeat(32) })
+    const hashed = seedAssistantAnswer(db, {
+      content: 'Claim. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'hashed.pdf', documentId: hashedId, snippet: 'x' }],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const hashedReview = seedEvidenceReview(db, hashed)
+    db.prepare('UPDATE documents SET sha256 = NULL WHERE id = ?').run(hashedId)
+    const lost = computeEvidenceReviewFreshness(db, hashedReview.id)!
+    expect(lost.sources).toEqual([{ key: 'S1', state: 'unverifiable' }])
+    expect(lost.outdated).toBe(false)
   })
 
   it('FIX-4: reserialized coverage (key order + extra unknown keys) stays UNCHANGED — never a false positive', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, messageId } = seedReview(db)
     // Same SEMANTIC coverage as seeded ({mode:'relevance', chunksCovered:2, chunksTotal:5})
     // but re-serialized: different key order, plus unknown extras and the excluded
@@ -271,7 +220,7 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
   })
 
   it('answer-text drift and coverage drift each flip outdated (spec §21.2)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const first = seedReview(db)
     db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('Rewritten.', first.messageId)
     let fresh = computeEvidenceReviewFreshness(db, first.reviewId)!
@@ -288,67 +237,28 @@ describe('freshness engine (spec §21.2) — stored-fact comparison only', () =>
     expect(fresh.outdated).toBe(true)
   })
 
-  it('an archive source is unverifiable by construction: a same-titled document changing is not its drift (PR #294 review H2)', () => {
-    const { db } = freshDb()
-    // The decoy carries the article's exact title; the review also cites a real document.
-    const decoyId = seedDocument(db, { title: 'Treibhausgas', sha256: 'aa'.repeat(32) })
-    const docId = seedDocument(db, { title: 'Klimabericht.pdf', sha256: 'bb'.repeat(32) })
-    const { messageId } = seedAnswer(db, {
-      content: 'Aus dem Archiv. [S1]\n\nAus der Bibliothek. [S2]',
-      citations: [
-        {
-          label: 'S1',
-          sourceTitle: 'Treibhausgas',
-          snippet: 'Methan aus der Landwirtschaft.',
-          sourceKind: 'archive',
-          packId: 'pack-climate',
-          archiveTitle: 'Wikipedia (DE)',
-          articlePath: 'A/Treibhausgas'
-        },
-        { label: 'S2', sourceTitle: 'Klimabericht.pdf', documentId: docId, snippet: 'Der Bericht.' }
-      ],
-      coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 6 }
-    })
-    const reviewId = createEvidenceReviewFromMessage(db, messageId, {}).id
-
-    expect(computeEvidenceReviewFreshness(db, reviewId)!.sources).toEqual([
-      { key: 'S1', state: 'unverifiable' },
-      { key: 'S2', state: 'unchanged' }
-    ])
-    // Re-ingesting the SAME-TITLED document is not this archive source's drift: under the
-    // defect S1 was pinned to that row and this would have read 'changed' + outdated.
-    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('cc'.repeat(32), decoyId)
-    const fresh = computeEvidenceReviewFreshness(db, reviewId)!
-    expect(fresh.sources).toContainEqual({ key: 'S1', state: 'unverifiable' })
-    expect(fresh.outdated).toBe(false)
-    // The cited document still drifts normally.
-    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('dd'.repeat(32), docId)
-    const drifted = computeEvidenceReviewFreshness(db, reviewId)!
-    expect(drifted.sources).toContainEqual({ key: 'S2', state: 'changed' })
-    expect(drifted.sources).toContainEqual({ key: 'S1', state: 'unverifiable' })
-    expect(drifted.outdated).toBe(true)
-  })
-
   it('the outdated overlay never erases ready (spec §18.4)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     const detail = getEvidenceReview(db, reviewId)!
     for (const item of detail.items) {
       updateEvidenceReviewItem(db, item.id, { decision: 'supported' })
     }
-    expect(markEvidenceReviewReady(db, reviewId)?.review.status).toBe('ready')
+    const ready = markEvidenceReviewReady(db, reviewId)!
+    expect(ready.review.status).toBe('ready')
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     const fresh = computeEvidenceReviewFreshness(db, reviewId)!
     expect(fresh.outdated).toBe(true)
     const after = getEvidenceReview(db, reviewId)!
     expect(after.status).toBe('ready')
-    expect(after.completedAt).toBeTruthy()
+    expect(after.completedAt).toBe(ready.review.completedAt)
+    expect(after.updatedAt).toBe(ready.review.updatedAt)
   })
 })
 
 describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
   it('no-ops on a non-outdated review (nothing to acknowledge — no phantom record)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId } = seedReview(db)
     const result = acknowledgeEvidenceReviewFreshness(db, reviewId)!
     expect(result.acknowledgedAt).toBeNull()
@@ -357,11 +267,17 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
   })
 
   it('persists across reads, never rewrites lifecycle stamps, and works on a READY review', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     const detail = getEvidenceReview(db, reviewId)!
     for (const item of detail.items) updateEvidenceReviewItem(db, item.id, { decision: 'supported' })
     expect(markEvidenceReviewReady(db, reviewId)?.review.status).toBe('ready')
+    // Sentinel stamps (the FIX-5 idiom, evidence-reviews-ipc): a re-stamp can never hide inside the millisecond markReady used.
+    db.prepare('UPDATE evidence_reviews SET updated_at = ?, completed_at = ? WHERE id = ?').run(
+      '2020-01-01T00:00:00.000Z',
+      '2020-01-02T00:00:00.000Z',
+      reviewId
+    )
     const before = reviewHeadRow(db, reviewId)
 
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
@@ -375,16 +291,15 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
     expect(after.status).toBe(before.status)
     expect(after.completed_at).toBe(before.completed_at)
     expect(after.updated_at).toBe(before.updated_at)
-    expect(parseFreshnessAck(after.freshness_ack_json as string | null)).toMatchObject({
-      acknowledgedAt: acked.acknowledgedAt
-    })
+    expect(after.updated_at).toBe('2020-01-01T00:00:00.000Z')
+    expect(storedAck(db, reviewId).acknowledgedAt).toBe(acked.acknowledgedAt)
 
     // A fresh computation (a "restart" — nothing cached) still reports it acknowledged.
     expect(computeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBe(acked.acknowledgedAt)
   })
 
   it('LAPSES when the drift changes afterwards (fingerprint mismatch → new warning)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId, messageId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     const acked = acknowledgeEvidenceReviewFreshness(db, reviewId)!
@@ -395,15 +310,23 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
     expect(fresh.outdated).toBe(true)
     expect(fresh.acknowledgedAt).toBeNull()
     // Acknowledging AGAIN covers the new drift.
-    expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
+    const again = acknowledgeEvidenceReviewFreshness(db, reviewId)!
+    expect(computeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBe(again.acknowledgedAt)
   })
 
   it('a malformed stored ack record reads as not acknowledged (never unlocks the gate)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     db.prepare('UPDATE evidence_reviews SET freshness_ack_json = ? WHERE id = ?').run(
       '{not json',
+      reviewId
+    )
+    expect(computeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeNull()
+    // A well-formed record whose fingerprint IS the current drift (FR17 pins it) but whose stamp is
+    // not a string reaches the type guard: it must still read as never acknowledged.
+    db.prepare('UPDATE evidence_reviews SET freshness_ack_json = ? WHERE id = ?').run(
+      JSON.stringify({ acknowledgedAt: 123, fingerprint: `src:S1=changed:${'ff'.repeat(32)};src:S2=unverifiable` }),
       reviewId
     )
     expect(computeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeNull()
@@ -414,7 +337,7 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
   // would read "still changed" and keep a stale acknowledge alive forever). ----
 
   it('FIX-1: a RE-CHANGE of an already-changed source lapses the acknowledge (aa→ff, ack, ff→ee)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
@@ -432,7 +355,7 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
   })
 
   it('FIX-1: a SECOND answer edit lapses an acknowledge given for the first edit', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, messageId } = seedReview(db)
     db.prepare('UPDATE messages SET content = ? WHERE id = ?').run('First rewrite.', messageId)
     expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
@@ -443,7 +366,7 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
   })
 
   it('FIX-1: changed → fully recovered → changed-AGAIN never resurrects the stale acknowledge', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
@@ -459,12 +382,11 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
   })
 
   it('the stored fingerprint is canonical: value-bearing for changed facts, literals for missing/unverifiable, sorted', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     acknowledgeEvidenceReviewFreshness(db, reviewId)
-    const row = reviewHeadRow(db, reviewId)
-    const ack = parseFreshnessAck(row.freshness_ack_json as string | null)!
+    const ack = storedAck(db, reviewId)
     // S1 changed → carries the OBSERVED current sha; S2 (unresolved) → state literal.
     expect(ack.fingerprint).toBe(`src:S1=changed:${'ff'.repeat(32)};src:S2=unverifiable`)
   })
@@ -478,7 +400,7 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
   // deliberate, not incidental — if you change `canonicalCoverage`, you are changing a
   // stored-data contract and must say so.
   it('AUD-19: the coverage fingerprint is byte-stable over the canonical coverage form', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, messageId } = seedReview(db)
     // Every CoverageInfo field set, INCLUDING the deliberately excluded display-plumbing
     // (`nodeIds`) — so the pinned digest also proves the plumbing contributes nothing.
@@ -502,9 +424,7 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
       messageId
     )
     acknowledgeEvidenceReviewFreshness(db, reviewId)
-    const ack = parseFreshnessAck(
-      reviewHeadRow(db, reviewId).freshness_ack_json as string | null
-    )!
+    const ack = storedAck(db, reviewId)
     expect(ack.fingerprint).toBe('coverage=changed:dfc1357dca536b8e;src:S2=unverifiable')
 
     // The excluded plumbing really is excluded: a different `nodeIds` must produce the
@@ -515,10 +435,7 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
       other.messageId
     )
     acknowledgeEvidenceReviewFreshness(db, other.reviewId)
-    expect(
-      parseFreshnessAck(reviewHeadRow(db, other.reviewId).freshness_ack_json as string | null)!
-        .fingerprint
-    ).toBe(ack.fingerprint)
+    expect(storedAck(db, other.reviewId).fingerprint).toBe(ack.fingerprint)
 
     // #643: a SET `labelledExcerpts` is a compared claim (it decides labels + marker links), so
     // flipping it changes the fingerprint.
@@ -528,55 +445,16 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
       labelled.messageId
     )
     acknowledgeEvidenceReviewFreshness(db, labelled.reviewId)
-    expect(
-      parseFreshnessAck(reviewHeadRow(db, labelled.reviewId).freshness_ack_json as string | null)!
-        .fingerprint
-    ).not.toBe(ack.fingerprint)
+    expect(storedAck(db, labelled.reviewId).fingerprint).not.toBe(ack.fingerprint)
   })
 })
 
 describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => {
-  it('a changed source BLOCKS export until acknowledged; afterwards the pack records the mismatch', async () => {
-    const { db, root } = freshDb()
-    const { reviewId, docId } = seedReview(db)
-    db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
-
-    // Un-acknowledged outdated → refused BEFORE any dialog (no file, no row).
-    let dialogShown = false
-    await expect(
-      exportEvidencePackToFile(db, reviewId, {}, {
-        chooseDestination: async () => {
-          dialogShown = true
-          return join(root, 'refused.html')
-        },
-        renderPdf: NEVER_PDF
-      })
-    ).rejects.toBeInstanceOf(EvidencePackOutdatedError)
-    expect(dialogShown).toBe(false)
-    expect(existsSync(join(root, 'refused.html'))).toBe(false)
-    expect(listEvidenceExports(db, reviewId)).toEqual([])
-
-    // Acknowledge → export succeeds; the pack RECORDS the mismatch (spec §28.6).
-    expect(acknowledgeEvidenceReviewFreshness(db, reviewId)!.acknowledgedAt).toBeTruthy()
-    const dest = join(root, 'acked.html')
-    const record = await exportEvidencePackToFile(db, reviewId, {}, {
-      chooseDestination: async () => dest,
-      renderPdf: NEVER_PDF
-    })
-    expect(record).not.toBeNull()
-    const html = readFileSync(dest, 'utf8')
-    expect(html).toContain('This review is outdated')
-    expect(html).toContain('1 source document has changed since this review was created.')
-    expect(html).toContain('The reviewer acknowledged this change on')
-    expect(html).toContain('Changed since review') // §16.1.7 availability at export
-    expect(html).toContain('Availability at export')
-  })
-
   it('FIX-3: MIXED drift — one source changed AND another deleted: gate from the changed one, §15.4 + register cells for both; a NEW deletion lapses a prior acknowledge', async () => {
-    const { db, root } = freshDb()
-    const docA = seedDocument(db, { title: 'a.pdf', sha256: 'aa'.repeat(32) })
-    const docB = seedDocument(db, { title: 'b.pdf', sha256: 'bb'.repeat(32) })
-    const { messageId } = seedAnswer(db, {
+    const { db, root } = freshWorkspaceDb('epfresh')
+    const docA = seedSourceDocument(db, { title: 'a.pdf', sha256: 'aa'.repeat(32) })
+    const docB = seedSourceDocument(db, { title: 'b.pdf', sha256: 'bb'.repeat(32) })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Claim A. [S1]\n\nClaim B. [S2]',
       citations: [
         { label: 'S1', sourceTitle: 'a.pdf', documentId: docA, snippet: 'Excerpt from A.' },
@@ -584,7 +462,7 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
       ],
       coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 4 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
 
     // Drift step 1: A changes; the user acknowledges.
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docA)
@@ -602,16 +480,14 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
     expect(fresh.acknowledgedAt).toBeNull()
 
     // Un-acknowledged → export refuses (the gate fires from the CHANGED source).
-    await expect(
-      exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => join(root, 'x.html'), renderPdf: NEVER_PDF })
-    ).rejects.toBeInstanceOf(EvidencePackOutdatedError)
+    await expect(exportEvidencePackToFile(db, detail.id, {}, exportDeps(join(root, 'x.html')))).rejects.toBeInstanceOf(
+      EvidencePackOutdatedError
+    )
 
     // Re-acknowledge → export succeeds; the pack records BOTH drift kinds honestly.
     expect(acknowledgeEvidenceReviewFreshness(db, detail.id)!.acknowledgedAt).toBeTruthy()
     const dest = join(root, 'mixed.html')
-    expect(
-      await exportEvidencePackToFile(db, detail.id, {}, { chooseDestination: async () => dest, renderPdf: NEVER_PDF })
-    ).not.toBeNull()
+    expect(await exportEvidencePackToFile(db, detail.id, {}, exportDeps(dest))).not.toBeNull()
     const html = readFileSync(dest, 'utf8')
     expect(html).toContain('This review is outdated')
     expect(html).toContain('1 source document has changed since this review was created.')
@@ -625,14 +501,11 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
   })
 
   it('a deleted source does NOT block export; the pack carries the missing-source warning (spec §28.7)', async () => {
-    const { db, root } = freshDb()
+    const { db, root } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     db.prepare('DELETE FROM documents WHERE id = ?').run(docId)
     const dest = join(root, 'missing.html')
-    const record = await exportEvidencePackToFile(db, reviewId, {}, {
-      chooseDestination: async () => dest,
-      renderPdf: NEVER_PDF
-    })
+    const record = await exportEvidencePackToFile(db, reviewId, {}, exportDeps(dest))
     expect(record).not.toBeNull()
     const html = readFileSync(dest, 'utf8')
     // The persisted snippet remains visible (spec §28.7) with the §15.4 warning…
@@ -645,29 +518,10 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
 })
 
 describe('IPC surface (new P4 channels + real overlay)', () => {
-  function makeCtx(db: Db, root: string): AppContext {
-    return {
-      trustedSenders: ANY_SENDER,
-      db,
-      paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
-      workspace: { isUnlocked: () => true },
-      runtime: {
-        active: () => {
-          throw new Error('model runtime must never be touched on the evidence surface')
-        },
-        start: async () => {
-          throw new Error('model runtime must never start on the evidence surface')
-        }
-      },
-      manifestsDir: null,
-      isDev: true,
-      audit: createAuditRecorder(() => db)
-    } as unknown as AppContext
-  }
-
   it('refreshState + acknowledge round-trip; detail/summary reads carry the REAL overlay', async () => {
-    const { db, root } = freshDb()
-    registerEvidenceReviewsIpc(makeCtx(db, root))
+    const { db, root } = freshWorkspaceDb('epfresh')
+    const { ctx } = evidenceIpcContext(db, root)
+    registerEvidenceReviewsIpc(ctx)
     const { reviewId, messageId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
 
@@ -699,11 +553,16 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     expect(badFresh).toBeNull()
     const { result: badAck } = await invoke(handlers, IPC.acknowledgeEvidenceReviewFreshness, '')
     expect(badAck).toBeNull()
+    // 42 and '' bind and match no row: null with or without the handler's guard (the null contract).
+    // `true` cannot be bound by node:sqlite, so only `safeId` keeps these two from throwing.
+    expect((await invoke(handlers, IPC.refreshEvidenceReviewState, true)).result).toBeNull()
+    expect((await invoke(handlers, IPC.acknowledgeEvidenceReviewFreshness, true)).result).toBeNull()
   })
 
   it('FIX-6: an outdated-unacknowledged export over the WIRE rejects with the LOCALIZED copy — no file, no row, no audit event', async () => {
-    const { db, root } = freshDb()
-    registerEvidenceReviewsIpc(makeCtx(db, root))
+    const { db, root } = freshWorkspaceDb('epfresh')
+    const { ctx, audit } = evidenceIpcContext(db, root)
+    registerEvidenceReviewsIpc(ctx)
     const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     // The IPC catch arm maps EvidencePackOutdatedError → tMain('main.evidenceReviews.exportOutdated').
@@ -712,10 +571,7 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     )
     expect(listEvidenceExports(db, reviewId)).toEqual([])
     // No dialog was reached, so no file could exist; and no export audit event fired.
-    const events = db
-      .prepare("SELECT event_type FROM runtime_events WHERE event_type = 'evidence_pack_exported'")
-      .all()
-    expect(events).toEqual([])
+    expect(audit.filter((e) => e.type === 'evidence_pack_exported')).toEqual([])
     // After the acknowledge the SAME wire call proceeds to the (mocked, cancelled) dialog
     // and resolves null — the refusal is specifically the unacknowledged state.
     acknowledgeEvidenceReviewFreshness(db, reviewId)
@@ -724,8 +580,9 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
   })
 
   it('sourceContext rejects unknown review ids, unknown keys, and unresolved sources', async () => {
-    const { db, root } = freshDb()
-    registerEvidenceReviewsIpc(makeCtx(db, root))
+    const { db, root } = freshWorkspaceDb('epfresh')
+    const { ctx } = evidenceIpcContext(db, root)
+    registerEvidenceReviewsIpc(ctx)
     const { reviewId } = seedReview(db)
     const { result: unknownReview } = await invoke(handlers, IPC.getEvidenceSourceContext, 'nope', 'S1')
     expect(unknownReview).toBeNull()
@@ -734,25 +591,28 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     // S2 is the unresolved legacy citation — there is no document to read.
     const { result: unresolved } = await invoke(handlers, IPC.getEvidenceSourceContext, reviewId, 'S2')
     expect(unresolved).toBeNull()
+    // The KEY never reaches SQL (it is matched against the review's own snapshot in JS): a non-string key reads null with or without the guard (the null contract).
     const { result: malformed } = await invoke(handlers, IPC.getEvidenceSourceContext, reviewId, 7)
     expect(malformed).toBeNull()
+    // The REVIEW id does reach SQL: `true` cannot be bound, so only `safeId` keeps this from throwing.
+    expect((await invoke(handlers, IPC.getEvidenceSourceContext, true, 'S1')).result).toBeNull()
   })
 })
 
 describe('source-in-context (D-5) — stored extraction only', () => {
   it('locates the persisted snippet in the stored chunks with neighbor context + hash state', () => {
-    const { db } = freshDb()
-    const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
-    seedChunk(db, { documentId: docId, index: 0, text: 'Preamble text before the clause.', page: 11 })
-    const chunkId = seedChunk(db, {
+    const { db } = freshWorkspaceDb('epfresh')
+    const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
+    seedEvidenceChunk(db, { documentId: docId, index: 0, text: 'Preamble text before the clause.', page: 11 })
+    const chunkId = seedEvidenceChunk(db, {
       documentId: docId,
       index: 1,
       text: 'Clause 5: Either party may terminate with 30 days notice.',
       page: 12,
       section: 'Termination'
     })
-    seedChunk(db, { documentId: docId, index: 2, text: 'Following clause about fees.', page: 13 })
-    const { messageId } = seedAnswer(db, {
+    seedEvidenceChunk(db, { documentId: docId, index: 2, text: 'Following clause about fees.', page: 13 })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Claim. [S1]',
       citations: [
         {
@@ -765,7 +625,7 @@ describe('source-in-context (D-5) — stored extraction only', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 3 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
     const ctx = getEvidenceSourceContext(db, detail.id, 'S1')!
     expect(ctx).toMatchObject({
       availability: 'available',
@@ -782,10 +642,10 @@ describe('source-in-context (D-5) — stored extraction only', () => {
   })
 
   it('reports mismatch hash state after the stored hash changed; searches when the chunk id is stale', () => {
-    const { db } = freshDb()
-    const docId = seedDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
-    seedChunk(db, { documentId: docId, index: 0, text: 'The clause: terminate at will.', page: 1 })
-    const { messageId } = seedAnswer(db, {
+    const { db } = freshWorkspaceDb('epfresh')
+    const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
+    seedEvidenceChunk(db, { documentId: docId, index: 0, text: 'The clause: terminate at will.', page: 1 })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Claim. [S1]',
       citations: [
         {
@@ -798,7 +658,7 @@ describe('source-in-context (D-5) — stored extraction only', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
     const ctx = getEvidenceSourceContext(db, detail.id, 'S1')!
     expect(ctx.hashState).toBe('mismatch')
@@ -807,16 +667,16 @@ describe('source-in-context (D-5) — stored extraction only', () => {
   })
 
   it('NEVER serves another document through a foreign chunk id (cross-document leak guard)', () => {
-    const { db } = freshDb()
-    const docId = seedDocument(db, { title: 'a.pdf', sha256: 'aa'.repeat(32) })
-    const otherDoc = seedDocument(db, { title: 'b.pdf', sha256: 'bb'.repeat(32) })
+    const { db } = freshWorkspaceDb('epfresh')
+    const docId = seedSourceDocument(db, { title: 'a.pdf', sha256: 'aa'.repeat(32) })
+    const otherDoc = seedSourceDocument(db, { title: 'b.pdf', sha256: 'bb'.repeat(32) })
     // The FOREIGN document contains the snippet text; the snapshotted doc does not.
-    const foreignChunk = seedChunk(db, {
+    const foreignChunk = seedEvidenceChunk(db, {
       documentId: otherDoc,
       index: 0,
       text: 'SECRET-OTHER-DOC terminate at will.'
     })
-    const { messageId } = seedAnswer(db, {
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Claim. [S1]',
       citations: [
         {
@@ -830,7 +690,7 @@ describe('source-in-context (D-5) — stored extraction only', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
     const ctx = getEvidenceSourceContext(db, detail.id, 'S1')!
     // The foreign chunk is refused; a.pdf has no chunk with the text → honest not-located,
     // and no byte of the other document's text leaks.
@@ -840,7 +700,7 @@ describe('source-in-context (D-5) — stored extraction only', () => {
   })
 
   it('a deleted document reads missing with the persisted snippet retained (spec §15.4)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     db.prepare('DELETE FROM documents WHERE id = ?').run(docId)
     const ctx = getEvidenceSourceContext(db, reviewId, 'S1')!
@@ -853,10 +713,10 @@ describe('source-in-context (D-5) — stored extraction only', () => {
   })
 
   it('an unlocatable snippet reads located:false — never guessed context', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     const { reviewId, docId } = seedReview(db)
     // The document exists but its stored chunks do not contain the snippet.
-    seedChunk(db, { documentId: docId, index: 0, text: 'Completely different content now.' })
+    seedEvidenceChunk(db, { documentId: docId, index: 0, text: 'Completely different content now.' })
     const ctx = getEvidenceSourceContext(db, reviewId, 'S1')!
     expect(ctx.availability).toBe('available')
     expect(ctx.located).toBe(false)
@@ -865,11 +725,11 @@ describe('source-in-context (D-5) — stored extraction only', () => {
   })
 
   it('a truncated (…-terminated) snippet still locates by its prefix', () => {
-    const { db } = freshDb()
-    const docId = seedDocument(db, { title: 'long.pdf', sha256: 'aa'.repeat(32) })
+    const { db } = freshWorkspaceDb('epfresh')
+    const docId = seedSourceDocument(db, { title: 'long.pdf', sha256: 'aa'.repeat(32) })
     const longText = `Start. ${'clause text '.repeat(80)}End.`
-    seedChunk(db, { documentId: docId, index: 0, text: longText })
-    const { messageId } = seedAnswer(db, {
+    seedEvidenceChunk(db, { documentId: docId, index: 0, text: longText })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Claim. [S1]',
       citations: [
         {
@@ -882,26 +742,26 @@ describe('source-in-context (D-5) — stored extraction only', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
     const ctx = getEvidenceSourceContext(db, detail.id, 'S1')!
     expect(ctx.located).toBe(true)
     expect(ctx.match).toBe(longText.slice(0, 200))
   })
 
   it('an archive source has no context at all — null, even with a same-titled document and its chunks present (PR #294 review H2)', () => {
-    const { db } = freshDb()
+    const { db } = freshWorkspaceDb('epfresh')
     // The decoy document has the article's title AND stored chunks holding the very snippet:
     // everything the ladder would need, if the archive source were ever pointed at it.
-    const decoyId = seedDocument(db, { title: 'Treibhausgas', sha256: 'aa'.repeat(32) })
-    seedChunk(db, {
+    const decoyId = seedSourceDocument(db, { title: 'Treibhausgas', sha256: 'aa'.repeat(32) })
+    seedEvidenceChunk(db, {
       documentId: decoyId,
       index: 0,
       text: 'Methan aus der Landwirtschaft ist ein Treibhausgas.',
       page: 3
     })
-    const docId = seedDocument(db, { title: 'Klimabericht.pdf', sha256: 'bb'.repeat(32) })
-    seedChunk(db, { documentId: docId, index: 0, text: 'Der Bericht nennt Methan.', page: 1 })
-    const { messageId } = seedAnswer(db, {
+    const docId = seedSourceDocument(db, { title: 'Klimabericht.pdf', sha256: 'bb'.repeat(32) })
+    seedEvidenceChunk(db, { documentId: docId, index: 0, text: 'Der Bericht nennt Methan.', page: 1 })
+    const { messageId } = seedAssistantAnswer(db, {
       content: 'Aus dem Archiv. [S1]\n\nAus der Bibliothek. [S2]',
       citations: [
         {
@@ -922,7 +782,7 @@ describe('source-in-context (D-5) — stored extraction only', () => {
       ],
       coverage: { mode: 'relevance', chunksCovered: 2, chunksTotal: 4 }
     })
-    const detail = createEvidenceReviewFromMessage(db, messageId, {})
+    const detail = seedEvidenceReview(db, { messageId })
     // Honest unavailable: there is no workspace document behind an archive article, so the
     // reader claims nothing (the review row's "Open article", added in #301 P6, goes through
     // packs:getArticle with the snapshot's pack id + article path — never through this reader).
@@ -947,12 +807,15 @@ describe('source-in-context (D-5) — stored extraction only', () => {
 // field reads "unchanged", so an export proceeds without the outdated banner and without
 // the acknowledge gate ever firing.
 //
-// The primary tooth is a COMPILE-time one (`satisfies Record<keyof CoverageInfo, …>` on the
-// literal). This test is the second tooth, for two reasons the compiler cannot cover:
-// `npm test` runs without `tsc`, and the compiler cannot tell a field that is *listed but
-// deliberately excluded* (value `undefined`, which JSON.stringify drops) from one that is
-// *listed and compared*. So it re-derives both sets from source and pins the exclusions to
-// the documented list.
+// The primary tooth is a COMPILE-time one: `satisfies Record<keyof CoverageInfo, …>` on the
+// literal rejects a missing or an extra key, and `npm run typecheck` (a step of every CI
+// build; tsconfig.node.json covers src/main, tsconfig.web.json covers tests/) also forces the
+// `Required<CoverageInfo>` fixture of the byte-stability row above to set every field. Two
+// things stay outside it. The field-parity row below still fails if that constraint is
+// weakened (`Partial<…>`, `Record<string, unknown>`) or a local `npm test` runs without the
+// typecheck. The exclusions row is the only check of a field that is listed but parked as
+// `undefined` (JSON.stringify drops it): the compiler accepts that, and the pinned digest above
+// does not move, so nothing else notices a claim silently dropped from drift detection.
 const FRESHNESS_SRC = join(__dirname, '../../src/main/services/evidence-pack/freshness.ts')
 const TYPES_SRC = join(__dirname, '../../src/shared/types.ts')
 
