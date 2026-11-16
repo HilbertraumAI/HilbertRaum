@@ -294,7 +294,7 @@ so the newer build still finds the choice. Before unlock the renderer cannot rea
 per-computer localStorage mirror `hilbertraum.uiLanguage` instead (D-L3).
 ⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
 unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
-`workspaceMode` is set to the active mode by the `WorkspaceController` on open.
+`workspaceMode` is set to the active mode by the `WorkspaceController` at create, at a plaintext open and at every unlock, and the write gate accepts only `encrypted` or `plaintext_dev`. The renderer cannot set it: `settings:update` drops the key from a patch (#858).
 
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`

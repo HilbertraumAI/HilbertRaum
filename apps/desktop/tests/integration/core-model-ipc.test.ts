@@ -297,6 +297,25 @@ describe('registerCoreIpc', () => {
     expect((result as AppSettings).theme).toBe('dark')
   })
 
+  // #858: the workspace stamps `workspaceMode` (at create and at a plaintext open) and Settings and
+  // Privacy read it to say "encrypted" and to offer Change password. The renderer must not move it.
+  it('updateSettings drops a renderer-sent workspaceMode and applies the rest of the patch (#858)', async () => {
+    const db = seededDb()
+    updateSettings(db, { workspaceMode: 'encrypted' }) // the controller's own stamp
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      paths: { configPath: bogusConfigDir() },
+      db,
+      workspace: { isUnlocked: () => true }
+    } as unknown as AppContext
+    registerCoreIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.updateSettings, { workspaceMode: 'plaintext_dev', theme: 'dark' })
+    expect(result as AppSettings).toMatchObject({ workspaceMode: 'encrypted', theme: 'dark' })
+    await invoke(handlers, IPC.updateSettings, { workspaceMode: 'banana' })
+    expect(getSettings(db).workspaceMode).toBe('encrypted')
+  })
+
   // Step 4-4 (Wave 4 ruling (a)): a GPU settings change stops the reranker sidecar (suspend,
   // never the permanent stop()) so its NEXT start re-evaluates the device posture instead of
   // keeping a stale one for the rest of the session — a REAL flip only (BE-1 discipline).

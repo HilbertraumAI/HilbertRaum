@@ -169,6 +169,17 @@ export function registerCoreIpc(ctx: AppContext): void {
     if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
       throw new Error(tMain('main.settings.invalidPatch'))
     }
+    // #858: `workspaceMode` is main's record of the open workspace's mode. The controller stamps
+    // it at create and at a plaintext open, and Settings and Privacy read it to say "encrypted"
+    // and to offer Change password. A renderer patch never sets it: the write gate only checks
+    // it is a string, so a renderer bug could otherwise record any value. Drop it, keep the rest.
+    if (Object.hasOwn(patch, 'workspaceMode')) {
+      if (patch.workspaceMode !== undefined) {
+        log.warn('Settings update ignored workspaceMode (set by the workspace, not the renderer)')
+      }
+      const { workspaceMode: _ignored, ...rest } = patch
+      patch = rest
+    }
     log.info('Settings updated', Object.keys(patch))
     // Read BEFORE the write so local_api_toggled records only a REAL flip — key-presence
     // alone would log phantom enable/disable events for rejected-junk or same-value
