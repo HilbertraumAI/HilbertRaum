@@ -2,13 +2,20 @@
 
 ## How the app finds its data
 
-At startup (`main/index.ts` → `initBackend()`), the app resolves a **root path** using
-`services/workspace.ts` → `resolvePaths()`, in this priority:
+At startup (`main/index.ts` → `initBackend()`), the app picks a **root path** with
+`services/workspace.ts` → `locateDriveRoot()` and derives the paths from it with `resolvePaths()`, in
+this priority:
 
-1. **`HILBERTRAUM_DRIVE_ROOT` environment variable** — explicit override (used when launching from a
-   prepared drive, or for testing). If the root contains `config/drive.json`, it is treated as a
-   **prepared drive**.
-2. **App-data fallback** — `app.getPath('userData')` for a normal install / dev run.
+1. **`HILBERTRAUM_DRIVE_ROOT` environment variable** — explicit override (the drive launchers set it;
+   also used for testing). If the root contains `config/drive.json`, it is treated as a **prepared
+   drive**. An empty or blank value counts as unset (#858).
+2. **The drive the app runs from** — `findPreparedDriveRoot` walks up, at most six folders, from
+   where the app really is: the Windows portable exe's folder (`PORTABLE_EXECUTABLE_DIR`), a Linux
+   AppImage's file (`APPIMAGE`; the executable itself runs from a temporary mount), or the
+   executable's folder. So an app started directly on a Kit, without the launcher, still opens the
+   drive's workspace. A macOS app that Gatekeeper translocates runs from elsewhere and is not found
+   this way; the drive's launcher covers it.
+3. **App-data fallback** — `app.getPath('userData')` for a normal install / dev run.
 
 From the root, these paths are derived and created (idempotently) on first run:
 

@@ -6746,8 +6746,10 @@ Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` m
   `out/tools/assert-commercial-drive.mjs`. The build ORDER lives in the two builder scripts alone
   (`script-orchestration.test.ts` runs it); the TS step plan that once mirrored it had no caller and
   was removed (#770).
-- Drive detection without the launcher: `workspace.ts findPreparedDriveRoot` walks up from the app's
-  own location (`PORTABLE_EXECUTABLE_DIR` / exe path) to the `config/drive.json` marker (audit M16).
+- Drive detection without the launcher: `workspace.ts locateDriveRoot` (an empty `HILBERTRAUM_DRIVE_ROOT`
+  counts as unset) has `findPreparedDriveRoot` walk up from the app's real location
+  (`PORTABLE_EXECUTABLE_DIR`, then `APPIMAGE` while `APPDIR` holds the executable, then the exe path) to
+  the `config/drive.json` marker (audit M16; #858).
 
 ## In-app model downloader (Phase 18)
 

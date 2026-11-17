@@ -46,10 +46,10 @@ should not appear at all.
 
 ## Linux: the AppImage does not start
 
-**On a prepared drive, start the launcher, not the AppImage.** `start-hilbertraum.sh` makes the
-AppImage executable for you and points the app at the drive's workspace. Started on its own, the
-AppImage does not find the drive and opens a separate, empty workspace in your home folder; your
-data on the drive is untouched, so quit and use the launcher. If double-clicking the launcher opens
+**On a prepared drive, start the launcher.** `start-hilbertraum.sh` makes the AppImage executable
+for you and points the app at the drive's workspace. An AppImage started on its own from the drive
+finds the drive's workspace too (before #858 it opened a separate, empty workspace in your home
+folder; the data on the drive was untouched). If double-clicking the launcher opens
 it in a text editor or does nothing, open a terminal in the drive's top folder and run
 `./start-hilbertraum.sh`. The terminal also shows any error message that a double-click hides.
 

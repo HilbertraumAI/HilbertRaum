@@ -68,6 +68,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **On Linux, the AppImage started directly from a Kit opens the Kit's workspace.** Started without
+  the drive's launcher, for example by a double-click in the file manager, the AppImage looked for
+  the drive from the temporary folder it unpacks itself into, found nothing, and opened a new, empty
+  workspace on the computer. It now looks from where the AppImage file really is. An empty
+  `HILBERTRAUM_DRIVE_ROOT` setting is also ignored now instead of disabling that search (#858).
 - **An unlock request on a workspace that is already open no longer pretends to unlock it.** The
   lock screen never sends one, but if one arrived it answered "unlocked" whatever the password,
   wrote a "Workspace unlocked" entry to the activity log, repeated earlier lines in the

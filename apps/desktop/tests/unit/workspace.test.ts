@@ -1,14 +1,89 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   buildDriveStatus,
   ensureWorkspaceDirs,
   findPreparedDriveRoot,
+  locateDriveRoot,
   resolvePaths
 } from '../../src/main/services/workspace'
 import { tempRoot } from '../helpers/db-fixtures'
+
+// #858: main/index.ts hands `locateDriveRoot` the override and the app's real location; its result goes to
+// `resolvePaths`. An empty or blank override is "not set", and each launch shape must find the drive it runs from.
+describe('locateDriveRoot', () => {
+  /** A prepared drive (`config/drive.json`) with the app somewhere below it. */
+  function kit(): { drive: string; app: string } {
+    const drive = tempRoot('drive-locate')
+    mkdirSync(join(drive, 'config'), { recursive: true })
+    writeFileSync(join(drive, 'config', 'drive.json'), '{}')
+    const app = join(drive, 'app', 'linux')
+    mkdirSync(app, { recursive: true })
+    return { drive, app }
+  }
+  const nowhere = (): string => join(tempRoot('drive-none'), 'bin', 'hilbertraum')
+
+  it.each([
+    ['no override', undefined],
+    ['an empty override (VAR= ./app)', ''],
+    ['a blank override', '   ']
+  ])('%s: the drive the executable sits on wins', (_label, envOverride) => {
+    const { drive, app } = kit()
+    expect(locateDriveRoot({ envOverride, exePath: join(app, 'hilbertraum') })).toEqual({ root: drive, fromOverride: false })
+  })
+
+  it('a real override wins, trimmed, over a detected drive', () => {
+    const { app } = kit()
+    expect(locateDriveRoot({ envOverride: '  /mnt/kit  ', exePath: join(app, 'hilbertraum') })).toEqual({
+      root: '/mnt/kit',
+      fromOverride: true
+    })
+  })
+
+  it("a Linux AppImage is found from $APPIMAGE, not from its FUSE mount's executable", () => {
+    const { drive, app } = kit()
+    const fuseExe = nowhere() // the executable inside /tmp/.mount_XXXX: no drive above it
+    const appImageDir = dirname(dirname(fuseExe)) // $APPDIR: the mount that holds the executable
+    expect(
+      locateDriveRoot({ appImagePath: join(app, 'HilbertRaum.AppImage'), appImageDir, exePath: fuseExe })
+    ).toEqual({ root: drive, fromOverride: false })
+  })
+
+  it("an $APPIMAGE inherited from ANOTHER AppImage is ignored: the executable's own drive wins", () => {
+    const own = kit()
+    const other = kit() // a second Kit, holding the AppImage whose child this process is
+    const otherMount = tempRoot('drive-other-mount') // that AppImage's $APPDIR; our executable is not in it
+    expect(
+      locateDriveRoot({
+        appImagePath: join(other.app, 'Other.AppImage'),
+        appImageDir: otherMount,
+        exePath: join(own.app, 'hilbertraum')
+      })
+    ).toEqual({ root: own.drive, fromOverride: false })
+  })
+
+  it('an $APPIMAGE that sits on no drive falls through to the executable', () => {
+    const { drive, app } = kit()
+    const exePath = join(app, 'hilbertraum')
+    expect(
+      locateDriveRoot({ appImagePath: nowhere(), appImageDir: dirname(dirname(exePath)), exePath })
+    ).toEqual({ root: drive, fromOverride: false })
+  })
+
+  it('the Windows portable exe is found from PORTABLE_EXECUTABLE_DIR, not from its temp extraction', () => {
+    const { drive, app } = kit()
+    expect(locateDriveRoot({ portableExeDir: app, exePath: nowhere() })).toEqual({ root: drive, fromOverride: false })
+  })
+
+  it('nothing set and no drive above the app → undefined (app-data)', () => {
+    expect(locateDriveRoot({ envOverride: '', appImagePath: '', exePath: nowhere() })).toEqual({
+      root: undefined,
+      fromOverride: false
+    })
+  })
+})
 
 describe('resolvePaths', () => {
   // The drive layout (docs/drive-layout.md): the vault's `.enc` is `<dbPath>.enc`, so a database
