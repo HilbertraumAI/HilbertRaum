@@ -703,11 +703,15 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
         `content-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
     )
     await until(() => h.sources.length === 1, 'the generation starting')
-    // Flood deltas until the socket buffer fills and the drain timeout reclaims the slot.
+    // Feed deltas until the drain timeout reclaims the slot. The source never ends, so the stream cannot finish
+    // normally: however much the loopback buffers absorb (a fixed 4 MiB flood fit them under load, and the stream
+    // then ended as served), the writer stays ahead of the reader until a write waits on 'drain' and times out.
     const big = 'y'.repeat(64 * 1024)
-    for (let i = 0; i < 64; i++) h.sources[0].push(big)
-    h.sources[0].end()
-    await until(() => !h.mgr.isGenerating(), 'the drain timeout reclaiming the stalled stream')
+    await until(() => {
+      if (!h.mgr.isGenerating()) return true
+      h.sources[0].push(big)
+      return false
+    }, 'the drain timeout reclaiming the stalled stream')
     socket.destroy()
     // The slot is free: a fresh request is admitted and served.
     const next = post(h, { messages: [{ role: 'user', content: 'ok' }] })
