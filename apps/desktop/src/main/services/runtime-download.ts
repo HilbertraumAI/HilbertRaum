@@ -373,34 +373,32 @@ export function resolveTarBinary(
 
 /**
  * The `tar` arguments for extracting `archivePath` into `destDir`, run with `cwd` = `destDir`
- * (#856). Windows' tar (bsdtar) opens the paths on its command line through the ANSI code page,
- * so an absolute path holding a character outside it (a Cyrillic or Japanese folder on a Western
- * Windows) fails with "Error opening archive"; the child's cwd reaches it intact. The installer
- * always downloads the archive straight into the target under an ASCII name
- * (`ARCHIVE_NAME_RULE`), so the bare name is enough, on every host. Any other layout keeps the
- * absolute call, and so does a name starting with `-`: `tar -xf -` reads the archive from stdin,
- * which here is empty, so tar would exit 0 having extracted nothing.
+ * (#856). Windows' tar (bsdtar) converts the paths on its command line through the ANSI code
+ * page, so under a Cyrillic or Japanese folder on a Western Windows an absolute archive path
+ * failed with "Error opening archive" and a `-C` with "could not chdir"; the child's cwd reaches
+ * tar intact. So there is no `-C` (the cwd is the target), and an archive in the target, where
+ * the installer downloads it (`planRuntimeDownload`), goes as `./<name>`. The `./` also keeps a
+ * name starting with `-` from meaning stdin, and one holding a `:` from meaning GNU tar's
+ * `host:file`. Any other archive keeps its absolute path.
  */
 function tarExtractArgs(archivePath: string, destDir: string): string[] {
-  const name = basename(archivePath)
-  return resolve(dirname(archivePath)) === resolve(destDir) && !name.startsWith('-')
-    ? ['-xf', name]
-    : ['-xf', archivePath, '-C', destDir]
+  const inTarget = resolve(dirname(archivePath)) === resolve(destDir)
+  return ['-xf', inTarget ? `./${basename(archivePath)}` : archivePath]
 }
 
 /**
- * Default extractor: the OS's pinned `tar` (see `resolveTarBinary`), `-xf` with the archive's
- * bare name from inside `destDir` (`tarExtractArgs`). One command covers every host because each
- * platform's archive is one its `tar` understands — Windows 10+ ships bsdtar (handles the .zip
- * release assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use
- * the same native tools (unzip/ditto/tar); this is the in-app equivalent.
+ * Default extractor: the OS's pinned `tar` (see `resolveTarBinary`), `-xf ./<archive>` from
+ * inside `destDir` (`tarExtractArgs`). One command covers every host because each platform's
+ * archive is one its `tar` understands — Windows 10+ ships bsdtar (handles the .zip release
+ * assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the same
+ * native tools (unzip/ditto/tar); this is the in-app equivalent.
  */
 export const extractWithTar: ExtractFn = (archivePath, destDir, signal) =>
   new Promise<void>((resolvePromise, reject) => {
     const child = spawn(resolveTarBinary(), tarExtractArgs(archivePath, destDir), {
       stdio: 'ignore',
-      // The target: the bare archive name resolves against it, and the child never inherits a
-      // possibly attacker-influenced cwd. `tar` itself is an absolute path (`resolveTarBinary`).
+      // The target: the archive's `./` name resolves against it and the files land in it, and
+      // the child never inherits a possibly attacker-influenced cwd.
       cwd: destDir,
       windowsHide: true
     })

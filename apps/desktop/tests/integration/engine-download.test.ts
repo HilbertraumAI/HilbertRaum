@@ -19,9 +19,8 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
     }
   }
 })
-import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -60,6 +59,7 @@ import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../s
 import { tMain } from '../../src/main/services/i18n'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
+import { makeTarGz, makeZip } from '../helpers/archives'
 import { verifierInert } from '../helpers/binary-fixtures'
 import { committedRuntimeSources } from '../helpers/catalog'
 import { bodyFetch, hangingFetch, routedFetch, runToEnd } from '../helpers/download-fixtures'
@@ -1141,24 +1141,20 @@ describe('resolveTarBinary (CWD-binary-planting hardening, vuln-scan 2026-06-21)
   })
 })
 
-// #856: the real default extractor, through the OS's own tar. Windows' bsdtar opens the paths on
-// its command line through the ANSI code page, so an engine install under a Cyrillic or Japanese
-// folder failed with "Error opening archive" on a Western Windows (code page 1252, as on the CI
-// runners). The archive is built by the same tar in the platform's release format (.zip on
-// Windows, .tar.gz elsewhere), with a nested folder as the whisper zip and the posix tarballs have.
+// #856: the real default extractor, through the OS's own tar. Windows' bsdtar converts the paths
+// on its command line through the ANSI code page, so an engine install under a Cyrillic or
+// Japanese folder failed with "Error opening archive" on a Western Windows (code page 1252, as on
+// this suite's Windows machines). Each archive is the platform's release format (.zip on Windows,
+// .tar.gz elsewhere), with a nested folder as the whisper zip and the posix tarballs have.
 const OS_TAR = resolveTarBinary()
 describe.skipIf(!isAbsolute(OS_TAR))('extractWithTar with the OS tar (#856)', () => {
   const ARCHIVE = process.platform === 'win32' ? 'engine.zip' : 'engine.tar.gz'
-
-  /** A release-shaped archive in its own folder: one file at the top, one nested. */
-  function buildArchive(): string {
-    const src = mkdtempSync(join(tmpdir(), 'hr-engine-tar-src-'))
-    writeFileSync(join(src, BIN_NAME), 'top-level binary')
-    mkdirSync(join(src, 'Release'))
-    writeFileSync(join(src, 'Release', 'nested.txt'), 'nested file')
-    const made = spawnSync(OS_TAR, ['-a', '-cf', ARCHIVE, BIN_NAME, 'Release'], { cwd: src })
-    expect(made.status, String(made.stderr)).toBe(0)
-    return join(src, ARCHIVE)
+  const archiveBytes = (): Buffer => {
+    const top = { name: BIN_NAME, data: Buffer.from('top-level binary') }
+    const nested = { name: 'Release/nested.txt', data: Buffer.from('nested file') }
+    return process.platform === 'win32'
+      ? makeZip([top, nested])
+      : makeTarGz([top, { name: 'Release/', dir: true }, nested])
   }
 
   /** An empty `<temp root>/<folder>/runtime/llama.cpp`, the shape of an install target. */
@@ -1168,10 +1164,9 @@ describe.skipIf(!isAbsolute(OS_TAR))('extractWithTar with the OS tar (#856)', ()
     return dir
   }
 
-  /** `archive` copied into `dir` as `name`, as the installer downloads it. `copyFileSync`, not
-   *  `cpSync`: Node 24.13's `cpSync` mangles a non-ASCII destination. */
-  function placeIn(dir: string, archive: string, name = ARCHIVE): string {
-    copyFileSync(archive, join(dir, name))
+  /** The archive written into `dir` as `name`, as the installer downloads it. */
+  function archiveIn(dir: string, name = ARCHIVE): string {
+    writeFileSync(join(dir, name), archiveBytes())
     return join(dir, name)
   }
 
@@ -1182,21 +1177,27 @@ describe.skipIf(!isAbsolute(OS_TAR))('extractWithTar with the OS tar (#856)', ()
 
   it('extracts into a folder named in Cyrillic and Japanese', async () => {
     const dir = target('Олена 日本')
-    await extractWithTar(placeIn(dir, buildArchive()), dir)
+    await extractWithTar(archiveIn(dir), dir)
     expectExtracted(dir)
   })
 
-  it('extracts an archive that sits outside the target', async () => {
-    const dir = target('outside')
-    await extractWithTar(buildArchive(), dir)
-    expectExtracted(dir)
-  })
-
-  it('extracts an archive named "-", which tar would read as stdin by bare name', async () => {
+  it('extracts an archive named "-", which tar would otherwise read as stdin', async () => {
     const dir = target('dash')
-    await extractWithTar(placeIn(dir, buildArchive(), '-'), dir)
+    await extractWithTar(archiveIn(dir, '-'), dir)
     expectExtracted(dir)
   })
+
+  // The archive's absolute path still goes through the code page here, so on a Windows machine
+  // whose temp folder itself is outside it (a user folder named in Cyrillic) this row would fail
+  // for that reason, not for the target's name.
+  it.skipIf(process.platform === 'win32' && /[^\x20-\x7e]/.test(tmpdir()))(
+    'extracts an archive from outside the target into a folder named in Cyrillic and Japanese',
+    async () => {
+      const dir = target('Олена 日本')
+      await extractWithTar(archiveIn(mkdtempSync(join(tmpdir(), 'hr-engine-tar-src-'))), dir)
+      expectExtracted(dir)
+    }
+  )
 })
 
 // F-32 (full-audit 2026-07-16): the in-use guard covered only the CHAT runtime — but the

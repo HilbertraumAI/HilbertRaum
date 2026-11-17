@@ -70,12 +70,15 @@ master pipeline** that produces a finished, sellable drive (see the last section
     ≤2 s SIGKILL grace (the extractor rejects after signalling the child, not after its exit; a tar
     wedged in uninterruptible I/O can outlive even that) — an accepted residual: rejecting only after
     the child's exit would reintroduce the unbounded wait this fix removes.
-    **`tar` gets the archive's bare name, run from inside the target** (#856), on every host.
-    Windows' tar (bsdtar) opens the paths on its command line through the ANSI code page, so an
-    absolute path under a Cyrillic or Japanese folder on a Western Windows failed with "Error opening
-    archive"; the child's working directory reaches tar intact. The archive is always downloaded
-    into the target under an ASCII name (`ARCHIVE_NAME_RULE`). Any other layout, and a name
-    starting with `-` (which tar reads as stdin), keeps `tar -xf <absolute archive> -C <target>`.
+    **`tar` runs from inside the target and gets `-xf ./<archive>`, with no `-C`** (#856), on every
+    host. Windows' tar (bsdtar) converts the paths on its command line through the ANSI code page,
+    so under a Cyrillic or Japanese folder on a Western Windows an absolute archive path failed with
+    "Error opening archive" and a `-C` with "could not chdir"; the child's working directory
+    reaches tar intact. The installer downloads the archive into the target, so its name is all tar
+    needs: ASCII when it comes from the URL (`ARCHIVE_NAME_RULE`), while the fallback name built
+    from the yaml's `version` is not checked. The `./` keeps a name starting with `-` from meaning
+    stdin and one holding a `:` from meaning GNU tar's `host:file`. An archive anywhere else keeps
+    its absolute path.
     **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install pre-cleans the dir EVERY
     llama-server sidecar runs from (chat + embedder + reranker + vision + translation), so it is
     refused while any of them has a live child; a `whisper_cpp` install is refused mid-transcription/
