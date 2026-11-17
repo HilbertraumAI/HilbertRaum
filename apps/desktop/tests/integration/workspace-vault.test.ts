@@ -413,6 +413,18 @@ describe('WorkspaceController', () => {
     again.lock()
   })
 
+  it('unlock re-stamps workspaceMode, so a wrong stored mode heals at the next unlock (#858)', () => {
+    const vp = freshVaultPaths('vault-mode')
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.create('master-pass', 'encrypted')
+    updateSettings(ctrl.requireDb(), { workspaceMode: 'plaintext_dev' }) // e.g. an older build's renderer
+    ctrl.lock()
+    ctrl.unlock('master-pass')
+    expect(getSettings(ctrl.requireDb()).workspaceMode).toBe('encrypted')
+    ctrl.lock()
+  })
+
   it('drives the encrypted uninitialized → unlocked → locked → unlocked lifecycle', () => {
     const vp = freshVaultPaths('vault')
     // Commercial posture: encryption required, not a dev build → onboarding, no plaintext.

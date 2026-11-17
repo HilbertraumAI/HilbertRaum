@@ -1717,6 +1717,10 @@ export class WorkspaceController {
     this.key = key
     this.descriptor = descriptor
     this._mode = 'encrypted'
+    // #858: re-stamp the mode Settings and Privacy read. Create and a plaintext open stamp it;
+    // without this an unlock kept whatever the row said, so a wrong value (an older build's
+    // renderer, a bug) hid Change password on an encrypted workspace for good.
+    updateSettings(db, { workspaceMode: 'encrypted' })
     // A new session: disarm any latch a completed lock left behind, and bump the epoch so a
     // model start still hashing weights from the PREVIOUS session refuses instead of spawning
     // into this one (AUD-02/AUD-03).

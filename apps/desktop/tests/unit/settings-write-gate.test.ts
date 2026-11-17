@@ -197,6 +197,15 @@ describe('settings write gate (BE-1)', () => {
     expect(rawSetting(db, 'gpuMode')).toBe('off')
     expect(updateSettings(db, { gpuMode: 'auto' }).gpuMode).toBe('auto')
   })
+
+  // #858: Settings and Privacy read workspaceMode to say "encrypted" and to offer Change password.
+  it("workspaceMode accepts only 'encrypted' or 'plaintext_dev'; junk keeps the prior value (#858)", () => {
+    const db = freshDb()
+    expect(updateSettings(db, { workspaceMode: 'encrypted' }).workspaceMode).toBe('encrypted')
+    updateSettings(db, { workspaceMode: 'banana' } as JunkPatch)
+    expect(rawSetting(db, 'workspaceMode')).toBe('encrypted')
+    expect(updateSettings(db, { workspaceMode: 'plaintext_dev' }).workspaceMode).toBe('plaintext_dev')
+  })
 })
 
 // CODE-16 (full-audit 2026-07-11): the object-valued settings accepted UNBOUNDED payloads from

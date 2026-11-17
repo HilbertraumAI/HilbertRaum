@@ -206,6 +206,8 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
       toStore = Math.min(MAX_LOCAL_API_PORT, Math.max(MIN_LOCAL_API_PORT, Math.floor(value)))
     }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
+    // #858: the two modes a workspace can be in; anything else would make Settings misreport it.
+    if (key === 'workspaceMode' && value !== 'encrypted' && value !== 'plaintext_dev') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue
     // uiLanguage: 'system' or a language this build registers. The READ path stays tolerant on
     // purpose: a value a newer build wrote (a shared drive) resolves like 'system' and its row
