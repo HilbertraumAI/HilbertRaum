@@ -828,8 +828,8 @@ the offline/privacy guarantees:
   scope corrected 2026-07-12, full-audit SEC-2 — the earlier "build-time only" framing was
   wrong).** `Expand-Archive` / `tar -xzf` in `scripts/fetch-runtime.{ps1,sh}` run on the drive
   **builder's** trusted machine — but the shipped app's engine installer performs the same
-  extraction (`runtime-download.ts` `extractWithTar`: `tar -xf … -C extractTo` via the OS
-  `tar`) of an archive whose source list (`runtime-sources.yaml`) lives on the user-writable
+  extraction (`runtime-download.ts` `extractWithTar`: `tar -xf ./<archive>` in `extractTo`,
+  OS `tar`) of an archive whose source list (`runtime-sources.yaml`) lives on the user-writable
   drive. Current in-app posture: the archive's sha256 is verified **before** extraction
   (tampering needs drive write access to both the archive/URL and the matching hash; a
   placeholder hash extracted flagged `unverified` — RT-02, 2026-09-02, made that a hard

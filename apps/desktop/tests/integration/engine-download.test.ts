@@ -20,15 +20,16 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
   }
 })
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { stringify } from 'yaml'
 import { isRealSha256 } from '../../src/shared/manifest'
 import {
   EngineDownloadManager,
   engineStatus,
+  extractWithTar,
   hostRuntimeArch,
   hostRuntimeOs,
   loadRuntimeSources,
@@ -58,6 +59,7 @@ import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../s
 import { tMain } from '../../src/main/services/i18n'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
+import { makeTarGz, makeZip } from '../helpers/archives'
 import { verifierInert } from '../helpers/binary-fixtures'
 import { committedRuntimeSources } from '../helpers/catalog'
 import { bodyFetch, hangingFetch, routedFetch, runToEnd } from '../helpers/download-fixtures'
@@ -70,7 +72,7 @@ import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 // network seam), the verify-before-trust flow (placeholder honesty, mismatch discard), the
 // extract → flatten → marker install, and the host build selection. The network + the
 // extraction are injected (a fake fetch + a fake extractor that drops the binary) so the
-// suite stays zero-network and never shells out.
+// suite stays zero-network. Only the #856 rows shell out, to the OS's own tar.
 
 const BODY = 'llama-server-release-archive-bytes'
 const REAL_SHA = createHash('sha256').update(BODY).digest('hex')
@@ -1136,6 +1138,61 @@ describe('resolveTarBinary (CWD-binary-planting hardening, vuln-scan 2026-06-21)
   it('falls back to the bare name only when no known absolute tar exists (exotic host)', () => {
     expect(resolveTarBinary('linux', {}, () => false)).toBe('tar')
     expect(resolveTarBinary('win32', { SystemRoot: 'C:\\Windows' }, () => false)).toBe('tar')
+  })
+})
+
+// #856: the real default extractor, through the OS's own tar. Windows' bsdtar converts the paths
+// on its command line through the ANSI code page, so an engine install under a Cyrillic or
+// Japanese folder failed with "Error opening archive" on a Western Windows (code page 1252, as on
+// this suite's Windows machines). Each archive is the platform's release format (.zip on Windows,
+// .tar.gz elsewhere), with a nested folder as the whisper zip and the posix tarballs have.
+const OS_TAR = resolveTarBinary()
+describe.skipIf(!isAbsolute(OS_TAR))('extractWithTar with the OS tar (#856)', () => {
+  const ARCHIVE = process.platform === 'win32' ? 'engine.zip' : 'engine.tar.gz'
+  const archiveBytes = (): Buffer => {
+    const top = { name: BIN_NAME, data: Buffer.from('top-level binary') }
+    const nested = { name: 'Release/nested.txt', data: Buffer.from('nested file') }
+    return process.platform === 'win32'
+      ? makeZip([top, nested])
+      : makeTarGz([top, { name: 'Release/', dir: true }, nested])
+  }
+
+  /** An empty `<temp root>/<folder>/runtime/llama.cpp`, the shape of an install target. */
+  function target(folder: string): string {
+    const dir = join(mkdtempSync(join(tmpdir(), 'hr-engine-tar-')), folder, 'runtime', 'llama.cpp')
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  /** The archive written into `dir` as `name`, as the installer downloads it. */
+  function archiveIn(dir: string, name = ARCHIVE): string {
+    writeFileSync(join(dir, name), archiveBytes())
+    return join(dir, name)
+  }
+
+  function expectExtracted(dir: string): void {
+    expect(readFileSync(join(dir, BIN_NAME), 'utf8')).toBe('top-level binary')
+    expect(readFileSync(join(dir, 'Release', 'nested.txt'), 'utf8')).toBe('nested file')
+  }
+
+  it('extracts into a folder named in Cyrillic and Japanese', async () => {
+    const dir = target('Олена 日本')
+    await extractWithTar(archiveIn(dir), dir)
+    expectExtracted(dir)
+  })
+
+  it('extracts an archive named "-", which tar would otherwise read as stdin', async () => {
+    const dir = target('dash')
+    await extractWithTar(archiveIn(dir, '-'), dir)
+    expectExtracted(dir)
+  })
+
+  // Its absolute path would have to go on tar's command line, through the code page again.
+  it('refuses an archive kept outside the target, before tar runs', async () => {
+    const dir = target('outside')
+    const elsewhere = archiveIn(mkdtempSync(join(tmpdir(), 'hr-engine-tar-src-')))
+    await expect(extractWithTar(elsewhere, dir)).rejects.toThrow(/must sit in the folder/)
+    expect(readdirSync(dir)).toEqual([])
   })
 })
 
