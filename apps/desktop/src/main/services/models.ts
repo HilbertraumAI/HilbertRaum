@@ -77,7 +77,8 @@ export interface DiscoveryResult {
  * Manifests are committed to git, so they sit at the repo/app root. Packaging places
  * them under resources; the drive launchers set HILBERTRAUM_MANIFESTS_DIR to the drive's copy
  * (one source of truth with the verify/fetch scripts). A set-but-missing override
- * falls back to the walk-up instead of blanking the model list.
+ * falls back to the walk-up instead of blanking the model list. The override steers the model
+ * list only: main also resolves the app's own copy (no override) for the engine pins (#842).
  */
 export function resolveManifestsDir(startDir: string, override?: string): string | null {
   const env = override?.trim()

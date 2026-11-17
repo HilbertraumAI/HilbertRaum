@@ -5856,6 +5856,15 @@ cites it as "In-app engine updates"._
   "Engine versions" row (and Copy-report line) naming every engine or `cpu/` net that is not the pin.
 - **Scripts:** `fetch-runtime.{ps1,sh}` print a note when the drive's yaml pins a different version of
   the family than the repo's, and say to refresh the manifests (`prepare-drive`) first (`packaging.md`).
+- **The pin is the app's own (#842, 2026-11-17).** §1's "never the drive's" was the intent, but the
+  handlers passed `ctx.manifestsDir`, which the launchers point at the drive's `model-manifests/`;
+  only a direct start read the bundled copy. A new app copied onto a drive whose manifests were not
+  refreshed therefore compared the engine with the drive's old pin and offered nothing. The status,
+  install, repair and update, and the voice engine's "could it be fetched here" check (#527), now
+  read `ctx.bundledManifestsDir` (`resolveManifestsDir(app.getAppPath())`, no override); the model
+  list keeps `ctx.manifestsDir`. After an in-app update the drive's yaml is older than the engine
+  on it, so `fetch-runtime` run without `prepare-drive` first re-installs the drive's older pin
+  (its marker check is "equal", not "at least").
 
 ### §4 Real-app verification (2026-10-05, DesktopDiT, GTX 1070 Ti, dev build)
 
@@ -14565,7 +14574,8 @@ they rest on._
 5. The pinned files are 1,333,102 bytes (`deu`) and 2,952,873 bytes (`eng`), measured 2026-09-22
    from the pinned URLs; their sha256 matched the pins.
 6. A release-only portable exe reads the APP-BUNDLED `model-manifests/`; a launcher-started drive
-   reads the drive's user-writable copy (`HILBERTRAUM_MANIFESTS_DIR`).
+   reads the drive's user-writable copy (`HILBERTRAUM_MANIFESTS_DIR`). (Since #842 that holds for
+   the model list and this installer's first source; the engine pins always come from the bundle.)
 
 **§3 Design as built.**
 - **Service** `services/ocr-install.ts` (Electron-free). `OCR_PINS` + `OCR_LICENSE`;

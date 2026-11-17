@@ -296,7 +296,9 @@ function initBackend(): void {
   for (const warning of policyWarnings) audit('policy_warning', warning)
 
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
-  log.info('Model manifests directory', { manifestsDir })
+  // #842: the app's own copy, never the launcher's override — the engine pins and the OCR fallback.
+  const bundledManifestsDir = resolveManifestsDir(app.getAppPath())
+  log.info('Model manifests directory', { manifestsDir, bundledManifestsDir })
 
   // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
   // Both are opt-in by availability — the selectors return the real backend only when
@@ -553,6 +555,7 @@ function initBackend(): void {
   const { embedder, reranker, transcriber, transcriberMissing, ocrEngine, translator } = composeServices({
     rootPath: paths.rootPath,
     manifestsDir,
+    bundledManifestsDir,
     // M-5: dev-only binary env overrides are honoured only in a dev build.
     isDev,
     // Issue #42: the translation sidecar honours the same gpuMode/gpuAutoDisabled the chat
@@ -676,6 +679,7 @@ function initBackend(): void {
     // (TG-3). Lazy — it spawns nothing until the first translate() of an available model.
     translator,
     manifestsDir,
+    bundledManifestsDir,
     probeGpu: gpuProbe,
     isDev,
     audit,
@@ -843,9 +847,9 @@ function initBackend(): void {
   registerImagesIpc(ctx, ctx.vision)
   registerTranslateIpc(ctx, ctx.translateJobs)
   registerDownloadIpc(ctx)
-  // #410: the OCR installer falls back to the APP-BUNDLED source list (no env override) when the
-  // drive's yaml carries no `ocr:` block.
-  registerEngineIpc(ctx, undefined, { bundledManifestsDir: resolveManifestsDir(app.getAppPath()) })
+  // The engine pins are `ctx.bundledManifestsDir` (#842); the OCR installer falls back to it when
+  // the drive's yaml carries no `ocr:` block (#410).
+  registerEngineIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   // The Performance screen's "last answer" figure: every finished chat answer's #290 speed

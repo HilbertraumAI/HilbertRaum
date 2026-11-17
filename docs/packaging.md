@@ -307,7 +307,9 @@ Key config points:
   on equally modified binaries (`architecture.md` #560 record §7).
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
-  `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
+  `HILBERTRAUM_MANIFESTS_DIR` (the launchers set it to the drive's copy) overrides that for the model
+  list only. The AI-engine pins (install, repair, the update notice) and the OCR fallback always read
+  this bundled copy (#842). Weights + sidecar binaries + the `ocr/` language files are
   **never** bundled — they live on the prepared drive.
 - **`THIRD-PARTY-NOTICES.md` ships as an `extraResource` too** (beside `model-manifests`, LIC-2):
   the aggregated license texts + copyright notices for every npm package that lands in `app.asar`

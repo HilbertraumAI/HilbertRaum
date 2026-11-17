@@ -502,8 +502,9 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     extract: ExtractFn = dropBinary,
     request?: { families: string[] }
   ): Promise<EngineDownloadJob> {
-    const ctx = f.ctx as unknown as { manifestsDir: string }
+    const ctx = f.ctx as unknown as { manifestsDir: string; bundledManifestsDir: string }
     ctx.manifestsDir = manifests
+    ctx.bundledManifestsDir = manifests // the engine pins are the app's own copy (#842)
     ipcState.handlers.clear()
     const manager = new EngineDownloadManager({ fetchImpl: bodyFetch(ARCHIVE), extractImpl: extract })
     // Fires once the job has settled, after any `onInstalled` listener ran.

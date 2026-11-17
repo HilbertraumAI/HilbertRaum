@@ -49,12 +49,15 @@ const MANIFEST = {
   }
 }
 
-function tempDrive(): { root: string; manifestsDir: string } {
+/** The drive's `model-manifests/`, and `appDir`: the app's own copy, which holds the engine pins (#842). */
+function tempDrive(): { root: string; manifestsDir: string; appDir: string } {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-transcriber-'))
   const manifestsDir = join(root, 'model-manifests')
   mkdirSync(manifestsDir, { recursive: true })
   writeFileSync(join(manifestsDir, 'whisper-test.yaml'), JSON.stringify(MANIFEST))
-  return { root, manifestsDir }
+  const appDir = join(root, 'app-bundle', 'model-manifests')
+  mkdirSync(appDir, { recursive: true })
+  return { root, manifestsDir, appDir }
 }
 
 function installBinary(root: string): void {
@@ -243,16 +246,17 @@ describe('engineFamilyHasHostBuild (#527)', () => {
 
 describe('composeTranscriberSlot (#527 — the slot and its reason from one resolution)', () => {
   it('walks a fresh drive from "both missing" to "engine" to selected', () => {
-    const { root, manifestsDir } = tempDrive()
-    writeRuntimeSources(manifestsDir)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir })).toEqual({
+    const { root, manifestsDir, appDir } = tempDrive()
+    writeRuntimeSources(appDir)
+    const deps = { rootPath: root, manifestsDir, bundledManifestsDir: appDir }
+    expect(composeTranscriberSlot(deps)).toEqual({
       transcriber: null,
       missing: 'model-and-engine'
     })
     installWeight(root)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir }).missing).toBe('engine')
+    expect(composeTranscriberSlot(deps).missing).toBe('engine')
     installBinary(root)
-    const slot = composeTranscriberSlot({ rootPath: root, manifestsDir })
+    const slot = composeTranscriberSlot(deps)
     expect(slot.transcriber?.id).toBe('whisper-test')
     expect(slot.missing).toBeNull()
     // A weight-only manifest (drives from before #504) composes without a VAD path.
@@ -260,20 +264,34 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
   })
 
   it('reports the model once the engine is in place', () => {
-    const { root, manifestsDir } = tempDrive()
-    writeRuntimeSources(manifestsDir)
+    const { root, manifestsDir, appDir } = tempDrive()
+    writeRuntimeSources(appDir)
     installBinary(root)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir }).missing).toBe('model')
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: appDir }).missing).toBe('model')
   })
 
   it('the issue’s drive: speech model installed, no engine, and no engine build for this OS', () => {
-    const { root, manifestsDir } = tempDrive()
-    writeRuntimeSources(manifestsDir, otherOs())
+    const { root, manifestsDir, appDir } = tempDrive()
+    writeRuntimeSources(appDir, otherOs())
     installWeight(root)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir })).toEqual({
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: appDir })).toEqual({
       transcriber: null,
       missing: 'engine-unsupported'
     })
+  })
+
+  // #842: the reason asks the pins the in-app installer uses, the app's own, not the drive's yaml
+  // (on a launcher start `manifestsDir` is the drive's copy, which can predate the app).
+  it('asks the app’s engine pins whether the voice engine could be fetched, never the drive’s (#842)', () => {
+    const { root, manifestsDir, appDir } = tempDrive()
+    installWeight(root)
+    const deps = { rootPath: root, manifestsDir, bundledManifestsDir: appDir }
+    writeRuntimeSources(manifestsDir, otherOs()) // the drive's yaml: no build for this system
+    writeRuntimeSources(appDir) // the app's: one
+    expect(composeTranscriberSlot(deps).missing).toBe('engine')
+    writeRuntimeSources(manifestsDir)
+    writeRuntimeSources(appDir, otherOs())
+    expect(composeTranscriberSlot(deps).missing).toBe('engine-unsupported')
   })
 
   it('returns null with no manifests dir (every role falls back)', () => {
@@ -284,12 +302,13 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
   })
 
   it('composeServices carries the reason alongside the slot', () => {
-    const { root, manifestsDir } = tempDrive()
-    writeRuntimeSources(manifestsDir)
+    const { root, manifestsDir, appDir } = tempDrive()
+    writeRuntimeSources(appDir)
     installWeight(root)
     const services = composeServices({
       rootPath: root,
       manifestsDir,
+      bundledManifestsDir: appDir,
       rerankerDevicePosture: () => 'cpu',
       rerankerRequestCeiling: () => Infinity
     })
@@ -299,20 +318,24 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
 })
 
 describe('refreshTranscriberSlot keeps the reason in step (#527)', () => {
-  function slot(root: string, manifestsDir: string | null) {
+  function slot(root: string, manifestsDir: string | null, bundledManifestsDir: string | null) {
     return {
       transcriber: null as Transcriber | null,
       transcriberMissing: undefined as TranscriberMissing | null | undefined,
       paths: { rootPath: root },
       manifestsDir,
+      bundledManifestsDir,
       isDev: false
     }
   }
 
   it('re-derives the reason on every refresh of a null slot, and clears it when the slot fills', () => {
-    const { root, manifestsDir } = tempDrive()
-    writeRuntimeSources(manifestsDir)
-    const ctx = slot(root, manifestsDir)
+    const { root, manifestsDir, appDir } = tempDrive()
+    writeRuntimeSources(appDir)
+    const ctx = slot(root, manifestsDir, appDir)
+    // Nothing on the drive yet, and the app's pins can fetch the voice engine (#842).
+    expect(refreshTranscriberSlot(ctx)).toBe(false)
+    expect(ctx.transcriberMissing).toBe('model-and-engine')
     // The voice engine install landed without the model: "both" turns into "model".
     installBinary(root)
     expect(refreshTranscriberSlot(ctx)).toBe(false)

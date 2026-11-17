@@ -83,8 +83,20 @@ export interface AppContext {
    * it off ctx per call (`ctx.translator`), never capture the value at wiring time.
    */
   translator?: Translator | null
-  /** Directory holding model-manifests, or null if it could not be located. */
+  /**
+   * Directory holding model-manifests, or null if it could not be located. The model list reads
+   * it; a launcher start points it at the drive's copy (`HILBERTRAUM_MANIFESTS_DIR`).
+   */
   manifestsDir: string | null
+  /**
+   * The app's OWN `model-manifests/` (packaged: `resources/model-manifests`; dev: the checkout's),
+   * resolved without `HILBERTRAUM_MANIFESTS_DIR`. The AI-engine pins come from here, never from
+   * `manifestsDir` (#842: on a launcher start that is the drive's copy, so a new app on a drive
+   * whose manifests were not refreshed compared the engine with the drive's old pin and never
+   * offered its update). Also the OCR installer's fallback source list (#410). Optional: absent in
+   * most test contexts, where it reads as "no engine sources".
+   */
+  bundledManifestsDir?: string | null
   /**
    * Session-cached GPU probe: `--list-devices` on a drive-local binary,
    * shared between the start ladder, Diagnostics, and the benchmark so they never

@@ -2443,6 +2443,13 @@ leaves any existing file untouched; nothing else in `ocr/` is listed, deleted or
 user-added third language survives). The request takes no renderer payload — the IPC refuses any
 argument.
 
+**#842 — the in-app engine download reads the app's own pins.** The install, the repair and the
+#516 update take their builds, URLs and hashes from the app's own `runtime-sources.yaml` (the
+bundled `model-manifests/`), never from the drive's copy, which the launchers hand the app for its
+model list. A tampered drive yaml therefore no longer chooses the engine archive the app fetches,
+and once the app is signed its signature covers those pins. The engine binaries on the drive are
+still trusted by location (§22-M2): whoever can write the drive can replace them directly.
+
 ### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
 `validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines
 the **request** bytes to the sidecar (normally the renderer's downscaled re-encode, but renderer

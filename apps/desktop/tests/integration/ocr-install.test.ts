@@ -834,7 +834,8 @@ describe('OCR install via IPC (#410)', () => {
     await closePerformanceFixture()
   })
 
-  function makeIpcDrive(opts: { locked?: boolean } = {}): {
+  /** `appCopyOnly`: the drive carries no source list; only the app's own copy does (the #410 fallback). */
+  function makeIpcDrive(opts: { locked?: boolean; appCopyOnly?: boolean } = {}): {
     root: string
     ctx: ReturnType<typeof ctxWith>
     ocrInstaller: OcrInstallManager
@@ -845,7 +846,9 @@ describe('OCR install via IPC (#410)', () => {
     mkdirSync(manifests, { recursive: true })
     mkdirSync(join(root, 'config'), { recursive: true })
     writeFileSync(join(root, 'config', 'policy.json'), JSON.stringify({ network: { allow_model_downloads: true } }))
-    writeFileSync(join(manifests, 'runtime-sources.yaml'), ocrYaml())
+    const appManifests = join(root, 'app-bundle', 'model-manifests')
+    mkdirSync(appManifests, { recursive: true })
+    writeFileSync(join(opts.appCopyOnly ? appManifests : manifests, 'runtime-sources.yaml'), ocrYaml())
     const db = seededDb(root)
     updateSettings(db, { allowNetwork: true })
     const fetchSpy = vi.fn(correctBytesFetch)
@@ -853,6 +856,7 @@ describe('OCR install via IPC (#410)', () => {
     const ctx = ctxWith(root, db, {
       paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
       manifestsDir: manifests,
+      bundledManifestsDir: appManifests,
       isDev: true,
       ocrEngine: null,
       workspace: { isUnlocked: () => opts.locked !== true }
@@ -861,6 +865,15 @@ describe('OCR install via IPC (#410)', () => {
     registerEngineIpc(ctx, undefined, { ocrInstaller })
     return { root, ctx, ocrInstaller, fetchSpy }
   }
+
+  // The handler's fallback reads the app's own copy off the context (`ctx.bundledManifestsDir`, which
+  // the engine pins share since #842).
+  it('falls back to the app’s own source list when the drive carries none', async () => {
+    makeIpcDrive({ appCopyOnly: true })
+    const status = (await invoke(handlers, IPC.getOcrInstallStatus)).result as OcrInstallStatus
+    expect(status.available).toBe(true)
+    expect(status.sourceHost).toBe('example.test')
+  })
 
   it('refuses while the workspace is locked, before any fetch', async () => {
     const d = makeIpcDrive({ locked: true })

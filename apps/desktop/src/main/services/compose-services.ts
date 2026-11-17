@@ -48,6 +48,12 @@ export interface ComposeServicesDeps {
   /** Resolved model-manifests dir, or null (→ every role falls back to mock/null). */
   manifestsDir: string | null
   /**
+   * The app's own `model-manifests/` (`AppContext.bundledManifestsDir`): its `runtime-sources.yaml`
+   * says whether the in-app installer could fetch the voice engine here (#527), the same pins the
+   * installer reads (#842). Absent or null: no engine build to fetch.
+   */
+  bundledManifestsDir?: string | null
+  /**
    * Developer build (`!app.isPackaged`). Gates the dev-only `HILBERTRAUM_LLAMA_BIN` /
    * `HILBERTRAUM_WHISPER_BIN` binary overrides (M-5): in a packaged build the sidecar
    * binaries are resolved only from the on-drive location, never an env-supplied path.
@@ -204,7 +210,7 @@ export function composeTranscriberSlot(deps: ComposeServicesDeps): {
       rootPath: deps.rootPath,
       model,
       isDev,
-      engineFetchable: engineFamilyHasHostBuild(deps.manifestsDir, 'whisper_cpp')
+      engineFetchable: engineFamilyHasHostBuild(deps.bundledManifestsDir ?? null, 'whisper_cpp')
     }) ??
     // Both pieces are on the drive, yet nothing was selected (the ladder and this check read
     // the same files, so only a race with a removal lands here): the model is the honest guess.
@@ -238,6 +244,7 @@ export interface TranscriberSlot {
   /** Only the drive root is read (binary + weight paths resolve against it). */
   paths: Pick<AppContext['paths'], 'rootPath'>
   manifestsDir: AppContext['manifestsDir']
+  bundledManifestsDir?: AppContext['bundledManifestsDir']
   isDev: AppContext['isDev']
 }
 
@@ -247,6 +254,7 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
     const next = composeTranscriberSlot({
       rootPath: ctx.paths.rootPath,
       manifestsDir: ctx.manifestsDir,
+      bundledManifestsDir: ctx.bundledManifestsDir,
       isDev: ctx.isDev
     })
     // #527: the reason moves with every refresh — an engine install that lands without the model
@@ -403,6 +411,7 @@ export async function refreshOcrSlot(
 export function composeServices({
   rootPath,
   manifestsDir,
+  bundledManifestsDir,
   isDev = false,
   gpu,
   rerankerDevicePosture,
@@ -455,6 +464,7 @@ export function composeServices({
   const { transcriber, missing: transcriberMissing } = composeTranscriberSlot({
     rootPath,
     manifestsDir,
+    bundledManifestsDir,
     isDev,
     discovered
   })
