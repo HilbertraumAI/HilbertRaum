@@ -1354,6 +1354,9 @@ read pre-unlock. Since Phase 32 it is the **v2 envelope** format:
   data key (`dataKey` = AES-256-GCM of the data key under the KEK). Unlock: derive the KEK →
   check the verifier → unwrap the data key → zero the KEK. This makes a password change O(1)
   (re-wrap one blob) and is the foundation for future key features (recovery codes, rotation).
+  Any unlock failure after the verifier (a corrupt wrapped key, a tag-failing `.enc`, a failed
+  roll-forward, an error once the database is open) zeroes the KEK and the data key before it
+  throws, and shreds a working file it had already opened (#858).
 - **v1 (legacy, still fully supported):** no `dataKey` — the data is encrypted directly under
   the password-derived key. v1 vaults unlock unchanged forever; they migrate to v2 only on
   their **first password change** (never on unlock — a vault that never changes its password
