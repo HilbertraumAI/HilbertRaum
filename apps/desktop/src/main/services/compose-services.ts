@@ -48,14 +48,6 @@ export interface ComposeServicesDeps {
   /** Resolved model-manifests dir, or null (→ every role falls back to mock/null). */
   manifestsDir: string | null
   /**
-   * The app's own `model-manifests/` (`AppContext.bundledManifestsDir`): its `runtime-sources.yaml`
-   * says whether the in-app installer could fetch the voice engine here (#527), the same pins the
-   * installer reads (#842). Null: no engine build to fetch. Optional on THIS base type only because
-   * `composeTranslator` shares it and never reads it; the transcriber's composition and
-   * `composeServices` require it (the Wave 8 NF-1 rule below: an optional wire goes missing silently).
-   */
-  bundledManifestsDir?: string | null
-  /**
    * Developer build (`!app.isPackaged`). Gates the dev-only `HILBERTRAUM_LLAMA_BIN` /
    * `HILBERTRAUM_WHISPER_BIN` binary overrides (M-5): in a packaged build the sidecar
    * binaries are resolved only from the on-drive location, never an env-supplied path.
@@ -108,10 +100,25 @@ export interface ComposeServicesDeps {
  * (`// @ts-expect-error`).
  */
 export type ComposeServicesArgs = ComposeServicesDeps &
-  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling' | 'bundledManifestsDir'>>
+  EnginePinsDeps &
+  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling'>>
 
-/** The transcriber's composition: the engine pins are required (#842), see `ComposeServicesDeps`. */
-export type ComposeTranscriberDeps = ComposeServicesDeps & Required<Pick<ComposeServicesDeps, 'bundledManifestsDir'>>
+/**
+ * #842: where the engine pins live, for the transcriber's composition and `composeServices`. Never on
+ * the shared base: `composeTranslator` takes that and never reads it, and an optional field there would
+ * be one a composer could drop without a compile error (the NF-1 rule above).
+ */
+export interface EnginePinsDeps {
+  /**
+   * The app's own `model-manifests/` (`AppContext.bundledManifestsDir`): its `runtime-sources.yaml`
+   * says whether the in-app installer could fetch the voice engine here (#527), the same pins the
+   * installer reads. Null: no engine build to fetch.
+   */
+  bundledManifestsDir: string | null
+}
+
+/** The transcriber's composition: the drive layout plus the engine pins (#842). */
+export type ComposeTranscriberDeps = ComposeServicesDeps & EnginePinsDeps
 
 /**
  * Build (or re-build) JUST the translation sidecar selection from the current drive layout.

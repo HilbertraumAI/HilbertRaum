@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse as parseYaml, stringify } from 'yaml'
@@ -125,10 +125,12 @@ function demoRuntime(): { status: () => RuntimeStatus; activeModelId: () => stri
  *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case.
  *  `kit` (#678) pins the chat engine as a prepared Kit has it: a vulkan main build, plus the
  *  `cpu/` safety net in its own folder (each its own archive URL).
- *  The engine pins are the app's own copy (`ctx.bundledManifestsDir`, #842). By default it is the
- *  drive's twin, as on a freshly prepared drive; `appLlamaVersion` gives the app its own copy with a
- *  newer chat-engine pin and archive URL (`…-app.zip`): a new app copied onto a drive whose
- *  manifests were not refreshed, started through the launcher. */
+ *  The engine pins are the app's own copy (`ctx.bundledManifestsDir`, #842). By default the yaml
+ *  lives ONLY there and the drive's folder holds the model manifests alone, so every engine row in
+ *  this file fails if a path reads the drive's copy. `appLlamaVersion` keeps the yaml on the drive
+ *  too, as its stale pin, and gives the app a newer chat-engine pin with its own archive URL
+ *  (`…-app.zip`): a new app copied onto a drive whose manifests were not refreshed, started through
+ *  the launcher. */
 function makeDrive(
   opts: {
     withWhisper?: boolean
@@ -196,16 +198,18 @@ function makeDrive(
       }
     })
   )
-  let appManifests = manifests
+  const drivePins = join(manifests, 'runtime-sources.yaml')
+  const appManifests = join(root, 'app-bundle', 'model-manifests')
+  mkdirSync(appManifests, { recursive: true })
   if (opts.appLlamaVersion) {
-    appManifests = join(root, 'app-bundle', 'model-manifests')
-    mkdirSync(appManifests, { recursive: true })
-    const sources = parseYaml(readFileSync(join(manifests, 'runtime-sources.yaml'), 'utf8')) as {
+    const sources = parseYaml(readFileSync(drivePins, 'utf8')) as {
       llama_cpp: { version: string; builds: Array<{ url: string }> }
     }
     sources.llama_cpp.version = opts.appLlamaVersion
     for (const build of sources.llama_cpp.builds) build.url = build.url.replace(/\.zip$/, '-app.zip')
     writeFileSync(join(appManifests, 'runtime-sources.yaml'), stringify(sources))
+  } else {
+    renameSync(drivePins, join(appManifests, 'runtime-sources.yaml'))
   }
   const db = seededDb(root)
   updateSettings(db, { allowNetwork: true })

@@ -306,11 +306,13 @@ Key config points:
   600–700 ms later than the stock binary, whatever the app code. A timing A/B must run both sides
   on equally modified binaries (`architecture.md` #560 record §7).
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
-  finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
-  `HILBERTRAUM_MANIFESTS_DIR` (the launchers set it to the drive's copy) overrides that for the model
-  list only. The AI-engine pins (install, repair, the update notice) and the OCR fallback always read
-  this bundled copy (#842). Weights + sidecar binaries + the `ocr/` language files are
-  **never** bundled — they live on the prepared drive.
+  finds them for the model list via `resolveManifestsDir(app.getAppPath())`, which walks up to
+  `resources/model-manifests`; `HILBERTRAUM_MANIFESTS_DIR` (the launchers set it to the drive's copy)
+  overrides that. The AI-engine pins (install, repair, the update notice) and the OCR fallback read
+  this bundled copy only, by `resolveBundledManifestsDir`: exactly `<process.resourcesPath>/model-manifests`,
+  no walk-up and no override, and none when it is missing (#842). Engine entries added to a drive's
+  `runtime-sources.yaml` therefore reach the scripts, never the app. Weights + sidecar binaries + the
+  `ocr/` language files are **never** bundled — they live on the prepared drive.
 - **`THIRD-PARTY-NOTICES.md` ships as an `extraResource` too** (beside `model-manifests`, LIC-2):
   the aggregated license texts + copyright notices for every npm package that lands in `app.asar`
   or the Vite-compiled bundles (Apache-2.0 NOTICE preservation for pdfjs-dist/tesseract.js, the
