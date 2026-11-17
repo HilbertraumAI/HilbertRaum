@@ -10,17 +10,56 @@ import { IMAGES_DIR_NAME } from './workspace-vault'
 //   1. Prepared external drive (a `config/drive.json` marker at the root)
 //   2. Explicit override via the HILBERTRAUM_DRIVE_ROOT environment variable
 //   3. App-data fallback (normal install / dev)
-// Detection order in main: HILBERTRAUM_DRIVE_ROOT (the launchers) → walk-up from the app's own
-// location (`findPreparedDriveRoot` — a buyer who double-clicks the portable .exe /
-// .app directly, bypassing the launcher, must still land on the DRIVE workspace, not a
-// silent fresh app-data one) → app-data fallback.
+// Detection order in main (`locateDriveRoot`): HILBERTRAUM_DRIVE_ROOT (the launchers) → walk-up
+// from the app's real location (`findPreparedDriveRoot` from the portable exe's folder, the
+// AppImage's file or the executable — a buyer who starts the app directly, bypassing the
+// launcher, must still land on the DRIVE workspace, not a silent fresh app-data one) →
+// app-data fallback.
+
+/** Where the running app really is, for {@link locateDriveRoot}. */
+export interface AppLocation {
+  /** `HILBERTRAUM_DRIVE_ROOT` (the launchers set it to the drive). */
+  envOverride?: string
+  /** `PORTABLE_EXECUTABLE_DIR`: the Windows portable exe extracts itself to a temp dir and names its real folder here. */
+  portableExeDir?: string
+  /** `APPIMAGE`: a Linux AppImage runs from a FUSE mount under /tmp and names the real .AppImage file here. */
+  appImagePath?: string
+  /** `APPDIR`: that FUSE mount. `APPIMAGE` counts only while the executable sits inside it: every child of
+   *  ANY AppImage inherits both, so a value leaked from another app's AppImage must not pick the drive. */
+  appImageDir?: string
+  /** `app.getPath('exe')`: an unpacked macOS .app or Linux build run in place. */
+  exePath: string
+}
+
+/**
+ * The workspace root to hand `resolvePaths`. The `HILBERTRAUM_DRIVE_ROOT` override wins when it names a
+ * path; an EMPTY or blank one counts as unset (#858). `VAR= ./app` from a shell used to keep `''`, which
+ * `resolvePaths` trims away, so the app fell back to app-data although it ran from a prepared drive.
+ * Without an override, the drive is found by walking up from where the app really is (see
+ * {@link AppLocation}; #858: an AppImage's executable sits in its FUSE mount, so only `$APPIMAGE` reaches
+ * the drive). Not found → `undefined` (app-data). `fromOverride` says which source won, for the startup log.
+ */
+export function locateDriveRoot(loc: AppLocation): { root: string | undefined; fromOverride: boolean } {
+  const override = loc.envOverride?.trim()
+  if (override) return { root: override, fromOverride: true }
+  const appImage = loc.appImagePath?.trim()
+  const appDir = loc.appImageDir?.trim()
+  const ownAppImage = appImage && appDir && loc.exePath.startsWith(appDir) ? appImage : undefined
+  const detected =
+    findPreparedDriveRoot(loc.portableExeDir) ??
+    findPreparedDriveRoot(ownAppImage ? dirname(ownAppImage) : undefined) ??
+    findPreparedDriveRoot(dirname(loc.exePath))
+  return { root: detected ?? undefined, fromOverride: false }
+}
 
 /**
  * Walk up from `startDir` looking for the prepared-drive marker (`config/drive.json`).
  * Returns the drive root, or null. Used when the app is launched WITHOUT the launcher:
  * the Windows portable exe exposes its real location via PORTABLE_EXECUTABLE_DIR (the
- * exe itself extracts to a temp dir), and a macOS .app/Linux AppImage on the drive is
- * found by walking up from the executable. Only a marker hit counts — an exe sitting in
+ * exe itself extracts to a temp dir), a Linux AppImage via APPIMAGE (it runs from a FUSE
+ * mount), and an unpacked macOS .app or Linux build is found by walking up from the
+ * executable (a .app that Gatekeeper translocates runs from elsewhere and is not found:
+ * the drive's launcher covers that). At most `maxLevels` folders up. Only a marker hit counts — an exe sitting in
  * Downloads must NOT turn Downloads into a workspace root.
  */
 export function findPreparedDriveRoot(startDir: string | undefined, maxLevels = 6): string | null {
@@ -46,7 +85,7 @@ export interface ResolvedPaths {
 }
 
 export interface ResolveOptions {
-  /** Value of HILBERTRAUM_DRIVE_ROOT, if set. */
+  /** The root `locateDriveRoot` picked: the HILBERTRAUM_DRIVE_ROOT override or the detected drive. */
   envRoot?: string
   /** Fallback root (e.g. Electron app.getPath('userData')). */
   fallbackRoot: string

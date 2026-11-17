@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, session
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
+import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
 import { onEngineProblemsChanged } from './services/runtime/engine-load'
@@ -187,12 +187,17 @@ function initBackend(): void {
   // launcher) gets no HILBERTRAUM_DRIVE_ROOT — detect the drive from the app's own location so
   // they still land on the drive's (possibly encrypted) workspace, not a silent fresh
   // app-data one. PORTABLE_EXECUTABLE_DIR is set by the electron-builder portable target
-  // (the exe extracts itself to a temp dir, so execPath alone would miss the drive).
-  const exeDriveRoot =
-    findPreparedDriveRoot(process.env.PORTABLE_EXECUTABLE_DIR) ??
-    findPreparedDriveRoot(dirname(app.getPath('exe')))
+  // (the exe extracts itself to a temp dir, so execPath alone would miss the drive), and
+  // APPIMAGE by a Linux AppImage (it runs from a FUSE mount). An empty override counts as unset.
+  const driveRoot = locateDriveRoot({
+    envOverride: process.env.HILBERTRAUM_DRIVE_ROOT,
+    portableExeDir: process.env.PORTABLE_EXECUTABLE_DIR,
+    appImagePath: process.env.APPIMAGE,
+    appImageDir: process.env.APPDIR,
+    exePath: app.getPath('exe')
+  })
   const paths = resolvePaths({
-    envRoot: process.env.HILBERTRAUM_DRIVE_ROOT ?? exeDriveRoot ?? undefined,
+    envRoot: driveRoot.root,
     fallbackRoot: app.getPath('userData')
   })
   ensureWorkspaceDirs(paths)
@@ -203,7 +208,7 @@ function initBackend(): void {
   log.info('Workspace resolved', {
     root: paths.rootPath,
     preparedDrive: paths.isPreparedDrive,
-    detectedFromAppLocation: !process.env.HILBERTRAUM_DRIVE_ROOT && exeDriveRoot != null
+    detectedFromAppLocation: !driveRoot.fromOverride && driveRoot.root !== undefined
   })
 
   // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
