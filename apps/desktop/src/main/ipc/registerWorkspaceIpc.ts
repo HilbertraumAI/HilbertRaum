@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import {
   VaultBusyError,
   VaultDamagedError,
+  VaultOpenFailedError,
   VaultRecoveryBlockedError,
   WrongPasswordError,
   workspaceAdmitsWork
@@ -257,6 +258,25 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.vaultDamaged')
         }
       }
+      // #844: the password verified and SQLite found a database, but opening it could not finish
+      // (an upgrade step: a full drive, an I/O error, a bug in a new step). The open does not rewrite
+      // `.enc` (only a `.recovery` roll-forward before it can, with a fresher snapshot), so this
+      // must not wear the damaged copy and send the user looking for a backup. The log gets
+      // the error's `failure` (the cause's kind and SQLite's fixed description): the error never
+      // holds the cause's message, which a backfill can fill with stored text.
+      // instanceof PLUS the name — the bundle-duplication quirk again.
+      if (err instanceof VaultOpenFailedError || (err instanceof Error && err.name === 'VaultOpenFailedError')) {
+        log.error(
+          'Workspace unlock failed: the database could not finish opening (password verified)',
+          (err as VaultOpenFailedError).failure
+        )
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (could not finish opening)')
+        return {
+          ok: false,
+          reason: 'vault_open_failed',
+          message: tMain('main.workspace.vaultOpenFailed')
+        }
+      }
       // #242: the startup salvage is blocked — another program holds the recovery file the
       // last session's newest data must be moved onto, so opening now would decrypt the
       // stale snapshot over it. Its own reason + copy (close the holder, retry; nothing is
@@ -352,7 +372,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         if (/not permitted|already exists/i.test(message)) {
           return { ok: false, reason: 'refused', message }
         }
-        log.error('Workspace create failed', message)
+        // #844: a first open that could not finish carries only a fixed message; what failed is
+        // in its `failure` (content-free).
+        const failure = (err as { failure?: object } | null)?.failure
+        log.error('Workspace create failed', failure ? { message, ...failure } : message)
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }

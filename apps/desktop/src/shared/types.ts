@@ -332,7 +332,11 @@ export interface WorkspaceStateInfo {
  *  (opening would decrypt the stale snapshot over it); close that program and retry, nothing
  *  is lost.
  *  `workspace_newer` (#247): the database was written by a NEWER build (`PRAGMA user_version`
- *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app. */
+ *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app.
+ *  `vault_open_failed` (#844): the password verified and the data is a database SQLite does not
+ *  call damaged, but opening it could not finish (an upgrade step: a full drive, an I/O error, a
+ *  bug in a new step). The failed open never rewrites the encrypted vault: free space and retry,
+ *  or after an update start the previous version. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }
   | {
@@ -340,6 +344,7 @@ export type WorkspaceActionResult =
       reason:
         | 'wrong_password'
         | 'vault_damaged'
+        | 'vault_open_failed'
         | 'vault_recovery_blocked'
         | 'workspace_newer'
         | 'refused'

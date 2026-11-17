@@ -46,6 +46,8 @@ import {
 } from '../../src/shared/types'
 import { WorkspaceController, VaultRecoveryBlockedError, type VaultPaths } from '../../src/main/services/workspace-vault'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
+import { log, readLogTail } from '../../src/main/services/logging'
+import * as settingsModule from '../../src/main/services/settings'
 import { UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 import {
   CREATE_FAILURE_KEYS,
@@ -63,6 +65,7 @@ import {
   newerPlaintext,
   newerVault,
   unlockedController,
+  upgradeBlockedVault,
   workspaceIpcCtx,
   type WorkspaceIpcCtxOptions
 } from '../helpers/vault-fixtures'
@@ -564,6 +567,13 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     vault_damaged: [
       { how: 'a vault that decrypts to noise', arrange: () => ({ workspace: startedOn(damagedOnDisk()), args: [PW] }) }
     ],
+    // #844: a healthy database whose open's upgrade step cannot finish is not damage.
+    vault_open_failed: [
+      {
+        how: 'a database whose upgrade step cannot finish',
+        arrange: () => ({ workspace: startedOn(upgradeBlockedVault(lockedVault('wsipc', PW), PW)), args: [PW] })
+      }
+    ],
     // A real hold takes an `fs` mock (vault-recovery-guards.test.ts drives one into this handler);
     // the handler only sees the controller's typed refusal, so a workspace whose unlock throws it
     // reaches the same branch.
@@ -594,6 +604,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
   const CREATE: Provocations = {
     wrong_password: NEVER_SENT,
     vault_damaged: NEVER_SENT,
+    vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
     workspace_newer: [
       {
@@ -672,4 +683,63 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       }
     }
   )
+})
+
+// #844: an open that could not finish is logged by what failed, never by the failure's message. A
+// backfill's error can quote what it was reading (a JSON parse error quotes its input), and app.log
+// never carries document text (logging.ts). The trigger's abort text stands in for such a quote.
+describe('an unlock whose open could not finish (#844)', () => {
+  it('logs the cause’s kind and SQLite’s own description, never the cause’s message', async () => {
+    const quote = 'page text the backfill was reading'
+    const workspace = startedOn(upgradeBlockedVault(lockedVault('wsipc', PW), PW, { abortMessage: quote }))
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    // Only this unlock's lines: the table rows above log the same failure, and the buffer trims
+    // from the front, so the lines are taken after a marker rather than by count.
+    const marker = `#844 marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.unlockWorkspace, PW)
+      expect(result).toMatchObject({ ok: false, reason: 'vault_open_failed' })
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)
+      const logged = lines.filter((l) => l.includes('could not finish opening'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain('ERR_SQLITE_ERROR')
+      expect(logged[0]).toContain('constraint failed')
+      expect(lines.join('\n')).not.toContain(quote)
+    } finally {
+      workspace.shutdown()
+    }
+  })
+
+  it('a create whose first open could not finish logs what failed, not only the fixed message', async () => {
+    const workspace = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    // Creating builds and seeds the vault first, then opens it like an unlock: the second seed is the open's.
+    const realSeed = settingsModule.seedSettings
+    const full = Object.assign(new Error('database or disk is full'), {
+      code: 'ERR_SQLITE_ERROR',
+      errcode: 13,
+      errstr: 'database or disk is full'
+    })
+    const seed = vi
+      .spyOn(settingsModule, 'seedSettings')
+      .mockImplementationOnce(realSeed)
+      .mockImplementationOnce(() => {
+        throw full
+      })
+    const marker = `#844 create marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'encrypted')
+      expect(result).toMatchObject({ ok: false, reason: 'error' })
+      const all = readLogTail(100_000)
+      const logged = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('Workspace create failed'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain('"sqliteCode":13')
+    } finally {
+      seed.mockRestore()
+      workspace.shutdown()
+    }
+  })
 })

@@ -129,7 +129,8 @@ export class VaultLockError extends Error {
 
 /**
  * Thrown by `unlockEncryptedVault` when the password is CORRECT (verifier passed, GCM tag
- * on `.enc` authenticated) but the decrypted bytes are not an openable SQLite database —
+ * on `.enc` authenticated) but SQLite finds the decrypted bytes are not a database, or a
+ * corrupt one (#844: any other open failure is `VaultOpenFailedError`) —
  * the vault ciphertext itself is damaged (issue #208: the app had re-encrypted a
  * shred-survivor of random noise over the good `.enc`, so every layer of crypto verified
  * and only `openDatabase` could tell). Structurally NOT a password problem: the IPC layer
@@ -145,6 +146,62 @@ export class VaultDamagedError extends Error {
     super('The workspace decrypted but is not a database — the vault is damaged')
     this.name = 'VaultDamagedError'
   }
+}
+
+/**
+ * Thrown by `unlockEncryptedVault` when the password is CORRECT and the decrypted file is a
+ * database SQLite does not call damaged, yet opening it failed (#844): one of the open's
+ * upgrade steps (the schema, an `ensureColumn`, a backfill) or the unlock's own settings writes
+ * could not finish, through a full drive, an I/O error or a bug in a new step. The failed open
+ * never rewrites `.enc` (the working copy is shredded like any failure after the decrypt; a
+ * `.recovery` roll-forward earlier in the same unlock may already have replaced it with that
+ * fresher snapshot, in the same format), so this is not damage,
+ * and the IPC layer must not show `vault_damaged`'s "restore from a backup": it maps this to
+ * `vault_open_failed` (free space and retry; after an update, the previous version still opens
+ * the vault).
+ *
+ * It keeps only WHAT failed (`failure`), never the cause itself: a backfill's error can quote what
+ * it was reading (a JSON parse error quotes its input), and app.log never carries document text.
+ */
+export class VaultOpenFailedError extends Error {
+  /** The cause's kind and Node error code (`ERR_SQLITE_ERROR`, `ENOSPC`, …), and SQLite's own
+   *  result code and fixed description: content-free, for the log. */
+  readonly failure: { kind: string; code: string | null; sqliteCode: number | null; sqlite: string | null }
+  constructor(cause: unknown) {
+    super('The workspace decrypted to a database, but opening it failed')
+    this.name = 'VaultOpenFailedError'
+    const c = cause as { name?: unknown; code?: unknown; errcode?: unknown; errstr?: unknown } | null | undefined
+    this.failure = {
+      kind: typeof c?.name === 'string' ? c.name : typeof cause,
+      code: typeof c?.code === 'string' ? c.code : null,
+      sqliteCode: typeof c?.errcode === 'number' ? c.errcode : null,
+      sqlite: typeof c?.errstr === 'string' ? c.errstr : null
+    }
+  }
+}
+
+/** SQLite's primary result codes for "this is not a database" and "this database is corrupt". */
+const SQLITE_CORRUPT = 11
+const SQLITE_NOTADB = 26
+
+/**
+ * Whether SQLite itself judged the file damaged (#844): `node:sqlite` errors carry SQLite's
+ * extended result code as `errcode`, whose low byte is the primary code. Noise fails the first
+ * read with NOTADB (#208); a real database with a damaged page passes that read and fails a later
+ * statement with CORRUPT. Anything else (a full drive, an I/O error, a constraint, a JS error in
+ * a backfill) is an open that could not finish, not damage.
+ */
+function sqliteJudgedDamaged(err: unknown): boolean {
+  const code = (err as { errcode?: unknown } | null)?.errcode
+  return typeof code === 'number' && ((code & 0xff) === SQLITE_CORRUPT || (code & 0xff) === SQLITE_NOTADB)
+}
+
+/** What a failure of the unlock's open, or of its own settings writes, is thrown as (#208, #247,
+ *  #844): a newer build's database as itself, SQLite's damage verdict as `VaultDamagedError`, and
+ *  anything else as `VaultOpenFailedError`. */
+function openFailure(err: unknown): unknown {
+  if (isWorkspaceNewerError(err)) return err
+  return sqliteJudgedDamaged(err) ? new VaultDamagedError() : new VaultOpenFailedError(err)
 }
 
 /**
@@ -1241,7 +1298,9 @@ export interface UnlockedVault {
  * Unlock an encrypted vault: derive the key, verify the password against the descriptor
  * (no DB access), unwrap the data key on a v2 descriptor, decrypt `.enc` → working file,
  * and open the database. Throws `WrongPasswordError` on a bad password (the GCM verifier
- * fails, the DB is never touched).
+ * fails, the DB is never touched). After the password verified: `VaultRecoveryBlockedError`
+ * (#242), `WorkspaceNewerError` (#247), `VaultDamagedError` when SQLite finds no database or a
+ * corrupt one (#208), and `VaultOpenFailedError` when the open could not finish otherwise (#844).
  */
 export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): UnlockedVault {
   const descriptor = readVaultDescriptor(vaultPaths.descriptorPath)
@@ -1279,7 +1338,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   // IS the file key, returned on success.
   let fileKey = key
   let plaintextOnDisk = false
-  let openedDb: Db | null = null
+  // Declared wide: it is assigned inside the open's own try below, which the outer catch's
+  // narrowing does not follow (it would read `openedDb` as always null there).
+  let openedDb = null as Db | null
   try {
     if (descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
       fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
@@ -1351,14 +1412,20 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       decryptMs: perfMs(decryptT0),
       dbBytes: fileSizeOrNull(vaultPaths.dbPath)
     })
-    // #208: the decrypt above verified the GCM tag, so a failure to OPEN what came out means
-    // the vault ciphertext itself is damaged (it authenticates — it is our own ciphertext —
-    // but its plaintext is not a database). Distinguish that from a wrong password, and never
-    // leave the decrypted output at rest: for a damaged-but-real database those bytes are
-    // authentic plaintext user data sitting on disk while the workspace reports locked.
+    // #208: the decrypt above verified the GCM tag, so when SQLite finds no database (or a
+    // corrupt one) in what came out, the vault ciphertext itself is damaged (it authenticates —
+    // it is our own ciphertext — but its plaintext is not a database). Distinguish that from a
+    // wrong password, and from an upgrade step that could not finish (#844), and never leave the
+    // decrypted output at rest: for a damaged-but-real database those bytes are authentic
+    // plaintext user data sitting on disk while the workspace reports locked.
     let db: Db
     try {
       db = openDatabase(vaultPaths.dbPath)
+      openedDb = db
+      seedSettings(db)
+      // #858: re-stamp the mode Settings and Privacy read (create and a plaintext open stamp it
+      // too), inside this guard so a failed write cannot leave the keys or the open database behind.
+      updateSettings(db, { workspaceMode: 'encrypted' })
     } catch (err) {
       // The plaintext is shredded on the way out (the outer catch), exactly like any failure
       // after the decrypt.
@@ -1366,14 +1433,11 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       // file is a database; it is refused as such (the plaintext is shredded exactly like the
       // damaged case; `.enc` is not rewritten here — a pending `.recovery` above still rolls
       // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
-      if (isWorkspaceNewerError(err)) throw err
-      throw new VaultDamagedError()
+      // #844: damage only when SQLite says so. Any other failure of the open or of the unlock's
+      // own settings writes is a step that could not finish on a database that is fine, and the
+      // open does not rewrite `.enc`: not "restore a backup".
+      throw openFailure(err)
     }
-    openedDb = db
-    seedSettings(db)
-    // #858: re-stamp the mode Settings and Privacy read (create and a plaintext open stamp it too),
-    // inside this guard so a failed write cannot leave the keys or the open database behind.
-    updateSettings(db, { workspaceMode: 'encrypted' })
     return { db, key: fileKey, descriptor }
   } catch (err) {
     if (openedDb) {

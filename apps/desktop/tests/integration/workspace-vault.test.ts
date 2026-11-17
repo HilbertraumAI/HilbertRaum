@@ -24,6 +24,7 @@ import {
   applyPendingRekey,
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
+  VaultOpenFailedError,
   WorkspaceController,
   WrongPasswordError
 } from '../../src/main/services/workspace-vault'
@@ -159,7 +160,8 @@ describe('encrypted vault lifecycle', () => {
         throw new Error('disk I/O error')
       })
       try {
-        expect(() => unlockEncryptedVault(vp, 'pw')).toThrow('disk I/O error')
+        // A write of the unlock's own after the open: reported as an open that could not finish (#844).
+        expect(() => unlockEncryptedVault(vp, 'pw')).toThrowError(VaultOpenFailedError)
         expect(zeroed(unwrapped(decryptSpy, vp))).toBe(true)
         expect(existsSync(vp.dbPath)).toBe(false)
         // The vault is untouched: the next unlock opens it normally.

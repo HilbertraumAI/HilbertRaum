@@ -2710,6 +2710,12 @@ export const fr: UiCatalog<'fr'> = {
     'endommagées et n’ont pas pu être ouvertes. Ressaisir le mot de passe n’y changera rien. Ne ' +
     'créez pas de nouvel espace de travail\u00A0: laissez les fichiers tels quels et restaurez ' +
     'le dossier «\u00A0workspace\u00A0» à partir d’une sauvegarde.',
+  'main.workspace.vaultOpenFailed':
+    'Votre mot de passe est correct, mais HilbertRaum n’a pas pu terminer l’ouverture de ' +
+    'l’espace de travail. L’espace de travail chiffré sur le disque est resté tel quel. ' +
+    'Vérifiez qu’il reste de l’espace libre sur le disque, puis réessayez. Si le problème ' +
+    'est apparu après une mise à jour, la version précédente de HilbertRaum peut toujours ' +
+    'l’ouvrir.',
   'main.workspace.recoveryBlocked':
     'L’espace de travail ne peut pas encore être ouvert\u00A0: un autre programme garde ouvert ' +
     'un fichier de récupération qui contient vos données les plus récentes. Fermez tout ce qui ' +

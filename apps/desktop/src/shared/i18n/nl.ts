@@ -2520,6 +2520,11 @@ export const nl: UiCatalog<'nl'> = {
     'konden niet worden geopend. Het wachtwoord opnieuw invoeren helpt niet. Maak geen nieuwe ' +
     'werkruimte aan: laat de bestanden zoals ze zijn en herstel de map van de werkruimte vanuit ' +
     'een back-up.',
+  'main.workspace.vaultOpenFailed':
+    'Je wachtwoord klopt, maar HilbertRaum kon het openen van de werkruimte niet afronden. ' +
+    'De versleutelde werkruimte op de schijf is ongewijzigd gebleven. Zorg dat er vrije ' +
+    'ruimte op de schijf is en probeer het dan opnieuw. Als dit na een update is begonnen, ' +
+    'kan de vorige versie van HilbertRaum de werkruimte nog steeds openen.',
   'main.workspace.recoveryBlocked':
     'De werkruimte kon nog niet worden geopend: een ander programma houdt een herstelbestand met ' +
     'je nieuwste gegevens vast. Sluit alles wat de schijf mogelijk scant (antivirus, ' +

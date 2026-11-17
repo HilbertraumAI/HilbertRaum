@@ -342,6 +342,29 @@ normally. Copies up to 0.1.59 cannot give that message; they open the workspace 
 
 ---
 
+## "Your password is correct, but HilbertRaum could not finish opening the workspace"
+
+This message (issue #844) means the password was right and the workspace decrypted to a
+readable database, but opening it could not finish. Each version of the app may update the
+workspace's internal layout when it first opens it, and that step needs some free space on
+the drive. Typical causes: a nearly full drive, a USB connection that dropped, or a fault in a
+new version's update step. Nothing is damaged: the failed open does not change the encrypted
+workspace on the drive.
+
+What to do:
+
+- Free some space on the drive, then unlock again.
+- If the drive was unplugged or is flaky, reconnect it and try again.
+- If this started right after an update, the previous release can still open the workspace,
+  because the failed update did not convert it. Put that release back **in place of** the new
+  one (never both side by side, see "Two app versions on the drive" below), and report the
+  issue.
+
+Before #844 this case showed the "damaged … restore from a backup" message above, although
+nothing was damaged.
+
+---
+
 ## "Could not lock the workspace"
 
 Locking re-encrypts your workspace on the drive, and that briefly needs **free space about the

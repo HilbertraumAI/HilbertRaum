@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
+import { inspect } from 'node:util'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
@@ -9,11 +10,19 @@ import {
   VaultLockError,
   WorkspaceController,
   WrongPasswordError,
-  REKEY_SUFFIX
+  REKEY_SUFFIX,
+  type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { Db } from '../../src/main/services/db'
-import { ENCRYPTION_REQUIRED, damagedVault, freshVaultPaths, lockedVault } from '../helpers/vault-fixtures'
+import {
+  ENCRYPTION_REQUIRED,
+  corruptVault,
+  damagedVault,
+  freshVaultPaths,
+  lockedVault,
+  upgradeBlockedVault
+} from '../helpers/vault-fixtures'
 
 // Issue #208 — an encrypted workspace was destroyed ON DISK: `.enc` ended up holding the
 // app's own encryption of a 483 kB random-noise file (a shred survivor), so every unlock
@@ -167,5 +176,45 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
 
     // And the damaged `.enc` is left untouched, byte for byte, as evidence/recovery material.
     expect(readFileSync(vp.encPath).equals(damagedEnc)).toBe(true)
+  })
+})
+
+// Issue #844 — an unlock whose open fails is damage only when SQLite says so. A healthy database
+// whose open cannot finish (here a backfill write that a trigger aborts; a full drive or a bug in a
+// new upgrade step looks the same from here) read as "damaged … restore from a backup", though
+// `.enc` is never touched on that path.
+describe('issue #844 — only SQLite’s own verdict reads as a damaged vault', () => {
+  /** What the unlock threw. The rows read its name: the IPC layer matches on it too (the bundle-duplication quirk). */
+  function unlockError(vp: VaultPaths): Error | undefined {
+    try {
+      unlockEncryptedVault(vp, 'pw')
+    } catch (err) {
+      return err as Error
+    }
+    return undefined
+  }
+
+  it('an open that cannot finish on a healthy database throws VaultOpenFailedError and leaves .enc as it was', () => {
+    // The abort text stands in for stored text a failing backfill's error could quote.
+    const quote = 'page text the backfill was reading'
+    const vp = upgradeBlockedVault(lockedVault('vault-844', 'pw'), 'pw', { abortMessage: quote })
+    const enc = readFileSync(vp.encPath)
+    const err = unlockError(vp)
+    expect(err?.name).toBe('VaultOpenFailedError')
+    // Whoever prints this error, its cause and stack included, prints none of that text.
+    expect(inspect(err, { depth: 10 })).not.toContain(quote)
+    expect(readFileSync(vp.encPath).equals(enc)).toBe(true)
+    expect(existsSync(vp.dbPath)).toBe(false)
+  })
+
+  it('a settings write the unlock makes after the open reads the same way', () => {
+    const vp = upgradeBlockedVault(lockedVault('vault-844', 'pw'), 'pw', { at: 'settings' })
+    expect(unlockError(vp)?.name).toBe('VaultOpenFailedError')
+    expect(existsSync(vp.dbPath)).toBe(false)
+  })
+
+  it('a real database whose schema page is corrupt still throws VaultDamagedError', () => {
+    const vp = corruptVault(lockedVault('vault-844', 'pw'), 'pw')
+    expect(unlockError(vp)?.name).toBe('VaultDamagedError')
   })
 })

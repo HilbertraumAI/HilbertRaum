@@ -1110,10 +1110,15 @@ head's own weights + KV.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
-  'vault_damaged'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
+  'vault_damaged'|'vault_open_failed'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
   wrong password / policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
   password-verified-but-undecryptable-to-a-database unlock failure, deliberately distinct from
-  `wrong_password`; `vault_recovery_blocked` (#242) is the unlock refused because a held
+  `wrong_password`, and since #844 only what SQLite itself calls not a database or corrupt;
+  `vault_open_failed` (#844) is the unlock whose open could not finish on a database SQLite does
+  not call damaged (an upgrade step or the unlock's settings write, on a full drive, an I/O
+  error, a bug in a new step) — the failed open never rewrites `.enc`; free space and retry,
+  or start the previous version after an update;
+  `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage — retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
   written by a NEWER build — nothing written, update the app). Since the 2026-11 UI languages
