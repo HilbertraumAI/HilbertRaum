@@ -2795,7 +2795,7 @@ export const uk: UiCatalog<'uk'> = {
     'запустити завантаження знову, воно почнеться з початку.',
   'main.engine.alreadyRunning': 'ШІ-рушій уже завантажується.',
   'main.engine.noSources':
-    'На цьому диску не знайдено джерел для завантаження рушія (бракує файлу ' +
+    'У цій копії HilbertRaum не знайдено джерел для завантаження рушія (бракує файлу ' +
     'runtime-sources.yaml).',
   'main.engine.noHostBuild': 'Для цього компʼютера немає збірки ШІ-рушія.',
   'main.engine.alreadyInstalled': 'ШІ-рушій уже встановлено.',

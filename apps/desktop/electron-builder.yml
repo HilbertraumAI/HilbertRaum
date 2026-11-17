@@ -138,8 +138,9 @@ files:
 npmRebuild: false
 
 # Model manifests are the ONLY model metadata in git. Ship them beside app.asar so the
-# packaged main process finds them: resolveManifestsDir(app.getAppPath()) walks up from
-# resources/app.asar and matches resources/model-manifests. HILBERTRAUM_MANIFESTS_DIR overrides.
+# packaged main process finds them: for the model list, resolveManifestsDir(app.getAppPath())
+# walks up from resources/app.asar and matches resources/model-manifests (HILBERTRAUM_MANIFESTS_DIR
+# overrides); the engine pins read exactly <process.resourcesPath>/model-manifests (#842).
 # Weights + sidecar binaries are NEVER bundled — they live on the prepared drive.
 extraResources:
   - from: ../../model-manifests

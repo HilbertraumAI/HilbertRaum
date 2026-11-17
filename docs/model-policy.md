@@ -813,9 +813,10 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 
 ### Download hosts (#769)
 
-Every host a committed URL names. This is an **inventory, not an allowlist**: the app and the
-scripts fetch from whatever host a drive's yaml names (`security-model.md` S4 declined a
-download-host allowlist), and a download follows redirects to hosts no file names (the Hugging
+Every host a committed URL names. This is an **inventory, not an allowlist** (`security-model.md`
+S4 declined a download-host allowlist). The scripts fetch from whatever host a drive's yaml names,
+and so does the app for models and the OCR files; its engine downloads read the app's own
+`runtime-sources.yaml` (#842). A download also follows redirects to hosts no file names (the Hugging
 Face and GitHub storage CDNs, `mirror.download.kiwix.org`). `committed-catalog.test.ts` holds both
 columns to the committed files exactly, so a new host is a deliberate edit of this table. A model
 manifest's URLs are its `download.url`, `mmproj.download.url` and every `files[].download.url`,

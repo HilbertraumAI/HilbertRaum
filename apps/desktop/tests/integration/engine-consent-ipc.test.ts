@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse as parseYaml, stringify } from 'yaml'
 
 // #339 P8-2 — the consent step's IPC contract, through the REAL `downloadEngine` handler:
 //
@@ -124,9 +124,22 @@ function demoRuntime(): { status: () => RuntimeStatus; activeModelId: () => stri
  *  `withWhisper` (#497) also pins the whisper_cpp family and provisions the speech model's
  *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case.
  *  `kit` (#678) pins the chat engine as a prepared Kit has it: a vulkan main build, plus the
- *  `cpu/` safety net in its own folder (each its own archive URL). */
+ *  `cpu/` safety net in its own folder (each its own archive URL).
+ *  The engine pins are the app's own copy (`ctx.bundledManifestsDir`, #842). By default the yaml
+ *  lives ONLY there and the drive's folder holds the model manifests alone, so every engine row in
+ *  this file fails if a path reads the drive's copy. `appLlamaVersion` keeps the yaml on the drive
+ *  too, as its stale pin, and gives the app a newer chat-engine pin with its own archive URL
+ *  (`…-app.zip`): a new app copied onto a drive whose manifests were not refreshed, started through
+ *  the launcher. */
 function makeDrive(
-  opts: { withWhisper?: boolean; runtime?: unknown; llamaVersion?: string; extract?: ExtractFn; kit?: boolean } = {}
+  opts: {
+    withWhisper?: boolean
+    runtime?: unknown
+    llamaVersion?: string
+    appLlamaVersion?: string
+    extract?: ExtractFn
+    kit?: boolean
+  } = {}
 ): Drive {
   const root = freshRoot()
   const manifests = join(root, 'model-manifests')
@@ -185,6 +198,19 @@ function makeDrive(
       }
     })
   )
+  const drivePins = join(manifests, 'runtime-sources.yaml')
+  const appManifests = join(root, 'app-bundle', 'model-manifests')
+  mkdirSync(appManifests, { recursive: true })
+  if (opts.appLlamaVersion) {
+    const sources = parseYaml(readFileSync(drivePins, 'utf8')) as {
+      llama_cpp: { version: string; builds: Array<{ url: string }> }
+    }
+    sources.llama_cpp.version = opts.appLlamaVersion
+    for (const build of sources.llama_cpp.builds) build.url = build.url.replace(/\.zip$/, '-app.zip')
+    writeFileSync(join(appManifests, 'runtime-sources.yaml'), stringify(sources))
+  } else {
+    renameSync(drivePins, join(appManifests, 'runtime-sources.yaml'))
+  }
   const db = seededDb(root)
   updateSettings(db, { allowNetwork: true })
   const reconcile = vi.fn(async () => undefined)
@@ -192,6 +218,7 @@ function makeDrive(
   const ctx = ctxWith(root, db, {
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     manifestsDir: manifests,
+    bundledManifestsDir: appManifests,
     runtime: opts.runtime ?? { activeModelId: () => null, status: () => ({ running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: '' }) },
     zim: { reconcile },
     // #497: the startup composition found no whisper-cli, so the slot is null until an install.
@@ -772,6 +799,35 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
     ).rejects.toThrow(/in use right now/i)
     expect(d.fetchSpy).not.toHaveBeenCalled()
     expect(runtime.stop).not.toHaveBeenCalled()
+  })
+
+  // #842: a launcher start points `ctx.manifestsDir` at the drive's `model-manifests/`, which a new
+  // app copied onto the drive by hand leaves as it was: its yaml still pins the engine that is on the
+  // drive. The status, the update and the plain install all take the app's own pin all the same.
+  it('offers the update against the app’s pin when the drive’s yaml still pins the engine on it (#842)', async () => {
+    const runtime = liveRuntime()
+    const d = makeDrive({ runtime, llamaVersion: 'b150', appLlamaVersion: 'b200' })
+    Object.assign(d.ctx, helpers())
+    withOlderEngine(d) // b150: current by the drive's yaml, older by the app's
+    const status = (await invoke(d.handlers, IPC.getEngineStatus)).result as EngineStatus
+    expect(status.version).toBe('b200')
+    expect(status.engineVersions?.find((v) => v.family === 'llama_cpp')).toMatchObject({
+      installed: 'b150',
+      pinned: 'b200',
+      relation: 'older'
+    })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(d.fetchSpy.mock.calls.map(([url]) => String(url))).toEqual(['https://example.test/llama-app.zip'])
+    expect(versionOnDrive(d)).toBe('b200')
+  })
+
+  it('installs a missing engine from the app’s pin, not the drive’s (#842)', async () => {
+    const d = makeDrive({ llamaVersion: 'b150', appLlamaVersion: 'b200' })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine)
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(d.fetchSpy.mock.calls.map(([url]) => String(url))).toEqual(['https://example.test/llama-app.zip'])
+    expect(versionOnDrive(d)).toBe('b200')
   })
 
   it('work that starts during the download refuses the swap at the pause — the old engine stays and keeps answering', async () => {

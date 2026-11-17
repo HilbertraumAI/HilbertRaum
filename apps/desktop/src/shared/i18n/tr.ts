@@ -2611,7 +2611,7 @@ export const tr: UiCatalog<'tr'> = {
     'başlatıldığında indirme baştan başlar.',
   'main.engine.alreadyRunning': 'Yapay zekâ motoru zaten indiriliyor.',
   'main.engine.noSources':
-    'Bu sürücüde motor kaynağı bulunamadı (runtime-sources.yaml dosyası eksik).',
+    'Bu HilbertRaum kopyasında motor kaynağı bulunamadı (runtime-sources.yaml dosyası eksik).',
   'main.engine.noHostBuild':
     'Bu bilgisayar için kullanılabilir bir yapay zekâ motoru derlemesi yok.',
   'main.engine.alreadyInstalled': 'Yapay zekâ motoru zaten kurulu.',

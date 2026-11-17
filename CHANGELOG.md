@@ -68,6 +68,13 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The AI engine update is offered however you start the app.** After a new version of
+  HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
+  older engine list still on the drive, so the AI Model screen never offered the engine update;
+  starting the app file directly did. Both now use the list built into the app, and Settings →
+  Diagnostics compares the engine with the version this app is built for. The voice engine's
+  install hint follows the same list. If you added engine entries to your drive's
+  `model-manifests/runtime-sources.yaml` yourself, only the drive scripts use them now (#842).
 - **A workspace that could not finish opening is no longer reported as damaged.** When unlocking
   failed after the password was accepted, for example because the drive was nearly full while
   the app updated the workspace after an update, the lock screen said the workspace data was

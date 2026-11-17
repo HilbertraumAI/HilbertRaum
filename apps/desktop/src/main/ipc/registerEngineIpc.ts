@@ -174,11 +174,6 @@ export function kiwixToolsInUse(): boolean {
 export interface RegisterEngineIpcOptions {
   /** The OCR installer (#410); tests inject one with a fake fetch and fake pins. */
   ocrInstaller?: OcrInstallManager
-  /**
-   * The app-bundled `model-manifests/` (resolved WITHOUT the env override) — the OCR installer's
-   * fallback source list when the drive's yaml carries no `ocr:` block (#410).
-   */
-  bundledManifestsDir?: string | null
 }
 
 export function registerEngineIpc(
@@ -266,6 +261,11 @@ export function registerEngineIpc(
     ocrInstaller.networkSwitched(on, onStopped)
   }
 
+  // #842: every engine call below (the status, the install and repair, the update) reads the pins
+  // from `ctx.bundledManifestsDir`, the app's own `runtime-sources.yaml`, never `ctx.manifestsDir`,
+  // which a launcher start points at the drive's copy. A new app on a drive whose manifests were not
+  // refreshed then compared the engine with the drive's old pin, found it current, and never offered
+  // its update. One source for all of them, so the notice never offers what the update would refuse.
   const gates = (): DownloadGates => {
     const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m), { isDev: ctx.isDev })
     const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork
@@ -284,7 +284,7 @@ export function registerEngineIpc(
     const update = { jobId: '', modelId: null as string | null, paused: false, resumed: false }
     const job = await engine.start({
       rootPath: ctx.paths.rootPath,
-      manifestsDir: ctx.manifestsDir ?? null,
+      manifestsDir: ctx.bundledManifestsDir,
       gates: gates(),
       families,
       update: true,
@@ -320,7 +320,7 @@ export function registerEngineIpc(
 
   ipcHandle(
     IPC.getEngineStatus,
-    (): EngineStatus => engineStatus(ctx.paths.rootPath, ctx.manifestsDir ?? null)
+    (): EngineStatus => engineStatus(ctx.paths.rootPath, ctx.bundledManifestsDir)
   )
 
   ipcHandle(IPC.downloadEngine, (_e, raw?: unknown): Promise<EngineDownloadJob> => {
@@ -338,7 +338,7 @@ export function registerEngineIpc(
     if (request.update) return startEngineUpdate(request.families ?? [])
     return engine.start({
       rootPath: ctx.paths.rootPath,
-      manifestsDir: ctx.manifestsDir ?? null,
+      manifestsDir: ctx.bundledManifestsDir,
       gates: gates(),
       ...request,
       // #678: what the reinstall replaces — the builds the OS refused, the `cpu/` net included.
@@ -375,7 +375,7 @@ export function registerEngineIpc(
   const ocrSources = () => ({
     rootPath: ctx.paths.rootPath,
     manifestsDir: ctx.manifestsDir ?? null,
-    bundledManifestsDir: options.bundledManifestsDir ?? null
+    bundledManifestsDir: ctx.bundledManifestsDir
   })
 
   ipcHandle(IPC.getOcrInstallStatus, (): Promise<OcrInstallStatus> => ocrInstaller.status(ocrSources()))

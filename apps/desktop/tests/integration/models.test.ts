@@ -37,6 +37,7 @@ import {
   launchContextTokens,
   selectModel,
   resolveManifestsDir,
+  resolveBundledManifestsDir,
   weightPath
 } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
@@ -1695,6 +1696,40 @@ describe('resolveManifestsDir', () => {
   })
   it('returns null when nothing is found', () => {
     expect(resolveManifestsDir(tempRoot('empty'))).toBe(null)
+  })
+})
+
+// #842: the engine pins' source. A packaged app sits inside a drive whose own `model-manifests/` is
+// user-writable, so the packaged answer never walks up to it.
+describe('resolveBundledManifestsDir', () => {
+  /** A drive with its own model-manifests/, and an app folder on it (resources/app.asar). */
+  function driveWithApp(name: string): { drive: string; resources: string; appPath: string } {
+    const drive = tempRoot(name)
+    mkdirSync(join(drive, 'model-manifests'), { recursive: true })
+    const resources = join(drive, 'app', 'resources')
+    const appPath = join(resources, 'app.asar')
+    mkdirSync(appPath, { recursive: true })
+    return { drive, resources, appPath }
+  }
+
+  it('a packaged build takes its resources copy, not the drive’s copy above it', () => {
+    const { resources, appPath } = driveWithApp('bundled-packaged')
+    mkdirSync(join(resources, 'model-manifests'))
+    expect(resolveBundledManifestsDir({ isPackaged: true, resourcesPath: resources, appPath })).toBe(
+      join(resources, 'model-manifests')
+    )
+  })
+
+  it('a packaged build without its resources copy has none, rather than the drive’s', () => {
+    const { resources, appPath } = driveWithApp('bundled-missing')
+    expect(resolveBundledManifestsDir({ isPackaged: true, resourcesPath: resources, appPath })).toBe(null)
+  })
+
+  it('a dev build takes the checkout’s, by the walk-up', () => {
+    const { drive, resources, appPath } = driveWithApp('bundled-dev')
+    expect(resolveBundledManifestsDir({ isPackaged: false, resourcesPath: resources, appPath })).toBe(
+      join(drive, 'model-manifests')
+    )
   })
 })
 

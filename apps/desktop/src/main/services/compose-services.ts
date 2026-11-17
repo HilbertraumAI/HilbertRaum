@@ -100,7 +100,25 @@ export interface ComposeServicesDeps {
  * (`// @ts-expect-error`).
  */
 export type ComposeServicesArgs = ComposeServicesDeps &
+  EnginePinsDeps &
   Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling'>>
+
+/**
+ * #842: where the engine pins live, for the transcriber's composition and `composeServices`. Never on
+ * the shared base: `composeTranslator` takes that and never reads it, and an optional field there would
+ * be one a composer could drop without a compile error (the NF-1 rule above).
+ */
+export interface EnginePinsDeps {
+  /**
+   * The app's own `model-manifests/` (`AppContext.bundledManifestsDir`): its `runtime-sources.yaml`
+   * says whether the in-app installer could fetch the voice engine here (#527), the same pins the
+   * installer reads. Null: no engine build to fetch.
+   */
+  bundledManifestsDir: string | null
+}
+
+/** The transcriber's composition: the drive layout plus the engine pins (#842). */
+export type ComposeTranscriberDeps = ComposeServicesDeps & EnginePinsDeps
 
 /**
  * Build (or re-build) JUST the translation sidecar selection from the current drive layout.
@@ -183,7 +201,7 @@ export function shouldReplaceTranslator(current: Translator | null | undefined):
  * three moments the slot itself is, so the reason can never describe a different drive state than the slot;
  * `getAppStatus` (polled by the shell) only reads it back.
  */
-export function composeTranscriberSlot(deps: ComposeServicesDeps): {
+export function composeTranscriberSlot(deps: ComposeTranscriberDeps): {
   transcriber: Transcriber | null
   missing: TranscriberMissing | null
 } {
@@ -204,7 +222,7 @@ export function composeTranscriberSlot(deps: ComposeServicesDeps): {
       rootPath: deps.rootPath,
       model,
       isDev,
-      engineFetchable: engineFamilyHasHostBuild(deps.manifestsDir, 'whisper_cpp')
+      engineFetchable: engineFamilyHasHostBuild(deps.bundledManifestsDir, 'whisper_cpp')
     }) ??
     // Both pieces are on the drive, yet nothing was selected (the ladder and this check read
     // the same files, so only a race with a removal lands here): the model is the honest guess.
@@ -238,6 +256,7 @@ export interface TranscriberSlot {
   /** Only the drive root is read (binary + weight paths resolve against it). */
   paths: Pick<AppContext['paths'], 'rootPath'>
   manifestsDir: AppContext['manifestsDir']
+  bundledManifestsDir: AppContext['bundledManifestsDir']
   isDev: AppContext['isDev']
 }
 
@@ -247,6 +266,7 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
     const next = composeTranscriberSlot({
       rootPath: ctx.paths.rootPath,
       manifestsDir: ctx.manifestsDir,
+      bundledManifestsDir: ctx.bundledManifestsDir,
       isDev: ctx.isDev
     })
     // #527: the reason moves with every refresh — an engine install that lands without the model
@@ -403,6 +423,7 @@ export async function refreshOcrSlot(
 export function composeServices({
   rootPath,
   manifestsDir,
+  bundledManifestsDir,
   isDev = false,
   gpu,
   rerankerDevicePosture,
@@ -455,6 +476,7 @@ export function composeServices({
   const { transcriber, missing: transcriberMissing } = composeTranscriberSlot({
     rootPath,
     manifestsDir,
+    bundledManifestsDir,
     isDev,
     discovered
   })

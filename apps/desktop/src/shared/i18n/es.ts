@@ -2778,7 +2778,7 @@ export const es: UiCatalog<'es'> = {
     'parcial. Si la vuelves a iniciar, empezará desde el principio.',
   'main.engine.alreadyRunning': 'El motor de IA ya se está descargando.',
   'main.engine.noSources':
-    'No se encontró la lista de descargas del motor en esta unidad (falta ' +
+    'No se encontró la lista de descargas del motor en esta copia de HilbertRaum (falta ' +
     '«runtime-sources.yaml»).',
   'main.engine.noHostBuild': 'No hay ninguna versión del motor de IA disponible para este equipo.',
   'main.engine.alreadyInstalled': 'El motor de IA ya está instalado.',

@@ -2930,7 +2930,7 @@ export const fr: UiCatalog<'fr'> = {
     'été supprimé. Si vous le relancez, il recommencera depuis le début.',
   'main.engine.alreadyRunning': 'Le moteur d’IA est déjà en cours de téléchargement.',
   'main.engine.noSources':
-    'Aucune source de moteur n’a été trouvée sur ce disque (le fichier ' +
+    'Aucune source de moteur n’a été trouvée dans cette copie de HilbertRaum (le fichier ' +
     '«\u00A0runtime-sources.yaml\u00A0» est absent).',
   'main.engine.noHostBuild': 'Aucune version du moteur d’IA n’est disponible pour cet ordinateur.',
   'main.engine.alreadyInstalled': 'Le moteur d’IA est déjà installé.',

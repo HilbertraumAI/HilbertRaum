@@ -2782,7 +2782,7 @@ export const ru: UiCatalog<'ru'> = {
     'запуске скачивание начнется заново.',
   'main.engine.alreadyRunning': 'ИИ-движок уже скачивается.',
   'main.engine.noSources':
-    'На этом диске не найдены источники движка (нет файла runtime-sources.yaml).',
+    'В этой копии HilbertRaum не найдены источники движка (нет файла runtime-sources.yaml).',
   'main.engine.noHostBuild': 'Для этого компьютера нет сборки ИИ-движка.',
   'main.engine.alreadyInstalled': 'ИИ-движок уже установлен.',
   'main.engine.unknownJob': 'Неизвестное задание скачивания движка.',

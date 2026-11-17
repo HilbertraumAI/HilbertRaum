@@ -2028,7 +2028,8 @@ whole renderer-visible surface.
   engine updates"):** `EngineStatus` gains `engineVersions?: EngineVersionInfo[]` — per family on
   the drive with a host build: `{ family, optional, installed: string|null, installedBackend:
   string|null, pinned, pinnedBackend, relation: 'current'|'older'|'newer'|'unknown', cpuNet?:
-  { installed, pinned, relation } }`. `EngineDownloadRequest` gains `update?: boolean` (explicit
+  { installed, pinned, relation } }`; `pinned` comes from the app's own `runtime-sources.yaml`,
+  never the drive's (#842). `EngineDownloadRequest` gains `update?: boolean` (explicit
   REQUIRED `families`, never with `reinstall`; only `older` installs and an older `cpu/` net are
   replaced, else `main.engine.nothingToUpdate`; refused while work runs, `main.engine.updateBusy`),
   and `EngineDownloadJob` gains `update?: boolean`. **Behaviour change:** the argument-less

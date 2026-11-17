@@ -480,6 +480,7 @@ export interface EngineDownloadDeps {
 
 export interface StartEngineDownloadOptions {
   rootPath: string
+  /** The folder whose `runtime-sources.yaml` pins the engines: the app's own copy (#842). */
   manifestsDir: string | null
   gates: DownloadGates
   /** Restrict the install to these families (default: every missing, fetchable family). */
