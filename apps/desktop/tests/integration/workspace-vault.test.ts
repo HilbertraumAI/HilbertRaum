@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, utimesSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -30,6 +30,7 @@ import {
 import { randomBytes } from 'node:crypto'
 import { encrypt, decrypt, serializeBlob, deserializeBlob } from '../../src/main/services/security/crypto'
 import * as vaultCrypto from '../../src/main/services/security/crypto'
+import * as settingsModule from '../../src/main/services/settings'
 import { tempRoot } from '../helpers/db-fixtures'
 import {
   ENCRYPTION_REQUIRED,
@@ -95,6 +96,115 @@ describe('encrypted vault lifecycle', () => {
     } finally {
       deriveSpy.mockRestore()
     }
+  })
+
+  // #858: the same observable for the failures AFTER the password verified. A pass-through spy keeps the very
+  // Buffers the unlock derived (the KEK) and unwrapped (the data key); each must be all zero once the unlock
+  // throws, and no decrypted working file may stay on disk.
+  describe('a failure after the password verified zeroes the keys (#858)', () => {
+    const zeroed = (b: Buffer | undefined): boolean => b instanceof Buffer && b.length === FAST_KDF.keyLen && b.every((x) => x === 0)
+    const returned = (spy: { mock: { results: Array<{ type: string; value: unknown }> } }, i = 0): Buffer | undefined =>
+      spy.mock.results.filter((r) => r.type === 'return')[i]?.value as Buffer | undefined
+    /** The data key the unwrap returned: the `decrypt` call whose blob is the descriptor's wrapped key. */
+    const unwrapped = (
+      spy: { mock: { calls: unknown[][]; results: Array<{ type: string; value: unknown }> } },
+      vp: { descriptorPath: string }
+    ): Buffer | undefined => {
+      const iv = Buffer.from(JSON.parse(readFileSync(vp.descriptorPath, 'utf8')).dataKey.ivB64, 'base64')
+      const i = spy.mock.calls.findIndex((c) => (c[1] as { iv?: Buffer } | undefined)?.iv?.equals(iv))
+      const r = spy.mock.results[i]
+      return r?.type === 'return' ? (r.value as Buffer) : undefined
+    }
+
+    it('a corrupt wrapped data key: the derived key is zeroed', () => {
+      const vp = lockedVault('vault', 'pw')
+      const descriptor = JSON.parse(readFileSync(vp.descriptorPath, 'utf8'))
+      const ct = Buffer.from(descriptor.dataKey.ciphertextB64, 'base64')
+      ct[0] ^= 0xff
+      descriptor.dataKey.ciphertextB64 = ct.toString('base64')
+      writeFileSync(vp.descriptorPath, JSON.stringify(descriptor))
+      const deriveSpy = vi.spyOn(vaultCrypto, 'deriveKey')
+      try {
+        expect(() => unlockEncryptedVault(vp, 'pw')).toThrow()
+        expect(() => unlockEncryptedVault(vp, 'pw')).not.toThrow(WrongPasswordError)
+        expect(zeroed(returned(deriveSpy))).toBe(true)
+        expect(existsSync(vp.dbPath)).toBe(false)
+      } finally {
+        deriveSpy.mockRestore()
+      }
+    })
+
+    it('an .enc that fails its tag check: the derived key and the unwrapped data key are zeroed', () => {
+      const vp = lockedVault('vault', 'pw')
+      const enc = readFileSync(vp.encPath)
+      enc[enc.length - 20] ^= 0xff // inside the last chunk's ciphertext
+      writeFileSync(vp.encPath, enc)
+      const deriveSpy = vi.spyOn(vaultCrypto, 'deriveKey')
+      const decryptSpy = vi.spyOn(vaultCrypto, 'decrypt')
+      try {
+        expect(() => unlockEncryptedVault(vp, 'pw')).toThrow()
+        expect(zeroed(returned(deriveSpy))).toBe(true)
+        expect(zeroed(unwrapped(decryptSpy, vp))).toBe(true)
+        expect(existsSync(vp.dbPath)).toBe(false)
+      } finally {
+        deriveSpy.mockRestore()
+        decryptSpy.mockRestore()
+      }
+    })
+
+    it('a failure after the database opened: the data key is zeroed and the plaintext working file shredded', () => {
+      const vp = lockedVault('vault', 'pw')
+      const decryptSpy = vi.spyOn(vaultCrypto, 'decrypt')
+      const seedSpy = vi.spyOn(settingsModule, 'seedSettings').mockImplementationOnce(() => {
+        throw new Error('disk I/O error')
+      })
+      try {
+        expect(() => unlockEncryptedVault(vp, 'pw')).toThrow('disk I/O error')
+        expect(zeroed(unwrapped(decryptSpy, vp))).toBe(true)
+        expect(existsSync(vp.dbPath)).toBe(false)
+        // The vault is untouched: the next unlock opens it normally.
+        const next = unlockEncryptedVault(vp, 'pw')
+        next.db.close()
+      } finally {
+        seedSpy.mockRestore()
+        decryptSpy.mockRestore()
+      }
+    })
+
+    it('a roll-forward that cannot write: the data key is zeroed and the snapshot survives', () => {
+      const vp = lockedVault('vault', 'pw')
+      // A failed lock's salvage: a real database newer than `.enc`, waiting as `.recovery`.
+      const first = unlockEncryptedVault(vp, 'pw')
+      first.db.close()
+      renameSync(vp.dbPath, `${vp.dbPath}${RECOVERY_SUFFIX}`)
+      const past = new Date(Date.now() - 60_000)
+      utimesSync(vp.encPath, past, past)
+      // The roll-forward writes `<enc>.tmp` first: a directory there makes that write fail.
+      mkdirSync(`${vp.encPath}.tmp`)
+      const decryptSpy = vi.spyOn(vaultCrypto, 'decrypt')
+      try {
+        expect(() => unlockEncryptedVault(vp, 'pw')).toThrow()
+        expect(zeroed(unwrapped(decryptSpy, vp))).toBe(true)
+        expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(true)
+      } finally {
+        decryptSpy.mockRestore()
+      }
+    })
+
+    it('a v1 vault whose .enc fails its tag check: the derived key, which is its file key, is zeroed', () => {
+      const vp = lockedVault('vault', 'pw', { legacyV1: true })
+      const enc = readFileSync(vp.encPath)
+      enc[enc.length - 20] ^= 0xff
+      writeFileSync(vp.encPath, enc)
+      const deriveSpy = vi.spyOn(vaultCrypto, 'deriveKey')
+      try {
+        expect(() => unlockEncryptedVault(vp, 'pw')).toThrow()
+        expect(zeroed(returned(deriveSpy))).toBe(true)
+        expect(existsSync(vp.dbPath)).toBe(false)
+      } finally {
+        deriveSpy.mockRestore()
+      }
+    })
   })
 
   // H4 (audit round 4): `.enc` IS the user's data; creating over it would irreversibly

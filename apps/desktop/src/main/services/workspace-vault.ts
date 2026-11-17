@@ -1269,101 +1269,128 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     key.fill(0)
     throw new WrongPasswordError()
   }
-  // v2 envelope: the derived key is only the KEK — unwrap the data key, drop the KEK.
+  // #858: from here on, EVERY failure zeroes the file key (the catch below), not only the named
+  // ones. A corrupt wrapped data key used to leave the KEK in the heap; a tag-failing `.enc`, a
+  // roll-forward that cannot write, or a throw after the decrypt left the data key, and a throw
+  // after the open also left the plaintext working file on disk and its handle open. Once
+  // plaintext exists on disk, the way out closes the database and shreds it.
+  // v2 envelope: the derived key is only the KEK — unwrap the data key, then drop the KEK at once
+  // (if the unwrap throws, `fileKey` is still the KEK and the catch zeroes it). v1: the derived key
+  // IS the file key, returned on success.
   let fileKey = key
-  if (descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
-    fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
-    key.fill(0)
-  }
-  // full-audit 2026-07-11 CODE-1b — roll a preserved newer working file FORWARD now that
-  // the key exists: re-encrypt it over the stale `.enc` (encryptFile is atomic tmp→rename
-  // and fsyncs — CODE-10), shred it, and continue with the normal unlock, which decrypts
-  // the freshly written `.enc` right back. If the re-encrypt fails (e.g. the disk is
-  // still full) the snapshot survives under `.recovery` for the next attempt.
-  //
-  // The roll-forward is GUARDED like the init() salvage (CODE-1 review follow-up F1):
-  // shredFile is best-effort, so a CONSUMED `.recovery` can outlive its unlink (Windows:
-  // AV/search indexer holding the file without FILE_SHARE_DELETE). Unguarded, that
-  // leftover would (a) if still intact, re-encrypt a now-STALE snapshot over the fresh
-  // `.enc` on every later unlock — a silent recurring rollback of everything since the
-  // failed lock — or (b) if the shred's random-overwrite ran but the unlink failed,
-  // encrypt GARBAGE over the good `.enc` (GCM verifies fine — it is our own ciphertext)
-  // and destroy the workspace. So roll forward only a snapshot that is still the
-  // freshest data: a real SQLite file (header) strictly NEWER than `.enc` (mtime; a
-  // missing `.enc` counts as older — restoring an unlockable vault beats none). Anything
-  // else is a spent or corrupt leftover: shred it (retrying the failed unlink) and
-  // unlock normally.
-  const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
-  if (existsSync(recoveryPath)) {
-    // full-audit 2026-07-12 REL-2 — the freshness PROBE is exception-guarded: a Windows
-    // AV/indexer hold without FILE_SHARE_READ (or the file vanishing between existsSync and
-    // openSync) throws EBUSY/EPERM/ENOENT here, which used to fail the whole unlock raw
-    // (generic openFailed) until the hold cleared. Only the probe is wrapped: a roll-forward
-    // encryptFile failure (e.g. disk still full) keeps failing the unlock so the snapshot
-    // survives untouched.
-    let fresher: boolean | null = null
-    try {
-      fresher =
-        fileHasSqliteHeader(recoveryPath) &&
-        (!existsSync(vaultPaths.encPath) ||
-          statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
-    } catch {
-      // #242 — a probe error means we cannot read the header. If `.recovery` could still be
-      // the fresh failed-lock delta — newer than `.enc`, `.enc` missing, or the mtime
-      // unreadable too — we must NOT unlock into the stale `.enc` and leave the snapshot to
-      // be shredded once a later lock makes `.enc` newer: refuse exactly as the init()
-      // salvage does, and let the next unlock retry once the hold clears. Only when `.enc`
-      // is demonstrably newer (a spent leftover) is it safe to proceed and unlock normally.
-      let encStrictlyNewer = false
-      try {
-        encStrictlyNewer =
-          existsSync(vaultPaths.encPath) &&
-          statSync(vaultPaths.encPath).mtimeMs > statSync(recoveryPath).mtimeMs
-      } catch {
-        /* even the stat failed → treat as possibly fresh → refuse */
-      }
-      if (!encStrictlyNewer) {
-        fileKey.fill(0)
-        throw new VaultRecoveryBlockedError()
-      }
-      /* `.enc` newer → spent leftover → leave it in place, unlock normally */
-    }
-    if (fresher !== null) {
-      if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
-      shredFile(recoveryPath)
-    }
-  }
-  // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
-  // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
-  cleanSidecars(vaultPaths.dbPath)
-  const decryptT0 = performance.now()
-  decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
-  perfMark('vault_unlocked', {
-    kdfMs,
-    decryptMs: perfMs(decryptT0),
-    dbBytes: fileSizeOrNull(vaultPaths.dbPath)
-  })
-  // #208: the decrypt above verified the GCM tag, so a failure to OPEN what came out means
-  // the vault ciphertext itself is damaged (it authenticates — it is our own ciphertext —
-  // but its plaintext is not a database). Distinguish that from a wrong password, and never
-  // leave the decrypted output at rest: for a damaged-but-real database those bytes are
-  // authentic plaintext user data sitting on disk while the workspace reports locked.
-  let db: Db
+  let plaintextOnDisk = false
+  let openedDb: Db | null = null
   try {
-    db = openDatabase(vaultPaths.dbPath)
-  } catch (err) {
-    shredFile(vaultPaths.dbPath)
+    if (descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
+      fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
+      key.fill(0)
+    }
+    // full-audit 2026-07-11 CODE-1b — roll a preserved newer working file FORWARD now that
+    // the key exists: re-encrypt it over the stale `.enc` (encryptFile is atomic tmp→rename
+    // and fsyncs — CODE-10), shred it, and continue with the normal unlock, which decrypts
+    // the freshly written `.enc` right back. If the re-encrypt fails (e.g. the disk is
+    // still full) the snapshot survives under `.recovery` for the next attempt.
+    //
+    // The roll-forward is GUARDED like the init() salvage (CODE-1 review follow-up F1):
+    // shredFile is best-effort, so a CONSUMED `.recovery` can outlive its unlink (Windows:
+    // AV/search indexer holding the file without FILE_SHARE_DELETE). Unguarded, that
+    // leftover would (a) if still intact, re-encrypt a now-STALE snapshot over the fresh
+    // `.enc` on every later unlock — a silent recurring rollback of everything since the
+    // failed lock — or (b) if the shred's random-overwrite ran but the unlink failed,
+    // encrypt GARBAGE over the good `.enc` (GCM verifies fine — it is our own ciphertext)
+    // and destroy the workspace. So roll forward only a snapshot that is still the
+    // freshest data: a real SQLite file (header) strictly NEWER than `.enc` (mtime; a
+    // missing `.enc` counts as older — restoring an unlockable vault beats none). Anything
+    // else is a spent or corrupt leftover: shred it (retrying the failed unlink) and
+    // unlock normally.
+    const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
+    if (existsSync(recoveryPath)) {
+      // full-audit 2026-07-12 REL-2 — the freshness PROBE is exception-guarded: a Windows
+      // AV/indexer hold without FILE_SHARE_READ (or the file vanishing between existsSync and
+      // openSync) throws EBUSY/EPERM/ENOENT here, which used to fail the whole unlock raw
+      // (generic openFailed) until the hold cleared. Only the probe is wrapped: a roll-forward
+      // encryptFile failure (e.g. disk still full) keeps failing the unlock so the snapshot
+      // survives untouched.
+      let fresher: boolean | null = null
+      try {
+        fresher =
+          fileHasSqliteHeader(recoveryPath) &&
+          (!existsSync(vaultPaths.encPath) ||
+            statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
+      } catch {
+        // #242 — a probe error means we cannot read the header. If `.recovery` could still be
+        // the fresh failed-lock delta — newer than `.enc`, `.enc` missing, or the mtime
+        // unreadable too — we must NOT unlock into the stale `.enc` and leave the snapshot to
+        // be shredded once a later lock makes `.enc` newer: refuse exactly as the init()
+        // salvage does, and let the next unlock retry once the hold clears. Only when `.enc`
+        // is demonstrably newer (a spent leftover) is it safe to proceed and unlock normally.
+        let encStrictlyNewer = false
+        try {
+          encStrictlyNewer =
+            existsSync(vaultPaths.encPath) &&
+            statSync(vaultPaths.encPath).mtimeMs > statSync(recoveryPath).mtimeMs
+        } catch {
+          /* even the stat failed → treat as possibly fresh → refuse */
+        }
+        if (!encStrictlyNewer) throw new VaultRecoveryBlockedError()
+        /* `.enc` newer → spent leftover → leave it in place, unlock normally */
+      }
+      if (fresher !== null) {
+        if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
+        shredFile(recoveryPath)
+      }
+    }
+    // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
+    // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
     cleanSidecars(vaultPaths.dbPath)
+    const decryptT0 = performance.now()
+    decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
+    plaintextOnDisk = true
+    perfMark('vault_unlocked', {
+      kdfMs,
+      decryptMs: perfMs(decryptT0),
+      dbBytes: fileSizeOrNull(vaultPaths.dbPath)
+    })
+    // #208: the decrypt above verified the GCM tag, so a failure to OPEN what came out means
+    // the vault ciphertext itself is damaged (it authenticates — it is our own ciphertext —
+    // but its plaintext is not a database). Distinguish that from a wrong password, and never
+    // leave the decrypted output at rest: for a damaged-but-real database those bytes are
+    // authentic plaintext user data sitting on disk while the workspace reports locked.
+    let db: Db
+    try {
+      db = openDatabase(vaultPaths.dbPath)
+    } catch (err) {
+      // The plaintext is shredded on the way out (the outer catch), exactly like any failure
+      // after the decrypt.
+      // #247: a database a NEWER build stamped is not damage — the password verified and the
+      // file is a database; it is refused as such (the plaintext is shredded exactly like the
+      // damaged case; `.enc` is not rewritten here — a pending `.recovery` above still rolls
+      // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
+      if (isWorkspaceNewerError(err)) throw err
+      throw new VaultDamagedError()
+    }
+    openedDb = db
+    seedSettings(db)
+    // #858: re-stamp the mode Settings and Privacy read (create and a plaintext open stamp it too),
+    // inside this guard so a failed write cannot leave the keys or the open database behind.
+    updateSettings(db, { workspaceMode: 'encrypted' })
+    return { db, key: fileKey, descriptor }
+  } catch (err) {
+    if (openedDb) {
+      try {
+        openedDb.close()
+      } catch {
+        // Best-effort. If the handle stays open, Windows cannot unlink the file: the shred still
+        // overwrites the plaintext in place, and the next launch's sweep removes the remains.
+      }
+    }
+    if (plaintextOnDisk) {
+      shredFile(vaultPaths.dbPath)
+      cleanSidecars(vaultPaths.dbPath)
+    }
     fileKey.fill(0)
-    // #247: a database a NEWER build stamped is not damage — the password verified and the
-    // file is a database; it is refused as such (the plaintext is shredded again exactly like
-    // the damaged case; `.enc` is not rewritten here — a pending `.recovery` above still rolls
-    // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
-    if (isWorkspaceNewerError(err)) throw err
-    throw new VaultDamagedError()
+    throw err
   }
-  seedSettings(db)
-  return { db, key: fileKey, descriptor }
 }
 
 /**
@@ -1717,10 +1744,7 @@ export class WorkspaceController {
     this.key = key
     this.descriptor = descriptor
     this._mode = 'encrypted'
-    // #858: re-stamp the mode Settings and Privacy read. Create and a plaintext open stamp it;
-    // without this an unlock kept whatever the row said, so a wrong value (an older build's
-    // renderer, a bug) hid Change password on an encrypted workspace for good.
-    updateSettings(db, { workspaceMode: 'encrypted' })
+    // (#858: `unlockEncryptedVault` re-stamped `workspaceMode`, inside its failure guard.)
     // A new session: disarm any latch a completed lock left behind, and bump the epoch so a
     // model start still hashing weights from the PREVIOUS session refuses instead of spawning
     // into this one (AUD-02/AUD-03).
