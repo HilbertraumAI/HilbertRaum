@@ -8,7 +8,7 @@
 // fs calls go through the mocked module like the suites' own, every wrapper there is pass-through until armed, and
 // the vault primitives below DO reach the recorded `openSync` / `renameSync` / `fsyncSync`. So build the vault state
 // above the `mockClear()` lines (and before arming a failure), never between a `mockClear()` and the measured call.
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { SCHEMA_VERSION } from '../../src/main/services/db'
@@ -139,6 +139,44 @@ export function damagedVault<T extends VaultPaths>(vp: T, password: string, nois
   const noise = `${vp.dbPath}.noise-src`
   writeFileSync(noise, randomBytes(noiseBytes))
   encryptFile(noise, vp.encPath, key)
+  return vp
+}
+
+/**
+ * The existing vault at `vp` (created under `password`) whose database is a real SQLite file with a damaged first page
+ * past its header (#844): `PRAGMA user_version` still reads (it is in the header), and the first statement that reads
+ * the schema fails SQLITE_CORRUPT. Encrypted under the vault's real key, so the unlock authenticates and only SQLite
+ * can tell. The working copy and the corrupted source are removed: the vault is left locked.
+ */
+export function corruptVault<T extends VaultPaths>(vp: T, password: string): T {
+  const { db, key } = unlockEncryptedVault(vp, password)
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+  db.close()
+  const bytes = readFileSync(vp.dbPath)
+  bytes.fill(0xff, 100, 200) // the schema b-tree's page header and cell pointers
+  const src = `${vp.dbPath}.corrupt-src`
+  writeFileSync(src, bytes)
+  encryptFile(src, vp.encPath, key)
+  rmSync(src)
+  rmSync(vp.dbPath)
+  return vp
+}
+
+/**
+ * The existing vault at `vp` (created under `password`) whose open cannot finish on a healthy database (#844): a
+ * document holds OCR pages but no OCR summary, so `openDatabase`'s backfill updates it on the next open, and a trigger
+ * aborts that update with `abortMessage`. SQLite reports a constraint failure, not damage: the stand-in for an upgrade
+ * step that fails on a full drive or through a bug. The vault is left locked.
+ */
+export function upgradeBlockedVault<T extends VaultPaths>(vp: T, password: string, abortMessage = 'blocked'): T {
+  const { db, key } = unlockEncryptedVault(vp, password)
+  const now = new Date().toISOString()
+  db.prepare(
+    "INSERT INTO documents (id, title, status, created_at, updated_at, ocr_json) VALUES ('doc-844', 'scan', 'ready', ?, ?, ?)"
+  ).run(now, now, JSON.stringify({ pages: [{ pageNumber: 1, text: 'page one' }] }))
+  const quoted = `'${abortMessage.replace(/'/g, "''")}'`
+  db.prepare(`CREATE TRIGGER block_upgrade BEFORE UPDATE ON documents BEGIN SELECT RAISE(ABORT, ${quoted}); END`).run()
+  lockEncryptedVault(vp, db, key)
   return vp
 }
 

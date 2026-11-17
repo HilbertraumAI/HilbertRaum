@@ -2565,6 +2565,11 @@ export const es: UiCatalog<'es'> = {
     'y no se pudieron abrir. Volver a escribir la contraseña no servirá. No crees un espacio de ' +
     'trabajo nuevo: deja los archivos como están y restaura la carpeta «workspace» desde una ' +
     'copia de seguridad.',
+  'main.workspace.vaultOpenFailed':
+    'Tu contraseña es correcta, pero HilbertRaum no pudo terminar de abrir el espacio de ' +
+    'trabajo. El espacio de trabajo cifrado en la unidad se dejó como estaba. Asegúrate de ' +
+    'que la unidad tenga espacio libre y vuelve a intentarlo. Si esto empezó después de una ' +
+    'actualización, la versión anterior de HilbertRaum todavía puede abrirlo.',
   'main.workspace.recoveryBlocked':
     'Todavía no se pudo abrir el espacio de trabajo: otro programa tiene abierto un archivo de ' +
     'recuperación con tus datos más recientes. Cierra todo lo que pueda estar analizando la ' +

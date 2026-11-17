@@ -2597,6 +2597,12 @@ export const de: Record<keyof typeof en, string> = {
     'beschädigt und konnten nicht geöffnet werden. Das Passwort erneut einzugeben hilft ' +
     'nicht. Lege keinen neuen Arbeitsbereich an — lass die Dateien unverändert und stelle ' +
     'den Ordner „workspace“ aus einem Backup wieder her.',
+  'main.workspace.vaultOpenFailed':
+    'Dein Passwort ist richtig, aber HilbertRaum konnte das Öffnen des Arbeitsbereichs ' +
+    'nicht abschließen. Der verschlüsselte Arbeitsbereich auf dem Laufwerk ist unverändert. ' +
+    'Sorge für freien Speicherplatz auf dem Laufwerk und versuch es dann noch einmal. Wenn ' +
+    'das nach einem Update begonnen hat, kann die vorherige HilbertRaum-Version ihn ' +
+    'weiterhin öffnen.',
   // #242: see en.ts — the recovery file is held by another program; nothing is lost.
   'main.workspace.recoveryBlocked':
     'Der Arbeitsbereich konnte noch nicht geöffnet werden: Ein anderes Programm hält eine ' +

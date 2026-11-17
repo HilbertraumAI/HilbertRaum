@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import {
   VaultBusyError,
   VaultDamagedError,
+  VaultOpenFailedError,
   VaultRecoveryBlockedError,
   WrongPasswordError,
   workspaceAdmitsWork
@@ -255,6 +256,26 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           ok: false,
           reason: 'vault_damaged',
           message: tMain('main.workspace.vaultDamaged')
+        }
+      }
+      // #844: the password verified and SQLite found a database, but opening it could not finish
+      // (an upgrade step: a full drive, an I/O error, a bug in a new step). `.enc` is untouched, so
+      // this must not wear the damaged copy and send the user looking for a backup. The log gets
+      // the cause's name and SQLite's fixed description, never its message: a backfill's error can
+      // quote stored text, and app.log never carries document text.
+      // instanceof PLUS the name — the bundle-duplication quirk again.
+      if (err instanceof VaultOpenFailedError || (err instanceof Error && err.name === 'VaultOpenFailedError')) {
+        const cause = (err as Error).cause as { name?: unknown; errcode?: unknown; errstr?: unknown } | undefined
+        log.error('Workspace unlock failed: the database could not finish opening (password verified)', {
+          cause: typeof cause?.name === 'string' ? cause.name : typeof cause,
+          sqliteCode: typeof cause?.errcode === 'number' ? cause.errcode : null,
+          sqlite: typeof cause?.errstr === 'string' ? cause.errstr : null
+        })
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (could not finish opening)')
+        return {
+          ok: false,
+          reason: 'vault_open_failed',
+          message: tMain('main.workspace.vaultOpenFailed')
         }
       }
       // #242: the startup salvage is blocked — another program holds the recovery file the

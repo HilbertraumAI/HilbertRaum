@@ -2639,6 +2639,13 @@ export const en = {
     'Your password is correct, but the workspace data on the drive is damaged and could ' +
     'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
     'keep the files as they are and restore the workspace folder from a backup.',
+  // #844: the password verified and the data is a database, but opening it could not finish (an
+  // upgrade step: a full drive, an I/O error, a bug in a new step). Not damage: `.enc` is untouched.
+  'main.workspace.vaultOpenFailed':
+    'Your password is correct, but HilbertRaum could not finish opening the workspace. The ' +
+    'encrypted workspace on the drive was left as it was. Make sure the drive has free ' +
+    'space, then try again. If this started after an update, the previous version of ' +
+    'HilbertRaum can still open it.',
   // #242: the start-up salvage could not move the last session's newest data aside because
   // another program holds the recovery file on that name; opening now would lose that data.
   'main.workspace.recoveryBlocked':

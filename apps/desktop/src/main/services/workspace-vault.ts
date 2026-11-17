@@ -129,7 +129,8 @@ export class VaultLockError extends Error {
 
 /**
  * Thrown by `unlockEncryptedVault` when the password is CORRECT (verifier passed, GCM tag
- * on `.enc` authenticated) but the decrypted bytes are not an openable SQLite database —
+ * on `.enc` authenticated) but SQLite finds the decrypted bytes are not a database, or a
+ * corrupt one (#844: any other open failure is `VaultOpenFailedError`) —
  * the vault ciphertext itself is damaged (issue #208: the app had re-encrypted a
  * shred-survivor of random noise over the good `.enc`, so every layer of crypto verified
  * and only `openDatabase` could tell). Structurally NOT a password problem: the IPC layer
@@ -145,6 +146,39 @@ export class VaultDamagedError extends Error {
     super('The workspace decrypted but is not a database — the vault is damaged')
     this.name = 'VaultDamagedError'
   }
+}
+
+/**
+ * Thrown by `unlockEncryptedVault` when the password is CORRECT and the decrypted file is a
+ * database SQLite does not call damaged, yet `openDatabase` failed (#844): one of the open's
+ * upgrade steps (the schema, an `ensureColumn`, a backfill) could not finish, through a full
+ * drive, an I/O error or a bug in a new step. `.enc` is untouched (the working copy is shredded
+ * like any failure after the decrypt), so this is not damage, and the IPC layer must not show
+ * `vault_damaged`'s "restore from a backup": it maps this to `vault_open_failed` (free space and
+ * retry; after an update, the previous version still opens the vault). `cause` is the open's
+ * error, for the log.
+ */
+export class VaultOpenFailedError extends Error {
+  constructor(cause: unknown) {
+    super('The workspace decrypted to a database, but opening it failed', { cause })
+    this.name = 'VaultOpenFailedError'
+  }
+}
+
+/** SQLite's primary result codes for "this is not a database" and "this database is corrupt". */
+const SQLITE_CORRUPT = 11
+const SQLITE_NOTADB = 26
+
+/**
+ * Whether SQLite itself judged the file damaged (#844): `node:sqlite` errors carry SQLite's
+ * extended result code as `errcode`, whose low byte is the primary code. Noise fails the first
+ * read with NOTADB (#208); a real database with a damaged page passes that read and fails a later
+ * statement with CORRUPT. Anything else (a full drive, an I/O error, a constraint, a JS error in
+ * a backfill) is an open that could not finish, not damage.
+ */
+function sqliteJudgedDamaged(err: unknown): boolean {
+  const code = (err as { errcode?: unknown } | null)?.errcode
+  return typeof code === 'number' && ((code & 0xff) === SQLITE_CORRUPT || (code & 0xff) === SQLITE_NOTADB)
 }
 
 /**
@@ -1351,11 +1385,12 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       decryptMs: perfMs(decryptT0),
       dbBytes: fileSizeOrNull(vaultPaths.dbPath)
     })
-    // #208: the decrypt above verified the GCM tag, so a failure to OPEN what came out means
-    // the vault ciphertext itself is damaged (it authenticates — it is our own ciphertext —
-    // but its plaintext is not a database). Distinguish that from a wrong password, and never
-    // leave the decrypted output at rest: for a damaged-but-real database those bytes are
-    // authentic plaintext user data sitting on disk while the workspace reports locked.
+    // #208: the decrypt above verified the GCM tag, so when SQLite finds no database (or a
+    // corrupt one) in what came out, the vault ciphertext itself is damaged (it authenticates —
+    // it is our own ciphertext — but its plaintext is not a database). Distinguish that from a
+    // wrong password, and from an upgrade step that could not finish (#844), and never leave the
+    // decrypted output at rest: for a damaged-but-real database those bytes are authentic
+    // plaintext user data sitting on disk while the workspace reports locked.
     let db: Db
     try {
       db = openDatabase(vaultPaths.dbPath)
@@ -1367,7 +1402,10 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       // damaged case; `.enc` is not rewritten here — a pending `.recovery` above still rolls
       // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
       if (isWorkspaceNewerError(err)) throw err
-      throw new VaultDamagedError()
+      // #844: damage only when SQLite says so. Any other failure is an upgrade step that could
+      // not finish on a database that is fine, and `.enc` is untouched: not "restore a backup".
+      if (sqliteJudgedDamaged(err)) throw new VaultDamagedError()
+      throw new VaultOpenFailedError(err)
     }
     openedDb = db
     seedSettings(db)

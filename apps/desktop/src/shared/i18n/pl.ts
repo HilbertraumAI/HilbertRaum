@@ -2599,6 +2599,11 @@ export const pl: UiCatalog<'pl'> = {
     'Hasło jest prawidłowe, ale dane obszaru roboczego na dysku są uszkodzone i nie udało się ' +
     'ich otworzyć. Ponowne wpisanie hasła nie pomoże. Nie twórz nowego obszaru roboczego – ' +
     'zostaw pliki bez zmian i przywróć folder obszaru roboczego z kopii zapasowej.',
+  'main.workspace.vaultOpenFailed':
+    'Hasło jest prawidłowe, ale aplikacja HilbertRaum nie mogła dokończyć otwierania ' +
+    'obszaru roboczego. Zaszyfrowany obszar roboczy na dysku pozostał bez zmian. Upewnij ' +
+    'się, że na dysku jest wolne miejsce, i spróbuj ponownie. Jeśli problem pojawił się po ' +
+    'aktualizacji, poprzednia wersja aplikacji HilbertRaum nadal może go otworzyć.',
   'main.workspace.recoveryBlocked':
     'Nie udało się jeszcze otworzyć obszaru roboczego: inny program ma otwarty plik odzyskiwania ' +
     'z twoimi najnowszymi danymi. Zamknij wszystko, co może skanować dysk (program antywirusowy, ' +

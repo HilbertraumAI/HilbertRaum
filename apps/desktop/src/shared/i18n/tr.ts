@@ -2419,6 +2419,11 @@ export const tr: UiCatalog<'tr'> = {
     'Parolanız doğru, ancak sürücüdeki çalışma alanı verileri hasarlı ve açılamadı. Parolayı ' +
     'yeniden yazmak işe yaramaz. Yeni bir çalışma alanı oluşturmayın: dosyaları olduğu gibi ' +
     'bırakın ve çalışma alanı klasörünü bir yedekten geri yükleyin.',
+  'main.workspace.vaultOpenFailed':
+    'Parolanız doğru, ancak HilbertRaum çalışma alanını açmayı tamamlayamadı. Sürücüdeki ' +
+    'şifreli çalışma alanı olduğu gibi bırakıldı. Sürücüde boş alan olduğundan emin olun ve ' +
+    'yeniden deneyin. Bu sorun bir güncellemeden sonra başladıysa, HilbertRaum’un önceki ' +
+    'sürümü onu hâlâ açabilir.',
   'main.workspace.recoveryBlocked':
     'Çalışma alanı henüz açılamadı: başka bir program, en yeni verilerinizi içeren bir kurtarma ' +
     'dosyasını kullanıyor. Sürücüyü tarıyor olabilecek her şeyi kapatın (virüsten koruma, arama ' +

@@ -2612,6 +2612,11 @@ export const it: UiCatalog<'it'> = {
     'La tua password è corretta, ma i dati dell’area di lavoro sull’unità sono danneggiati e non ' +
     'è stato possibile aprirli. Reinserire la password non serve. Non creare una nuova area di ' +
     'lavoro: lascia i file come sono e ripristina la cartella «workspace» da un backup.',
+  'main.workspace.vaultOpenFailed':
+    'La tua password è corretta, ma HilbertRaum non è riuscito a completare l’apertura ' +
+    'dell’area di lavoro. L’area di lavoro crittografata sull’unità è rimasta com’era. ' +
+    'Assicurati che sull’unità ci sia spazio libero, poi riprova. Se il problema è iniziato ' +
+    'dopo un aggiornamento, la versione precedente di HilbertRaum può ancora aprirla.',
   'main.workspace.recoveryBlocked':
     'Non è ancora possibile aprire l’area di lavoro: un altro programma tiene aperto un file di ' +
     'ripristino con i tuoi dati più recenti. Chiudi ciò che potrebbe analizzare l’unità ' +

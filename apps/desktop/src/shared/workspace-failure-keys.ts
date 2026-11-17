@@ -29,6 +29,7 @@ export type WorkspaceFailureReason = Extract<WorkspaceActionResult, { ok: false 
 export const UNLOCK_FAILURE_KEYS = {
   wrong_password: 'main.workspace.wrongPassword',
   vault_damaged: 'main.workspace.vaultDamaged',
+  vault_open_failed: 'main.workspace.vaultOpenFailed',
   vault_recovery_blocked: 'main.workspace.recoveryBlocked',
   workspace_newer: 'main.workspace.newer',
   // `null`: main never sends this reason for this call. If it ever does, give the entry a key:
@@ -39,9 +40,10 @@ export const UNLOCK_FAILURE_KEYS = {
 
 /** The gate's copy for a failed create, by reason (`null`: show main's `message`). */
 export const CREATE_FAILURE_KEYS = {
-  // `null`: main never sends these three for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
+  // `null`: main never sends these four for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
   wrong_password: null,
   vault_damaged: null,
+  vault_open_failed: null,
   vault_recovery_blocked: null,
   workspace_newer: 'main.workspace.newer',
   // The one `null` main does send: the vault's own sentence, which has no catalog key.

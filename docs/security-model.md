@@ -1185,7 +1185,13 @@ password. Four guards close this:
   `{ reason: 'vault_damaged' }` result with backup/recovery copy. Structurally it cannot
   be a password problem, and telling the user to retype the password (or worse, follow
   the forgotten-password advice to create a fresh workspace) destroys the evidence and
-  any recovery option.
+  any recovery option. Since #844 "damaged" is SQLite's own verdict on the decrypted file
+  (not a database, or corrupt, read from the error's result code). Any other failure of the
+  open, such as an upgrade step on a full drive, is a `VaultOpenFailedError` →
+  `{ reason: 'vault_open_failed' }` with "free space and retry, or start the previous
+  version" copy: `.enc` is untouched on that path, so "restore from a backup" was wrong.
+  Its log line names the cause's kind and SQLite's fixed description, never the cause's
+  message, which a backfill's error could fill with stored text.
 - **No decrypted leftover after a failed open.** `decryptFile` always shredded its output
   on a **tag** failure; the incident showed the gap after a *successful* decrypt whose
   result fails to open — that output stayed on disk while the workspace reported locked
