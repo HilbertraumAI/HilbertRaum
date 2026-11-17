@@ -46,7 +46,8 @@ import type { EngineProblemBuilds } from './runtime/engine-load'
 // engine family from model-manifests/runtime-sources.yaml into runtime/<family>/<os>/,
 // mirroring the canonical fetch-runtime scripts (download → verify → clean → extract →
 // flatten → install marker). The network (`fetchImpl`) and extraction (`extractImpl`,
-// default `tar -xf`) are injected seams so the unit suite stays zero-network/zero-shell.
+// default `tar -xf`) are injected seams so the unit suite stays zero-network; only the #856
+// rows in engine-download.test.ts run the OS's own tar.
 //
 // FAMILIES: llama_cpp (chat) + whisper_cpp (transcription) + kiwix_tools (the knowledge-pack
 // tools, OPTIONAL — #339 P8-1). To add a future engine, list its spec in
@@ -316,7 +317,8 @@ export function engineStatus(
 }
 
 /**
- * Extract a release archive into `destDir`. Injected so tests never shell out. The optional
+ * Extract a release archive into `destDir`, the folder it sits in (`extractWithTar` refuses any
+ * other, #856). Injected so the install-flow tests never shell out. The optional
  * `signal` (F-33) lets a job cancel reach the child: without it `extractWithTar` was the only
  * unbounded child in the repo — a wedged tar pinned the job in 'extracting' with no way to stop
  * it, and a cancel merely flipped the status while tar kept writing.
@@ -376,14 +378,17 @@ export function resolveTarBinary(
  * (#856). Windows' tar (bsdtar) converts the paths on its command line through the ANSI code
  * page, so under a Cyrillic or Japanese folder on a Western Windows an absolute archive path
  * failed with "Error opening archive" and a `-C` with "could not chdir"; the child's cwd reaches
- * tar intact. So there is no `-C` (the cwd is the target), and an archive in the target, where
- * the installer downloads it (`planRuntimeDownload`), goes as `./<name>`. The `./` also keeps a
- * name starting with `-` from meaning stdin, and one holding a `:` from meaning GNU tar's
- * `host:file`. Any other archive keeps its absolute path.
+ * tar intact. So there is no `-C` (the cwd is the target) and the archive goes as `./<name>`. The
+ * `./` also keeps a name starting with `-` from meaning stdin, and one holding a `:` from meaning
+ * GNU tar's `host:file`. The installer always downloads the archive into the target
+ * (`planRuntimeDownload`); one kept anywhere else would need its path on the command line again,
+ * so it is refused rather than left to fail on those machines only.
  */
 function tarExtractArgs(archivePath: string, destDir: string): string[] {
-  const inTarget = resolve(dirname(archivePath)) === resolve(destDir)
-  return ['-xf', inTarget ? `./${basename(archivePath)}` : archivePath]
+  if (resolve(dirname(archivePath)) !== resolve(destDir)) {
+    throw new Error('extractWithTar: the archive must sit in the folder it is extracted into')
+  }
+  return ['-xf', `./${basename(archivePath)}`]
 }
 
 /**

@@ -77,8 +77,8 @@ master pipeline** that produces a finished, sellable drive (see the last section
     reaches tar intact. The installer downloads the archive into the target, so its name is all tar
     needs: ASCII when it comes from the URL (`ARCHIVE_NAME_RULE`), while the fallback name built
     from the yaml's `version` is not checked. The `./` keeps a name starting with `-` from meaning
-    stdin and one holding a `:` from meaning GNU tar's `host:file`. An archive anywhere else keeps
-    its absolute path.
+    stdin and one holding a `:` from meaning GNU tar's `host:file`. `extractWithTar` refuses an
+    archive kept anywhere else, since its path would have to go on the command line again.
     **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install pre-cleans the dir EVERY
     llama-server sidecar runs from (chat + embedder + reranker + vision + translation), so it is
     refused while any of them has a live child; a `whisper_cpp` install is refused mid-transcription/

@@ -1187,17 +1187,13 @@ describe.skipIf(!isAbsolute(OS_TAR))('extractWithTar with the OS tar (#856)', ()
     expectExtracted(dir)
   })
 
-  // The archive's absolute path still goes through the code page here, so on a Windows machine
-  // whose temp folder itself is outside it (a user folder named in Cyrillic) this row would fail
-  // for that reason, not for the target's name.
-  it.skipIf(process.platform === 'win32' && /[^\x20-\x7e]/.test(tmpdir()))(
-    'extracts an archive from outside the target into a folder named in Cyrillic and Japanese',
-    async () => {
-      const dir = target('Олена 日本')
-      await extractWithTar(archiveIn(mkdtempSync(join(tmpdir(), 'hr-engine-tar-src-'))), dir)
-      expectExtracted(dir)
-    }
-  )
+  // Its absolute path would have to go on tar's command line, through the code page again.
+  it('refuses an archive kept outside the target, before tar runs', async () => {
+    const dir = target('outside')
+    const elsewhere = archiveIn(mkdtempSync(join(tmpdir(), 'hr-engine-tar-src-')))
+    await expect(extractWithTar(elsewhere, dir)).rejects.toThrow(/must sit in the folder/)
+    expect(readdirSync(dir)).toEqual([])
+  })
 })
 
 // F-32 (full-audit 2026-07-16): the in-use guard covered only the CHAT runtime — but the
