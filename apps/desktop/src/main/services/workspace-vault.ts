@@ -2045,8 +2045,13 @@ export class WorkspaceController {
           this.dropKeyAndHandle()
           return { ...this.getState(), lockNotice: 'working_copy_lost' }
         }
+        // Not judged lost, but a main file that is gone still leaves its `-wal`/`-shm` behind
+        // (#853): plaintext pages no main file can replay, shredded now rather than left on the
+        // drive until the next launch. Only then: beside an existing file, an un-checkpointed WAL
+        // (a checkpoint that hit the full disk) may hold data the next launch's salvage needs.
         try {
           if (workingCopy === 'database') this._db = openDatabase(dbPath)
+          else if (workingCopy === 'gone') cleanSidecars(dbPath)
         } catch {
           // Re-open is best-effort: if the disk is too broken even for that, keep the
           // closed handle — isUnlocked() stays true, so no unlock can decrypt the STALE
@@ -2085,13 +2090,11 @@ export class WorkspaceController {
    * drive: on a non-journaling exFAT stick, at-rest WAL sidecars mean the last session
    * never closed cleanly, and they make the next hard unplug likelier to corrupt. ONLY
    * for callers that are about to exit the process — a closed plaintext DB has no reopen
-   * path short of relaunch (`requireDb` throws afterwards). Returns the lock's `lockNotice`, so
-   * the quit paths can log a lock that finished at the last snapshot (#855).
+   * path short of relaunch (`requireDb` throws afterwards).
    */
-  shutdown(): WorkspaceStateInfo['lockNotice'] {
-    let notice: WorkspaceStateInfo['lockNotice']
+  shutdown(): void {
     try {
-      notice = this.lock().lockNotice
+      this.lock()
     } catch (err) {
       // full-audit 2026-07-11 CODE-1 — the failed lock re-opened the plaintext DB so an
       // INTERACTIVE session stays usable, but this caller is exiting the process. Close
@@ -2126,6 +2129,5 @@ export class WorkspaceController {
       this._db.close()
       this._db = null
     }
-    return notice
   }
 }

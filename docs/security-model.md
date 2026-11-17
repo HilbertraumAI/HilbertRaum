@@ -1075,7 +1075,9 @@ explicitly:
   (that retry still reports the failed lock; the next one locks). Nor is a working file judged
   lost while `.enc` is missing too: `.enc` sits beside it, so a drive or workspace folder that
   vanished (a USB stick dropping out) reads as missing for both, and the working file may come
-  back newer. The quit path finishes the same way and logs it; it has nowhere to show the notice.
+  back newer; a main file that is gone still has its orphaned `-wal`/`-shm` shredded (#853). The
+  quit path finishes the same way, silently: it has nowhere to show the notice, and a line logged
+  after the lock lives only in memory and ends with the process.
 - **Newer-file roll-forward (CODE-1b).** If the app exits after a failed lock, the startup
   crash sweep must NOT shred the working file — it is the only fresh copy of the session's
   data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer

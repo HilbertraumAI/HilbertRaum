@@ -83,7 +83,7 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     // modelling it with `lock()` hid #853 on POSIX, where the refused lock's re-open created
     // an empty database that shutdown then left at rest and the next unlock rolled forward
     // over `.enc`.
-    expect(a.shutdown()).toBe('working_copy_lost') // what the quit paths log
+    expect(() => a.shutdown()).not.toThrow()
     expect(a.isUnlocked()).toBe(false)
     expect(existsSync(vp.dbPath)).toBe(false)
 
@@ -219,6 +219,26 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     // …and an unlock in this session does not decrypt the older `.enc` over it.
     expect(ctrl.unlock('correct horse battery').state).toBe('unlocked')
     expect(readFileSync(vp.dbPath).equals(workingFile)).toBe(true)
+  })
+
+  // …but a main file that is gone still has its orphaned sidecars shredded there (#853): plaintext
+  // pages no main file can replay. (Windows plants them, as in the "removed" row above.)
+  it('a refused lock with the working file and its .enc both gone still shreds the orphaned -wal/-shm (#853)', () => {
+    const vp = freshVaultPaths('vault-208')
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.create('correct horse battery', 'encrypted')
+    if (process.platform === 'win32') ctrl.requireDb().close()
+    rmSync(vp.dbPath)
+    if (process.platform === 'win32') {
+      for (const suffix of ['-wal', '-shm']) writeFileSync(`${vp.dbPath}${suffix}`, randomBytes(4096))
+    }
+    rmSync(vp.encPath)
+
+    expect(() => ctrl.lock()).toThrowError(VaultLockError)
+    for (const leftover of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) {
+      expect(existsSync(leftover)).toBe(false)
+    }
   })
 
   it('lockEncryptedVault refuses to encrypt a non-SQLite working file over .enc (guard pin)', () => {
