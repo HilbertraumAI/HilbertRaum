@@ -68,6 +68,12 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **On Windows, the AI engine installs from a folder whose name uses another alphabet.** When the
+  drive or the app's data folder had a name in, for example, Cyrillic or Japanese on a Windows set
+  up for a Western language (such as a user folder named in Cyrillic on an English Windows), the
+  install from the AI Model screen downloaded and checked the engine, then stopped with "The AI
+  engine downloaded but could not be unpacked" on every try. It now installs. German umlauts
+  were not affected (#856).
 - **On Linux, the AppImage started directly from a Kit opens the Kit's workspace.** Started without
   the drive's launcher, for example by a double-click in the file manager, the AppImage looked for
   the drive from the temporary folder it unpacks itself into, found nothing, and opened a new, empty

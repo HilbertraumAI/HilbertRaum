@@ -372,18 +372,35 @@ export function resolveTarBinary(
 }
 
 /**
- * Default extractor: `tar -xf <archive> -C <dir>` via the OS's pinned `tar` (see
- * `resolveTarBinary`). One command covers every host because each platform's archive is one
- * its `tar` understands — Windows 10+ ships bsdtar (handles the .zip release assets), macOS
- * bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the same native
- * tools (unzip/ditto/tar); this is the in-app equivalent.
+ * The `tar` arguments for extracting `archivePath` into `destDir`, run with `cwd` = `destDir`
+ * (#856). Windows' tar (bsdtar) opens the paths on its command line through the ANSI code page,
+ * so an absolute path holding a character outside it (a Cyrillic or Japanese folder on a Western
+ * Windows) fails with "Error opening archive"; the child's cwd reaches it intact. The installer
+ * always downloads the archive straight into the target under an ASCII name
+ * (`ARCHIVE_NAME_RULE`), so the bare name is enough, on every host. Any other layout keeps the
+ * absolute call, and so does a name starting with `-`: `tar -xf -` reads the archive from stdin,
+ * which here is empty, so tar would exit 0 having extracted nothing.
+ */
+function tarExtractArgs(archivePath: string, destDir: string): string[] {
+  const name = basename(archivePath)
+  return resolve(dirname(archivePath)) === resolve(destDir) && !name.startsWith('-')
+    ? ['-xf', name]
+    : ['-xf', archivePath, '-C', destDir]
+}
+
+/**
+ * Default extractor: the OS's pinned `tar` (see `resolveTarBinary`), `-xf` with the archive's
+ * bare name from inside `destDir` (`tarExtractArgs`). One command covers every host because each
+ * platform's archive is one its `tar` understands — Windows 10+ ships bsdtar (handles the .zip
+ * release assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use
+ * the same native tools (unzip/ditto/tar); this is the in-app equivalent.
  */
 export const extractWithTar: ExtractFn = (archivePath, destDir, signal) =>
   new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(resolveTarBinary(), ['-xf', archivePath, '-C', destDir], {
+    const child = spawn(resolveTarBinary(), tarExtractArgs(archivePath, destDir), {
       stdio: 'ignore',
-      // Don't inherit a possibly attacker-influenced CWD for the child; the archive path is
-      // absolute so this only pins where the (absolute) interpreter is launched from.
+      // The target: the bare archive name resolves against it, and the child never inherits a
+      // possibly attacker-influenced cwd. `tar` itself is an absolute path (`resolveTarBinary`).
       cwd: destDir,
       windowsHide: true
     })

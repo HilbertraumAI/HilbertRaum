@@ -6889,7 +6889,7 @@ hits when downloading a model into a dev/incomplete drive. `services/runtime-dow
 marker** — mirroring the canonical `fetch-runtime` scripts, but in-app. The network
 (`fetchImpl`) and the archive extraction (`extractImpl`, default `tar -xf`, which covers the
 .zip/.tar.gz host assets via bsdtar/GNU tar) are **injected seams**, so the unit suite stays
-zero-network and never shells out. **Same gates as the model downloader** (policy ∧
+zero-network; only the #856 rows run the OS's own tar (packaging.md, the in-app engine section). **Same gates as the model downloader** (policy ∧
 `allowNetwork`), re-checked in main; placeholder hashes complete `unverified` (checksum
 honesty); the install is **idempotent via the marker** (`runtimeInstallCurrent`). Surfaced as
 `engine:status/download/getJob/cancel` IPC + a Models-screen "Install the AI engine" banner

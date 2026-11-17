@@ -19,16 +19,18 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
     }
   }
 })
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { stringify } from 'yaml'
 import { isRealSha256 } from '../../src/shared/manifest'
 import {
   EngineDownloadManager,
   engineStatus,
+  extractWithTar,
   hostRuntimeArch,
   hostRuntimeOs,
   loadRuntimeSources,
@@ -70,7 +72,7 @@ import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 // network seam), the verify-before-trust flow (placeholder honesty, mismatch discard), the
 // extract → flatten → marker install, and the host build selection. The network + the
 // extraction are injected (a fake fetch + a fake extractor that drops the binary) so the
-// suite stays zero-network and never shells out.
+// suite stays zero-network. Only the #856 rows shell out, to the OS's own tar.
 
 const BODY = 'llama-server-release-archive-bytes'
 const REAL_SHA = createHash('sha256').update(BODY).digest('hex')
@@ -1136,6 +1138,64 @@ describe('resolveTarBinary (CWD-binary-planting hardening, vuln-scan 2026-06-21)
   it('falls back to the bare name only when no known absolute tar exists (exotic host)', () => {
     expect(resolveTarBinary('linux', {}, () => false)).toBe('tar')
     expect(resolveTarBinary('win32', { SystemRoot: 'C:\\Windows' }, () => false)).toBe('tar')
+  })
+})
+
+// #856: the real default extractor, through the OS's own tar. Windows' bsdtar opens the paths on
+// its command line through the ANSI code page, so an engine install under a Cyrillic or Japanese
+// folder failed with "Error opening archive" on a Western Windows (code page 1252, as on the CI
+// runners). The archive is built by the same tar in the platform's release format (.zip on
+// Windows, .tar.gz elsewhere), with a nested folder as the whisper zip and the posix tarballs have.
+const OS_TAR = resolveTarBinary()
+describe.skipIf(!isAbsolute(OS_TAR))('extractWithTar with the OS tar (#856)', () => {
+  const ARCHIVE = process.platform === 'win32' ? 'engine.zip' : 'engine.tar.gz'
+
+  /** A release-shaped archive in its own folder: one file at the top, one nested. */
+  function buildArchive(): string {
+    const src = mkdtempSync(join(tmpdir(), 'hr-engine-tar-src-'))
+    writeFileSync(join(src, BIN_NAME), 'top-level binary')
+    mkdirSync(join(src, 'Release'))
+    writeFileSync(join(src, 'Release', 'nested.txt'), 'nested file')
+    const made = spawnSync(OS_TAR, ['-a', '-cf', ARCHIVE, BIN_NAME, 'Release'], { cwd: src })
+    expect(made.status, String(made.stderr)).toBe(0)
+    return join(src, ARCHIVE)
+  }
+
+  /** An empty `<temp root>/<folder>/runtime/llama.cpp`, the shape of an install target. */
+  function target(folder: string): string {
+    const dir = join(mkdtempSync(join(tmpdir(), 'hr-engine-tar-')), folder, 'runtime', 'llama.cpp')
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  /** `archive` copied into `dir` as `name`, as the installer downloads it. `copyFileSync`, not
+   *  `cpSync`: Node 24.13's `cpSync` mangles a non-ASCII destination. */
+  function placeIn(dir: string, archive: string, name = ARCHIVE): string {
+    copyFileSync(archive, join(dir, name))
+    return join(dir, name)
+  }
+
+  function expectExtracted(dir: string): void {
+    expect(readFileSync(join(dir, BIN_NAME), 'utf8')).toBe('top-level binary')
+    expect(readFileSync(join(dir, 'Release', 'nested.txt'), 'utf8')).toBe('nested file')
+  }
+
+  it('extracts into a folder named in Cyrillic and Japanese', async () => {
+    const dir = target('Олена 日本')
+    await extractWithTar(placeIn(dir, buildArchive()), dir)
+    expectExtracted(dir)
+  })
+
+  it('extracts an archive that sits outside the target', async () => {
+    const dir = target('outside')
+    await extractWithTar(buildArchive(), dir)
+    expectExtracted(dir)
+  })
+
+  it('extracts an archive named "-", which tar would read as stdin by bare name', async () => {
+    const dir = target('dash')
+    await extractWithTar(placeIn(dir, buildArchive(), '-'), dir)
+    expectExtracted(dir)
   })
 })
 
