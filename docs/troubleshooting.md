@@ -385,6 +385,19 @@ search, the reranker, translation, voice input, OCR, knowledge packs — restart
 
 ---
 
+## "The workspace's working file on the drive was removed or damaged"
+
+You see this on the unlock screen right after a lock. While the workspace was open, something
+outside HilbertRaum deleted or overwrote its working file on the drive: a cleanup tool, a second
+copy of the app started from another place, a failing drive. Nothing newer than the last secured
+copy was left, so the app locked the workspace as it was the last time it was locked or the app
+was closed. The changes made since then are lost; everything before is intact.
+
+What to do: unlock as usual and carry on. If it happens again, find what else touches the
+drive's `workspace` folder, and check the drive for errors.
+
+---
+
 ## "Could not open the workspace yet: another program is holding a recovery file"
 
 You see this on the unlock screen when a previous session's lock did not finish (see "Could

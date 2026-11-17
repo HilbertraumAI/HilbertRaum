@@ -697,6 +697,19 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   }
 }
 
+/**
+ * #855 — what a refused lock finds at the working file: still a `database` (re-open it), `gone`
+ * (ENOENT), `not-database` (readable, but no SQLite header), or `unknown` (the probe itself failed:
+ * a hold, a permission error). Only `gone` and `not-database` are judged lost.
+ */
+function probeWorkingCopy(path: string): 'database' | 'gone' | 'not-database' | 'unknown' {
+  try {
+    return fileHasSqliteHeader(path) ? 'database' : 'not-database'
+  } catch (err) {
+    return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'gone' : 'unknown'
+  }
+}
+
 /** A real SQLite database file starts with this 16-byte header. */
 const SQLITE_HEADER = Buffer.from('SQLite format 3\u0000')
 
@@ -1979,6 +1992,9 @@ export class WorkspaceController {
    * Lock the encrypted vault: re-encrypt the working file → `.enc` and shred the
    * plaintext. A no-op for `plaintext_dev` (nothing to protect, and closing it would
    * wedge the app back into onboarding) — the DB simply stays open until process exit.
+   * A refused re-encrypt throws `VaultLockError` with the workspace open again, except when
+   * the working file is gone or no longer a database (#855): the lock then finishes at the
+   * last good `.enc` and returns `lockNotice: 'working_copy_lost'`.
    */
   lock(): WorkspaceStateInfo {
     if (this._db && this.key && this.descriptor?.mode === 'encrypted') {
@@ -2002,24 +2018,34 @@ export class WorkspaceController {
         // working file (POSIX lets an open file be unlinked), the re-open would leave the
         // controller holding a fresh, EMPTY database, and the next lock (a retry, or
         // `shutdown()` at quit) would pass the header guard and encrypt it over the good
-        // `.enc`. With no file to re-open, the session's delta is gone either way; keeping the
-        // closed handle (below) refuses every later lock and keeps `.enc` as the last good
-        // snapshot, which the next launch opens. A main file that is GONE also leaves its
-        // `-wal`/`-shm` behind (SQLite sees the database moved and skips the delete on close):
-        // plaintext pages no main file can replay, so they are shredded now rather than left
-        // on the drive until the next launch's sweep. Only when the file is gone: beside an
-        // existing file, an un-checkpointed WAL (a checkpoint that hit the full disk) may hold
-        // data the next launch's salvage still needs.
+        // `.enc`.
+        //
+        // #855 — and a working file that is GONE, or there but no longer a database (#208's
+        // noise, a truncation), holds nothing newer than `.enc`: the session's changes since
+        // the last lock are lost either way, and `.enc` is the last good snapshot. So the lock
+        // FINISHES instead of keeping a closed handle (which left the session reporting
+        // `unlocked` on a database that no call could use, refused every later lock and kept
+        // the key in memory until quit): shred what is left — the noise itself, and the
+        // `-wal`/`-shm` a vanished main file leaves behind (SQLite sees the database moved and
+        // skips the delete on close), plaintext pages no main file can replay — zero the key,
+        // and report `locked` with a notice the lock screen shows. That is what the next
+        // launch's sweep would do (`preserveNewerPlaintext` keeps only a header-bearing file
+        // with no live sidecars), done now, so an unlock in this session opens `.enc` at once.
+        // A file the probe cannot READ (a hold, a permission error) is not judged lost: it may
+        // be the only fresh copy, so it keeps the closed handle, and with it the refusal of any
+        // unlock that would decrypt the stale `.enc` over it this session.
         const dbPath = this.vaultPaths.dbPath
-        let reopenable = false
-        try {
-          reopenable = fileHasSqliteHeader(dbPath)
-        } catch {
-          /* missing or unreadable working file: never create a database in its place */
+        const workingCopy = probeWorkingCopy(dbPath)
+        if (workingCopy === 'gone' || workingCopy === 'not-database') {
+          shredFile(dbPath)
+          cleanSidecars(dbPath)
+          this.key.fill(0)
+          this._db = null
+          this.key = null
+          return { ...this.getState(), lockNotice: 'working_copy_lost' }
         }
         try {
-          if (reopenable) this._db = openDatabase(dbPath)
-          else if (!existsSync(dbPath)) cleanSidecars(dbPath)
+          if (workingCopy === 'database') this._db = openDatabase(dbPath)
         } catch {
           // Re-open is best-effort: if the disk is too broken even for that, keep the
           // closed handle — isUnlocked() stays true, so no unlock can decrypt the STALE

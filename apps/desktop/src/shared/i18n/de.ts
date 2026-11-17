@@ -2420,6 +2420,10 @@ export const de: Record<keyof typeof en, string> = {
     'auf diesem Laufwerk.',
   'gate.unlock.submit': 'Entsperren',
   'gate.unlock.submitBusy': 'Wird entsperrt…',
+  'gate.unlock.workingCopyLost':
+    'Die Arbeitsdatei des Arbeitsbereichs auf dem Laufwerk wurde entfernt oder beschädigt. Dein ' +
+    'Arbeitsbereich bleibt so erhalten, wie er beim letzten Sperren oder Schließen der App war; ' +
+    'Änderungen seitdem sind verloren.',
   'gate.welcome.title': 'Willkommen',
   'gate.welcome.intro':
     'Das ist dein privater KI-Arbeitsbereich. Chatte mit einem KI-Modell und stelle Fragen ' +

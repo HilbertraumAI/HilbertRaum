@@ -135,7 +135,9 @@ password recovery — are documented in
   re-encrypt the garbage, so the at-rest `.enc` — the vault itself — survives and the next
   unlock recovers the last locked snapshot. On macOS and Linux the sweep deletes the file
   instead of overwriting it; since #853 the refused lock no longer re-creates it as an empty
-  database, which a retry or the quit used to encrypt over `.enc`. A workspace-level cross-process lock file would
+  database, which a retry or the quit used to encrypt over `.enc`, and since #855 it finishes at
+  the last locked snapshot and the lock screen says the session's changes are lost. A
+  workspace-level cross-process lock file would
   close the corner fully; not built (stale-lock handling on hard-killed processes needs its
   own design). A pre-0.1.59 build takes no lock at all: the drive launchers refuse to start
   while two app versions sit at the drive root (#235), but starting an artifact directly

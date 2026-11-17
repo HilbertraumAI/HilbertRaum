@@ -68,6 +68,13 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A lock that finds the workspace's working file removed or damaged now finishes, and says what
+  was lost.** If something outside HilbertRaum deleted or overwrote the open working copy of an
+  encrypted workspace, the lock was refused and the workspace stayed half open until you quit:
+  every screen failed with "database is not open", Lock now kept failing with advice to free
+  space, and the workspace key stayed in memory. Now the workspace locks as it was the last time
+  it was locked or the app was closed, the lock screen says that the changes since then are lost,
+  and you can unlock again right away (#855).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;

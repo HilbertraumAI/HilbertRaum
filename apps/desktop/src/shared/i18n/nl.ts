@@ -2349,6 +2349,10 @@ export const nl: UiCatalog<'nl'> = {
     'schijf.',
   'gate.unlock.submit': 'Ontgrendelen',
   'gate.unlock.submitBusy': 'Ontgrendelen…',
+  'gate.unlock.workingCopyLost':
+    'Het werkbestand van de werkruimte op de schijf is verwijderd of beschadigd. Je werkruimte ' +
+    'blijft zoals hij was toen hij voor het laatst werd vergrendeld of de app werd gesloten; ' +
+    'wijzigingen sinds dat moment zijn verloren gegaan.',
   'gate.welcome.title': 'Welkom',
   'gate.welcome.intro':
     'Dit is je privéwerkruimte voor AI. Chat met een AI-model en stel vragen over je documenten: ' +

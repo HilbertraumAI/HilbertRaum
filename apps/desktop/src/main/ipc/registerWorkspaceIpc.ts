@@ -688,6 +688,14 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))
   }
+  // #855: the working file was gone or no longer a database, so the lock finished at the last good
+  // `.enc` and the workspace is LOCKED (key zeroed, no handle). Not a failure: the latch stays
+  // armed and nothing restarts, as after any lock; the lock screen shows the notice. No audit
+  // event can be written, there is no database; the log line is buffered like any line logged
+  // while locked.
+  if (state.lockNotice === 'working_copy_lost') {
+    log.warn('Workspace locked at its last saved state: the working file was gone or no longer a database')
+  }
   log.info('Workspace locked (sidecars stopped)')
   return state
 }

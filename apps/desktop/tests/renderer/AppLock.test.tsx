@@ -90,6 +90,30 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     })
     expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
     expect(perfMark).toHaveBeenCalledWith('gate_visible')
+    // A plain lock carries no #855 notice, so the gate shows none.
+    expect(screen.queryByText(t('en', 'gate.unlock.workingCopyLost'))).not.toBeInTheDocument()
+  })
+
+  // #855: a lock that finished at the last good snapshot because the working file was gone or no
+  // longer a database resolves `locked` with a notice. The gate the lock lands on must say that
+  // the changes since the previous lock are lost: the user would otherwise unlock into older data
+  // with nothing to explain it.
+  it('shows the gate with the lost-changes notice when the lock finished at the last snapshot (#855)', async () => {
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        lockWorkspace: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: 'working_copy_lost' })),
+        perfMark: vi.fn()
+      })
+    )
+
+    const user = userEvent.setup()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    await user.click(within(nav).getByRole('button', { name: 'Lock now' }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(t('en', 'gate.unlock.workingCopyLost'))
   })
 
   // full-audit 2026-07-11 CODE-26: a FAILED lock (main restored the unlocked vault, CODE-1a)
