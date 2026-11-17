@@ -164,14 +164,16 @@ export class VaultDamagedError extends Error {
  * it was reading (a JSON parse error quotes its input), and app.log never carries document text.
  */
 export class VaultOpenFailedError extends Error {
-  /** The cause's kind and SQLite's own result code and fixed description, for the log. */
-  readonly failure: { kind: string; sqliteCode: number | null; sqlite: string | null }
+  /** The cause's kind and Node error code (`ERR_SQLITE_ERROR`, `ENOSPC`, …), and SQLite's own
+   *  result code and fixed description: content-free, for the log. */
+  readonly failure: { kind: string; code: string | null; sqliteCode: number | null; sqlite: string | null }
   constructor(cause: unknown) {
     super('The workspace decrypted to a database, but opening it failed')
     this.name = 'VaultOpenFailedError'
-    const c = cause as { name?: unknown; errcode?: unknown; errstr?: unknown } | null | undefined
+    const c = cause as { name?: unknown; code?: unknown; errcode?: unknown; errstr?: unknown } | null | undefined
     this.failure = {
       kind: typeof c?.name === 'string' ? c.name : typeof cause,
+      code: typeof c?.code === 'string' ? c.code : null,
       sqliteCode: typeof c?.errcode === 'number' ? c.errcode : null,
       sqlite: typeof c?.errstr === 'string' ? c.errstr : null
     }
@@ -1336,7 +1338,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   // IS the file key, returned on success.
   let fileKey = key
   let plaintextOnDisk = false
-  let openedDb: Db | null = null
+  // Declared wide: it is assigned inside the open's own try below, which the outer catch's
+  // narrowing does not follow (it would read `openedDb` as always null there).
+  let openedDb = null as Db | null
   try {
     if (descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
       fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
@@ -1417,6 +1421,11 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     let db: Db
     try {
       db = openDatabase(vaultPaths.dbPath)
+      openedDb = db
+      seedSettings(db)
+      // #858: re-stamp the mode Settings and Privacy read (create and a plaintext open stamp it
+      // too), inside this guard so a failed write cannot leave the keys or the open database behind.
+      updateSettings(db, { workspaceMode: 'encrypted' })
     } catch (err) {
       // The plaintext is shredded on the way out (the outer catch), exactly like any failure
       // after the decrypt.
@@ -1424,18 +1433,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       // file is a database; it is refused as such (the plaintext is shredded exactly like the
       // damaged case; `.enc` is not rewritten here — a pending `.recovery` above still rolls
       // forward first, so nothing is lost) and the IPC layer names the remedy: update the app.
-      // #844: damage only when SQLite says so. Any other failure is an upgrade step that could
-      // not finish on a database that is fine, and `.enc` is not rewritten: not "restore a backup".
-      throw openFailure(err)
-    }
-    openedDb = db
-    try {
-      seedSettings(db)
-      // #858: re-stamp the mode Settings and Privacy read (create and a plaintext open stamp it
-      // too), inside this guard so a failed write cannot leave the keys or the open database behind.
-      updateSettings(db, { workspaceMode: 'encrypted' })
-    } catch (err) {
-      // #844: the open's own writes on the same database, so a failure reads the same way.
+      // #844: damage only when SQLite says so. Any other failure of the open or of the unlock's
+      // own settings writes is a step that could not finish on a database that is fine, and the
+      // open does not rewrite `.enc`: not "restore a backup".
       throw openFailure(err)
     }
     return { db, key: fileKey, descriptor }

@@ -259,9 +259,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         }
       }
       // #844: the password verified and SQLite found a database, but opening it could not finish
-      // (an upgrade step: a full drive, an I/O error, a bug in a new step). The failed open never
-      // rewrites `.enc`, so
-      // this must not wear the damaged copy and send the user looking for a backup. The log gets
+      // (an upgrade step: a full drive, an I/O error, a bug in a new step). The open does not rewrite
+      // `.enc` (only a `.recovery` roll-forward before it can, with a fresher snapshot), so this
+      // must not wear the damaged copy and send the user looking for a backup. The log gets
       // the error's `failure` (the cause's kind and SQLite's fixed description): the error never
       // holds the cause's message, which a backfill can fill with stored text.
       // instanceof PLUS the name — the bundle-duplication quirk again.
@@ -372,7 +372,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         if (/not permitted|already exists/i.test(message)) {
           return { ok: false, reason: 'refused', message }
         }
-        log.error('Workspace create failed', message)
+        // #844: a first open that could not finish carries only a fixed message; what failed is
+        // in its `failure` (content-free).
+        const failure = (err as { failure?: object } | null)?.failure
+        log.error('Workspace create failed', failure ? { message, ...failure } : message)
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }

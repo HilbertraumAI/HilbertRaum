@@ -47,6 +47,7 @@ import {
 import { WorkspaceController, VaultRecoveryBlockedError, type VaultPaths } from '../../src/main/services/workspace-vault'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
+import * as settingsModule from '../../src/main/services/settings'
 import { UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 import {
   CREATE_FAILURE_KEYS,
@@ -701,9 +702,43 @@ describe('an unlock whose open could not finish (#844)', () => {
       expect(result).toMatchObject({ ok: false, reason: 'vault_open_failed' })
       const all = readLogTail(100_000)
       const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)
-      expect(lines.filter((l) => l.includes('could not finish opening') && l.includes('constraint failed'))).toHaveLength(1)
+      const logged = lines.filter((l) => l.includes('could not finish opening'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain('ERR_SQLITE_ERROR')
+      expect(logged[0]).toContain('constraint failed')
       expect(lines.join('\n')).not.toContain(quote)
     } finally {
+      workspace.shutdown()
+    }
+  })
+
+  it('a create whose first open could not finish logs what failed, not only the fixed message', async () => {
+    const workspace = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    // Creating builds and seeds the vault first, then opens it like an unlock: the second seed is the open's.
+    const realSeed = settingsModule.seedSettings
+    const full = Object.assign(new Error('database or disk is full'), {
+      code: 'ERR_SQLITE_ERROR',
+      errcode: 13,
+      errstr: 'database or disk is full'
+    })
+    const seed = vi
+      .spyOn(settingsModule, 'seedSettings')
+      .mockImplementationOnce(realSeed)
+      .mockImplementationOnce(() => {
+        throw full
+      })
+    const marker = `#844 create marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'encrypted')
+      expect(result).toMatchObject({ ok: false, reason: 'error' })
+      const all = readLogTail(100_000)
+      const logged = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('Workspace create failed'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain('"sqliteCode":13')
+    } finally {
+      seed.mockRestore()
       workspace.shutdown()
     }
   })
