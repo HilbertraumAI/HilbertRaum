@@ -2033,15 +2033,16 @@ export class WorkspaceController {
         // with no live sidecars), done now, so an unlock in this session opens `.enc` at once.
         // A file the probe cannot READ (a hold, a permission error) is not judged lost: it may
         // be the only fresh copy, so it keeps the closed handle, and with it the refusal of any
-        // unlock that would decrypt the stale `.enc` over it this session.
+        // unlock that would decrypt the stale `.enc` over it this session. Nor is a working file
+        // whose `.enc` is gone too: `.enc` sits beside it, so a drive or workspace folder that
+        // vanished (a USB stick dropping out, a folder moved away) reads as ENOENT for both, and
+        // the working file may come back newer than `.enc`.
         const dbPath = this.vaultPaths.dbPath
         const workingCopy = probeWorkingCopy(dbPath)
-        if (workingCopy === 'gone' || workingCopy === 'not-database') {
+        if ((workingCopy === 'gone' || workingCopy === 'not-database') && existsSync(this.vaultPaths.encPath)) {
           shredFile(dbPath)
           cleanSidecars(dbPath)
-          this.key.fill(0)
-          this._db = null
-          this.key = null
+          this.dropKeyAndHandle()
           return { ...this.getState(), lockNotice: 'working_copy_lost' }
         }
         try {
@@ -2054,11 +2055,7 @@ export class WorkspaceController {
         }
         throw new VaultLockError()
       }
-      // Zero the key bytes before dropping the reference — otherwise the 32-byte key
-      // lingers in the heap until GC and could surface in a dump/swap.
-      this.key.fill(0)
-      this._db = null
-      this.key = null
+      this.dropKeyAndHandle()
     }
     // AUD-02: the branch above is skipped for a `plaintext_dev` workspace — there is no vault to
     // re-encrypt, so `lock()` is a deliberate no-op and the DB stays OPEN. Disarm the latch in
@@ -2070,6 +2067,17 @@ export class WorkspaceController {
   }
 
   /**
+   * The end of a lock that finished (re-encrypted, or #855 at the last snapshot): zero the key
+   * bytes before dropping the reference — otherwise the 32-byte key lingers in the heap until
+   * GC and could surface in a dump/swap — and drop the handle `lockEncryptedVault` closed.
+   */
+  private dropKeyAndHandle(): void {
+    this.key?.fill(0)
+    this._db = null
+    this.key = null
+  }
+
+  /**
    * Process-exit teardown (issue #51). For an unlocked encrypted vault this is `lock()`
    * (checkpoint + close + re-encrypt + shred — the existing path). For `plaintext_dev` —
    * where `lock()` is a deliberate no-op — it checkpoints and CLOSES the DB, so a clean
@@ -2077,11 +2085,13 @@ export class WorkspaceController {
    * drive: on a non-journaling exFAT stick, at-rest WAL sidecars mean the last session
    * never closed cleanly, and they make the next hard unplug likelier to corrupt. ONLY
    * for callers that are about to exit the process — a closed plaintext DB has no reopen
-   * path short of relaunch (`requireDb` throws afterwards).
+   * path short of relaunch (`requireDb` throws afterwards). Returns the lock's `lockNotice`, so
+   * the quit paths can log a lock that finished at the last snapshot (#855).
    */
-  shutdown(): void {
+  shutdown(): WorkspaceStateInfo['lockNotice'] {
+    let notice: WorkspaceStateInfo['lockNotice']
     try {
-      this.lock()
+      notice = this.lock().lockNotice
     } catch (err) {
       // full-audit 2026-07-11 CODE-1 — the failed lock re-opened the plaintext DB so an
       // INTERACTIVE session stays usable, but this caller is exiting the process. Close
@@ -2116,5 +2126,6 @@ export class WorkspaceController {
       this._db.close()
       this._db = null
     }
+    return notice
   }
 }

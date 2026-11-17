@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
+import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { inspect } from 'node:util'
 import {
@@ -71,7 +83,7 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     // modelling it with `lock()` hid #853 on POSIX, where the refused lock's re-open created
     // an empty database that shutdown then left at rest and the next unlock rolled forward
     // over `.enc`.
-    expect(() => a.shutdown()).not.toThrow()
+    expect(a.shutdown()).toBe('working_copy_lost') // what the quit paths log
     expect(a.isUnlocked()).toBe(false)
     expect(existsSync(vp.dbPath)).toBe(false)
 
@@ -182,6 +194,31 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     // The early return of an unlock on a workspace that is still open: nothing decrypted.
     expect(ctrl.unlock('correct horse battery').state).toBe('unlocked')
     expect(statSync(vp.dbPath).isDirectory()).toBe(true)
+  })
+
+  // #855's other boundary: `.enc` must still be there. It sits beside the working file, so a drive or
+  // workspace folder that vanished (a USB stick dropping out) reads as missing for both, and the
+  // working file may come back newer than `.enc`. Moving the folder away stands in for the dropout.
+  it('a refused lock never judges the working file lost while its .enc is missing too: a vanished workspace folder comes back untouched (#855)', () => {
+    const vp = freshVaultPaths('vault-208')
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.create('correct horse battery', 'encrypted')
+    const workspaceDir = dirname(vp.dbPath)
+    // Windows cannot move a folder that holds an open file, so the handle is closed first there.
+    if (process.platform === 'win32') ctrl.requireDb().close()
+    renameSync(workspaceDir, `${workspaceDir}-away`)
+
+    expect(() => ctrl.lock()).toThrowError(VaultLockError)
+
+    // The drive is back: the working file is still there and still a database…
+    renameSync(`${workspaceDir}-away`, workspaceDir)
+    const workingFile = readFileSync(vp.dbPath)
+    expect(workingFile.subarray(0, 16).toString('latin1')).toBe('SQLite format 3\u0000')
+    expect(existsSync(vp.encPath)).toBe(true)
+    // …and an unlock in this session does not decrypt the older `.enc` over it.
+    expect(ctrl.unlock('correct horse battery').state).toBe('unlocked')
+    expect(readFileSync(vp.dbPath).equals(workingFile)).toBe(true)
   })
 
   it('lockEncryptedVault refuses to encrypt a non-SQLite working file over .enc (guard pin)', () => {

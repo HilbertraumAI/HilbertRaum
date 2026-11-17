@@ -239,7 +239,10 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   // rest (issue #51: at-rest WAL sidecars on a non-journaling exFAT stick read as "the last
   // session never closed cleanly" and worsen hard-unplug outcomes).
   try {
-    ctx?.workspace.shutdown()
+    if (ctx?.workspace.shutdown() === 'working_copy_lost') {
+      // #855: the lock finished at the last good snapshot; the session's changes are lost.
+      log.error('Workspace locked on quit at its last saved state: the working file was gone or no longer a database')
+    }
   } catch (err) {
     log.error('Failed to lock workspace on quit', String(err))
   }
@@ -321,7 +324,10 @@ export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = 
   }
   try {
     detachVaultKey()
-    ctx?.workspace.shutdown()
+    if (ctx?.workspace.shutdown() === 'working_copy_lost') {
+      // #855: the lock finished at the last good snapshot; the session's changes are lost.
+      log.error('Workspace locked on quit at its last saved state: the working file was gone or no longer a database')
+    }
   } catch (err) {
     log.error('emergency lock failed — the next launch recovers the working copy', String(err))
   }
