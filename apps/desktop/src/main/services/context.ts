@@ -89,14 +89,14 @@ export interface AppContext {
    */
   manifestsDir: string | null
   /**
-   * The app's OWN `model-manifests/` (packaged: `resources/model-manifests`; dev: the checkout's),
-   * resolved without `HILBERTRAUM_MANIFESTS_DIR`. The AI-engine pins come from here, never from
-   * `manifestsDir` (#842: on a launcher start that is the drive's copy, so a new app on a drive
-   * whose manifests were not refreshed compared the engine with the drive's old pin and never
-   * offered its update). Also the OCR installer's fallback source list (#410). Optional: absent in
-   * most test contexts, where it reads as "no engine sources".
+   * The app's OWN `model-manifests/` (`resolveBundledManifestsDir`: packaged, exactly
+   * `resources/model-manifests`; dev, the checkout's), never `HILBERTRAUM_MANIFESTS_DIR`. The AI-engine
+   * pins come from here, never from `manifestsDir` (#842: on a launcher start that is the drive's
+   * copy, so a new app on a drive whose manifests were not refreshed compared the engine with the
+   * drive's old pin and never offered its update). Also the OCR installer's fallback source list
+   * (#410). Required, so no context can leave it out by accident; null reads as "no engine sources".
    */
-  bundledManifestsDir?: string | null
+  bundledManifestsDir: string | null
   /**
    * Session-cached GPU probe: `--list-devices` on a drive-local binary,
    * shared between the start ladder, Diagnostics, and the benchmark so they never

@@ -2853,7 +2853,8 @@ export const en = {
     'The server sent the wrong part of the file, so the partial download was discarded. ' +
     'Starting it again will begin from the start.',
   'main.engine.alreadyRunning': 'The AI engine is already downloading.',
-  'main.engine.noSources': 'No engine sources were found on this drive (runtime-sources.yaml is missing).',
+  'main.engine.noSources':
+    'No engine sources were found in this copy of HilbertRaum (runtime-sources.yaml is missing).',
   'main.engine.noHostBuild': 'No AI-engine build is available for this computer.',
   'main.engine.alreadyInstalled': 'The AI engine is already installed.',
   'main.engine.unknownJob': 'Unknown engine-download job.',

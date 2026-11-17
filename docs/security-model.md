@@ -2446,9 +2446,11 @@ argument.
 **#842 — the in-app engine download reads the app's own pins.** The install, the repair and the
 #516 update take their builds, URLs and hashes from the app's own `runtime-sources.yaml` (the
 bundled `model-manifests/`), never from the drive's copy, which the launchers hand the app for its
-model list. A tampered drive yaml therefore no longer chooses the engine archive the app fetches,
-and once the app is signed its signature covers those pins. The engine binaries on the drive are
-still trusted by location (§22-M2): whoever can write the drive can replace them directly.
+model list. A tampered drive yaml therefore no longer chooses the engine archive the app fetches.
+The pins are as trustworthy as the app's own files: a packaged build reads exactly
+`resources/model-manifests` beside `app.asar`, never a folder above it, and nothing re-checks those
+files while the app runs. The engine binaries on the drive are still trusted by location (§22-M2):
+whoever can write the drive can replace them directly.
 
 ### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
 `validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines

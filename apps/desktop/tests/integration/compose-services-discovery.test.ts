@@ -54,6 +54,7 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     const services = composeServices({
       rootPath: root,
       manifestsDir,
+      bundledManifestsDir: null,
       rerankerDevicePosture: () => 'cpu',
       rerankerRequestCeiling: () => Infinity
     })
@@ -78,7 +79,7 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     const { root, manifestsDir } = tempDrive()
     discoverCalls.mockClear()
     // No `discovered` — a speech-model download or a whisper.cpp install just changed the drive.
-    const ctx = { transcriber: null, paths: { rootPath: root }, manifestsDir, isDev: false }
+    const ctx = { transcriber: null, paths: { rootPath: root }, manifestsDir, bundledManifestsDir: null, isDev: false }
     expect(refreshTranscriberSlot(ctx)).toBe(false) // no binary in the fixture
     expect(discoverCalls).toHaveBeenCalledTimes(1)
   })
@@ -89,6 +90,7 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     const services = composeServices({
       rootPath: root,
       manifestsDir: null,
+      bundledManifestsDir: null,
       rerankerDevicePosture: () => 'cpu',
       rerankerRequestCeiling: () => Infinity
     })

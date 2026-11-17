@@ -50,7 +50,9 @@ export interface ComposeServicesDeps {
   /**
    * The app's own `model-manifests/` (`AppContext.bundledManifestsDir`): its `runtime-sources.yaml`
    * says whether the in-app installer could fetch the voice engine here (#527), the same pins the
-   * installer reads (#842). Absent or null: no engine build to fetch.
+   * installer reads (#842). Null: no engine build to fetch. Optional on THIS base type only because
+   * `composeTranslator` shares it and never reads it; the transcriber's composition and
+   * `composeServices` require it (the Wave 8 NF-1 rule below: an optional wire goes missing silently).
    */
   bundledManifestsDir?: string | null
   /**
@@ -106,7 +108,10 @@ export interface ComposeServicesDeps {
  * (`// @ts-expect-error`).
  */
 export type ComposeServicesArgs = ComposeServicesDeps &
-  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling'>>
+  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling' | 'bundledManifestsDir'>>
+
+/** The transcriber's composition: the engine pins are required (#842), see `ComposeServicesDeps`. */
+export type ComposeTranscriberDeps = ComposeServicesDeps & Required<Pick<ComposeServicesDeps, 'bundledManifestsDir'>>
 
 /**
  * Build (or re-build) JUST the translation sidecar selection from the current drive layout.
@@ -189,7 +194,7 @@ export function shouldReplaceTranslator(current: Translator | null | undefined):
  * three moments the slot itself is, so the reason can never describe a different drive state than the slot;
  * `getAppStatus` (polled by the shell) only reads it back.
  */
-export function composeTranscriberSlot(deps: ComposeServicesDeps): {
+export function composeTranscriberSlot(deps: ComposeTranscriberDeps): {
   transcriber: Transcriber | null
   missing: TranscriberMissing | null
 } {
@@ -210,7 +215,7 @@ export function composeTranscriberSlot(deps: ComposeServicesDeps): {
       rootPath: deps.rootPath,
       model,
       isDev,
-      engineFetchable: engineFamilyHasHostBuild(deps.bundledManifestsDir ?? null, 'whisper_cpp')
+      engineFetchable: engineFamilyHasHostBuild(deps.bundledManifestsDir, 'whisper_cpp')
     }) ??
     // Both pieces are on the drive, yet nothing was selected (the ladder and this check read
     // the same files, so only a race with a removal lands here): the model is the honest guess.
@@ -244,7 +249,7 @@ export interface TranscriberSlot {
   /** Only the drive root is read (binary + weight paths resolve against it). */
   paths: Pick<AppContext['paths'], 'rootPath'>
   manifestsDir: AppContext['manifestsDir']
-  bundledManifestsDir?: AppContext['bundledManifestsDir']
+  bundledManifestsDir: AppContext['bundledManifestsDir']
   isDev: AppContext['isDev']
 }
 

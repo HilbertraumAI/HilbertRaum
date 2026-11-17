@@ -2828,7 +2828,7 @@ export const de: Record<keyof typeof en, string> = {
     'Download verworfen. Beim nächsten Start beginnt er von vorn.',
   'main.engine.alreadyRunning': 'Die KI-Engine wird bereits heruntergeladen.',
   'main.engine.noSources':
-    'Auf diesem Laufwerk wurden keine Engine-Quellen gefunden (runtime-sources.yaml fehlt).',
+    'In dieser Kopie von HilbertRaum wurden keine Engine-Quellen gefunden (runtime-sources.yaml fehlt).',
   'main.engine.noHostBuild': 'Für diesen Computer ist keine KI-Engine verfügbar.',
   'main.engine.alreadyInstalled': 'Die KI-Engine ist bereits installiert.',
   'main.engine.unknownJob': 'Unbekannter Engine-Download.',

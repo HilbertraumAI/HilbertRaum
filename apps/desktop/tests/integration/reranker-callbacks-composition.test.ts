@@ -36,13 +36,20 @@ describe('Wave 8 NF-1: the required-wiring type-level proof', () => {
     // @ts-expect-error — rerankerDevicePosture/rerankerRequestCeiling are REQUIRED on composeServices's
     // own signature (ComposeServicesArgs), even though the shared ComposeServicesDeps base (also used
     // by composeTranslator) keeps them optional. An omission here must be a compile error.
-    composeServices({ rootPath, manifestsDir: null, rerankerRequestCeiling: () => 48 })
+    composeServices({ rootPath, manifestsDir: null, bundledManifestsDir: null, rerankerRequestCeiling: () => 48 })
   })
 
   it('composeServices refuses a call missing ONLY rerankerRequestCeiling', () => {
     const rootPath = mktemp()
     // @ts-expect-error — rerankerRequestCeiling alone omitted.
-    composeServices({ rootPath, manifestsDir: null, rerankerDevicePosture: () => 'cpu' as const })
+    composeServices({ rootPath, manifestsDir: null, bundledManifestsDir: null, rerankerDevicePosture: () => 'cpu' as const })
+  })
+
+  it('composeServices refuses a call missing ONLY bundledManifestsDir (#842)', () => {
+    const rootPath = mktemp()
+    // @ts-expect-error — the engine pins' source is required too: left out, the voice engine would read
+    // as "no build for this system" with no compile error.
+    composeServices({ rootPath, manifestsDir: null, rerankerDevicePosture: () => 'cpu' as const, rerankerRequestCeiling: () => 48 })
   })
 
   it('createRerankerCallbacks refuses a call missing any of its four required dependencies', () => {
@@ -137,6 +144,7 @@ describe('Wave 8: the wired callbacks actually reach the sidecar (functional, no
     const { reranker } = composeServices({
       rootPath: root,
       manifestsDir,
+      bundledManifestsDir: null,
       rerankerDevicePosture: () => {
         postureCalls++
         return posture

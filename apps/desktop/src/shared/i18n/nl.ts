@@ -2732,8 +2732,8 @@ export const nl: UiCatalog<'nl'> = {
     'verwijderd. Bij een nieuwe start begint de download opnieuw vanaf het begin.',
   'main.engine.alreadyRunning': 'De AI-engine wordt al gedownload.',
   'main.engine.noSources':
-    'Er zijn op deze schijf geen downloadbronnen voor de engine gevonden (runtime-sources.yaml ' +
-    'ontbreekt).',
+    'Er zijn in deze kopie van HilbertRaum geen downloadbronnen voor de engine gevonden ' +
+    '(runtime-sources.yaml ontbreekt).',
   'main.engine.noHostBuild': 'Er is geen versie van de AI-engine beschikbaar voor deze computer.',
   'main.engine.alreadyInstalled': 'De AI-engine is al geïnstalleerd.',
   'main.engine.unknownJob': 'Onbekende download van de engine.',

@@ -5862,9 +5862,13 @@ cites it as "In-app engine updates"._
   refreshed therefore compared the engine with the drive's old pin and offered nothing. The status,
   install, repair and update, and the voice engine's "could it be fetched here" check (#527), now
   read `ctx.bundledManifestsDir` (`resolveManifestsDir(app.getAppPath())`, no override); the model
-  list keeps `ctx.manifestsDir`. After an in-app update the drive's yaml is older than the engine
-  on it, so `fetch-runtime` run without `prepare-drive` first re-installs the drive's older pin
-  (its marker check is "equal", not "at least").
+  list keeps `ctx.manifestsDir`. A packaged build takes exactly `resources/model-manifests`
+  (`resolveBundledManifestsDir`; no walk-up that could reach the drive's copy above the app).
+  Engine entries a drive owner adds to the drive's yaml (another OS's build, a mirror) reach the
+  scripts only. After an in-app update the drive's yaml is older than the engine on it, and both
+  drive-side checks compare markers with it for EQUAL: `fetch-runtime` run without `prepare-drive`
+  first re-installs the drive's older pin, and the sell gate (`assertCommercialDrive`) reports the
+  updated engine as not matching its pin. `prepare-drive` brings the yaml back in step.
 
 ### §4 Real-app verification (2026-10-05, DesktopDiT, GTX 1070 Ti, dev build)
 

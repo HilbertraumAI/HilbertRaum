@@ -2799,7 +2799,7 @@ export const pl: UiCatalog<'pl'> = {
     'ponownym rozpoczęciu pobieranie zacznie się od początku.',
   'main.engine.alreadyRunning': 'Silnik AI jest już pobierany.',
   'main.engine.noSources':
-    'Na tym dysku nie znaleziono źródeł silnika (brak pliku runtime-sources.yaml).',
+    'W tej kopii HilbertRaum nie znaleziono źródeł silnika (brak pliku runtime-sources.yaml).',
   'main.engine.noHostBuild': 'Dla tego komputera nie ma dostępnej wersji silnika AI.',
   'main.engine.alreadyInstalled': 'Silnik AI jest już zainstalowany.',
   'main.engine.unknownJob': 'Nieznane zadanie pobierania silnika.',

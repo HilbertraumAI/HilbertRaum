@@ -2819,7 +2819,7 @@ export const it: UiCatalog<'it'> = {
     'scartato. Se avvii di nuovo il download, ricomincerà dall’inizio.',
   'main.engine.alreadyRunning': 'Il download del motore IA è già in corso.',
   'main.engine.noSources':
-    'Su questa unità non è stata trovata nessuna origine per il motore (manca il file ' +
+    'In questa copia di HilbertRaum non è stata trovata nessuna origine per il motore (manca il file ' +
     '«runtime-sources.yaml»).',
   'main.engine.noHostBuild': 'Non è disponibile nessuna build del motore IA per questo computer.',
   'main.engine.alreadyInstalled': 'Il motore IA è già installato.',

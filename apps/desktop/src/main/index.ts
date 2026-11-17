@@ -94,7 +94,7 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import { resolveManifestsDir } from './services/models'
+import { resolveBundledManifestsDir, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import {
@@ -297,7 +297,11 @@ function initBackend(): void {
 
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
   // #842: the app's own copy, never the launcher's override — the engine pins and the OCR fallback.
-  const bundledManifestsDir = resolveManifestsDir(app.getAppPath())
+  const bundledManifestsDir = resolveBundledManifestsDir({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath()
+  })
   log.info('Model manifests directory', { manifestsDir, bundledManifestsDir })
 
   // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.

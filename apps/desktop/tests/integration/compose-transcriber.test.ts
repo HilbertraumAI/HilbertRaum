@@ -95,10 +95,10 @@ describe('composeTranscriberSlot — the Silero VAD file as the second required 
     const { root, manifestsDir } = tempDriveWithVad()
     installBinary(root)
     installWeight(root)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir }).transcriber).toBeNull()
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: null }).transcriber).toBeNull()
 
     writeFileSync(join(root, 'models', 'transcriber', VAD_NAME), 'vad-bytes')
-    const transcriber = composeTranscriberSlot({ rootPath: root, manifestsDir }).transcriber
+    const transcriber = composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: null }).transcriber
     expect(transcriber).toBeInstanceOf(WhisperCliTranscriber)
     expect((transcriber as WhisperCliTranscriber).vadModelPath).toBe(join(root, 'models', 'transcriber', VAD_NAME))
   })
@@ -114,7 +114,7 @@ function fakeTranscriber(): Transcriber {
 
 describe('refreshTranscriberSlot (#497 — the hook body both install paths share)', () => {
   function slot(root: string, manifestsDir: string | null, transcriber: Transcriber | null = null) {
-    return { transcriber, paths: { rootPath: root }, manifestsDir, isDev: false }
+    return { transcriber, paths: { rootPath: root }, manifestsDir, bundledManifestsDir: null, isDev: false }
   }
 
   it('leaves a LIVE instance untouched — same object, no re-composition', () => {
@@ -137,6 +137,7 @@ describe('refreshTranscriberSlot (#497 — the hook body both install paths shar
         throw new Error('paths unreadable')
       },
       manifestsDir: null,
+      bundledManifestsDir: null,
       isDev: false
     }
     expect(() => refreshTranscriberSlot(ctx)).not.toThrow()
@@ -298,7 +299,7 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
     const { root } = tempDrive()
     installBinary(root)
     installWeight(root) // both pieces ARE on the drive: only the missing manifests dir keeps the slot empty
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir: null })).toEqual({ transcriber: null, missing: 'model' })
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir: null, bundledManifestsDir: null })).toEqual({ transcriber: null, missing: 'model' })
   })
 
   it('composeServices carries the reason alongside the slot', () => {
