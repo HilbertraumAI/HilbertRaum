@@ -46,7 +46,7 @@ import {
 } from '../../src/shared/types'
 import { WorkspaceController, VaultRecoveryBlockedError, type VaultPaths } from '../../src/main/services/workspace-vault'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
-import { readLogTail } from '../../src/main/services/logging'
+import { log, readLogTail } from '../../src/main/services/logging'
 import { UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 import {
   CREATE_FAILURE_KEYS,
@@ -690,14 +690,19 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
 describe('an unlock whose open could not finish (#844)', () => {
   it('logs the cause’s kind and SQLite’s own description, never the cause’s message', async () => {
     const quote = 'page text the backfill was reading'
-    const workspace = startedOn(upgradeBlockedVault(lockedVault('wsipc', PW), PW, quote))
+    const workspace = startedOn(upgradeBlockedVault(lockedVault('wsipc', PW), PW, { abortMessage: quote }))
     registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    // Only this unlock's lines: the table rows above log the same failure, and the buffer trims
+    // from the front, so the lines are taken after a marker rather than by count.
+    const marker = `#844 marker ${randomUUID()}`
+    log.info(marker)
     try {
       const { result } = await invoke(handlers, IPC.unlockWorkspace, PW)
       expect(result).toMatchObject({ ok: false, reason: 'vault_open_failed' })
-      const line = readLogTail(100_000).filter((l) => l.includes('could not finish opening')).at(-1) ?? ''
-      expect(line).toContain('constraint failed')
-      expect(readLogTail(100_000).join('\n')).not.toContain(quote)
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1)
+      expect(lines.filter((l) => l.includes('could not finish opening') && l.includes('constraint failed'))).toHaveLength(1)
+      expect(lines.join('\n')).not.toContain(quote)
     } finally {
       workspace.shutdown()
     }

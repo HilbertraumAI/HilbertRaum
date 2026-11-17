@@ -2640,7 +2640,8 @@ export const en = {
     'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
     'keep the files as they are and restore the workspace folder from a backup.',
   // #844: the password verified and the data is a database, but opening it could not finish (an
-  // upgrade step: a full drive, an I/O error, a bug in a new step). Not damage: `.enc` is untouched.
+  // upgrade step: a full drive, an I/O error, a bug in a new step). Not damage: the failed open never
+  // rewrites `.enc`.
   'main.workspace.vaultOpenFailed':
     'Your password is correct, but HilbertRaum could not finish opening the workspace. The ' +
     'encrypted workspace on the drive was left as it was. Make sure the drive has free ' +

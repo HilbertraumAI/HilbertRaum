@@ -71,10 +71,10 @@ from its first public `1.0.0` release onward.
 - **A workspace that could not finish opening is no longer reported as damaged.** When unlocking
   failed after the password was accepted, for example because the drive was nearly full while
   the app updated the workspace after an update, the lock screen said the workspace data was
-  damaged and should be restored from a backup. Nothing was damaged: the encrypted workspace on
-  the drive stays as it was. The lock screen now says so, and suggests freeing space and trying
-  again, or starting the previous version of HilbertRaum after an update. The damaged message
-  remains for data that really is damaged (#844).
+  damaged and should be restored from a backup. Nothing was damaged, and the failed open does not
+  change the encrypted workspace on the drive. The lock screen now says so, and suggests freeing
+  space and trying again, or starting the previous version of HilbertRaum after an update. The
+  damaged message remains for data that really is damaged (#844).
 - **On Windows, the AI engine installs from a folder whose name uses another alphabet.** When the
   drive or the app's data folder had a name in, for example, Cyrillic or Japanese on a Windows set
   up for a Western language (such as a user folder named in Cyrillic on an English Windows), the

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
+import { inspect } from 'node:util'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
@@ -183,26 +184,37 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
 // new upgrade step looks the same from here) read as "damaged … restore from a backup", though
 // `.enc` is never touched on that path.
 describe('issue #844 — only SQLite’s own verdict reads as a damaged vault', () => {
-  /** The name of what the unlock threw: the IPC layer matches on it too (the bundle-duplication quirk). */
-  function unlockFailure(vp: VaultPaths): string {
+  /** What the unlock threw. The rows read its name: the IPC layer matches on it too (the bundle-duplication quirk). */
+  function unlockError(vp: VaultPaths): Error | undefined {
     try {
       unlockEncryptedVault(vp, 'pw')
     } catch (err) {
-      return (err as Error).name
+      return err as Error
     }
-    return 'nothing thrown'
+    return undefined
   }
 
   it('an open that cannot finish on a healthy database throws VaultOpenFailedError and leaves .enc as it was', () => {
-    const vp = upgradeBlockedVault(lockedVault('vault-844', 'pw'), 'pw')
+    // The abort text stands in for stored text a failing backfill's error could quote.
+    const quote = 'page text the backfill was reading'
+    const vp = upgradeBlockedVault(lockedVault('vault-844', 'pw'), 'pw', { abortMessage: quote })
     const enc = readFileSync(vp.encPath)
-    expect(unlockFailure(vp)).toBe('VaultOpenFailedError')
+    const err = unlockError(vp)
+    expect(err?.name).toBe('VaultOpenFailedError')
+    // Whoever prints this error, its cause and stack included, prints none of that text.
+    expect(inspect(err, { depth: 10 })).not.toContain(quote)
     expect(readFileSync(vp.encPath).equals(enc)).toBe(true)
+    expect(existsSync(vp.dbPath)).toBe(false)
+  })
+
+  it('a settings write the unlock makes after the open reads the same way', () => {
+    const vp = upgradeBlockedVault(lockedVault('vault-844', 'pw'), 'pw', { at: 'settings' })
+    expect(unlockError(vp)?.name).toBe('VaultOpenFailedError')
     expect(existsSync(vp.dbPath)).toBe(false)
   })
 
   it('a real database whose schema page is corrupt still throws VaultDamagedError', () => {
     const vp = corruptVault(lockedVault('vault-844', 'pw'), 'pw')
-    expect(unlockFailure(vp)).toBe('VaultDamagedError')
+    expect(unlockError(vp)?.name).toBe('VaultDamagedError')
   })
 })

@@ -164,18 +164,26 @@ export function corruptVault<T extends VaultPaths>(vp: T, password: string): T {
 
 /**
  * The existing vault at `vp` (created under `password`) whose open cannot finish on a healthy database (#844): a
- * document holds OCR pages but no OCR summary, so `openDatabase`'s backfill updates it on the next open, and a trigger
- * aborts that update with `abortMessage`. SQLite reports a constraint failure, not damage: the stand-in for an upgrade
- * step that fails on a full drive or through a bug. The vault is left locked.
+ * trigger aborts, with `abortMessage`, the next open's write at `at`. `'backfill'`: a document holds OCR pages but no
+ * OCR summary, so `openDatabase`'s backfill updates it. `'settings'`: the unlock's own settings re-stamp after the open.
+ * SQLite reports a constraint failure, not damage: the stand-in for a step that fails on a full drive or through a bug.
+ * The vault is left locked.
  */
-export function upgradeBlockedVault<T extends VaultPaths>(vp: T, password: string, abortMessage = 'blocked'): T {
+export function upgradeBlockedVault<T extends VaultPaths>(
+  vp: T,
+  password: string,
+  opts: { abortMessage?: string; at?: 'backfill' | 'settings' } = {}
+): T {
   const { db, key } = unlockEncryptedVault(vp, password)
-  const now = new Date().toISOString()
-  db.prepare(
-    "INSERT INTO documents (id, title, status, created_at, updated_at, ocr_json) VALUES ('doc-844', 'scan', 'ready', ?, ?, ?)"
-  ).run(now, now, JSON.stringify({ pages: [{ pageNumber: 1, text: 'page one' }] }))
-  const quoted = `'${abortMessage.replace(/'/g, "''")}'`
-  db.prepare(`CREATE TRIGGER block_upgrade BEFORE UPDATE ON documents BEGIN SELECT RAISE(ABORT, ${quoted}); END`).run()
+  const table = opts.at === 'settings' ? 'settings' : 'documents'
+  if (table === 'documents') {
+    const now = new Date().toISOString()
+    db.prepare(
+      "INSERT INTO documents (id, title, status, created_at, updated_at, ocr_json) VALUES ('doc-844', 'scan', 'ready', ?, ?, ?)"
+    ).run(now, now, JSON.stringify({ pages: [{ pageNumber: 1, text: 'page one' }] }))
+  }
+  const quoted = `'${(opts.abortMessage ?? 'blocked').replace(/'/g, "''")}'`
+  db.prepare(`CREATE TRIGGER block_open BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, ${quoted}); END`).run()
   lockEncryptedVault(vp, db, key)
   return vp
 }

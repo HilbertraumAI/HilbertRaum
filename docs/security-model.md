@@ -1189,9 +1189,10 @@ password. Four guards close this:
   (not a database, or corrupt, read from the error's result code). Any other failure of the
   open, such as an upgrade step on a full drive, is a `VaultOpenFailedError` →
   `{ reason: 'vault_open_failed' }` with "free space and retry, or start the previous
-  version" copy: `.enc` is untouched on that path, so "restore from a backup" was wrong.
-  Its log line names the cause's kind and SQLite's fixed description, never the cause's
-  message, which a backfill's error could fill with stored text.
+  version" copy: the failed open never rewrites `.enc`, so "restore from a backup" was
+  wrong. The error keeps only the cause's kind and SQLite's code and fixed description
+  (`failure`), never the cause itself, whose message a backfill's error could fill with
+  stored text; that is all its log line carries.
 - **No decrypted leftover after a failed open.** `decryptFile` always shredded its output
   on a **tag** failure; the incident showed the gap after a *successful* decrypt whose
   result fails to open — that output stayed on disk while the workspace reported locked

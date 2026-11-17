@@ -259,18 +259,17 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         }
       }
       // #844: the password verified and SQLite found a database, but opening it could not finish
-      // (an upgrade step: a full drive, an I/O error, a bug in a new step). `.enc` is untouched, so
+      // (an upgrade step: a full drive, an I/O error, a bug in a new step). The failed open never
+      // rewrites `.enc`, so
       // this must not wear the damaged copy and send the user looking for a backup. The log gets
-      // the cause's name and SQLite's fixed description, never its message: a backfill's error can
-      // quote stored text, and app.log never carries document text.
+      // the error's `failure` (the cause's kind and SQLite's fixed description): the error never
+      // holds the cause's message, which a backfill can fill with stored text.
       // instanceof PLUS the name — the bundle-duplication quirk again.
       if (err instanceof VaultOpenFailedError || (err instanceof Error && err.name === 'VaultOpenFailedError')) {
-        const cause = (err as Error).cause as { name?: unknown; errcode?: unknown; errstr?: unknown } | undefined
-        log.error('Workspace unlock failed: the database could not finish opening (password verified)', {
-          cause: typeof cause?.name === 'string' ? cause.name : typeof cause,
-          sqliteCode: typeof cause?.errcode === 'number' ? cause.errcode : null,
-          sqlite: typeof cause?.errstr === 'string' ? cause.errstr : null
-        })
+        log.error(
+          'Workspace unlock failed: the database could not finish opening (password verified)',
+          (err as VaultOpenFailedError).failure
+        )
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (could not finish opening)')
         return {
           ok: false,

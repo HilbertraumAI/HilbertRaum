@@ -335,8 +335,8 @@ export interface WorkspaceStateInfo {
  *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app.
  *  `vault_open_failed` (#844): the password verified and the data is a database SQLite does not
  *  call damaged, but opening it could not finish (an upgrade step: a full drive, an I/O error, a
- *  bug in a new step). The encrypted vault is untouched: free space and retry, or after an
- *  update start the previous version. */
+ *  bug in a new step). The failed open never rewrites the encrypted vault: free space and retry,
+ *  or after an update start the previous version. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }
   | {
