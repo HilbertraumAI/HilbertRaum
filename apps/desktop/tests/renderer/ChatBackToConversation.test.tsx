@@ -128,7 +128,6 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
       }),
       ...beyondChatStubs(),
       getAppStatus: vi.fn(async () => appStatus({ activeModelId: 'm1', machineRamGb: 16 })),
-      getEvidenceReviewForMessage: vi.fn(async () => null),
       createEvidenceReview: vi.fn(async () => makeDetail({ conversationId: 'c1', messageId: 'm2' }))
     })
     render(<App />)

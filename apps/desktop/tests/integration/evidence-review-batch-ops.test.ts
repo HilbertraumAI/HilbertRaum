@@ -227,17 +227,18 @@ describe('AUD-12 — evidence-review chip state loads per CONVERSATION, not per 
     expect(before).toHaveLength(2)
     expect(before.every((s) => s.outdated === false)).toBe(true)
 
-    // The source document changes under the reviews → BOTH must report outdated, exactly as
-    // the per-message channel does (the overlay is derived at the boundary, never stored).
+    // The source document changes under the reviews → BOTH must report outdated (the overlay is
+    // derived at the boundary, never stored; the service read above keeps the constant false).
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), documentId)
     const after = (
       await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, conversationId)
     ).result as EvidenceReviewSummary[]
     expect(after.every((s) => s.outdated === true)).toBe(true)
-    // …and it agrees with the single-message channel for the same message.
-    const single = (await invoke(handlers, IPC.getEvidenceReviewForMessage, messageIds[0]!))
-      .result as EvidenceReviewSummary
-    expect(after.find((s) => s.id === first.id)).toEqual(single)
+    // Apart from the overlay, each element is the service's summary for its message.
+    expect(after.find((s) => s.id === first.id)).toEqual({
+      ...getEvidenceReviewForMessage(db, messageIds[0]!),
+      outdated: true
+    })
   })
 
   it('over IPC: a malformed conversation id reads as "no reviews" (never a throw)', async () => {

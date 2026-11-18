@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { join } from 'node:path'
-import { openDatabase, listTables, type Db } from '../../src/main/services/db'
+import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   appendMessage,
   createConversation,
@@ -38,7 +38,7 @@ import { documentLeafProvenance } from '../../src/main/services/analysis/coverag
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import { DEFAULT_SETTINGS, type EvidenceSourceSnapshot, type ReviewDecision } from '../../src/shared/types'
 import { chunkIdsOf, seedEmbeddedDoc, seedReadyTree } from '../helpers/doc-fixtures'
-import { freshWorkspaceDb, legacyDbPath } from '../helpers/db-fixtures'
+import { freshWorkspaceDb, legacyDbPath, listTables } from '../helpers/db-fixtures'
 import {
   seedAssistantAnswer,
   seedEvidenceReview,

@@ -45,11 +45,7 @@ import {
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
 import { t as tShared } from '../../src/shared/i18n'
-import type {
-  CoverageInfo,
-  EvidenceReviewFreshness,
-  EvidenceReviewSummary
-} from '../../src/shared/types'
+import type { CoverageInfo, EvidenceReviewFreshness } from '../../src/shared/types'
 import { freshWorkspaceDb } from '../helpers/db-fixtures'
 import {
   evidenceIpcContext,
@@ -518,11 +514,11 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
 })
 
 describe('IPC surface (new P4 channels + real overlay)', () => {
-  it('refreshState + acknowledge round-trip; detail/summary reads carry the REAL overlay', async () => {
+  it('refreshState + acknowledge round-trip; the detail read carries the REAL overlay', async () => {
     const { db, root } = freshWorkspaceDb('epfresh')
     const { ctx } = evidenceIpcContext(db, root)
     registerEvidenceReviewsIpc(ctx)
-    const { reviewId, messageId, docId } = seedReview(db)
+    const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
 
     const { result: freshRaw } = await invoke(handlers, IPC.refreshEvidenceReviewState, reviewId)
@@ -530,10 +526,8 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     expect(fresh.outdated).toBe(true)
     expect(fresh.acknowledgedAt).toBeNull()
 
-    // The entry-point summary + the detail read now report the computed overlay (the chat
-    // chip renders from this) — while the stored status row is untouched.
-    const { result: summaryRaw } = await invoke(handlers, IPC.getEvidenceReviewForMessage, messageId)
-    expect((summaryRaw as EvidenceReviewSummary).outdated).toBe(true)
+    // The detail read now reports the computed overlay (the chat chip's batch read is
+    // evidence-review-batch-ops.test.ts's) — while the stored status row is untouched.
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, reviewId)
     expect((detailRaw as { outdated: boolean }).outdated).toBe(true)
     expect(reviewHeadRow(db, reviewId).status).toBe('draft')
@@ -545,8 +539,8 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     )
     expect((ackRaw as EvidenceReviewFreshness).acknowledgedAt).toBeTruthy()
     // Acknowledged ≠ fresh: the overlay stays true (the drift still exists).
-    const { result: stillRaw } = await invoke(handlers, IPC.getEvidenceReviewForMessage, messageId)
-    expect((stillRaw as EvidenceReviewSummary).outdated).toBe(true)
+    const { result: stillRaw } = await invoke(handlers, IPC.getEvidenceReview, reviewId)
+    expect((stillRaw as { outdated: boolean }).outdated).toBe(true)
 
     // Malformed ids refuse.
     const { result: badFresh } = await invoke(handlers, IPC.refreshEvidenceReviewState, 42)

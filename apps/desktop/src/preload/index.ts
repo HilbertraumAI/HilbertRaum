@@ -692,9 +692,6 @@ const api = {
   /** The full review read-model, or null on an unknown id. */
   getEvidenceReview: (reviewId: string): Promise<EvidenceReviewDetail | null> =>
     ipcRenderer.invoke(IPC.getEvidenceReview, reviewId),
-  /** The message's review as a light summary (the entry-point/action-row state), or null. */
-  getEvidenceReviewForMessage: (messageId: string): Promise<EvidenceReviewSummary | null> =>
-    ipcRenderer.invoke(IPC.getEvidenceReviewForMessage, messageId),
   /** EVERY review in one conversation as light summaries — the transcript's whole chip state
    *  in ONE round trip (AUD-12), keyed by `messageId` on the renderer side. Empty array for
    *  an unknown conversation. */
@@ -773,9 +770,6 @@ const api = {
     sourceKey: string
   ): Promise<EvidenceSourceContext | null> =>
     ipcRenderer.invoke(IPC.getEvidenceSourceContext, reviewId, sourceKey),
-  /** Delete a review (items/links/export records CASCADE); true when a row was deleted. */
-  deleteEvidenceReview: (reviewId: string): Promise<boolean> =>
-    ipcRenderer.invoke(IPC.deleteEvidenceReview, reviewId),
   /** How many reviews this conversation's messages carry — the D-2 delete-confirm count. */
   countEvidenceReviewsForConversation: (conversationId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.countEvidenceReviewsForConversation, conversationId),

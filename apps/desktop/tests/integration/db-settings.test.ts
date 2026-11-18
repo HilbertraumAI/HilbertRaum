@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { listTables } from '../../src/main/services/db'
+import { listTables } from '../helpers/db-fixtures'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import { applyUiLanguageSetting, initMainI18n, mainUiLanguage } from '../../src/main/services/i18n'
 import { UI_LANGUAGE_CODES } from '../../src/shared/i18n'
