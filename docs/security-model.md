@@ -1085,8 +1085,22 @@ explicitly:
   lost while `.enc` is missing too: `.enc` sits beside it, so a drive or workspace folder that
   vanished (a USB stick dropping out) reads as missing for both, and the working file may come
   back newer; a main file that is gone still has its orphaned `-wal`/`-shm` shredded (#853). The
-  quit path finishes the same way, silently: it has nowhere to show the notice, and a line logged
-  after the lock lives only in memory and ends with the process.
+  quit path (and a crash or session-end lock) finishes the same way. It has nowhere to show the
+  notice and a line logged after the lock lives only in memory, so since #875 the notice is state,
+  not only a return value: it stands until the next successful unlock, and the lock leaves
+  `config/working-copy-lost.json`, content-free and bound to the IV of the `.enc` it fell back to,
+  so the next start's lock screen shows it too. The unlock that consumes it records
+  `workspace_working_copy_lost` in the audit log and a line in `app.log` (now there is a database
+  and a log key again). The IV binding makes a marker an older build ignored expire at the next
+  lock by any build, so it never tells a lie on a Kit shared between OSes; a marker of another
+  version is left alone. The startup salvage raises the same notice when it has to shred a newer
+  working file whose header reads but whose structure does not (#876): that was the last
+  session's only fresh copy (a header-less one is a successful lock's shred survivor, and says
+  nothing). So does an unlock that has to shred such a `.recovery` copy instead of rolling it
+  forward; it records the loss at once (no notice: the workspace is already open). The log line and
+  the audit metadata name which of the three it was (`cause`: `lock`, `startup`, `recovery`). A
+  workspace created where a wiped one left its marker removes it. The marker reveals only that a
+  lock or a start fell back to the last snapshot, and when.
 - **Newer-file roll-forward (CODE-1b).** If the app exits after a failed lock, the startup
   crash sweep must NOT shred the working file — it is the only fresh copy of the session's
   data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer

@@ -819,7 +819,7 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
-  it.each<[string, (vp: FreshVaultPaths) => void]>([
+  it.each<[string, (vp: FreshVaultPaths) => void, boolean]>([
     [
       'a non-SQLite (garbage)',
       (vp) => {
@@ -827,7 +827,9 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
         // sidecars — but rolling THAT forward would replace the intact `.enc` with garbage.
         writeFileSync(vp.dbPath, 'garbage that is not a database')
         backdate(vp.encPath)
-      }
+      },
+      // That is what a SUCCESSFUL lock leaves when its shred's unlink fails: nothing was lost, so no notice.
+      false
     ],
     [
       // #876: the failed-lock signature holds (newer, cleanly closed, the SQLite header), but past page 1 it is no
@@ -836,9 +838,12 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
       (vp) => {
         failedLockState(vp)
         noisePastPageOne(vp.dbPath)
-      }
+      },
+      // #875: our own shred never leaves a header, so this was the last session's only fresh copy, and it is lost: the
+      // lock screen says so (the same notice as a lock that finished at the last snapshot).
+      true
     ]
-  ])('CODE-1b: %s newer working file is still shredded, never rolled forward', (_what, plant) => {
+  ])('CODE-1b: %s newer working file is still shredded, never rolled forward', (_what, plant, lost) => {
     const vp = lockedVault('vault', 'pw')
     plant(vp)
 
@@ -846,10 +851,17 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.init()
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    if (lost) expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+    else expect(ctl.getState()).not.toHaveProperty('lockNotice')
+    // A restart before the unlock still says so: the start wrote it down, not only into this run's memory.
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    if (lost) expect(restarted.getState()).toMatchObject({ lockNotice: 'working_copy_lost' })
+    else expect(restarted.getState()).not.toHaveProperty('lockNotice')
     expect(ctl.unlock('pw').state).toBe('unlocked')
     // The `.enc` snapshot opened.
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
-    ctl.lock()
+    expect(ctl.lock()).not.toHaveProperty('lockNotice')
   })
 
   // #242 / #876: a newer working file the probe cannot read (a hold, a permission error) may be the only fresh copy of
@@ -928,12 +940,14 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
-  it.each<[string, (recoveryPath: string, vp: FreshVaultPaths, key: Buffer) => void]>([
+  it.each<[string, (recoveryPath: string, vp: FreshVaultPaths, key: Buffer) => void, boolean]>([
     [
       'a garbage (shred-overwritten)',
       // The failed-unlink aftermath of a shred whose OVERWRITE ran: random bytes, newer than
       // `.enc`, no SQLite header.
-      (recoveryPath) => writeFileSync(recoveryPath, randomBytes(4096))
+      (recoveryPath) => writeFileSync(recoveryPath, randomBytes(4096)),
+      // A spent leftover: nothing was lost, so nothing is recorded.
+      false
     ],
     [
       // #876: a real copy of the database whose pages past page 1 are noise: the header reads, the structure does not.
@@ -941,9 +955,12 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
       (recoveryPath, vp, key) => {
         decryptFile(vp.encPath, recoveryPath, key)
         noisePastPageOne(recoveryPath)
-      }
+      },
+      // #875: no shred of ours leaves a header, so this was a failed lock's session, lost now: the unlock records it
+      // for the IPC to log and audit (cause 'recovery'; the event's own time is when).
+      true
     ]
-  ])('CODE-1b guard (F1): %s .recovery is never encrypted over the good .enc', (_what, plant) => {
+  ])('CODE-1b guard (F1): %s .recovery is never encrypted over the good .enc', (_what, plant, lost) => {
     const vp = lockedVault('vault', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     updateSettings(db, { contextTokens: 6161 })
@@ -961,6 +978,7 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     const ctl = unlockedController(vp, 'pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161) // data intact
     expect(existsSync(recoveryPath)).toBe(false) // leftover shredded, not rolled forward
+    expect(ctl.takeWorkingCopyLost()).toEqual(lost ? { cause: 'recovery', lostAt: null } : null)
     ctl.lock()
   })
 

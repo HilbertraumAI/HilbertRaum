@@ -62,6 +62,7 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   workspace_unlock_failed: 'diag.audit.workspace_unlock_failed',
   workspace_lock_failed: 'diag.audit.workspace_lock_failed',
   workspace_password_changed: 'diag.audit.workspace_password_changed',
+  workspace_working_copy_lost: 'diag.audit.workspace_working_copy_lost',
   settings_changed: 'diag.audit.settings_changed',
   local_api_toggled: 'diag.audit.local_api_toggled',
   policy_warning: 'diag.audit.policy_warning',

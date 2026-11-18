@@ -202,6 +202,16 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
+      // #875: the last session's changes were lost: the previous lock finished at the last saved state
+      // (often at quit, with no lock screen to say so and no log that outlived it), the start swept the
+      // working file, or this unlock discarded a broken recovery copy. Now there is a database and a log
+      // key to record it in, once. Content-free: which loss (`cause`) and, for a recorded one, when.
+      const lost = ctx.workspace.takeWorkingCopyLost?.() ?? null
+      if (lost) {
+        const meta = { cause: lost.cause, ...(lost.lostAt ? { lostAt: lost.lostAt } : {}) }
+        log.warn('The changes since the last saved state were lost: the working file was gone or no longer a database', meta)
+        ctx.audit?.('workspace_working_copy_lost', 'Changes since the last saved state were lost (working file gone or damaged)', meta)
+      }
       // Settings are readable now — main-side emissions follow the user's language.
       refreshUiLanguage(ctx)
       // The first-run / moved-drive benchmark and the model auto-start, in the P7 order (PR #303
@@ -711,9 +721,11 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   }
   // #855: the working file was gone or no longer a database, so the lock finished at the last good
   // `.enc` and the workspace is LOCKED (key zeroed, no handle). Not a failure: the latch stays
-  // armed and nothing restarts, as after any lock; the lock screen shows the notice. No audit
-  // event can be written, there is no database; the log line is buffered like any line logged
-  // while locked.
+  // armed and nothing restarts, as after any lock; the lock screen shows the notice. There is no
+  // database to audit it in now: the controller keeps the notice until the next unlock (and a
+  // marker carries it across a quit, #875), and that unlock records `workspace_working_copy_lost`.
+  // This line is buffered like any line logged while locked; it persists if the user unlocks in
+  // this session.
   if (state.lockNotice === 'working_copy_lost') {
     log.warn('Workspace locked at its last saved state: the working file was gone or no longer a database')
   }

@@ -157,3 +157,25 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     expect(screen.queryByText(lockFailed)).not.toBeInTheDocument()
   })
 })
+
+describe('the gate at start (#875)', () => {
+  // #875: a lock at QUIT that finished at the last snapshot has no lock screen to return the notice to. Main keeps it
+  // (a marker on the drive) and reports it in the workspace state, so the gate at the next start says it from the
+  // state App fetches on mount, with no lock in this session.
+  it('shows the lost-changes notice on the gate at start, from the workspace state alone (#875)', async () => {
+    const lockWorkspace = vi.fn(async () => lockedState)
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: 'working_copy_lost' })),
+        lockWorkspace,
+        perfMark: vi.fn()
+      })
+    )
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(t('en', 'gate.unlock.workingCopyLost'))
+    expect(lockWorkspace).not.toHaveBeenCalled()
+  })
+})

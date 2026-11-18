@@ -1937,6 +1937,8 @@ export const nl: UiCatalog<'nl'> = {
   'diag.audit.workspace_unlock_failed': 'Ontgrendelen mislukt',
   'diag.audit.workspace_lock_failed': 'Vergrendelen mislukt (de werkruimte bleef open)',
   'diag.audit.workspace_password_changed': 'Wachtwoord van de werkruimte gewijzigd',
+  'diag.audit.workspace_working_copy_lost':
+    'Recente wijzigingen verloren (het werkbestand is verwijderd of beschadigd)',
   'diag.audit.settings_changed': 'Instellingen gewijzigd',
   'diag.audit.local_api_toggled': 'Lokale API in- of uitgeschakeld',
   'diag.audit.policy_warning': 'Melding over het beleid',

@@ -2018,6 +2018,8 @@ export const it: UiCatalog<'it'> = {
   'diag.audit.workspace_lock_failed':
     'Tentativo di blocco non riuscito (l’area di lavoro è rimasta aperta)',
   'diag.audit.workspace_password_changed': 'Password dell’area di lavoro cambiata',
+  'diag.audit.workspace_working_copy_lost':
+    'Modifiche recenti perse (il file di lavoro è stato rimosso o danneggiato)',
   'diag.audit.settings_changed': 'Impostazioni modificate',
   'diag.audit.local_api_toggled': 'API locale attivata o disattivata',
   'diag.audit.policy_warning': 'Avviso sui criteri dell’unità',

@@ -2020,6 +2020,8 @@ export const uk: UiCatalog<'uk'> = {
   'diag.audit.workspace_lock_failed':
     'Не вдалося заблокувати (робочий простір залишився відкритим)',
   'diag.audit.workspace_password_changed': 'Пароль робочого простору змінено',
+  'diag.audit.workspace_working_copy_lost':
+    'Останні зміни втрачено (робочий файл було видалено або пошкоджено)',
   'diag.audit.settings_changed': 'Параметри змінено',
   'diag.audit.local_api_toggled': 'Локальний API увімкнено або вимкнено',
   'diag.audit.policy_warning': 'Повідомлення про політику',

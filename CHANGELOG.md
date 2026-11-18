@@ -102,6 +102,8 @@ from its first public `1.0.0` release onward.
   and you can unlock again right away (#855). The lock now also recognises a working copy that was
   overwritten but whose beginning still looked like a database: before, it could save that
   damaged copy over the last good one, and the workspace could no longer be opened (#876).
+  When this happens as the app closes, the lock screen says so the next time you start
+  HilbertRaum, and Settings → Diagnostics (advanced) → Activity records it when you unlock (#875).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;

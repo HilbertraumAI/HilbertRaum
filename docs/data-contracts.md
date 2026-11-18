@@ -1177,9 +1177,38 @@ head's own weights + KV.
   there reads as damage from #845 on).
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
   first, then plaintext opens immediately, encrypted stays locked, else uninitialized),
-  `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup), `getState() → WorkspaceStateInfo`,
+  `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup),
+  `isNewerWorkspace()` (#247), `isRecoveryBlocked()` (#242), `getState() → WorkspaceStateInfo`,
   `requireDb()` (throws while locked), `isUnlocked()`, `unlock(password)`, `create(password, mode)`,
-  `lock()` (no-op for plaintext).
+  `lock()` (no-op for plaintext: it returns with the database open and disarms the latch),
+  `shutdown()` (the quit's lock; for plaintext a checkpoint + close),
+  `changePassword(current, next, kdf?)`, `beginDocumentWork()` → release (refused with
+  `VaultBusyError` during a password change), `beginLock()` / `isLocking()` / `cancelLock()` (the
+  AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
+  locked or in plaintext), `takeWorkingCopyLost()` (#875, below).
+- **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
+  database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
+  what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
+  next successful unlock, `getState()` reports `lockNotice: 'working_copy_lost'` while the state is
+  `locked`. The lock also writes
+  **`config/working-copy-lost.json`** = `{ "v": 1, "enc": "<base64 of the 12-byte IV of .enc>", "cause": "lock" }`
+  (temp + fsync + rename, best-effort), so a lock at quit, a crash or a session end is reported at
+  the next start: `init()` (encrypted branch, after the verdict, the salvage, the sweep and the
+  rekey recovery) adopts a v1 marker whose `enc` equals the IV of the `.enc` there now, and removes
+  one that names another (a later lock by any build re-encrypted `.enc`: stale). A marker of
+  another `v`, or one that is not JSON, is neither shown nor removed; under a newer-format verdict
+  none is read. The startup salvage raises the same notice when the sweep shreds a newer working
+  file whose header reads but whose structure is `damaged` (no shred of ours leaves a header; a
+  header-less one is a successful lock's shred survivor and raises nothing); its marker says
+  `"cause": "startup"`. A successful unlock consumes it: the flag clears, this build's marker is
+  removed, and `takeWorkingCopyLost() → { cause, lostAt: <marker mtime ISO> | null } | null` returns
+  it once, for the unlock IPC to log ("The changes since the last saved state were lost …") and
+  audit (`workspace_working_copy_lost`, metadata `{ cause, lostAt }`, `cause` = `lock` | `startup` |
+  `recovery`). `recovery` is a loss the unlock itself makes: `unlockEncryptedVault` shreds a
+  `.recovery` newer than `.enc` whose structure is `damaged` (`UnlockedVault.recoveryDiscarded`),
+  recorded with no `lostAt` (the event's own time is when). `create()` removes a v1 marker a wiped
+  vault left (with no vault, startup never reads one); the commercial sell gate does not list the
+  file. Older builds ignore the file; the descriptor is untouched.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
@@ -1213,7 +1242,12 @@ head's own weights + KV.
   than PR #289;
   `lockWorkspace` → `WorkspaceStateInfo`, with `lockNotice: 'working_copy_lost'` when the lock
   finished at the last good snapshot because the working file was gone or no longer a database
-  (#855; `getWorkspaceState` never sets it). Registered in `initBackend()`; exposed on preload `api` +
+  (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock (see
+  "Working copy lost" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
+  `WorkspaceActionResult`: `wrong_password` (a wrong or non-string current password), `refused`
+  (a new password under `MIN_PASSWORD_LENGTH` or not a string, the workspace locked or a lock under
+  way, or document work in progress: `VaultBusyError`), `error` (anything else, #845's refusals
+  included: the current password still works). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
   `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`,

@@ -11,7 +11,7 @@ import {
   writeFileSync,
   writeSync
 } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { inspect } from 'node:util'
 import {
@@ -34,6 +34,7 @@ import {
   ENCRYPTION_REQUIRED,
   corruptVault,
   damagedVault,
+  editDescriptor,
   freshVaultPaths,
   lockedVault,
   noisePastPageOne,
@@ -73,6 +74,9 @@ function noiseInPlace(path: string): void {
     closeSync(fd)
   }
 }
+
+/** Where the controller records a lock that finished at the last snapshot (#875; `drive-layout.md`). */
+const markerPath = (vp: VaultPaths): string => join(dirname(vp.descriptorPath), 'working-copy-lost.json')
 
 /** Commits that allocate pages, so page 1 (its in-header page count) is written to the WAL and not yet back in the
  *  main file: the state an import leaves behind. */
@@ -118,13 +122,20 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     // "Next launch": a fresh controller sweeps the garbage and the ORIGINAL password
     // still opens the workspace — the session delta is lost (it was destroyed in place,
     // nothing can save it), but everything up to the last good lock is intact.
+    // #875: and its lock screen says so. The quit had no screen to say it on, so the controller left a marker beside
+    // the descriptor, and the next start reads it.
     const c = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     c.init()
-    expect(c.getState().state).toBe('locked')
+    expect(c.getState()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
     c.unlock('correct horse battery')
     expect(c.getState().state).toBe('unlocked')
     expect(getSettings(c.requireDb()).workspaceMode).toBe('encrypted')
-    c.lock()
+    // The unlock consumed the notice: gone from disk, and the next lock is a plain one.
+    expect(existsSync(markerPath(vp))).toBe(false)
+    expect(c.lock()).not.toHaveProperty('lockNotice')
+    const d = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    d.init()
+    expect(d.getState()).not.toHaveProperty('lockNotice')
   })
 
   // #853 / #855 — something outside the app removes the live working file, or overwrites it in
@@ -202,8 +213,9 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
       expect(existsSync(leftover)).toBe(false)
     }
     expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
-    // "Lock now" again is a plain lock of a locked workspace.
-    expect(ctrl.lock()).not.toHaveProperty('lockNotice')
+    // #875: the notice stands until the next unlock, whatever asks: "Lock now" again, the state the gate fetches.
+    expect(ctrl.lock()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+    expect(ctrl.getState()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
 
     // The same session, no relaunch: the right password opens the last good snapshot.
     ctrl.unlock('correct horse battery')
@@ -458,6 +470,109 @@ describe('issue #876 — a lock whose checkpoint could not finish keeps the sess
     } finally {
       release()
     }
+  })
+})
+
+// Issue #875 — a lock that finished at the last snapshot (#855) at QUIT had no lock screen to say so, and nothing
+// survived the process: the next start showed a plain lock screen and the user unlocked into older data with no
+// explanation. The controller now leaves `config/working-copy-lost.json`, bound to the IV of the `.enc` it fell back
+// to, reads it at startup and reports the notice while the workspace is locked, and the next unlock consumes it. The
+// rows below are about the marker's lifetime when other builds share the drive (a Kit carries several OSes' apps).
+describe('issue #875 — the notice of a lock that finished at the last snapshot survives a restart', () => {
+  const PW = 'pw'
+
+  /** A session whose working file is overwritten in place, then the app quits: the #855 lock at quit. */
+  function loseWorkingCopyAtQuit(vp: VaultPaths): void {
+    const a = unlockedController(vp, PW)
+    updateSettings(a.requireDb(), { contextTokens: 8282 })
+    a.requireDb().exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    noiseInPlace(vp.dbPath)
+    a.shutdown()
+    expect(existsSync(markerPath(vp))).toBe(true)
+  }
+
+  it('a marker an older build left behind after it locked again (another snapshot now) is stale: no notice, and removed', () => {
+    const vp = lockedVault('vault-875', PW)
+    loseWorkingCopyAtQuit(vp)
+    const leftByThisLoss = readFileSync(markerPath(vp))
+    // An older build knows no marker: it unlocks and locks (a new `.enc`) and leaves the file where it was.
+    const b = unlockedController(vp, PW)
+    b.lock()
+    writeFileSync(markerPath(vp), leftByThisLoss)
+
+    const c = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    c.init()
+    expect(c.getState().state).toBe('locked')
+    expect(c.getState()).not.toHaveProperty('lockNotice')
+    expect(existsSync(markerPath(vp))).toBe(false)
+  })
+
+  it('a marker of a format a newer build wrote is neither shown nor removed, even when it names the current snapshot', () => {
+    const vp = lockedVault('vault-875', PW)
+    loseWorkingCopyAtQuit(vp)
+    const marker = JSON.parse(readFileSync(markerPath(vp), 'utf8')) as Record<string, unknown>
+    writeFileSync(markerPath(vp), JSON.stringify({ ...marker, v: 2 }))
+    const newer = readFileSync(markerPath(vp))
+
+    const c = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    c.init()
+    expect(c.getState()).not.toHaveProperty('lockNotice')
+    c.unlock(PW)
+    c.lock()
+    expect(readFileSync(markerPath(vp)).equals(newer)).toBe(true)
+  })
+
+  // #845: a vault format a newer build wrote leaves the whole workspace as it is: startup reads nothing past the
+  // verdict, so the marker is neither read nor removed, and the lock screen shows the version problem, not a loss.
+  it('under a newer vault format the marker is neither read nor removed; once that format is gone, the next unlock consumes it', () => {
+    const vp = lockedVault('vault-875', PW)
+    loseWorkingCopyAtQuit(vp)
+    const marker = readFileSync(markerPath(vp))
+    const descriptor = readFileSync(vp.descriptorPath)
+    editDescriptor(vp, (d) => {
+      d.version = 3
+    })
+
+    const c = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    c.init()
+    expect(c.getState()).not.toHaveProperty('lockNotice')
+    expect(thrownBy(() => c.unlock(PW)).name).toBe('VaultNewerError')
+    expect(readFileSync(markerPath(vp)).equals(marker)).toBe(true)
+
+    writeFileSync(vp.descriptorPath, descriptor) // the newer copy rolled back
+    expect(c.unlock(PW).state).toBe('unlocked')
+    expect(existsSync(markerPath(vp))).toBe(false)
+  })
+
+  // The marker is best-effort: a write that fails (here its name is taken by a folder, so the rename cannot land) must
+  // not fail the lock, must still show the notice in this run, and must leave no half-written temp file in `config/`.
+  it('a marker that cannot be written leaves no temp file behind, and the lock still finishes with the notice', () => {
+    const vp = lockedVault('vault-875', PW)
+    mkdirSync(join(markerPath(vp), 'blocker'), { recursive: true })
+    const ctrl = unlockedController(vp, PW)
+    ctrl.requireDb().exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    noiseInPlace(vp.dbPath)
+
+    expect(ctrl.lock()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+    expect(existsSync(`${markerPath(vp)}.tmp`)).toBe(false)
+    expect(statSync(markerPath(vp)).isDirectory()).toBe(true)
+  })
+
+  // A workspace wiped by hand (its `.enc` and descriptor deleted, say to reset a Kit) leaves `config/` with the marker
+  // of a vault that is gone. With no vault, startup never reads it; the workspace created there removes it, so it does
+  // not outlive the vault it was about (and a reset drive does not carry the old loss's time).
+  it('a workspace created where a wiped one left its marker removes the marker', () => {
+    const vp = lockedVault('vault-875', PW)
+    loseWorkingCopyAtQuit(vp)
+    rmSync(vp.encPath)
+    rmSync(vp.descriptorPath)
+    const c = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    c.init()
+    expect(c.getState().state).toBe('uninitialized')
+    expect(existsSync(markerPath(vp))).toBe(true)
+    c.create('correct horse battery', 'encrypted')
+    expect(existsSync(markerPath(vp))).toBe(false)
+    c.lock()
   })
 })
 

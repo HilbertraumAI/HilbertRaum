@@ -393,7 +393,9 @@ search, the reranker, translation, voice input, OCR, knowledge packs — restart
 
 ## "The workspace's working file on the drive was removed or damaged"
 
-You see this on the unlock screen right after a lock. While the workspace was open, something
+You see this on the unlock screen right after a lock, or the next time you start HilbertRaum when
+it happened as the app closed (**Settings → Diagnostics (advanced) → Activity** then records it
+when you unlock, as "Recent changes lost"). While the workspace was open, something
 outside HilbertRaum deleted or overwrote its working file on the drive: a cleanup tool, a second
 copy of the app started from another place, a failing drive. Nothing newer than the last secured
 copy was left, so the app locked the workspace as it was the last time it was locked or the app
