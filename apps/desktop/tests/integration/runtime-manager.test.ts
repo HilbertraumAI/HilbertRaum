@@ -552,7 +552,7 @@ describe('#109 warm-up window through the real manager', () => {
   it('a healthy server mid-warm-up still reports "Starting"; ready lands only after the stream ends', async () => {
     const h = warmupWindowHarness()
     const startP = h.mgr.start(QUIT_OPTS)
-    while (h.completionRequests() === 0) await tick()
+    await until(() => h.completionRequests() > 0, 'the first completion request')
 
     // /health said yes long ago — but the warm-up generation is still streaming.
     expect(h.mgr.status().running).toBe(false)
@@ -572,7 +572,7 @@ describe('#109 warm-up window through the real manager', () => {
     const h = warmupWindowHarness()
     const startP = h.mgr.start(QUIT_OPTS)
     startP.catch(() => undefined)
-    while (h.completionRequests() === 0) await tick()
+    await until(() => h.completionRequests() > 0, 'the first completion request')
 
     const t0 = Date.now()
     await h.mgr.stop() // pre-#109 semantics preserved: the CODE-2 cancel reaches the new window
@@ -662,7 +662,7 @@ describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
     const h = loadingStartHarness()
     const startP = h.mgr.start(QUIT_OPTS)
     startP.catch(() => undefined) // asserted below; pre-arm so no unhandled rejection
-    while (h.spawnCount() === 0) await tick()
+    await until(() => h.spawnCount() > 0, 'the runtime spawn')
     const t0 = Date.now()
     await h.mgr.stop() // pre-fix: queued behind the full 60 s health timeout → test timeout
     expect(Date.now() - t0).toBeLessThan(hangBudgetMs(5_000)) // a hang detector, not a timing proof
@@ -681,7 +681,7 @@ describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
     const h = loadingStartHarness()
     const startP = h.mgr.start(QUIT_OPTS)
     startP.catch(() => undefined)
-    while (h.spawnCount() === 0) await tick()
+    await until(() => h.spawnCount() > 0, 'the runtime spawn')
 
     const ctx = {
       runtime: h.mgr,

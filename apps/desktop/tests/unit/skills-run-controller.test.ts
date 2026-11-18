@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SkillRunController, type ToolRunner } from '../../src/main/services/skills/run-controller'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, untilValue } from '../helpers/hang-budget'
 
 // architecture.md "Skills — design record" §9 (S11b) — the GENERIC tool-run lifecycle controller: running →
 // terminal, progress merge, Cancel via the AbortSignal, and (A2, audit
@@ -8,15 +8,11 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 // documents run in parallel. Also pins the generic `count` outcome field (+ its deprecated
 // `transactionCount` alias).
 
-const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
-
 async function waitForTerminal(controller: SkillRunController, handle: string): Promise<string> {
-  for (let i = 0; i < 50; i++) {
+  return untilValue(() => {
     const s = controller.get(handle)
-    if (s && s.state !== 'running') return s.state
-    await flush()
-  }
-  throw new Error('run did not terminate')
+    return s && s.state !== 'running' ? s.state : undefined
+  }, `skill run ${handle} reaching a terminal state`)
 }
 
 describe('SkillRunController (S11b)', () => {

@@ -46,6 +46,11 @@ export function hangBudgetMs(localMs: number): number {
  * `for (let i = 0; i < hangPolls(200); i++)`. Pass the loop's own sleep so the 45 s cap still
  * lands on real time: 200 polls of 5 ms is a 1 s detector, and on CI becomes a 4 s one.
  *
+ * Only for a loop that really sleeps ≥ 5 ms per step. A 0-1 ms `setTimeout` step is NOT 1 ms: it lasts about
+ * 1.1 ms on Linux but about 15.6 ms on Windows (timer resolution), so a count of such turns is a detector ~14x
+ * narrower on the ubuntu runner than at a Windows desk (#895). Poll real I/O through `until` / `untilValue`, which
+ * bound by the real clock instead.
+ *
  * This shape is the NASTIER of the two and was missed by the first sweep of #458 step 3 —
  * CI found it (`vision-security.test.ts`, run 34664328086). A counted loop does not merely
  * stay narrow on CI, it **falls through silently**: no named error, just the next assertion
@@ -134,3 +139,23 @@ export async function until(cond: () => boolean, what: string, localMs = 5_000):
  * it statically, or the same test mounted it earlier and React renders it from its lazy cache.
  */
 export const LAZY_SCREEN_WAIT: Readonly<{ timeout: number }> = { timeout: hangBudgetMs(5_000) }
+
+/**
+ * Poll an ASYNC `probe` until it yields a value (anything but `undefined`, `null` or `false`), or fail by name once
+ * `hangBudgetMs(localMs)` of REAL time has passed: the async twin of `until`, for state read through an awaited call
+ * (an IPC channel, a job status) whose answer the caller wants back. Real time like `until`, so a poll bounded this
+ * way cannot narrow into a count of timer turns (#895), and it works under fake timers and a mocked `Date.now`.
+ */
+export async function untilValue<T>(
+  probe: () => T | null | undefined | false | Promise<T | null | undefined | false>,
+  what: string,
+  localMs = 5_000
+): Promise<T> {
+  const deadline = realNow() + hangBudgetMs(localMs)
+  for (;;) {
+    const v = await probe()
+    if (v !== undefined && v !== null && v !== false) return v
+    if (realNow() > deadline) throw new Error(`${what} never happened`)
+    await new Promise<void>((r) => realSetTimeout(r, 1))
+  }
+}

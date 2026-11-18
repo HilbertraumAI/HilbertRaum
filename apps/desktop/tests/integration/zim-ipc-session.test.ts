@@ -13,7 +13,7 @@ import {
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { hangPolls, testBudgetMs, within } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs, within } from '../helpers/hang-budget'
 
 // #301 P3b — the knowledge-pack SESSION BOUNDARY (findings H4 and M4; checks T07 and T08).
 //
@@ -131,13 +131,19 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 /** One real macrotask. Only ever a CEILING for "nothing else happened", never a proof. */
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
 
-/** Drain up to `ceiling` ticks, resolving as soon as `pred` holds. Never a fixed sleep. */
-async function waitUntil(pred: () => boolean, ceiling = hangPolls(400, 1)): Promise<boolean> {
-  for (let i = 0; i < ceiling; i++) {
-    if (pred()) return true
+/**
+ * Wait up to `ceilingMs` of wall-clock time (`hangBudgetMs`, so wider on CI), resolving as soon as `pred` holds. Never a
+ * fixed sleep. A deadline, not a count of timer turns: a 1 ms turn lasts ~1.1 ms on Linux and ~15.6 ms on Windows (#895).
+ * Every caller is a positive wait (the negative windows in this file are their own `tick` loops), so a wide bound costs
+ * nothing on success: the longest wait measured at an idle desk was ~70 ms, and a loaded Windows leg can stall for seconds.
+ */
+async function waitUntil(pred: () => boolean, ceilingMs = hangBudgetMs(5_000)): Promise<boolean> {
+  const deadline = Date.now() + ceilingMs
+  while (!pred()) {
+    if (Date.now() > deadline) return false
     await tick()
   }
-  return pred()
+  return true
 }
 
 /**
@@ -2575,7 +2581,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
       expect(unlocked).toMatchObject({ ok: true })
       expect(searchableOf(h, delta).searchable).toBeNull()
-      expect(await waitUntil(() => searchableOf(h, delta).searchable === 'yes', hangPolls(2_000, 1))).toBe(true)
+      expect(await waitUntil(() => searchableOf(h, delta).searchable === 'yes')).toBe(true)
     } finally {
       await h.close()
     }
@@ -2629,7 +2635,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
         await waitUntil(() => {
           const s = h.svc.excluded()
           return s !== null && s.length === 1 && s[0]!.packId === loserId
-        }, hangPolls(2_000, 1))
+        })
       ).toBe(true)
       expect((await status()).excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
 

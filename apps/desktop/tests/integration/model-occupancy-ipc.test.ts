@@ -56,6 +56,7 @@ import { writeSkillPackage } from '../helpers/skill-fixtures'
 import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 import { killableRuntime } from '../helpers/killable-runtime'
 import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
+import { untilValue } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -144,16 +145,11 @@ function refusal(start: StartSkillRunResult): string | undefined {
   return 'error' in start ? start.error : undefined
 }
 
-const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
-
 async function pollUntilTerminal(runHandle: string): Promise<SkillRunState> {
-  for (let i = 0; i < 200; i++) {
-    const { result } = await invoke(handlers, IPC.getSkillRun, runHandle)
-    const state = result as SkillRunState | null
-    if (state && state.state !== 'running') return state
-    await flush()
-  }
-  throw new Error('run did not terminate')
+  return untilValue(async () => {
+    const state = (await invoke(handlers, IPC.getSkillRun, runHandle)).result as SkillRunState | null
+    return state && state.state !== 'running' ? state : undefined
+  }, `skill run ${runHandle} reaching a terminal state`)
 }
 
 beforeEach(() => {
@@ -206,8 +202,7 @@ describe('startSkillRun — the model-lane guard (#186)', () => {
 
     const start = await startRun(h, 'redact_document', true)
     expect(start.started).toBe(true)
-    // Give the run a tick to reach the dialog.
-    for (let i = 0; i < 50 && !h.runtime.occupancy.held('skill-run'); i++) await flush()
+    // The span is taken synchronously in the start handler, so it is already held here.
     expect(h.runtime.occupancy.held('skill-run')).toBe(true)
     // …and while it is held, a second run is refused with the skill-run copy.
     const second = await startRun(h, 'redact_document', true)

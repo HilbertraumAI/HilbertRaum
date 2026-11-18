@@ -27,6 +27,7 @@ import { t } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import type { OccupancyLane } from '../../src/main/services/runtime/occupancy'
 import { stubChatRuntime } from '../helpers/chat-runtime-stub'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Issues #185/#186 — the shared model-occupancy span (architecture.md "Model occupancy —
 // design record"). Both issues were the same defect seen from two sides: the local-API wave's
@@ -325,7 +326,7 @@ describe('DocTaskManager vs the occupancy spans', () => {
     expect(occ.held('doc-task')).toBe(false)
 
     const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [docId] })
-    const deadline = Date.now() + 10_000
+    const deadline = Date.now() + hangBudgetMs(10_000)
     for (;;) {
       const state = manager.getDocTask(jobId).state
       if (state === 'done' || state === 'failed' || state === 'cancelled') break
