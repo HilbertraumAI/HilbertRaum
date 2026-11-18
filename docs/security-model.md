@@ -1263,6 +1263,23 @@ password. Four guards close this:
   session's commits lost), and the probe called a torn one damaged and discarded the session.
   A `-wal` that is noise (#208's sweep shreds the sidecars too) holds nothing and does not count.
   The app keeps one connection to the workspace database, so a normal lock never leaves one.
+  **One retry first** (review round 2): a `-wal` can be there holding nothing new (SQLite copied it
+  in and its delete failed; its frames belong to no checkpoint of this file), or one the check
+  cannot open (an antivirus hold counts as holding commits). So before refusing, the lock opens
+  the database once more with a plain connection, lets SQLite's own WAL recovery decide, checkpoints
+  and closes; only a `-wal` that still holds commits afterwards refuses, so a leftover no longer
+  costs a refused lock with the full-drive message. When SQLite calls the database itself corrupt,
+  the WAL cannot be replayed into it and the probe judges the file (#208's noise between the two
+  files still finishes at the last snapshot). The v1 rekey stage refuses a pending WAL the same way.
+  **The probe only adds a refusal or a discard for proven damage** (review round 2). When its
+  SQLite stage cannot run for another reason (SQLite cannot open the file through its URI, an I/O
+  error, out of memory), the file is `unchecked`, and each site judges it by the header it read,
+  exactly as before the probe: the lock encrypts it, a failed lock re-opens it, the salvage
+  preserves it, the roll-forward rolls it forward, the v1 rekey stages it. Each fallback is logged
+  with the site and SQLite's code. A header read that fails (a hold) keeps the earlier answer: not
+  judged lost, the lock and the salvage refuse, as with the header check. Without this rule a SQLite
+  error unrelated to the file's content would have refused every lock, blocked every start's salvage
+  and refused every unlock beside a `.recovery`, where the header check let all three through.
 - **"Vault damaged" is not "wrong password".** An unlock that passes the descriptor
   verifier and authenticates the `.enc` GCM tag but cannot `openDatabase` the decrypted
   bytes throws a typed `VaultDamagedError`, surfaced as its own

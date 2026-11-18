@@ -1119,20 +1119,37 @@ head's own weights + KV.
   fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
   its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
   and `VaultOpenFailedError` when the open could not finish otherwise (#844).
-  `lockEncryptedVault(vaultPaths, db, key)` (checkpoint+close → `-wal` check → probe → re-encrypt →
-  shred; it refuses to encrypt when `walAwaitsCheckpoint` says the checkpoint did not finish, and
-  unless the probe says `database`). **`walAwaitsCheckpoint(dbPath)`** (`services/db.ts`, #876
-  review round 1): true when `<dbPath>-wal` has a valid WAL header (magic `0x377f0682`/`0x377f0683`)
-  and frames after it (more than 32 bytes), or exists but cannot be read; a noise `-wal` is false.
+  `lockEncryptedVault(vaultPaths, db, key, encryptFileImpl?, onProbeFallback?)` (checkpoint+close →
+  `-wal` check, with one retry → probe → re-encrypt → shred). It refuses while the `-wal` still holds
+  commits after the retry, and unless the probe reads the file as a database; once it has judged the
+  file, every failure is a **`LockStoppedError`** (`reason: 'wal' | 'probe' | 'encrypt'`, `verdict:
+  { walPending, probe | null }`, an encrypt failure as its `cause`), which the controller reads
+  instead of probing again (#876 review round 2). **`walAwaitsCheckpoint(dbPath)`** (`services/db.ts`):
+  stats `<dbPath>-wal` first (32 bytes or less never counts); true when it has a valid WAL header
+  (magic `0x377f0682`/`0x377f0683`) and frames after it, or has frames but cannot be opened or read
+  (a hold); a noise `-wal` is false. **`checkpointLeftoverWal(dbPath)`** → `{ outcome: 'checkpointed'
+  | 'busy', log, checkpointed } | { outcome: 'damaged' | 'failed', code }`: the lock's one retry, a
+  plain open (SQLite's own WAL recovery decides what the WAL holds), `PRAGMA wal_checkpoint(TRUNCATE)`
+  and close; `damaged` (CORRUPT/NOTADB) means the WAL cannot be replayed into the file and no longer
+  refuses the lock. `stageRekey` refuses the same pending WAL (no retry: its connection is open).
   **`probeDatabaseFile(path)`**
-  (`services/db.ts`, #876) → `'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'`: the
+  (`services/db.ts`, #876) → `{ verdict: 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'
+  | 'unchecked', code? }`: the
   header through `node:fs`, then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
   `\\?\` long form on Windows) that reads the schema, the first row of every table and the last row
   of every rowid table, then the root-page header of every index through `node:fs`. It reads the
-  main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file. `damaged` = the SQLite header, but SQLite calls the structure CORRUPT or
+  main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file.
+  `damaged` = the SQLite header, but SQLite calls the structure CORRUPT or
   NOTADB, or an index root is no b-tree page; `not-database` = no SQLite header (noise, empty,
-  cut short); `unknown` = the probe could not decide (a hold, any other SQLite error), never read
-  as lost. The one verdict for the lock's guard and its #855 verdict, the startup salvage, the
+  cut short); `unknown` = the header read itself failed (a hold), never read as lost; `unchecked`
+  (review round 2) = the header reads but the structure could not be read for a reason that is not
+  damage (any other SQLite error, an index-root read that fails), with `code` (SQLite's result code
+  and fixed description, or a Node error code). **The probe only adds a refusal or a discard for
+  proven damage:** every site judges an `unchecked` file by its header, as before the probe, and
+  reports it (`ProbeFallbackNote(site, code)`, `site` = `lock` | `salvage` | `recovery` | `rekey`);
+  the controller keeps the notes, `takeProbeFallbacks()` returns them once, and the lock, unlock and
+  password-change handlers log each ("A workspace file was judged by its SQLite header …"). The one
+  verdict for the lock's guard and its #855 verdict, the startup salvage, the
   `.recovery` roll-forward and `stageRekey`. `sqliteJudgedDamaged(err)` (the #844 classifier)
   lives beside it.
   `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that

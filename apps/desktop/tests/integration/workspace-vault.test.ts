@@ -43,6 +43,7 @@ import {
   freshVaultPaths,
   lockedVault,
   noisePastPageOne,
+  plantProbeTrap,
   tagFailingVault,
   thrownBy,
   unlockedController,
@@ -904,6 +905,31 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
     expect(existsSync(recoveryPath)).toBe(false)
+    ctl.lock()
+  })
+
+  // #876 review round 2: the startup salvage and the unlock's roll-forward judge a file the probe cannot read for a
+  // reason that is not damage by its header, as before the probe existed (a hold, which the header read itself hits,
+  // still refuses as before). `plantProbeTrap` stands in for that failure: a table only its creating connection reads.
+  it.each<[string, boolean, string[]]>([
+    ['a failed lock’s working file (the start moves it aside, the unlock rolls it forward)', false, ['salvage', 'recovery']],
+    ['a .recovery snapshot (the unlock rolls it forward)', true, ['recovery']]
+  ])('CODE-1b: %s whose structure the probe cannot read is judged by its header, as before (#876)', (_what, asRecovery, sites) => {
+    const vp = lockedVault('vault', 'pw')
+    const { db } = unlockEncryptedVault(vp, 'pw')
+    plantProbeTrap(db)
+    updateSettings(db, { contextTokens: 7171 })
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    if (asRecovery) renameSync(vp.dbPath, `${vp.dbPath}${RECOVERY_SUFFIX}`)
+    backdate(vp.encPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.isRecoveryBlocked()).toBe(false)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    expect(ctl.takeProbeFallbacks().map((f) => f.site)).toEqual(sites)
     ctl.lock()
   })
 

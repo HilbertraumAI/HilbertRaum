@@ -77,6 +77,7 @@ import {
   lockedVault,
   noisePastPageOne,
   newerPlaintext,
+  plantProbeTrap,
   newerVault,
   setFrameMagic,
   tagFailingVault,
@@ -927,6 +928,28 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
       expect(lostEvents()).toHaveLength(1)
       expect(logged()).toHaveLength(1)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+})
+
+// #876 review round 2: a site whose probe could not read the structure (not damage) judged the file by its header, as
+// before the probe existed. Support needs to know that happened: the lock handler logs which site and SQLite's code.
+describe('a lock whose probe fell back to the header (#876)', () => {
+  it('logs the site and the SQLite code', async () => {
+    const ctrl = unlockedVault()
+    plantProbeTrap(ctrl.requireDb())
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `#876 fallback marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.lockWorkspace)).result).toMatchObject({ state: 'locked' })
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('judged by its SQLite header'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('"site":"lock"')
+      expect(lines[0]).toMatch(/"code":"sqlite 1\b/)
     } finally {
       ctrl.shutdown()
     }

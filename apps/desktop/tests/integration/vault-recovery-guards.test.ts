@@ -61,9 +61,12 @@ const failures = vi.hoisted(() => ({
   enospcOnEncTmpWrite: false,
   /** Descriptors opened on an `.enc.tmp` while `enospcOnEncTmpWrite` was armed. */
   encTmpFds: new Set<number>(),
+  /** openSync throws EBUSY ONCE for the next `-wal` path while armed (an antivirus hold on the WAL at the lock's first
+   *  look, gone by its retry; #876 review round 2), then disarms itself. */
+  openThrowOnWalPathOnce: false,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
-  hits: { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0 }
+  hits: { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0 }
 }))
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -87,6 +90,11 @@ vi.mock('node:fs', async (importOriginal) => {
       if (failures.openThrowOnRecoveryPath && isRecovery(path)) {
         failures.hits.openSync += 1
         throw errnoError('EBUSY', 'EBUSY: resource busy or locked, open (held .recovery)')
+      }
+      if (failures.openThrowOnWalPathOnce && String(path).endsWith('-wal')) {
+        failures.openThrowOnWalPathOnce = false
+        failures.hits.openSyncWal += 1
+        throw errnoError('EBUSY', 'EBUSY: resource busy or locked, open (held -wal)')
       }
       const fd = actual.openSync(path, flags, mode)
       if (failures.enospcOnEncTmpWrite && String(path).endsWith('.enc.tmp')) failures.encTmpFds.add(fd)
@@ -136,7 +144,8 @@ beforeEach(() => {
   holdRecovery(false)
   failures.enospcOnEncTmpWrite = false
   failures.encTmpFds.clear()
-  failures.hits = { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0 }
+  failures.openThrowOnWalPathOnce = false
+  failures.hits = { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0 }
   ipcState.handlers.clear()
 })
 
@@ -342,7 +351,7 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
-    expect(failures.hits).toEqual({ renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0 })
+    expect(failures.hits).toEqual({ renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0 })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(recoveryPath)).toBe(true)
@@ -435,6 +444,33 @@ describe('a full drive at the lock write, in the same session (full-audit 2026-0
     // … and the next unlock reads the write made after the failure.
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    ctl.lock()
+  })
+})
+
+// #876 review round 2 — the lock refuses while the `-wal` still holds commits, and a `-wal` with frames that its check
+// cannot open (an antivirus hold) counts as holding them (refusing is the safe answer there). So the lock retries once:
+// it re-opens the database, SQLite's own WAL recovery decides what the WAL holds, and a checkpoint copies it in. Here the
+// close leaves the session's own WAL behind (already copied in; its delete failed), and a hold refuses the check's first
+// open of it; the retry clears it, and the lock goes through at the first try.
+describe('a -wal held at the lock’s first look (#876)', () => {
+  it('is cleared by the lock’s one retry: the lock finishes, the session in .enc', () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    const ctl = unlockedController(vp, 'pw')
+    const db = ctl.requireDb()
+    updateSettings(db, { contextTokens: 4343 })
+    const leftover = readFileSync(`${vp.dbPath}-wal`)
+    const close = db.close.bind(db)
+    ;(db as unknown as { close: () => void }).close = () => {
+      close()
+      writeFileSync(`${vp.dbPath}-wal`, leftover)
+      failures.openThrowOnWalPathOnce = true
+    }
+
+    expect(ctl.lock()).not.toHaveProperty('lockNotice')
+    expect(failures.hits.openSyncWal).toBe(1)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(4343)
     ctl.lock()
   })
 })

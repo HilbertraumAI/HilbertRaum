@@ -36,6 +36,7 @@ import {
 } from '../../src/main/services/workspace-vault'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import type { AppContext } from '../../src/main/services/context'
+import type { Db } from '../../src/main/services/db'
 import type { PrivacyPolicy } from '../../src/shared/types'
 import { openRawDb, tempRoot } from './db-fixtures'
 import { ANY_SENDER } from './ipc'
@@ -191,6 +192,18 @@ export function noisePastPageOne(path: string): void {
   } finally {
     closeSync(fd)
   }
+}
+
+/**
+ * A table on the open database `db` that only `db` itself can read (#876 review round 2): a VIRTUAL generated column
+ * calls a function registered on this connection alone, so any other connection reading a row fails with SQLite's
+ * "unknown function" (SQLITE_ERROR), while the file stays a healthy database that `openDatabase` and every app query
+ * handle as before. It stands in for a structural read the probe cannot run for a reason that is not damage (SQLite
+ * cannot open the file through the URI, an I/O error, out of memory).
+ */
+export function plantProbeTrap(db: Db): void {
+  db.function('w3_probe_trap', { deterministic: true }, (x: unknown) => x as number)
+  db.exec('CREATE TABLE w3_probe_trap (a, b AS (w3_probe_trap(a)) VIRTUAL); INSERT INTO w3_probe_trap (a) VALUES (1);')
 }
 
 /**

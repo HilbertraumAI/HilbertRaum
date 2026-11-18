@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, constants, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { openDatabase, probeDatabaseFile } from '../../src/main/services/db'
+import { openDatabase, probeDatabaseFile, walAwaitsCheckpoint } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { tempRoot } from '../helpers/db-fixtures'
+import { plantProbeTrap } from '../helpers/vault-fixtures'
 
 // #876: the lock's guard, the #855 lost-copy verdict, the init() salvage, the `.recovery` roll-forward and the v1 rekey
 // stage all decide "is this file a database?" before they encrypt it over `.enc` or shred it. A 16-byte header check
@@ -45,7 +46,7 @@ describe('probeDatabaseFile (#876)', () => {
   it('reads the app schema, partial index included, as a database, and leaves the file byte-identical with no -wal/-shm', () => {
     const { path } = appDatabase()
     const before = sha(path)
-    expect(probeDatabaseFile(path)).toBe('database')
+    expect(probeDatabaseFile(path).verdict).toBe('database')
     expect(sha(path)).toBe(before)
     expect(readdirSync(dirname(path))).toEqual(['hilbertraum.sqlite'])
   })
@@ -60,7 +61,7 @@ describe('probeDatabaseFile (#876)', () => {
   ])('a database whose root page of %s is noise is damaged', (_what, name) => {
     const { path, pageSize, roots } = appDatabase(name)
     overwritePage(path, roots[name], pageSize)
-    expect(probeDatabaseFile(path)).toBe('damaged')
+    expect(probeDatabaseFile(path).verdict).toBe('damaged')
     expect(readdirSync(dirname(path))).toEqual(['hilbertraum.sqlite'])
   })
 
@@ -86,7 +87,7 @@ describe('probeDatabaseFile (#876)', () => {
     } finally {
       closeSync(fd)
     }
-    expect(probeDatabaseFile(path)).toBe(verdict)
+    expect(probeDatabaseFile(path).verdict).toBe(verdict)
   })
 
   // The probe reads the path down to the FIRST row of every table, and that path sits near the start of the file. An
@@ -114,7 +115,7 @@ describe('probeDatabaseFile (#876)', () => {
     } finally {
       closeSync(fd)
     }
-    expect(probeDatabaseFile(path)).toBe('damaged')
+    expect(probeDatabaseFile(path).verdict).toBe('damaged')
   })
 
   // SQLite cannot open a Windows path of 260 characters or more unless it is written in the `\\?\` long form; node:fs
@@ -128,7 +129,7 @@ describe('probeDatabaseFile (#876)', () => {
     const long = join(dir, 'hilbertraum.sqlite.recovery')
     writeFileSync(long, readFileSync(path))
     expect(long.length).toBeGreaterThan(300)
-    expect(probeDatabaseFile(long)).toBe('database')
+    expect(probeDatabaseFile(long).verdict).toBe('database')
     expect(readdirSync(dir)).toEqual(['hilbertraum.sqlite.recovery'])
   })
 
@@ -139,16 +140,16 @@ describe('probeDatabaseFile (#876)', () => {
   ])('%s is not a database', (_what, write) => {
     const path = join(tempRoot('db-probe'), 'hilbertraum.sqlite')
     write(path)
-    expect(probeDatabaseFile(path)).toBe('not-database')
+    expect(probeDatabaseFile(path).verdict).toBe('not-database')
   })
 
   it('a missing file is gone, and one that cannot be read is unknown', () => {
     const root = tempRoot('db-probe')
-    expect(probeDatabaseFile(join(root, 'hilbertraum.sqlite'))).toBe('gone')
+    expect(probeDatabaseFile(join(root, 'hilbertraum.sqlite')).verdict).toBe('gone')
     // A directory under the file's name stands in for an unreadable file on every OS (a hold, a permission error).
     const dir = join(root, 'held.sqlite')
     mkdirSync(dir)
-    expect(probeDatabaseFile(dir)).toBe('unknown')
+    expect(probeDatabaseFile(dir).verdict).toBe('unknown')
   })
 
   // A drive started from a network share has a UNC workspace path. SQLite refuses a URI whose authority is a host, so
@@ -164,7 +165,59 @@ describe('probeDatabaseFile (#876)', () => {
     }
   })()
   it.runIf(uncReachable)('a database on a UNC path is a database', () => {
-    expect(probeDatabaseFile(unc)).toBe('database')
+    expect(probeDatabaseFile(unc).verdict).toBe('database')
     expect(readdirSync(dirname(local))).toEqual(['hilbertraum.sqlite'])
+  })
+
+  // #876 review round 2: the probe may only ADD a refusal or a discard for proven damage. When its SQLite stage fails
+  // for another reason, the file is `unchecked` (with the code, for the log), and every caller judges it by its header,
+  // as before the probe existed. A table only its creating connection can read stands in for that failure.
+  it('a database whose structure SQLite cannot read for a reason that is not damage is unchecked, with the code', () => {
+    const path = join(tempRoot('db-probe'), 'hilbertraum.sqlite')
+    const db = openDatabase(path)
+    plantProbeTrap(db)
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    expect(probeDatabaseFile(path)).toEqual({ verdict: 'unchecked', code: expect.stringMatching(/^sqlite 1\b/) })
+    expect(readdirSync(dirname(path))).toEqual(['hilbertraum.sqlite'])
+  })
+})
+
+// #876 (review rounds 1 and 2): the lock refuses while the `-wal` still holds commits the main file lacks. Only a WAL
+// header (either of SQLite's two magic numbers) with something after it counts; a header alone holds no frame, and
+// noise is no WAL. A `-wal` with frames that cannot be read (a hold) counts too: refusing is the safe answer there.
+describe('walAwaitsCheckpoint (#876)', () => {
+  const UV_FS_O_EXLOCK = 0x10000000
+  const header = (magic: number): Buffer => {
+    const b = Buffer.alloc(32)
+    b.writeUInt32BE(magic, 0)
+    b.writeUInt32BE(3007000, 4)
+    b.writeUInt32BE(4096, 8)
+    return b
+  }
+  it.each<[string, Buffer | null, boolean]>([
+    ['no -wal', null, false],
+    ['a WAL header and nothing after it', header(0x377f0682), false],
+    ['a WAL header (magic 0x377f0682) with a frame', Buffer.concat([header(0x377f0682), randomBytes(24 + 4096)]), true],
+    ['a WAL header (magic 0x377f0683) with a frame', Buffer.concat([header(0x377f0683), randomBytes(24 + 4096)]), true],
+    ['noise', randomBytes(64 * 1024), false]
+  ])('%s → %s', (_what, wal, pending) => {
+    const dbPath = join(tempRoot('db-probe'), 'hilbertraum.sqlite')
+    if (wal) writeFileSync(`${dbPath}-wal`, wal)
+    expect(walAwaitsCheckpoint(dbPath)).toBe(pending)
+  })
+
+  // A real hold: on Windows a handle opened with libuv's UV_FS_O_EXLOCK (0x10000000; node:fs passes it through but does not
+  // export it) shares nothing, so the check's own open fails with EBUSY while a stat still works.
+  it.runIf(process.platform === 'win32')('a -wal with frames that another program holds exclusively counts as holding commits', () => {
+    const dbPath = join(tempRoot('db-probe'), 'hilbertraum.sqlite')
+    writeFileSync(`${dbPath}-wal`, Buffer.concat([header(0x377f0682), randomBytes(24 + 4096)]))
+    const hold = openSync(`${dbPath}-wal`, constants.O_RDONLY | UV_FS_O_EXLOCK)
+    try {
+      expect(() => closeSync(openSync(`${dbPath}-wal`, 'r'))).toThrow(/EBUSY/)
+      expect(walAwaitsCheckpoint(dbPath)).toBe(true)
+    } finally {
+      closeSync(hold)
+    }
   })
 })

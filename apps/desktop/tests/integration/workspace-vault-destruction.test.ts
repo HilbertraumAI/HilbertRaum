@@ -32,12 +32,14 @@ import type { Db } from '../../src/main/services/db'
 import { openRawDb } from '../helpers/db-fixtures'
 import {
   ENCRYPTION_REQUIRED,
+  FAST_KDF,
   corruptVault,
   damagedVault,
   editDescriptor,
   freshVaultPaths,
   lockedVault,
   noisePastPageOne,
+  plantProbeTrap,
   thrownBy,
   unlockedController,
   upgradeBlockedVault
@@ -435,6 +437,30 @@ describe('issue #876 — a lock whose checkpoint could not finish keeps the sess
     ctrl.lock()
   })
 
+  // The v1 rekey stages the working file the same way the lock encrypts it, so it carries the same guard (#876 review
+  // round 2): a staged copy of a stale main file would replace `.enc` at the commit.
+  it('a password change (v1 vault) whose checkpoint could not finish is refused before anything is staged', () => {
+    const vp = lockedVault('vault-876', PW, { legacyV1: true })
+    const ctrl = unlockedController(vp, PW)
+    ctrl.requireDb().exec('PRAGMA busy_timeout = 0;') // the stage's checkpoint gives up at once instead of after 5 s
+    const release = holdTheWal(vp.dbPath)
+    writeTheSession(ctrl.requireDb())
+    const descriptor = readFileSync(vp.descriptorPath)
+    try {
+      expect(() => ctrl.changePassword(PW, 'a-new-password', FAST_KDF)).toThrow(/checkpoint did not finish/)
+      expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
+      expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+    } finally {
+      release()
+    }
+    // Once nothing holds the WAL back, the change goes through, with the session.
+    ctrl.changePassword(PW, 'a-new-password', FAST_KDF)
+    ctrl.lock()
+    ctrl.unlock('a-new-password')
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+    ctrl.lock()
+  })
+
   it('a main file torn where a full drive stopped the checkpoint, beside a -wal that holds the commits: refused, the session kept, nothing discarded', () => {
     const vp = lockedVault('vault-876', PW)
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, enospc) // the drive is full for the encrypt too
@@ -470,6 +496,172 @@ describe('issue #876 — a lock whose checkpoint could not finish keeps the sess
     } finally {
       release()
     }
+  })
+})
+
+// #876 review round 2 — a `-wal` that is there after the close but holds nothing the main file lacks (SQLite has
+// already copied it in and its delete failed, or its frames belong to no checkpoint of this file) must not refuse the
+// lock: one retry lets SQLite's own WAL recovery decide, and only a WAL that still holds commits refuses. And the probe
+// may only ADD a refusal or a discard for proven damage: when its SQLite stage cannot run for another reason (here a
+// table only the session's own connection can read, `plantProbeTrap`), each site judges the file by its header, as it
+// did before the probe existed, and says so for the log.
+describe('issue #876 — a -wal that holds nothing, and a structure the probe cannot read', () => {
+  const PW = 'pw'
+  const enospc: typeof encryptFile = () => {
+    throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+  }
+
+  /** The session's own `-wal` (every frame valid), captured while it is live, and the session's close patched to put
+   *  it back after the real close: what SQLite leaves when its delete of the WAL fails. `mangle` changes the copy;
+   *  `thenAlso` runs between the close and the planting. */
+  function walLeftAfterTheClose(ctrl: WorkspaceController, vp: VaultPaths, mangle?: (wal: Buffer) => Buffer, thenAlso?: () => void): void {
+    const db = ctrl.requireDb()
+    const captured = readFileSync(`${vp.dbPath}-wal`)
+    const leftover = mangle ? mangle(captured) : captured
+    const close = db.close.bind(db)
+    ;(db as unknown as { close: () => void }).close = () => {
+      close()
+      thenAlso?.()
+      writeFileSync(`${vp.dbPath}-wal`, leftover)
+    }
+  }
+
+  it.each<[string, ((wal: Buffer) => Buffer) | undefined]>([
+    ['the session’s own -wal, already copied in (its delete failed)', undefined],
+    [
+      'a -wal whose header salt is foreign (its frames belong to no checkpoint of this file)',
+      (wal) => {
+        const foreign = Buffer.from(wal)
+        foreign.writeUInt32BE((foreign.readUInt32BE(16) ^ 0xffffffff) >>> 0, 16)
+        return foreign
+      }
+    ]
+  ])('a lock after which the close leaves %s finishes at once, the session in .enc', (_what, mangle) => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    growInTheWal(ctrl.requireDb())
+    updateSettings(ctrl.requireDb(), { contextTokens: 4242 })
+    walLeftAfterTheClose(ctrl, vp, mangle)
+
+    expect(ctrl.lock()).not.toHaveProperty('lockNotice')
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
+    ctrl.unlock(PW)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+    ctrl.lock()
+  })
+
+  // With page 1 in the `-wal`, the retry's checkpoint can run and copies what the WAL has over the noise; without it,
+  // SQLite calls the noise NOTADB, so the WAL cannot be replayed and must not refuse the lock. Either way the probe then
+  // finds noise and the lock finishes at the last snapshot.
+  it.each<[string, boolean]>([
+    ['page 1 in the -wal', true],
+    ['no page 1 in the -wal (SQLite calls the main file no database)', false]
+  ])('a noise main file beside a valid -wal the close leaves (#208 between the two files), %s, finishes at the last snapshot with the notice', (_what, grow) => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    updateSettings(ctrl.requireDb(), { contextTokens: 7171 })
+    ctrl.lock() // the last good snapshot holds 7171
+    ctrl.unlock(PW)
+    ctrl.requireDb().exec('PRAGMA wal_checkpoint(TRUNCATE);') // the unlock's own writes out of the WAL
+    if (grow) growInTheWal(ctrl.requireDb())
+    updateSettings(ctrl.requireDb(), { contextTokens: 8282 })
+    const wal = readFileSync(`${vp.dbPath}-wal`)
+    const pageSize = wal.readUInt32BE(8)
+    const pages: number[] = []
+    for (let off = 32; off + 24 + pageSize <= wal.length; off += 24 + pageSize) pages.push(wal.readUInt32BE(off))
+    expect(pages.includes(1)).toBe(grow) // the shape this row is about
+    walLeftAfterTheClose(ctrl, vp, undefined, () => noiseInPlace(vp.dbPath))
+    const encBefore = readFileSync(vp.encPath)
+
+    expect(ctrl.lock()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+    for (const leftover of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) expect(existsSync(leftover)).toBe(false)
+    expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    ctrl.unlock(PW)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(7171)
+    ctrl.lock()
+  })
+
+  // The retry's close (the last connection) usually clears such a `-wal` even when its own checkpoint fails. When another
+  // connection keeps the WAL open (here a reader's transaction), it stays, and SQLite's NOTADB is what says the WAL
+  // cannot be replayed into this file: it must not refuse the lock, which would leave a closed handle the re-open cannot
+  // replace (the state #855 fixed).
+  it('a noise main file beside a -wal another connection holds, SQLite calling the file no database: the lock finishes at the last snapshot', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    updateSettings(ctrl.requireDb(), { contextTokens: 7171 })
+    ctrl.lock() // the last good snapshot holds 7171
+    ctrl.unlock(PW)
+    const db = ctrl.requireDb()
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);') // the unlock's own writes out of the WAL
+    db.exec('PRAGMA busy_timeout = 0;')
+    const reader = openRawDb(vp.dbPath)
+    reader.exec('BEGIN')
+    reader.prepare('SELECT count(*) AS n FROM settings').get()
+    updateSettings(db, { contextTokens: 8282 })
+    const wal = readFileSync(`${vp.dbPath}-wal`)
+    const pageSize = wal.readUInt32BE(8)
+    const pages: number[] = []
+    for (let off = 32; off + 24 + pageSize <= wal.length; off += 24 + pageSize) pages.push(wal.readUInt32BE(off))
+    expect(pages.includes(1)).toBe(false) // the shape this row is about
+    noiseInPlace(vp.dbPath)
+    const encBefore = readFileSync(vp.encPath)
+    try {
+      expect(ctrl.lock()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+      expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    } finally {
+      try {
+        reader.exec('COMMIT')
+      } catch {
+        /* its files were shredded under it */
+      }
+      reader.close()
+    }
+    ctrl.unlock(PW)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(7171)
+    ctrl.lock()
+  })
+
+  it('a lock whose probe cannot read the structure for a reason that is not damage judges by the header, as before: it locks, the session in .enc', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    plantProbeTrap(ctrl.requireDb())
+    updateSettings(ctrl.requireDb(), { contextTokens: 4242 })
+
+    expect(ctrl.lock()).not.toHaveProperty('lockNotice')
+    expect(ctrl.takeProbeFallbacks()).toEqual([{ site: 'lock', code: expect.stringMatching(/^sqlite 1\b/) }])
+    ctrl.unlock(PW)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+    ctrl.lock()
+  })
+
+  // The encrypt failing after that judgement (a full drive) re-opens the session as before, from the one probe the
+  // lock made: the controller reads the verdict the lock carried instead of probing again (one note, not two).
+  it('…and when the encrypt then fails, the session is re-opened from the one probe the lock made', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, enospc)
+    ctrl.init()
+    ctrl.unlock(PW)
+    plantProbeTrap(ctrl.requireDb())
+    updateSettings(ctrl.requireDb(), { contextTokens: 4242 })
+
+    expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
+    expect(ctrl.isUnlocked()).toBe(true)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+    expect(ctrl.takeProbeFallbacks()).toEqual([{ site: 'lock', code: expect.stringMatching(/^sqlite 1\b/) }])
+  })
+
+  it('a password change (v1 vault) whose probe cannot read the structure stages it by the header, as before', () => {
+    const vp = lockedVault('vault-876', PW, { legacyV1: true })
+    const ctrl = unlockedController(vp, PW)
+    plantProbeTrap(ctrl.requireDb())
+    updateSettings(ctrl.requireDb(), { contextTokens: 4242 })
+
+    ctrl.changePassword(PW, 'a-new-password', FAST_KDF)
+    expect(ctrl.takeProbeFallbacks()).toEqual([{ site: 'rekey', code: expect.stringMatching(/^sqlite 1\b/) }])
+    ctrl.lock()
+    ctrl.unlock('a-new-password')
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+    ctrl.lock()
   })
 })
 

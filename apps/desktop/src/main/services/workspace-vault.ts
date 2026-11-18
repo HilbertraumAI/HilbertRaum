@@ -21,7 +21,16 @@ import { tMain } from './i18n'
 import { canonicalLeafFor } from './ingestion/stored-copy-leaf'
 import { perfMark, perfMs } from './perf'
 import type { Db } from './db'
-import { isWorkspaceNewerError, openDatabase, probeDatabaseFile, sqliteJudgedDamaged, walAwaitsCheckpoint } from './db'
+import {
+  checkpointLeftoverWal,
+  isWorkspaceNewerError,
+  openDatabase,
+  probeDatabaseFile,
+  sqliteJudgedDamaged,
+  walAwaitsCheckpoint,
+  type DatabaseFileProbe,
+  type WalCheckpointRetry
+} from './db'
 import { seedSettings, updateSettings } from './settings'
 import type { PrivacyPolicy, WorkspaceMode, WorkspaceStateInfo } from '../../shared/types'
 import {
@@ -884,17 +893,18 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
  */
 export type PreserveOutcome = 'preserved' | 'not-needed' | 'discarded' | 'failed'
 
-export function preserveNewerPlaintext(vaultPaths: VaultPaths): PreserveOutcome {
+export function preserveNewerPlaintext(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNote): PreserveOutcome {
   try {
     if (!existsSync(vaultPaths.dbPath) || !existsSync(vaultPaths.encPath)) return 'not-needed'
     if (existsSync(`${vaultPaths.dbPath}-wal`) || existsSync(`${vaultPaths.dbPath}-shm`)) return 'not-needed'
     if (statSync(vaultPaths.dbPath).mtimeMs <= statSync(vaultPaths.encPath).mtimeMs) return 'not-needed'
-    // #876: the structure, not only the header. A probe that cannot decide (a hold, the file
-    // vanishing) refuses the sweep, as any other doubt here does (#242).
+    // #876: the structure, not only the header. A header read that fails (a hold, the file
+    // vanishing) refuses the sweep, as any other doubt here does (#242); a structure SQLite cannot
+    // read for a reason that is not damage is judged by the header, as before (review round 2).
     const probe = probeDatabaseFile(vaultPaths.dbPath)
-    if (probe === 'not-database') return 'not-needed' // a shred survivor of a lock that succeeded
-    if (probe === 'damaged') return 'discarded'
-    if (probe !== 'database') return 'failed'
+    if (probe.verdict === 'not-database') return 'not-needed' // a shred survivor of a lock that succeeded
+    if (probe.verdict === 'damaged') return 'discarded'
+    if (!readsAsDatabase(probe, 'salvage', onProbeFallback)) return 'failed'
     const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
     // full-audit 2026-07-12 REL-1 — shred a pre-existing `.recovery` BEFORE the rename. Any
     // `.recovery` coexisting with a working dbPath is spent or garbage (an intervening unlock
@@ -1273,14 +1283,31 @@ function stagedRekeyFiles(vaultPaths: VaultPaths, journal = readRekeyJournal(vau
  * copy) and ends in `.tmp`, so the startup sweep covers a crash. The journal is written
  * FIRST — recovery must know every staged path before any of them exists.
  */
-export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataKey: Buffer): void {
+export function stageRekey(
+  vaultPaths: VaultPaths,
+  db: Db,
+  oldKey: Buffer,
+  dataKey: Buffer,
+  onProbeFallback?: ProbeFallbackNote
+): void {
   db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+  // #876 review round 2 — the lock's WAL guard: a checkpoint that could not finish (it does not
+  // throw; it answers "busy") leaves the main file stale while the session's commits sit in the
+  // `-wal`, and the staged copy of that stale file would replace `.enc` at the commit. The
+  // connection is open, so a TRUNCATE that finished left the `-wal` empty. Refused; nothing is
+  // staged, and the user tries the change again.
+  if (walAwaitsCheckpoint(vaultPaths.dbPath)) {
+    throw new Error(
+      'Refusing to stage the password change: the checkpoint did not finish, so the working ' +
+        'database file lacks commits the -wal still holds.'
+    )
+  }
   // #208 — same guard as the lock path: the staged file replaces `.enc` right after the
   // descriptor commit, so encrypting a shred-survivor (or anything else that is not the
   // checkpointed database) here would destroy the vault through the rekey journal instead.
   // #876: the structure, not only the header; an unreadable working file is refused too. The
   // probe reads the main file the checkpoint above completed, beside the open connection.
-  if (probeDatabaseFile(vaultPaths.dbPath) !== 'database') {
+  if (!readsAsDatabase(probeDatabaseFile(vaultPaths.dbPath), 'rekey', onProbeFallback)) {
     throw new Error(
       'Refusing to stage the password change: the working database file is not a SQLite ' +
         'database (it may have been overwritten).'
@@ -1562,7 +1589,11 @@ export interface UnlockedVault {
  * fails its tag (#860 V5b) or SQLite finds no database or a corrupt one (#208), and
  * `VaultOpenFailedError` when the open could not finish otherwise (#844).
  */
-export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): UnlockedVault {
+export function unlockEncryptedVault(
+  vaultPaths: VaultPaths,
+  password: string,
+  onProbeFallback?: ProbeFallbackNote
+): UnlockedVault {
   // #845: FIRST, before the rekey recovery, the `.recovery` roll-forward, the sidecar clean or the decrypt can write
   // anything, and independent of the password (a newer format's verifier may differ): a vault a newer build wrote is
   // refused as it is.
@@ -1643,14 +1674,18 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       try {
         // A probe that cannot decide (a hold, the file vanishing) is the probe error handled below.
         const probe = probeDatabaseFile(recoveryPath)
-        if (probe === 'unknown' || probe === 'gone') throw new Error(`The .recovery probe could not decide (${probe})`)
+        if (probe.verdict === 'unknown' || probe.verdict === 'gone') {
+          throw new Error(`The .recovery probe could not decide (${probe.verdict})`)
+        }
         const newer =
-          probe !== 'not-database' &&
+          probe.verdict !== 'not-database' &&
           (!existsSync(vaultPaths.encPath) || statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
-        fresher = probe === 'database' && newer
+        // A structure SQLite cannot read for a reason that is not damage: judged by the header, as
+        // before (#876 review round 2).
+        fresher = readsAsDatabase(probe, 'recovery', onProbeFallback) && newer
         // #875: our own shred never leaves a header, so a newer copy whose header reads but whose
         // structure does not was the failed lock's session, and shredding it loses that session.
-        recoveryDiscarded = probe === 'damaged' && newer
+        recoveryDiscarded = probe.verdict === 'damaged' && newer
       } catch {
         // #242 — a probe error means we cannot read the header. If `.recovery` could still be
         // the fresh failed-lock delta — newer than `.enc`, `.enc` missing, or the mtime
@@ -1738,10 +1773,54 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   }
 }
 
+/** The sites that judge a working file with {@link probeDatabaseFile} (#876), for the log. */
+export type ProbeFallbackSite = 'lock' | 'salvage' | 'recovery' | 'rekey'
+/** Told when a site judged a file by its SQLite header because the probe could not read its structure for a reason
+ *  that is not damage (`unchecked`, with the code): the controller keeps these for the IPC to log. */
+export type ProbeFallbackNote = (site: ProbeFallbackSite, code: string) => void
+
+/**
+ * #876: does a site treat the file as a database? `database` does; `unchecked` (review round 2) does too, exactly as
+ * the header check before the probe did (the probe read the header, only its structural read could not run), and the
+ * fallback is reported. Everything else does not.
+ */
+function readsAsDatabase(probe: DatabaseFileProbe, site: ProbeFallbackSite, onProbeFallback?: ProbeFallbackNote): boolean {
+  if (probe.verdict === 'unchecked') {
+    onProbeFallback?.(site, probe.code ?? 'unknown')
+    return true
+  }
+  return probe.verdict === 'database'
+}
+
+/** What a lock found at the working file after the close (#876): whether the `-wal` still holds commits after the one
+ *  retry, and the probe's answer (null when the WAL refused the lock before the probe ran). */
+export interface WorkingFileVerdict {
+  walPending: boolean
+  probe: DatabaseFileProbe | null
+}
+
+/**
+ * Thrown by {@link lockEncryptedVault} once it has judged the working file (#876 review round 2): it refused because
+ * the `-wal` still holds commits (`wal`) or the file is no database (`probe`), or the encrypt failed after a passing
+ * judgement (`encrypt`, the cause attached). The controller reads the verdict instead of probing the file again.
+ */
+export class LockStoppedError extends Error {
+  constructor(
+    readonly reason: 'wal' | 'probe' | 'encrypt',
+    readonly verdict: WorkingFileVerdict,
+    message: string,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options)
+    this.name = 'LockStoppedError'
+  }
+}
+
 /**
  * Lock an unlocked encrypted vault: checkpoint + close the DB (flushing WAL into the
  * main file), re-encrypt the working file → `.enc`, then shred the plaintext working
- * file and its sidecars. Idempotent-ish: safe to call once per unlock.
+ * file and its sidecars. Idempotent-ish: safe to call once per unlock. Once it has judged the
+ * working file, any failure is a {@link LockStoppedError} carrying that judgement.
  */
 export function lockEncryptedVault(
   vaultPaths: VaultPaths,
@@ -1750,7 +1829,9 @@ export function lockEncryptedVault(
   /** Test seam (full-audit 2026-07-11 CODE-1): the lock path's re-encrypt boundary.
    *  Production callers omit it; tests inject a throwing impl to drive the lock-failure
    *  recovery without needing a genuinely full disk. */
-  encryptFileImpl: typeof encryptFile = encryptFile
+  encryptFileImpl: typeof encryptFile = encryptFile,
+  /** Told when the probe fell back to the header (`unchecked`). */
+  onProbeFallback?: ProbeFallbackNote
 ): void {
   // Flush WAL into the main file so the encrypted snapshot is complete, then close.
   const checkpointT0 = performance.now()
@@ -1785,23 +1866,46 @@ export function lockEncryptedVault(
   // lose the session's commits once the WAL is shredded below (which happened before); judging it
   // with the probe would call a good session damaged. So refuse first: the controller re-opens the
   // session (the open replays the WAL) and the user frees space and locks again (CODE-1a).
-  if (walAwaitsCheckpoint(vaultPaths.dbPath)) {
-    throw new Error(
+  // Review round 2: a `-wal` can also be there holding nothing the main file lacks (SQLite already
+  // copied it in and its delete failed; its frames belong to no checkpoint of this file), or be one
+  // the check cannot open (a hold). So the lock retries once, through SQLite: a plain open lets
+  // SQLite's own WAL recovery decide, a TRUNCATE checkpoint copies in what is real, and only a WAL
+  // that still holds commits afterwards refuses. When SQLite calls the database itself corrupt, the
+  // WAL cannot be replayed into it and protects nothing: the probe below judges the file.
+  let walRetry: WalCheckpointRetry | null = null
+  let walPending = walAwaitsCheckpoint(vaultPaths.dbPath)
+  if (walPending) {
+    walRetry = checkpointLeftoverWal(vaultPaths.dbPath)
+    walPending = walRetry.outcome !== 'damaged' && walAwaitsCheckpoint(vaultPaths.dbPath)
+  }
+  if (walPending) {
+    throw new LockStoppedError(
+      'wal',
+      { walPending: true, probe: null },
       'Refusing to lock: the checkpoint did not finish, so the -wal still holds commits the working ' +
-        'database file lacks. Keeping the session open and the previous encrypted snapshot.'
+        `database file lacks (retry: ${walRetry?.outcome}). Keeping the session open and the previous encrypted snapshot.`
     )
   }
   const probeT0 = performance.now()
   const probe = probeDatabaseFile(vaultPaths.dbPath)
   const probeMs = perfMs(probeT0)
-  if (probe !== 'database') {
-    throw new Error(
+  const verdict: WorkingFileVerdict = { walPending: false, probe }
+  // Review round 2: the probe only adds a refusal for proven damage; a structure it could not read
+  // for another reason is judged by the header, which it read, as the lock did before (and noted).
+  if (!readsAsDatabase(probe, 'lock', onProbeFallback)) {
+    throw new LockStoppedError(
+      'probe',
+      verdict,
       'Refusing to lock: the working database file is not a SQLite database (it may have ' +
-        `been overwritten; probe: ${probe}). Keeping the previous encrypted snapshot.`
+        `been overwritten; probe: ${probe.verdict}). Keeping the previous encrypted snapshot.`
     )
   }
   const encryptT0 = performance.now()
-  encryptFileImpl(vaultPaths.dbPath, vaultPaths.encPath, key)
+  try {
+    encryptFileImpl(vaultPaths.dbPath, vaultPaths.encPath, key)
+  } catch (err) {
+    throw new LockStoppedError('encrypt', verdict, 'The lock could not re-encrypt the working file', { cause: err })
+  }
   const encryptMs = perfMs(encryptT0)
   const shredT0 = performance.now()
   shredFile(vaultPaths.dbPath)
@@ -1916,6 +2020,12 @@ export class WorkspaceController {
   private _workingCopyLost: 'lock' | 'startup' | null = null
   /** #875: what the last successful unlock consumed, for the IPC to record once ({@link takeWorkingCopyLost}). */
   private _lostAtPreviousLock: { cause: WorkingCopyLossCause; lostAt: string | null } | null = null
+  /** #876 review round 2: sites that judged a file by its header because the probe could not read its structure (not
+   *  damage), for the IPC to log ({@link takeProbeFallbacks}). Bounded. */
+  private _probeFallbacks: Array<{ site: ProbeFallbackSite; code: string }> = []
+  private readonly noteProbeFallback: ProbeFallbackNote = (site, code) => {
+    if (this._probeFallbacks.length < 20) this._probeFallbacks.push({ site, code })
+  }
   /**
    * AUD-02 — armed by {@link beginLock} as the FIRST act of the interactive lock path, before
    * any await, and read by {@link workspaceAdmitsWork}. See that function for why `isUnlocked()`
@@ -1956,6 +2066,15 @@ export class WorkspaceController {
   /** True while the startup salvage is blocked by a held `.recovery` (#242) — see {@link _recoveryBlocked}. */
   isRecoveryBlocked(): boolean {
     return this._recoveryBlocked
+  }
+
+  /** #876 review round 2: the sites that judged a file by its SQLite header since the last call, because the probe could
+   *  not read its structure for a reason that is not damage (site + content-free code). Returns them once, for the IPC
+   *  to log; a quit's notes go with the process. */
+  takeProbeFallbacks(): Array<{ site: ProbeFallbackSite; code: string }> {
+    const notes = this._probeFallbacks
+    this._probeFallbacks = []
+    return notes
   }
 
   /**
@@ -2060,7 +2179,7 @@ export class WorkspaceController {
       // #242: when that move FAILS (a held `.recovery` on the target) refuse to sweep — the
       // working file is still the only fresh copy — and refuse to open until a retry lands
       // it; the pending-rekey recovery waits as well (unlock runs it once admitted).
-      const salvage = preserveNewerPlaintext(this.vaultPaths)
+      const salvage = preserveNewerPlaintext(this.vaultPaths, this.noteProbeFallback)
       this._recoveryBlocked = salvage === 'failed'
       if (this._recoveryBlocked) return // locked AND blocked; unlock() re-runs this salvage
       shredStalePlaintext(this.vaultPaths)
@@ -2201,7 +2320,7 @@ export class WorkspaceController {
       this.init()
       if (this._recoveryBlocked) throw new VaultRecoveryBlockedError()
     }
-    const { db, key, descriptor, recoveryDiscarded } = unlockEncryptedVault(this.vaultPaths, password)
+    const { db, key, descriptor, recoveryDiscarded } = unlockEncryptedVault(this.vaultPaths, password, this.noteProbeFallback)
     this._db = db
     this.key = key
     this.descriptor = descriptor
@@ -2329,7 +2448,7 @@ export class WorkspaceController {
         discardPendingRekey(this.vaultPaths) // defensive: drop strays from an old abort
         const dataKey = generateDataKey()
         try {
-          stageRekey(this.vaultPaths, this._db, this.key, dataKey)
+          stageRekey(this.vaultPaths, this._db, this.key, dataKey, this.noteProbeFallback)
           // COMMIT POINT: the atomic descriptor replace. Before it the old password +
           // old files win; from here on the new ones do.
           this.descriptor = rewrapVaultKey(this.vaultPaths, dataKey, nextPassword, kdf)
@@ -2410,7 +2529,7 @@ export class WorkspaceController {
   lock(): WorkspaceStateInfo {
     if (this._db && this.key && this.descriptor?.mode === 'encrypted') {
       try {
-        lockEncryptedVault(this.vaultPaths, this._db, this.key, this.encryptFileImpl)
+        lockEncryptedVault(this.vaultPaths, this._db, this.key, this.encryptFileImpl, this.noteProbeFallback)
       } catch (err) {
         // full-audit 2026-07-11 CODE-1a — a failed re-encrypt (realistically ENOSPC)
         // must never strand the controller half-locked. `lockEncryptedVault` had already
@@ -2457,8 +2576,14 @@ export class WorkspaceController {
         // plus the WAL. Never discarded; re-opened below (the open replays the WAL). A `-wal` that is
         // noise holds nothing, and a WAL whose main file is gone cannot be replayed: both are judged as
         // before.
-        const workingCopy = probeDatabaseFile(dbPath)
-        const walPending = workingCopy !== 'gone' && walAwaitsCheckpoint(dbPath)
+        // Review round 2: the lock carried what it found (its one probe, and the WAL after its retry),
+        // so the file is judged once; only a failure before that judgement (the close itself) probes
+        // here. A structure the probe could not read (not damage) is a database, as the header said.
+        const judged = err instanceof LockStoppedError ? err.verdict : null
+        const probe = judged?.probe ?? probeDatabaseFile(dbPath)
+        if (!judged?.probe && probe.verdict === 'unchecked') this.noteProbeFallback('lock', probe.code ?? 'unknown')
+        const workingCopy = probe.verdict
+        const walPending = workingCopy !== 'gone' && (judged ? judged.walPending : walAwaitsCheckpoint(dbPath))
         const lost =
           workingCopy === 'gone' || (!walPending && (workingCopy === 'not-database' || workingCopy === 'damaged'))
         if (lost && existsSync(this.vaultPaths.encPath)) {
@@ -2477,7 +2602,8 @@ export class WorkspaceController {
         // (a checkpoint that hit the full disk) holds the session: the re-open replays it, whatever the
         // main file alone looks like.
         try {
-          if (workingCopy === 'database' || (walPending && workingCopy !== 'unknown')) this._db = openDatabase(dbPath)
+          const replayable = walPending && (workingCopy === 'damaged' || workingCopy === 'not-database')
+          if (workingCopy === 'database' || workingCopy === 'unchecked' || replayable) this._db = openDatabase(dbPath)
           else if (workingCopy === 'gone') cleanSidecars(dbPath)
         } catch {
           // Re-open is best-effort: if the disk is too broken even for that, keep the

@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ocrMetaFromJson, parseOcrMeta } from './ingestion/ocr-meta'
 
@@ -1134,12 +1134,31 @@ export function sqliteJudgedDamaged(err: unknown): boolean {
 
 /**
  * What {@link probeDatabaseFile} found at a path (#876): a `database` SQLite can read the structure of; `damaged`, a
- * file that starts with the SQLite header but whose structure SQLite cannot read (corrupt, or noise past a page 1 a
- * checkpoint wrote back); `not-database`, no SQLite header at all (noise, a shred survivor, an empty or cut-short file);
- * `gone` (ENOENT); `unknown`, the probe itself could not finish (a hold, a permission error, anything SQLite does not
- * call damage), which no caller may read as "lost".
+ * file that starts with the SQLite header but whose structure SQLite calls CORRUPT or NOTADB (or an index root that is
+ * no b-tree page, or a page size no database has); `not-database`, no SQLite header at all (noise, a shred survivor, an
+ * empty or cut-short file); `gone` (ENOENT); `unknown`, the header read itself failed (a hold, a permission error),
+ * which no caller may read as "lost"; `unchecked` (review round 2), the header reads but the structure could not be read
+ * for a reason that is NOT damage (SQLite could not open the file through its URI, an I/O error, out of memory, a table
+ * it cannot read; or an index-root read that failed after the header read). The probe may only ADD a refusal or a
+ * discard for proven damage: on `unchecked` every caller judges the file by its header, exactly as before the probe
+ * existed, and reports the fallback (the `code`) for the log.
  */
-export type DatabaseFileProbe = 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'
+export type DatabaseFileVerdict = 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown' | 'unchecked'
+
+/** {@link probeDatabaseFile}'s answer: the verdict, and for `unchecked` what stopped the structural read (SQLite's result
+ *  code and its fixed description, or a Node error code; content-free). */
+export interface DatabaseFileProbe {
+  verdict: DatabaseFileVerdict
+  code?: string
+}
+
+/** A failure's content-free code for the log: SQLite's result code and fixed description, else the Node error code. */
+function failureCode(err: unknown): string {
+  const e = err as { errcode?: unknown; errstr?: unknown; code?: unknown; name?: unknown } | null
+  if (typeof e?.errcode === 'number') return `sqlite ${e.errcode}${typeof e.errstr === 'string' ? `: ${e.errstr}` : ''}`
+  if (typeof e?.code === 'string') return e.code
+  return typeof e?.name === 'string' ? e.name : typeof err
+}
 
 /** A real SQLite database file starts with this 16-byte header. */
 const SQLITE_HEADER = Buffer.from('SQLite format 3\u0000')
@@ -1207,19 +1226,25 @@ const WAL_HEADER_BYTES = 32
  * `-wal` with a valid header and frames that survives that close means the checkpoint did not finish (a full drive:
  * commits still land in the WAL's allocated space, the copy back fails where the main file has to grow), so the main
  * file alone is stale or torn while the session itself is intact. True only for a valid WAL header with frames after it:
- * a `-wal` that is noise (#208's sweep shreds the sidecars too) holds nothing to replay. A `-wal` with frames that
- * cannot be read is counted as holding commits (refusing is the safe answer there).
+ * a `-wal` that is noise (#208's sweep shreds the sidecars too) holds nothing to replay. The size is read first (a stat
+ * works through an antivirus hold), so a `-wal` of the header or less never counts (an empty one a TRUNCATE checkpoint
+ * left, whose delete failed); one with frames that cannot be opened or read counts as holding commits (refusing is the
+ * safe answer there; the lock retries once through SQLite, see {@link checkpointLeftoverWal}).
  */
 export function walAwaitsCheckpoint(dbPath: string): boolean {
   const walPath = `${dbPath}-wal`
-  let fd: number
   try {
-    fd = openSync(walPath, 'r')
+    if (statSync(walPath).size <= WAL_HEADER_BYTES) return false
   } catch (err) {
     return (err as NodeJS.ErrnoException | null)?.code !== 'ENOENT'
   }
+  let fd: number
   try {
-    if (fstatSync(fd).size <= WAL_HEADER_BYTES) return false
+    fd = openSync(walPath, 'r')
+  } catch {
+    return true
+  }
+  try {
     const head = Buffer.alloc(4)
     if (readSync(fd, head, 0, head.length, 0) < head.length) return false
     return WAL_MAGIC.includes(head.readUInt32BE(0))
@@ -1227,6 +1252,38 @@ export function walAwaitsCheckpoint(dbPath: string): boolean {
     return true
   } finally {
     closeSync(fd)
+  }
+}
+
+/** What the lock's one retry of an unfinished checkpoint found ({@link checkpointLeftoverWal}). */
+export type WalCheckpointRetry =
+  | { outcome: 'checkpointed' | 'busy'; log: number; checkpointed: number }
+  | { outcome: 'damaged' | 'failed'; code: string }
+
+/**
+ * The lock's one retry when {@link walAwaitsCheckpoint} says the `-wal` still holds commits (#876 review round 2): open
+ * the database at `dbPath` with a plain connection, so SQLite's own WAL recovery decides what the WAL really holds,
+ * checkpoint it (TRUNCATE) and close (as the last connection, SQLite deletes the WAL). A WAL SQLite ignores (a foreign
+ * salt, a bad header checksum, noise after a valid header) or has already copied in (its delete failed) is gone
+ * afterwards, and the lock goes on. One that still holds commits (a full drive, a second connection reading) stays, and
+ * the caller re-checks. `damaged`: SQLite calls the database CORRUPT or NOTADB, so the WAL cannot be replayed into it
+ * and does not protect it. `busy`: a reader kept the checkpoint from finishing. Writes only what a checkpoint writes; no
+ * migrations, no schema change.
+ */
+export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
+  let db: Db | null = null
+  try {
+    db = new DatabaseSync(dbPath)
+    const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
+    return { outcome: row.busy ? 'busy' : 'checkpointed', log: row.log, checkpointed: row.checkpointed }
+  } catch (err) {
+    return { outcome: sqliteJudgedDamaged(err) ? 'damaged' : 'failed', code: failureCode(err) }
+  } finally {
+    try {
+      db?.close()
+    } catch {
+      /* the checkpoint's answer is the story; a close that fails leaves the WAL, which the re-check then sees */
+    }
   }
 }
 
@@ -1244,12 +1301,16 @@ export function walAwaitsCheckpoint(dbPath: string): boolean {
  *    with a root page (rowid, WITHOUT ROWID and FTS5 shadow tables alike; `NOT INDEXED` so the table's own b-tree is
  *    read, not an index that covers it; virtual tables have no root page and are skipped), and the last row of every
  *    rowid table (`ORDER BY rowid DESC`, a reverse scan: the rightmost path, whose pages the latest writes put near
- *    the end of the file; a WITHOUT ROWID table has no rowid to order by and is read from its first row only).
+ *    the end of the file; a WITHOUT ROWID table has no rowid to order by and is read from its first row only; on a
+ *    table with a column of its own named `rowid` the order is that column's, so SQLite sorts the table for it: right,
+ *    only slow, and no app table has such a column).
  * 3. The root page header of every index, read through `node:fs` ({@link indexRootLooksValid}). Not through SQL: an
  *    index cannot be read by name (`INDEXED BY` throws "no query solution" on a partial index, and the app has one,
  *    `idx_documents_pending_dest`, so such a probe would refuse every lock; A1 §2.5, trap 2).
  *
- * SQLite's CORRUPT or NOTADB is `damaged`; any other SQLite failure is `unknown`. What it reads (the schema, each
+ * SQLite's CORRUPT or NOTADB is `damaged`; any other SQLite failure, and an index-root read that fails after the header
+ * read, is `unchecked` (with the code): the probe adds a refusal or a discard only for proven damage, so the callers
+ * judge an `unchecked` file by its header, as before. A header read that fails is `unknown`. What it reads (the schema, each
  * index root, each table's leftmost and, for rowid tables, rightmost path) is a small part of a large file. It catches
  * an overwrite that starts at the beginning of the file (#208's shred: the review's fuzz missed none of 1,820) or runs
  * to its end (1 of 200 missed), but mostly misses noise confined to a range or a page in between (57–91 % missed in
@@ -1259,6 +1320,7 @@ export function walAwaitsCheckpoint(dbPath: string): boolean {
  * encrypt or discard asks {@link walAwaitsCheckpoint} first.
  */
 export function probeDatabaseFile(path: string): DatabaseFileProbe {
+  const answer = (verdict: DatabaseFileVerdict): DatabaseFileProbe => ({ verdict })
   let pageSize: number
   let usableSize: number
   try {
@@ -1266,16 +1328,16 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
     try {
       const header = Buffer.alloc(DATABASE_HEADER_BYTES)
       const got = readSync(fd, header, 0, header.length, 0)
-      if (got < header.length || !header.subarray(0, SQLITE_HEADER.length).equals(SQLITE_HEADER)) return 'not-database'
+      if (got < header.length || !header.subarray(0, SQLITE_HEADER.length).equals(SQLITE_HEADER)) return answer('not-database')
       const stored = header.readUInt16BE(16)
       pageSize = stored === 1 ? 65_536 : stored
-      if (pageSize < 512 || pageSize > 65_536 || (pageSize & (pageSize - 1)) !== 0) return 'damaged'
+      if (pageSize < 512 || pageSize > 65_536 || (pageSize & (pageSize - 1)) !== 0) return answer('damaged')
       usableSize = pageSize - header[20]
     } finally {
       closeSync(fd)
     }
   } catch (err) {
-    return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'gone' : 'unknown'
+    return answer((err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'gone' : 'unknown')
   }
   const indexRoots: number[] = []
   let db: Db | null = null
@@ -1299,7 +1361,7 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
       } else if (o.type === 'index') indexRoots.push(o.rootpage)
     }
   } catch (err) {
-    return sqliteJudgedDamaged(err) ? 'damaged' : 'unknown'
+    return sqliteJudgedDamaged(err) ? answer('damaged') : { verdict: 'unchecked', code: failureCode(err) }
   } finally {
     try {
       db?.close()
@@ -1313,17 +1375,18 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
       const pageCount = Math.floor(fstatSync(fd).size / pageSize)
       const header = Buffer.alloc(12)
       for (const root of indexRoots) {
-        if (root > pageCount) return 'damaged'
+        if (root > pageCount) return answer('damaged')
         const got = readSync(fd, header, 0, header.length, (root - 1) * pageSize)
-        if (got < header.length || !indexRootLooksValid(header, usableSize, pageCount)) return 'damaged'
+        if (got < header.length || !indexRootLooksValid(header, usableSize, pageCount)) return answer('damaged')
       }
     } finally {
       closeSync(fd)
     }
   } catch (err) {
-    return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'gone' : 'unknown'
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return answer('gone')
+    return { verdict: 'unchecked', code: failureCode(err) }
   }
-  return 'database'
+  return answer('database')
 }
 
 /** Open (or create) the database at `path` and run migrations. */

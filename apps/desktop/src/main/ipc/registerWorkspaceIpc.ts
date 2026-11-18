@@ -172,6 +172,17 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
   }
 }
 
+/**
+ * #876 review round 2: log each site that judged a workspace file by its SQLite header because the probe could not read
+ * its structure for a reason that is not damage (the file was then treated as before the probe existed). Which site and
+ * SQLite's code only; the controller keeps them until a handler that can log (a lock, an unlock, a password change).
+ */
+function logProbeFallbacks(ctx: AppContext): void {
+  for (const note of ctx.workspace.takeProbeFallbacks?.() ?? []) {
+    log.warn('A workspace file was judged by its SQLite header: the structural check could not run', note)
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
@@ -198,6 +209,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
       attachLogKey(ctx)
       log.info('Workspace unlocked')
+      logProbeFallbacks(ctx)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
@@ -448,6 +460,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         const key = ctx.workspace.encryptionKey()
         if (key) rekeyVaultLog(key)
         log.info('Workspace password changed') // never the passwords, in any branch
+        logProbeFallbacks(ctx)
         // Audit: id-free, content-free, success only.
         ctx.audit?.('workspace_password_changed', 'Workspace password changed')
         return { ok: true, state }
@@ -471,6 +484,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // password still works": true, and the gate's "update the app to open it" would be wrong on an
         // open workspace. The log line carries the error's own content-free message.
         log.error('Workspace password change failed', String(err))
+        logProbeFallbacks(ctx)
         return {
           ok: false,
           reason: 'error',
@@ -716,6 +730,7 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // this path and any other throw out of the teardown.
     attachLogKey(ctx)
     log.error('Workspace lock failed — workspace stays unlocked', String(err))
+    logProbeFallbacks(ctx)
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))
   }
@@ -729,6 +744,7 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   if (state.lockNotice === 'working_copy_lost') {
     log.warn('Workspace locked at its last saved state: the working file was gone or no longer a database')
   }
+  logProbeFallbacks(ctx)
   log.info('Workspace locked (sidecars stopped)')
   return state
 }
