@@ -711,6 +711,8 @@ describe('helpers', () => {
     expect(suggestedPackFileName('A'.repeat(100), 'html')).toBe(`${'A'.repeat(60)}.html`)
     const astral = '\u{20000}'
     expect(suggestedPackFileName(`${'A'.repeat(59)}${astral}${astral}`, 'pdf')).toBe(`${'A'.repeat(59)}${astral}.pdf`)
+    // A cut that lands on a space leaves no space before the extension.
+    expect(suggestedPackFileName(`${'A'.repeat(59)} Clause 7`, 'html')).toBe(`${'A'.repeat(59)}.html`)
   })
 
   // AUD-15: the writer is ASYNC (fs.promises + a FileHandle fsync) so a multi-MB pack no
