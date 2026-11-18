@@ -172,6 +172,17 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
   }
 }
 
+/**
+ * #876 review round 2: log each site that judged a workspace file by its SQLite header because the probe could not read
+ * its structure for a reason that is not damage (the file was then treated as before the probe existed). Which site and
+ * SQLite's code only; the controller keeps them until a handler that can log (a lock, an unlock, a password change).
+ */
+function logProbeFallbacks(ctx: AppContext): void {
+  for (const note of ctx.workspace.takeProbeFallbacks?.() ?? []) {
+    log.warn('A workspace file was judged by its SQLite header: the structural check could not run', note)
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
@@ -198,10 +209,27 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
       attachLogKey(ctx)
       log.info('Workspace unlocked')
+      logProbeFallbacks(ctx)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
+      // #875: the last session's changes were lost: the previous lock finished at the last saved state
+      // (often at quit, with no lock screen to say so and no log that outlived it), the start swept the
+      // working file, or this unlock discarded a broken recovery copy. Now there is a database and a log
+      // key to record it in, once. Content-free: which loss (`cause`) and, for a recorded one, when.
+      const lost = ctx.workspace.takeWorkingCopyLost?.() ?? null
+      if (lost) {
+        const meta = { cause: lost.cause, ...(lost.lostAt ? { lostAt: lost.lostAt } : {}) }
+        const what =
+          lost.cause === 'recovery'
+            ? 'the recovery copy a failed lock left was no longer a database'
+            : lost.cause === 'startup'
+              ? 'the working file was no longer a database'
+              : 'the working file was gone or no longer a database'
+        log.warn(`The changes since the last saved state were lost: ${what}`, meta)
+        ctx.audit?.('workspace_working_copy_lost', 'Changes since the last saved state were lost', meta)
+      }
       // Settings are readable now — main-side emissions follow the user's language.
       refreshUiLanguage(ctx)
       // The first-run / moved-drive benchmark and the model auto-start, in the P7 order (PR #303
@@ -438,6 +466,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         const key = ctx.workspace.encryptionKey()
         if (key) rekeyVaultLog(key)
         log.info('Workspace password changed') // never the passwords, in any branch
+        logProbeFallbacks(ctx)
         // Audit: id-free, content-free, success only.
         ctx.audit?.('workspace_password_changed', 'Workspace password changed')
         return { ok: true, state }
@@ -461,6 +490,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // password still works": true, and the gate's "update the app to open it" would be wrong on an
         // open workspace. The log line carries the error's own content-free message.
         log.error('Workspace password change failed', String(err))
+        logProbeFallbacks(ctx)
         return {
           ok: false,
           reason: 'error',
@@ -706,17 +736,21 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // this path and any other throw out of the teardown.
     attachLogKey(ctx)
     log.error('Workspace lock failed — workspace stays unlocked', String(err))
+    logProbeFallbacks(ctx)
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))
   }
   // #855: the working file was gone or no longer a database, so the lock finished at the last good
   // `.enc` and the workspace is LOCKED (key zeroed, no handle). Not a failure: the latch stays
-  // armed and nothing restarts, as after any lock; the lock screen shows the notice. No audit
-  // event can be written, there is no database; the log line is buffered like any line logged
-  // while locked.
+  // armed and nothing restarts, as after any lock; the lock screen shows the notice. There is no
+  // database to audit it in now: the controller keeps the notice until the next unlock (and a
+  // marker carries it across a quit, #875), and that unlock records `workspace_working_copy_lost`.
+  // This line is buffered like any line logged while locked; it persists if the user unlocks in
+  // this session.
   if (state.lockNotice === 'working_copy_lost') {
     log.warn('Workspace locked at its last saved state: the working file was gone or no longer a database')
   }
+  logProbeFallbacks(ctx)
   log.info('Workspace locked (sidecars stopped)')
   return state
 }

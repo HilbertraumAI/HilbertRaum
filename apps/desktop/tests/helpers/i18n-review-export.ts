@@ -78,6 +78,7 @@ export const SECURITY_TEXT: readonly string[] = [
   'packExport.integrity.hashNote',
   'packExport.sources.pathNote',
   'diag.audit.workspace_lock_failed',
+  'diag.audit.workspace_working_copy_lost',
   // Network and offline.
   'settings.tab.privacy',
   'settings.network',

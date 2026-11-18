@@ -322,9 +322,13 @@ export interface WorkspaceStateInfo {
   /** Policy requires encryption — onboarding may not offer plaintext. */
   encryptionRequired: boolean
   /**
-   * Set only on what `lockWorkspace` returns, never by `getWorkspaceState()` (#855): the lock
-   * finished at the last good snapshot because the working file was gone or no longer a
-   * database, so the changes since the previous lock are lost. The lock screen says so.
+   * A lock finished at the last good snapshot because the working file was gone or no longer a
+   * database, so the changes since the previous lock are lost (#855). The lock screen says so.
+   * Set while the workspace is locked, on what `lockWorkspace` returns and on
+   * `getWorkspaceState()` alike, until the next successful unlock; a lock at quit leaves
+   * `config/working-copy-lost.json`, so the next start reports it too (#875). Also set when the
+   * startup salvage had to shred the last session's only fresh copy (#875). Under a
+   * newer-build verdict (#845) startup does not read the marker.
    */
   lockNotice?: 'working_copy_lost'
 }
@@ -3569,6 +3573,11 @@ export type AuditEventType =
   // (full-audit 2026-07-11 CODE-1a). Content-free, like the other workspace events.
   | 'workspace_lock_failed'
   | 'workspace_password_changed'
+  // #875: the changes since the last saved state were lost, recorded by the unlock after the loss: the previous lock
+  // finished at the last saved state (the working file gone or no longer a database), the start swept the working file,
+  // or this unlock discarded a broken recovery copy. Content-free; metadata { cause: 'lock' | 'startup' | 'recovery',
+  // lostAt? } (lostAt: when the marker was written; none for 'recovery', the event's own time).
+  | 'workspace_working_copy_lost'
   | 'settings_changed'
   // The local API master switch flipped. Metadata is BOOLEANS ONLY ({ enabled }) — the
   // audit-log export writes metadata verbatim to plaintext JSON outside the vault, so

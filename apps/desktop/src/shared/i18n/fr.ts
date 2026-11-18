@@ -2109,6 +2109,8 @@ export const fr: UiCatalog<'fr'> = {
   'diag.audit.workspace_lock_failed':
     'Échec d’une tentative de verrouillage (l’espace de travail est resté ouvert)',
   'diag.audit.workspace_password_changed': 'Mot de passe de l’espace de travail modifié',
+  'diag.audit.workspace_working_copy_lost':
+    'Modifications récentes perdues (le fichier de travail a été supprimé ou endommagé)',
   'diag.audit.settings_changed': 'Paramètres modifiés',
   'diag.audit.local_api_toggled': 'API locale activée ou désactivée',
   'diag.audit.policy_warning': 'Avis de la politique du disque',

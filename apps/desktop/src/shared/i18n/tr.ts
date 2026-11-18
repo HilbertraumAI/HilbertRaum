@@ -1882,6 +1882,8 @@ export const tr: UiCatalog<'tr'> = {
   'diag.audit.workspace_lock_failed':
     'Kilitleme denemesi başarısız oldu (çalışma alanının kilidi açık kaldı)',
   'diag.audit.workspace_password_changed': 'Çalışma alanı parolası değiştirildi',
+  'diag.audit.workspace_working_copy_lost':
+    'Son değişiklikler kayboldu (çalışma dosyası silindi veya hasar gördü)',
   'diag.audit.settings_changed': 'Ayarlar değiştirildi',
   'diag.audit.local_api_toggled': 'Yerel API açıldı veya kapatıldı',
   'diag.audit.policy_warning': 'İlke bildirimi',
