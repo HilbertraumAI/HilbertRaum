@@ -1362,6 +1362,18 @@ export const fr: UiCatalog<'fr'> = {
   'models.engine.downloadingNoTotal': 'Téléchargement du moteur d’IA…',
   'models.engine.verifying': 'Vérification du moteur d’IA…',
   'models.engine.extracting': 'Décompression du moteur d’IA…',
+  'models.engineConfirm.chatEngine': 'Moteur d’IA (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Moteur vocal (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'version de repli pour le processeur seul',
+  'models.engineConfirm.version': 'Version',
+  'models.engineConfirm.total': 'Taille totale',
+  'models.engineConfirm.licenseIncludes': '{license}, inclut {bundled}',
+  'models.engineConfirm.hint':
+    'Chaque fichier est téléchargé depuis l’adresse indiquée et vérifié par rapport à sa somme de ' +
+    'contrôle attendue avant d’être utilisé. Rien sur vous ni sur vos documents n’est envoyé.',
+  'models.engineConfirm.updateNote':
+    'Votre modèle continue de répondre pendant le téléchargement. Il se met en pause quelques ' +
+    'secondes, seulement pendant le remplacement des fichiers.',
   'models.voiceEngine.title': 'Ajouter la dictée vocale (facultatif)',
   'models.voiceEngine.explain':
     'Le Chat et les réponses sur vos documents fonctionnent déjà sur ce disque. Le moteur vocal ' +
@@ -2073,6 +2085,12 @@ export const fr: UiCatalog<'fr'> = {
   'diag.audit.model_download_started': 'Téléchargement lancé',
   'diag.audit.model_download_verified': 'Téléchargement vérifié',
   'diag.audit.model_download_failed': 'Échec du téléchargement',
+  'diag.audit.engine_install_started': 'Téléchargement du moteur ou des outils lancé',
+  'diag.audit.engine_install_finished': 'Moteur ou outils installés',
+  'diag.audit.engine_install_failed': 'Échec de l’installation du moteur ou des outils',
+  'diag.audit.ocr_install_started': 'Téléchargement des fichiers OCR lancé',
+  'diag.audit.ocr_install_finished': 'Fichiers OCR installés',
+  'diag.audit.ocr_install_failed': 'Échec de l’installation des fichiers OCR',
   'diag.audit.document_imported': 'Document importé',
   'diag.audit.document_reindexed': 'Document réindexé',
   'diag.audit.document_deleted': 'Document supprimé',

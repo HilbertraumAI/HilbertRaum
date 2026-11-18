@@ -3,7 +3,9 @@ import { refreshGpuProbeAfterRuntimeInstall } from './registerBenchmarkIpc'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
+  AuditEventType,
   EngineDownloadJob,
+  EngineDownloadPreview,
   EngineProblemFamily,
   EngineRecheckResult,
   EngineStatus,
@@ -14,7 +16,9 @@ import {
   EngineDownloadManager,
   engineStatus,
   parseEngineDownloadRequest,
-  type EngineFamily
+  previewEngineDownload,
+  type EngineFamily,
+  type EngineJobEnd
 } from '../services/runtime-download'
 import { OcrInstallManager, assertNoOcrInstallPayload } from '../services/ocr-install'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
@@ -171,6 +175,36 @@ export function kiwixToolsInUse(): boolean {
   return registeredSidecarPids('kiwix_tools').length > 0
 }
 
+/**
+ * #843: what starts a job this registrar audits. Every engine and OCR job started here is one the user
+ * confirmed in a dialog; an in-app updater will record the same audit types with its own trigger.
+ */
+const AUDIT_TRIGGER = 'user'
+
+/**
+ * #843: an engine job's audit metadata — code names, versions and counts only, from what the job
+ * set out to fetch (`preview`, the same plan its dialog showed when it opened). Never the job's
+ * `error`, which is friendly copy and can carry a drive path or a URL's failure text.
+ */
+function engineAuditMetadata(
+  job: EngineDownloadJob,
+  preview: EngineDownloadPreview | null,
+  end?: Pick<EngineJobEnd, 'reason' | 'cause'>
+): Record<string, unknown> {
+  const versions: Record<string, string> = {}
+  for (const item of preview?.items ?? []) versions[item.family] = item.version
+  return {
+    jobId: job.jobId,
+    kind: preview?.kind ?? (job.update === true ? 'update' : job.reinstall === true ? 'reinstall' : 'install'),
+    families: [...(job.families ?? [])],
+    versions,
+    sizeBytes: preview?.totalBytes ?? null,
+    trigger: AUDIT_TRIGGER,
+    ...(end?.reason ? { reason: end.reason } : {}),
+    ...(end?.cause ? { cause: end.cause } : {})
+  }
+}
+
 export interface RegisterEngineIpcOptions {
   /** The OCR installer (#410); tests inject one with a fake fetch and fake pins. */
   ocrInstaller?: OcrInstallManager
@@ -240,6 +274,21 @@ export function registerEngineIpc(
         log.warn('Knowledge-pack reconcile after the tools install failed', { error: zimErrorClass(err) })
       })
     }
+  })
+
+  // #843: every engine job the user confirmed is recorded — once when it starts, once when it ends
+  // (finished, or failed with a content-free reason: `cancelled` and `networkOff` included). A job
+  // refused before it exists (a closed gate, nothing to do) records nothing, as a model download's.
+  // The recorder buffers while the workspace is locked, so a lock in the middle needs nothing here.
+  // The start is recorded when `start()` resolves. A job cannot settle before that: `start()` returns
+  // before its run's first file operation completes, and the handler resumes on the next microtask.
+  const auditEngine = (type: AuditEventType, job: EngineDownloadJob, end?: EngineJobEnd): void => {
+    const metadata = engineAuditMetadata(job, end?.preview ?? engine.jobPreview(job.jobId), end)
+    const verb = type === 'engine_install_started' ? 'started' : type === 'engine_install_finished' ? 'finished' : 'failed'
+    ctx.audit?.(type, `Engine ${String(metadata.kind)} ${verb}: ${(metadata.families as string[]).join(', ')}`, metadata)
+  }
+  engine.onSettled((job, end) => {
+    auditEngine(job.status === 'done' ? 'engine_install_finished' : 'engine_install_failed', job, end)
   })
 
   // #516: a failed or cancelled update (or one the install hook did not resume) brings back the
@@ -323,17 +372,35 @@ export function registerEngineIpc(
     (): EngineStatus => engineStatus(ctx.paths.rootPath, ctx.bundledManifestsDir)
   )
 
-  ipcHandle(IPC.downloadEngine, (_e, raw?: unknown): Promise<EngineDownloadJob> => {
-    // #339 P8-2: the OPTIONAL argument. Absent = the default install (required families
-    // only — the manager never reaches an optional family without it). The consent dialog
-    // sends `{ families: ['kiwix_tools'] }` after the licence acknowledgement; the payload
-    // is renderer input and is validated against the code's own family names.
+  /**
+   * The request the renderer sent, validated — the same for `engine:plan` and `engine:download`, so
+   * the preview a dialog shows and the job its Confirm starts are selected from one request. #532:
+   * "Install … again" re-fetches an engine that is on the drive and current by its marker — admitted
+   * only for a family whose files the OS loader found damaged this session.
+   */
+  const admittedRequest = (raw: unknown): ReturnType<typeof parseEngineDownloadRequest> => {
     const request = parseEngineDownloadRequest(raw)
-    // #532: "Install … again" re-fetches an engine that is on the drive and current by its
-    // marker — admitted only for a family whose files the OS loader found damaged this session.
     if (request.reinstall && !(request.families ?? []).every(repairable)) {
       throw new Error(tMain('main.engine.nothingToRepair'))
     }
+    return request
+  }
+
+  // #843: what a request would fetch, for its confirmation dialog — the step selection `start()`
+  // runs (`planEngineSteps`), with the same pins and, for a reinstall, the same refused builds. The
+  // payload is the one Confirm then sends to `engine:download` unchanged: main keeps no consent
+  // token, it checks the gates on every start. Read-only: no network, no write.
+  ipcHandle(IPC.getEnginePlan, (_e, raw?: unknown): EngineDownloadPreview => {
+    const request = admittedRequest(raw)
+    return previewEngineDownload({
+      rootPath: ctx.paths.rootPath,
+      manifestsDir: ctx.bundledManifestsDir,
+      ...request,
+      ...(request.reinstall ? { reinstallBuilds: refusedBuilds(request.families ?? []) } : {})
+    })
+  })
+
+  const startEngineJob = (request: ReturnType<typeof parseEngineDownloadRequest>): Promise<EngineDownloadJob> => {
     // #516: an update downloads first and pauses the engine's users only for the swap.
     if (request.update) return startEngineUpdate(request.families ?? [])
     return engine.start({
@@ -358,6 +425,17 @@ export function registerEngineIpc(
       // kiwix-serve / kiwix-manage child executes from — refused while one is registered.
       kiwixToolsActive: kiwixToolsInUse()
     })
+  }
+
+  ipcHandle(IPC.downloadEngine, async (_e, raw?: unknown): Promise<EngineDownloadJob> => {
+    // #339 P8-2: the OPTIONAL argument. Absent = the default install (required families
+    // only — the manager never reaches an optional family without it). The consent dialog
+    // sends `{ families: ['kiwix_tools'] }` after the licence acknowledgement; the payload
+    // is renderer input and is validated against the code's own family names.
+    const request = admittedRequest(raw)
+    const job = await startEngineJob(request)
+    auditEngine('engine_install_started', job)
+    return job
   })
 
   ipcHandle(IPC.getEngineJob, (_e, jobId: string): EngineDownloadJob => engine.get(jobId))
@@ -386,7 +464,10 @@ export function registerEngineIpc(
     return ocrInstaller.start({
       ...ocrSources(),
       gates: gates(),
-      activate: () => refreshOcrSlot(ctx)
+      activate: () => refreshOcrSlot(ctx),
+      // #843: the job's start and end reach the activity log (language codes and counts only), with
+      // the trigger the engine rows carry: the rows are permanent, and an app update records its own.
+      audit: (type, message, metadata) => ctx.audit?.(type, message, { ...metadata, trigger: AUDIT_TRIGGER })
     })
   })
 

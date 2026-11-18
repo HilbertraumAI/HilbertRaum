@@ -44,6 +44,9 @@
 # against a local download on 2026-11-07 (SHA-256 exact). fetch-runtime re-SHA-256-verifies each
 # archive BEFORE extracting, so a wrong/changed digest deletes the archive and fails the run — a
 # bad binary can never silently install.
+# size_bytes (#843): each asset's GitHub Releases API asset `size`, read 2026-11-18, same call as the
+# `digest`. The in-app engine dialog shows it before anything is downloaded; it is a label only (the
+# download is checked by its sha256, never by its size, and a bad value reads as "unknown").
 # What changed in the archives since b11146: every one now carries `llama-connect` (v0.8.0+), the
 # separately built peer-to-peer tunnel that `llama-server --connect` starts. The installers leave
 # it out (`neverInstalled` in assets.ts SIDECAR_FAMILY_SPECS, mirrored in both fetch-runtime
@@ -57,10 +60,10 @@
 # notes / `nightly-tag.txt` asset give the `bNNNNN`; confirm both tags resolve to one commit) —
 # a plain nightly needs an explicit, recorded exception here. Update version + per-OS asset URLs
 # (asset names vary by release), capture each asset's real SHA-256 (release `digest` metadata AND
-# a local download), diff the archive file lists against this pin's (a new executable is either
-# required or `neverInstalled`), re-verify the llama.cpp facts the app depends on
-# (docs/architecture.md GPU record "llama.cpp facts"), and promote it here as a deliberate,
-# reviewed change.
+# a local download) and its `size_bytes` (the same metadata's asset `size`), diff the archive file
+# lists against this pin's (a new executable is either required or `neverInstalled`), re-verify
+# the llama.cpp facts the app depends on (docs/architecture.md GPU record "llama.cpp facts"), and
+# promote it here as a deliberate, reviewed change.
 
 llama_cpp:
   version: b12110
@@ -70,30 +73,35 @@ llama_cpp:
       backend: vulkan
       url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-vulkan-x64.zip
       sha256: 9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f
+      size_bytes: 37661146
       extract_to: runtime/llama.cpp/win
     - os: win
       arch: x64
       backend: cpu
       url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip
       sha256: 98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2
+      size_bytes: 24708445
       extract_to: runtime/llama.cpp/win/cpu
     - os: mac
       arch: arm64
       backend: metal
       url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-arm64.tar.gz
       sha256: 4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662
+      size_bytes: 16650691
       extract_to: runtime/llama.cpp/mac
     - os: linux
       arch: x64
       backend: vulkan
       url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-vulkan-x64.tar.gz
       sha256: a5d741940956ec62e8783aee7e5a4c7c761af867d6f027c3277a51e1a3ac59b0
+      size_bytes: 35858360
       extract_to: runtime/llama.cpp/linux
     - os: linux
       arch: x64
       backend: cpu
       url: https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-ubuntu-x64.tar.gz
       sha256: 368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55
+      size_bytes: 23051958
       extract_to: runtime/llama.cpp/linux/cpu
 
 # SECOND SIDECAR FAMILY (Phase 36): whisper.cpp — the audio transcriber. ADDITIVE
@@ -109,8 +117,10 @@ llama_cpp:
 # runtime/whisper.cpp/<os>/, writing the .hilbertraum-runtime.json marker by hand or via
 # fetch-runtime's marker step. CPU-only by design (E5/reranker precedent: ASR is a
 # batch job; GPU whisper would be a later opt-in, never a default risk).
-# The sha256 below was computed from a fresh download on 2026-06-11.
-# To bump: re-run the non-ASCII command-line layouts on the real binary and model
+# The sha256 below was computed from a fresh download on 2026-06-11. Its size_bytes (#843) is the
+# GitHub Releases API asset `size`, read 2026-11-18, same call as the `digest` (which equals the sha256).
+# To bump: capture the new asset's sha256 and size_bytes (the release metadata's `digest` and
+# `size`, and a local download); re-run the non-ASCII command-line layouts on the real binary and model
 # (tests/manual/whisper-smoke.test.ts "#869 layout matrix": three roots, a foreign original that is
 # copied in, a dictation with VAD, a Kit on another drive, the model-path refusal; architecture.md
 # "Audio transcription (Phase 36)", "#869 amendment"), and read the new whisper-cli.exe for a UTF-8
@@ -125,6 +135,7 @@ whisper_cpp:
       backend: cpu
       url: https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.6/whisper-bin-x64.zip
       sha256: b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822
+      size_bytes: 4093849
       extract_to: runtime/whisper.cpp/win
 
 # THIRD SIDECAR FAMILY (#339, P8-1): kiwix-tools — the knowledge-pack (ZIM) tools.
