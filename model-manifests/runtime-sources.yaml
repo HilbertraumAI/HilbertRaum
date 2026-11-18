@@ -112,7 +112,7 @@ llama_cpp:
 # The sha256 below was computed from a fresh download on 2026-06-11.
 # To bump: re-run the non-ASCII command-line layouts on the real binary and model
 # (tests/manual/whisper-smoke.test.ts "#869 layout matrix": three roots, a foreign original that is
-# copied in, a dictation with VAD, a Kit on another drive, the model-name refusal; architecture.md
+# copied in, a dictation with VAD, a Kit on another drive, the model-path refusal; architecture.md
 # "Audio transcription (Phase 36)", "#869 amendment"), and read the new whisper-cli.exe for a UTF-8
 # activeCodePage manifest: v1.8.6 has none, so Windows hands it its argv in the ANSI code page. With
 # one, the relative spellings, the transient copy and the refusal can be retired, as #729 did for

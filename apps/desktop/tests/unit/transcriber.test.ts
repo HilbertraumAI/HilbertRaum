@@ -56,6 +56,22 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...mocked, default: mocked }
 })
 
+// #869 review: the pre-spawn binary hash, observed (each call logs 'hash' into `events`) and, once
+// `hold` is set, held — so a row can see WHEN it runs relative to the copy and an engine swap, and
+// land a suspend() inside it. Pass-through otherwise (the verifier is inert in the unit suite).
+const hashProbe = vi.hoisted(() => ({ events: [] as string[], hold: null as null | Promise<void> }))
+vi.mock('../../src/main/services/binary-verifier', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/services/binary-verifier')>()
+  return {
+    ...actual,
+    verifyBinaryBeforeSpawn: async (binPath: string) => {
+      hashProbe.events.push('hash')
+      if (hashProbe.hold) await hashProbe.hold
+      return actual.verifyBinaryBeforeSpawn(binPath)
+    }
+  }
+})
+
 // Phase 36 — the whisper-cli path resolver and the CLI backend driven by a FAKE spawn (CI is zero-binary:
 // no real process, no real audio). The selector itself runs over a real temp drive in compose-transcriber.test.ts.
 
@@ -769,10 +785,14 @@ describe('WhisperCliTranscriber — non-ASCII paths on Windows (#869)', () => {
       stalledCopy.armed = false
       stalledCopy.source = null
       stalledCopy.writer = null
+      hashProbe.events.length = 0
+      hashProbe.hold = null
     })
 
-    /** Start a transcription whose copy stalls after its first chunk; resolve once that chunk is on disk. */
-    async function copyInFlight(): Promise<{
+    /** Start a transcription of an original that is copied in (its child "runs" until killed). With
+     *  `stall` (the default) the copy stops after its first chunk and this resolves once that chunk is
+     *  on disk; without it the copy completes on its own and this resolves at once. */
+    async function copyInFlight(stall = true): Promise<{
       docs: string
       call: Promise<unknown>
       controller: AbortController
@@ -785,15 +805,22 @@ describe('WhisperCliTranscriber — non-ASCII paths on Windows (#869)', () => {
       mkdirSync(join(root, 'Олена'), { recursive: true })
       const origin = join(root, 'Олена', 'Sitzung März.wav')
       writeFileSync(origin, 'ORIGINAL-AUDIO-BYTES')
-      const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON, platform: 'win32', hold: true })
+      const { transcriber, spawned } = fakeCliTranscriber({
+        json: WHISPER_JSON,
+        platform: 'win32',
+        hold: true,
+        onSpawn: () => hashProbe.events.push('spawn')
+      })
       const controller = new AbortController()
-      stalledCopy.armed = true
+      stalledCopy.armed = stall
       const call = transcriber.transcribe(origin, { workDir: docs, signal: controller.signal })
       call.catch(() => undefined) // settled by each row
-      await until(
-        () => readdirSync(docs).some((f) => f.includes('.parse-audio') && readFileSync(join(docs, f), 'utf8') === 'PARTIAL-AUDIO'),
-        'the copy writing its first chunk'
-      )
+      if (stall) {
+        await until(
+          () => readdirSync(docs).some((f) => f.includes('.parse-audio') && readFileSync(join(docs, f), 'utf8') === 'PARTIAL-AUDIO'),
+          'the copy writing its first chunk'
+        )
+      }
       return { docs, call, controller, spawned, transcriber }
     }
 
@@ -816,9 +843,11 @@ describe('WhisperCliTranscriber — non-ASCII paths on Windows (#869)', () => {
       expect(readdirSync(docs)).toEqual([])
     })
 
-    // #516: the spawn gate was passed before the copy began; an engine install that starts its swap
-    // during the copy must hold this spawn until the swap is over, like any other.
-    it('an engine swap that begins during it holds the spawn until the swap is over', async () => {
+    // #516 + vuln-scan B, the order that matters: the copy comes FIRST, then the spawn gate, the binary
+    // hash and the spawn, in that order and with nothing between the hash and the spawn. An engine
+    // install that starts its swap during a long copy therefore holds the spawn, and the binary is
+    // hashed only after the swap — the one that will run, never the one replaced under the copy.
+    it('an engine swap that begins during it holds the spawn, and the binary is hashed after the swap', async () => {
       const { spawned, transcriber } = await copyInFlight()
       const release = holdEngineSpawns('whisper_cpp')
       try {
@@ -828,10 +857,29 @@ describe('WhisperCliTranscriber — non-ASCII paths on Windows (#869)', () => {
         await new Promise((r) => setImmediate(r)) // every continuation of the finished copy has run
         expect(spawned).toHaveLength(0)
       } finally {
+        hashProbe.events.push('swap over')
         release()
       }
       await until(() => spawned.length === 1, 'the spawn after the swap')
+      expect(hashProbe.events).toEqual(['swap over', 'hash', 'spawn'])
       await transcriber.stop() // the held child
+    })
+
+    // A suspend() (or stop()) landing during the binary hash — after the copy, before the spawn — is
+    // seen too: the finished copy is shredded before it returns, and no child starts afterwards.
+    it('a suspend() during the binary hash returns at once, the copy shredded, and starts nothing', async () => {
+      let hashDone: () => void = () => undefined
+      hashProbe.hold = new Promise<void>((r) => (hashDone = r))
+      const { docs, call, spawned, transcriber } = await copyInFlight(false)
+      try {
+        await until(() => hashProbe.events.includes('hash'), 'the hash starting')
+        await within(transcriber.suspend(), 'suspend() returning during the hash')
+        expect(readdirSync(docs)).toEqual([])
+      } finally {
+        hashDone()
+      }
+      await expect(within(call, 'the transcription settling')).rejects.toThrow('Transcription was cancelled.')
+      expect(spawned).toHaveLength(0)
     })
 
     // The engine update's own suspend() then lands while the finished copy waits at that gate: it must
@@ -854,7 +902,7 @@ describe('WhisperCliTranscriber — non-ASCII paths on Windows (#869)', () => {
     })
   })
 
-  // Only a user's own manifest can name a model file with a non-ASCII character; copying gigabytes
+  // Only a user's own manifest can give a model a path with a non-ASCII character; copying gigabytes
   // per call is no option, so the call is refused, typed, before anything is spawned or written.
   it('refuses a model with no ASCII spelling before it spawns or writes anything', async () => {
     const docs = scratch()

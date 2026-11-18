@@ -76,7 +76,8 @@ from its first public `1.0.0` release onward.
   alphabet could not be read either. The voice engine now gets every path in a form it can read;
   in an encrypted workspace, a recording it still cannot reach by name is copied into the
   workspace for the transcription and shredded right after. A speech model you added yourself
-  whose file name has such a character is refused with a message that says to rename it (#869).
+  whose folder or file name has such a character is refused with a message that says to move it
+  to a plain path (#869).
 - **The OCR files can be downloaded in the app on a drive set up with an older version.** If the
   drive's download list predated the files this version of HilbertRaum uses (a drive prepared with
   a version before 0.1.63 has no page-orientation file in it), the AI Model screen and the Documents rows

@@ -19,8 +19,9 @@ import { isAsciiPath } from '../zim/argv'
 //     dictation WAV) by its bare name, on every platform — names the app chooses, so ASCII;
 //   - on Windows, a model (`-m`, `-vm`) absolute when that is ASCII, else relative to that folder
 //     (`..\..\models\…` under a root such as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum`); with no
-//     ASCII spelling (a non-ASCII model FILE name, which only a user's own manifest can give) the
-//     call is refused, typed (`WhisperPathError`), before anything starts;
+//     ASCII spelling (a non-ASCII folder or file name in the model's path below `models/`, which
+//     only a user's own manifest can give) the call is refused, typed (`WhisperPathError`), before
+//     anything starts;
 //   - on Windows, the audio absolute when ASCII, else relative when ASCII, else COPIED into that
 //     folder first under an ASCII name (`<id>.parse-audio<ext>`): an encrypted workspace's first
 //     import parses the user's ORIGINAL file wherever it is (`ingestion/index.ts`), and a German

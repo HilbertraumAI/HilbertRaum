@@ -82,7 +82,7 @@ export const AUDIO_TRANSCRIPTION_FAILED_MESSAGE = t('en', 'main.ingest.audioTran
 export const AUDIO_ENGINE_CANNOT_RUN_MESSAGE = t('en', 'main.ingest.voiceEngineCannotRun')
 
 /** #869: the speech model's path has no spelling the voice engine reads on this Windows command
- *  line — a model file name outside ASCII (persist-canonical, display-mapped). */
+ *  line — a folder or file name below `models/` outside ASCII (persist-canonical, display-mapped). */
 export const AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE = t('en', 'main.ingest.voiceModelPathUnsupported')
 
 /** Packing target per ExtractedSegment in APPROX-TOKENS (~a paragraph / ~70 s of speech — the
@@ -221,7 +221,7 @@ export const AudioParser: DocumentParser = {
       }
       // #530: the OS refused to start the voice engine — "re-index to try again" would not help.
       if (isEngineCannotRunError(err)) throw new Error(AUDIO_ENGINE_CANNOT_RUN_MESSAGE)
-      // #869: refused before it started — renaming the model file fixes it, a re-index would not.
+      // #869: refused before it started — moving the model to an ASCII path fixes it, a re-index alone would not.
       if (isWhisperPathError(err)) throw new Error(AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE)
       throw new Error(AUDIO_TRANSCRIPTION_FAILED_MESSAGE)
     }

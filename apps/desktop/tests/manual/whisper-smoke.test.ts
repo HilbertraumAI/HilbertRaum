@@ -142,8 +142,8 @@ describe.skipIf(!enabled)('Whisper smoke (manual, real v1.8.6 + real German audi
 // model. Each root below is a Kit-shaped copy (the engine folder copied, the models hard-linked) and
 // every leg goes through the app's own service: a stored file, an encrypted first import's foreign
 // original whose name has no ASCII spelling (copied into the documents folder for the run, on
-// Windows), and a dictation with VAD. A model with a non-ASCII file name is refused before anything
-// starts, and a documents folder past MAX_PATH fails as an error, never a crash or a hang.
+// Windows), and a dictation with VAD. A model with a non-ASCII path (here its file name) is refused
+// before anything starts, and a documents folder past MAX_PATH fails as an error, never a crash or a hang.
 // rag-design.md §17 D-Z1 "#787 amendment" is the kiwix twin; architecture.md "Audio transcription
 // (Phase 36)" "#869 amendment" is this one's record.
 const M869 = process.env.HILBERTRAUM_WHISPER_869 === '1' && ROOT.length > 0 && existsSync(ROOT)
@@ -300,9 +300,9 @@ describe.runIf(M869)('#869 layout matrix (manual, real whisper-cli under non-ASC
     }
   )
 
-  // Only a user's own manifest can name a model file outside ASCII; on Windows the call is refused,
+  // Only a user's own manifest can give a model a path outside ASCII; on Windows the call is refused,
   // typed, before anything starts. POSIX reads any name.
-  it('a model with a non-ASCII file name is refused on Windows, read elsewhere', { timeout: 600_000 }, async () => {
+  it('a model with a non-ASCII path (its file name) is refused on Windows, read elsewhere', { timeout: 600_000 }, async () => {
     const { docs, make } = provision(join(scratch, 'refusal', 'HilbertRaum'), 'ggml-small-für-mich.bin')
     const stored = join(docs, 'doc-1.wav')
     copyFileSync(M869_WAV, stored)

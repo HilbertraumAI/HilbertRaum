@@ -621,14 +621,14 @@ corrupted file, or a password-protected document. Supported types: txt, md, pdf,
 csv/tsv, audio recordings (wav, mp3, flac, ogg — needs the speech model), and photos of
 pages (png, jpg, jpeg — needs the OCR files). Other files in the same import still succeed.
 
-### "On Windows, the voice engine cannot open the transcription model because the model’s file name contains …"
+### "On Windows, the voice engine cannot open the transcription model because a folder or file name in the model’s path contains …"
 
-The file name of the speech model or its voice-activity model (or a folder under `models/` in its
-manifest) has an umlaut, an accent or another non-ASCII character, which the pinned voice engine
-cannot read on Windows (#869). The models that come with the app are named in plain ASCII, so
-this only happens with a model you added through your own manifest. Rename the model file to plain letters, digits, `-`,
-`_` and `.`, change its `local_path` in the manifest to match, then re-index the recording (or
-dictate again). The app's own folders may have any name (for example app data under
+A folder or the file name in the path of the speech model or its voice-activity model (its
+`local_path` below `models/`) has an umlaut, an accent or another non-ASCII character, which the
+pinned voice engine cannot read on Windows (#869). The models that come with the app are stored
+under plain ASCII paths, so this only happens with a model you added through your own manifest.
+Move the model file to a path of plain letters, digits, `-`, `_` and `.` below `models/`, change
+its `local_path` in the manifest to match, then re-index the recording (or dictate again). The app's own folders may have any name (for example app data under
 `C:\Users\Jürgen\AppData\Roaming\HilbertRaum`), and so may your recordings: a recording whose
 name the voice engine cannot read is copied into the workspace for the transcription and shredded
 right after.

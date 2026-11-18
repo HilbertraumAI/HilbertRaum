@@ -2400,14 +2400,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   misheard (R-W3: "LibriVox" → "Librebox"); numbers, names of people/places, and dates
   held up well in the German probes. The transcript is searchable text, not a notarized
   record.
-- **On Windows, the voice engine refuses a speech model whose file name is not plain ASCII
-  (#869).** The pinned whisper-cli reads its command line in the system's code page, so since
+- **On Windows, the voice engine refuses a speech model whose path below `models/` is not plain
+  ASCII (#869).** The pinned whisper-cli reads its command line in the system's code page, so since
   #869 it starts in the workspace's `documents` folder and gets every path in an ASCII spelling
   from there (`architecture.md` "Audio transcription (Phase 36)", "#869 amendment"): a drive or
   app-data folder such as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum` or a Kit folder `Übungen`
-  works, and so does a recording named `Sitzung März.mp3` anywhere. A model file name has no such
-  spelling — only a user's own manifest can give one (the shipped manifests are ASCII) — so audio
-  import and dictation refuse it with copy that says to rename the file and its manifest entry,
+  works, and so does a recording named `Sitzung März.mp3` anywhere. A model path with a non-ASCII
+  folder or file name below `models/` has no such spelling — only a user's own manifest can give
+  one (the shipped manifests are ASCII) — so audio import and dictation refuse it with copy that
+  says to move the model to a plain path and update its manifest entry,
   even on a Windows set to use UTF-8 for its code page. **Encrypted workspace, first import of a
   recording whose name or folder has no ASCII spelling from the workspace** (a Kit on `D:\`, the
   file in `C:\Users\Jörg\Musik\`): the app copies it into the workspace's `documents` folder for

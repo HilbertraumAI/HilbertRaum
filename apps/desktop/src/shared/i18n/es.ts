@@ -2469,10 +2469,10 @@ export const es: UiCatalog<'es'> = {
     'grabación. En la pantalla Modelo de IA se indica qué hacer; después, reindexa este ' +
     'documento.',
   'main.ingest.voiceModelPathUnsupported':
-    'En Windows, el motor de voz no puede abrir el modelo de transcripción porque el nombre de ' +
-    'archivo del modelo contiene una diéresis, un acento u otro carácter que no es ASCII. Cambia el ' +
-    'nombre del archivo del modelo y su entrada en el manifiesto del modelo por uno sin esos ' +
-    'caracteres; después, reindexa este documento.',
+    'En Windows, el motor de voz no puede abrir el modelo de transcripción porque el nombre de una ' +
+    'carpeta o del archivo en la ruta del modelo contiene una diéresis, un acento u otro carácter ' +
+    'que no es ASCII. Guarda el modelo en una ruta sin esos caracteres y actualiza su entrada en el ' +
+    'manifiesto del modelo; después, reindexa este documento.',
   'main.ingest.searchModelTimeout':
     'El modelo de búsqueda no respondió a tiempo, así que no se pudo indexar este documento. ' +
     'Vuelve a intentarlo.',
@@ -2931,9 +2931,10 @@ export const es: UiCatalog<'es'> = {
     'qué falta.',
   'main.dictation.voiceModelPathUnsupported':
     'En Windows, el motor de voz no puede abrir uno de sus modelos (el modelo de transcripción o el ' +
-    'de detección de actividad de voz) porque el nombre del archivo contiene una diéresis, un acento ' +
-    'u otro carácter que no es ASCII. Cambia el nombre de ese archivo de modelo y su entrada en el ' +
-    'manifiesto del modelo por uno sin esos caracteres y vuelve a intentarlo.',
+    'de detección de actividad de voz) porque el nombre de una carpeta o del archivo en la ruta de ' +
+    'ese modelo contiene una diéresis, un acento u otro carácter que no es ASCII. Guarda el modelo ' +
+    'en una ruta sin esos caracteres, actualiza su entrada en el manifiesto del modelo y vuelve a ' +
+    'intentarlo.',
   'main.preflight.readOnly':
     'Parece que esta unidad es de solo lectura, así que la aplicación no puede crear su espacio ' +
     'de trabajo. Prueba con otro puerto USB o lee la guía de solución de problemas.',

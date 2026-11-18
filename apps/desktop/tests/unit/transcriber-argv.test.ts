@@ -77,12 +77,14 @@ describe('planWhisperArgv (#869)', () => {
     expect(plan).toEqual({ ...want, outBase: OUT })
   })
 
-  // A model whose file name holds a non-ASCII character is only possible in a user's own manifest;
-  // copying gigabytes per call is no option, so the call is refused before anything starts.
+  // A model whose path below `models/` holds a non-ASCII character — the file name or a folder — is
+  // only possible in a user's own manifest; copying gigabytes per call is no option, so the call is
+  // refused before anything starts.
   it.each([
-    { arg: '-m', modelPath: 'D:\\HilbertRaum\\models\\transcriber\\ggml-small-für-mich.bin', vadModelPath: null },
-    { arg: '-vm', modelPath: KIT_D.model, vadModelPath: 'D:\\HilbertRaum\\models\\transcriber\\ggml-silero-größer.bin' }
-  ])('win32: refuses a model with no ASCII spelling ($arg)', ({ arg, modelPath, vadModelPath }) => {
+    { name: 'a non-ASCII file name', arg: '-m', modelPath: 'D:\\HilbertRaum\\models\\transcriber\\ggml-small-für-mich.bin', vadModelPath: null },
+    { name: 'an ASCII file name in a non-ASCII folder', arg: '-m', modelPath: 'D:\\HilbertRaum\\models\\Übersetzung\\ggml-small.bin', vadModelPath: null },
+    { name: 'a non-ASCII VAD file name', arg: '-vm', modelPath: KIT_D.model, vadModelPath: 'D:\\HilbertRaum\\models\\transcriber\\ggml-silero-größer.bin' }
+  ])('win32: refuses a model with no ASCII spelling: $name ($arg)', ({ arg, modelPath, vadModelPath }) => {
     const plan = planWhisperArgv({ cwd: KIT_D.cwd, modelPath, vadModelPath, filePath: `${KIT_D.cwd}\\doc-1.mp3`, id: ID, platform: 'win32' })
     expect(plan).toEqual({ refused: arg })
   })

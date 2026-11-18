@@ -2387,8 +2387,9 @@ it fails with friendly convert-to-WAV/MP3 copy.
   starts in `opts.workDir` — the workspace's `documents/` folder — on every platform, and gets
   every file there (the transcript `-of`, a stored copy, a decrypted transient, the dictation
   WAV) by its bare name; **(b)** on Windows a model (`-m`, `-vm`) goes absolute when ASCII, else
-  relative (`..\..\models\transcriber\…`), and with no ASCII spelling — a non-ASCII model FILE
-  name, which only a user's own manifest can give — the call is refused before anything starts
+  relative (`..\..\models\transcriber\…`), and with no ASCII spelling — a non-ASCII folder or
+  file name in the model's path below `models/` (an ASCII file name in a non-ASCII folder too),
+  which only a user's own manifest can give — the call is refused before anything starts
   (`WhisperPathError`, log class `whisper:non-ascii-path`, its own row and dictation copy:
   `main.ingest.voiceModelPathUnsupported`, `main.dictation.voiceModelPathUnsupported`); copying
   gigabytes per call is no option; **(c)** on Windows the audio goes absolute when ASCII, else
@@ -2570,8 +2571,8 @@ explicitly out of scope.
   Full record: wave-3 plan §10.
 - **#869 (2026-11-18):** the dictation WAV and its transcript reach whisper-cli by their bare
   names from the documents folder, the speech and VAD models (`-m`, `-vm`) by an ASCII spelling,
-  so dictation works under a root with any character; a VAD or speech model whose file name has
-  no ASCII spelling is refused with `main.dictation.voiceModelPathUnsupported`. Record: "Audio
+  so dictation works under a root with any character; a VAD or speech model whose path (a folder
+  or the file name below `models/`) has no ASCII spelling is refused with `main.dictation.voiceModelPathUnsupported`. Record: "Audio
   transcription (Phase 36)", "#869 amendment".
 
 ## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11, decisions D31–D33)

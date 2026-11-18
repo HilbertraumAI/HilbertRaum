@@ -2422,10 +2422,10 @@ export const nl: UiCatalog<'nl'> = {
     'getranscribeerd. Op het scherm AI-model staat wat je kunt doen. Indexeer dit document ' +
     'daarna opnieuw.',
   'main.ingest.voiceModelPathUnsupported':
-    'Onder Windows kan de spraakengine het transcriptiemodel niet openen, omdat de bestandsnaam van ' +
-    'het model een umlaut, een accent of een ander niet-ASCII-teken bevat. Wijzig de naam van het ' +
-    'modelbestand en van de vermelding in het manifest van het model in een naam zonder zulke ' +
-    'tekens. Indexeer dit document daarna opnieuw.',
+    'Onder Windows kan de spraakengine het transcriptiemodel niet openen, omdat de naam van een map ' +
+    'of van het bestand in het pad van het model een umlaut, een accent of een ander ' +
+    'niet-ASCII-teken bevat. Zet het model op een pad zonder zulke tekens en pas de vermelding in ' +
+    'het manifest van het model aan. Indexeer dit document daarna opnieuw.',
   'main.ingest.searchModelTimeout':
     'Het zoekmodel reageerde niet op tijd, dus dit document kon niet worden geïndexeerd. Probeer ' +
     'het opnieuw.',
@@ -2893,9 +2893,10 @@ export const nl: UiCatalog<'nl'> = {
     'ontbreekt.',
   'main.dictation.voiceModelPathUnsupported':
     'Onder Windows kan de spraakengine een van zijn modellen (het transcriptiemodel of het model ' +
-    'voor spraakactiviteitsdetectie) niet openen, omdat de bestandsnaam een umlaut, een accent of ' +
-    'een ander niet-ASCII-teken bevat. Wijzig de naam van dat modelbestand en van de vermelding in ' +
-    'het manifest van het model in een naam zonder zulke tekens en probeer het opnieuw.',
+    'voor spraakactiviteitsdetectie) niet openen, omdat de naam van een map of van het bestand in ' +
+    'het pad van dat model een umlaut, een accent of een ander niet-ASCII-teken bevat. Zet het model ' +
+    'op een pad zonder zulke tekens, pas de vermelding in het manifest van het model aan en probeer ' +
+    'het opnieuw.',
   'main.preflight.readOnly':
     'Deze schijf lijkt alleen-lezen te zijn, dus de app kan geen werkruimte aanmaken. Probeer ' +
     'een andere USB-poort, of lees de handleiding voor probleemoplossing.',

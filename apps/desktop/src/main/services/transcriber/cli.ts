@@ -106,10 +106,6 @@ function resolveIdleTimeoutMs(explicit?: number): number {
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** Resolves when `signal` aborts (at once when it already has); never rejects. */
-const untilAborted = (signal: AbortSignal): Promise<void> =>
-  new Promise((r) => (signal.aborted ? r() : signal.addEventListener('abort', () => r(), { once: true })))
-
 /**
  * Grace after SIGTERM before escalating to SIGKILL on a kill (REL-2), mirroring
  * `LlamaServer.stop()`'s `DEFAULT_KILL_GRACE_MS`. A whisper-cli wedged in native decode code
@@ -185,9 +181,10 @@ export class WhisperCliTranscriber implements Transcriber {
    */
   private readonly active = new Map<ChildProcess, Promise<void>>()
   /**
-   * #869: calls still copying their original into the documents folder (no child yet), mapped to
-   * the same cleanup promise. suspend()/stop() abort each copy and await its shred like a child's:
-   * an engine update suspends without aborting the import's own signal (`registerEngineIpc`).
+   * #869: calls that copy their original into the documents folder, from before the copy until their
+   * child exists (the copy, the spawn gate, the binary hash), mapped to a promise that resolves once
+   * the copy is gone from disk. suspend()/stop() abort each and await that, as they kill and await a
+   * child: an engine update suspends without aborting the import's own signal (`registerEngineIpc`).
    */
   private readonly copying = new Map<AbortController, Promise<void>>()
   private stopped = false
@@ -235,8 +232,9 @@ export class WhisperCliTranscriber implements Transcriber {
       platform: this.platform ?? process.platform
     })
     if ('refused' in plan) {
-      // A model file name only a user's own manifest can give; copying gigabytes per call is no
-      // option. The argument, never the path, goes to the log.
+      // A model path only a user's own manifest can give (a non-ASCII folder or file name below
+      // `models/`); copying gigabytes per call is no option. The argument, never the path, goes to
+      // the log.
       log.warn('whisper-cli not started: a model path has no ASCII spelling on this Windows command line', {
         class: 'whisper:non-ascii-path',
         arg: plan.refused
@@ -263,36 +261,53 @@ export class WhisperCliTranscriber implements Transcriber {
     }
 
     // `done` resolves only after the shred below runs. suspend()/stop() await it (via the
-    // `active` map, or `copying` while the original is still being copied) so a killed child's
-    // transient transcript, or a partial copy, is shredded before the parent exits (L5).
+    // `active` map) so a killed child's transient transcript is shredded before the parent
+    // exits (L5); before the child exists they await the copy instead (`copying`, #869).
     let resolveDone: () => void = () => undefined
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve
     })
-    // #869: the copy is aborted by the call's own signal (cancel, lock, quit) AND by suspend()/stop().
-    const copyAbort = copyPath ? new AbortController() : null
-    const copy = copyPath && copyAbort
-      ? {
-          signal: opts.signal ? AbortSignal.any([opts.signal, copyAbort.signal]) : copyAbort.signal,
-          run: async (signal: AbortSignal): Promise<void> => {
-            this.copying.set(copyAbort, done)
-            const out = createWriteStream(copyPath, { flags: 'wx' })
-            try {
-              await pipeline(createReadStream(filePath), out, { signal })
-            } finally {
-              // The partial copy is shredded by the `finally` below — after its handle is closed.
-              if (!out.closed) await once(out, 'close').catch(() => undefined)
-            }
-          }
-        }
-      : undefined
     let registeredChild: ChildProcess | null = null
+    // #869: a call with a copy is registered in `copying` BEFORE anything awaits, so suspend()/stop()
+    // see it through the copy, the spawn gate and the binary hash, until its child exists. They abort
+    // it (as the call's own signal does: cancel, lock, quit), and await the copy being gone: a copy
+    // still being written is shredded by the `finally` below once the copy fails; a finished one is
+    // shredded at once by the abort, because the call may still be waiting at the gate or the hash.
+    const copyAbort = copyPath ? new AbortController() : null
+    let copyWritten = false
+    let copyGone: () => void = () => undefined
+    const onCallAbort = (): void => copyAbort?.abort()
+    if (copyPath && copyAbort) {
+      this.copying.set(copyAbort, new Promise<void>((resolve) => (copyGone = resolve)))
+      copyAbort.signal.addEventListener('abort', () => {
+        if (!copyWritten || registeredChild) return
+        shredFile(copyPath)
+        copyGone()
+      }, { once: true })
+      opts.signal?.addEventListener('abort', onCallAbort, { once: true })
+    }
     try {
+      if (copyPath && copyAbort) {
+        // First, before the existing gate → hash → spawn sequence: an engine swap that begins during
+        // a long copy then holds the spawn, and the binary is hashed after it, right before the spawn.
+        if (opts.signal?.aborted || this.stopped) throw new Error('Transcription was cancelled.')
+        const out = createWriteStream(copyPath, { flags: 'wx' })
+        try {
+          await pipeline(createReadStream(filePath), out, { signal: copyAbort.signal })
+        } catch (err) {
+          if (copyAbort.signal.aborted || this.stopped) throw new Error('Transcription was cancelled.')
+          throw err
+        } finally {
+          // A partial copy is shredded by the `finally` below — after its handle is closed.
+          if (!out.closed) await once(out, 'close').catch(() => undefined)
+          copyWritten = true
+        }
+      }
       const { stderrTail } = await this.run(cwd, args, opts, (child) => {
         registeredChild = child
         this.active.set(child, done)
         if (copyAbort) this.copying.delete(copyAbort) // a child now: suspend()/stop() kill it instead
-      }, copy)
+      }, copyAbort?.signal)
       let parsed: WhisperJson
       try {
         parsed = JSON.parse(readFileSync(jsonPath, 'utf8')) as WhisperJson
@@ -318,27 +333,29 @@ export class WhisperCliTranscriber implements Transcriber {
     } finally {
       shredFile(jsonPath) // the transcript is content — never leave it on disk
       if (copyPath) shredFile(copyPath) // #869: so is the copied audio
+      copyGone()
       if (copyAbort) this.copying.delete(copyAbort)
+      opts.signal?.removeEventListener('abort', onCallAbort)
       if (registeredChild) this.active.delete(registeredChild)
       resolveDone() // unblock any suspend()/stop() waiting on this child's cleanup
     }
   }
 
   /** Spawn the CLI in `cwd` and resolve on exit, surfacing progress + a bounded stderr tail.
-   *  `copy` (#869: the copy of an original) runs after the waits, right before the spawn; its
-   *  signal is the call's own plus suspend()/stop()'s. */
+   *  `copySignal` (#869): a call that copied its original in is aborted by suspend()/stop() too. */
   private async run(
     cwd: string,
     args: string[],
     opts: TranscribeOptions,
     onChild: (child: ChildProcess) => void,
-    copy?: { signal: AbortSignal; run: (signal: AbortSignal) => Promise<void> }
+    copySignal?: AbortSignal
   ): Promise<{ code: number | null; stderrTail: string }> {
     // #658: a call cancelled (the dictation deadline, a lock during the WAV write) or a transcriber
     // stopped (quit) starts nothing — no model load it would kill at once. Checked before the waits
     // below and again after them: a `stop()` that lands in between has nothing in `active` to kill,
-    // so a child spawned after it would outlive the app.
-    const cancelled = (): boolean => opts.signal?.aborted === true || this.stopped || copy?.signal.aborted === true
+    // so a child spawned after it would outlive the app. #869: nor does a call whose copy a
+    // suspend() aborted during the waits.
+    const cancelled = (): boolean => opts.signal?.aborted === true || this.stopped || copySignal?.aborted === true
     if (cancelled()) throw new Error('Transcription was cancelled.')
     // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
     // packaged-build tamper is refused; the audio import then fails per-file with the
@@ -349,21 +366,6 @@ export class WhisperCliTranscriber implements Transcriber {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
     if (cancelled()) throw new Error('Transcription was cancelled.')
-    if (copy) {
-      // #869: a copy is written only past the engine gate and the hash. A cancel, suspend() or
-      // stop() during it aborts it and starts nothing; the caller's `finally` shreds what was
-      // written, and suspend()/stop() await that.
-      try {
-        await copy.run(copy.signal)
-      } catch (err) {
-        if (cancelled()) throw new Error('Transcription was cancelled.')
-        throw err
-      }
-      // An engine install that began its swap during the copy holds this spawn too (#516). The wait
-      // ends early on an abort, so a suspend() never waits on the gate.
-      await Promise.race([waitForEngineSpawns('whisper_cpp'), untilAborted(copy.signal)])
-      if (cancelled()) throw new Error('Transcription was cancelled.')
-    }
     return new Promise((resolve, reject) => {
       let child: ChildProcess
       try {
@@ -570,14 +572,14 @@ export class WhisperCliTranscriber implements Transcriber {
   async suspend(): Promise<void> {
     const pending = [...this.active.entries()]
     for (const [child] of pending) this.killWithEscalation(child)
-    // #869: a call still copying its original has no child yet — abort the copy (it then starts
-    // nothing) and await its shred the same way.
+    // #869: a call that copied (or is copying) its original and has no child yet — abort it (it then
+    // starts nothing) and await its copy being shredded.
     const copies = [...this.copying.entries()]
     for (const [abort] of copies) abort.abort()
-    // Wait for each killed child's `close` (or each aborted copy) to drive transcribe()'s finally
-    // (shred + resolve), but never longer than the cap so a wedged child can't hang quit/lock.
+    // Wait for each killed child's `close` to drive transcribe()'s finally (shred + resolve), and for
+    // each aborted copy to be gone, but never longer than the cap so a wedged child can't hang quit/lock.
     await Promise.race([
-      Promise.all([...pending.map(([, done]) => done), ...copies.map(([, done]) => done)]),
+      Promise.all([...pending.map(([, done]) => done), ...copies.map(([, gone]) => gone)]),
       delay(this.suspendTimeoutMs)
     ])
   }

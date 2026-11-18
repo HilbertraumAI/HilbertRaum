@@ -2613,10 +2613,10 @@ export const fr: UiCatalog<'fr'> = {
     'donc pas pu être transcrit. Suivez les indications de l’écran Modèle d’IA, puis réindexez ' +
     'ce document.',
   'main.ingest.voiceModelPathUnsupported':
-    'Sous Windows, le moteur vocal ne peut pas ouvrir le modèle de transcription, car le nom de ' +
-    'fichier du modèle contient un tréma, un accent ou un autre caractère non ASCII. Renommez le ' +
-    'fichier du modèle et son entrée dans le manifeste du modèle sans ces caractères, puis réindexez ' +
-    'ce document.',
+    'Sous Windows, le moteur vocal ne peut pas ouvrir le modèle de transcription, car le nom d’un ' +
+    'dossier ou du fichier dans le chemin du modèle contient un tréma, un accent ou un autre ' +
+    'caractère non ASCII. Placez le modèle dans un chemin sans ces caractères et mettez à jour son ' +
+    'entrée dans le manifeste du modèle, puis réindexez ce document.',
   'main.ingest.searchModelTimeout':
     'Le modèle de recherche n’a pas répondu à temps\u00A0: ce document n’a donc pas pu être ' +
     'indexé. Réessayez.',
@@ -3093,9 +3093,10 @@ export const fr: UiCatalog<'fr'> = {
     'qui manque.',
   'main.dictation.voiceModelPathUnsupported':
     'Sous Windows, le moteur vocal ne peut pas ouvrir l’un de ses modèles (le modèle de ' +
-    'transcription ou celui de détection d’activité vocale), car le nom du fichier contient un ' +
-    'tréma, un accent ou un autre caractère non ASCII. Renommez ce fichier de modèle et son entrée ' +
-    'dans le manifeste du modèle sans ces caractères, puis réessayez.',
+    'transcription ou celui de détection d’activité vocale), car le nom d’un dossier ou du fichier ' +
+    'dans le chemin de ce modèle contient un tréma, un accent ou un autre caractère non ASCII. ' +
+    'Placez le modèle dans un chemin sans ces caractères et mettez à jour son entrée dans le ' +
+    'manifeste du modèle, puis réessayez.',
   'main.preflight.readOnly':
     'Ce disque semble être en lecture seule\u00A0: l’application ne peut donc pas y créer son ' +
     'espace de travail. Essayez un autre port USB ou consultez le guide de dépannage.',
