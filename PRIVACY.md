@@ -129,17 +129,27 @@ that needs them. Three things must all be true before a single byte moves:
    tools are GPL-3.0-or-later and always show that license for you to accept. The OCR files (three
    files — German, English and the page-orientation data — about 8.6 MB together, Apache-2.0, from
    `cdn.jsdelivr.net`) show the files, size, license and source host; their license is pre-reviewed, so there
-   is nothing extra to accept.
+   is nothing extra to accept. Installing, updating or reinstalling the AI engine (the chat engine
+   llama.cpp and the voice engine whisper.cpp, from `github.com`) shows each archive it will fetch
+   with its version, size, license (MIT; on Windows the archives also carry a library under
+   Apache-2.0 WITH LLVM-exception or zlib, named in the dialog) and full download address; that
+   license is pre-reviewed too, so there is nothing extra to accept.
 
-The request goes only to the address printed in the model's local manifest — the knowledge-pack
-tools and the OCR files instead ride the pinned `runtime-sources.yaml`, not a model manifest, but
-the same address-only, no-telemetry rule applies. For the OCR files the app itself fixes which
+The request goes only to the address printed in the model's local manifest — the AI engine, the
+knowledge-pack tools and the OCR files instead ride the pinned `runtime-sources.yaml`, not a model
+manifest (for the AI engine and the knowledge-pack tools, the copy built into the app, not the
+drive's), but the same address-only, no-telemetry rule applies. For the OCR files the app itself fixes which
 files it accepts (their checksums and sizes are built into the app) and where they go (the drive's
 `ocr/` folder); the drive's list, or the app's own copy when the drive's has no matching entry,
 supplies only the download address. Nothing about you, your prompts, or your documents is
 ever sent. There are **no update checks, no model catalog, and no background downloads** — with
 the checkbox off (or no internet at all) the app is fully usable and makes no internet calls.
 Every downloaded file is checked against its expected checksum before the app will use it.
+Each install of a model, the AI engine, the knowledge-pack tools or the OCR files is recorded in
+your local activity log (Settings → Diagnostics (advanced) → Activity), which stays in your
+workspace: what was installed and when, and for the AI engine, the knowledge-pack tools and the
+OCR files also whether it finished, failed or was stopped — never a file path, and never anything
+about you or your documents.
 
 ## Letting other apps on this computer use your model (local API)
 

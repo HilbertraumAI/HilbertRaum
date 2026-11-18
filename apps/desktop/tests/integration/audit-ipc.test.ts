@@ -312,11 +312,14 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       })
     )
 
-    // -- settings: a privacy-relevant key + a sentinel value on a NON-privacy key.
+    // -- settings: a privacy-relevant key + a sentinel value on a NON-privacy key. `skillInfoSeen` is
+    // the one renderer-writable free-text key (#868: a main-owned key such as `gpuLastError` is dropped
+    // before the audit sweep, so its value could not reach the events anyway).
     await invoke(handlers, IPC.updateSettings, {
       allowNetwork: true,
-      gpuLastError: SETTING_SENTINEL
+      skillInfoSeen: [SETTING_SENTINEL]
     })
+    expect(getSettings(ctx.db).skillInfoSeen).toContain(SETTING_SENTINEL) // the save really carried it
 
     // -- chat: sentinel content streams through the real chat path, then export+delete.
     const { result: convRaw } = await invoke(handlers, IPC.createConversation, {})

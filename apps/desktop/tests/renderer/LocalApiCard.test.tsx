@@ -165,6 +165,20 @@ describe('LocalApiCard — the consent dialog', () => {
     await user.click(screen.getByRole('switch', { name: /Allow other apps/ }))
     expect(updateSettings).toHaveBeenCalledWith({ localApiEnabled: false })
   })
+
+  // #860 API9: a refused save (the workspace locking mid-click) must not read as done, least of all for OFF: the user
+  // would believe the port is closed.
+  it('a refused OFF says the setting was not saved, and the switch stays on', async () => {
+    const user = userEvent.setup()
+    const updateSettings = vi.fn(async () => {
+      throw new Error('The workspace is locked.')
+    })
+    const state = renderCard({ settings: settings({ localApiEnabled: true }), updateSettings })
+    await user.click(screen.getByRole('switch', { name: /Allow other apps/ }))
+    expect(await screen.findByText('This setting couldn’t be saved. Please try again.')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: /Allow other apps/ })).toBeChecked()
+    expect(state.current.localApiEnabled).toBe(true)
+  })
 })
 
 describe('LocalApiCard — the connect block', () => {
@@ -276,6 +290,16 @@ describe('LocalApiCard — live state', () => {
     expect(banner.textContent).toContain('4981')
     expect(screen.queryByText('Connect another app')).not.toBeInTheDocument()
   })
+
+  // #860 API9: the other failed start. No address or key to paste while nothing listens.
+  it('a start that failed for another reason points to Diagnostics, and hides the connect block', async () => {
+    renderCard({
+      settings: settings({ localApiEnabled: true }),
+      localApi: apiStatus({ running: false, port: null, lastError: 'start_failed' })
+    })
+    expect(await screen.findByText('The local API could not start. The Diagnostics tab has the details.')).toBeInTheDocument()
+    expect(screen.queryByText('Connect another app')).not.toBeInTheDocument()
+  })
 })
 
 describe('LocalApiCard — key requirement + rotation', () => {
@@ -306,6 +330,21 @@ describe('LocalApiCard — key requirement + rotation', () => {
     await user.click(screen.getByRole('button', { name: 'Create new key' }))
     expect(regenerateLocalApiToken).toHaveBeenCalledTimes(1)
     expect(await screen.findByText('hr-…new1')).toBeInTheDocument()
+  })
+
+  // #860 API9: a user may be revoking a leaked key. A rotation that failed must not read as done.
+  it('a failed rotation says so, and the card keeps showing the old key', async () => {
+    const user = userEvent.setup()
+    const regenerateLocalApiToken = vi.fn(async () => {
+      throw new Error('The workspace is locked.')
+    })
+    renderCard({ settings: settings({ localApiEnabled: true }), maskedKey: 'hr-…old1', regenerateLocalApiToken })
+    expect(await screen.findByText('hr-…old1')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Create a new key' }))
+    await user.click(await screen.findByRole('button', { name: 'Create new key' }))
+    expect(await screen.findByText('Could not create a new key. Try again.')).toBeInTheDocument()
+    expect(screen.queryByText('New access key created.')).not.toBeInTheDocument()
+    expect(screen.getByText('hr-…old1')).toBeInTheDocument()
   })
 })
 

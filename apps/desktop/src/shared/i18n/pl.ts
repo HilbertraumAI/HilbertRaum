@@ -1331,6 +1331,18 @@ export const pl: UiCatalog<'pl'> = {
   'models.engine.downloadingNoTotal': 'Pobieranie silnika AI…',
   'models.engine.verifying': 'Sprawdzanie silnika AI…',
   'models.engine.extracting': 'Rozpakowywanie silnika AI…',
+  'models.engineConfirm.chatEngine': 'Silnik AI (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Silnik mowy (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'wersja zapasowa tylko dla procesora',
+  'models.engineConfirm.version': 'Wersja',
+  'models.engineConfirm.total': 'Łączny rozmiar',
+  'models.engineConfirm.licenseIncludes': '{license}, zawiera {bundled}',
+  'models.engineConfirm.hint':
+    'Każdy plik jest pobierany z podanego adresu i przed użyciem porównywany z oczekiwaną sumą ' +
+    'kontrolną. Nie są wysyłane żadne informacje o tobie ani o twoich dokumentach.',
+  'models.engineConfirm.updateNote':
+    'Twój model odpowiada dalej, dopóki trwa pobieranie. Wstrzymuje pracę na kilka sekund tylko na ' +
+    'czas zastępowania plików.',
   'models.voiceEngine.title': 'Dodaj dyktowanie (opcjonalnie)',
   'models.voiceEngine.explain':
     'Odpowiedzi w czacie i odpowiedzi na podstawie dokumentów już działają na tym dysku. Silnik ' +
@@ -1999,6 +2011,12 @@ export const pl: UiCatalog<'pl'> = {
   'diag.audit.model_download_started': 'Rozpoczęto pobieranie',
   'diag.audit.model_download_verified': 'Sprawdzono pobrany plik',
   'diag.audit.model_download_failed': 'Pobieranie nie powiodło się',
+  'diag.audit.engine_install_started': 'Rozpoczęto pobieranie silnika lub narzędzi',
+  'diag.audit.engine_install_finished': 'Zainstalowano silnik lub narzędzia',
+  'diag.audit.engine_install_failed': 'Instalacja silnika lub narzędzi nie powiodła się',
+  'diag.audit.ocr_install_started': 'Rozpoczęto pobieranie plików OCR',
+  'diag.audit.ocr_install_finished': 'Zainstalowano pliki OCR',
+  'diag.audit.ocr_install_failed': 'Instalacja plików OCR nie powiodła się',
   'diag.audit.document_imported': 'Zaimportowano dokument',
   'diag.audit.document_reindexed': 'Ponownie zindeksowano dokument',
   'diag.audit.document_deleted': 'Usunięto dokument',

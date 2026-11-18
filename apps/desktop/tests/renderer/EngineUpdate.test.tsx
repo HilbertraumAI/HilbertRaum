@@ -13,7 +13,7 @@ import {
   type EngineStatus,
   type EngineVersionInfo
 } from '../../src/shared/types'
-import { engineJob, stubModelsApi } from '../helpers/model-fixtures'
+import { engineJob, enginePreview, enginePreviewItem, stubModelsApi } from '../helpers/model-fixtures'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { STOPPED_RUNTIME, appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
@@ -63,8 +63,15 @@ describe('ModelsScreen — the engine update notice (#516)', () => {
       getEngineStatus: vi.fn(async () => opts.engine),
       recheckEngine: vi.fn(async () => ({ problems: [] })),
       ...(opts.downloadEngine ? { downloadEngine: opts.downloadEngine } : {}),
-      ...(opts.getEngineJob ? { getEngineJob: opts.getEngineJob } : {})
+      ...(opts.getEngineJob ? { getEngineJob: opts.getEngineJob } : {}),
+      // #843: what the dialog states for the update (one archive is enough for these rows).
+      getEnginePlan: vi.fn(async () => enginePreview({ kind: 'update', items: [enginePreviewItem({ installed: 'b9849' })] }))
     })
+  }
+  /** #843: the click opened the confirmation; Confirm it with the notice's own action label. */
+  async function confirmUpdate(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: en('models.engineUpdate.update') }))
   }
   const renderModels = (): ReturnType<typeof render> =>
     render(
@@ -87,6 +94,7 @@ describe('ModelsScreen — the engine update notice (#516)', () => {
     // A quiet offer, not the fix for a fault: no loud primary (design-guidelines §11.17 #516 amendment).
     expect(update).not.toHaveClass('primary')
     await user.click(update)
+    await confirmUpdate(user)
     expect(downloadEngine).toHaveBeenCalledWith({ families: ['llama_cpp'], update: true })
     expect(await within(notice).findByText(en('models.engine.progress', { pct: 25 }))).toBeInTheDocument()
     expect(await screen.findByText(en('models.engineUpdate.done'), {}, { timeout: hangBudgetMs(4000) })).toBeInTheDocument()
@@ -99,6 +107,7 @@ describe('ModelsScreen — the engine update notice (#516)', () => {
     renderModels()
     await screen.findByText(en('models.engineUpdate.bothTitle'))
     await user.click(screen.getByRole('button', { name: en('models.engineUpdate.update') }))
+    await confirmUpdate(user)
     expect(downloadEngine).toHaveBeenCalledWith({ families: ['llama_cpp', 'whisper_cpp'], update: true })
   })
 

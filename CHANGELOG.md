@@ -75,6 +75,13 @@ from its first public `1.0.0` release onward.
   but the encrypted data itself was damaged (its bytes changed, for example by a copy that was cut
   short), the unlock screen now says the data is damaged and to restore it from a backup, instead
   of "Could not open the workspace" (#845).
+- **Installing, updating or reinstalling the AI engine now asks first.** Install AI engine,
+  Install voice engine, Update and Install the AI engine again used to start the download on the
+  click. Each now opens a confirmation, as model and OCR downloads do, that lists every file the
+  action will fetch with its version, size, license and full download address, and nothing is
+  downloaded until you confirm. The activity log (Settings → Diagnostics → Activity) now also
+  records each AI engine and OCR-file install: when it started and whether it finished or failed,
+  never a file path (#843).
 
 ### Fixed
 
@@ -111,6 +118,12 @@ from its first public `1.0.0` release onward.
   Diagnostics compares the engine with the version this app is built for. The voice engine's
   install hint follows the same list. If you added engine entries to your drive's
   `model-manifests/runtime-sources.yaml` yourself, only the drive scripts use them now (#842).
+- **`fetch-runtime` no longer replaces an AI engine that the app updated.** After the app updated
+  an engine on a drive whose engine list was not refreshed, running `fetch-runtime` on that drive
+  saw a version that differed from the drive's list and downloaded the older one over it. The
+  script now keeps an engine that is newer than the drive's list and says so; pass
+  `-AllowDowngrade` (`--allow-downgrade` in the `.sh` script) to replace it anyway. Building a
+  Kit with `build-commercial-drive` still installs exactly the version the app ships with (#873).
 - **A workspace that could not finish opening is no longer reported as damaged.** When unlocking
   failed after the password was accepted, for example because the drive was nearly full while
   the app updated the workspace after an update, the lock screen said the workspace data was
@@ -275,6 +288,14 @@ from its first public `1.0.0` release onward.
   first and put in place only when complete, like the other exports, so that message is true.
   When an export fails while writing, for example an evidence pack, the error shown now names
   the real cause, such as a full drive, instead of a later error from closing the file (#838).
+- **A settings save from the app's window can change only the settings a screen offers.** It
+  could also write records that only the app itself keeps: whether the workspace is encrypted,
+  which models are active, the benchmark and graphics card results, and the list of model files
+  already checked, which lets a file skip its next check. No screen did this, but a fault in the
+  window could have. Such values are now ignored and the rest of the save goes through. The
+  retrieval settings that no screen shows are kept within fixed limits as well: a negative or
+  huge number of excerpts is brought into range, and NaN or infinity, which used to be stored as
+  an empty value, is no longer stored (#868).
 
 ## [0.1.65] — 2026-11-11
 

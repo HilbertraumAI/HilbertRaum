@@ -10,6 +10,7 @@ import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJ
 import { REPO_ROOT, repoText } from '../helpers/repo-files'
 import { SCRIPT_LEGS, downloadEnv, isolatedScripts, outputOf, scriptRoot } from '../helpers/script-legs'
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
+import { MARKER_ROWS, type MarkerFamily } from '../helpers/fetch-runtime-markers'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // Executes the drive-builder scripts (#233, #234) — unlike script-drift.test.ts, which is
@@ -1031,6 +1032,57 @@ for (const leg of SCRIPT_LEGS) {
         expect(r.status, out).toBe(0)
         expect(out).toContain(line)
         expect(/skip \(/.test(out)).toBe(skipped)
+      })
+    })
+
+    // #873: an engine newer than the drive's pin was put there by a newer app (#516, #842); the script used to
+    // re-fetch the drive's older pin over it. The table is shared with script-drift.test.ts's ordering row.
+    describe('fetch-runtime keeps an engine newer than the drive pin (#873)', () => {
+      const WHISPER_BLOCK = [
+        'whisper_cpp:',
+        '  version: v1.8.6',
+        '  builds:',
+        '    - os: win',
+        '      arch: x64',
+        '      backend: cpu',
+        '      url: https://example.invalid/whisper-bin-x64.zip',
+        `      sha256: ${REAL_SHA}`,
+        '      extract_to: runtime/whisper.cpp/win',
+        ''
+      ].join('\n')
+      const DIRS: Record<MarkerFamily, string[]> = {
+        llama_cpp: ['llama.cpp', 'win'],
+        whisper_cpp: ['whisper.cpp', 'win'],
+        kiwix_tools: ['kiwix-tools', 'win']
+      }
+      const FILES: Record<MarkerFamily, readonly string[]> = {
+        llama_cpp: ['llama-server.exe'],
+        whisper_cpp: ['whisper-cli.exe'],
+        kiwix_tools: KIWIX_WIN
+      }
+
+      it.each(MARKER_ROWS.map((row) => [row.title, row] as const))('%s', (_title, row) => {
+        const root = scratchTarget(REAL_SHA, (y) => `${y}${WHISPER_BLOCK}`)
+        const dir = join(root, 'runtime', ...DIRS[row.family], ...(row.cpuNet ? ['cpu'] : []))
+        mkdirSync(dir, { recursive: true })
+        for (const name of FILES[row.family]) writeFileSync(join(dir, name), 'fake')
+        // #729: an install the script keeps still loses the tunnel program, as on the current-pin skip path.
+        if (row.family === 'llama_cpp') writeFileSync(join(dir, 'llama-connect.exe'), 'tunnel')
+        writeFileSync(join(dir, '.hilbertraum-runtime.json'), JSON.stringify({ ...row.marker, os: 'win', arch: 'x64' }))
+        const args = [f('Target'), root, f('Family'), row.family, f('Os'), 'win', f('Arch'), 'x64', ...(row.cpuNet ? [f('Backend'), 'cpu'] : [])]
+        const r = leg.run(fetcher, [...args, f('DryRun'), ...row.flags.map((flag) => f(flag))])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        if (row.expect === 'skip-newer') {
+          expect(out).toContain(`${row.marker.version} is newer than this drive's pin ${row.pin}, installed by the app; pass ${f('AllowDowngrade')} to replace it`)
+          expect(out).not.toContain('present but')
+          expect(out.includes('would leave out: llama-connect.exe')).toBe(row.family === 'llama_cpp')
+        } else {
+          expect(out).toContain('present but')
+          expect(out).not.toMatch(/skip \(/)
+          expect(out).not.toContain('is newer than')
+        }
+        expect(out.includes(`commercial: replacing the newer ${row.marker.version} with the pinned ${row.pin}`)).toBe(row.expect === 'refetch-commercial')
       })
     })
 

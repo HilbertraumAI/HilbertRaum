@@ -789,7 +789,8 @@ exposed to logging via `WorkspaceController.encryptionKey()` (the same data key 
 ## Audit log data class (Phase 19)
 
 `services/audit.ts` records app activity into the spec §8 `runtime_events` table. The recorded
-families (`AuditEventType` in `shared/types.ts`) span model starts/stops and downloads; document
+families (`AuditEventType` in `shared/types.ts`) span model starts/stops and downloads; the AI engine
+and OCR-file installs (`engine_install_*`, `ocr_install_*`, #843); document
 imports/deletes and lifecycle/collection changes (`document_lifecycle_changed`, `collection_*`);
 document tasks and exports (`document_task_*`, `document_exported`/`summary_exported`); conversation
 lifecycle (`conversation_*`) and the per-answer exports (`message_table_exported`,
@@ -804,7 +805,12 @@ class is defined by a **hard privacy rule**:
   chat content); a code-block save (#286) records `{ messageId, bytes, extension }` — the
   extension is safe only because it comes from the fixed allowlist in
   `shared/code-block-export.ts` (a closed set), never from the fence info string, which is
-  model output; `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
+  model output; an engine or OCR install (#843) records code names, versions, byte counts and
+  content-free reason codes (`{ jobId, kind, families, versions, sizeBytes, trigger }` / `{ jobId,
+  languages, bytes, trigger }`, plus `reason`/`cause` on a failure) — never the job's `error`, which is
+  friendly copy that can carry a drive path or a server's reply (`install-audit.test.ts` pushes a
+  sentinel and the drive path through a failure's error and proves neither reaches a row);
+  `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
   `gpuMode`, `developerMode`) and their boolean/enum values, never any other setting's value.
   **Document titles/filenames are content (S1, full-audit-2026-06-30).** `document_imported` /
   `document_reindexed` (incl. the doc-task *materialize* path) record `documentId` + `status` +
@@ -2663,6 +2669,27 @@ local; the answer/image are content-class and never logged/audited (the vision s
 this); and binding picker-sourced analyses to a token would not help the drag-drop case, which is
 legitimately raw-bytes. Requiring a token *only* for picker-sourced analyses (so drag-drop alone uses raw
 bytes) remains a possible future tightening; the boundary is recorded here rather than changed.
+
+### Settings writes — the renderer writes only its own keys (#868)
+`settings:update` passed the renderer's whole patch to the settings write gate, which checks what a
+value may hold but not who may write the key. Since #868 (#858 had done it for `workspaceMode` alone)
+the handler keeps only the keys `SETTINGS_WRITERS` (`shared/settings-writers.ts`) marks renderer-owned
+and saves them; every other key is dropped whatever its value. The main-owned keys are the workspace's
+mode, the active model ids (`models:select` / `runtime:use` set them after checking that the model
+exists and has the role), the benchmark, placement and GPU records, and `checksumCache`, where a
+forged entry with a weights file's size and modification time would make that file count as checked
+without being hashed. The patch is **dropped from, never refused**: a refusal would show the user a
+save error for a renderer bug they cannot fix and lose the keys that were fine, and a compromised
+renderer gains nothing either way. The kept patch is a fresh object built from own keys, so
+`__proto__` cannot ride along, and every side effect of the save (the network switch, the reranker
+suspend, the UI language, the Performance push, the local-API lifecycle, the audit sweep) reads it.
+The log line names a dropped key only when it is a settings key and only counts the others, so no
+string the renderer chose reaches the diagnostics log. The table is typed `satisfies Record<keyof
+AppSettings, …>`, so a new settings key fails typecheck until it has an owner, and the preload's
+`updateSettings` takes renderer-owned keys only. The five retrieval tuning keys stay renderer-writable
+(no screen writes them; a maintainer may tune them in the running app) and the write gate bounds them
+(`data-contracts.md` "Settings storage"). None of this was reachable from the UI, where every screen
+sends only its own keys: the gap was a renderer bug's or a compromised renderer's.
 
 ## Re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, item B — design record)
 

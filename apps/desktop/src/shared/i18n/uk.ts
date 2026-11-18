@@ -1337,6 +1337,18 @@ export const uk: UiCatalog<'uk'> = {
   'models.engine.downloadingNoTotal': 'Завантаження ШІ-рушія…',
   'models.engine.verifying': 'Перевірка ШІ-рушія…',
   'models.engine.extracting': 'Розпакування ШІ-рушія…',
+  'models.engineConfirm.chatEngine': 'ШІ-рушій (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Рушій мовлення (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'резервна версія лише для процесора',
+  'models.engineConfirm.version': 'Версія',
+  'models.engineConfirm.total': 'Загальний розмір',
+  'models.engineConfirm.licenseIncludes': '{license}, містить {bundled}',
+  'models.engineConfirm.hint':
+    'Кожен файл завантажується з указаної адреси й перед використанням звіряється з очікуваною ' +
+    'контрольною сумою. Нічого про вас чи ваші документи не надсилається.',
+  'models.engineConfirm.updateNote':
+    'Ваша модель і далі відповідає, поки триває завантаження. Вона призупиняється на кілька секунд ' +
+    'лише тоді, коли замінюються файли.',
   'models.voiceEngine.title': 'Додати голосове диктування (необовʼязково)',
   'models.voiceEngine.explain':
     'Відповіді в чаті та за документами вже працюють на цьому диску. Рушій мовлення ' +
@@ -2002,6 +2014,12 @@ export const uk: UiCatalog<'uk'> = {
   'diag.audit.model_download_started': 'Завантаження розпочато',
   'diag.audit.model_download_verified': 'Завантаження перевірено',
   'diag.audit.model_download_failed': 'Не вдалося завантажити',
+  'diag.audit.engine_install_started': 'Завантаження рушія або інструментів розпочато',
+  'diag.audit.engine_install_finished': 'Рушій або інструменти встановлено',
+  'diag.audit.engine_install_failed': 'Не вдалося встановити рушій або інструменти',
+  'diag.audit.ocr_install_started': 'Завантаження OCR-файлів розпочато',
+  'diag.audit.ocr_install_finished': 'OCR-файли встановлено',
+  'diag.audit.ocr_install_failed': 'Не вдалося встановити OCR-файли',
   'diag.audit.document_imported': 'Документ імпортовано',
   'diag.audit.document_reindexed': 'Документ переіндексовано',
   'diag.audit.document_deleted': 'Документ видалено',

@@ -329,12 +329,25 @@ export interface SidecarFamilySpec {
    */
   optional?: boolean
   /**
-   * The licence the consent dialog asks the user to acknowledge before an OPTIONAL family is
-   * fetched (#339 P8-2), SPDX-style. CODE-side on purpose: a user-writable drive yaml must not
-   * be able to change what the user is told they are accepting. Required families carry none —
-   * their permissive licences ride the notices files, not a consent step.
+   * The family's licence, SPDX-style, as its confirmation dialog states it. CODE-side on purpose:
+   * a user-writable drive yaml must not be able to change what the user is told. For the OPTIONAL
+   * family it is what the consent dialog asks the user to acknowledge (#339 P8-2); the required
+   * families' licences are pre-reviewed (docs/model-policy.md), so their dialog only states them
+   * (#843), with no acknowledgement.
    */
   license?: string
+  /**
+   * #843: the other licences an archive carries beside the family's own, per OS, as the dialog
+   * names them after "includes" (the licence records in docs/model-policy.md). Only the Windows
+   * archives bundle a library under another licence: LLVM's `libomp.dll` in llama.cpp's, SDL2 in
+   * whisper.cpp's.
+   */
+  bundledLicenses?: Partial<Record<RuntimeOs, string>>
+  /**
+   * #843: the upstream repository whose `LICENSE` at the pinned tag the dialog links to
+   * (`<repo>/blob/<version>/LICENSE`). Absent for a family whose dialog links elsewhere.
+   */
+  licenseRepo?: string
   /**
    * Executables the release archive carries that an install never keeps (#729), base names like
    * `binaryBase`. CODE-side on purpose, like `alsoRequired`: a user-writable drive yaml must not be
@@ -360,8 +373,25 @@ export const LLAMA_CONNECT_BINARY_BASE = 'llama-connect'
  * first REQUIRED family.
  */
 export const SIDECAR_FAMILY_SPECS: readonly SidecarFamilySpec[] = [
-  { family: 'llama_cpp', binaryBase: 'llama-server', neverInstalled: [LLAMA_CONNECT_BINARY_BASE] },
-  { family: 'whisper_cpp', binaryBase: WHISPER_BINARY_BASE },
+  {
+    family: 'llama_cpp',
+    binaryBase: 'llama-server',
+    neverInstalled: [LLAMA_CONNECT_BINARY_BASE],
+    // docs/model-policy.md "License-review record — llama.cpp b12110": MIT; both Windows archives
+    // ship LLVM's libomp.dll with its LICENSE-LLVM-OpenMP (Apache-2.0 WITH LLVM-exception).
+    license: 'MIT',
+    bundledLicenses: { win: 'Apache-2.0 WITH LLVM-exception (libomp.dll)' },
+    licenseRepo: 'https://github.com/ggml-org/llama.cpp'
+  },
+  {
+    family: 'whisper_cpp',
+    binaryBase: WHISPER_BINARY_BASE,
+    // docs/model-policy.md "License-review record — whisper.cpp v1.8.6": MIT; the Windows zip
+    // ships SDL2.dll (zlib licence).
+    license: 'MIT',
+    bundledLicenses: { win: 'zlib (SDL2.dll)' },
+    licenseRepo: 'https://github.com/ggml-org/whisper.cpp'
+  },
   {
     family: 'kiwix_tools',
     binaryBase: KIWIX_SERVE_BINARY_BASE,

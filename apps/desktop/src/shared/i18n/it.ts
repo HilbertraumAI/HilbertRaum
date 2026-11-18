@@ -1318,6 +1318,18 @@ export const it: UiCatalog<'it'> = {
   'models.engine.downloadingNoTotal': 'Download del motore IA in corso…',
   'models.engine.verifying': 'Controllo del motore IA in corso…',
   'models.engine.extracting': 'Estrazione del motore IA in corso…',
+  'models.engineConfirm.chatEngine': 'Motore IA (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Motore vocale (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'versione di riserva solo per il processore',
+  'models.engineConfirm.version': 'Versione',
+  'models.engineConfirm.total': 'Dimensioni totali',
+  'models.engineConfirm.licenseIncludes': '{license}, include {bundled}',
+  'models.engineConfirm.hint':
+    'Ogni file viene scaricato dall’indirizzo indicato e, prima dell’uso, controllato con il ' +
+    'checksum previsto. Non viene inviato nulla su di te o sui tuoi documenti.',
+  'models.engineConfirm.updateNote':
+    'Il tuo modello continua a rispondere durante il download. Si ferma per qualche secondo solo ' +
+    'mentre i file vengono sostituiti.',
   'models.voiceEngine.title': 'Aggiungi la dettatura vocale (opzionale)',
   'models.voiceEngine.explain':
     'Le risposte in chat e sui documenti funzionano già su questa unità. Il motore vocale è ' +
@@ -2000,6 +2012,12 @@ export const it: UiCatalog<'it'> = {
   'diag.audit.model_download_started': 'Download avviato',
   'diag.audit.model_download_verified': 'Download controllato',
   'diag.audit.model_download_failed': 'Download non riuscito',
+  'diag.audit.engine_install_started': 'Download del motore o degli strumenti avviato',
+  'diag.audit.engine_install_finished': 'Motore o strumenti installati',
+  'diag.audit.engine_install_failed': 'Installazione del motore o degli strumenti non riuscita',
+  'diag.audit.ocr_install_started': 'Download dei file OCR avviato',
+  'diag.audit.ocr_install_finished': 'File OCR installati',
+  'diag.audit.ocr_install_failed': 'Installazione dei file OCR non riuscita',
   'diag.audit.document_imported': 'Documento importato',
   'diag.audit.document_reindexed': 'Documento reindicizzato',
   'diag.audit.document_deleted': 'Documento eliminato',

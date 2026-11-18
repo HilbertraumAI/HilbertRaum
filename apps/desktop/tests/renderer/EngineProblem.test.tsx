@@ -25,7 +25,7 @@ import type { Translator } from '../../src/renderer/components/translator'
 import { appShellStubs } from '../helpers/app-shell'
 import { deferred } from '../helpers/deferred'
 import { stubHomeApi } from '../helpers/home-screen'
-import { ENGINE_INSTALLED, engineJob, modelsScreenStubs, stubModelsApi } from '../helpers/model-fixtures'
+import { ENGINE_INSTALLED, engineJob, enginePreview, modelsScreenStubs, stubModelsApi } from '../helpers/model-fixtures'
 import { laptopResult } from '../helpers/performance-screen'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -254,6 +254,8 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       ),
       ...(opts.downloadEngine ? { downloadEngine: opts.downloadEngine } : {}),
       ...(opts.getEngineJob ? { getEngineJob: opts.getEngineJob } : {}),
+      // #843: what the reinstall's confirmation states (one archive is enough for these rows).
+      getEnginePlan: vi.fn(async () => enginePreview({ kind: 'reinstall' })),
       getAppStatus: vi.fn(async () => appStatus({ engineProblems: opts.problems() })),
       getEngineStatus: vi.fn(async () => opts.engine ?? ENGINE_INSTALLED),
       onEngineProblemsChanged: vi.fn((cb: () => void) => {
@@ -362,6 +364,8 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       // The fix leads; Check again (for a fix made elsewhere) follows it.
       expect(reinstall.compareDocumentPosition(check) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       await user.click(reinstall)
+      // #843: it asks first, under the action's own name.
+      await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: en('models.engineProblem.reinstall') }))
       expect(downloadEngine).toHaveBeenCalledWith({ families: ['llama_cpp'], reinstall: true })
       // The progress is this banner's: the missing-engine banner never shows a reinstall.
       expect(await within(banner()).findByText(en('models.engine.progress', { pct: 50 }))).toBeInTheDocument()
@@ -426,6 +430,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       const hint = reinstall.closest('.engine-problem-hint') as HTMLElement
       const installBanner = screen.getByText(en('models.engine.title')).closest('.banner') as HTMLElement
       await user.click(reinstall)
+      await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: en('models.engineProblem.voiceReinstall') }))
       expect(downloadEngine).toHaveBeenCalledWith({ families: ['whisper_cpp'], reinstall: true })
       expect(await within(hint).findByText(en('models.engine.progress', { pct: 50 }))).toBeInTheDocument()
       // The install banner does not claim that job, and waits for it: one engine job at a time.

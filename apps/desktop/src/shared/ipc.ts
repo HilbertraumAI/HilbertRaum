@@ -221,6 +221,11 @@ export const IPC = {
   // stop falling back to the built-in demo runtime. Same gates as model downloads.
   /** Is the llama.cpp engine installed, and can it be fetched for this host? */
   getEngineStatus: 'engine:status',
+  /**
+   * #843: what a `downloadEngine` request would fetch (`EngineDownloadPreview`), for its confirmation
+   * dialog. Takes the same optional payload; read-only (no network, no write).
+   */
+  getEnginePlan: 'engine:plan',
   /** Start fetching + extracting the host's llama-server build (gated: policy ∧ setting). */
   downloadEngine: 'engine:download',
   /** Poll the engine-download job's progress/status. */

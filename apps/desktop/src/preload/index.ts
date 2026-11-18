@@ -34,6 +34,7 @@ import type {
   DownloadJob,
   DriveStatus,
   EngineDownloadJob,
+  EngineDownloadPreview,
   EngineDownloadRequest,
   EngineRecheckResult,
   EngineStatus,
@@ -94,6 +95,7 @@ import type {
   WorkspaceMode,
   WorkspaceStateInfo
 } from '../shared/types'
+import type { RendererSettingsPatch } from '../shared/settings-writers'
 
 // The single, typed bridge between renderer and main. The renderer has no
 // direct Node or network access — it can only call what is exposed here.
@@ -103,7 +105,9 @@ const api = {
   perfMark: (event: string): void => ipcRenderer.send(IPC.perfMark, event),
   getDriveStatus: (): Promise<DriveStatus> => ipcRenderer.invoke(IPC.getDriveStatus),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
-  updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
+  /** Renderer-owned keys only (#868): main drops any other key from the patch, and this type makes a
+   *  literal patch that names one fail typecheck at the call site. */
+  updateSettings: (patch: RendererSettingsPatch): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.updateSettings, patch),
 
   // ---- Privacy / offline policy ----
@@ -199,6 +203,15 @@ const api = {
   // ---- In-app engine (llama.cpp sidecar) downloader ----
   /** Is the real AI engine installed, and (if not) can it be fetched for this host? */
   getEngineStatus: (): Promise<EngineStatus> => ipcRenderer.invoke(IPC.getEngineStatus),
+  /**
+   * #843: what `downloadEngine(request)` would fetch — every archive with its version, size, licence
+   * and full address — for the confirmation dialog. The same payload rule as `downloadEngine`: no
+   * argument = the default install. Read-only.
+   */
+  getEnginePlan: (request?: EngineDownloadRequest): Promise<EngineDownloadPreview> =>
+    request === undefined
+      ? ipcRenderer.invoke(IPC.getEnginePlan)
+      : ipcRenderer.invoke(IPC.getEnginePlan, request),
   /**
    * Start fetching + extracting the host's engine build(s). Gated like model downloads. No
    * argument = the DEFAULT install (every missing required family: llama.cpp, whisper.cpp) —

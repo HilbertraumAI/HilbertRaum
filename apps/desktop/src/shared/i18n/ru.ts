@@ -1315,6 +1315,18 @@ export const ru: UiCatalog<'ru'> = {
   'models.engine.downloadingNoTotal': 'Скачивание ИИ-движка…',
   'models.engine.verifying': 'Проверка ИИ-движка…',
   'models.engine.extracting': 'Распаковка ИИ-движка…',
+  'models.engineConfirm.chatEngine': 'ИИ-движок (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Голосовой движок (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'резервная сборка только для процессора',
+  'models.engineConfirm.version': 'Версия',
+  'models.engineConfirm.total': 'Общий размер',
+  'models.engineConfirm.licenseIncludes': '{license}, включает {bundled}',
+  'models.engineConfirm.hint':
+    'Каждый файл скачивается с указанного адреса, и перед использованием его контрольная сумма ' +
+    'сверяется с ожидаемой. Никакие сведения о вас или ваших документах не отправляются.',
+  'models.engineConfirm.updateNote':
+    'Ваша модель продолжает отвечать, пока идет скачивание. Она приостанавливается на несколько ' +
+    'секунд, только пока заменяются файлы.',
   'models.voiceEngine.title': 'Добавьте голосовой ввод (необязательно)',
   'models.voiceEngine.explain':
     'Ответы в чате и по документам на этом диске уже работают. Голосовой движок необязателен — ' +
@@ -1989,6 +2001,12 @@ export const ru: UiCatalog<'ru'> = {
   'diag.audit.model_download_started': 'Скачивание начато',
   'diag.audit.model_download_verified': 'Скачанный файл проверен',
   'diag.audit.model_download_failed': 'Ошибка скачивания',
+  'diag.audit.engine_install_started': 'Скачивание движка или инструментов начато',
+  'diag.audit.engine_install_finished': 'Движок или инструменты установлены',
+  'diag.audit.engine_install_failed': 'Ошибка установки движка или инструментов',
+  'diag.audit.ocr_install_started': 'Скачивание файлов OCR начато',
+  'diag.audit.ocr_install_finished': 'Файлы OCR установлены',
+  'diag.audit.ocr_install_failed': 'Ошибка установки файлов OCR',
   'diag.audit.document_imported': 'Документ импортирован',
   'diag.audit.document_reindexed': 'Документ переиндексирован',
   'diag.audit.document_deleted': 'Документ удален',

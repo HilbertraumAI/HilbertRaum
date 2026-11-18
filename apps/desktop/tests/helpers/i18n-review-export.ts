@@ -84,6 +84,7 @@ export const SECURITY_TEXT: readonly string[] = [
   'settings.network',
   'indicator',
   'models.confirm.hint',
+  'models.engineConfirm.hint',
   'diag.audit.offline_guard_violation',
   'skills.intro',
   'skills.perm',

@@ -1205,6 +1205,18 @@ export const tr: UiCatalog<'tr'> = {
   'models.engine.downloadingNoTotal': 'Yapay zekâ motoru indiriliyor…',
   'models.engine.verifying': 'Yapay zekâ motoru doğrulanıyor…',
   'models.engine.extracting': 'Yapay zekâ motoru arşivden çıkarılıyor…',
+  'models.engineConfirm.chatEngine': 'Yapay zekâ motoru (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Ses motoru (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'yalnızca işlemci için yedek derleme',
+  'models.engineConfirm.version': 'Sürüm',
+  'models.engineConfirm.total': 'Toplam boyut',
+  'models.engineConfirm.licenseIncludes': '{license}; ayrıca şunu içerir: {bundled}',
+  'models.engineConfirm.hint':
+    'Her dosya gösterilen adresten indirilir ve kullanılmadan önce beklenen sağlama toplamıyla ' +
+    'karşılaştırılır. Sizinle veya belgelerinizle ilgili hiçbir şey gönderilmez.',
+  'models.engineConfirm.updateNote':
+    'Modeliniz indirme sürerken yanıt vermeye devam eder. Yalnızca dosyalar değiştirilirken birkaç ' +
+    'saniye duraklar.',
   'models.voiceEngine.title': 'Sesle dikte ekleyin (isteğe bağlı)',
   'models.voiceEngine.explain':
     'Sohbet ve belge yanıtları bu sürücüde zaten çalışıyor. Ses motoru isteğe bağlıdır; yalnızca ' +
@@ -1846,6 +1858,12 @@ export const tr: UiCatalog<'tr'> = {
   'diag.audit.model_download_started': 'İndirme başlatıldı',
   'diag.audit.model_download_verified': 'İndirme doğrulandı',
   'diag.audit.model_download_failed': 'İndirme başarısız oldu',
+  'diag.audit.engine_install_started': 'Motor veya araç indirmesi başlatıldı',
+  'diag.audit.engine_install_finished': 'Motor veya araçlar kuruldu',
+  'diag.audit.engine_install_failed': 'Motor veya araç kurulumu başarısız oldu',
+  'diag.audit.ocr_install_started': 'OCR dosyalarının indirilmesi başlatıldı',
+  'diag.audit.ocr_install_finished': 'OCR dosyaları kuruldu',
+  'diag.audit.ocr_install_failed': 'OCR dosyalarının kurulumu başarısız oldu',
   'diag.audit.document_imported': 'Belge içe aktarıldı',
   'diag.audit.document_reindexed': 'Belge yeniden dizinlendi',
   'diag.audit.document_deleted': 'Belge silindi',

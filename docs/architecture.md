@@ -5920,8 +5920,27 @@ cites it as "In-app engine updates"._
   because that banner leads and a reinstall fetches the pin anyway. It joins the deep-link no-scroll
   predicate (the #539 note on #516), and a toast confirms a finished update. Diagnostics has an
   "Engine versions" row (and Copy-report line) naming every engine or `cpu/` net that is not the pin.
+- **The update asks first (#843, 2026-11-18).** Update opens the engine confirmation (the "In-app
+  engine installer" #843 addendum) with what this job will fetch: the main build and, when older, the
+  `cpu/` net, each "installed → pinned". The dialog's preview and `start()` select the archives with
+  one function, `planEngineSteps` (extracted from `start()`), so the rule "the notice never offers
+  what the update would refuse" now holds for the dialog's list too, for the selection (as of the
+  moment it opened; Confirm plans again), and P8's in-app updater extends that function, not a copy.
+  The preview does not run the checks outside the selection: the gates, the one-job check, an engine
+  in use (`main.engine.runtimeRunning` and its voice and tools twins) and the update's busy check
+  (`main.engine.updateBusy`). Those refusals can arrive after Confirm, as the same friendly errors
+  (research C §1.8 accepted this). The dialog's "the model pauses for a few seconds" note shows only
+  when the update includes the AI engine: a voice-engine-only update pauses the transcriber alone
+  (`pauseEngineUsers`).
 - **Scripts:** `fetch-runtime.{ps1,sh}` print a note when the drive's yaml pins a different version of
   the family than the repo's, and say to refresh the manifests (`prepare-drive`) first (`packaging.md`).
+  **Newer is never replaced there either (#873, 2026-11-18):** a present engine whose marker is NEWER
+  than the drive's pin, by `compareRuntimeVersions`'s order (re-spelled in both twins, held to one
+  shared table by `script-drift.test.ts`), is skipped with a line naming both versions, whatever its
+  backend, unless `-AllowDowngrade`/`--allow-downgrade` (not `-Force`: that is prepare-drive's
+  "overwrite config") or `-Commercial`/`--commercial` (a sold drive carries its app's pin; the script
+  says it is replacing the newer engine). An unorderable version re-fetches as before. Applies to
+  llama.cpp (main and `cpu/`), whisper.cpp and the knowledge-pack tools.
 - **The pin is the app's own (#842, 2026-11-17).** §1's "never the drive's" was the intent, but the
   handlers passed `ctx.manifestsDir`, which the launchers point at the drive's `model-manifests/`;
   only a direct start read the bundled copy. A new app copied onto a drive whose manifests were not
@@ -5931,10 +5950,11 @@ cites it as "In-app engine updates"._
   packaged build takes exactly `<resources>/model-manifests` (`process.resourcesPath`), with no
   walk-up that could reach the drive's copy above the app, and a dev build the checkout's. The
   model list keeps `ctx.manifestsDir`. Engine entries a drive owner adds to the drive's yaml (another OS's build, a mirror) reach the
-  scripts only. After an in-app update the drive's yaml is older than the engine on it, and both
-  drive-side checks compare markers with it for EQUAL: `fetch-runtime` run without `prepare-drive`
-  first re-installs the drive's older pin, and the sell gate (`assertCommercialDrive`) reports the
-  updated engine as not matching its pin. `prepare-drive` brings the yaml back in step.
+  scripts only. After an in-app update the drive's yaml is older than the engine on it. The sell gate
+  (`assertCommercialDrive`) compares markers with it for EQUAL and reports the updated engine as not
+  matching its pin; `fetch-runtime` run without `prepare-drive` first used to re-install the drive's
+  older pin too, and since #873 keeps the newer engine instead (above). `prepare-drive` brings the
+  yaml back in step.
 
 ### §4 Real-app verification (2026-10-05, DesktopDiT, GTX 1070 Ti, dev build)
 
@@ -7007,6 +7027,35 @@ kiwix-tools" (the license side), `docs/data-contracts.md` (the type-level shape)
 `docs/rag-design.md` §17 D-Z17 (the family contract from the knowledge-packs side, including the
 R-1 closure statement).
 
+**Addendum — #843, every engine install asks first (2026-11-18).** PRIVACY.md item 3 promises a
+dialog with the size, licence and address of "that specific download"; the engine's install
+banner, the #516 update notice and the #532 "Install … again" called `downloadEngine` on the click.
+Each now opens `EngineConfirmDialog` (`renderer/components`), the model dialog's `ConfirmDialog` +
+`<dl class="kv">` shape: per archive its version (for an update "installed → pinned"), backend,
+size, full URL in `<code>` and licence with its link and host (#236), the total when there is more
+than one archive, a "checked against its checksum, nothing about you is sent" hint, and for an update
+the pause note. Its title is the clicked surface's own title, its Confirm the action's own label;
+Confirm is disabled while the download gate is closed (`computeDownloadGate`). **Decisions:**
+(1) the facts come from **main** — `engine:plan` answers from `previewEngineDownload`, which runs
+`planEngineSteps`, the step selection `EngineDownloadManager.start()` itself runs (extracted from
+`start()` unchanged), with the same bundled pins and, for a reinstall, the same refused builds. A
+renderer-side reconstruction would have had to re-derive the `cpu/` net and the verdict store's
+builds and could drift; the equality table in `engine-plan.test.ts` holds the preview's URLs to the
+URLs the started job downloads. The preview runs the selection only, not `start()`'s other refusals
+(the gates, the one-job check, an engine in use, an update's busy check), so those can still arrive
+after Confirm as the same friendly error. The dialog shows the plan **at the moment it opened**:
+Confirm sends the same request and `start()` plans again, and main's gates decide again. If the drive changed in
+between (a background helper start reported a refused `cpu/` net while a reinstall dialog was open),
+the job does what the new plan says, and its audit record names what it really fetched; closing that
+gap would need a consent token, which decision (2) rules out. (2) **No consent token in main**: Confirm sends the unchanged request
+(the argument-less install stays argument-less), main checks the gates on every start as before, so
+the in-app updater's "one consent covers the engines inside an update" stays possible. (3) The
+licence is **code-side and pre-reviewed** (`SidecarFamilySpec.license`, `bundledLicenses` per OS,
+`licenseRepo`; `docs/model-policy.md` "What the in-app engine dialog states"), so there is no
+acknowledgement checkbox (the OCR pattern, not the kiwix one). (4) The sizes are the pins'
+`size_bytes` (labels only, never checked — the archive is checked by its SHA-256). The kiwix consent
+dialog is unchanged; its job is audited like every engine job (below).
+
 ## Diagnostics & transcript export (audit round)
 - `getRuntimeStatus` (read-only runtime health), `getLogTail` (tail of the local `app.log`), and
   `exportConversation` (spec §7.6 transcript export via the OS save dialog) round out spec §7.11/§7.6.
@@ -7057,7 +7106,9 @@ only), `registerModelIpc` (`model_selected/verified`, `runtime_started/stopped`)
 (`document_imported/reindexed/deleted`), `registerWorkspaceIpc`
 (`workspace_created/unlocked/locked/unlock_failed`), `registerDownloadIpc` → an injected
 `DownloadManagerDeps.audit` hook (`model_download_started/verified/failed` — the Phase-18
-follow-up), plus `main/index.ts` for `runtime_crashed`/`runtime_fallback` (the GPU
+follow-up), `registerEngineIpc` (#843: `engine_install_started/finished/failed` from the
+`engine:download` handler and the manager's `onSettled`; `ocr_install_started/finished/failed`
+through the `StartOcrInstallOptions.audit` sink it passes to every OCR job), plus `main/index.ts` for `runtime_crashed`/`runtime_fallback` (the GPU
 crash-fallback/ladder callbacks), `policy_warning` (startup `loadPolicy`), and
 `offline_guard_violation` (a new `assertOfflinePosture.onViolation` hook).
 
@@ -14732,6 +14783,17 @@ they rest on._
   the in-app action first, the script as the DIY alternative; the network-inventory sentence
   (pinned in five places by `repo-hygiene.test.ts`) gained its fourth item; PRIVACY.md's downloads
   section names the OCR files and their host.
+- **Audit (#843, 2026-11-18).** Every job records `ocr_install_started` when it starts and one
+  `ocr_install_finished` (with the activation `outcome`) or `ocr_install_failed` when its run has
+  settled, through `StartOcrInstallOptions.audit`, which `registerEngineIpc` passes as `ctx.audit` (the
+  Phase-19 rule: the IPC layer owns the wiring; the manager never sees the DB). Metadata
+  `{ jobId, languages, bytes, trigger: 'user' }` (the IPC layer adds `trigger`, as on the engine rows:
+  the rows are permanent and an app update will record the same types with its own); a failure's
+  `reason` is its `main.ocr.*` key's last part and its `cause` the log's own label (`http-404`,
+  `mismatch`, `rename`, …); a stop is `cancelled` or `networkOff` (#782). Never `job.error`. A lock
+  in the middle needs nothing: the recorder buffers while the DB is locked and writes in order after
+  the unlock. That buffer is memory only, so an end event still waiting there is lost if the app quits
+  before the next unlock (the same for an engine job), leaving a `started` row with no end.
 
 **§4 Tests.** `ocr-install.test.ts` (gates, payload, hostile `dest`, pin mismatch, bundled
 fallback, hash-is-state skip, mismatch keeps the old file, size cap, third-language survival,
@@ -14755,7 +14817,8 @@ either order).
   German UI; policy/`allowNetwork` off disables the action).
 - Pre-existing, out of scope (D7; not filed): engine `extract_to` unconstrained + destructive
   pre-clean; the model manifest `local_path` has no prefix rule; PRIVACY.md item 3 vs the
-  dialog-less engine banner; `translationAvailable` is read on mount only; release-only installs
+  dialog-less engine banner (fixed by #843: "In-app engine installer"); `translationAvailable` is
+  read on mount only; release-only installs
   have no app skills.
 
 ## Dependency remediation — design record (wave DEP-1, PR #77)

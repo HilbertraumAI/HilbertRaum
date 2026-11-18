@@ -193,6 +193,8 @@ drive is the same flow as building it, run again from a machine with the repo:
    `config/drive.json` and `config/policy.json` are kept, and `--force` would rewrite both to the
    defaults, resetting a drive owner's policy (`docs/packaging.md`, "To move a drive to the repo's pin").
 2. `fetch-models` / `fetch-runtime` download anything new (present + verified files are skipped).
+   An engine that the app updated past the drive's pin is kept as it is (#873); `--allow-downgrade`
+   replaces it with the drive's pin.
    On a Kit, `fetch-models --bundled`: plain `fetch-models` would preload the whole catalog (#766).
 3. **Delete every prior app artifact** at the drive root — `HilbertRaum-<old>-portable.exe`,
    `HilbertRaum-<old>.AppImage`, `HilbertRaum-<old>-mac-arm64.app.zip` — and any extracted

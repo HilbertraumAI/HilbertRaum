@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
 import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../../src/renderer/screens/ModelsScreen'
 import type { DownloadJob, EngineDownloadJob } from '../../src/shared/types'
 import { deferred } from '../helpers/deferred'
@@ -9,6 +9,7 @@ import {
   OBTAINABLE_DOWNLOAD,
   downloadJob,
   engineJob,
+  enginePreview,
   modelInfo,
   stubModelsApi
 } from '../helpers/model-fixtures'
@@ -91,6 +92,7 @@ describe('ModelsScreen — FE-4 setState-after-unmount guard (download and engin
       listModels,
       getEngineStatus: vi.fn(async () => ENGINE_MISSING),
       downloadEngine: vi.fn(async () => engineJob()),
+      getEnginePlan: vi.fn(async () => enginePreview()),
       getEngineJob
     })
 
@@ -98,6 +100,9 @@ describe('ModelsScreen — FE-4 setState-after-unmount guard (download and engin
     await flush()
 
     fireEvent.click(screen.getByRole('button', { name: 'Install AI engine' }))
+    await flush()
+    // #843: the install asks first.
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Install AI engine' }))
     await flush()
 
     await act(async () => {

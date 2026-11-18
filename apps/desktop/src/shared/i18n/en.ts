@@ -1359,6 +1359,18 @@ export const en = {
   'models.engine.downloadingNoTotal': 'Downloading the AI engine…',
   'models.engine.verifying': 'Verifying the AI engine…',
   'models.engine.extracting': 'Unpacking the AI engine…',
+  'models.engineConfirm.chatEngine': 'AI engine (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Voice engine (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'processor-only fallback',
+  'models.engineConfirm.version': 'Version',
+  'models.engineConfirm.total': 'Total size',
+  'models.engineConfirm.licenseIncludes': '{license}, includes {bundled}',
+  'models.engineConfirm.hint':
+    'Each file is downloaded from the address shown and checked against its expected checksum before ' +
+    'it is used. Nothing about you or your documents is sent.',
+  'models.engineConfirm.updateNote':
+    'Your model keeps answering while the download runs. It pauses for a few seconds only while the ' +
+    'files are replaced.',
   // Voice-engine-only note: the chat engine is installed (chat works for real); only the
   // optional voice engine (whisper.cpp) is missing, so this is a quiet info note — never the
   // "demo mode" alarm. Reuses the engine download job (progress/retry/policy) keys above.
@@ -1978,6 +1990,12 @@ export const en = {
   'diag.audit.model_download_started': 'Download started',
   'diag.audit.model_download_verified': 'Download verified',
   'diag.audit.model_download_failed': 'Download failed',
+  'diag.audit.engine_install_started': 'Engine or tools download started',
+  'diag.audit.engine_install_finished': 'Engine or tools installed',
+  'diag.audit.engine_install_failed': 'Engine or tools install failed',
+  'diag.audit.ocr_install_started': 'OCR file download started',
+  'diag.audit.ocr_install_finished': 'OCR files installed',
+  'diag.audit.ocr_install_failed': 'OCR file install failed',
   'diag.audit.document_imported': 'Document imported',
   'diag.audit.document_reindexed': 'Document re-indexed',
   'diag.audit.document_deleted': 'Document deleted',

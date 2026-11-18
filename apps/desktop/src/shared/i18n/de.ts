@@ -1376,6 +1376,18 @@ export const de: Record<keyof typeof en, string> = {
   'models.engine.downloadingNoTotal': 'KI-Engine wird heruntergeladen…',
   'models.engine.verifying': 'KI-Engine wird geprüft…',
   'models.engine.extracting': 'KI-Engine wird entpackt…',
+  'models.engineConfirm.chatEngine': 'KI-Engine (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Sprach-Engine (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'Ausweichversion nur für den Prozessor',
+  'models.engineConfirm.version': 'Version',
+  'models.engineConfirm.total': 'Gesamtgröße',
+  'models.engineConfirm.licenseIncludes': '{license}, enthält {bundled}',
+  'models.engineConfirm.hint':
+    'Jede Datei wird von der angezeigten Adresse heruntergeladen und vor der Verwendung mit ihrer ' +
+    'erwarteten Prüfsumme verglichen. Nichts über dich oder deine Dokumente wird gesendet.',
+  'models.engineConfirm.updateNote':
+    'Dein Modell antwortet weiter, solange der Download läuft. Nur während die Dateien ersetzt ' +
+    'werden, pausiert es einige Sekunden.',
   // Hinweis nur zur Sprach-Engine: die Chat-Engine ist installiert (Chat funktioniert echt);
   // nur die optionale Sprach-Engine (whisper.cpp) fehlt — daher ein ruhiger Info-Hinweis, kein
   // „Demo-Modus“-Alarm. Nutzt dieselben Download-Job-Schlüssel (Fortschritt/Wiederholen/Richtlinie).
@@ -1995,6 +2007,12 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.model_download_started': 'Download gestartet',
   'diag.audit.model_download_verified': 'Download verifiziert',
   'diag.audit.model_download_failed': 'Download fehlgeschlagen',
+  'diag.audit.engine_install_started': 'Download von Engine oder Werkzeugen gestartet',
+  'diag.audit.engine_install_finished': 'Engine oder Werkzeuge installiert',
+  'diag.audit.engine_install_failed': 'Installation von Engine oder Werkzeugen fehlgeschlagen',
+  'diag.audit.ocr_install_started': 'Download der OCR-Dateien gestartet',
+  'diag.audit.ocr_install_finished': 'OCR-Dateien installiert',
+  'diag.audit.ocr_install_failed': 'Installation der OCR-Dateien fehlgeschlagen',
   'diag.audit.document_imported': 'Dokument importiert',
   'diag.audit.document_reindexed': 'Dokument neu indexiert',
   'diag.audit.document_deleted': 'Dokument gelöscht',

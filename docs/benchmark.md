@@ -1049,9 +1049,10 @@ resident-sidecar transitions for the "Models on this computer" rows (`onResidenc
 `E5Embedder`, `LlamaReranker`, `TranslationRuntime`, `VisionRuntime` forwarded by
 `VisionService`: lazy start landed, idle teardown, suspend/stop, unexpected exit — the services
 stay Electron-free, the subscriptions live in `initBackend`); and the settings keys the snapshot
-reads when they change through `models:select` / `models:use` or `settings:update`
-(`PERFORMANCE_SETTINGS_KEYS`: the active slots, `contextTokens`, `contextTokensOverride`,
-`gpuMode` — not every settings write). No coalescing main-side; the renderer serialises its
+reads when they change: the active slots through `models:select` / `runtime:use`, and
+`contextTokens`, `contextTokensOverride` and `gpuMode` through `settings:update`
+(`PERFORMANCE_SETTINGS_KEYS` — not every settings write; since #868 that channel drops the
+active slots, which are main-owned). No coalescing main-side; the renderer serialises its
 refetches.
 
 **The screen's half of that contract** (`PerformanceScreen.tsx`): it subscribes to

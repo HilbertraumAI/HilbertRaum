@@ -24,7 +24,7 @@ getImportJob(jobId: string): Promise<ImportJobStatus>
 listDocuments(): Promise<DocumentInfo[]>
 deleteDocument(documentId: string): Promise<void>
 getSettings(): Promise<AppSettings>
-updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+updateSettings(patch: RendererSettingsPatch): Promise<AppSettings>  // renderer-owned keys only (#868)
 ```
 _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names in `src/shared/ipc.ts`.
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
@@ -201,7 +201,7 @@ Nothing reaches the workspace file, so an older build sees no change and `SCHEMA
 
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;
-`updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:true`
+`updateSettings(patch)` upserts (what each key may hold is the write gate below; who may write it through IPC is `SETTINGS_WRITERS`, see the end of this section); `seedSettings` seeds on first run. Default `allowNetwork:true`
 (network is PERMITTED on a fresh install so model/engine downloads work — the policy ceiling still
 wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
@@ -294,7 +294,8 @@ so the newer build still finds the choice. Before unlock the renderer cannot rea
 per-computer localStorage mirror `hilbertraum.uiLanguage` instead (D-L3).
 ⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
 unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
-`workspaceMode` is set to the active mode by the `WorkspaceController` at create, at a plaintext open and at every unlock, and the write gate accepts only `encrypted` or `plaintext_dev`. The renderer cannot set it: `settings:update` drops the key from a patch (#858).
+`workspaceMode` is set to the active mode by the `WorkspaceController` at create, at a plaintext open and at every unlock, and the write gate accepts only `encrypted` or `plaintext_dev`. The renderer cannot set it (#858).
+**Who writes which key (#868).** `settings:update` accepts only the keys [`SETTINGS_WRITERS`](../apps/desktop/src/shared/settings-writers.ts) marks renderer-owned (`satisfies Record<keyof AppSettings, 'renderer' | 'main'>`, so a new key fails typecheck until it has an owner). A main-owned key (`workspaceMode`, `activeModelId`, `activeEmbeddingModelId`, `lastBenchmark`, `benchmarkHistory`, `modelPlacements`, `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`, `checksumCache`) is dropped with a log line and the rest of the patch is saved; a key that is no setting is dropped and only counted in that line, never named. The main process writes its keys through `updateSettings(db, …)` directly (the active ids through `models:select` / `runtime:use`). The preload's `updateSettings(patch: RendererSettingsPatch)` makes a literal patch with a main-owned key fail typecheck in the renderer too. The 19 renderer-owned keys are the 14 the screens write plus the five retrieval tuning keys, which no screen writes; the write gate bounds those: `ragTopKInitial` and `ragTopKFinal` to 1–200 and `ragMaxContextTokens` to 256–131,072, each floored to a whole number and clamped, `ragMinSimilarity` clamped to 0–1, and a non-finite value of these four is dropped with the previous value kept; `contextTokens` keeps its 2,048 floor (a non-finite value still falls back to it) and is clamped to 131,072.
 
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
@@ -410,7 +411,7 @@ limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300
 a 15 s SSE drain-timeout reclaim wedged slots — the runtime's CB-5 watchdogs end a wedged
 sidecar with 502 `runtime_unresponsive`: no headers in 180 s, then before the first token 120 s
 of silence or 10 min without prompt progress, then 30 s without text; `local-api.md` §6.7, #598), body-idle 30 s (body phase only),
-maxConnections 16. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
+maxConnections 16 per listener: one on 127.0.0.1 and one on ::1, so up to 32 at once. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
 post-unlock seams via `maybeStartLocalApi` when policy ∧ setting permit (D3/D7) — both seams
 delegate to `applyLocalApiSettings` (one gate); stopped first in `runLockTeardown` (best-effort,
 pinned) + `performShutdown` (pinned); start/stop/applySettings are SERIALIZED inside the server
@@ -1491,6 +1492,27 @@ head's own weights + KV.
   partial test contexts stay valid; every call site is `ctx.audit?.(…)`.
 ✅ **`services/downloads.ts` seam (additive):** `DownloadManagerDeps.audit?` (`DownloadAuditType` =
   the three `model_download_*` values) — injected by `registerDownloadIpc` in production.
+✅ **Engine and OCR installs (#843, additive):** `engine_install_started | engine_install_finished |
+  engine_install_failed`, recorded in `registerEngineIpc` (started once `start()` has resolved, in the
+  `engine:download` handler — a job cannot settle before that, and nothing reorders the two — and the end
+  from `EngineDownloadManager.onSettled`, whose listener now also gets `EngineJobEnd { reason, cause?,
+  preview }`; `kind`, `versions` and `sizeBytes` come from the job's stored plan alone). Neither call can
+  fail the install: an audit fault is logged and dropped. Metadata `{ jobId, kind:
+  'install'|'update'|'reinstall', families, versions: { <family>: <pin> }, sizeBytes: number|null, trigger:
+  'user' }`; a failure adds `reason` (`cancelled`, `networkOff`, `checksumMismatch`, `fileMissing`,
+  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, and `internal` for an exception no
+  step caught — the job then ends `failed` instead of staying in a live status) and, for `download`, `cause`
+  (`failureReason`: `network`, `http-404`, `write`, …). `ocr_install_started | ocr_install_finished |
+  ocr_install_failed` come from `services/ocr-install.ts` through the new `StartOcrInstallOptions.audit?`
+  sink, which `registerEngineIpc` wires to `ctx.audit` adding the same `trigger: 'user'`: `{ jobId,
+  languages, bytes, trigger }`, plus `outcome` when finished and `reason` (the `main.ocr.*` key's last
+  part, `cancelled` or `networkOff`) and `cause` when not; the manager calls the sink inside a guard at both
+  ends, so a failing sink never fails or blocks the install. Never `job.error` (friendly copy that can carry
+  a path). A request refused before a job exists records nothing, as a model download's. A knowledge-pack
+  tools install is an engine job, so it is recorded as `engine_install_*` with `families: ['kiwix_tools']`
+  (the labels say "engine or tools"). An end that is still in the recorder's memory buffer (workspace
+  locked) when the app quits is lost. The names are permanent: an in-app updater records the same types
+  with its own `trigger`.
 ✅ **`services/offlineGuard.ts` seam (additive):** `AssertOfflinePostureDeps.onViolation?(host)`.
 ✅ **IPC** `ipc/registerAuditIpc.ts` — `getAuditEvents`, `exportAuditLog` (JSON, save-dialog
   pattern). **Renderer:** Diagnostics Activity card (on-demand, type filter, paging, export).
@@ -2196,6 +2218,25 @@ whole renderer-visible surface.
   count stays 145) and **no preload change** — `missingOptionalFamilies` and the gate additions ride the existing
   `engineStatus` payload / the existing assert-tool call, unread by the renderer until the
   consent step (#339 P8-2).
+  **#843 additions (the engine's confirmation; one new channel, additive):** `getEnginePlan(request?:
+  EngineDownloadRequest): Promise<EngineDownloadPreview>` (`engine:plan`, read-only; the preload sends
+  NO payload for the argument-less call, as `downloadEngine` does). The handler validates the request
+  exactly like `engine:download` (`parseEngineDownloadRequest`, then `main.engine.nothingToRepair` for a
+  reinstall without a damaged-files verdict) and answers from `previewEngineDownload` = the step
+  selection `EngineDownloadManager.start()` runs (`planEngineSteps`), with the same bundled pins and,
+  for a reinstall, the same refused builds — or throws the selection refusal `start()` would at that
+  moment (`nothingToUpdate`, `alreadyInstalled`, `noHostBuild`, …). The gates, the one-job check, the
+  engine-in-use refusals (`main.engine.runtimeRunning` and its twins) and the update's
+  `main.engine.updateBusy` are not part of it; `start()` and the update handler check them after
+  Confirm (and plan again). `EngineDownloadPreview = { kind:
+  'install'|'update'|'reinstall', items: EngineDownloadPreviewItem[], totalBytes: number|null }`, with
+  `EngineDownloadPreviewItem = { family, version, installed: string|null, backend, os, arch, safetyNet,
+  url, sizeBytes: number|null, license, bundledLicense: string|null, licenseUrl: string|null }`.
+  `license`, `bundledLicense` (per OS) and `licenseUrl` (`<repo>/blob/<version>/LICENSE`, only for a
+  plain tag) come from the code-side `SidecarFamilySpec` (new optional `bundledLicenses`,
+  `licenseRepo`; `license` is now set for the two required families too), `sizeBytes` from the pin's
+  `size_bytes`, which every committed llama.cpp and whisper.cpp build now carries. The renderer sends
+  Confirm's request unchanged to `engine:download`: main keeps no consent token.
 - **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
   (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
   all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:
