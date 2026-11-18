@@ -608,9 +608,14 @@ export interface EngineJobSteps {
  * refusal. `EngineDownloadManager.start()` runs it after its gates and its one-job check, and the
  * confirmation dialog's preview (`engine:plan`, {@link previewEngineDownload}) runs the same
  * function, so the dialog states what the job plans to fetch when it opens — the `cpu/` net an update
- * adds, the builds a reinstall replaces — and never offers what `start()` would refuse at that moment
- * (#516's rule for the update notice). Confirm sends the request unchanged and `start()` plans again. P8's in-app updater extends this function, not a copy of it. Reads the yaml and the
- * install markers only; fetches nothing.
+ * adds, the builds a reinstall replaces — and never offers a selection `start()` would refuse at that
+ * moment (#516's rule for the update notice). It covers the selection only: the gates, the one-job
+ * check, an engine in use (`main.engine.runtimeRunning`, `…transcriptionRunning`,
+ * `…knowledgePackToolsRunning`) and an update's busy check (`main.engine.updateBusy`) stay `start()`'s
+ * and the update handler's, so those refusals can arrive after Confirm, as the same friendly errors
+ * (research C §1.8). Confirm sends the request unchanged and `start()` plans again. P8's in-app updater
+ * extends this function, not a copy of it. Reads the yaml and the install markers only; fetches
+ * nothing.
  */
 export function planEngineSteps(opts: EngineStepRequest): EngineJobSteps {
   if (!opts.manifestsDir || !loadSourcesResult(opts.manifestsDir)) {
@@ -748,6 +753,8 @@ export type EngineJobEndReason =
   | 'incomplete'
   | 'install'
   | 'notReplaced'
+  // A failure outside every step that records its own reason (an unexpected exception in the run).
+  | 'internal'
 
 /** What a settled job's listeners learn beside its snapshot (#843). */
 export interface EngineJobEnd {
@@ -881,20 +888,25 @@ export class EngineDownloadManager {
       ...(reinstall ? { reinstall } : {}),
       ...(update ? { update } : {})
     })
-    void this.run(job, steps, controller, opts.beforeReplace).finally(() => {
-      this.runSettled = true
-      if (this.active?.jobId === job.jobId) this.active = null
-      // #516: every outcome — the IPC layer resumes what an update paused, done or not.
-      const settled = this.get(job.jobId)
-      const end = this.jobEnd(settled)
-      for (const listener of this.settledListeners) {
-        try {
-          listener(settled, end)
-        } catch (err) {
-          this.deps.log?.('Engine job settle listener failed', String(err))
+    void this.run(job, steps, controller, opts.beforeReplace)
+      // Every expected failure sets the status and its reason where it happens. An unexpected exception
+      // (one no step catches) used to leave the job reading 'downloading' or 'extracting' for good — a
+      // renderer polling it never saw an end — and an unhandled rejection. It ends the job instead.
+      .catch((err: unknown) => this.failUnexpectedly(job, err))
+      .finally(() => {
+        this.runSettled = true
+        if (this.active?.jobId === job.jobId) this.active = null
+        // #516: every outcome — the IPC layer resumes what an update paused, done or not.
+        const settled = this.get(job.jobId)
+        const end = this.jobEnd(settled)
+        for (const listener of this.settledListeners) {
+          try {
+            listener(settled, end)
+          } catch (err) {
+            this.deps.log?.('Engine job settle listener failed', String(err))
+          }
         }
-      }
-    })
+      })
     return { ...job }
   }
 
@@ -903,14 +915,26 @@ export class EngineDownloadManager {
     return this.previews.get(jobId) ?? null
   }
 
+  /**
+   * An exception no step of `run()` caught: the job fails (its message stays in the local log). It records
+   * no reason, so `jobEnd` reports `internal`, never a guess at the step the job reached.
+   */
+  private failUnexpectedly(job: EngineDownloadJob, err: unknown): void {
+    this.deps.log?.('Engine job failed unexpectedly', { jobId: job.jobId, error: String(err) })
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return
+    job.status = 'failed'
+    job.error = friendlyEngineError(err)
+  }
+
   /** #843: why a settled job ended, for its audit record — content-free codes only. */
   private jobEnd(job: EngineDownloadJob): EngineJobEnd {
     const preview = this.jobPreview(job.jobId)
     if (job.status === 'done') return { reason: null, preview }
     const recorded = this.endReasons.get(job.jobId)
     // A stop records its reason when it lands; a failure where it happens. A job that read
-    // `cancelled` without either (a cancel that won a race with a failure) is a cancel.
-    const fallback: EngineJobEndReason = job.status === 'cancelled' ? 'cancelled' : 'install'
+    // `cancelled` without either (a cancel that won a race with a failure) is a cancel; any other
+    // ending without one is `internal`, never a guess at the step it reached.
+    const fallback: EngineJobEndReason = job.status === 'cancelled' ? 'cancelled' : 'internal'
     return { reason: recorded?.reason ?? fallback, ...(recorded?.cause ? { cause: recorded.cause } : {}), preview }
   }
 

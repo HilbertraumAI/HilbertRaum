@@ -5924,11 +5924,14 @@ cites it as "In-app engine updates"._
   engine installer" #843 addendum) with what this job will fetch: the main build and, when older, the
   `cpu/` net, each "installed → pinned". The dialog's preview and `start()` select the archives with
   one function, `planEngineSteps` (extracted from `start()`), so the rule "the notice never offers
-  what the update would refuse" now holds for the dialog's list too (as of the moment it opened;
-  Confirm plans again), and P8's in-app updater extends that function, not a copy. The dialog's
-  "the model pauses for a few seconds" note shows only when the update includes the AI engine: a
-  voice-engine-only update pauses the transcriber alone (`pauseEngineUsers`). A busy refusal (`main.engine.updateBusy`) can now arrive after Confirm;
-  it is the same friendly error.
+  what the update would refuse" now holds for the dialog's list too, for the selection (as of the
+  moment it opened; Confirm plans again), and P8's in-app updater extends that function, not a copy.
+  The preview does not run the checks outside the selection: the gates, the one-job check, an engine
+  in use (`main.engine.runtimeRunning` and its voice and tools twins) and the update's busy check
+  (`main.engine.updateBusy`). Those refusals can arrive after Confirm, as the same friendly errors
+  (research C §1.8 accepted this). The dialog's "the model pauses for a few seconds" note shows only
+  when the update includes the AI engine: a voice-engine-only update pauses the transcriber alone
+  (`pauseEngineUsers`).
 - **Scripts:** `fetch-runtime.{ps1,sh}` print a note when the drive's yaml pins a different version of
   the family than the repo's, and say to refresh the manifests (`prepare-drive`) first (`packaging.md`).
   **Newer is never replaced there either (#873, 2026-11-18):** a present engine whose marker is NEWER
@@ -7038,8 +7041,10 @@ Confirm is disabled while the download gate is closed (`computeDownloadGate`). *
 `start()` unchanged), with the same bundled pins and, for a reinstall, the same refused builds. A
 renderer-side reconstruction would have had to re-derive the `cpu/` net and the verdict store's
 builds and could drift; the equality table in `engine-plan.test.ts` holds the preview's URLs to the
-URLs the started job downloads. The dialog shows the plan **at the moment it opened**: Confirm sends
-the same request and `start()` plans again, and main's gates decide again. If the drive changed in
+URLs the started job downloads. The preview runs the selection only, not `start()`'s other refusals
+(the gates, the one-job check, an engine in use, an update's busy check), so those can still arrive
+after Confirm as the same friendly error. The dialog shows the plan **at the moment it opened**:
+Confirm sends the same request and `start()` plans again, and main's gates decide again. If the drive changed in
 between (a background helper start reported a refused `cpu/` net while a reinstall dialog was open),
 the job does what the new plan says, and its audit record names what it really fetched; closing that
 gap would need a consent token, which decision (2) rules out. (2) **No consent token in main**: Confirm sends the unchanged request

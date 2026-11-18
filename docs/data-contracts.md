@@ -1422,22 +1422,26 @@ head's own weights + KV.
 ✅ **`services/downloads.ts` seam (additive):** `DownloadManagerDeps.audit?` (`DownloadAuditType` =
   the three `model_download_*` values) — injected by `registerDownloadIpc` in production.
 ✅ **Engine and OCR installs (#843, additive):** `engine_install_started | engine_install_finished |
-  engine_install_failed`, recorded in `registerEngineIpc` (started when `engine:download` resolves —
-  or first, at the end, for a job that settled sooner — and the end from `EngineDownloadManager.onSettled`,
-  whose listener now also gets `EngineJobEnd { reason, cause?, preview }`). Metadata `{ jobId, kind:
+  engine_install_failed`, recorded in `registerEngineIpc` (started once `start()` has resolved, in the
+  `engine:download` handler — a job cannot settle before that, and nothing reorders the two — and the end
+  from `EngineDownloadManager.onSettled`, whose listener now also gets `EngineJobEnd { reason, cause?,
+  preview }`; `kind`, `versions` and `sizeBytes` come from the job's stored plan alone). Neither call can
+  fail the install: an audit fault is logged and dropped. Metadata `{ jobId, kind:
   'install'|'update'|'reinstall', families, versions: { <family>: <pin> }, sizeBytes: number|null, trigger:
   'user' }`; a failure adds `reason` (`cancelled`, `networkOff`, `checksumMismatch`, `fileMissing`,
-  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`) and, for `download`, `cause`
+  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, and `internal` for an exception no
+  step caught — the job then ends `failed` instead of staying in a live status) and, for `download`, `cause`
   (`failureReason`: `network`, `http-404`, `write`, …). `ocr_install_started | ocr_install_finished |
   ocr_install_failed` come from `services/ocr-install.ts` through the new `StartOcrInstallOptions.audit?`
   sink, which `registerEngineIpc` wires to `ctx.audit` adding the same `trigger: 'user'`: `{ jobId,
-  languages, bytes, trigger }`, plus `outcome` when
-  finished and `reason` (the `main.ocr.*` key's last part, `cancelled` or `networkOff`) and `cause` when
-  not. Never `job.error` (friendly copy that can carry a path). A request refused before a job exists
-  records nothing, as a model download's. A knowledge-pack tools install is an engine job, so it is
-  recorded as `engine_install_*` with `families: ['kiwix_tools']` (the labels say "engine or tools").
-  An end that is still in the recorder's memory buffer (workspace locked) when the app quits is lost. The names are permanent: an in-app updater records the same
-  types with its own `trigger`.
+  languages, bytes, trigger }`, plus `outcome` when finished and `reason` (the `main.ocr.*` key's last
+  part, `cancelled` or `networkOff`) and `cause` when not; the manager calls the sink inside a guard at both
+  ends, so a failing sink never fails or blocks the install. Never `job.error` (friendly copy that can carry
+  a path). A request refused before a job exists records nothing, as a model download's. A knowledge-pack
+  tools install is an engine job, so it is recorded as `engine_install_*` with `families: ['kiwix_tools']`
+  (the labels say "engine or tools"). An end that is still in the recorder's memory buffer (workspace
+  locked) when the app quits is lost. The names are permanent: an in-app updater records the same types
+  with its own `trigger`.
 ✅ **`services/offlineGuard.ts` seam (additive):** `AssertOfflinePostureDeps.onViolation?(host)`.
 ✅ **IPC** `ipc/registerAuditIpc.ts` — `getAuditEvents`, `exportAuditLog` (JSON, save-dialog
   pattern). **Renderer:** Diagnostics Activity card (on-demand, type filter, paging, export).
@@ -2149,8 +2153,11 @@ whole renderer-visible surface.
   exactly like `engine:download` (`parseEngineDownloadRequest`, then `main.engine.nothingToRepair` for a
   reinstall without a damaged-files verdict) and answers from `previewEngineDownload` = the step
   selection `EngineDownloadManager.start()` runs (`planEngineSteps`), with the same bundled pins and,
-  for a reinstall, the same refused builds — or throws the refusal `start()` would at that moment. The
-  gates and the one-job check are not part of it (`start()` checks both again, and plans again). `EngineDownloadPreview = { kind:
+  for a reinstall, the same refused builds — or throws the selection refusal `start()` would at that
+  moment (`nothingToUpdate`, `alreadyInstalled`, `noHostBuild`, …). The gates, the one-job check, the
+  engine-in-use refusals (`main.engine.runtimeRunning` and its twins) and the update's
+  `main.engine.updateBusy` are not part of it; `start()` and the update handler check them after
+  Confirm (and plan again). `EngineDownloadPreview = { kind:
   'install'|'update'|'reinstall', items: EngineDownloadPreviewItem[], totalBytes: number|null }`, with
   `EngineDownloadPreviewItem = { family, version, installed: string|null, backend, os, arch, safetyNet,
   url, sizeBytes: number|null, license, bundledLicense: string|null, licenseUrl: string|null }`.

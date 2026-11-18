@@ -188,17 +188,19 @@ const AUDIT_TRIGGER = 'user'
  */
 function engineAuditMetadata(
   job: EngineDownloadJob,
-  preview: EngineDownloadPreview | null,
+  preview: EngineDownloadPreview,
   end?: Pick<EngineJobEnd, 'reason' | 'cause'>
 ): Record<string, unknown> {
   const versions: Record<string, string> = {}
-  for (const item of preview?.items ?? []) versions[item.family] = item.version
+  for (const item of preview.items) versions[item.family] = item.version
   return {
     jobId: job.jobId,
-    kind: preview?.kind ?? (job.update === true ? 'update' : job.reinstall === true ? 'reinstall' : 'install'),
+    // The plan's kind, never rebuilt from the job's flags: one rule (`planEngineSteps`), so a kind
+    // an in-app updater adds is recorded as planned.
+    kind: preview.kind,
     families: [...(job.families ?? [])],
     versions,
-    sizeBytes: preview?.totalBytes ?? null,
+    sizeBytes: preview.totalBytes,
     trigger: AUDIT_TRIGGER,
     ...(end?.reason ? { reason: end.reason } : {}),
     ...(end?.cause ? { cause: end.cause } : {})
@@ -282,13 +284,28 @@ export function registerEngineIpc(
   // The recorder buffers while the workspace is locked, so a lock in the middle needs nothing here.
   // The start is recorded when `start()` resolves. A job cannot settle before that: `start()` returns
   // before its run's first file operation completes, and the handler resumes on the next microtask.
-  const auditEngine = (type: AuditEventType, job: EngineDownloadJob, end?: EngineJobEnd): void => {
-    const metadata = engineAuditMetadata(job, end?.preview ?? engine.jobPreview(job.jobId), end)
-    const verb = type === 'engine_install_started' ? 'started' : type === 'engine_install_finished' ? 'finished' : 'failed'
-    ctx.audit?.(type, `Engine ${String(metadata.kind)} ${verb}: ${(metadata.families as string[]).join(', ')}`, metadata)
+  // `start()` stores every job's plan before it returns, so `preview` is always there; the null arm is
+  // a type guard, never a second rule. Never throws: an audit fault must not fail the install it records.
+  const auditEngine = (
+    type: AuditEventType,
+    job: EngineDownloadJob,
+    preview: EngineDownloadPreview | null,
+    end?: EngineJobEnd
+  ): void => {
+    try {
+      if (!preview) {
+        log.warn('Engine job audit skipped: no plan recorded for the job', { jobId: job.jobId, type })
+        return
+      }
+      const metadata = engineAuditMetadata(job, preview, end)
+      const verb = type === 'engine_install_started' ? 'started' : type === 'engine_install_finished' ? 'finished' : 'failed'
+      ctx.audit?.(type, `Engine ${preview.kind} ${verb}: ${(metadata.families as string[]).join(', ')}`, metadata)
+    } catch (err) {
+      log.warn('Engine job audit failed', { jobId: job.jobId, type, error: String(err) })
+    }
   }
   engine.onSettled((job, end) => {
-    auditEngine(job.status === 'done' ? 'engine_install_finished' : 'engine_install_failed', job, end)
+    auditEngine(job.status === 'done' ? 'engine_install_finished' : 'engine_install_failed', job, end.preview, end)
   })
 
   // #516: a failed or cancelled update (or one the install hook did not resume) brings back the
@@ -434,7 +451,7 @@ export function registerEngineIpc(
     // is renderer input and is validated against the code's own family names.
     const request = admittedRequest(raw)
     const job = await startEngineJob(request)
-    auditEngine('engine_install_started', job)
+    auditEngine('engine_install_started', job, engine.jobPreview(job.jobId))
     return job
   })
 

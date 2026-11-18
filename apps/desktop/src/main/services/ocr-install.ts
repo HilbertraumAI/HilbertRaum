@@ -388,7 +388,13 @@ export class OcrInstallManager {
         bytes: job.totalBytes
       })
       const auditMeta = { jobId: job.jobId, languages, bytes: job.totalBytes }
-      opts.audit?.('ocr_install_started', `OCR install started: ${languages.join(', ')}`, { ...auditMeta })
+      // Never throws, like the end's: a failing sink here used to reject start() with the job already
+      // active, so every later install read "already running" until the app restarted.
+      try {
+        opts.audit?.('ocr_install_started', `OCR install started: ${languages.join(', ')}`, { ...auditMeta })
+      } catch (err) {
+        this.deps.log?.('OCR install audit failed', { error: String(err) })
+      }
       void this.run(job, plan, opts, controller).finally(() => {
         this.runSettled = true
         if (this.active?.jobId === job.jobId) this.active = null

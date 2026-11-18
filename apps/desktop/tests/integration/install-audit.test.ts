@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -18,6 +18,18 @@ vi.mock('electron', () => ({
   },
   app: { getVersion: () => '0.0.0-test' }
 }))
+// Round 2: one row makes the spawn gate throw, a failure outside every step that records its own reason.
+const spawnGate = vi.hoisted(() => ({ throwOnHold: false }))
+vi.mock('../../src/main/services/runtime/spawn-gate', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../src/main/services/runtime/spawn-gate')>()
+  return {
+    ...orig,
+    holdEngineSpawns: (family: string) => {
+      if (spawnGate.throwOnHold) throw new Error('the spawn gate failed')
+      return orig.holdEngineSpawns(family)
+    }
+  }
+})
 
 import { IPC } from '../../src/shared/ipc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
@@ -77,7 +89,9 @@ interface Harness {
  * A drive whose app pins pin the chat engine (with its size), the optional knowledge-pack tools and the two OCR
  * files; the engine IPC over a real DB.
  */
-function harness(opts: { fetchImpl?: FetchFn; extract?: ExtractFn; ocrFetch?: FetchFn; locked?: () => boolean } = {}): Harness {
+function harness(
+  opts: { fetchImpl?: FetchFn; extract?: ExtractFn; ocrFetch?: FetchFn; locked?: () => boolean; auditThrows?: boolean } = {}
+): Harness {
   const root = freshRoot()
   mkdirSync(join(root, 'config'), { recursive: true })
   writeFileSync(join(root, 'config', 'policy.json'), JSON.stringify({ network: { allow_model_downloads: true } }))
@@ -108,10 +122,16 @@ function harness(opts: { fetchImpl?: FetchFn; extract?: ExtractFn; ocrFetch?: Fe
   const db = seededDb(root)
   updateSettings(db, { allowNetwork: true })
   const locked = opts.locked ?? (() => false)
-  const audit = createAuditRecorder(() => {
+  const recorder = createAuditRecorder(() => {
     if (locked()) throw new Error('The workspace is locked.')
     return db
   })
+  // `auditThrows`: a recorder that fails outright (the real one never throws; the callers must not depend on it).
+  const audit: typeof recorder = opts.auditThrows
+    ? () => {
+        throw new Error('the audit sink failed')
+      }
+    : recorder
   const ctx = ctxWith(root, db, {
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     manifestsDir: null,
@@ -271,6 +291,35 @@ describe('engine installs in the activity log (#843)', () => {
     }
   })
 
+  // Round 2: an unexpected failure outside every step that records a reason (here the spawn gate, between the
+  // downloads and the swap) used to leave the job reading 'extracting' and be logged as an install failure.
+  it('a failure outside a recorded step ends the job failed, recorded as internal, not as an install failure', async () => {
+    const h = harness()
+    spawnGate.throwOnHold = true
+    try {
+      const job = await startEngine(h)
+      const ended = await runToEnd(h.manager, job.jobId)
+      expect(ended.status).toBe('failed')
+      await until(() => installRows(h, 'engine_install').length === 2, 'the failure event')
+      expect(installRows(h, 'engine_install')[1]).toMatchObject({ type: 'engine_install_failed', metadata: { reason: 'internal' } })
+      expect(h.allText()).not.toContain('the spawn gate failed')
+    } finally {
+      spawnGate.throwOnHold = false
+    }
+    // The manager is free again: the next install runs.
+    const next = await startEngine(h)
+    expect((await runToEnd(h.manager, next.jobId)).status).toBe('done')
+  })
+
+  it('a failing audit sink never fails the install: the job starts, runs and settles, and the next one is accepted', async () => {
+    const h = harness({ auditThrows: true })
+    const job = await startEngine(h)
+    expect((await runToEnd(h.manager, job.jobId)).status).toBe('done')
+    rmSync(join(h.root, 'runtime'), { recursive: true, force: true })
+    const next = await startEngine(h)
+    expect((await runToEnd(h.manager, next.jobId)).status).toBe('done')
+  })
+
   it('a request refused before a job exists records nothing (a closed gate, nothing to install)', async () => {
     const h = harness()
     updateSettings(h.db, { allowNetwork: false })
@@ -337,6 +386,15 @@ describe('OCR installs in the activity log (#843)', () => {
       expect(installRows(h, 'ocr_install').map((r) => r.type)).toEqual(['ocr_install_started', 'ocr_install_failed'])
       expect(installRows(h, 'ocr_install')[1].metadata.reason, label).toBe(reason)
     }
+  })
+
+  it('a failing audit sink never fails the install: the job starts, runs and settles, and the next one is accepted', async () => {
+    const h = harness({ auditThrows: true })
+    const job = await startOcr()
+    expect((await runToEnd(h.ocr, job.jobId)).status).toBe('done')
+    rmSync(join(h.root, 'ocr'), { recursive: true, force: true })
+    const next = await startOcr()
+    expect((await runToEnd(h.ocr, next.jobId)).status).toBe('done')
   })
 
   it('a lock in the middle of an install loses nothing: the events are kept and written after the unlock', async () => {
