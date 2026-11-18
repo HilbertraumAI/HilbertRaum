@@ -175,7 +175,8 @@ export function encrypt(key: Buffer, plaintext: Buffer): EncryptedBlob {
 
 /**
  * AES-256-GCM decrypt. Throws if the key is wrong or the ciphertext/tag was tampered
- * with (GCM authentication failure) — callers treat that as "wrong password".
+ * with (GCM authentication failure). Only the password check (`verifyKey`) reads that as a
+ * wrong password; past it, the unlock reads a tag failure as damage (#860 V5b).
  */
 export function decrypt(key: Buffer, blob: EncryptedBlob): Buffer {
   const decipher = createDecipheriv('aes-256-gcm', key, blob.iv)
@@ -183,15 +184,64 @@ export function decrypt(key: Buffer, blob: EncryptedBlob): Buffer {
   return Buffer.concat([decipher.update(blob.ciphertext), decipher.final()])
 }
 
+// ---- Vault format versions (#845) -------------------------------------------------
+
+/** Which vault artifact a newer build wrote: the descriptor's `version`, its KDF, an encrypted frame, or the
+ *  password-change journal. */
+export type VaultNewerWhat = 'descriptor' | 'kdf' | 'frame' | 'journal'
+
+/**
+ * Thrown when a vault artifact was written by a NEWER build than this one (#845): a descriptor `version` above the
+ * highest this build knows, a KDF it does not know, an encrypted frame of this family with a higher version byte, or
+ * a password-change journal of a higher version. Thrown BEFORE anything is written, so nothing was changed.
+ * Content-free (an artifact name and a version, never a path): the IPC layer maps it to the `workspace_newer` reason
+ * and copy, and logs `what` and `found`.
+ */
+export class VaultNewerError extends Error {
+  constructor(
+    readonly what: VaultNewerWhat,
+    readonly found: string | number
+  ) {
+    super(`The workspace ${what} was written by a newer HilbertRaum (found ${String(found)}); nothing was changed`)
+    this.name = 'VaultNewerError'
+  }
+}
+
+/** instanceof PLUS the name — the production bundle can hold a second copy of this module. */
+export function isVaultNewerError(err: unknown): err is VaultNewerError {
+  return err instanceof VaultNewerError || (err instanceof Error && err.name === 'VaultNewerError')
+}
+
 // ---- Framed serialization (for the encrypted DB file on disk) -------------------
 
-const MAGIC = Buffer.from('HRAUMEN1') // 8 bytes: format magic + version
+// 8 bytes: the 7-byte format family `HRAUMEN` and a 1-byte frame version, `1`. Every shipped build writes and reads
+// only `HRAUMEN1`; builds before #845 compare all 8 bytes, so they read any other version as an unrecognised header.
+const MAGIC = Buffer.from('HRAUMEN1')
+const MAGIC_FAMILY_BYTES = 7
 
 /** Frame layout constants, exported for the STREAMING file crypto in workspace-vault.ts
  *  (which must read/write the exact same `MAGIC | iv | tag | ciphertext` format). */
 export const BLOB_MAGIC: Buffer = MAGIC
 export const BLOB_IV_BYTES = IV_BYTES
 export const BLOB_TAG_BYTES = TAG_BYTES
+
+/**
+ * What the first bytes of an encrypted frame say (#845): `current` (`HRAUMEN1`, the frame this build reads), `newer`
+ * (`HRAUMEN` with another version byte: written by a newer build), or `foreign` (anything else, including fewer than
+ * 8 bytes: `PAIDENC1` from before the 0.1.10 rebrand, or no format at all).
+ */
+export function classifyFrameMagic(head: Buffer): 'current' | 'newer' | 'foreign' {
+  if (head.length < MAGIC.length) return 'foreign'
+  if (head.subarray(0, MAGIC.length).equals(MAGIC)) return 'current'
+  return head.subarray(0, MAGIC_FAMILY_BYTES).equals(MAGIC.subarray(0, MAGIC_FAMILY_BYTES)) ? 'newer' : 'foreign'
+}
+
+/** The `VaultNewerError` for a frame `classifyFrameMagic` called `newer`: `found` is its version byte, as the
+ *  character when printable (`'2'`), else as hex. */
+export function newerFrameError(head: Buffer): VaultNewerError {
+  const v = head[MAGIC_FAMILY_BYTES]
+  return new VaultNewerError('frame', v >= 0x21 && v <= 0x7e ? String.fromCharCode(v) : `0x${v.toString(16).padStart(2, '0')}`)
+}
 
 /**
  * Serialize an encrypted blob to a single self-describing buffer:
@@ -201,13 +251,16 @@ export function serializeBlob(blob: EncryptedBlob): Buffer {
   return Buffer.concat([MAGIC, blob.iv, blob.tag, blob.ciphertext])
 }
 
-/** Parse a buffer produced by `serializeBlob`. Throws on a bad/short/foreign header. */
+/** Parse a buffer produced by `serializeBlob`. Throws on a bad/short/foreign header, and `VaultNewerError` on a
+ *  frame a newer build wrote (checked first: a newer layout need not be as long as this build's header). */
 export function deserializeBlob(buf: Buffer): EncryptedBlob {
   const headerLen = MAGIC.length + IV_BYTES + TAG_BYTES
+  const magic = classifyFrameMagic(buf)
+  if (magic === 'newer') throw newerFrameError(buf)
   if (buf.length < headerLen) {
     throw new Error('Encrypted blob is too short or corrupt')
   }
-  if (!buf.subarray(0, MAGIC.length).equals(MAGIC)) {
+  if (magic !== 'current') {
     throw new Error('Encrypted blob has an unrecognised header')
   }
   const iv = buf.subarray(MAGIC.length, MAGIC.length + IV_BYTES)

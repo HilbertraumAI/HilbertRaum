@@ -1073,12 +1073,21 @@ head's own weights + KV.
   bytes. Deterministic for the same password+salt+params.
 - **AEAD:** `encrypt(key, plaintext) → { iv(12), tag(16), ciphertext }` (AES-256-GCM, fresh IV),
   `decrypt(key, blob)` (throws on wrong key/tamper). `serializeBlob`/`deserializeBlob`
-  (`MAGIC(8)|iv|tag|ct` on-disk frame). `makeVerifier(key)`/`verifyKey(key, verifier)` (password
+  (`MAGIC(8)|iv|tag|ct` on-disk frame; `MAGIC` = the family `HRAUMEN` + the frame version byte `1`).
+  `classifyFrameMagic(head) → 'current' | 'newer' | 'foreign'` (#845); `deserializeBlob` and the
+  streaming readers throw **`VaultNewerError`** (`{ what: 'descriptor'|'kdf'|'frame'|'journal', found }`,
+  `isVaultNewerError`) for a `newer` frame, before any output is opened, and "unrecognised header" for a
+  `foreign` one. `makeVerifier(key)`/`verifyKey(key, verifier)` (password
   check via a known-plaintext GCM blob — never touches the DB).
 ✅ **`services/workspace-vault.ts`** (spec §7.9) — the lock/unlock lifecycle.
-- **Descriptor:** `VaultDescriptor { version, mode:'encrypted', kdf, saltB64, verifier }` at
-  **`config/workspace.json`** (unencrypted; the only pre-unlock artifact).
-  `readVaultDescriptor`/`writeVaultDescriptor` (atomic). `vaultPathsFrom({configPath,dbPath,logsPath?})` →
+- **Descriptor:** `VaultDescriptor { version, mode:'encrypted', kdf, saltB64, verifier, dataKey? }` at
+  **`config/workspace.json`** (unencrypted; the only pre-unlock artifact). `dataKey` (v2) is the data
+  key wrapped by the password-derived key; every published release writes v2 with Argon2id
+  (`apps/desktop/tests/fixtures/vault-golden/PROVENANCE.md`).
+  `readVaultDescriptorChecked(path) → { kind: 'absent' | 'unreadable' | 'newer' (what, found) | 'ok'
+  (descriptor) }` (#845); `readVaultDescriptor` is its back-compat face (`ok` → the descriptor, else
+  null; a newer descriptor still counts as "a vault exists" for `isDescriptorUnreadable`, so no create
+  over it); `writeVaultDescriptor` (atomic: temp + fsync + rename). `vaultPathsFrom({configPath,dbPath,logsPath?})` →
   `VaultPaths { descriptorPath, encPath = <dbPath>.enc, dbPath, logsPath? }` (`logsPath` is optional
   and additive — older callers omit it; without it the rekey does not account for the rotated log).
 - **Rekey journal (on-disk, #241):** `workspace/rekey-journal.json` — `{ version: 1, staged: string[],
@@ -1096,15 +1105,57 @@ head's own weights + KV.
   `DOCUMENTS_DIR_NAME`, `ROTATED_ENCRYPTED_LOG_NAME` (`app.1.log.enc`, deleted at the commit).
   `createImageSession(db, dir, req, cipher, beginWork?)` — the optional fifth argument is the
   document-work lease factory (`() => ctl.beginDocumentWork()`), taken before the first await.
-- **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename), `shredFile`
+- **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename; `decryptFile` throws
+  `FrameAuthError` when the GCM tag fails, #860 V5b), `shredFile`
   (overwrite-random + unlink, best-effort), `cleanSidecars` (shred `-wal`/`-shm`).
-- **Lifecycle:** `createEncryptedVaultOnDisk(vaultPaths, password, kdf?)` (writes descriptor + seeds
-  an initial DB + encrypts → `.enc` + shreds, leaving it LOCKED); `unlockEncryptedVault(vaultPaths,
-  password) → { db, key, descriptor }` (verify → decrypt → open; throws **`WrongPasswordError`**);
+- **Lifecycle:** `createEncryptedVaultOnDisk(vaultPaths, password, kdf?, opts?)` seeds a new
+  database, encrypts it to `.enc.new`, shreds the plaintext and its WAL/SHM, writes the descriptor (the
+  commit point), then renames `.enc.new` to `.enc`, leaving the vault LOCKED (`opts.legacyV1`, tests
+  only, builds a v1 descriptor); `unlockEncryptedVault(vaultPaths, password) → { db, key, descriptor }`
+  (format verdict → verify → decrypt → open). It throws **`VaultNewerError`** before the password is
+  checked (#845); **`WrongPasswordError`** when the verifier fails; after the password verified,
+  `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247), **`VaultDamagedError`** when `.enc`
+  fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
+  its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
+  and `VaultOpenFailedError` when the open could not finish otherwise (#844).
   `lockEncryptedVault(vaultPaths, db, key)` (checkpoint+close → re-encrypt → shred).
-  `plaintextAllowed(policy, {isDev, developerMode})` gates plaintext (now **enforced**).
-- **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: plaintext opens
-  immediately, encrypted stays locked, else uninitialized), `getState() → WorkspaceStateInfo`,
+  `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that
+  allows it and a dev build; the `developerMode` setting plays no part (it lives in the encrypted DB).
+- **Vault format versions (#845):** `vaultFormatVerdict(vaultPaths) → { kind: 'ok' } | { kind:
+  'newer', what, found }`, read-only and independent of the password. It runs first in
+  `WorkspaceController.init()` (before the failed-lock salvage, the crash sweep and the rekey recovery)
+  and in `unlockEncryptedVault` (before the rekey recovery, the `.recovery` roll-forward and the
+  decrypt). A `newer` verdict writes, shreds and renames nothing: the workspace reports `locked`, the
+  create flow is refused, and every unlock throws `VaultNewerError`, which the unlock IPC answers with
+  `workspace_newer` (+ `main.workspace.newer`, no new key) and a log line naming `what` and `found`.
+  While startup's verdict is `newer`, `unlock()` and `create()` re-read the disk first: once the newer
+  artifact is gone (the newer copy rolled back, a backup restored), `init()` runs the salvage, sweep and
+  rekey recovery it skipped, before anything is decrypted. "Numeric" below means a number, integer or not,
+  or a string holding a decimal number (`"3"`): shipped builds compare `version` with `>=`, which
+  JavaScript applies to both.
+
+  | Artifact | Read as `newer` (`what`) | Not newer: as before |
+  |---|---|---|
+  | `config/workspace.json` | any numeric `version` above 2 (3, 2.5, `"3"`), checked before any shape check (`descriptor`); a v1/v2 descriptor whose `kdf.algo` is a string other than `scrypt`/`argon2id` (`kdf`) | unparseable, a field missing, a v2 without `dataKey`, a `version` string holding no number (`"3.0.0"`): `unreadable` ("restore a backup"); out-of-bounds KDF params: refused at derive (tamper); a `version` that is missing or not a number or string, beside `dataKey`: read as v1, and the unlock's tag failure reports `vault_damaged` |
+  | `workspace/hilbertraum.sqlite.enc` and every staged file a recovery would swap in (`.enc.new`, `documents/` and `images/` `*.enc.new`, the journal's entries) | first 8 bytes `HRAUMEN` + a version byte other than `1` (`frame`) | any other magic (`PAIDENC1`, written before 0.1.10, or noise): "unrecognised header", the generic unlock error |
+  | `workspace/rekey-journal.json` | any numeric `version` above 1 (2, 2.5), whatever the descriptor says (`journal`) | unparseable or another `version`: quarantined as `.corrupt` |
+  | `logs/app.log.enc`, `logs/app.1.log.enc` | a `newer` frame in either: `logging.ts` keeps the session's log in memory and never persists or rotates over them | a corrupt or foreign-key log: started fresh (overwritten), as before |
+
+  `changePassword` re-reads the descriptor on disk first and refuses (nothing derived or written) when it
+  is newer or no longer the one the session unlocked; the IPC answers `error` +
+  `main.workspace.changeFailed` (the current password still works). **Frozen constraints for any future
+  format** (builds shipped before #845 cannot be changed): they read a descriptor with `mode` other
+  than `encrypted`, or without `dataKey`, as unreadable (safe), but a v3 that keeps `dataKey` as a v2
+  (unsafe: it unlocks, and a password change rewrites it as v2) — so a v3 must drop or rename
+  `dataKey` (or change `mode`); a field added to a v2 descriptor without a version bump is dropped by
+  any build's password change; never stage `.enc.new` (or any `*.enc.new`) under a v2 descriptor
+  before the commit point — every shipped build rolls a staged file forward under a v2 descriptor and
+  quarantines a journal it cannot read, so a newer build's uncommitted stage would end up under a key
+  that exists nowhere; `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
+  unrecognised header).
+- **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
+  first, then plaintext opens immediately, encrypted stays locked, else uninitialized),
+  `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup), `getState() → WorkspaceStateInfo`,
   `requireDb()` (throws while locked), `isUnlocked()`, `unlock(password)`, `create(password, mode)`,
   `lock()` (no-op for plaintext).
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
@@ -1113,7 +1164,8 @@ head's own weights + KV.
   'vault_damaged'|'vault_open_failed'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
   wrong password / policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
   password-verified-but-undecryptable-to-a-database unlock failure, deliberately distinct from
-  `wrong_password`, and since #844 only what SQLite itself calls not a database or corrupt;
+  `wrong_password`, and since #844 only what SQLite itself calls not a database or corrupt, plus
+  (#860 V5b) a `.enc` that fails its GCM tag after the password verified;
   `vault_open_failed` (#844) is the unlock whose open could not finish on a database SQLite does
   not call damaged (an upgrade step or the unlock's settings write, on a full drive, an I/O
   error, a bug in a new step) — the failed open never rewrites `.enc`; free space and retry,
@@ -1121,7 +1173,8 @@ head's own weights + KV.
   `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage — retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
-  written by a NEWER build — nothing written, update the app). Since the 2026-11 UI languages
+  written by a NEWER build — nothing written, update the app; since #845 also the unlock refused
+  because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages
   wave the lock screen renders a failed unlock or create from `reason` in its own language
   (`shared/workspace-failure-keys.ts`, one table per call; architecture.md i18n record D-L3);
   `message` is shown only for a reason a table maps to `null` (create's free-text `refused`) or

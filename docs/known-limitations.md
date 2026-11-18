@@ -154,6 +154,15 @@ password recovery — are documented in
   Nothing is harmed or written; opening the drive with a current build works. Accepted: drives
   ship the app alongside the data, so version skew requires deliberately mixing an old app
   with a new workspace.
+- **Builds released before #845 (0.1.65 and earlier) cannot detect a newer vault format.** From
+  #845 on, a build refuses a workspace whose descriptor, KDF, `.enc` frame or password-change
+  journal a newer build wrote, before anything is written, with "This workspace was written by a
+  newer HilbertRaum — update the app to open it." (`security-model.md` "Vault format versions").
+  An older build reads such a workspace the old way: a descriptor that keeps its wrapped data
+  key passes for the current format and a password change rewrites it as such, and its startup
+  sweep and rekey recovery run over the newer files. The same shape as the schema stamp above:
+  any future vault format has to be designed so those builds fail safely (the frozen constraints
+  in `data-contracts.md` "Vault format versions"), and old artifacts still belong off the drive.
 - **A pre-document-organization build ignores collections on a post-feature DB — but deletes still
   work.** An older app shows the flat document corpus (it never reads the `collections` /
   `document_collections` / `conversation_documents` tables), so organization is invisible, not

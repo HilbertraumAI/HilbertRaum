@@ -201,6 +201,53 @@ export function newerVault<T extends VaultPaths>(vp: T, password: string): T {
 }
 
 /**
+ * What `run` threw: its name and the newer-format fields of #845's `VaultNewerError` (`what`, `found`), or
+ * `{ name: '(no error)' }`. Rows assert the NAME, never the class: on code without the class an import of it is
+ * `undefined`, and `toThrowError(undefined)` passes for any error (#844's trap), which would make a control run green.
+ */
+export function thrownBy(run: () => unknown): { name: string; what?: unknown; found?: unknown } {
+  try {
+    run()
+  } catch (err) {
+    const e = err as { name?: unknown; what?: unknown; found?: unknown } | null
+    return { name: String(e?.name), what: e?.what, found: e?.found }
+  }
+  return { name: '(no error)' }
+}
+
+/**
+ * The descriptor at `vp` rewritten through `edit`, as the app writes it (2-space JSON): the fixture for a descriptor a
+ * newer build wrote (#845: `version: 3`, an unknown `kdf.algo`, no `dataKey`).
+ */
+export function editDescriptor<T extends VaultPaths>(vp: T, edit: (d: Record<string, unknown>) => void): T {
+  const d = JSON.parse(readFileSync(vp.descriptorPath, 'utf8')) as Record<string, unknown>
+  edit(d)
+  writeFileSync(vp.descriptorPath, JSON.stringify(d, null, 2), 'utf8')
+  return vp
+}
+
+/**
+ * The 8-byte frame magic at the start of `path` replaced by `magic`, the rest of the file left as it was (#845):
+ * `HRAUMEN2` is a frame a newer build wrote, `PAIDENC1` the pre-0.1.10 format.
+ */
+export function setFrameMagic(path: string, magic: string): void {
+  const bytes = readFileSync(path)
+  Buffer.from(magic, 'latin1').copy(bytes, 0, 0, 8)
+  writeFileSync(path, bytes)
+}
+
+/**
+ * The existing vault at `vp` whose `.enc` fails its GCM tag (#860 V5b): one ciphertext byte of the last chunk
+ * flipped. The password still verifies; only the decrypt can tell.
+ */
+export function tagFailingVault<T extends VaultPaths>(vp: T): T {
+  const enc = readFileSync(vp.encPath)
+  enc[enc.length - 20] ^= 0xff
+  writeFileSync(vp.encPath, enc)
+  return vp
+}
+
+/**
  * A plaintext workspace DB at `vp.dbPath` that a NEWER build stamped (`user_version = SCHEMA_VERSION + 1`), written
  * through a raw handle (no migrations) that is closed again (#247). The plaintext twin of `newerVault`.
  */

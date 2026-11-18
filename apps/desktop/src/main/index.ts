@@ -269,6 +269,13 @@ function initBackend(): void {
     // untouched; the gate reports `workspace_newer` (update the app).
     log.warn('Workspace not opened: its database was written by a newer build (update the app)')
   }
+  const newerVaultFormat = workspace.newerVaultFormat()
+  if (newerVaultFormat) {
+    // #845: a vault artifact (descriptor, KDF, `.enc` frame, rekey journal) is in a newer build's
+    // format — startup wrote nothing (no salvage, sweep or rekey recovery); every unlock reports
+    // `workspace_newer`. Buffered like every pre-unlock line: this build never unlocks this vault.
+    log.warn('Workspace not opened: its vault format was written by a newer build (update the app)', newerVaultFormat)
+  }
 
   // Settings are readable right away on a plaintext workspace — resolve the UI language
   // for main-side emissions (tMain) now. Encrypted workspaces stay on the OS-locale

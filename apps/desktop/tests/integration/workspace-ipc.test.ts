@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 // IPC-layer tests for registerWorkspaceIpc — the exception→result mapping the unlock gate
 // depends on (a wrong password / policy refusal / weak password must be a NORMAL
@@ -60,10 +60,13 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   ENCRYPTION_REQUIRED,
   damagedVault,
+  editDescriptor,
   freshVaultPaths,
   lockedVault,
   newerPlaintext,
   newerVault,
+  setFrameMagic,
+  tagFailingVault,
   unlockedController,
   upgradeBlockedVault,
   workspaceIpcCtx,
@@ -128,6 +131,25 @@ describe('registerWorkspaceIpc', () => {
       // The refusal left the vault alone: the current password still verifies for the change at the floor.
       const atFloor = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'a'.repeat(MIN_PASSWORD_LENGTH))
       expect(atFloor.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // #845: a change refused because the descriptor on disk is a newer build's says the change failed and the current
+  // password still works; the gate's "update the app to open it" would be wrong on a workspace that is open.
+  it('change password over a descriptor a newer build rewrote mid-session answers "change failed", the descriptor untouched', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const ctrl = unlockedController(vp, PW)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    editDescriptor(vp, (d) => {
+      d.version = 3
+    })
+    const descriptor = readFileSync(vp.descriptorPath)
+    try {
+      const { result } = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'long-enough-pw')
+      expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.changeFailed') })
+      expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
     } finally {
       ctrl.lock()
     }
@@ -565,7 +587,12 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       }
     ],
     vault_damaged: [
-      { how: 'a vault that decrypts to noise', arrange: () => ({ workspace: startedOn(damagedOnDisk()), args: [PW] }) }
+      { how: 'a vault that decrypts to noise', arrange: () => ({ workspace: startedOn(damagedOnDisk()), args: [PW] }) },
+      // #860 V5b: the password verified, so a tag failure means the `.enc` bytes changed (bit rot, a cut-short copy).
+      {
+        how: 'an .enc whose tag fails after the password verified',
+        arrange: () => ({ workspace: startedOn(tagFailingVault(lockedVault('wsipc', PW))), args: [PW] })
+      }
     ],
     // #844: a healthy database whose open's upgrade step cannot finish is not damage.
     vault_open_failed: [
@@ -595,6 +622,26 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       {
         how: 'a database a newer build stamped',
         arrange: () => ({ workspace: startedOn(newerVault(lockedVault('wsipc', PW), PW)), args: [PW] })
+      },
+      // #845: the vault format itself, refused before the password is checked.
+      {
+        how: 'a vault descriptor a newer build wrote',
+        arrange: () => ({
+          workspace: startedOn(
+            editDescriptor(lockedVault('wsipc', PW), (d) => {
+              d.version = 3
+            })
+          ),
+          args: [PW]
+        })
+      },
+      {
+        how: 'an .enc frame a newer build wrote',
+        arrange: () => {
+          const vp = lockedVault('wsipc', PW)
+          setFrameMagic(vp.encPath, 'HRAUMEN2')
+          return { workspace: startedOn(vp), args: [PW] }
+        }
       }
     ],
     refused: NEVER_SENT,
@@ -683,6 +730,51 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       }
     }
   )
+})
+
+// #845: the user copy is the same for a newer database and a newer vault format; only the log tells support which
+// artifact a newer build wrote, and which version it found.
+describe('an unlock refused for a newer vault format (#845)', () => {
+  it('logs the artifact and the version found', async () => {
+    const workspace = startedOn(
+      editDescriptor(lockedVault('wsipc', PW), (d) => {
+        d.version = 3
+      })
+    )
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    const marker = `#845 marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.unlockWorkspace, PW)
+      expect(result).toMatchObject({ ok: false, reason: 'workspace_newer' })
+      const all = readLogTail(100_000)
+      const logged = all
+        .slice(all.findIndex((l) => l.includes(marker)) + 1)
+        .filter((l) => l.includes('vault format was written by a newer build'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain('{"what":"descriptor","found":3}')
+    } finally {
+      workspace.shutdown()
+    }
+  })
+
+  // #860 V5b: the damaged copy is one for both kinds of damage; the log names which.
+  it('a vault_damaged unlock logs which damage: a failed authentication after the password verified', async () => {
+    const workspace = startedOn(tagFailingVault(lockedVault('wsipc', PW)))
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    const marker = `#860 V5b marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      const { result } = await invoke(handlers, IPC.unlockWorkspace, PW)
+      expect(result).toMatchObject({ ok: false, reason: 'vault_damaged' })
+      const all = readLogTail(100_000)
+      const logged = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('vault damaged'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain('{"damage":"failed-authentication"}')
+    } finally {
+      workspace.shutdown()
+    }
+  })
 })
 
 // #844: an open that could not finish is logged by what failed, never by the failure's message. A

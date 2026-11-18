@@ -6,13 +6,22 @@ import {
   existsSync,
   readFileSync,
   openSync,
+  readSync,
   writeSync,
   fsyncSync,
   closeSync,
   rmSync
 } from 'node:fs'
 import { join } from 'node:path'
-import { encrypt, decrypt, serializeBlob, deserializeBlob } from './security/crypto'
+import {
+  encrypt,
+  decrypt,
+  serializeBlob,
+  deserializeBlob,
+  classifyFrameMagic,
+  newerFrameError,
+  isVaultNewerError
+} from './security/crypto'
 import { ROTATED_ENCRYPTED_LOG_NAME, shredFile } from './workspace-vault'
 
 // Local-only rotating logger (spec §7.11 — diagnostics logs stay on device, never uploaded).
@@ -77,6 +86,40 @@ let vaultKey: Buffer | null = null
  */
 let buffer = ''
 
+/**
+ * #845: `app.log.enc`, or the rotated `app.1.log.enc`, is in a frame a NEWER build wrote. This build cannot read it and
+ * must not replace it, so for the rest of the session nothing persists or rotates over either: the session's lines
+ * stay in the in-memory buffer only (readable on Diagnostics, gone at lock or quit, like a session spent at the unlock
+ * gate).
+ */
+let encLogNewer = false
+
+/** Enter the #845 buffer-only mode, with one line saying why (it stays in the buffer like every other). */
+function keepLogInMemory(file: string, found: string | number): void {
+  encLogNewer = true
+  write('warn', 'Diagnostics log: a log file was written by a newer build; this session keeps its log in memory', {
+    file,
+    found
+  })
+}
+
+/** The frame version byte of `path` when its first 8 bytes name a frame a newer build wrote (#845); null when they
+ *  do not, or the file is absent or unreadable. */
+function newerFrameVersion(path: string): string | number | null {
+  try {
+    const head = Buffer.alloc(8)
+    const fd = openSync(path, 'r')
+    try {
+      const got = head.subarray(0, readSync(fd, head, 0, head.length, 0))
+      return classifyFrameMagic(got) === 'newer' ? newerFrameError(got).found : null
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return null
+  }
+}
+
 export function initLogging(directory: string): void {
   mkdirSync(directory, { recursive: true })
   logDir = directory
@@ -85,6 +128,7 @@ export function initLogging(directory: string): void {
   mode = 'buffering'
   vaultKey = null
   buffer = ''
+  encLogNewer = false
 }
 
 /** Drop whole lines from the FRONT of `text` until it is within `maxBytes` UTF-8 bytes, so the
@@ -137,7 +181,7 @@ function vaultKeyZeroed(): boolean {
 
 /** Encrypt `buffer` and write it to `app.log.enc` atomically (temp + fsync + rename). */
 function persistEncrypted(): void {
-  if (!encLogFile || !vaultKey || vaultKeyZeroed()) return
+  if (!encLogFile || !vaultKey || vaultKeyZeroed() || encLogNewer) return
   try {
     writeFileAtomicSync(encLogFile, serializeBlob(encrypt(vaultKey, Buffer.from(buffer, 'utf8'))))
   } catch {
@@ -153,8 +197,10 @@ function loadEncrypted(): void {
     // Pre-unlock buffered lines (this session) come AFTER the persisted history. Trim on a
     // line boundary (not a raw byte slice) so the merged buffer never starts mid-line.
     buffer = trimToByteCap(prior + buffer, BUFFER_MAX_BYTES)
-  } catch {
-    /* a corrupt/foreign-key log is not recoverable — start fresh rather than throw */
+  } catch (err) {
+    // A corrupt/foreign-key log is not recoverable — start fresh rather than throw. A newer build's frame is not
+    // ours to replace (#845): keep this session's log in memory only.
+    if (isVaultNewerError(err)) keepLogInMemory('app.log.enc', err.found)
   }
 }
 
@@ -168,6 +214,10 @@ export function attachVaultKey(key: Buffer): void {
   vaultKey = key
   mode = 'encrypted'
   loadEncrypted()
+  // #845: the rotated generation counts too. With no live `app.log.enc` beside it (a newer build rotated last), a
+  // rotation this session would otherwise overwrite it.
+  const rotatedNewer = encLogNewer || !logDir ? null : newerFrameVersion(join(logDir, ROTATED_ENCRYPTED_LOG_NAME))
+  if (rotatedNewer !== null) keepLogInMemory(ROTATED_ENCRYPTED_LOG_NAME, rotatedNewer)
   persistEncrypted()
   // Migration: an OLDER build (or a crash before this build's first lock) may have left a
   // plaintext `app.log`/`app.1.log` on an encrypted drive. Shred it now that the log is
@@ -245,7 +295,7 @@ function rotatePlainIfNeeded(): void {
 
 /** Rotate the encrypted log: re-encrypt the current buffer to `app.1.log.enc`, then reset. */
 function rotateEncryptedIfNeeded(): void {
-  if (!encLogFile || !logDir || !vaultKey || vaultKeyZeroed()) return
+  if (!encLogFile || !logDir || !vaultKey || vaultKeyZeroed() || encLogNewer) return
   if (Buffer.byteLength(buffer, 'utf8') <= MAX_BYTES) return
   try {
     const blob = serializeBlob(encrypt(vaultKey, Buffer.from(buffer, 'utf8')))

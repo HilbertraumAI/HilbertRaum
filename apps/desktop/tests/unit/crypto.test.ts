@@ -12,7 +12,7 @@ import {
   verifyKey,
   type KdfParams
 } from '../../src/main/services/security/crypto'
-import { FAST_ARGON, FAST_KDF as FAST_SCRYPT } from '../helpers/vault-fixtures'
+import { FAST_ARGON, FAST_KDF as FAST_SCRYPT, thrownBy } from '../helpers/vault-fixtures'
 
 // Phase 9 — KDF + AEAD primitives (pure, no I/O).
 
@@ -151,11 +151,29 @@ describe('serializeBlob / deserializeBlob', () => {
     expect(() => deserializeBlob(Buffer.alloc(4))).toThrow(/too short/)
   })
 
-  // A frame long enough to pass the length check, with a magic this build does not write (a
-  // future format version, #845): it must be refused by name, never parsed as `iv | tag | ct`.
-  it('rejects a header-sized frame with a foreign magic (a future format)', () => {
-    const foreign = Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(12 + 16)])
+  // A frame with a magic this build does not write must be refused by name, never parsed as `iv | tag | ct`. One of
+  // this family with a higher version byte (`HRAUMEN2`) was written by a NEWER build (#845), also when it is shorter
+  // than this build's header (a newer layout need not match it); any other magic stays "unrecognised".
+  it.each([
+    ['HRAUMEN2', '2'],
+    ['HRAUMEN9', '9']
+  ])('reads a frame a newer build wrote (%s) as newer, by name (#845)', (magic, version) => {
+    for (const rest of [randomBytes(12 + 16), randomBytes(4)]) {
+      expect(thrownBy(() => deserializeBlob(Buffer.concat([Buffer.from(magic), rest])))).toEqual({
+        name: 'VaultNewerError',
+        what: 'frame',
+        found: version
+      })
+    }
+  })
+
+  it.each([
+    ['PAIDENC1, the pre-0.1.10 format', Buffer.from('PAIDENC1')],
+    ['bytes of no format', Buffer.from('0011223344556677', 'hex')]
+  ])('rejects a header-sized frame with a foreign magic as unrecognised, not newer: %s', (_case, magic) => {
+    const foreign = Buffer.concat([magic, randomBytes(12 + 16)])
     expect(() => deserializeBlob(foreign)).toThrow(/unrecognised header/)
+    expect(thrownBy(() => deserializeBlob(foreign)).name).toBe('Error')
   })
 })
 
@@ -179,4 +197,5 @@ describe('password verifier', () => {
       '818259b6310026a8e0dbac5d2e6927abcfdb07b32258fac4f61b18b80f929085'
     )
   })
+
 })

@@ -315,10 +315,11 @@ next section.
 
 ## "Your password is correct, but the workspace data on the drive is damaged"
 
-This message (issue #208) means the app verified your password and decrypted the workspace,
-but what came out is not a readable database — the encrypted file itself was damaged at some
-earlier point. Retyping the password cannot help, and this is deliberately **not** worded as
-a password problem.
+This message (issue #208) means the app verified your password, but the encrypted workspace
+file failed its integrity check (its bytes changed after it was written, for example a copy
+that was cut short), or it decrypted to something that is not a readable database — the
+encrypted file itself was damaged at some earlier point. Retyping the password cannot help,
+and this is deliberately **not** worded as a password problem.
 
 What to do:
 
@@ -338,7 +339,12 @@ version, delete its app file from the drive, and only then start the new one (se
 versions on the drive" below). If the app says **"This workspace was written by a newer
 HilbertRaum — update the app to open it."**, you started an older copy on a workspace a newer copy has
 already opened: nothing was changed — update (or start the newer copy) and the workspace opens
-normally. Copies up to 0.1.59 cannot give that message; they open the workspace anyway.
+normally. Copies up to 0.1.59 cannot give that message; they open the workspace anyway. The
+same message also covers the encrypted workspace's own files (issue #845): its
+`config/workspace.json` or its encrypted data in a format a newer copy wrote. The unlock screen
+shows it whatever password you type, because the older copy cannot check a password in a format
+it does not know; your password is not the problem, and nothing was changed. Copies up to 0.1.65
+cannot give it for those files.
 
 ---
 

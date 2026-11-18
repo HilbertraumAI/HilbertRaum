@@ -330,15 +330,18 @@ export interface WorkspaceStateInfo {
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).
- *  `vault_damaged` (#208): the password verified but the vault ciphertext did not decrypt
- *  to an openable database — structurally NOT a password problem, and the copy must say so
- *  (retyping the password cannot help; restoring from a backup can).
+ *  `vault_damaged` (#208): the password verified but the vault ciphertext failed its tag
+ *  (#860 V5b) or did not decrypt to an openable database — structurally NOT a password
+ *  problem, and the copy must say so (retyping the password cannot help; restoring from a
+ *  backup can).
  *  `vault_recovery_blocked` (#242): the last session's newest data still waits to be salvaged
  *  and another program holds the recovery file it must be moved onto — the unlock is refused
  *  (opening would decrypt the stale snapshot over it); close that program and retry, nothing
  *  is lost.
  *  `workspace_newer` (#247): the database was written by a NEWER build (`PRAGMA user_version`
- *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app.
+ *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app. Also (#845)
+ *  a vault format a newer build wrote (descriptor, KDF, `.enc` frame, rekey journal), refused
+ *  before the password is checked.
  *  `vault_open_failed` (#844): the password verified and the data is a database SQLite does not
  *  call damaged, but opening it could not finish (an upgrade step: a full drive, an I/O error, a
  *  bug in a new step). The failed open never rewrites the encrypted vault: free space and retry,

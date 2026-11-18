@@ -37,10 +37,14 @@ import {
   ENCRYPTION_REQUIRED,
   FAST_KDF,
   backdate,
+  damagedVault,
   failedLockState,
   freshVaultPaths,
   lockedVault,
-  unlockedController
+  tagFailingVault,
+  thrownBy,
+  unlockedController,
+  type FreshVaultPaths
 } from '../helpers/vault-fixtures'
 
 afterEach(() => {
@@ -221,6 +225,36 @@ describe('encrypted vault lifecycle', () => {
     opened.db.close()
   })
 
+  // #860 V5b: past the verifier, a tag failure is damage too, and the error says which damage it is (its message
+  // reaches only the log; the user copy is `vault_damaged`'s either way). A descriptor whose `version` is missing
+  // while it keeps `dataKey` lands here as well (read as v1, the password's key opens no data): the message must not
+  // claim the data decrypted (W2 review finding 5).
+  it.each<[string, (vp: FreshVaultPaths) => void, RegExp]>([
+    ['an .enc that fails its tag', (vp) => void tagFailingVault(vp), /failed its authentication check/],
+    [
+      'a descriptor without a version that keeps its dataKey',
+      (vp) => {
+        const d = JSON.parse(readFileSync(vp.descriptorPath, 'utf8'))
+        delete d.version
+        writeFileSync(vp.descriptorPath, JSON.stringify(d))
+      },
+      /failed its authentication check/
+    ],
+    ['an .enc that decrypts to noise (#208)', (vp) => void damagedVault(vp, 'pw', 64 * 1024), /not a database/]
+  ])('a verified password over damaged data throws VaultDamagedError naming the damage: %s', (_case, damage, message) => {
+    const vp = lockedVault('vault', 'pw')
+    damage(vp)
+    let thrown: unknown
+    try {
+      unlockEncryptedVault(vp, 'pw')
+    } catch (err) {
+      thrown = err
+    }
+    expect((thrown as Error | undefined)?.name).toBe('VaultDamagedError')
+    expect((thrown as Error).message).toMatch(message)
+    expect(existsSync(vp.dbPath)).toBe(false)
+  })
+
   it('a corrupt descriptor with an intact .enc gives a restore hint, not "no workspace"', () => {
     const vp = lockedVault('vault', 'pw')
     writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
@@ -273,13 +307,32 @@ describe('streaming file crypto (M5)', () => {
     expect(existsSync(`${out}.tmp`)).toBe(false) // the partial output was shredded
   })
 
-  // A frame of a format this build does not write (a future version, #845) is refused by name
-  // before any decrypt, by both readers. Past the magic check its next 28 bytes would be taken as
-  // `iv | tag`, and only the GCM tag failure would stop it, under a misleading message.
-  it('a frame with a foreign magic (a future format) is refused by name before any decrypt, by the sync and the async reader', async () => {
+  // A frame of a format this build does not write is refused by name before any decrypt, by both
+  // readers. Past the magic check its next 28 bytes would be taken as `iv | tag`, and only the GCM
+  // tag failure would stop it, under a misleading message. A frame a NEWER build wrote (`HRAUMEN` +
+  // a higher version byte) is refused as newer (#845); any other magic stays "unrecognised".
+  it('a frame a newer build wrote (HRAUMEN2) is refused as newer before any decrypt, by the sync and the async reader (#845)', async () => {
     const enc = tmpFile('future.enc', Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(12 + 16 + 64)]))
     const out = `${enc}.plain`
+    expect(thrownBy(() => decryptFile(enc, out, randomBytes(32)))).toEqual({
+      name: 'VaultNewerError',
+      what: 'frame',
+      found: '2'
+    })
+    await expect(decryptFileAsync(enc, out, randomBytes(32))).rejects.toMatchObject({
+      name: 'VaultNewerError',
+      what: 'frame',
+      found: '2'
+    })
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(`${out}.tmp`)).toBe(false)
+  })
+
+  it('a frame of another format (PAIDENC1, before 0.1.10) is refused as unrecognised, not newer, by the sync and the async reader', async () => {
+    const enc = tmpFile('older.enc', Buffer.concat([Buffer.from('PAIDENC1'), randomBytes(12 + 16 + 64)]))
+    const out = `${enc}.plain`
     expect(() => decryptFile(enc, out, randomBytes(32))).toThrow(/unrecognised header/)
+    expect(thrownBy(() => decryptFile(enc, out, randomBytes(32))).name).toBe('Error')
     await expect(decryptFileAsync(enc, out, randomBytes(32))).rejects.toThrow(/unrecognised header/)
     expect(existsSync(out)).toBe(false)
     expect(existsSync(`${out}.tmp`)).toBe(false)
