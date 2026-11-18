@@ -161,7 +161,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
       // the 'starter' step above; only a thrown error reaches here.)
       finish(next, 'models')
     } finally {
-      unsubscribe?.()
+      unsubscribe()
     }
   }
 

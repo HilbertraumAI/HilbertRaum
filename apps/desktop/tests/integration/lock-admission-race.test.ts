@@ -754,8 +754,8 @@ describe('admission during the lock teardown (AUD-02)', () => {
 // `app.exit(0)`. Most sidecars are safe there because quit uses the permanently-latching `stop()`
 // where lock uses the non-latching `suspend()`, so an admitted call fails at `ensureStarted`
 // rather than respawning. Two are not, and are covered here. `performShutdown` arms the latch as its
-// first act; these rows are that arm's only proof (shutdown.test.ts's stand-in workspace has no
-// `beginLock`).
+// first act; these rows are that arm's only proof (shutdown.test.ts's stand-in `beginLock` is a no-op;
+// that file pins emergencyLock's arm).
 describe('admission during the QUIT teardown (AUD-02)', () => {
   /** Park `performShutdown` inside its awaited sidecar-stop window (wrapped — see `parkedLock`). */
   async function parkedQuit(h: Harness): Promise<{ quitP: Promise<void> }> {

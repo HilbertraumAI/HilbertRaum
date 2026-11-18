@@ -1333,7 +1333,7 @@ export function ChatScreen({
         setSkillInfoFor(installId)
         const nextSeen = [...skillInfoSeen, picked.id]
         setSkillInfoSeen(nextSeen)
-        void Promise.resolve(window.api.updateSettings({ skillInfoSeen: nextSeen })).catch(() => undefined)
+        void window.api.updateSettings({ skillInfoSeen: nextSeen }).catch(() => undefined)
       } else {
         setSkillInfoFor(null)
       }
