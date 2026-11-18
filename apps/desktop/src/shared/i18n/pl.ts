@@ -2505,6 +2505,11 @@ export const pl: UiCatalog<'pl'> = {
   'main.ingest.voiceEngineCannotRun':
     'Silnik mowy nie może działać na tym komputerze, więc nie udało się transkrybować tego ' +
     'nagrania. Na ekranie Model AI widać, co zrobić – a potem zindeksuj ten dokument ponownie.',
+  'main.ingest.voiceModelPathUnsupported':
+    'W systemie Windows silnik mowy nie może otworzyć modelu transkrypcji, ponieważ nazwa folderu ' +
+    'lub pliku w ścieżce modelu zawiera literę ze znakiem diakrytycznym (na przykład ą, ł, ü, é) ' +
+    'albo inny znak spoza ASCII. Umieść model w ścieżce bez takich znaków i zaktualizuj jego wpis w ' +
+    'manifeście modelu – a potem zindeksuj ten dokument ponownie.',
   'main.ingest.searchModelTimeout':
     'Model wyszukiwania nie odpowiedział na czas, więc nie udało się zindeksować tego dokumentu. ' +
     'Spróbuj ponownie.',
@@ -2930,6 +2935,12 @@ export const pl: UiCatalog<'pl'> = {
   'main.dictation.busy': 'Trwa jeszcze transkrypcja ostatniego dyktowania – to potrwa chwilę.',
   'main.dictation.engineCannotRun':
     'Silnik mowy nie może działać na tym komputerze. Ekran Model AI pokazuje, czego brakuje.',
+  'main.dictation.voiceModelPathUnsupported':
+    'W systemie Windows silnik mowy nie może otworzyć jednego ze swoich modeli (modelu transkrypcji ' +
+    'lub modelu wykrywania aktywności głosowej), ponieważ nazwa folderu lub pliku w ścieżce tego ' +
+    'modelu zawiera literę ze znakiem diakrytycznym (na przykład ą, ł, ü, é) albo inny znak spoza ' +
+    'ASCII. Umieść model w ścieżce bez takich znaków i zaktualizuj jego wpis w manifeście modelu – a ' +
+    'potem spróbuj ponownie.',
   'main.preflight.readOnly':
     'Wygląda na to, że ten dysk jest tylko do odczytu, więc aplikacja nie może utworzyć obszaru ' +
     'roboczego. Użyj innego portu USB albo zajrzyj do instrukcji rozwiązywania problemów.',

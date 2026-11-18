@@ -2514,6 +2514,11 @@ export const it: UiCatalog<'it'> = {
     'Il motore vocale non può funzionare su questo computer, quindi non è stato possibile ' +
     'trascrivere questa registrazione. Nella schermata Modello IA trovi cosa fare, poi ' +
     'reindicizza questo documento.',
+  'main.ingest.voiceModelPathUnsupported':
+    'Su Windows, il motore vocale non può aprire il modello di trascrizione perché il nome di una ' +
+    'cartella o del file nel percorso del modello contiene una dieresi, un accento o un altro ' +
+    'carattere non ASCII. Sposta il modello in un percorso senza caratteri di questo tipo e aggiorna ' +
+    'la sua voce nel manifest del modello, poi reindicizza questo documento.',
   'main.ingest.searchModelTimeout':
     'Il modello di ricerca non ha risposto in tempo, quindi non è stato possibile indicizzare ' +
     'questo documento. Riprova.',
@@ -2964,6 +2969,12 @@ export const it: UiCatalog<'it'> = {
   'main.dictation.engineCannotRun':
     'Il motore vocale non può funzionare su questo computer. La schermata Modello IA indica cosa ' +
     'manca.',
+  'main.dictation.voiceModelPathUnsupported':
+    'Su Windows, il motore vocale non può aprire uno dei suoi modelli (il modello di trascrizione o ' +
+    'quello di rilevamento dell’attività vocale) perché il nome di una cartella o del file nel ' +
+    'percorso di quel modello contiene una dieresi, un accento o un altro carattere non ASCII. ' +
+    'Sposta il modello in un percorso senza caratteri di questo tipo e aggiorna la sua voce nel ' +
+    'manifest del modello, poi riprova.',
   'main.preflight.readOnly':
     'Questa unità sembra essere in sola lettura, quindi l’app non può creare la sua area di ' +
     'lavoro. Prova un’altra porta USB oppure consulta la guida alla risoluzione dei problemi.',

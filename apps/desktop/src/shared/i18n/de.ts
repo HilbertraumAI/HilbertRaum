@@ -2490,6 +2490,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb konnte dieses Dokument nicht indexiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — versuch es danach erneut.',
   'main.ingest.engineLibraryMissing': 'Die KI-Engine kann auf diesem Computer nicht laufen, weil die Systembibliothek {library} fehlt. Im Bereich „KI-Modell“ steht, wie du das behebst — versuch es danach erneut.',
   'main.ingest.voiceEngineCannotRun': 'Die Sprach-Engine kann auf diesem Computer nicht laufen, deshalb konnte diese Aufnahme nicht transkribiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — indexiere das Dokument danach neu.',
+  'main.ingest.voiceModelPathUnsupported':
+    'Unter Windows kann die Sprach-Engine das Transkriptionsmodell nicht öffnen, weil ein Ordner- ' +
+    'oder Dateiname im Pfad des Modells einen Umlaut, einen Akzent oder ein anderes ' +
+    'Nicht-ASCII-Zeichen enthält. Lege das Modell unter einem Pfad ohne solche Zeichen ab, passe ' +
+    'seinen Eintrag im Manifest des Modells an und indexiere das Dokument danach neu.',
   // #634: das Suchmodell (der E5-Embedder) ist ausgefallen — gewählt nach der Art des Fehlers, nie
   // nach seinem Text (der Text eines Startfehlers nennt die Modelldatei mit absolutem Pfad).
   'main.ingest.searchModelTimeout':
@@ -2973,6 +2978,12 @@ export const de: Record<keyof typeof en, string> = {
   'main.dictation.tooLong': 'Diese Aufnahme ist zu lang für ein Diktat. Importiere lange Aufnahmen stattdessen als Audiodatei im Bereich „Dokumente“.',
   'main.dictation.busy': 'Das letzte Diktat wird noch transkribiert — einen Moment.',
   'main.dictation.engineCannotRun': 'Die Sprach-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
+  'main.dictation.voiceModelPathUnsupported':
+    'Unter Windows kann die Sprach-Engine eines ihrer Modelle (das Transkriptionsmodell oder das ' +
+    'Modell zur Erkennung von Sprachaktivität) nicht öffnen, weil ein Ordner- oder Dateiname im Pfad ' +
+    'dieses Modells einen Umlaut, einen Akzent oder ein anderes Nicht-ASCII-Zeichen enthält. Lege ' +
+    'das Modell unter einem Pfad ohne solche Zeichen ab, passe seinen Eintrag im Manifest des ' +
+    'Modells an und versuch es dann noch einmal.',
   'main.preflight.readOnly':
     'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
     'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in der ' +

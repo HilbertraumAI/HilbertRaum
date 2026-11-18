@@ -2371,6 +2371,65 @@ it fails with friendly convert-to-WAV/MP3 copy.
 - **Audit:** the existing `document_imported` (filename, document id, status, chunk
   count — never content) covers audio; the
   transcript is CONTENT and never reaches `runtime_events` (sentinel-tested end-to-end).
+- **#869 amendment (2026-11-18): every whisper-cli child starts in the documents folder and
+  gets an ASCII command line, or none at all.** The pinned whisper-cli (v1.8.6, Windows x64)
+  has a narrow `main` and, unlike llama-server since b12110 (#729), no UTF-8 `activeCodePage`
+  manifest (PE read), so Windows fills its argv in the ANSI code page. Measured with the real
+  `ggml-small` model on code page 1252: a model path (`-m`) with an umlaut makes it die with a
+  fail-fast exception (0xC0000409) right after "loading model from" (it exits within 0.3 s; no
+  error dialog keeps it alive), one with characters outside the code page arrives as `?` ("failed
+  to open", exit 3) — so under a root such as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum`
+  or a Kit folder `Übungen` every import and dictation failed; an audio or output path
+  (`-f`, `-of`) with characters of the code page (`März`) worked, one with characters outside
+  it (`Олена 日本`) failed (`-f`: "input file not found", exit 2; `-of`: exit 0 with no transcript
+  written). A RELATIVE path is read exactly (the OS resolves it against the child's wide working
+  directory), so **design as built, one pure planner (`transcriber/argv.ts`):** **(a)** the child
+  starts in `opts.workDir` — the workspace's `documents/` folder — on every platform, and gets
+  every file there (the transcript `-of`, a stored copy, a decrypted transient, the dictation
+  WAV) by its bare name; **(b)** on Windows a model (`-m`, `-vm`) goes absolute when ASCII, else
+  relative (`..\..\models\transcriber\…`), and with no ASCII spelling — a non-ASCII folder or
+  file name in the model's path below `models/` (an ASCII file name in a non-ASCII folder too),
+  which only a user's own manifest can give — the call is refused before anything starts
+  (`WhisperPathError`, log class `whisper:non-ascii-path`, its own row and dictation copy:
+  `main.ingest.voiceModelPathUnsupported`, `main.dictation.voiceModelPathUnsupported`); copying
+  gigabytes per call is no option; **(c)** on Windows the audio goes absolute when ASCII, else
+  relative when ASCII (never across drives), else it is **copied into the documents folder**
+  as `<uuid>.parse-audio<ext>` for the run: an encrypted workspace's first import parses the
+  user's ORIGINAL file wherever it is (`ingestion/index.ts`), and a name or folder with characters
+  outside the code page cannot be named to the child (the copy rule needs no knowledge of the
+  code page, so every original without an ASCII spelling is copied, e.g. a Kit on `D:\` and the
+  file in `C:\Users\Jörg\Musik\`). The copy is the same plaintext class as an encrypted
+  re-index's decrypted `.parse` transient: written only after the engine-install gate and the
+  binary hash, right before the spawn; shredded in the same `finally` as the transcript; and under
+  the startup crash sweep by its `.parse` infix. While it is being written the call has no child,
+  so it is tracked on its own (`copying`): the call's signal (cancel, lock, quit) and
+  `suspend()`/`stop()` (lock, quit, and an engine update, which suspends without aborting the
+  import's signal) abort it; no child starts after that, and `suspend()`/`stop()` return only
+  after the partial copy is shredded, under the same 10 s cap as a child. An engine install that
+  begins its swap during the copy holds the spawn at the #516 gate, re-checked after the copy.
+  macOS and Linux take (a) only — their argv is bytes, so they never copy and never refuse.
+  Every path is resolved against the APP's working directory before the spawn (the command too,
+  `whisperCommand`): the child starts elsewhere, so a relative one (a dev run's relative drive
+  root, `HILBERTRAUM_WHISPER_BIN`) would otherwise be looked up from the documents folder (the
+  #787 trap). **Why the documents folder (the #787 DLL-search caveat, `rag-design.md` §17 D-Z1).**
+  Windows searches a process's working directory for a DLL it finds neither beside the exe nor
+  in the system folders, and the pinned build imports `MSVCP140.dll`, `VCRUNTIME140.dll`,
+  `VCRUNTIME140_1.dll` and `VCOMP140.DLL`, which the zip does not carry (#530); `whisper-cli`
+  also calls `ggml_backend_load_all`, whose scanner (`ggml.dll`: `current_path()`,
+  `LoadLibraryW`) looks for `ggml-*.dll` backends beside the exe AND in the working directory.
+  The documents folder is the app's own and holds only names the app chooses (`<uuid>…`,
+  `<docId><ext>`, `.enc`, `.parse*`), so nothing there can carry such a DLL name, and writing
+  there needs the same access as writing the unhashed DLLs beside the exe; it is never the
+  audio's own folder (a Downloads folder, what #787 rejected) nor the engine folder (an engine
+  install replaces it while no child runs, #516). Before this, the child inherited the app's
+  own working directory. A documents folder of 258+ characters cannot be a working directory
+  (Node's spawn fails `ENOENT`, absorbed by `guardChildStdio`, #790): the file fails with the
+  generic copy, as it did before (whisper-cli opens its files without a long-path prefix). The
+  real layouts are `tests/manual/whisper-smoke.test.ts` "#869 layout matrix" (three roots `ascii`,
+  `Jörg äöü`, `Олена 日本`: a stored file, a foreign original, a dictation with VAD; a Kit on
+  another drive; the refusal; MAX_PATH), red on master and green here; a whisper pin bump
+  re-runs it (`runtime-sources.yaml`, "To bump") and may retire (b)–(c) if upstream adds the
+  manifest. No transcript, citation or stored-data change.
 
 ## Voice dictation (Phase 37, wave-3 plan §10, decision D30)
 
@@ -2510,6 +2569,11 @@ explicitly out of scope.
   for 2 s, the composer shows the "no sound is reaching the microphone" note until signal
   returns or recording ends; a null analyser never shows it (the post-stop gate still refuses).
   Full record: wave-3 plan §10.
+- **#869 (2026-11-18):** the dictation WAV and its transcript reach whisper-cli by their bare
+  names from the documents folder, the speech and VAD models (`-m`, `-vm`) by an ASCII spelling,
+  so dictation works under a root with any character; a VAD or speech model whose path (a folder
+  or the file name below `models/`) has no ASCII spelling is refused with `main.dictation.voiceModelPathUnsupported`. Record: "Audio
+  transcription (Phase 36)", "#869 amendment".
 
 ## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11, decisions D31–D33)
 

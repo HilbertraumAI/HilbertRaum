@@ -68,6 +68,16 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **On Windows, audio import and voice dictation work in folders with umlauts, accents or other
+  alphabets.** When the drive or the app's data folder had such a character in its path (a user
+  named Jürgen, a Kit folder named `Übungen`, a folder in Cyrillic or Japanese), the voice engine
+  could not open its speech model: every recording failed to import and every dictation failed,
+  and with an umlaut the voice engine crashed. A recording whose own name or folder used another
+  alphabet could not be read either. The voice engine now gets every path in a form it can read;
+  in an encrypted workspace, a recording it still cannot reach by name is copied into the
+  workspace for the transcription and shredded right after. A speech model you added yourself
+  whose folder or file name has such a character is refused with a message that says to move it
+  to a plain path (#869).
 - **The OCR files can be downloaded in the app on a drive set up with an older version.** If the
   drive's download list predated the files this version of HilbertRaum uses (a drive prepared with
   a version before 0.1.63 has no page-orientation file in it), the AI Model screen and the Documents rows
