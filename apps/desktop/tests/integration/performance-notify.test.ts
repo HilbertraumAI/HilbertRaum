@@ -63,7 +63,6 @@ import type { AppSettings, BenchmarkProgressStep, ImageAnalyzeRequest, Performan
 import { modelPlacement } from '../helpers/benchmark-records'
 import { fakeSpawn } from '../helpers/fake-sidecar'
 import { invoke, makeEvent } from '../helpers/ipc'
-import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 import {
   CARDS,
   CATALOG_MANIFESTS,
@@ -415,11 +414,9 @@ describe('settings keys the snapshot reads', () => {
   describe('through settings:update', () => {
     pinPlatform('win32', 'x64') // the `gpuMode` row reads the class, which reads the platform
 
-    const embeddings = (id: string): Record<string, unknown> => rawManifest({ id, role: 'embeddings', local_path: `models/embeddings/${id}.gguf` })
     /** A card machine whose active model is outside the catalog, so its context is the settings default. */
     function snapshotInputs() {
       const { ctx, db } = here()
-      ctx.manifestsDir = manifestsDirWith(embeddings('first-embedder'), embeddings('second-embedder'))
       updateSettings(db, { activeModelId: 'some-model', gpuProbe: { devices: [CARDS.RTX_3090], probedAt: '2026-09-05T00:00:00Z', machineKey: hereKey() } })
       registerCoreIpc(ctx)
       return ctx
@@ -427,10 +424,9 @@ describe('settings keys the snapshot reads', () => {
     const context = (s: PerformanceSnapshot): unknown => s.placement.model?.contextTokens
 
     // Each row reads the figure the key moves: a key that stops feeding the snapshot fails here, so
-    // this is no copy of PERFORMANCE_SETTINGS_KEYS.
+    // this is no copy of PERFORMANCE_SETTINGS_KEYS. The active slots are main-owned since #868: they
+    // move through `models:select` / `runtime:use` (the row above), never through this channel.
     it.each<[keyof AppSettings, Partial<AppSettings>, (s: PerformanceSnapshot) => unknown]>([
-      ['activeModelId', { activeModelId: 'another-model' }, (s) => s.placement.model?.id],
-      ['activeEmbeddingModelId', { activeEmbeddingModelId: 'second-embedder' }, (s) => s.placement.models.find((r) => r.role === 'embeddings')?.modelId],
       ['contextTokens', { contextTokens: 2048 }, context],
       ['contextTokensOverride', { contextTokensOverride: 16_384 }, context],
       ['gpuMode', { gpuMode: 'off' }, (s) => s.placement.memoryClass]

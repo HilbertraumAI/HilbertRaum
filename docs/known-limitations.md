@@ -999,9 +999,10 @@ password recovery — are documented in
   Models-screen action — moves the posture to `gpu` with nothing to suspend the sidecar, so the
   next ask could resolve the wide `all` scope while the sidecar stayed resident on the CPU — C1's
   combination again, through a drift window. Step 4-7 adds `activeModelId` to the suspend trigger,
-  fired from all three settings-writing channels (`settings:update`, `models:select`,
-  `models:use`) through one shared predicate (`rerankerPostureInputsChanged`,
-  `rag/device-posture.ts`); `activeEmbeddingModelId` is explicitly not a posture input and never
+  fired from `models:select` and `models:use` (`runtime:use`) through one shared predicate
+  (`rerankerPostureInputsChanged`, `rag/device-posture.ts`), the one `settings:update` uses for
+  `gpuMode`; `settings:update` fired it for `activeModelId` too until #868, which drops that key
+  from a renderer patch. `activeEmbeddingModelId` is explicitly not a posture input and never
   triggers it. **The honest residual:** this is not an absolute guarantee for every ask in
   flight — `suspend()` is fire-and-forget, so an ask landing mid-teardown hits the sidecar's
   `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates`

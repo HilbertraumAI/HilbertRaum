@@ -24,7 +24,7 @@ getImportJob(jobId: string): Promise<ImportJobStatus>
 listDocuments(): Promise<DocumentInfo[]>
 deleteDocument(documentId: string): Promise<void>
 getSettings(): Promise<AppSettings>
-updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+updateSettings(patch: RendererSettingsPatch): Promise<AppSettings>  // renderer-owned keys only (#868)
 ```
 _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names in `src/shared/ipc.ts`.
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
@@ -201,7 +201,7 @@ Nothing reaches the workspace file, so an older build sees no change and `SCHEMA
 
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;
-`updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:true`
+`updateSettings(patch)` upserts (what each key may hold is the write gate below; who may write it through IPC is `SETTINGS_WRITERS`, see the end of this section); `seedSettings` seeds on first run. Default `allowNetwork:true`
 (network is PERMITTED on a fresh install so model/engine downloads work — the policy ceiling still
 wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
@@ -294,7 +294,8 @@ so the newer build still finds the choice. Before unlock the renderer cannot rea
 per-computer localStorage mirror `hilbertraum.uiLanguage` instead (D-L3).
 ⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
 unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
-`workspaceMode` is set to the active mode by the `WorkspaceController` at create, at a plaintext open and at every unlock, and the write gate accepts only `encrypted` or `plaintext_dev`. The renderer cannot set it: `settings:update` drops the key from a patch (#858).
+`workspaceMode` is set to the active mode by the `WorkspaceController` at create, at a plaintext open and at every unlock, and the write gate accepts only `encrypted` or `plaintext_dev`. The renderer cannot set it (#858).
+**Who writes which key (#868).** `settings:update` accepts only the keys [`SETTINGS_WRITERS`](../apps/desktop/src/shared/settings-writers.ts) marks renderer-owned (`satisfies Record<keyof AppSettings, 'renderer' | 'main'>`, so a new key fails typecheck until it has an owner). A main-owned key (`workspaceMode`, `activeModelId`, `activeEmbeddingModelId`, `lastBenchmark`, `benchmarkHistory`, `modelPlacements`, `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`, `checksumCache`) is dropped with a log line and the rest of the patch is saved; a key that is no setting is dropped and only counted in that line, never named. The main process writes its keys through `updateSettings(db, …)` directly (the active ids through `models:select` / `runtime:use`). The preload's `updateSettings(patch: RendererSettingsPatch)` makes a literal patch with a main-owned key fail typecheck in the renderer too. The 19 renderer-owned keys are the 14 the screens write plus the five retrieval tuning keys, which no screen writes; the write gate bounds those: `ragTopKInitial` and `ragTopKFinal` to 1–200 and `ragMaxContextTokens` to 256–131,072, each floored to a whole number and clamped, `ragMinSimilarity` clamped to 0–1, and a non-finite value of these four is dropped with the previous value kept; `contextTokens` keeps its 2,048 floor (a non-finite value still falls back to it) and is clamped to 131,072.
 
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`

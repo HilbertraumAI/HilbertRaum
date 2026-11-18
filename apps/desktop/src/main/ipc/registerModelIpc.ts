@@ -488,11 +488,12 @@ export async function maybeAutoStartActiveModel(ctx: AppContext): Promise<void> 
 
 /**
  * Wave 7 rulings (a)/(c) (step 4-7, resolving the scoped Opus review of step 4-6's finding C2):
- * `models:select` and `models:use` both reach `activeModelId` through `selectModel` →
- * `updateSettings` (`services/models.ts`), bypassing `registerCoreIpc.ts`'s `settings:update`
- * handler — and its suspend hook — entirely. Both IPC handlers below call this so the decision is
- * made through the SAME shared predicate that handler uses (`rerankerPostureInputsChanged`,
- * `rag/device-posture.ts`), never a third independent copy of the condition. `before` must be
+ * `models:select` and `models:use` are the only channels that move `activeModelId` (#868:
+ * `settings:update` drops it from a renderer patch). Both reach it through `selectModel` →
+ * `updateSettings` (`services/models.ts`), never through `registerCoreIpc.ts`'s `settings:update`
+ * handler and its suspend hook, so both IPC handlers below call this, and the decision is made
+ * through the SAME shared predicate that handler uses for `gpuMode` (`rerankerPostureInputsChanged`,
+ * `rag/device-posture.ts`), never a second independent copy of the condition. `before` must be
  * read off `getSettings` BEFORE `selectModel` runs (the REAL-flip discipline); only
  * `activeModelId` can move through this path (`selectModel` never touches `gpuMode`/
  * `gpuAutoDisabled`), so `after` reuses `before`'s GPU fields verbatim.

@@ -94,6 +94,7 @@ import type {
   WorkspaceMode,
   WorkspaceStateInfo
 } from '../shared/types'
+import type { RendererSettingsPatch } from '../shared/settings-writers'
 
 // The single, typed bridge between renderer and main. The renderer has no
 // direct Node or network access — it can only call what is exposed here.
@@ -103,7 +104,9 @@ const api = {
   perfMark: (event: string): void => ipcRenderer.send(IPC.perfMark, event),
   getDriveStatus: (): Promise<DriveStatus> => ipcRenderer.invoke(IPC.getDriveStatus),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
-  updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
+  /** Renderer-owned keys only (#868): main drops any other key from the patch, and this type makes a
+   *  literal patch that names one fail typecheck at the call site. */
+  updateSettings: (patch: RendererSettingsPatch): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.updateSettings, patch),
 
   // ---- Privacy / offline policy ----

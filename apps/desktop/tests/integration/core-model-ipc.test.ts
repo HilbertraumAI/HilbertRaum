@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest'
 import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -73,6 +73,12 @@ import {
   snapshotRerankerOccupancy,
   createPendingModelSwitchCounter
 } from '../../src/main/services/rag/device-posture'
+import { log } from '../../src/main/services/logging'
+import { createLocalApiServer } from '../../src/main/services/local-api/lifecycle'
+import type { MainSettingsKey, RendererSettingsPatch } from '../../src/shared/settings-writers'
+import { benchmarkResult, modelPlacement } from '../helpers/benchmark-records'
+import { until } from '../helpers/hang-budget'
+import { freePort } from '../helpers/local-api-harness'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -297,33 +303,157 @@ describe('registerCoreIpc', () => {
     expect((result as AppSettings).theme).toBe('dark')
   })
 
-  // #858: the workspace stamps `workspaceMode` (at create and at a plaintext open) and Settings and
-  // Privacy read it to say "encrypted" and to offer Change password. The renderer must not move it.
-  it('updateSettings drops a renderer-sent workspaceMode and applies the rest of the patch (#858)', async () => {
-    const db = seededDb()
-    updateSettings(db, { workspaceMode: 'encrypted' }) // the controller's own stamp
-    const ctx = {
-      trustedSenders: ANY_SENDER,
-      paths: { configPath: bogusConfigDir() },
-      db,
-      workspace: { isUnlocked: () => true }
-    } as unknown as AppContext
-    registerCoreIpc(ctx)
+  // #868 (after #858, which closed it for `workspaceMode` only): `settings:update` writes only the keys
+  // SETTINGS_WRITERS gives the renderer. A main-owned key is dropped from the patch, whatever its value,
+  // and the rest of the patch is saved.
+  describe('updateSettings writes only the keys the renderer owns (#868)', () => {
+    function ctxOn(db: Db, extra: Record<string, unknown> = {}): AppContext {
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        db,
+        workspace: { isUnlocked: () => true },
+        ...extra
+      } as unknown as AppContext
+      registerCoreIpc(ctx)
+      return ctx
+    }
 
-    const { result } = await invoke(handlers, IPC.updateSettings, { workspaceMode: 'plaintext_dev', theme: 'dark' })
-    expect(result as AppSettings).toMatchObject({ workspaceMode: 'encrypted', theme: 'dark' })
-    await invoke(handlers, IPC.updateSettings, { workspaceMode: 'banana' })
-    expect(getSettings(db).workspaceMode).toBe('encrypted')
+    // One well-formed value per main-owned key. Typed by the table: a key that becomes main-owned fails
+    // typecheck here until it has a row, and one that becomes renderer-owned is an excess property.
+    const MAIN_KEY_VALUES: { [K in MainSettingsKey]: NonNullable<AppSettings[K]> } = {
+      workspaceMode: 'encrypted',
+      activeModelId: 'qwen3-4b-instruct-q4',
+      activeEmbeddingModelId: 'multilingual-e5-small-q8',
+      lastBenchmark: benchmarkResult(),
+      benchmarkHistory: [benchmarkResult()],
+      modelPlacements: { qwen: modelPlacement() },
+      gpuAutoDisabled: true,
+      gpuLastError: '2026-11-18T00:00:00.000Z: vk::Device::createBuffer failed',
+      gpuProbe: { devices: [CARDS.RTX_3090], probedAt: '2026-11-18T00:00:00.000Z' },
+      checksumCache: { 'models/chat/x.gguf': { size: 1, mtimeMs: 2, sha256: 'a'.repeat(64) } }
+    }
+
+    it.each(Object.entries(MAIN_KEY_VALUES) as Array<[MainSettingsKey, unknown]>)(
+      'a renderer patch of %s leaves the stored value as it was',
+      async (key, value) => {
+        const db = seededDb()
+        ctxOn(db)
+        const before = getSettings(db)[key]
+        await invoke(handlers, IPC.updateSettings, { [key]: value })
+        expect(getSettings(db)[key]).toEqual(before)
+        // The value is well formed: the main process's own write stores it. So the IPC drop above, not
+        // the write gate, is what kept the stored value.
+        expect(updateSettings(db, { [key]: value })[key]).toEqual(value)
+      }
+    )
+
+    it('a mixed patch saves its renderer keys, and the log names no key the renderer made up', async () => {
+      const db = seededDb()
+      ctxOn(db)
+      const lines: unknown[][] = []
+      vi.spyOn(log, 'info').mockImplementation((...args) => void lines.push(args))
+      vi.spyOn(log, 'warn').mockImplementation((...args) => void lines.push(args))
+      onTestFinished(() => {
+        vi.restoreAllMocks()
+      })
+      // Built with JSON.parse, as a patch arrives over IPC: an own `__proto__` key, not a prototype.
+      const patch = JSON.parse('{"__proto__":{"theme":"light"},"theme":"dark","renderer-made-up-key":1}') as Record<string, unknown>
+      patch.checksumCache = MAIN_KEY_VALUES.checksumCache
+      patch.gpuProbe = undefined // main-owned, but it writes nothing: not worth a name in the log (#858 rule)
+      const { result } = await invoke(handlers, IPC.updateSettings, patch)
+      for (const settings of [result as AppSettings, getSettings(db)]) {
+        expect(settings.theme).toBe('dark')
+        expect(settings.checksumCache).toEqual({})
+      }
+      const logged = JSON.stringify(lines)
+      expect(logged).toContain('checksumCache') // the dropped main-owned key is named
+      expect(logged).not.toContain('gpuProbe')
+      expect(logged).not.toContain('renderer-made-up-key')
+      expect(logged).not.toContain('__proto__')
+    })
+
+    // A key sent as `undefined` writes nothing, so it must not act as a change either: before, the audit
+    // trail recorded a privacy-relevant change that never happened.
+    it('a renderer key sent as undefined records no settings change; the same key with a value does', async () => {
+      const db = seededDb()
+      const audit = vi.fn()
+      ctxOn(db, { audit })
+      await invoke(handlers, IPC.updateSettings, { allowNetwork: undefined, localApiEnabled: undefined })
+      expect(audit).not.toHaveBeenCalled()
+      await invoke(handlers, IPC.updateSettings, { allowNetwork: false })
+      expect(audit.mock.calls.map((c) => c[0])).toEqual(['settings_changed'])
+    })
+
+    // The issue's "the allowed keys still save": each screen's own keys, at values other than the
+    // defaults, in one patch.
+    it('every key a screen writes still saves', async () => {
+      const db = seededDb()
+      ctxOn(db)
+      const byScreen: Record<string, RendererSettingsPatch> = {
+        Settings: {
+          allowNetwork: false,
+          theme: 'dark',
+          uiLanguage: 'en',
+          gpuMode: 'off',
+          ragRerankWideScope: true,
+          autoStartActiveModel: false,
+          chatCompactionEnabled: false,
+          developerMode: true
+        },
+        'Settings, Local API card': { localApiEnabled: true, localApiTokenRequired: false, localApiPort: 4990 },
+        'Settings, Skills tab': { skillsAutoFireEnabled: true },
+        'Chat, skill info card': { skillInfoSeen: ['bank-statement'] },
+        'AI Model, context size': { contextTokensOverride: 16_384 },
+        'retrieval tuning (no screen)': {
+          contextTokens: 8192,
+          ragTopKInitial: 20,
+          ragTopKFinal: 8,
+          ragMaxContextTokens: 4000,
+          ragMinSimilarity: 0.25
+        }
+      }
+      await invoke(handlers, IPC.updateSettings, Object.assign({}, ...Object.values(byScreen)))
+      const stored = getSettings(db)
+      for (const [screen, patch] of Object.entries(byScreen)) expect(stored, screen).toMatchObject(patch)
+    })
+
+    // #860 API7: "off" must close the port. The real server, through the real settings handler.
+    it('a localApiEnabled patch opens the listener, and the next one closes it (#860 API7)', async () => {
+      const db = seededDb()
+      updateSettings(db, { localApiPort: await freePort() })
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        isDev: true,
+        db,
+        workspace: { isUnlocked: () => true, isLocking: () => false },
+        runtime: new RuntimeManager(() => {
+          throw new Error('no model in this row')
+        })
+      } as unknown as AppContext
+      ctx.localApi = createLocalApiServer(ctx, '0.0.0-test')
+      onTestFinished(() => ctx.localApi!.stop())
+      registerCoreIpc(ctx)
+      const models = (): Promise<Response> => fetch(`http://127.0.0.1:${getSettings(db).localApiPort}/v1/models`)
+
+      await invoke(handlers, IPC.updateSettings, { localApiEnabled: true })
+      await until(() => ctx.localApi!.status().running, 'the listener opening')
+      expect((await models()).status).toBe(401) // answering, and asking for the key
+
+      await invoke(handlers, IPC.updateSettings, { localApiEnabled: false })
+      await until(() => !ctx.localApi!.status().running, 'the listener closing')
+      await expect(models()).rejects.toThrow()
+    })
   })
 
   // Step 4-4 (Wave 4 ruling (a)): a GPU settings change stops the reranker sidecar (suspend,
   // never the permanent stop()) so its NEXT start re-evaluates the device posture instead of
   // keeping a stale one for the rest of the session — a REAL flip only (BE-1 discipline).
-  // Step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped Opus review of step 4-6's finding
-  // C2): `activeModelId` joins gpuMode/gpuAutoDisabled as a posture input this SAME handler
-  // watches, through the ONE shared predicate `rerankerPostureInputsChanged`
-  // (`rag/device-posture.ts`) — `activeEmbeddingModelId` deliberately does not.
-  describe('updateSettings stops the reranker on a REAL gpuMode/gpuAutoDisabled/activeModelId flip (step 4-4; step 4-7 adds activeModelId)', () => {
+  // #868: `gpuMode` is the one posture input a renderer patch can still carry. `gpuAutoDisabled`
+  // and `activeModelId` are main-owned and dropped (the table above); `activeModelId` suspends
+  // through `models:select` / `runtime:use` (the registerModelIpc rows below).
+  describe('updateSettings stops the reranker on a REAL gpuMode flip (step 4-4)', () => {
     function ctxWithFakeReranker(): { ctx: AppContext; suspend: ReturnType<typeof vi.fn> } {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
@@ -349,41 +479,9 @@ describe('registerCoreIpc', () => {
       expect(suspend).not.toHaveBeenCalled()
     })
 
-    it('gpuAutoDisabled false -> true suspends the sidecar', async () => {
-      const { suspend } = ctxWithFakeReranker()
-      await invoke(handlers, IPC.updateSettings, { gpuAutoDisabled: true })
-      expect(suspend).toHaveBeenCalledTimes(1)
-    })
-
     it('an unrelated settings key never suspends the sidecar', async () => {
       const { suspend } = ctxWithFakeReranker()
       await invoke(handlers, IPC.updateSettings, { theme: 'dark' })
-      expect(suspend).not.toHaveBeenCalled()
-    })
-
-    // Step 4-7, channel 1 of 3 (settings:update) — Wave 7 ruling (a): activeModelId feeds the
-    // posture through chatModelNeedMib, so a REAL change to it must suspend the sidecar exactly
-    // like a gpuMode/gpuAutoDisabled flip already does.
-    it('activeModelId set to a NEW value (a REAL flip) suspends the sidecar (Wave 7 ruling (a): activeModelId joins the posture inputs)', async () => {
-      const { suspend } = ctxWithFakeReranker() // default activeModelId is null
-      await invoke(handlers, IPC.updateSettings, { activeModelId: 'qwen3-4b-instruct-q4' })
-      expect(suspend).toHaveBeenCalledTimes(1)
-    })
-
-    it('activeModelId set to its CURRENT value (no real flip) does not suspend', async () => {
-      const { ctx, suspend } = ctxWithFakeReranker()
-      updateSettings(ctx.db, { activeModelId: 'qwen3-4b-instruct-q4' })
-      suspend.mockClear() // clear the setup write's own effect before the assertion
-      await invoke(handlers, IPC.updateSettings, { activeModelId: 'qwen3-4b-instruct-q4' })
-      expect(suspend).not.toHaveBeenCalled()
-    })
-
-    // Step 4-7, group 2 (the non-posture negative) — Wave 7 ruling (a) is explicit:
-    // activeEmbeddingModelId is NOT a posture input (the embedder never contends with the
-    // reranker's own placement estimate) and must never trigger a suspend, even on a real flip.
-    it('activeEmbeddingModelId set to a NEW value (a REAL flip) does NOT suspend the sidecar — it is not a posture input (Wave 7 ruling (a))', async () => {
-      const { suspend } = ctxWithFakeReranker() // default activeEmbeddingModelId is null
-      await invoke(handlers, IPC.updateSettings, { activeEmbeddingModelId: 'multilingual-e5-small-q8' })
       expect(suspend).not.toHaveBeenCalled()
     })
 

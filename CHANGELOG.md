@@ -271,6 +271,14 @@ from its first public `1.0.0` release onward.
   first and put in place only when complete, like the other exports, so that message is true.
   When an export fails while writing, for example an evidence pack, the error shown now names
   the real cause, such as a full drive, instead of a later error from closing the file (#838).
+- **A settings save from the app's window can change only the settings a screen offers.** It
+  could also write records that only the app itself keeps: whether the workspace is encrypted,
+  which models are active, the benchmark and graphics card results, and the list of model files
+  already checked, which lets a file skip its next check. No screen did this, but a fault in the
+  window could have. Such values are now ignored and the rest of the save goes through. The
+  retrieval settings that no screen shows are kept within working limits as well: a negative or
+  huge number of excerpts is brought into range, and NaN or infinity, which used to be stored as
+  an empty value, is no longer stored (#868).
 
 ## [0.1.65] — 2026-11-11
 
