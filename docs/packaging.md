@@ -710,8 +710,10 @@ vars / a git-ignored secrets file on the build machine — secrets NEVER enter t
 green gate does not sign** (it never invokes electron-builder).
 
 - **Windows** (`win.signtoolOptions`): supply the OV/EV cert via `WIN_CSC_LINK` (path/URL to the
-  `.pfx` or base64) + `WIN_CSC_KEY_PASSWORD`. **EV** certs (hardware token / cloud HSM) build
-  SmartScreen reputation fastest. The launcher `.cmd` is a script (not signed); the portable `.exe` it
+  `.pfx` or base64) + `WIN_CSC_KEY_PASSWORD`. Signing lets SmartScreen build reputation for the
+  publisher; Microsoft's current guidance treats certificate types alike for this, so an OV
+  certificate or a cloud signing service (Microsoft's Artifact Signing, formerly Trusted Signing) is
+  the cost-effective choice — confirm against Microsoft's code-signing documentation before buying. The launcher `.cmd` is a script (not signed); the portable `.exe` it
   spawns **is** signed — that is what SmartScreen evaluates.
 - **macOS** (`mac.notarize` + `hardenedRuntime` + `build/entitlements.mac.plist`): supply the
   *Developer ID Application* cert via `CSC_LINK`/`CSC_KEY_PASSWORD` and the notarization creds via
@@ -1212,7 +1214,7 @@ publicly linkable.
 | --- | --- | --- |
 | 0 — now | none | unsigned `.exe` (SmartScreen "More info → Run anyway"), ad-hoc-signed `.app` (macOS 15+: System Settings → Privacy & Security → "Open Anyway"), `SHA256SUMS.txt` as the integrity floor — flows documented in [`troubleshooting.md`](troubleshooting.md) |
 | 1 — Apple | `CSC_LINK` / `CSC_KEY_PASSWORD` + `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` | Developer ID-signed + notarized `.app` (electron-builder auto-notarizes; `hardenedRuntime` + entitlements already wired). Also remove the `CSC_IDENTITY_AUTO_DISCOVERY: 'false'` line from `release.yml` |
-| 2 — Windows | `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` (OV/EV `.pfx` or Azure Trusted Signing via signtool env) | signed `.exe`; SmartScreen reputation builds |
+| 2 — Windows | `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` (OV/EV `.pfx` or Microsoft's Artifact Signing, formerly Trusted Signing, via signtool env) | signed `.exe`; SmartScreen reputation builds |
 
 Non-clash with `ci.yml`: `release.yml` never fires on `pull_request`/`push: master` — only tags and
 manual dispatch. It runs on **Node 24** (electron-builder ships its own pinned Electron runtime),

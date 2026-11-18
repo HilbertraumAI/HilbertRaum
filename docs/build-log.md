@@ -27,6 +27,16 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-18 — the two closed 2026-11-16 test audit entries retired verbatim (follow-ups wave opened)
+
+Retired from `BUILD_STATE.md` on 2026-11-18, when the follow-ups wave opened; a single wave line there names their open
+follow-ups (#837–#840, #860, #861) and replaces them. Citations of these two outcome entries now resolve here. Text below
+is byte-identical to what was removed.
+
+_2026-11-16 — **Vault + local API test audit: closed 2026-11-16.** PR #857 merged as `03d5a180`; follow-ups #858 (workspace hardening), #860 (coverage gaps) and #861 (doc drift) are open, and #859 (the local API stop label) is fixed. The entry is retired verbatim to `docs/build-log.md`; the vault and local API test conventions it added are in CONTRIBUTING.md._
+
+_2026-11-16 — **Evidence review + export test audit: closed 2026-11-16.** PR #836 merged as `c9017830`; follow-ups #837 (review save failures), #838 (export writers), #839 (coverage gaps), #840 (doc drift) are open. The entry is retired verbatim to `docs/build-log.md`; test inventory: architecture.md "Evidence Pack / Review Mode — design record" §7._
+
 ## 2026-11-16 — the 2026-11-16 vault + local API test audit entry retired verbatim (PR #857 merged)
 
 Retired from `BUILD_STATE.md` on 2026-11-16, when PR #857 merged as `03d5a180`; a short outcome entry with the open

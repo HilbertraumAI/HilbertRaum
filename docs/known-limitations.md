@@ -808,8 +808,10 @@ password recovery — are documented in
   double-click Excel detect the encoding instead of garbling umlauts/ß. The app's own round-trip is
   clean: the md/txt parsers strip one leading BOM on import (F-22) and the CSV importer (papaparse)
   strips it itself — but a strict external consumer that treats bytes verbatim (a naive `cut`/`awk`
-  pipeline, some JSON-adjacent CSV loaders) will see U+FEFF glued to the first header cell. JSON and
-  `.log` exports never carry a BOM (it breaks strict JSON parsers and log tooling).
+  pipeline, some JSON-adjacent CSV loaders) will see U+FEFF glued to the first header cell. The BOM
+  follows the chosen file's extension, not the kind of export: `.json`, `.xml` and `.log` files never get
+  one (it breaks strict JSON parsers and log tooling), but the diagnostic-log export defaults to
+  `hilbertraum-logs.txt` and so carries one unless the user picks `.log`.
 - **The documents list is windowed, so the browser's find-in-page (Ctrl+F) only matches rows that are
   currently rendered ([`architecture.md`](architecture.md) §36).**
   To stop the list DOM (and the per-row Radix menu-root state machines) from growing linearly with library
@@ -2386,8 +2388,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   re-transcribe — they read the stored transcript chunks.
 - **Audio costs real drive space, twice the size on encrypted workspaces transiently.**
   The recording is copied into the workspace (encrypted at rest); imports >50 MB of
-  audio ask first. Recordings also re-encrypt on every vault password change like any
-  document sidecar.
+  audio ask first. A password change only re-wraps the data key, so recordings are not
+  re-encrypted; only an older (v1) vault's one-time move to the current format, at its first
+  password change, re-encrypts them with every other stored file.
 - **mac/linux drives need a source-built whisper-cli.** Upstream ships a prebuilt binary
   for Windows only (R-W1); on other OSes audio import fails friendly until the drive
   builder compiles the pinned tag (see `drive-layout.md`). Windows-first, by the

@@ -572,7 +572,7 @@ a row has no **Try again**: it would read the same pictures and fail again.
 If the row says *"…needs the OCR files, which are not on this drive"*, the drive has no OCR
 language files yet (commercially-built drives already include them). Use the row's **Download
 OCR files** button (or *"Text recognition for scans and photos (optional)"* on the **AI Model**
-screen): confirm the files (German, English and the page-orientation data, about 8 MB), and once they are downloaded and
+screen): confirm the files (German, English and the page-orientation data, about 8.6 MB), and once they are downloaded and
 checked, text recognition starts **without a restart** — the row then offers **Make searchable
 (OCR)**. A photo that failed for the same reason reads with **Try again** afterwards. The download
 follows the usual gates: if the button is greyed out, the drive policy or **Settings → Allow

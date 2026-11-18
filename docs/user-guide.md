@@ -562,7 +562,7 @@ scanner's output) has no readable text, so the app tells you honestly: *"This PD
 like a scan — it has no readable text yet."* If your drive has the OCR files, the row
 offers a **Make searchable (OCR)** button right on the row. If it says the OCR files are
 *not on this drive*, the row offers **Download OCR files** instead: a short confirmation shows
-the files (German, English and the page-orientation data, about 8 MB together, Apache-2.0) and
+the files (German, English and the page-orientation data, about 8.6 MB together, Apache-2.0) and
 where they come from, and once they are downloaded and checked, text recognition starts working
 **without a restart** — the row then offers **Make searchable (OCR)**. (The same download is on
 the **AI Model** screen as *"Text recognition for scans and photos (optional)"*; on a drive that
