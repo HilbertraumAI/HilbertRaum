@@ -96,7 +96,8 @@ export function resolveManifestsDir(startDir: string, override?: string): string
 }
 
 /**
- * The app's OWN `model-manifests/` (#842): the engine pins and the OCR fallback list. No override ever
+ * The app's OWN `model-manifests/` (#842): the engine pins, and the OCR installer's second list (per
+ * file, #841). No override ever
  * reaches it. A packaged build takes exactly `<resources>/model-manifests` (the `extraResources` copy)
  * and null when that is missing: a walk-up could climb out of the app to a user-writable folder above
  * it, the drive's own copy included. A dev build takes the checkout's, by the walk-up.

@@ -2444,14 +2444,17 @@ not a code change for this round.
 files are the one downloadable asset whose trust anchor is NOT the drive's yaml: the app carries
 its own `{ lang, sha256, sizeBytes }` table (`OCR_PINS` in `services/ocr-install.ts`,
 drift-tested against the committed `runtime-sources.yaml`), installs only those languages
-(`deu` + `eng`), and writes them only to `ocr/<lang>.traineddata.gz` under the drive root. From
+(`deu` + `eng`, and `osd`, #538), and writes them only to `ocr/<lang>.traineddata.gz` under the drive root. From
 the drive's yaml it takes **the download URL and nothing else**: an entry whose `sha256` differs
 from the pin is never used, its `dest` is ignored, and its other languages are ignored — so a
 tampered yaml can redirect the host (the S4 IP-leak residual above) but cannot choose the bytes or
 the path. Since #841 a file the drive's yaml lacks, or pins with another hash, comes from the
 app's own list instead of refusing the install; the confirmation's "From" names the hosts the
-files still to fetch come from. So a drive owner's own mirror that lacks a file no longer keeps
-that file's download off the app's default host. Why stricter than models and the engine: the files are parsed by the tesseract WASM
+files still to fetch come from. That is a privacy trade: a drive owner's own mirror that lacks a
+file, or pins another version of it, no longer keeps that file's download off the app's default
+host (a public CDN). An owner who must keep every request on the mirror lists every pinned file
+there with its pinned hash; the alternative left every drive prepared before a pin change without
+the in-app download. Why stricter than models and the engine: the files are parsed by the tesseract WASM
 worker inside the main process, and a yaml-controlled `dest` would have made one user click a
 second arbitrary-file-write primitive on the drive (e.g. `dest: Start HilbertRaum.cmd`). The write
 itself: `ocr/` is created when missing and refused when it is a symlink/junction or resolves

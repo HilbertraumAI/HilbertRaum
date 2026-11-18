@@ -586,8 +586,10 @@ A drive set up with an older version of the app is fine: when the drive's OCR do
 (`model-manifests/runtime-sources.yaml`) lacks a file this version uses, or names another
 version of it, the app takes that file from its own list (it checks every file against checksums
 built into it). If the row still names only this setup route and offers no download button,
-neither list carries the right files, which points to a damaged app folder; use the script
-route.
+neither list carries the right files, which points to a damaged app folder. Copy this version of
+HilbertRaum onto the drive again, or refresh the drive's list with `prepare-drive` from the
+matching release and then use the script route (the script reads the drive's list, so on its own
+it fetches only what that older list names).
 
 ---
 

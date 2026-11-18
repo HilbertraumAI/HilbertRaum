@@ -296,7 +296,8 @@ function initBackend(): void {
   for (const warning of policyWarnings) audit('policy_warning', warning)
 
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
-  // #842: the app's own copy, never the launcher's override — the engine pins and the OCR fallback.
+  // #842: the app's own copy, never the launcher's override — the engine pins, and the OCR installer's
+  // second list (per file, #841).
   const bundledManifestsDir = resolveBundledManifestsDir({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,

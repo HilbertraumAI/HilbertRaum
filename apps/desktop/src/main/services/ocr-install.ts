@@ -305,16 +305,15 @@ export class OcrInstallManager {
       sizeBytes: pin.sizeBytes,
       installed: tasks.find((t) => t.lang === pin.lang)?.status === 'present-verified'
     }))
-    // The confirmation's "From" names the hosts this install will contact: those of the files still
-    // to fetch (#841 can mix the drive's list and the app's own), or every file's once all are in place.
-    const toFetch = urls
-      ? new Map([...urls].filter(([lang]) => !languages.some((l) => l.lang === lang && l.installed)))
-      : null
+    // The confirmation's "From" names the hosts this install will contact: those of the files the plan
+    // still downloads (#841 can mix the drive's list and the app's own), or every file's once all are
+    // in place.
+    const toFetch = new Map(tasks.filter((t) => t.status === 'download').map((t) => [t.lang, t.url]))
     return {
       available: resolved.kind === 'ok',
       languages,
       totalBytes: languages.filter((l) => !l.installed).reduce((sum, l) => sum + l.sizeBytes, 0),
-      sourceHost: urls ? sourceHosts(toFetch && toFetch.size > 0 ? toFetch : urls) : null,
+      sourceHost: urls ? sourceHosts(toFetch.size > 0 ? toFetch : urls) : null,
       license: OCR_LICENSE
     }
   }
