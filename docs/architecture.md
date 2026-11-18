@@ -11791,8 +11791,7 @@ closed at the composition seam during the P2 loop). The remainder are **deferred
 by area:
 - **EP-1 review/pack follow-ups:** no in-app review-delete affordance (the AUD-01 copy names the
   alternative because of it); "Try again" has no renderer review gate (unreachable today); the
-  dead `evidence:getForMessage` and `evidence:delete` channels were removed (#840); the batch
-  channel still recomputes freshness per review; ordinary review edits still fan out
+  batch channel still recomputes freshness per review; ordinary review edits still fan out
   non-atomically (the AUD-13 shape one level down); the AUD-01 refusal logs at ERROR
   (content-free).
 - **Provisioning / packaging:** `build-commercial-drive.ps1` still carries the `Write-Error` hazard
@@ -11815,6 +11814,10 @@ by area:
 - **Owner decisions (open):** whether `user-guide.md` §7 should carry a "packaged OCR currently
   crashes" caveat or wait for the fix bundle to land first (**B-30**), and whether the
   `architecture.md` TEST-N1 ledger row should get a superseding note for the CI Node change (**B-40**).
+
+**Closed since registration:** the dead `evidence:getForMessage` channel and preload method
+(registered under EP-1 above), together with the equally caller-less `evidence:delete`, were removed
+by #840.
 
 **§-anchor legend.** Commits, code comments, tests, and BUILD_STATE cite this audit as
 `AUD-nn` / `DV-n` (or the bare id beside a qualified cite); all 26 finding ids, the four design

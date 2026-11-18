@@ -3940,7 +3940,8 @@ export interface EvidenceReview {
   completedAt?: string | null
 }
 
-/** Light entry-point shape for `getEvidenceReviewForMessage` (chat action row, Phase 2). */
+/** A review's light summary: the chat's chip state, one per review in `evidence:summariesForConversation`
+ *  (AUD-12); main's `getEvidenceReviewForMessage` builds the same shape for `evidence:create`'s idempotency check. */
 export interface EvidenceReviewSummary {
   id: string
   conversationId: string

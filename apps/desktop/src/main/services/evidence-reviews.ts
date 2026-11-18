@@ -544,7 +544,9 @@ export function getEvidenceReview(db: Db, reviewId: string): EvidenceReviewDetai
   }
 }
 
-/** The entry-point read (chat action row): the message's review as a light summary, or null. */
+/** The message's review as a light summary, or null. Its one product caller is `evidence:create`'s
+ *  idempotency check; the chat reads every summary of a conversation through
+ *  {@link listEvidenceReviewSummariesForConversation} (AUD-12), one element per review in this shape. */
 export function getEvidenceReviewForMessage(db: Db, messageId: string): EvidenceReviewSummary | null {
   const row = prepareCached(
     db,
