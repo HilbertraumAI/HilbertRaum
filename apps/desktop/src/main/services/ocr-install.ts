@@ -136,11 +136,16 @@ type OcrSourceResolution =
   | { kind: 'mismatch' }
 
 /**
- * Where to download each pinned language from: the drive's yaml first, the app-bundled one only
- * when the drive's offers no usable `ocr:` block (none, or a file that does not validate). A
- * valid block that does not carry EVERY pinned language with the pinned sha256 is a mismatch
- * (version skew or tampering) — refused, never "fixed" by falling back. Either way the bytes are
- * the code pins': the yaml only ever chooses the host.
+ * Where to download each pinned file from: per file, the first source list whose entry for it
+ * carries the pinned sha256 — the drive's yaml first (a drive owner's own mirror keeps working),
+ * then the app's own copy, which matches the pins by construction (drift-tested,
+ * tests/unit/ocr-pins.test.ts). #841: a drive's list written before this app's pins changed (one
+ * prepared before `osd` existed, #538) used to refuse the whole install although the app's own
+ * list carried every file; that is the normal state after copying a new app onto a Kit. An entry
+ * with another sha256 is never used, so the bytes are still the code pins': the yaml only ever
+ * chooses the host. `mismatch` when some pinned file has a matching entry in no list (version skew
+ * or tampering, with the app's own list missing or damaged too); `none` when no list offers a
+ * usable `ocr:` block (none, or a yaml that does not validate).
  */
 function resolveOcrSources(
   manifestsDir: string | null,
@@ -150,18 +155,22 @@ function resolveOcrSources(
   const dirs = [manifestsDir, bundledManifestsDir].filter(
     (d, i, all): d is string => typeof d === 'string' && d !== '' && all.indexOf(d) === i
   )
-  for (const dir of dirs) {
-    const block = loadOcrBlock(dir)
-    if (!block) continue
-    const urls = new Map<string, string>()
-    for (const pin of pins) {
-      const file = block.files.find((f) => f.lang === pin.lang)
-      if (!file || file.sha256 !== pin.sha256) return { kind: 'mismatch' }
-      urls.set(pin.lang, file.url)
+  const blocks = dirs.map(loadOcrBlock).filter((b): b is OcrSources => b !== null)
+  if (blocks.length === 0) return { kind: 'none' }
+  const urls = new Map<string, string>()
+  for (const pin of pins) {
+    let url: string | null = null
+    for (const block of blocks) {
+      const file = block.files.find((f) => f.lang === pin.lang && f.sha256 === pin.sha256)
+      if (file) {
+        url = file.url
+        break
+      }
     }
-    return { kind: 'ok', urls }
+    if (url === null) return { kind: 'mismatch' }
+    urls.set(pin.lang, url)
   }
-  return { kind: 'none' }
+  return { kind: 'ok', urls }
 }
 
 /** The pins as `planOcrDownloads` input: the code's hash + fixed destination, the yaml's URL. */

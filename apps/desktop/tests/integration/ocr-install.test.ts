@@ -207,7 +207,7 @@ describe('sources / destinations (#410)', () => {
     expect(existsSync(join(root, 'runtime', 'llama.cpp', 'win', 'llama-server.exe'))).toBe(false)
   })
 
-  it('a yaml sha256 that does not match the pin is a mismatch — refused, no fetch, unavailable', async () => {
+  it('a yaml sha256 that does not match the pin, with no other list to take it from, is a mismatch — refused, no fetch, unavailable', async () => {
     const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml({ deuSha: sha256('not-the-pinned-bytes') }))
     const fetchSpy = vi.fn(correctBytesFetch)
@@ -218,13 +218,40 @@ describe('sources / destinations (#410)', () => {
     expect(status.available).toBe(false)
   })
 
-  it('a yaml missing one pinned language is a mismatch too', async () => {
+  it('a yaml missing one pinned language, with no other list to take it from, is a mismatch too', async () => {
     const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml({ omitLangs: ['eng'] }))
     const fetchSpy = vi.fn(correctBytesFetch)
     const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
     await expect(mgr.start(startOpts(root, manifests))).rejects.toThrow(tMain('main.ocr.sourcesMismatch'))
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  // #841: a drive whose list predates this app's pins (one prepared before `osd` existed, #538), or
+  // pins another version of a file. The app's own list carries every pinned file by construction,
+  // so each file comes from the first list whose entry carries its pinned hash: the drive's mirror
+  // where it matches, the app's own copy for the rest. Before, the whole install was refused.
+  it.each<[string, OcrYamlOverrides]>([
+    ['lacks a pinned file', { omitLangs: ['eng'] }],
+    ['pins another version of one', { engSha: sha256('another-version-of-eng') }]
+  ])('a drive list that %s: that file comes from the app’s own list, the matching one from the drive’s (#841)', async (_how, drive) => {
+    const root = tempRoot('ocr')
+    const driveManifests = manifestsDirWith(root, ocrYaml({ host: 'https://drive-mirror.example.test', ...drive }))
+    const bundled = tempRoot('ocr-bundled')
+    writeFileSync(join(bundled, 'runtime-sources.yaml'), ocrYaml({ host: 'https://bundled.example.test' }))
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
+
+    const status = await mgr.status(sourceOpts(root, driveManifests, bundled))
+    expect(status.available).toBe(true)
+    expect(status.sourceHost).toBe('drive-mirror.example.test, bundled.example.test')
+
+    const job = await mgr.start(startOpts(root, driveManifests, bundled))
+    expect((await runToEnd(mgr, job.jobId)).status).toBe('done')
+    const fetched = fetchSpy.mock.calls.map((call) => String(call[0]))
+    expect(new Set(fetched.filter((u) => u.includes('deu')))).toEqual(new Set(['https://drive-mirror.example.test/deu.traineddata.gz']))
+    expect(new Set(fetched.filter((u) => u.includes('eng')))).toEqual(new Set(['https://bundled.example.test/eng.traineddata.gz']))
+    expect(existsSync(join(root, ocrPinRelPath('eng')))).toBe(true)
   })
 
   it('falls back to the app-bundled source list when the drive yaml carries no ocr: block', async () => {
