@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { randomBytes } from 'node:crypto'
 import {
   DEFAULT_KDF,
+  SCRYPT_KDF,
   generateSalt,
   deriveKey,
   encrypt,
@@ -198,4 +199,13 @@ describe('password verifier', () => {
     )
   })
 
+  // #860 V7: the same for a vault created under the former scrypt default. No published release wrote one, but the
+  // descriptor-driven dispatch keeps such a vault unlockable, so its derivation must not drift either. Vector computed
+  // with `node:crypto` scryptSync directly (N 32768, r 8, p 1, maxmem 256 MiB), Node 24.13.
+  it('derives the known key for a fixed password + salt with the former scrypt default', () => {
+    const salt = Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex')
+    expect(deriveKey('correct horse battery staple', salt, SCRYPT_KDF).toString('hex')).toBe(
+      '7a8e34241db898d59175c696538c417467a975ffe569068425f16188d3159c58'
+    )
+  })
 })

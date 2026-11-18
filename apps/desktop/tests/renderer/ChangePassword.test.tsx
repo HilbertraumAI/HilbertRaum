@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
+import { ToastProvider } from '../../src/renderer/components'
 import {
   DEFAULT_SETTINGS,
   MIN_PASSWORD_LENGTH,
@@ -77,7 +78,11 @@ describe('Settings → Change password (Phase 32)', () => {
   it('gates submission on the 8-char floor + confirm match, then calls the IPC', async () => {
     const change = stubSettings({})
     const user = userEvent.setup()
-    render(<SettingsScreen tab="general" />)
+    render(
+      <ToastProvider>
+        <SettingsScreen tab="general" />
+      </ToastProvider>
+    )
     const button = await screen.findByRole('button', { name: /change password/i })
     expect(button).toBeDisabled()
 
@@ -104,6 +109,25 @@ describe('Settings → Change password (Phase 32)', () => {
     )
     expect((screen.getByLabelText('New password') as HTMLInputElement).value).toBe('')
     expect((screen.getByLabelText('Confirm new password') as HTMLInputElement).value).toBe('')
+    // …and says so (#860 C3): the cleared form alone does not tell the user the change took.
+    expect(await screen.findByText(t('en', 'settings.changePassword.toast'))).toBeInTheDocument()
+  })
+
+  // #860 C1: a call that rejects (the IPC itself failed, not main's answer) still tells the user, and says the current
+  // password still works; a silent card would leave them guessing which password is now valid.
+  it('shows the "something went wrong" copy when the change call itself rejects, keeping the fields', async () => {
+    const change = vi.fn(async (): Promise<WorkspaceActionResult> => {
+      throw new Error('ipc channel closed')
+    })
+    stubSettings({ changeWorkspacePassword: change })
+    const user = userEvent.setup()
+    render(<SettingsScreen tab="general" />)
+    await screen.findByRole('heading', { name: /change password/i })
+    await fillCard(user, 'old-password', 'long-enough-pw', 'long-enough-pw')
+    await user.click(screen.getByRole('button', { name: /change password/i }))
+    expect(change).toHaveBeenCalledWith('old-password', 'long-enough-pw')
+    expect(await screen.findByText(t('en', 'settings.changePassword.failed'))).toBeInTheDocument()
+    expect(screen.getByLabelText('Current password')).toHaveValue('old-password')
   })
 
   // The floor is main's (`registerWorkspaceIpc` refuses a new password under it); a copy of the

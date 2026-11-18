@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, utimesSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync, utimesSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -433,6 +433,33 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
     // front of the user — one click away from wiping the intact .enc.
     expect(ctl.getState().state).toBe('locked')
     // init() must not have opened a plaintext DB over the vault either (dev policy).
+    expect(ctl.isUnlocked()).toBe(false)
+  })
+
+  // #860 V4: the row above has `.enc` on disk, which alone keeps the create flow away. Without it the corrupt
+  // descriptor is the only sign of a vault, and the stored documents need the wrapped data key only it holds: a
+  // create would replace it with a fresh vault's.
+  it.each<[string, (vp: FreshVaultPaths) => void]>([
+    ['.enc present', () => {}],
+    [
+      '.enc gone, an encrypted document left in documents/',
+      (vp) => {
+        rmSync(vp.encPath)
+        const docs = join(dirname(vp.dbPath), 'documents')
+        mkdirSync(docs, { recursive: true })
+        writeFileSync(join(docs, 'doc.txt.enc'), randomBytes(64))
+      }
+    ]
+  ])('a corrupt descriptor keeps the create flow away (%s)', (_case, arrange) => {
+    const vp = lockedVault('vault', 'pw')
+    arrange(vp)
+    writeFileSync(vp.descriptorPath, '{ corrupted-not-json', 'utf8')
+    const descriptor = readFileSync(vp.descriptorPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.getState().state).toBe('locked')
+    expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+    expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
     expect(ctl.isUnlocked()).toBe(false)
   })
 

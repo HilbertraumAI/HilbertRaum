@@ -136,6 +136,24 @@ describe('registerWorkspaceIpc', () => {
     }
   })
 
+  // #860 L4: a change while document work holds the vault (an import writing `.enc` sidecars) is refused as busy, so
+  // the user waits for the import; "change failed" would send them retrying into the same refusal.
+  it('change password while documents are being imported is refused as busy, the vault untouched', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const ctrl = unlockedController(vp, PW)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const descriptor = readFileSync(vp.descriptorPath)
+    const release = ctrl.beginDocumentWork()
+    try {
+      const { result } = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'long-enough-pw')
+      expect(result).toMatchObject({ ok: false, reason: 'refused', message: expect.stringMatching(/imported/) })
+      expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
+    } finally {
+      release()
+      ctrl.lock()
+    }
+  })
+
   // #845: a change refused because the descriptor on disk is a newer build's says the change failed and the current
   // password still works; the gate's "update the app to open it" would be wrong on a workspace that is open.
   it('change password over a descriptor a newer build rewrote mid-session answers "change failed", the descriptor untouched', async () => {
