@@ -19,6 +19,7 @@ import type { Db } from '../db'
 import { log } from '../logging'
 import {
   SKILL_ID_RE,
+  parseSemverCore,
   skillNeedsNewerApp,
   type SkillKind,
   type SkillManifest,
@@ -282,7 +283,7 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
   let updated = 0
   let reenabled = 0
   const appVersion = opts.appVersion ?? ''
-  const knownAppVersion = SKILL_SEMVER_CORE_RE.test(appVersion.trim())
+  const knownAppVersion = parseSemverCore(appVersion) !== null // the §6.5 gate's own parse (#846 review)
 
   const selectStmt = db.prepare('SELECT * FROM skills WHERE install_id = ?')
   for (const d of discovered) {
@@ -395,9 +396,6 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
 
   return { inserted, updated, markedUnavailable, reenabled, present: present.size, errors, errorCodes }
 }
-
-/** The leading MAJOR.MINOR.PATCH the §6.5 gate compares (`skillNeedsNewerApp`); anything else is an unknown version. */
-const SKILL_SEMVER_CORE_RE = /^\d+\.\d+\.\d+/
 
 /**
  * #846: is this existing row one the version gate switched off? `'recorded'` when its reason says so;
