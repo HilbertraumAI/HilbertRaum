@@ -5931,6 +5931,13 @@ cites it as "In-app engine updates"._
   it is the same friendly error.
 - **Scripts:** `fetch-runtime.{ps1,sh}` print a note when the drive's yaml pins a different version of
   the family than the repo's, and say to refresh the manifests (`prepare-drive`) first (`packaging.md`).
+  **Newer is never replaced there either (#873, 2026-11-18):** a present engine whose marker is NEWER
+  than the drive's pin, by `compareRuntimeVersions`'s order (re-spelled in both twins, held to one
+  shared table by `script-drift.test.ts`), is skipped with a line naming both versions, whatever its
+  backend, unless `-AllowDowngrade`/`--allow-downgrade` (not `-Force`: that is prepare-drive's
+  "overwrite config") or `-Commercial`/`--commercial` (a sold drive carries its app's pin; the script
+  says it is replacing the newer engine). An unorderable version re-fetches as before. Applies to
+  llama.cpp (main and `cpu/`), whisper.cpp and the knowledge-pack tools.
 - **The pin is the app's own (#842, 2026-11-17).** §1's "never the drive's" was the intent, but the
   handlers passed `ctx.manifestsDir`, which the launchers point at the drive's `model-manifests/`;
   only a direct start read the bundled copy. A new app copied onto a drive whose manifests were not
@@ -5940,10 +5947,11 @@ cites it as "In-app engine updates"._
   packaged build takes exactly `<resources>/model-manifests` (`process.resourcesPath`), with no
   walk-up that could reach the drive's copy above the app, and a dev build the checkout's. The
   model list keeps `ctx.manifestsDir`. Engine entries a drive owner adds to the drive's yaml (another OS's build, a mirror) reach the
-  scripts only. After an in-app update the drive's yaml is older than the engine on it, and both
-  drive-side checks compare markers with it for EQUAL: `fetch-runtime` run without `prepare-drive`
-  first re-installs the drive's older pin, and the sell gate (`assertCommercialDrive`) reports the
-  updated engine as not matching its pin. `prepare-drive` brings the yaml back in step.
+  scripts only. After an in-app update the drive's yaml is older than the engine on it. The sell gate
+  (`assertCommercialDrive`) compares markers with it for EQUAL and reports the updated engine as not
+  matching its pin; `fetch-runtime` run without `prepare-drive` first used to re-install the drive's
+  older pin too, and since #873 keeps the newer engine instead (above). `prepare-drive` brings the
+  yaml back in step.
 
 ### §4 Real-app verification (2026-10-05, DesktopDiT, GTX 1070 Ti, dev build)
 
