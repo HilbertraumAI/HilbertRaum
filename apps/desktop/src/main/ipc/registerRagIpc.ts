@@ -100,11 +100,11 @@ import type { Db } from '../services/db'
  * posture cannot disagree, because both are resolved through the SAME shared helper with the
  * SAME settings AND occupancy snapshot for a given call (Wave 8 ruling (a) below re-sourced the
  * posture's chat-model input from `settings.activeModelId` onto the runtime's COMMITTED model —
- * a proxy that used to be false for the whole `models:use` hash + load window — plus the
+ * a proxy that used to be false for the whole `runtime:use` hash + load window — plus the
  * in-flight/pending chat-start state and the translator's occupancy; see
  * `rag/device-posture.ts`'s own doc comment for the full history). Step 4-4 added an event-time
  * suspend on `settings:update` for `gpuMode`/`gpuAutoDisabled`, and step 4-7 (Wave 7 ruling (a))
- * one for `activeModelId` on `models:select` and `models:use` (and on `settings:update`, until
+ * one for `activeModelId` on `models:select` and `runtime:use` (and on `settings:update`, until
  * #868 made `gpuMode` the only posture key a renderer patch can carry), so a resident sidecar's
  * NEXT `rerank()` would re-resolve promptly — early release, not the guarantee.
  * `gpuAutoDisabled` moves only through two seams no suspend covers (`tryGpuAgain`,

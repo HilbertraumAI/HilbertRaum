@@ -44,7 +44,7 @@ import { log } from '../logging'
 // input is now the RUNTIME's committed model (`RuntimeManager.activeModelId()`,
 // `rag/device-posture.ts`, Wave 8 ruling (a)), never the setting. Wave 7's three event-time
 // suspends (`gpuMode`/`gpuAutoDisabled` via `settings:update`; `activeModelId` via
-// `settings:update`/`models:select`/`models:use`) stay as EARLY release — a head start before
+// `settings:update`/`models:select`/`runtime:use`) stay as EARLY release — a head start before
 // the next `rerank()` would have noticed on its own — not what makes the posture correct.
 // `gpuAutoDisabled` also moves through two further seams no suspend covers (`tryGpuAgain`,
 // `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see `channels.json`.

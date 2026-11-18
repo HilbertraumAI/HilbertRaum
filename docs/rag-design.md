@@ -5216,7 +5216,7 @@ Implementation (ruling (c)): ONE shared main-process predicate, `rerankerPosture
 discipline the existing `gpuMode`/`gpuAutoDisabled` hook already used, now generalised rather than
 copied. Called from all three channels the ruling names: `registerCoreIpc.ts`'s `settings:update`
 handler (generalised in place) and both of `registerModelIpc.ts`'s `selectModel` call sites
-(`models:select`, `models:use`), which reach `activeModelId` through `services/models.ts`'s
+(`models:select`, `runtime:use`), which reach `activeModelId` through `services/models.ts`'s
 `selectModel` → `updateSettings`, bypassing `settings:update`'s own hook entirely — the same three
 channels `notifyPerformanceChanged()` already fans out to. Every call site calls `suspend()`,
 never `stop()`, fire-and-forget with the existing `.catch` + `log.warn` shape.
@@ -5258,7 +5258,7 @@ input is now the runtime's COMMITTED model, never `activeModelId`; the posture c
 by construction (Q, G, T); the sidecar's lifecycle is hardened; the Performance screen stops
 misreporting the reranker's device.** The scoped Opus review of step 4-7 (finding C3) showed that
 `activeModelId` was never a safe posture input: it is a proxy for "the chat model that will be
-loaded", true only once `models:use`'s multi-GB weight hash and subsequent load finish, and false
+loaded", true only once `runtime:use`'s multi-GB weight hash and subsequent load finish, and false
 for the ENTIRE window before that. On the project's own measured GTX 1070 Ti a 9B → 4B switch
 during that window could cold-start the reranker on the GPU beside the still-resident 9B — the
 exact VRAM contention the headroom gate exists to prevent. Option B′: `resolveRerankerDevicePosture`

@@ -4892,13 +4892,13 @@ once per cold start and held it for the session, the ask re-resolved on every as
 also fed the posture at the time, through `chatModelNeedMib`) suspended nothing, reopening the
 wide-scope/CPU-reranker combination through a drift window (measured concretely on the project's
 own GTX 1070 Ti — finding C2). `activeModelId` joined the suspend trigger, fired from all three
-settings-writing channels (`settings:update`, `models:select`, `models:use`) through one shared
+settings-writing channels (`settings:update`, `models:select`, `runtime:use`) through one shared
 predicate. That event-time suspend is a head start, not the correctness guarantee — see step 4-8
 below for what actually makes the posture correct at every moment.
 
 **Step 4-8 (Wave 8 rulings (a)-(d)) resolved a THIRD gap, finding C3 (scoped Opus review of step
 4-7): `activeModelId` was never a safe posture input to begin with.** It is a proxy for "the chat
-model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish —
+model that will be loaded", true only once `runtime:use`'s multi-GB weight hash and load finish —
 and false for the WHOLE window before that. A down-switch on the project's own measured GTX 1070
 Ti (`{totalMb: 8273, freeMb: 7504}`: the 9B running at posture `cpu`, switching to the 4B) could
 cold-start the reranker on the GPU beside the still-resident, still-running OLD chat model, for as

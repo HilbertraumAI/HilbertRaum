@@ -1086,3 +1086,26 @@ describe('repo hygiene — scripts/*.sh are executable in git (#512)', () => {
     expect(notExecutable).toEqual([])
   })
 })
+
+// #891: the "Use this model" channel is `runtime:use` (IPC.useModel). A "models"-prefixed spelling of it, written by
+// analogy with `models:select` and then copied from comment to comment, sent readers hunting for a channel that does not
+// exist. The frozen archive (docs/build-log.md) keeps retired text verbatim, so it is the one exemption.
+const STALE_USE_CHANNEL = ['models', 'use'].join(':') // not written whole, so this file is not its own offender
+describe(`repo hygiene — no stale ${STALE_USE_CHANNEL} channel name (#891)`, () => {
+  it('names the use-model channel runtime:use everywhere outside docs/build-log.md', () => {
+    const files = [
+      ...filesUnder(join(DESKTOP_ROOT, 'src'), /\.(ts|tsx)$/),
+      ...filesUnder(join(DESKTOP_ROOT, 'tests'), /\.(ts|tsx)$/),
+      ...filesUnder(join(REPO_ROOT, 'docs'), /\.md$/).filter((p) => !p.endsWith(join('docs', 'build-log.md'))),
+      ...filesUnder(join(REPO_ROOT, 'scripts'), /\.(m?js|mts|sh|ps1|md)$/),
+      ...filesUnder(join(REPO_ROOT, '.github'), /\.(ya?ml|md)$/),
+      ...readdirSync(REPO_ROOT)
+        .filter((f) => f.endsWith('.md'))
+        .map((f) => join(REPO_ROOT, f))
+    ]
+    const offenders = files
+      .filter((p) => readFileSync(p, 'utf8').includes(STALE_USE_CHANNEL))
+      .map((p) => p.slice(REPO_ROOT.length + 1))
+    expect(offenders).toEqual([])
+  })
+})

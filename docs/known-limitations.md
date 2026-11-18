@@ -1011,7 +1011,7 @@ password recovery — are documented in
   Models-screen action — moves the posture to `gpu` with nothing to suspend the sidecar, so the
   next ask could resolve the wide `all` scope while the sidecar stayed resident on the CPU — C1's
   combination again, through a drift window. Step 4-7 adds `activeModelId` to the suspend trigger,
-  fired from `models:select` and `models:use` (`runtime:use`) through one shared predicate
+  fired from `models:select` and `runtime:use` through one shared predicate
   (`rerankerPostureInputsChanged`, `rag/device-posture.ts`), the one `settings:update` uses for
   `gpuMode`; `settings:update` fired it for `activeModelId` too until #868, which drops that key
   from a renderer patch. `activeEmbeddingModelId` is explicitly not a posture input and never
@@ -1023,7 +1023,7 @@ password recovery — are documented in
   unvalidated on real hardware, as above.
 - **Scoped Opus review of step 4-7, finding C3, RESOLVED by step 4-8 (Wave 8 ruling (a)):**
   `activeModelId` was never a safe posture input in the first place — it is a proxy for "the chat
-  model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish,
+  model that will be loaded", true only once `runtime:use`'s multi-GB weight hash and load finish,
   and false for the whole window before that (the file's own comment calls this "the long
   pre-start window", minutes on a cold checksum cache). Step 4-7's event-time suspend fired at the
   START of that window, on the OLD model, then held the posture for the entire hash + load — so a
