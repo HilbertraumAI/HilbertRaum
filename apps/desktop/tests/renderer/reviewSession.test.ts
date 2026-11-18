@@ -929,6 +929,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     let holdItem: Deferred<void> | null = null
     let holdBulk: Deferred<void> | null = null
     let failItem = false
+    let failBulk: 'throw' | 'null' | null = null
     const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
       order.push(`item:${id}`)
       const gate = holdItem
@@ -946,6 +947,10 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
       const gate = holdBulk
       holdBulk = null
       if (gate) await gate.promise
+      const fail = failBulk
+      failBulk = null
+      if (fail === 'throw') throw new Error('disk I/O error')
+      if (fail === 'null') return null // refused: nothing persisted
       for (const item of items) {
         const now = db.get(item.id)!
         if (action === 'clear_decisions' && now !== 'not_reviewed') db.set(item.id, 'not_reviewed')
@@ -969,6 +974,10 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
       },
       failNextItemWrite(): void {
         failItem = true
+      },
+      /** The next sweep persists NOTHING and rejects ('throw') or is refused ('null'). */
+      failNextBulk(kind: 'throw' | 'null'): void {
+        failBulk = kind
       }
     }
   }
@@ -1127,6 +1136,119 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
       Object.fromEntries(main.db)
     )
   })
+
+  // Review round 5 (1, verified by running): a sweep that FAILS (rejects, or main refuses it with null) persisted
+  // nothing, but its optimistic apply stayed on screen; a later item save then reported "Saved" over swept values the
+  // database never got. Now the swept items with nothing queued go back to their pre-sweep decisions, an item decided
+  // during the call keeps it (its write lands after), and the error line stays until the user acts.
+  it.each<['throw' | 'null']>([['throw'], ['null']])(
+    'a sweep that fails (%s) is undone on screen: with an edit during the call and one after, the screen ends equal to main',
+    async (kind) => {
+      vi.useFakeTimers()
+      // Two decided paragraphs, so the sweep replaces both: one is changed again during the call, one is not.
+      const items = [
+        makeItem({ id: 'h1', blockKind: 'heading', decision: 'not_reviewed' }),
+        makeItem({ id: 'p1', blockKind: 'paragraph', decision: 'supported' }),
+        makeItem({ id: 'p2', blockKind: 'paragraph', decision: 'supported' })
+      ]
+      const detail = makeDetail({ items })
+      const main = persistingMain(items)
+      stubReviewApi({
+        getEvidenceReview: vi.fn(async () => detail),
+        updateEvidenceReviewItem: main.updateEvidenceReviewItem,
+        applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction
+      })
+      await openWith(detail)
+
+      const sweep = main.holdNextBulk()
+      main.failNextBulk(kind)
+      const sweeping = bulkClearDecisions() // optimistic: p1, p2 → not_reviewed
+      await vi.advanceTimersByTimeAsync(0)
+      expect(main.order).toEqual(['bulk:clear_decisions'])
+      editReviewItem('p2', { decision: 'not_supported' }) // decided again during the call
+      sweep.resolve()
+      await sweeping
+      const failed = getReviewSessionSnapshot()
+      expect(failed.saveState).toBe('error')
+      const shown = Object.fromEntries(failed.detail!.items.map((i) => [i.id, i.decision]))
+      expect(shown).toEqual({ h1: 'not_reviewed', p1: 'supported', p2: 'not_supported' }) // p1 back; p2 kept
+
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // p2's write lands after the failed sweep…
+      expect(main.db.get('p2')).toBe('not_supported')
+      expect(getReviewSessionSnapshot().saveState).toBe('error') // …and the sweep's error line stays
+      expectTruthful(main.db)
+
+      editReviewItem('h1', { decision: 'not_applicable' }) // the user acts after the failure
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+      expect(getReviewSessionSnapshot().saveState).toBe('saved')
+      expectTruthful(main.db)
+      expect(main.db.get('p1')).toBe('supported') // the failed sweep never touched it
+    }
+  )
+
+  // Review round 5 (3): a sweep's optimistic apply used to clear an error that was already showing with nothing queued
+  // (here a stale-handle drop). That error stays through the sweep; only a later successful save or Try again clears it.
+  it('an error already showing with nothing queued (a stale handle) is not cleared by a sweep', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const main = persistingMain(items)
+    const sweep = main.holdNextBulk()
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem: vi.fn(async () => null), // unknown id: the patch is dropped as unsaveable
+      applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction
+    })
+    await openWith(detail)
+    editReviewItem('h1', { reviewerNote: 'lost to a stale handle' })
+    await flushReviewSession()
+    expect(getReviewSessionSnapshot().saveState).toBe('error')
+
+    const sweeping = bulkClearDecisions() // nothing queued, so it runs…
+    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    expect(getReviewSessionSnapshot().saveState).toBe('error') // …without clearing the error at its start
+    sweep.resolve()
+    await sweeping
+    expect(getReviewSessionSnapshot().saveState).toBe('error') // nor at its end
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p2')!.decision).toBe('not_reviewed')
+    expect(main.db.get('p2')).toBe('not_reviewed')
+  })
+
+  // Review round 5 (2): the lane had no bound — a sweep (or an item write) whose call never answered kept every
+  // waiting flush and open pending forever, so even the lock could not finish. A purge (the lock seam) now releases
+  // every wait: nothing pending outlives it, and nothing opens into the purged store.
+  it.each<['sweep' | 'item write']>([['sweep'], ['item write']])(
+    'after a lock purge, every flush and open that was waiting on a hung %s settles, and nothing loads',
+    async (hung) => {
+      const items = bulkItems()
+      const detail = makeDetail({ items })
+      const never = new Promise<never>(() => {})
+      const getEvidenceReview = vi.fn(async () => detail)
+      const applyEvidenceReviewBulkAction = vi.fn(() => never)
+      const updateEvidenceReviewItem = vi.fn(() => never)
+      stubReviewApi({ getEvidenceReview, applyEvidenceReviewBulkAction, updateEvidenceReviewItem })
+      await openWith(detail)
+
+      const started: Array<Promise<unknown>> = []
+      if (hung === 'sweep') {
+        started.push(bulkClearDecisions())
+        await vi.waitFor(() => expect(applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+        editReviewItem('p1', { decision: 'supported' })
+      } else {
+        editReviewItem('p1', { decision: 'supported' })
+        started.push(flushReviewSession())
+        await vi.waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1))
+      }
+      started.push(flushReviewSession(), openReviewSession({ reviewId: 'r2' }))
+      purgeReviewSession() // the lock
+      const outcome = await Promise.race([
+        Promise.all(started).then(() => 'settled'),
+        new Promise((resolve) => setTimeout(() => resolve('still pending'), 1000))
+      ])
+      expect(outcome).toBe('settled')
+      expect(getEvidenceReview).toHaveBeenCalledTimes(1) // the first open only: r2 never loaded
+      expect(getReviewSessionSnapshot()).toMatchObject({ detail: null, loading: false, saveState: 'idle' })
+    }
+  )
 
   // Review round 4 (3): two sweeps must never overlap (the first's merge used to overwrite the second's optimistic
   // values and could claim "saved" while the second was still in flight): a second bulk action while one runs does

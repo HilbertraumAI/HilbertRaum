@@ -122,6 +122,54 @@ let purgeEpoch = 0
  */
 let sweepLane: Promise<void> | null = null
 
+/** A gate that opens once. */
+function gate(): { promise: Promise<void>; open: () => void } {
+  let open: () => void = () => {}
+  const promise = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  return { promise, open }
+}
+/**
+ * #837 (review round 5): opened (and replaced) by every purge. Every wait in this store — on an
+ * item flush, on the sweep lane, on a sweep's own call — is raced against it, so a call that
+ * never answers cannot keep anything pending after the lock: each wait then re-checks and finds
+ * the purged, empty store.
+ */
+let purgeGate = gate()
+function orPurge<T>(work: Promise<T>): Promise<T | undefined> {
+  return Promise.race([work, purgeGate.promise.then(() => undefined)])
+}
+
+/**
+ * How long `App.lockNow` lets the pre-lock flush run (review round 5): enough for one write that
+ * waits out the database's 5 s busy timeout. The flush waits for a running sweep (the one write
+ * lane), so a hung call must not hold the lock — the user's security action always wins.
+ */
+export const REVIEW_LOCK_FLUSH_BOUND_MS = 6_000
+
+/** The pre-lock flush, bounded: it never rejects and gives up after `REVIEW_LOCK_FLUSH_BOUND_MS`. */
+export async function flushReviewSessionBeforeLock(): Promise<void> {
+  let bound: ReturnType<typeof setTimeout> | null = null
+  try {
+    await Promise.race([
+      flushReviewSession().catch(() => {}),
+      new Promise<void>((resolve) => {
+        bound = setTimeout(resolve, REVIEW_LOCK_FLUSH_BOUND_MS)
+      })
+    ])
+  } finally {
+    if (bound) clearTimeout(bound)
+  }
+}
+
+/**
+ * #837 (review round 5): a FAILED sweep is shown until the user acts. Its error line stays
+ * through a later automatic save (an edit queued during the sweep's call is still written after
+ * it); a new edit, Try again, or a switch/lock clears it.
+ */
+let sweepFailed = false
+
 function notify(): void {
   for (const fn of listeners) fn()
 }
@@ -197,7 +245,7 @@ export async function openReviewSession(target: ReviewHandoffTarget): Promise<vo
   const epoch = purgeEpoch
   for (let pass = 0; pass < SWITCH_FLUSH_PASSES; pass++) {
     await flushReviewSession().catch(() => {})
-    while (flushInFlight) await flushInFlight
+    while (flushInFlight) await orPurge(flushInFlight)
     if (epoch !== purgeEpoch) return
     if (!hasUnsavedEdits() || state.saveState === 'error') break
   }
@@ -219,6 +267,7 @@ export async function openReviewSession(target: ReviewHandoffTarget): Promise<vo
   clearTimer()
   pendingItems = new Map()
   pendingHead = null
+  sweepFailed = false
   state = { ...INITIAL, loading: true }
   notify()
   try {
@@ -317,6 +366,7 @@ export function editReviewItem(itemId: string, patch: EvidenceReviewItemPatch): 
   if (!state.detail || state.detail.status === 'ready') return
   applyItemLocally(itemId, patch)
   pendingItems.set(itemId, mergeItemPatch(pendingItems.get(itemId), patch))
+  sweepFailed = false // the user acted after a failed sweep
   setState({ saveState: 'pending', saveError: null })
   armTimer()
 }
@@ -330,6 +380,7 @@ export function editReviewHead(patch: EvidenceReviewPatch): void {
   const safe: EvidenceReviewPatch = { ...patch }
   if (safe.title !== undefined && safe.title.trim().length === 0) delete safe.title
   if (Object.keys(safe).length === 0) return
+  sweepFailed = false // the user acted after a failed sweep
   setState({
     detail: {
       ...detail,
@@ -351,12 +402,12 @@ export function editReviewHead(patch: EvidenceReviewPatch): void {
  * drains whatever is pending at that point. Loss-free: see the module header.
  */
 export async function flushReviewSession(): Promise<void> {
-  while (flushInFlight || sweepLane) await (flushInFlight ?? sweepLane)
+  while (flushInFlight || sweepLane) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
   if (pendingItems.size === 0 && pendingHead == null) return
   const run = doFlush()
   flushInFlight = run
   try {
-    await run
+    await orPurge(run)
   } finally {
     if (flushInFlight === run) flushInFlight = null
   }
@@ -415,7 +466,9 @@ async function doFlush(): Promise<void> {
     armTimer()
     return
   }
-  setState({ saveState: 'saved', saveError: null })
+  // A failed sweep's error line stays until the user acts (review round 5): this save
+  // succeeding does not undo that the sweep failed.
+  setState(sweepFailed ? { saveState: 'error' } : { saveState: 'saved', saveError: null })
 }
 
 /**
@@ -436,6 +489,7 @@ export async function retryReviewSave(): Promise<void> {
     const fresh = await window.api.getEvidenceReview(reviewId)
     if (token !== openToken) return
     if (fresh) {
+      sweepFailed = false // Try again reconciled the screen with the database
       setState({ detail: fresh, saveState: 'idle', saveError: null })
     } else {
       setState({ detail: null, openError: { kind: 'notFound' }, saveState: 'idle', saveError: null })
@@ -463,7 +517,7 @@ export async function retryBlockedSwitch(): Promise<void> {
  */
 export async function discardAndSwitch(): Promise<void> {
   if (state.openError?.kind !== 'unsaved') return
-  while (flushInFlight) await flushInFlight
+  while (flushInFlight) await orPurge(flushInFlight)
   // Re-read after the wait: a lock (purge), a switch that went ahead, or the same review opened
   // again all end the refusal, and then there is nothing left to discard. (This is the post-await
   // guard here: every `openToken` bump also resets `openError`, so a token check would add
@@ -810,7 +864,7 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
  */
 async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, token: number): Promise<void> {
   await flushReviewSession()
-  while (flushInFlight) await flushInFlight
+  while (flushInFlight) await orPurge(flushInFlight)
   if (token !== openToken) return
   // #837: never sweep over an edit a FAILED write left unsaved (the markReviewReady /
   // exportReviewPack / reopenReview idiom, narrowed to what actually conflicts): the optimistic
@@ -822,29 +876,47 @@ async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, toke
   const { ids, decision } = bulkTargets(detail.items, action)
   if (ids.size === 0) return
   const queuedDecision = (itemId: string): boolean => pendingItems.get(itemId)?.decision !== undefined
-  // Optimistic apply — ONE state commit for the whole sweep, never one per item.
-  const optimistic = detail.items.map((i) =>
-    ids.has(i.id) && !queuedDecision(i.id) ? { ...i, decision } : i
-  )
+  // The decisions the optimistic apply replaces (review round 5): a FAILED sweep persisted
+  // nothing, so these come back on screen — the mirror of the success rule.
+  const before = new Map<string, ReviewDecision>()
+  for (const i of detail.items) if (ids.has(i.id) && !queuedDecision(i.id)) before.set(i.id, i.decision)
+  // Optimistic apply — ONE state commit for the whole sweep, never one per item. An error
+  // already showing stays (review round 5): only a later successful save or Try again clears it.
+  const optimistic = detail.items.map((i) => (before.has(i.id) ? { ...i, decision } : i))
   setState({
     detail: { ...detail, items: optimistic, gate: computeReadyGate(optimistic) },
-    saveState: 'pending',
-    saveError: null
+    ...(state.saveState === 'error' ? null : { saveState: 'pending', saveError: null })
   })
+  // A failed or refused sweep: every swept item with nothing queued goes back to its pre-sweep
+  // decision (under the one lane nothing is being written meanwhile); a decision queued during
+  // the call keeps its value and is written after. The error line stays until the user acts.
+  const undo = (saveError: string | null): void => {
+    const current = state.detail
+    if (current && current.id === reviewId) {
+      const items = current.items.map((i) =>
+        before.has(i.id) && !queuedDecision(i.id) ? { ...i, decision: before.get(i.id)! } : i
+      )
+      setState({ detail: { ...current, items, gate: computeReadyGate(items) } })
+    }
+    sweepFailed = true
+    setState({ saveState: 'error', saveError })
+    if (hasUnsavedEdits()) armTimer()
+  }
   let releaseLane: () => void = () => {}
   const lane = new Promise<void>((resolve) => {
     releaseLane = resolve
   })
   sweepLane = lane
   try {
-    const updated = await window.api.applyEvidenceReviewBulkAction(reviewId, action)
+    // Raced against the purge gate: a call that never answers cannot outlive the lock.
+    const updated = await orPurge(window.api.applyEvidenceReviewBulkAction(reviewId, action))
     if (token !== openToken) return // purge/switch landed mid-flight — never write
     const current = state.detail
     if (!current || current.id !== reviewId) return
     if (updated == null) {
       // Stale handle or a refusal (deleted / reopened-to-ready underneath us) — surfaced,
       // never retried in a loop.
-      setState({ saveState: 'error', saveError: null })
+      undo(null)
       return
     }
     // Merge the persisted DECISIONS only: a note typed while the sweep was in flight is still
@@ -870,7 +942,7 @@ async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, toke
     if (queued) armTimer()
   } catch (e) {
     if (token !== openToken) return
-    setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+    undo(friendlyIpcError(e))
   } finally {
     if (sweepLane === lane) sweepLane = null
     releaseLane()
@@ -904,7 +976,12 @@ export function purgeReviewSession(): void {
   pendingItems = new Map()
   pendingHead = null
   flushInFlight = null
-  sweepLane = null // the sweep's own finally still releases its waiters
+  sweepLane = null
+  sweepFailed = false
+  // Release every wait (review round 5): a flush, an open or a sweep waiting on a call that
+  // never answers settles now and finds the purged store — nothing outlives the lock.
+  purgeGate.open()
+  purgeGate = gate()
   state = INITIAL
   notify()
 }

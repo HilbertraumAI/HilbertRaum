@@ -14124,8 +14124,9 @@ reveal + filter that matches the marker AS DISPLAYED incl. DE `Q{n}`); narrow wi
 the pane for a `Modal width='wide'` drawer with focus return. Edits flow through the
 repo's first **debounced auto-save store** (`renderer/lib/reviewSession.ts`: 600 ms,
 drain-before-await, failed patches re-merge under newer values, every post-await write
-`openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()`,
-store purged after). **A switch or a sweep never runs over a failed save** (#837): a failed
+`openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()` —
+bounded by `REVIEW_LOCK_FLUSH_BOUND_MS` (6 s) so a hung call never holds the lock — and the
+store purged after, which also releases every wait on a call that never answered). **A switch or a sweep never runs over a failed save** (#837): a failed
 write leaves its patch queued with the save-error line + Try again, and every action that
 runs after a flush checks for it — mark ready, export and reopen refuse; a bulk sweep refuses
 (and its Bulk actions trigger is disabled) only while an edit a failed write left unsaved
@@ -14135,8 +14136,11 @@ starts while its call is in flight, so at its merge no item write is in flight a
 exact — an item keeps its local decision iff a decision patch for it is still queued (written
 after the sweep, the last word), otherwise it takes the sweep's value, which is what main
 holds; anything still queued gets the debounce armed, an error is never cleared by the merge,
-and one sweep runs at a time (`bulkRunning`; the trigger is disabled meanwhile); a failed HEAD
-edit counts like an item edit; a switch
+and one sweep runs at a time (`bulkRunning`; the trigger is disabled meanwhile); a sweep that
+fails or is refused persisted nothing, so its swept items with nothing queued go back to their
+pre-sweep decisions and its error line stays until the user acts (an edit, Try again), while a
+decision queued during its call is still written after it; a sweep never clears an error that
+was already showing; a failed HEAD edit counts like an item edit; a switch
 flushes until nothing is queued or a write fails (up to four passes, a safety valve, each
 followed by waiting out any flush another caller has in flight) and is refused only then;
 re-opening the SAME review keeps the edit on screen with no re-read; a switch to ANOTHER
