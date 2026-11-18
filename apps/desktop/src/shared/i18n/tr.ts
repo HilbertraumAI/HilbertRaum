@@ -2265,6 +2265,10 @@ export const tr: UiCatalog<'tr'> = {
     'Bu sürücüdeki çalışma alanını açmak için parolanızı girin. Her şey bu sürücüde kalır.',
   'gate.unlock.submit': 'Kilidi aç',
   'gate.unlock.submitBusy': 'Kilit açılıyor…',
+  'gate.unlock.workingCopyLost':
+    'Çalışma alanının sürücüdeki çalışma dosyası silindi veya hasar gördü. Çalışma alanınız, en son ' +
+    'kilitlendiği veya uygulamanın en son kapatıldığı andaki hâliyle korunuyor; o zamandan beri ' +
+    'yapılan değişiklikler kayboldu.',
   'gate.welcome.title': 'Hoş geldiniz',
   'gate.welcome.intro':
     'Burası özel yapay zekâ çalışma alanınız. Bir yapay zekâ modeliyle sohbet edin ve ' +

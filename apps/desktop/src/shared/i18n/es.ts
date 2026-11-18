@@ -2398,6 +2398,10 @@ export const es: UiCatalog<'es'> = {
     'esta unidad.',
   'gate.unlock.submit': 'Desbloquear',
   'gate.unlock.submitBusy': 'Desbloqueando…',
+  'gate.unlock.workingCopyLost':
+    'El archivo de trabajo del espacio de trabajo en la unidad se eliminó o se dañó. Tu espacio de ' +
+    'trabajo se conserva tal como estaba la última vez que se bloqueó o se cerró la aplicación; los ' +
+    'cambios hechos desde entonces se han perdido.',
   'gate.welcome.title': 'Te damos la bienvenida',
   'gate.welcome.intro':
     'Este es tu espacio de trabajo de IA privado. Chatea con un modelo de IA y haz preguntas ' +

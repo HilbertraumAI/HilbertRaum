@@ -2455,6 +2455,9 @@ export const en = {
     "Enter your password to open this drive's workspace. Everything stays on this drive.",
   'gate.unlock.submit': 'Unlock',
   'gate.unlock.submitBusy': 'Unlocking…',
+  'gate.unlock.workingCopyLost':
+    "The workspace's working file on the drive was removed or damaged. Your workspace is kept as " +
+    'it was the last time it was locked or the app was closed; changes made since then are lost.',
   'gate.welcome.title': 'Welcome',
   'gate.welcome.intro':
     'This is your private AI workspace. Chat with an AI model and ask questions about your ' +

@@ -222,6 +222,11 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           {brand}
           <h1>{t('gate.unlock.title')}</h1>
           <p className="hint">{t('gate.unlock.hint')}</p>
+          {/* #855: the lock that brought the user here finished at the last good snapshot
+              because the working file was gone or damaged; only that lock's result carries it. */}
+          {state.lockNotice === 'working_copy_lost' && (
+            <Banner tone="warning">{t('gate.unlock.workingCopyLost')}</Banner>
+          )}
           <div className="gate-fields">
             <PasswordField
               placeholder={t('gate.passwordPlaceholder')}

@@ -1135,10 +1135,13 @@ head's own weights + KV.
   file byte-identical. Bump `SCHEMA_VERSION` only for a change an older build must not open.
   Builds ≤ 0.1.59 never read the stamp, so it protects only pairs whose older build is newer
   than PR #289;
-  `lockWorkspace` → `WorkspaceStateInfo`. Registered in `initBackend()`; exposed on preload `api` +
+  `lockWorkspace` → `WorkspaceStateInfo`, with `lockNotice: 'working_copy_lost'` when the lock
+  finished at the last good snapshot because the working file was gone or no longer a database
+  (#855; `getWorkspaceState` never sets it). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
-  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired }`, `WorkspaceActionResult`.
+  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`,
+  `WorkspaceActionResult`.
 ✅ **`AppContext.db` is now a getter** over `workspace.requireDb()` (throws while locked) +
   `AppContext.workspace: WorkspaceController`. `main/index.ts` builds the controller from
   `loadPolicy(...).policy` + `isDev`, calls `init()`, and locks on `will-quit`. `registerCoreIpc`'s

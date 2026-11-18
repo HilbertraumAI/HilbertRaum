@@ -321,6 +321,12 @@ export interface WorkspaceStateInfo {
   plaintextAllowed: boolean
   /** Policy requires encryption — onboarding may not offer plaintext. */
   encryptionRequired: boolean
+  /**
+   * Set only on what `lockWorkspace` returns, never by `getWorkspaceState()` (#855): the lock
+   * finished at the last good snapshot because the working file was gone or no longer a
+   * database, so the changes since the previous lock are lost. The lock screen says so.
+   */
+  lockNotice?: 'working_copy_lost'
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).

@@ -2439,6 +2439,10 @@ export const pl: UiCatalog<'pl'> = {
     'Wpisz hasło, aby otworzyć obszar roboczy na tym dysku. Wszystko zostaje na tym dysku.',
   'gate.unlock.submit': 'Odblokuj',
   'gate.unlock.submitBusy': 'Odblokowywanie…',
+  'gate.unlock.workingCopyLost':
+    'Plik roboczy obszaru roboczego na dysku został usunięty lub uszkodzony. Twój obszar roboczy ' +
+    'jest zachowany w stanie z ostatniego zablokowania lub zamknięcia aplikacji; zmiany ' +
+    'wprowadzone od tego czasu zostały utracone.',
   'gate.welcome.title': 'Witaj',
   'gate.welcome.intro':
     'To twój prywatny obszar roboczy AI. Rozmawiaj z modelem AI i zadawaj pytania o swoje ' +

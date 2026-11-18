@@ -2539,6 +2539,10 @@ export const fr: UiCatalog<'fr'> = {
     'ce disque.',
   'gate.unlock.submit': 'Déverrouiller',
   'gate.unlock.submitBusy': 'Déverrouillage…',
+  'gate.unlock.workingCopyLost':
+    'Le fichier de travail de l’espace de travail sur le disque a été supprimé ou endommagé. Votre ' +
+    'espace de travail est conservé tel qu’il était la dernière fois qu’il a été verrouillé ou que ' +
+    'l’application a été fermée\u00A0; les modifications faites depuis sont perdues.',
   'gate.welcome.title': 'Bienvenue',
   'gate.welcome.intro':
     'Voici votre espace de travail d’IA privé. Discutez avec un modèle d’IA et posez des ' +

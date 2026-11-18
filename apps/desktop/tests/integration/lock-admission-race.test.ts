@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 // AUD-02 — the lock-teardown ADMISSION window.
@@ -650,6 +651,37 @@ describe('admission during the lock teardown (AUD-02)', () => {
     expect(result).toMatchObject({ jobId: expect.any(String) })
     h.ctx.docTasks?.cancelAllDocTasks()
     await h.ctx.docTasks?.awaitActiveTaskSettled()
+  })
+
+  // #855: a working file overwritten in place (#208's noise) or gone leaves nothing newer than `.enc`,
+  // so the lock FINISHES at the last good snapshot. Before, the controller kept a closed handle and
+  // threw: the handler read `isUnlocked()` as "open again", disarmed the latch, restarted the
+  // eager sidecars against a database no call could use, and answered "free some space", while
+  // every further "Lock now" was refused and the key stayed in memory until quit. The armed latch
+  // is the observable that the handler did not take that path (its first act there is the disarm).
+  it('a lock whose working file is no longer a database finishes: locked with the notice, the latch armed, and the same session unlocks again (#855)', async () => {
+    const h = await harness()
+    h.releaseSuspend() // run the teardown straight through
+    // Checkpointed first, so the lock's own checkpoint has no page to write back over the noise.
+    h.ctrl.requireDb().exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    const size = statSync(h.vp.dbPath).size
+    const fd = openSync(h.vp.dbPath, 'r+')
+    try {
+      writeSync(fd, randomBytes(size), 0, size, 0)
+    } finally {
+      closeSync(fd)
+    }
+
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+    expect(h.ctrl.isUnlocked()).toBe(false)
+    expect(h.ctrl.isLocking()).toBe(true)
+    expect(workspaceAdmitsWork(h.ctrl)).toBe(false)
+
+    const unlocked = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
+    expect(unlocked.result).toMatchObject({ ok: true, state: { state: 'unlocked' } })
+    expect(unlocked.result).not.toHaveProperty('state.lockNotice')
+    expect(h.ctrl.isLocking()).toBe(false)
   })
 
   // An `unlockWorkspace` landing mid-teardown must NOT disarm the latch: `unlock()` early-returns

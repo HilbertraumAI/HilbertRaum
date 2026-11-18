@@ -1058,10 +1058,26 @@ explicitly:
   working file still exists and starts with the SQLite header (#853): `openDatabase` creates a
   missing file, so after something removed the live working file (POSIX allows unlinking an
   open file) a re-open would hand the session an empty database, and the next lock (a retry,
-  or `shutdown()` at quit) would encrypt it over `.enc`. Without a file the controller keeps
-  its closed handle and shreds the orphaned `-wal`/`-shm` (plaintext pages SQLite leaves behind
-  when its main file was unlinked), every later lock is refused, and the next launch opens the
-  last snapshot.
+  or `shutdown()` at quit) would encrypt it over `.enc`.
+- **Working file gone or not a database → the lock finishes at the last snapshot (#855).** A
+  working file that is gone, or still there but no longer a database (#208's noise, a
+  truncation), holds nothing newer than `.enc`: the session's changes since the last lock are
+  lost either way. So the lock finishes instead of keeping a closed handle (which reported
+  `unlocked` on a database no call could use, refused every later lock and kept the key until
+  quit). The controller shreds what is left (the noise, and the `-wal`/`-shm` SQLite leaves
+  behind when its main file was unlinked), zeroes the key and returns `locked` with
+  `lockNotice: 'working_copy_lost'`. The lock screen then says the changes since the previous
+  lock are lost (`gate.unlock.workingCopyLost`), and an unlock in the same session opens `.enc`.
+  This is what the next launch's sweep would do anyway, done at once. A working file the header
+  probe cannot read (a hold, a permission error) is not judged lost, since it may be the only
+  fresh copy: the lock is refused as before, the controller keeps its closed handle, so no unlock
+  in this session decrypts the stale `.enc` over it. A retry once the hold clears re-opens it
+  (that retry still reports the failed lock; the next one locks). Nor is a working file judged
+  lost while `.enc` is missing too: `.enc` sits beside it, so a drive or workspace folder that
+  vanished (a USB stick dropping out) reads as missing for both, and the working file may come
+  back newer; a main file that is gone still has its orphaned `-wal`/`-shm` shredded (#853). The
+  quit path finishes the same way, silently: it has nowhere to show the notice, and a line logged
+  after the lock lives only in memory and ends with the process.
 - **Newer-file roll-forward (CODE-1b).** If the app exits after a failed lock, the startup
   crash sweep must NOT shred the working file — it is the only fresh copy of the session's
   data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer

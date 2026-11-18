@@ -2443,6 +2443,10 @@ export const it: UiCatalog<'it'> = {
     'questa unità.',
   'gate.unlock.submit': 'Sblocca',
   'gate.unlock.submitBusy': 'Sblocco in corso…',
+  'gate.unlock.workingCopyLost':
+    'Il file di lavoro dell’area di lavoro sull’unità è stato rimosso o danneggiato. La tua area di ' +
+    'lavoro resta com’era l’ultima volta che è stata bloccata o che l’app è stata chiusa; le ' +
+    'modifiche fatte da allora sono andate perse.',
   'gate.welcome.title': 'Ti diamo il benvenuto',
   'gate.welcome.intro':
     'Questa è la tua area di lavoro IA privata. Chatta con un modello IA e fai domande sui tuoi ' +
