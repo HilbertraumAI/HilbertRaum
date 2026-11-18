@@ -128,12 +128,24 @@ password recovery — are documented in
   `app.requestSingleInstanceLock()` refuses a second app instance on the same `userData` —
   which covers the incident class (two portable release builds, or two runs of the same
   build), and dev builds keep their own `-dev` suffix. It does NOT cover two processes with
-  *different* `userData` pointed at one drive workspace (e.g. an `npm run dev` with
-  `HILBERTRAUM_DRIVE_ROOT` racing a portable exe launched from that drive). In that corner
+  *different* `userData` pointed at one drive workspace: **two user accounts on one computer**
+  (fast user switching), each starting the app from the same drive, since `userData` lives in
+  each account's own profile (found in #876's analysis; the one case an ordinary user can
+  reach), or an `npm run dev` with `HILBERTRAUM_DRIVE_ROOT` racing a portable exe launched from
+  that drive. In that corner
   the second instance's startup sweep can still destroy the live session's **working file**
-  (its delta since the last lock); the lock-path SQLite-header guard then refuses to
+  (its delta since the last lock); the lock-path database guard then refuses to
   re-encrypt the garbage, so the at-rest `.enc` — the vault itself — survives and the next
-  unlock recovers the last locked snapshot. On macOS and Linux the sweep deletes the file
+  unlock recovers the last locked snapshot. Since #876 the guard judges the file's structure,
+  not only its 16-byte header: on Windows the lock's own checkpoint can write page 1 back over
+  the noise, which the header check let through. Its residual: the probe reads the schema, the
+  root page of every index and the paths down to the first and (for a rowid table) the last row
+  of every table, a small part of a large file. It catches an overwrite that starts at the
+  beginning of the file (the #208 shape: none missed in the review's fuzz) or runs to its end,
+  but mostly misses noise confined to a range or a single page in between (a failing stick's
+  garbled blocks, another tool's partial rewrite), as the header check did; such a file is then
+  encrypted over `.enc`, and the damage shows when the app next reads those pages. On macOS and
+  Linux the sweep deletes the file
   instead of overwriting it; since #853 the refused lock no longer re-creates it as an empty
   database, which a retry or the quit used to encrypt over `.enc`, and since #855 it finishes at
   the last locked snapshot and the lock screen says the session's changes are lost. A

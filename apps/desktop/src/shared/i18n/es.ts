@@ -1996,6 +1996,8 @@ export const es: UiCatalog<'es'> = {
   'diag.audit.workspace_lock_failed':
     'Intento de bloqueo fallido (el espacio de trabajo siguió abierto)',
   'diag.audit.workspace_password_changed': 'Contraseña del espacio de trabajo cambiada',
+  'diag.audit.workspace_working_copy_lost':
+    'Cambios recientes perdidos (el archivo de trabajo se eliminó o se dañó)',
   'diag.audit.settings_changed': 'Ajustes cambiados',
   'diag.audit.local_api_toggled': 'API local activada o desactivada',
   'diag.audit.policy_warning': 'Aviso de política',

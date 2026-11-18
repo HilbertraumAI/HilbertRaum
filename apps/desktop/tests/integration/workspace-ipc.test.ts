@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, statSync, writeSync } from 'node:fs'
 
 // IPC-layer tests for registerWorkspaceIpc — the exception→result mapping the unlock gate
 // depends on (a wrong password / policy refusal / weak password must be a NORMAL
@@ -28,7 +28,7 @@ vi.mock('../../src/main/services/embeddings', async (importOriginal) => {
   return { ...actual, purgeResidentVectors: purgeSpy }
 })
 
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { encodeVector, getResidentVectors } from '../../src/main/services/embeddings'
 import type { IpcMainInvokeEvent } from 'electron'
 import { inFlightStreams, streamSettled } from '../../src/main/ipc/inflight'
@@ -44,9 +44,19 @@ import {
   type WorkspaceActionResult,
   type WorkspaceStateInfo
 } from '../../src/shared/types'
-import { WorkspaceController, VaultRecoveryBlockedError, type VaultPaths } from '../../src/main/services/workspace-vault'
+import {
+  RECOVERY_SUFFIX,
+  WorkspaceController,
+  VaultRecoveryBlockedError,
+  decryptFile,
+  lockEncryptedVault,
+  unlockEncryptedVault,
+  type VaultPaths
+} from '../../src/main/services/workspace-vault'
+import { dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
+import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import * as settingsModule from '../../src/main/services/settings'
 import { UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 import {
@@ -59,11 +69,15 @@ import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   ENCRYPTION_REQUIRED,
+  backdate,
   damagedVault,
   editDescriptor,
+  failedLockState,
   freshVaultPaths,
   lockedVault,
+  noisePastPageOne,
   newerPlaintext,
+  plantProbeTrap,
   newerVault,
   setFrameMagic,
   tagFailingVault,
@@ -240,6 +254,24 @@ describe('registerWorkspaceIpc', () => {
       'the OCR engine through suspend, never its latching stop (BE-5)',
       (call, latchingStop) => ({ extra: { ocrEngine: { suspend: call, stop: latchingStop } } }),
       true
+    ],
+    // #860 L1: the reranker has seen recent questions and chunk text, and whisper-cli reads decrypted audio.
+    [
+      'the reranker through suspend, never its latching stop (#860 L1)',
+      (call, latchingStop) => ({ extra: { reranker: { suspend: call, stop: latchingStop } } }),
+      true
+    ],
+    [
+      'the transcriber through suspend, never its latching stop (#860 L1)',
+      (call, latchingStop) => ({ extra: { transcriber: { suspend: call, stop: latchingStop } } }),
+      true
+    ],
+    // #860 L2: an embedder that has `suspend` is suspended; its latching `stop` would leave every embed after the next
+    // unlock failing with "Embedder is stopped".
+    [
+      'the embedder through suspend when it has one, never its latching stop (#860 L2)',
+      (call, latchingStop) => ({ suspendEmbedder: call, stopEmbedder: latchingStop }),
+      true
     ]
   ])('lockWorkspace tears down %s while the DB is still open', async (_boundary, install, hasLatchingStop) => {
     const ctrl = unlockedVault()
@@ -357,15 +389,91 @@ describe('registerWorkspaceIpc', () => {
     expect(ctrl.isUnlocked()).toBe(false) // re-encrypted only AFTER the settle
   })
 
-  it('lockWorkspace still locks when a sidecar stop fails (allSettled)', async () => {
+  // #860 L10: …but never longer than the shipped 5 s bound. An unwind that never ends (a handler wedged in a parser,
+  // a skill run parked in a save dialog that was already open) must not hang "Lock now": at the bound the lock goes on
+  // and forfeits only that task's own write. The clock is driven 1 ms short of the bound, then to it. The doc task's
+  // bound is the handler's own race; a skill run's is the real controller's, which the handler hands the bound.
+  it.each([
+    [
+      'doc-task',
+      (base: Record<string, unknown>, reached: () => void) => {
+        base.docTasks = {
+          cancelAllDocTasks: vi.fn(),
+          abortActiveBuild: vi.fn(),
+          awaitActiveTaskSettled: () => {
+            reached()
+            return new Promise<void>(() => {})
+          }
+        }
+      }
+    ],
+    [
+      'skill-run',
+      (base: Record<string, unknown>, reached: () => void) => {
+        const runs = new SkillRunController()
+        // A run that ignores its abort: it stays running for good.
+        runs.start({ skillInstallId: 's', toolName: 'redact_document', documentId: 'doc-l10', documentCount: 1, runner: () => new Promise(() => {}) })
+        const awaitSettled = runs.awaitSettled.bind(runs)
+        runs.awaitSettled = (timeoutMs: number) => {
+          reached()
+          return awaitSettled(timeoutMs)
+        }
+        base.skillRuns = runs
+      }
+    ]
+  ])('lockWorkspace stops waiting for a cancelled %s that never settles at the 5 s bound (#860 L10)', async (_lane, install) => {
     const ctrl = unlockedVault()
-    registerWorkspaceIpc(
-      workspaceIpcCtx(ctrl, {
+    const base = workspaceIpcCtx(ctrl) as unknown as Record<string, unknown>
+    let reached!: () => void
+    const settleAwaited = new Promise<void>((r) => (reached = r))
+    install(base, reached)
+    registerWorkspaceIpc(base as unknown as AppContext)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let done = false
+      const lockP = invoke(handlers, IPC.lockWorkspace).then((r) => {
+        done = true
+        return r
+      })
+      await settleAwaited
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(done).toBe(false)
+      expect(ctrl.isUnlocked()).toBe(true) // still waiting, the DB open
+      await vi.advanceTimersByTimeAsync(1)
+      const { result } = await lockP
+      expect(result).toMatchObject({ state: 'locked' })
+      expect(ctrl.isUnlocked()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // An optional service that fails to stop must never block the security action: the sidecars settle together
+  // (allSettled), and the local API's stop, which runs first, on its own (#860 L8).
+  it.each<[string, WorkspaceIpcCtxOptions]>([
+    [
+      'a sidecar stop fails (allSettled)',
+      {
         stopRuntime: async () => {
           throw new Error('sidecar wedged')
         }
-      })
-    )
+      }
+    ],
+    [
+      'the local API stop fails (#860 L8)',
+      {
+        extra: {
+          localApi: {
+            stop: async () => {
+              throw new Error('listener wedged')
+            }
+          }
+        }
+      }
+    ]
+  ])('lockWorkspace still locks when %s', async (_what, opts) => {
+    const ctrl = unlockedVault()
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, opts))
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(ctrl.isUnlocked()).toBe(false)
@@ -748,6 +856,106 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       }
     }
   )
+})
+
+// #875: a lock at quit that finished at the last snapshot can be recorded only once there is a database again. The
+// unlock that consumes the notice writes it to Activity (the audit log) and app.log, once.
+describe('the unlock after a loss of the last session’s changes (#875)', () => {
+  /** The working file overwritten in place, then the app quits: the lock at quit finishes at the last snapshot. */
+  const lostAtQuit = (vp: VaultPaths): void => {
+    const before = unlockedController(vp, PW)
+    before.requireDb().exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    const size = statSync(vp.dbPath).size
+    const fd = openSync(vp.dbPath, 'r+')
+    try {
+      writeSync(fd, randomBytes(size), 0, size, 0)
+    } finally {
+      closeSync(fd)
+    }
+    before.shutdown()
+  }
+  /** A failed lock's working file (newer than `.enc`, cleanly closed) whose pages past page 1 are noise: the next start
+   *  sweeps it. */
+  const discardedAtStart = (vp: VaultPaths): void => {
+    failedLockState(vp, 7171, PW)
+    noisePastPageOne(vp.dbPath)
+  }
+  /** A `.recovery` snapshot newer than `.enc` whose pages past page 1 are noise: the unlock shreds it. */
+  const damagedRecovery = (vp: VaultPaths): void => {
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    lockEncryptedVault(vp, db, key)
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    decryptFile(vp.encPath, recoveryPath, key)
+    noisePastPageOne(recoveryPath)
+    backdate(vp.encPath)
+  }
+
+  // The audit metadata goes verbatim into the plaintext activity-log export, so it is pinned whole: the cause, and for a
+  // loss a marker recorded, when that was (the marker's mtime). A recovery copy is discarded at this unlock, so the
+  // event's own time is when.
+  // The log line names what was lost: the working file (a lock, a start) or the recovery copy a failed lock left.
+  it.each<[string, (vp: VaultPaths) => void, 'lock' | 'startup' | 'recovery', boolean, string]>([
+    ['a lock at quit that finished at the last snapshot', lostAtQuit, 'lock', true, 'the working file was gone or no longer a database'],
+    ['a start that swept the last session’s broken working file', discardedAtStart, 'startup', true, 'the working file was no longer a database'],
+    ['an unlock that discarded a damaged recovery copy', damagedRecovery, 'recovery', false, 'the recovery copy a failed lock left was no longer a database']
+  ])('after %s, the unlock records workspace_working_copy_lost and one log line, once', async (_what, lose, cause, noticeAtStart, what) => {
+    const vp = lockedVault('wsipc', PW)
+    lose(vp)
+
+    const ctrl = startedOn(vp) // the next start
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { audit: createAuditRecorder(() => ctrl.requireDb()) } }))
+    const markerFile = join(dirname(vp.descriptorPath), 'working-copy-lost.json')
+    const lostAt = noticeAtStart ? statSync(markerFile).mtime.toISOString() : undefined
+    const lostEvents = (): Array<Record<string, unknown> | null> =>
+      listAuditEvents(ctrl.requireDb())
+        .filter((e) => e.type === 'workspace_working_copy_lost')
+        .map((e) => e.metadata)
+    const marker = `#875 marker ${randomUUID()}`
+    log.info(marker)
+    const logged = (): string[] => {
+      const all = readLogTail(100_000)
+      return all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('since the last saved state were lost'))
+    }
+    try {
+      const state = (await invoke(handlers, IPC.getWorkspaceState)).result
+      if (noticeAtStart) expect(state).toMatchObject({ lockNotice: 'working_copy_lost' })
+      else expect(state).not.toHaveProperty('lockNotice')
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true, state: { state: 'unlocked' } })
+      expect(lostEvents()).toEqual([noticeAtStart ? { cause, lostAt } : { cause }])
+      expect(logged()).toHaveLength(1)
+      expect(logged()[0]).toContain(`"cause":"${cause}"`)
+      expect(logged()[0]).toContain(`were lost: ${what}`)
+
+      await invoke(handlers, IPC.lockWorkspace)
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(lostEvents()).toHaveLength(1)
+      expect(logged()).toHaveLength(1)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+})
+
+// #876 review round 2: a site whose probe could not read the structure (not damage) judged the file by its header, as
+// before the probe existed. Support needs to know that happened: the lock handler logs which site and SQLite's code.
+describe('a lock whose probe fell back to the header (#876)', () => {
+  it('logs the site and the SQLite code', async () => {
+    const ctrl = unlockedVault()
+    plantProbeTrap(ctrl.requireDb())
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = `#876 fallback marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.lockWorkspace)).result).toMatchObject({ state: 'locked' })
+      const all = readLogTail(100_000)
+      const lines = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('judged by its SQLite header'))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('"site":"lock"')
+      expect(lines[0]).toMatch(/"code":"sqlite 1\b/)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
 })
 
 // #845: the user copy is the same for a newer database and a newer vault format; only the log tells support which

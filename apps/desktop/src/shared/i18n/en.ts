@@ -2017,6 +2017,8 @@ export const en = {
   'diag.audit.workspace_unlock_failed': 'Unlock attempt failed',
   'diag.audit.workspace_lock_failed': 'Lock attempt failed (workspace stayed open)',
   'diag.audit.workspace_password_changed': 'Workspace password changed',
+  'diag.audit.workspace_working_copy_lost':
+    'Recent changes lost (the working file was removed or damaged)',
   'diag.audit.settings_changed': 'Settings changed',
   'diag.audit.local_api_toggled': 'Local API switched on or off',
   'diag.audit.policy_warning': 'Policy notice',

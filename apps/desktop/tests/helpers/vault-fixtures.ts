@@ -8,7 +8,18 @@
 // fs calls go through the mocked module like the suites' own, every wrapper there is pass-through until armed, and
 // the vault primitives below DO reach the recorded `openSync` / `renameSync` / `fsyncSync`. So build the vault state
 // above the `mockClear()` lines (and before arming a failure), never between a `mockClear()` and the measured call.
-import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { SCHEMA_VERSION } from '../../src/main/services/db'
@@ -25,6 +36,7 @@ import {
 } from '../../src/main/services/workspace-vault'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import type { AppContext } from '../../src/main/services/context'
+import type { Db } from '../../src/main/services/db'
 import type { PrivacyPolicy } from '../../src/shared/types'
 import { openRawDb, tempRoot } from './db-fixtures'
 import { ANY_SENDER } from './ipc'
@@ -160,6 +172,82 @@ export function corruptVault<T extends VaultPaths>(vp: T, password: string): T {
   rmSync(src)
   rmSync(vp.dbPath)
   return vp
+}
+
+/**
+ * #876's shape on the SQLite file at `path`: page 1 (the header and the schema root) kept, every byte after it
+ * overwritten in place with random noise, as a write through another program's `r+` handle lands (#208). The first 16
+ * bytes still read "SQLite format 3", so only a probe of the structure can tell. Call it on a file nothing else has
+ * open for writing.
+ */
+export function noisePastPageOne(path: string): void {
+  const fd = openSync(path, 'r+')
+  try {
+    const head = Buffer.alloc(18)
+    readSync(fd, head, 0, head.length, 0)
+    const stored = head.readUInt16BE(16)
+    const pageSize = stored === 1 ? 65_536 : stored
+    const size = fstatSync(fd).size
+    if (size > pageSize) writeSync(fd, randomBytes(size - pageSize), 0, size - pageSize, pageSize)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * A table on the open database `db` that only `db` itself can read (#876 review round 2): a VIRTUAL generated column
+ * calls a function registered on this connection alone, so any other connection reading a row fails with SQLite's
+ * "unknown function" (SQLITE_ERROR), while the file stays a healthy database that `openDatabase` and every app query
+ * handle as before. It stands in for a structural read the probe cannot run for a reason that is not damage (SQLite
+ * cannot open the file through the URI, an I/O error, out of memory).
+ */
+export function plantProbeTrap(db: Db): void {
+  db.function('w3_probe_trap', { deterministic: true }, (x: unknown) => x as number)
+  db.exec('CREATE TABLE w3_probe_trap (a, b AS (w3_probe_trap(a)) VIRTUAL); INSERT INTO w3_probe_trap (a) VALUES (1);')
+}
+
+/** SQLite's varint: 7-bit groups, high bit set on all but the last (values below 2^56 here). */
+function sqliteVarint(n: number): Buffer {
+  const groups: number[] = []
+  do {
+    groups.unshift(n % 128)
+    n = Math.floor(n / 128)
+  } while (n > 0)
+  return Buffer.from(groups.map((g, i) => (i < groups.length - 1 ? g | 0x80 : g)))
+}
+
+/**
+ * Noise SQLite reports as SQLITE_TOOBIG, not CORRUPT (#876 review round 3): the first cell of the table leaf at
+ * `rootPage` (4,096-byte pages) is rewritten into the page's free area as a record whose first column claims a TEXT value
+ * longer than SQLite allows (1,000,000,001 bytes), inside a payload sized so that its on-page part and overflow pointer
+ * still fit. Reading that row's first column fails "string or blob too big". The shape Fable's fuzz found (pages that
+ * keep their 8-byte b-tree header over noise bodies), made deterministic.
+ */
+export function oversizedFirstCell(path: string, rootPage: number): void {
+  const pageSize = 4096
+  const minLocal = Math.floor(((pageSize - 12) * 32) / 255) - 23
+  const payload = minLocal + Math.ceil((1e9 + 1 - minLocal) / (pageSize - 4)) * (pageSize - 4)
+  const serial = sqliteVarint(2 * 1_000_000_001 + 13)
+  const header = Buffer.concat([Buffer.from([1 + serial.length + 2]), serial, Buffer.from([0, 0])])
+  const cell = Buffer.concat([
+    sqliteVarint(payload),
+    Buffer.from([1]),
+    header,
+    Buffer.alloc(minLocal - header.length, 0x41),
+    Buffer.from([0, 0, 0, 2])
+  ])
+  const fd = openSync(path, 'r+')
+  try {
+    const page = Buffer.alloc(pageSize)
+    readSync(fd, page, 0, pageSize, (rootPage - 1) * pageSize)
+    if (page[0] !== 0x0d) throw new Error(`oversizedFirstCell: page ${rootPage} is no table leaf (type ${page[0]})`)
+    const at = 8 + 2 * page.readUInt16BE(3) + 64 // in the free area, past the cell pointers
+    cell.copy(page, at)
+    page.writeUInt16BE(at, 8)
+    writeSync(fd, page, 0, pageSize, (rootPage - 1) * pageSize)
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /**

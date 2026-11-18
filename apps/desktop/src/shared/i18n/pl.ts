@@ -2040,6 +2040,8 @@ export const pl: UiCatalog<'pl'> = {
   'diag.audit.workspace_lock_failed':
     'Próba zablokowania nie powiodła się (obszar roboczy pozostał odblokowany)',
   'diag.audit.workspace_password_changed': 'Zmieniono hasło obszaru roboczego',
+  'diag.audit.workspace_working_copy_lost':
+    'Utracono ostatnie zmiany (plik roboczy został usunięty lub uszkodzony)',
   'diag.audit.settings_changed': 'Zmieniono ustawienia',
   'diag.audit.local_api_toggled': 'Włączono lub wyłączono lokalne API',
   'diag.audit.policy_warning': 'Komunikat zasad dysku',

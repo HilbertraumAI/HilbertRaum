@@ -2030,6 +2030,8 @@ export const ru: UiCatalog<'ru'> = {
   'diag.audit.workspace_lock_failed':
     'Неудачная попытка блокировки (рабочее пространство осталось открытым)',
   'diag.audit.workspace_password_changed': 'Пароль рабочего пространства изменен',
+  'diag.audit.workspace_working_copy_lost':
+    'Последние изменения потеряны (рабочий файл был удален или поврежден)',
   'diag.audit.settings_changed': 'Настройки изменены',
   'diag.audit.local_api_toggled': 'Локальный API включен или выключен',
   'diag.audit.policy_warning': 'Уведомление о политике',

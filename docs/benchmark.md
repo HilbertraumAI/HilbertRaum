@@ -1226,8 +1226,10 @@ example a launcher stamp file); the monotonic column gives clean intra-process d
 
 Events: `app_ready`, `backend_init_done`, `window_ready_to_show`, `gate_visible` (the
 one renderer mark, allowlisted at the IPC boundary), `vault_unlocked` (kdf / decrypt
-split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / encrypt / shred
-split), `install_state_done` (with `cacheHit`, separating a real multi-GB hash from a
+split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / probe / encrypt / shred
+split + DB bytes; `probeMs` is the #876 structural check of the working file before it is
+encrypted, about 4 ms on a warm cache for a 365 MiB or a 1.4 GiB workspace, 6 ms under Electron 43),
+`install_state_done` (with `cacheHit`, separating a real multi-GB hash from a
 size+mtime cache hit), `checksum_start` / `checksum_done` (issue #106: one pair per
 REAL full-file hash wherever it runs — the cached model-weight path and the download
 verify alike — with a shared `seq` to pair interleaved hashes, `{modelId, file:

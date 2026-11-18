@@ -1135,7 +1135,41 @@ head's own weights + KV.
   fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
   its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
   and `VaultOpenFailedError` when the open could not finish otherwise (#844).
-  `lockEncryptedVault(vaultPaths, db, key)` (checkpoint+close → re-encrypt → shred).
+  `lockEncryptedVault(vaultPaths, db, key, encryptFileImpl?, onProbeFallback?)` (checkpoint+close →
+  `-wal` check, with one retry → probe → re-encrypt → shred). It refuses while the `-wal` still holds
+  commits after the retry, and unless the probe reads the file as a database; once it has judged the
+  file, every failure is a **`LockStoppedError`** (`reason: 'wal' | 'probe' | 'encrypt'`, `verdict:
+  { walPending, probe | null }`, an encrypt failure as its `cause`), which the controller reads
+  instead of probing again (#876 review round 2). **`walAwaitsCheckpoint(dbPath)`** (`services/db.ts`):
+  stats `<dbPath>-wal` first (32 bytes or less never counts); true when it has a valid WAL header
+  (magic `0x377f0682`/`0x377f0683`) and frames after it, or has frames but cannot be opened or read
+  (a hold); a noise `-wal` is false. **`checkpointLeftoverWal(dbPath)`** → `{ outcome: 'checkpointed'
+  | 'busy', log, checkpointed } | { outcome: 'damaged' | 'failed', code }`: the lock's one retry, a
+  plain open (SQLite's own WAL recovery decides what the WAL holds), `PRAGMA wal_checkpoint(TRUNCATE)`
+  and close; `damaged` (CORRUPT/NOTADB) means the WAL cannot be replayed into the file and no longer
+  refuses the lock. `stageRekey` refuses the same pending WAL (no retry: its connection is open).
+  **`probeDatabaseFile(path)`**
+  (`services/db.ts`, #876) → `{ verdict: 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'
+  | 'unchecked', code? }`: the
+  header through `node:fs`, then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
+  `\\?\` long form on Windows) that reads the schema, the first row of every table and the last row
+  of every rowid table, then the root-page header of every index through `node:fs`. It reads the
+  main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file.
+  `damaged` = the SQLite header, but SQLite calls the structure CORRUPT, NOTADB or (the probe's
+  own reads only, review round 3) TOOBIG, or an index root is no b-tree page, or the page size or
+  the schema format number (header byte 47 above 4) is one no SQLite writes; the schema is read with
+  `trusted_schema` OFF; `not-database` = no SQLite header (noise, empty,
+  cut short); `unknown` = the header read itself failed (a hold), never read as lost; `unchecked`
+  (review round 2) = the header reads but the structure could not be read for a reason that is not
+  damage (any other SQLite error, an index-root read that fails), with `code` (SQLite's result code
+  and fixed description, or a Node error code). **The probe only adds a refusal or a discard for
+  proven damage:** every site judges an `unchecked` file by its header, as before the probe, and
+  reports it (`ProbeFallbackNote(site, code)`, `site` = `lock` | `salvage` | `recovery` | `rekey`);
+  the controller keeps the notes, `takeProbeFallbacks()` returns them once, and the lock, unlock and
+  password-change handlers log each ("A workspace file was judged by its SQLite header …"). The one
+  verdict for the lock's guard and its #855 verdict, the startup salvage, the
+  `.recovery` roll-forward and `stageRekey`. `sqliteJudgedDamaged(err)` (the #844 classifier)
+  lives beside it.
   `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that
   allows it and a dev build; the `developerMode` setting plays no part (it lives in the encrypted DB).
 - **Vault format versions (#845):** `vaultFormatVerdict(vaultPaths) → { kind: 'ok' } | { kind:
@@ -1178,9 +1212,40 @@ head's own weights + KV.
   there reads as damage from #845 on).
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
   first, then plaintext opens immediately, encrypted stays locked, else uninitialized),
-  `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup), `getState() → WorkspaceStateInfo`,
+  `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup),
+  `isNewerWorkspace()` (#247), `isRecoveryBlocked()` (#242), `getState() → WorkspaceStateInfo`,
   `requireDb()` (throws while locked), `isUnlocked()`, `unlock(password)`, `create(password, mode)`,
-  `lock()` (no-op for plaintext).
+  `lock()` (no-op for plaintext: it returns with the database open and disarms the latch),
+  `shutdown()` (the quit's lock; for plaintext a checkpoint + close),
+  `changePassword(current, next, kdf?)`, `beginDocumentWork()` → release (refused with
+  `VaultBusyError` during a password change), `beginLock()` / `isLocking()` / `cancelLock()` (the
+  AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
+  locked or in plaintext), `takeWorkingCopyLost()` (#875, below).
+- **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
+  database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
+  what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
+  next successful unlock, `getState()` reports `lockNotice: 'working_copy_lost'` while the state is
+  `locked`. The lock also writes
+  **`config/working-copy-lost.json`** = `{ "v": 1, "enc": "<base64 of the 12-byte IV of .enc>", "cause": "lock" }`
+  (temp + fsync + rename, best-effort), so a lock at quit, a crash or a session end is reported at
+  the next start: `init()` (encrypted branch, after the verdict, the salvage, the sweep and the
+  rekey recovery) adopts a v1 marker whose `enc` equals the IV of the `.enc` there now, and removes
+  one that names another (a later lock by any build re-encrypted `.enc`: stale). A marker of
+  another `v`, or one that is not JSON, is neither shown nor removed; under a newer-format verdict
+  none is read. The startup salvage raises the same notice when the sweep shreds a newer working
+  file whose header reads but whose structure is `damaged` (no shred of ours leaves a header; a
+  header-less one is a successful lock's shred survivor and raises nothing); its marker says
+  `"cause": "startup"`. A successful unlock consumes it: the flag clears, this build's marker is
+  removed, and `takeWorkingCopyLost() → { cause, lostAt: <marker mtime ISO> | null } | null` returns
+  it once, for the unlock IPC to log ("The changes since the last saved state were lost …") and
+  audit (`workspace_working_copy_lost`, metadata `{ cause, lostAt }`, `cause` = `lock` | `startup` |
+  `recovery`). `recovery` is a loss the unlock itself makes: `unlockEncryptedVault` shreds a
+  `.recovery` newer than `.enc` whose structure is `damaged` (`UnlockedVault.recoveryDiscarded`),
+  recorded with no `lostAt` (the event's own time is when); that copy is shredded only once the
+  unlock has succeeded, so a failed unlock keeps the evidence and the next one records it (review
+  round 2; an older damaged copy is a spent leftover: shredded, nothing recorded). `create()` removes
+  a v1 marker a wiped vault left (with no vault, startup never reads one) and clears the record in
+  memory; the commercial sell gate does not list the file. Older builds ignore the file; the descriptor is untouched.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
@@ -1214,7 +1279,12 @@ head's own weights + KV.
   than PR #289;
   `lockWorkspace` → `WorkspaceStateInfo`, with `lockNotice: 'working_copy_lost'` when the lock
   finished at the last good snapshot because the working file was gone or no longer a database
-  (#855; `getWorkspaceState` never sets it). Registered in `initBackend()`; exposed on preload `api` +
+  (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock (see
+  "Working copy lost" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
+  `WorkspaceActionResult`: `wrong_password` (a wrong or non-string current password), `refused`
+  (a new password under `MIN_PASSWORD_LENGTH` or not a string, the workspace locked or a lock under
+  way, or document work in progress: `VaultBusyError`), `error` (anything else, #845's refusals
+  included: the current password still works). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
   `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`,

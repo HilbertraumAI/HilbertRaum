@@ -222,8 +222,9 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           {brand}
           <h1>{t('gate.unlock.title')}</h1>
           <p className="hint">{t('gate.unlock.hint')}</p>
-          {/* #855: the lock that brought the user here finished at the last good snapshot
-              because the working file was gone or damaged; only that lock's result carries it. */}
+          {/* #855: a lock finished at the last good snapshot because the working file was gone or
+              damaged. The state carries it until the next unlock: on what that lock returned, and
+              (#875) on getWorkspaceState() at the next start too, from the marker it left. */}
           {state.lockNotice === 'working_copy_lost' && (
             <Banner tone="warning">{t('gate.unlock.workingCopyLost')}</Banner>
           )}

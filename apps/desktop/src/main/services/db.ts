@@ -1,5 +1,7 @@
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
+import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { ocrMetaFromJson, parseOcrMeta } from './ingestion/ocr-meta'
 
 // SQLite storage via Node's built-in driver (no native compilation).
@@ -1114,6 +1116,306 @@ export class WorkspaceNewerError extends Error {
 /** instanceof PLUS the name — the production bundle can hold a second copy of this module. */
 export function isWorkspaceNewerError(err: unknown): err is WorkspaceNewerError {
   return err instanceof WorkspaceNewerError || (err instanceof Error && err.name === 'WorkspaceNewerError')
+}
+
+/** SQLite's primary result codes for "this is not a database" and "this database is corrupt". */
+const SQLITE_CORRUPT = 11
+const SQLITE_NOTADB = 26
+
+/**
+ * Whether SQLite itself judged the file damaged (#844): `node:sqlite` errors carry SQLite's
+ * extended result code as `errcode`, whose low byte is the primary code. Noise fails the first
+ * read with NOTADB (#208); a real database with a damaged page passes that read and fails a later
+ * statement with CORRUPT. Anything else (a full drive, an I/O error, a constraint, a JS error in
+ * a backfill) is an open that could not finish, not damage.
+ */
+export function sqliteJudgedDamaged(err: unknown): boolean {
+  const code = sqlitePrimaryCode(err)
+  return code === SQLITE_CORRUPT || code === SQLITE_NOTADB
+}
+
+/** The primary SQLite result code of a `node:sqlite` error (the low byte of its extended `errcode`), else null. */
+function sqlitePrimaryCode(err: unknown): number | null {
+  const code = (err as { errcode?: unknown } | null)?.errcode
+  return typeof code === 'number' ? code & 0xff : null
+}
+
+/**
+ * SQLITE_TOOBIG: a value longer than SQLite allows. Damage only inside {@link probeDatabaseFile}, whose reads (the
+ * schema, one row per table) can meet such a value only where a record's header claims one, which noise does (#876
+ * review round 3: Fable's fuzz). The open's verdict ({@link sqliteJudgedDamaged}: the unlock's #844 split, the lock's
+ * WAL retry) keeps it out: a backfill or a statement there can raise it on a healthy database (a value over this
+ * build's limit, a bug in a step), and calling that damage would condemn the vault.
+ */
+const SQLITE_TOOBIG = 18
+
+/**
+ * What {@link probeDatabaseFile} found at a path (#876): a `database` SQLite can read the structure of; `damaged`, a
+ * file that starts with the SQLite header but whose structure SQLite calls CORRUPT or NOTADB, or whose rows claim a value
+ * longer than SQLite allows (TOOBIG), or an index root that is no b-tree page, a page size no database has, a schema
+ * format no SQLite writes; `not-database`, no SQLite header at all (noise, a shred survivor, an
+ * empty or cut-short file); `gone` (ENOENT); `unknown`, the header read itself failed (a hold, a permission error),
+ * which no caller may read as "lost"; `unchecked` (review round 2), the header reads but the structure could not be read
+ * for a reason that is NOT damage (SQLite could not open the file through its URI, an I/O error, out of memory, a table
+ * it cannot read; or an index-root read that failed after the header read). The probe may only ADD a refusal or a
+ * discard for proven damage: on `unchecked` every caller judges the file by its header, exactly as before the probe
+ * existed, and reports the fallback (the `code`) for the log.
+ */
+export type DatabaseFileVerdict = 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown' | 'unchecked'
+
+/** {@link probeDatabaseFile}'s answer: the verdict, and for `unchecked` what stopped the structural read (SQLite's result
+ *  code and its fixed description, or a Node error code; content-free). */
+export interface DatabaseFileProbe {
+  verdict: DatabaseFileVerdict
+  code?: string
+}
+
+/** A failure's content-free code for the log: SQLite's result code and fixed description, else the Node error code. */
+function failureCode(err: unknown): string {
+  const e = err as { errcode?: unknown; errstr?: unknown; code?: unknown; name?: unknown } | null
+  if (typeof e?.errcode === 'number') return `sqlite ${e.errcode}${typeof e.errstr === 'string' ? `: ${e.errstr}` : ''}`
+  if (typeof e?.code === 'string') return e.code
+  return typeof e?.name === 'string' ? e.name : typeof err
+}
+
+/** A real SQLite database file starts with this 16-byte header. */
+const SQLITE_HEADER = Buffer.from('SQLite format 3\u0000')
+/** The database header's size: page 1's b-tree header starts after it. */
+const DATABASE_HEADER_BYTES = 100
+
+/**
+ * SQLite's URI for the file at `path`, opened with `immutable=1` (#876). SQLite then takes no lock and opens no
+ * `-wal`/`-shm`: it reads the main file alone, which is exactly what the lock encrypts. A plain read-only open of a
+ * WAL-mode file leaves an empty `-wal` and a 32 KiB `-shm` behind, and the init() salvage reads live sidecars as a
+ * mid-session crash and shreds the file they belong to (A1 §2.5, trap 1). Built by hand, not with `pathToFileURL`:
+ * SQLite accepts only an empty (or `localhost`) authority, and `pathToFileURL` puts a Windows UNC path's host there
+ * (`\\server\share\…` → `file://server/share/…`, and the URL standard drops a `localhost` host altogether), so a drive
+ * started from a network share would probe `unknown` and refuse every lock. SQLite's own spelling of a UNC path is an
+ * empty authority and a path that starts with `//`. On Windows the path is also written in the `\\?\` long form
+ * (`\\?\UNC\server\share\…` for a UNC path): without it SQLite cannot open a path of 260 characters or more, where
+ * `node:fs` can (a `.recovery` beside a 251-character working file is 260 characters, and a probe answering
+ * `unknown` there would refuse every unlock; #876 review round 1). So `C:\x` becomes `file:////%3F/C:/x`. Every byte
+ * but unreserved ASCII, `/` and `:` is percent-encoded (`?`, `#` and `%` must be); SQLite decodes them.
+ */
+function immutableUri(path: string): string {
+  let p = resolve(path)
+  if (process.platform === 'win32') {
+    if (!p.startsWith('\\\\?\\')) p = p.startsWith('\\\\') ? `\\\\?\\UNC\\${p.slice(2)}` : `\\\\?\\${p}`
+    p = p.replace(/\\/g, '/') // //?/C:/x, //?/UNC/server/share/x
+  }
+  let encoded = ''
+  for (const byte of Buffer.from(p, 'utf8')) {
+    const c = String.fromCharCode(byte)
+    encoded += /[A-Za-z0-9\-._~/:]/.test(c) ? c : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`
+  }
+  return `file://${encoded}?immutable=1`
+}
+
+/**
+ * Whether the 12 bytes at the start of an index b-tree's root page are a plausible b-tree page header (#876): the
+ * page type (interior 0x02, leaf 0x0A), the cell pointer array inside the page and before the cell content area, a
+ * first freeblock inside that area, at most 60 fragmented bytes, and an interior page's right child inside the file.
+ * Noise passes all of it with odds far below one in a million per page.
+ */
+function indexRootLooksValid(header: Buffer, usableSize: number, pageCount: number): boolean {
+  const type = header[0]
+  if (type !== 0x02 && type !== 0x0a) return false
+  const cellPointersEnd = (type === 0x02 ? 12 : 8) + 2 * header.readUInt16BE(3)
+  const contentStart = header.readUInt16BE(5) || 65_536
+  const firstFreeblock = header.readUInt16BE(1)
+  if (header[7] > 60) return false
+  if (cellPointersEnd > contentStart || contentStart > usableSize) return false
+  if (firstFreeblock !== 0 && (firstFreeblock < contentStart || firstFreeblock > usableSize - 4)) return false
+  if (type === 0x02) {
+    const rightChild = header.readUInt32BE(8)
+    if (rightChild < 1 || rightChild > pageCount) return false
+  }
+  return true
+}
+
+/** A WAL file starts with one of these two magic numbers (big-endian; the low bit names the checksum byte order). */
+const WAL_MAGIC = [0x377f0682, 0x377f0683]
+/** The WAL header's size: a WAL this short or shorter holds no frame. */
+const WAL_HEADER_BYTES = 32
+
+/**
+ * Does the `-wal` beside the database at `dbPath` still hold commits (#876 review round 1)? After the last connection
+ * closes, SQLite has checkpointed the WAL into the main file and deleted it (a TRUNCATE checkpoint leaves it empty). A
+ * `-wal` with a valid header and frames that survives that close means the checkpoint did not finish (a full drive:
+ * commits still land in the WAL's allocated space, the copy back fails where the main file has to grow), so the main
+ * file alone is stale or torn while the session itself is intact. True only for a valid WAL header with frames after it:
+ * a `-wal` that is noise (#208's sweep shreds the sidecars too) holds nothing to replay. The size is read first (a stat
+ * works through an antivirus hold), so a `-wal` of the header or less never counts (an empty one a TRUNCATE checkpoint
+ * left, whose delete failed); one with frames that cannot be opened or read counts as holding commits (refusing is the
+ * safe answer there; the lock retries once through SQLite, see {@link checkpointLeftoverWal}).
+ */
+export function walAwaitsCheckpoint(dbPath: string): boolean {
+  const walPath = `${dbPath}-wal`
+  try {
+    if (statSync(walPath).size <= WAL_HEADER_BYTES) return false
+  } catch (err) {
+    return (err as NodeJS.ErrnoException | null)?.code !== 'ENOENT'
+  }
+  let fd: number
+  try {
+    fd = openSync(walPath, 'r')
+  } catch {
+    return true
+  }
+  try {
+    const head = Buffer.alloc(4)
+    if (readSync(fd, head, 0, head.length, 0) < head.length) return false
+    return WAL_MAGIC.includes(head.readUInt32BE(0))
+  } catch {
+    return true
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** What the lock's one retry of an unfinished checkpoint found ({@link checkpointLeftoverWal}). */
+export type WalCheckpointRetry =
+  | { outcome: 'checkpointed' | 'busy'; log: number; checkpointed: number }
+  | { outcome: 'damaged' | 'failed'; code: string }
+
+/**
+ * The lock's one retry when {@link walAwaitsCheckpoint} says the `-wal` still holds commits (#876 review round 2): open
+ * the database at `dbPath` with a plain connection, so SQLite's own WAL recovery decides what the WAL really holds,
+ * checkpoint it (TRUNCATE) and close (as the last connection, SQLite deletes the WAL). A WAL SQLite ignores (a foreign
+ * salt, a bad header checksum, noise after a valid header) or has already copied in (its delete failed) is gone
+ * afterwards, and the lock goes on. One that still holds commits (a full drive, a second connection reading) stays, and
+ * the caller re-checks. `damaged`: SQLite calls the database CORRUPT or NOTADB, so the WAL cannot be replayed into it
+ * and does not protect it. `busy`: a reader kept the checkpoint from finishing. Writes only what a checkpoint writes; no
+ * migrations, no schema change.
+ */
+export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
+  let db: Db | null = null
+  try {
+    db = new DatabaseSync(dbPath)
+    const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
+    return { outcome: row.busy ? 'busy' : 'checkpointed', log: row.log, checkpointed: row.checkpointed }
+  } catch (err) {
+    return { outcome: sqliteJudgedDamaged(err) ? 'damaged' : 'failed', code: failureCode(err) }
+  } finally {
+    try {
+      db?.close()
+    } catch {
+      /* the checkpoint's answer is the story; a close that fails leaves the WAL, which the re-check then sees */
+    }
+  }
+}
+
+/**
+ * Is the file at `path` a database SQLite can read (#876)? Every place that encrypts a working file over `.enc`, or
+ * decides one is lost, asks this (the lock's guard and its #855 verdict, the init() salvage, the `.recovery`
+ * roll-forward, the v1 rekey stage). A check of the 16-byte header is not enough: a file overwritten in place while
+ * the session's last commits sat in the WAL gets page 1 (the header, the schema root) written back by the lock's own
+ * checkpoint, and is noise past it. In three steps, cheapest first:
+ *
+ * 1. The header, read through `node:fs` FIRST: a 0-byte file is a valid empty database to SQLite itself, and a hold
+ *    or a missing file must answer `unknown`/`gone` before SQLite is involved (the recovery-guard suites fail exactly
+ *    this read).
+ * 2. An `immutable=1` read-only open (see {@link immutableUri}): the whole schema, then the first row of every table
+ *    with a root page (rowid, WITHOUT ROWID and FTS5 shadow tables alike; `NOT INDEXED` so the table's own b-tree is
+ *    read, not an index that covers it; virtual tables have no root page and are skipped), and the last row of every
+ *    rowid table (`ORDER BY rowid DESC`, a reverse scan: the rightmost path, whose pages the latest writes put near
+ *    the end of the file; a WITHOUT ROWID table has no rowid to order by and is read from its first row only; on a
+ *    table with a column of its own named `rowid` the order is that column's, so SQLite sorts the table for it: right,
+ *    only slow, and no app table has such a column).
+ * 3. The root page header of every index, read through `node:fs` ({@link indexRootLooksValid}). Not through SQL: an
+ *    index cannot be read by name (`INDEXED BY` throws "no query solution" on a partial index, and the app has one,
+ *    `idx_documents_pending_dest`, so such a probe would refuse every lock; A1 §2.5, trap 2).
+ *
+ * SQLite's CORRUPT, NOTADB or TOOBIG is `damaged` (as are a page size or a schema format number no SQLite writes, in
+ * step 1); any other SQLite failure, and an index-root read that fails after the header read, is `unchecked` (with the
+ * code): the probe adds a refusal or a discard only for proven damage, so the callers judge an `unchecked` file by its
+ * header, as before. A header read that fails is `unknown`. The schema is read with `trusted_schema` OFF. What it
+ * reads (the schema, each index root, each table's leftmost and, for rowid tables, rightmost path) is a small part of a
+ * large file. It catches an overwrite that starts at the beginning of the file (#208's shred: the review's fuzz missed
+ * none of 1,820) or runs to its end (1 of 200 missed), but mostly misses noise confined to a range or a page in between (57–91 % missed in
+ * that fuzz), as the header check did. Milliseconds on a warm cache (the lock logs it as `vault_lock_done.probeMs`); a few hundred
+ * random reads on a cold one. Writes nothing and leaves no sidecar. It reads the main file ALONE: when commits still
+ * sit in the `-wal` (a checkpoint that did not finish) its verdict is about a stale or torn file, so a caller about to
+ * encrypt or discard asks {@link walAwaitsCheckpoint} first.
+ */
+export function probeDatabaseFile(path: string): DatabaseFileProbe {
+  const answer = (verdict: DatabaseFileVerdict): DatabaseFileProbe => ({ verdict })
+  let pageSize: number
+  let usableSize: number
+  try {
+    const fd = openSync(path, 'r')
+    try {
+      const header = Buffer.alloc(DATABASE_HEADER_BYTES)
+      const got = readSync(fd, header, 0, header.length, 0)
+      if (got < header.length || !header.subarray(0, SQLITE_HEADER.length).equals(SQLITE_HEADER)) return answer('not-database')
+      const stored = header.readUInt16BE(16)
+      pageSize = stored === 1 ? 65_536 : stored
+      if (pageSize < 512 || pageSize > 65_536 || (pageSize & (pageSize - 1)) !== 0) return answer('damaged')
+      // The schema format number (offset 44, a big-endian u32 of which SQLite reads only the low byte): no SQLite
+      // writes one above 4, and SQLite refuses it with a plain SQLITE_ERROR ("unsupported file format"), which step 2
+      // would report as `unchecked` (#876 review round 3).
+      if (header[47] > 4) return answer('damaged')
+      usableSize = pageSize - header[20]
+    } finally {
+      closeSync(fd)
+    }
+  } catch (err) {
+    return answer((err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'gone' : 'unknown')
+  }
+  const indexRoots: number[] = []
+  let db: Db | null = null
+  try {
+    db = new DatabaseSync(immutableUri(path), { readOnly: true })
+    // The schema read here is whatever the file holds, possibly before any unlock (the init() salvage): no function a
+    // view, trigger or generated column in it names runs with the trust SQLite gives a schema by default (ON in
+    // node:sqlite's build). The app's own schema needs no such trust (#876 review round 3).
+    db.exec('PRAGMA trusted_schema = OFF;')
+    const objects = db.prepare('SELECT type, name, rootpage FROM sqlite_schema').all() as Array<{
+      type: string
+      name: string
+      rootpage: number | null
+    }>
+    const withoutRowid = db.prepare("SELECT name FROM pragma_table_list WHERE schema = 'main' AND wr = 1").all() as Array<{
+      name: string
+    }>
+    const noRowid = new Set(withoutRowid.map((t) => t.name))
+    for (const o of objects) {
+      if (typeof o.rootpage !== 'number' || o.rootpage <= 0) continue // views, triggers, virtual tables
+      if (o.type === 'table') {
+        const table = `"${o.name.replace(/"/g, '""')}"`
+        db.prepare(`SELECT * FROM ${table} NOT INDEXED LIMIT 1`).all()
+        if (!noRowid.has(o.name)) db.prepare(`SELECT * FROM ${table} NOT INDEXED ORDER BY rowid DESC LIMIT 1`).all()
+      } else if (o.type === 'index') indexRoots.push(o.rootpage)
+    }
+  } catch (err) {
+    return sqliteJudgedDamaged(err) || sqlitePrimaryCode(err) === SQLITE_TOOBIG
+      ? answer('damaged')
+      : { verdict: 'unchecked', code: failureCode(err) }
+  } finally {
+    try {
+      db?.close()
+    } catch {
+      /* the read is the story; a failed close of a read-only, lock-free handle leaves nothing behind */
+    }
+  }
+  try {
+    const fd = openSync(path, 'r')
+    try {
+      const pageCount = Math.floor(fstatSync(fd).size / pageSize)
+      const header = Buffer.alloc(12)
+      for (const root of indexRoots) {
+        if (root > pageCount) return answer('damaged')
+        const got = readSync(fd, header, 0, header.length, (root - 1) * pageSize)
+        if (got < header.length || !indexRootLooksValid(header, usableSize, pageCount)) return answer('damaged')
+      }
+    } finally {
+      closeSync(fd)
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return answer('gone')
+    return { verdict: 'unchecked', code: failureCode(err) }
+  }
+  return answer('database')
 }
 
 /** Open (or create) the database at `path` and run migrations. */
