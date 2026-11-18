@@ -27,6 +27,7 @@ import {
 } from '@shared/i18n'
 import { MIN_PASSWORD_LENGTH, type AppSettings, type ThemeSetting } from '@shared/types'
 import { CPU_HI_MIN_THREADS } from '@shared/rerank-rules'
+import type { RendererSettingsPatch } from '@shared/settings-writers'
 
 // Settings (guidelines §2): one utility destination with four tabs.
 // "General" = the everyday settings; "Privacy & data" and "Diagnostics (advanced)"
@@ -203,7 +204,7 @@ function GeneralTab(): JSX.Element {
     languageTimerRef.current = setTimeout(() => flushLanguageRef.current(), LANGUAGE_SAVE_DELAY_MS)
   }
 
-  async function patch(p: Partial<AppSettings>): Promise<void> {
+  async function patch(p: RendererSettingsPatch): Promise<void> {
     try {
       const next = await window.api.updateSettings(p)
       if (!mountedRef.current) return

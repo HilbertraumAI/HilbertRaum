@@ -10,6 +10,7 @@ import {
   createLocalApiServer,
   maybeStartLocalApi
 } from '../../src/main/services/local-api/lifecycle'
+import { getOrCreateToken } from '../../src/main/services/local-api/token'
 import type { AppContext } from '../../src/main/services/context'
 import { tempRoot } from '../helpers/db-fixtures'
 import { freePort } from '../helpers/local-api-harness'
@@ -107,6 +108,30 @@ describe('local API lifecycle (P3 wiring)', () => {
     updateSettings(dbOf(ctx), { localApiEnabled: true })
     expect(await startSeam(ctx)).toEqual({ shouldRun: false })
     expect(ctx.localApi!.status().running).toBe(false)
+  })
+
+  // #860 API8: every request row elsewhere brings its own key and settings (the harness); this one goes through the
+  // factory's real wiring: the key from the workspace's token store, the requirement from its settings row, read per
+  // request.
+  it('the real server asks for the workspace’s own access key, and stops asking once the requirement is off', async () => {
+    const ctx = makeCtx()
+    const db = dbOf(ctx)
+    const port = await freePort()
+    updateSettings(db, { localApiEnabled: true, localApiPort: port })
+    const mgr = ctx.runtime as RuntimeManager
+    await mgr.start({ modelId: 'test-model', modelPath: '/m.gguf', contextTokens: 2048 })
+    cleanups.push(() => mgr.stop())
+    await applyLocalApiSettings(ctx)
+    const models = (key?: string): Promise<number> =>
+      fetch(`http://127.0.0.1:${port}/v1/models`, key ? { headers: { authorization: `Bearer ${key}` } } : {}).then(
+        (res) => res.status
+      )
+
+    expect(await models()).toBe(401)
+    expect(await models('hr-' + 'a'.repeat(43))).toBe(401) // the shipped key shape, but not this workspace's key
+    expect(await models(getOrCreateToken(db))).toBe(200)
+    updateSettings(db, { localApiTokenRequired: false })
+    expect(await models()).toBe(200)
   })
 
   it('a live settings change starts and stops the listener (applyLocalApiSettings)', async () => {

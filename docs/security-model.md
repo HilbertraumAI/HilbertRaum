@@ -2568,6 +2568,27 @@ this); and binding picker-sourced analyses to a token would not help the drag-dr
 legitimately raw-bytes. Requiring a token *only* for picker-sourced analyses (so drag-drop alone uses raw
 bytes) remains a possible future tightening; the boundary is recorded here rather than changed.
 
+### Settings writes — the renderer writes only its own keys (#868)
+`settings:update` passed the renderer's whole patch to the settings write gate, which checks what a
+value may hold but not who may write the key. Since #868 (#858 had done it for `workspaceMode` alone)
+the handler keeps only the keys `SETTINGS_WRITERS` (`shared/settings-writers.ts`) marks renderer-owned
+and saves them; every other key is dropped whatever its value. The main-owned keys are the workspace's
+mode, the active model ids (`models:select` / `runtime:use` set them after checking that the model
+exists and has the role), the benchmark, placement and GPU records, and `checksumCache`, where a
+forged entry with a weights file's size and modification time would make that file count as checked
+without being hashed. The patch is **dropped from, never refused**: a refusal would show the user a
+save error for a renderer bug they cannot fix and lose the keys that were fine, and a compromised
+renderer gains nothing either way. The kept patch is a fresh object built from own keys, so
+`__proto__` cannot ride along, and every side effect of the save (the network switch, the reranker
+suspend, the UI language, the Performance push, the local-API lifecycle, the audit sweep) reads it.
+The log line names a dropped key only when it is a settings key and only counts the others, so no
+string the renderer chose reaches the diagnostics log. The table is typed `satisfies Record<keyof
+AppSettings, …>`, so a new settings key fails typecheck until it has an owner, and the preload's
+`updateSettings` takes renderer-owned keys only. The five retrieval tuning keys stay renderer-writable
+(no screen writes them; a maintainer may tune them in the running app) and the write gate bounds them
+(`data-contracts.md` "Settings storage"). None of this was reachable from the UI, where every screen
+sends only its own keys: the gap was a renderer bug's or a compromised renderer's.
+
 ## Re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, item B — design record)
 
 Each sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe) was SHA-256-verified at

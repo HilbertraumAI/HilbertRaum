@@ -3,7 +3,7 @@ import http from 'node:http'
 import net from 'node:net'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import { LocalApiServer, PortInUseError } from '../../src/main/services/local-api/server'
-import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
+import { ChatRequestError, RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { until, within } from '../helpers/hang-budget'
 import { authed, freePort, localApiDeps, localApiHarness, rawHttp, type LocalApiHarness } from '../helpers/local-api-harness'
 
@@ -46,6 +46,18 @@ function armedByServer(stack: string | undefined): boolean {
   return caller !== undefined && /[\\/]services[\\/]local-api[\\/]server\.ts:\d/.test(caller)
 }
 
+/** Whether something accepts a TCP connection on `host:port` (a refusal, or a host with no such loopback, is false). */
+function accepts(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect(port, host)
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => resolve(false))
+  })
+}
+
 describe('LocalApiServer — bind posture (D2/O5)', () => {
   it('listens on 127.0.0.1 AND ::1, never 0.0.0.0; the two listeners share the port', async () => {
     // The bind targets are literals in server.ts: read them off the listen calls themselves.
@@ -67,19 +79,47 @@ describe('LocalApiServer — bind posture (D2/O5)', () => {
     }
   })
 
-  it('a taken port surfaces PortInUseError + lastError (never a crash), and a deliberate stop clears it — "off" is off, not broken', async () => {
-    const blocker = net.createServer()
-    await new Promise<void>((r) => blocker.listen(0, '127.0.0.1', () => r()))
-    onTestFinished(() => new Promise<void>((r) => blocker.close(() => r())))
-    const takenPort = (blocker.address() as net.AddressInfo).port
+  // #860 API1: the server binds 127.0.0.1 first, so a port taken only on ::1 fails AFTER the v4 listener is live. That
+  // listener must go too: Windows resolves `localhost` to ::1 first, so with a v4 listener left open, a client would
+  // send its access key to whatever program holds ::1, and the user would be told the endpoint is off.
+  it.for<[string, string]>([
+    ['127.0.0.1', '::1'],
+    ['::1', '127.0.0.1']
+  ])('a port taken on %s surfaces PortInUseError + lastError (never a crash), leaves no listener on %s, and a deliberate stop clears it — "off" is off, not broken', async ([taken, other], { skip }) => {
+    // The blocker takes an ephemeral port and the row reads it back: no gap in which another process could take it.
+    // That port is free on `taken`, but an unrelated program may hold the same number on `other`; then a listener
+    // found there below could be that program's, not the server's, so the row draws another port (a few tries).
+    const close = (s: net.Server): Promise<void> => new Promise<void>((r) => s.close(() => r()))
+    let blocker: net.Server | null = null
+    let takenPort = 0
+    for (let attempt = 0; attempt < 5 && blocker === null; attempt++) {
+      const candidate = net.createServer()
+      const blocked = await new Promise<string | null>((r) => {
+        candidate.once('error', (err: NodeJS.ErrnoException) => r(err.code ?? String(err)))
+        candidate.listen(0, taken, () => r(null))
+      })
+      skip(blocked !== null && taken === '::1', `this host has no IPv6 loopback (${blocked})`)
+      expect(blocked).toBeNull()
+      const port = (candidate.address() as net.AddressInfo).port
+      if (await accepts(other, port)) {
+        await close(candidate)
+        continue
+      }
+      blocker = candidate
+      takenPort = port
+    }
+    expect(blocker, `every drawn port was already held on ${other}`).not.toBeNull()
+    onTestFinished(() => (blocker ? close(blocker) : undefined))
     const mgr = new RuntimeManager(() => {
       throw new Error('unused')
     })
     const server = new LocalApiServer(
       localApiDeps(mgr, { getSettings: () => ({ localApiPort: takenPort, localApiTokenRequired: true }) })
     )
+    onTestFinished(() => server.stop())
     await expect(server.start()).rejects.toThrow(PortInUseError)
     expect(server.status().running).toBe(false)
+    expect(await accepts(other, takenPort)).toBe(false)
     // The P4 card's error surface: the failed bind is queryable, not just logged.
     expect(server.status().lastError).toBe('port_in_use')
     // Without this the Diagnostics row (and the copy report) would keep telling a user who
@@ -485,8 +525,10 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     expect((await next).status).toBe(200)
   })
 
-  it('pre-emption mid-stream: preempted_by_user error frame, close WITHOUT [DONE]', async () => {
-    const h = await localApiHarness({ runtime: 'manual' })
+  // #860 API3: each abort row runs under both production shapes of an aborted generation. The dev-mode mock runtime
+  // RETURNS (the server's post-loop branch); the real LlamaRuntime REJECTS with an AbortError (the catch branch).
+  it.each([false, true])('pre-emption mid-stream: preempted_by_user error frame, close WITHOUT [DONE] (runtime rejects on abort: %s)', async (rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
     await until(() => h.sources.length === 1, 'the external generation starting')
     h.sources[0].push('partial ')
@@ -510,10 +552,12 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   // (a switch, with Retry-After) or `model_not_loaded` (a stop) — not the 502 runtime_unresponsive a
   // killed sidecar used to produce (measured on master 2026-10-06: 502 / in-band runtime_error).
   it.each([
-    ['model_not_loaded' as const, false],
-    ['model_starting' as const, true]
-  ])('a model change before any bytes → 503 %s for the running request and the one queued behind it (Retry-After: %s)', async (code, retryAfter) => {
-    const h = await localApiHarness({ runtime: 'manual' })
+    ['model_not_loaded' as const, false, false],
+    ['model_not_loaded' as const, false, true],
+    ['model_starting' as const, true, false],
+    ['model_starting' as const, true, true]
+  ])('a model change before any bytes → 503 %s for the running request and the one queued behind it (Retry-After: %s; runtime rejects on abort: %s)', async (code, retryAfter, rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const running = post(h, { messages: [{ role: 'user', content: 'x' }] })
     await until(() => h.sources.length === 1, 'the generation starting') // generating, nothing sent yet
     const queued = post(h, { messages: [{ role: 'user', content: 'y' }] })
@@ -526,8 +570,8 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     }
   })
 
-  it('a model change mid-stream → in-band model_starting frame, closed WITHOUT [DONE] (#600)', async () => {
-    const h = await localApiHarness({ runtime: 'manual' })
+  it.each([false, true])('a model change mid-stream → in-band model_starting frame, closed WITHOUT [DONE] (#600; runtime rejects on abort: %s)', async (rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
     await until(() => h.sources.length === 1, 'the generation starting')
     h.sources[0].push('partial ')
@@ -539,8 +583,8 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     expect(last.error?.code).toBe('model_starting')
   })
 
-  it('server stop mid-stream (the lock teardown): error frame, no [DONE], listener gone', async () => {
-    const h = await localApiHarness({ runtime: 'manual' })
+  it.each([false, true])('server stop mid-stream (the lock teardown): error frame, no [DONE], listener gone (runtime rejects on abort: %s)', async (rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
     await until(() => h.sources.length === 1, 'the generation starting')
     h.sources[0].push('some ')
@@ -738,6 +782,74 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     await resPromise // the headers ride the first delta: the client leaves mid-stream
     controller.abort()
     await until(() => !h.mgr.isGenerating(), 'the generation ending after the client left')
+  })
+})
+
+// #860 API2: the rest of the published error table (docs/local-api.md §6.6) clients branch on. `invalid_json`,
+// `unsupported_field`, the auth/Host/Origin codes, `busy`, the model states, `runtime_unresponsive` and
+// `server_stopped` have their rows above; `internal_error` (the catch-all 500) has none on purpose.
+describe('LocalApiServer — the rest of the §6.6 error table (#860 API2)', () => {
+  const ask = { messages: [{ role: 'user', content: 'x' }] }
+
+  /** A completion whose generation has started and sent nothing yet: the row's runtime event lands before any bytes.
+   *  The answer is boxed: an async function would otherwise adopt the promise and wait for it. */
+  async function startedCompletion(h: LocalApiHarness): Promise<{ answer: Promise<Response> }> {
+    const answer = post(h, ask)
+    await until(() => h.sources.length === 1, 'the generation starting')
+    return { answer }
+  }
+
+  it.each<[string, number, string, string | null, (h: LocalApiHarness) => Promise<Response>]>([
+    ['a body that is not an object', 400, 'invalid_body', null, (h) => post(h, ['x'])],
+    ['an empty messages array', 400, 'invalid_messages', null, (h) => post(h, { messages: [] })],
+    ['a response_format that is not an object', 400, 'invalid_response_format', null, (h) => post(h, { ...ask, response_format: 'json' })],
+    [
+      'the runtime refusing a prompt over its context window, before any bytes',
+      400,
+      'context_overflow',
+      null,
+      async (h) => {
+        const { answer } = await startedCompletion(h)
+        // llama-server's typed refusal, as LlamaRuntime surfaces it (runtime/llama.ts `isExceedContextError`).
+        h.sources[0].fail(new ChatRequestError(400, 'the request exceeds the available context size', 'exceed_context_size_error'))
+        return answer
+      }
+    ],
+    [
+      'the user’s own chat taking the model before any bytes',
+      429,
+      'preempted_by_user',
+      '42',
+      async (h) => {
+        const { answer } = await startedCompletion(h)
+        const inApp = h.mgr.active()!.chatStream([{ role: 'user', content: 'in-app' }]) // D8: the in-app turn wins
+        const inAppPull = inApp.next()
+        const res = await answer
+        await until(() => h.sources.length === 2, 'the in-app turn reaching the model')
+        h.sources[1].end()
+        await inAppPull
+        await inApp.return()
+        return res
+      }
+    ]
+  ])('%s → %s %s (Retry-After: %s)', async (_provocation, status, code, retryAfter, provoke) => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const res = await provoke(h)
+    expect(res.status).toBe(status)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(code)
+    expect(res.headers.get('retry-after')).toBe(retryAfter)
+  })
+
+  it('a runtime failure mid-stream → in-band runtime_error frame, closed WITHOUT [DONE]', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const resPromise = post(h, { ...ask, stream: true })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    h.sources[0].push('partial ')
+    const res = await resPromise // the headers ride the first delta: the stream has started
+    h.sources[0].fail(new Error('llama-server closed the connection'))
+    const payloads = ssePayloads(await res.text())
+    expect(payloads).not.toContain('[DONE]')
+    expect((JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }).error?.code).toBe('runtime_error')
   })
 })
 

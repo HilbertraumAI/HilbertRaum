@@ -102,14 +102,15 @@ import type { Db } from '../services/db'
  * posture's chat-model input from `settings.activeModelId` onto the runtime's COMMITTED model —
  * a proxy that used to be false for the whole `models:use` hash + load window — plus the
  * in-flight/pending chat-start state and the translator's occupancy; see
- * `rag/device-posture.ts`'s own doc comment for the full history). Step 4-7 (Wave 7 ruling (a))
- * added an event-time suspend on every settings-writing channel that touches `activeModelId`
- * (`settings:update`, `models:select`, `models:use`) or `gpuMode`/`gpuAutoDisabled`, so a
- * resident sidecar's NEXT `rerank()` would re-resolve promptly — early release, not the
- * guarantee. `gpuAutoDisabled` also moves through two further seams no suspend covers
- * (`tryGpuAgain`, `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see
- * `channels.json`. What actually keeps the two from disagreeing at every MOMENT is the
- * reranker's own use-time re-check (`reranker/llama.ts`'s `resolveServer`, Wave 8 ruling (b)(Q)):
+ * `rag/device-posture.ts`'s own doc comment for the full history). Step 4-4 added an event-time
+ * suspend on `settings:update` for `gpuMode`/`gpuAutoDisabled`, and step 4-7 (Wave 7 ruling (a))
+ * one for `activeModelId` on `models:select` and `models:use` (and on `settings:update`, until
+ * #868 made `gpuMode` the only posture key a renderer patch can carry), so a resident sidecar's
+ * NEXT `rerank()` would re-resolve promptly — early release, not the guarantee.
+ * `gpuAutoDisabled` moves only through two seams no suspend covers (`tryGpuAgain`,
+ * `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see `channels.json`.
+ * What actually keeps the two from disagreeing at every MOMENT is the reranker's own use-time
+ * re-check (`reranker/llama.ts`'s `resolveServer`, Wave 8 ruling (b)(Q)):
  * a restart that cannot proceed safely lands on Wave 5 ruling (e)(i)'s `cappedCandidates`
  * fallback, never a wide scope on a CPU sidecar and never an ended ask. Absent a reranker
  * (`rerankerAvailable: false`), `rerankScopeFor`

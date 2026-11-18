@@ -47,6 +47,23 @@ const MIN_CONTEXT_TOKENS = 2048
  *  friendly error rather than wedging the app. */
 export const MAX_CONTEXT_TOKENS_OVERRIDE = 131_072
 
+/** Bounds for the retrieval tuning keys (#868). No screen writes them, but they stay renderer-writable
+ *  (a maintainer may tune them in the running app), so the gate bounds them instead of trusting
+ *  `typeof`: a negative count or a huge budget was stored as given, and NaN / ±Infinity (they survive
+ *  the IPC's structured clone) were stored as JSON `null` and read back by retrieval
+ *  (`ragSettingsFrom`) and the reranker's request ceiling (`cpuRequestCeilingFor`). A finite value is
+ *  floored (the counts and the token budget) and clamped into its range; a non-finite one is dropped
+ *  and the previous value kept (the `localApiPort` convention). The ranges are generous: they keep
+ *  every sane tuning and refuse only values no retrieval can use (`ragMinSimilarity` is a cosine
+ *  floor, 0 keeps every non-negative hit; the budget ceiling is the largest context window the app
+ *  launches). `contextTokens` keeps its own floor and gains the same ceiling, below. */
+const RETRIEVAL_TUNING_BOUNDS = {
+  ragTopKInitial: { min: 1, max: 200, integer: true },
+  ragTopKFinal: { min: 1, max: 200, integer: true },
+  ragMaxContextTokens: { min: 256, max: MAX_CONTEXT_TOKENS_OVERRIDE, integer: true },
+  ragMinSimilarity: { min: 0, max: 1, integer: false }
+} as const satisfies Partial<Record<keyof AppSettings, { min: number; max: number; integer: boolean }>>
+
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.
 // The table lives inside the workspace database, so on an encrypted workspace the
@@ -183,10 +200,17 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // safe, but junk must not be stored either).
     // contextTokens floor: clamp UP a too-small value so the doc-task budget can never drop
     // below a single summary's size (else the tree builder cannot reduce — HIGH_BUG). A
-    // non-finite value falls back to the floor rather than persisting NaN.
+    // non-finite value falls back to the floor rather than persisting NaN. #868: and clamp DOWN
+    // to the override's RAM-safety ceiling, which bounds the window this falls back to.
     if (key === 'contextTokens') {
       const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : MIN_CONTEXT_TOKENS
-      toStore = Math.max(MIN_CONTEXT_TOKENS, n)
+      toStore = Math.min(MAX_CONTEXT_TOKENS_OVERRIDE, Math.max(MIN_CONTEXT_TOKENS, n))
+    }
+    // #868: the four retrieval tuning keys (RETRIEVAL_TUNING_BOUNDS above).
+    if (Object.hasOwn(RETRIEVAL_TUNING_BOUNDS, key)) {
+      const bound = RETRIEVAL_TUNING_BOUNDS[key as keyof typeof RETRIEVAL_TUNING_BOUNDS]
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue
+      toStore = Math.min(bound.max, Math.max(bound.min, bound.integer ? Math.floor(value) : value))
     }
     // contextTokensOverride: null = automatic (model default) and stores as-is. A number is
     // clamped into [MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS_OVERRIDE] — the same tree-builder

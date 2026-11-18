@@ -284,6 +284,57 @@ describe('settings write gate — object-valued size cap + array rejection (CODE
   })
 })
 
+// #868: the retrieval tuning keys stay renderer-writable (no screen writes them; a maintainer can tune
+// them in the running app), so the write gate has to bound them. It checked only `typeof`: a negative
+// top-k or a huge budget was stored, and NaN or Infinity, which survive the IPC's structured clone,
+// were stored as `null` (JSON) and read back by retrieval and the reranker's request ceiling.
+// The bounds that ship, pinned by value: a finite number is floored (the counts) and clamped, a
+// non-finite one is dropped and the previous value kept (the `localApiPort` convention).
+describe('settings write gate — retrieval tuning bounds (#868)', () => {
+  type TuningKey = 'ragTopKInitial' | 'ragTopKFinal' | 'ragMaxContextTokens' | 'ragMinSimilarity' | 'contextTokens'
+
+  it.each<[TuningKey, number, number]>([
+    ['ragTopKInitial', 0, 1],
+    ['ragTopKInitial', -5, 1],
+    ['ragTopKInitial', 200, 200],
+    ['ragTopKInitial', 201, 200],
+    ['ragTopKInitial', 12.9, 12],
+    ['ragTopKFinal', 0, 1],
+    ['ragTopKFinal', 200, 200],
+    ['ragTopKFinal', 1e9, 200],
+    ['ragTopKFinal', 6.5, 6],
+    ['ragMaxContextTokens', 255, 256],
+    ['ragMaxContextTokens', -1, 256],
+    ['ragMaxContextTokens', 131_072, 131_072],
+    ['ragMaxContextTokens', 131_073, 131_072],
+    ['ragMaxContextTokens', 2500.7, 2500],
+    ['ragMinSimilarity', -0.5, 0],
+    ['ragMinSimilarity', 1.5, 1],
+    ['ragMinSimilarity', 0.42, 0.42],
+    // The floor (2048) is db-settings.test.ts's row; the ceiling is new.
+    ['contextTokens', 131_072, 131_072],
+    ['contextTokens', 131_073, 131_072]
+  ])('%s: %s is stored as %s', (key, written, stored) => {
+    const db = freshDb()
+    expect(updateSettings(db, { [key]: written })[key]).toBe(stored)
+    expect(rawSetting(db, key)).toBe(stored)
+  })
+
+  it.each<[Exclude<TuningKey, 'contextTokens'>, number, number]>([
+    ['ragTopKInitial', Number.NaN, 20],
+    ['ragTopKInitial', Number.POSITIVE_INFINITY, 20],
+    ['ragTopKFinal', Number.NEGATIVE_INFINITY, 8],
+    ['ragMaxContextTokens', Number.NaN, 4000],
+    ['ragMinSimilarity', Number.NaN, 0.3],
+    ['ragMinSimilarity', Number.POSITIVE_INFINITY, 0.3]
+  ])('%s: %s is dropped and the tuned value kept', (key, written, tuned) => {
+    const db = freshDb()
+    updateSettings(db, { [key]: tuned })
+    expect(updateSettings(db, { [key]: written })[key]).toBe(tuned)
+    expect(rawSetting(db, key)).toBe(tuned)
+  })
+})
+
 describe('ragRerankWideScope (step 4-4, Wave 4 ruling (a) — the cpu-hi rerank profile opt-in)', () => {
   it('defaults OFF and round-trips true and back to false', () => {
     const db = freshDb()

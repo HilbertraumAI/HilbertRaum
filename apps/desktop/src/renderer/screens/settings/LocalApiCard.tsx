@@ -13,6 +13,7 @@ import type {
   PolicyStatus,
   RuntimeStatus
 } from '@shared/types'
+import type { RendererSettingsPatch } from '@shared/settings-writers'
 
 // Settings → Privacy & data → "Local API" (local-api wave P4): the consent surface for the
 // opt-in loopback endpoint. Three rules shape this card:
@@ -111,7 +112,7 @@ export function LocalApiCard({
     }
   }, [effective, refresh, refreshConnection])
 
-  async function patch(p: Partial<AppSettings>): Promise<void> {
+  async function patch(p: RendererSettingsPatch): Promise<void> {
     setNotice(null)
     try {
       const next = await window.api.updateSettings(p)

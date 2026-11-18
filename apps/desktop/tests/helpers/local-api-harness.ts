@@ -50,6 +50,13 @@ export interface LocalApiHarnessOptions {
    */
   runtime?: 'echo' | 'manual' | { answer: string }
   /**
+   * `runtime: 'manual'` only (the harness throws on any other kind). How a generation ends when its signal aborts. `false` (default): the stream returns, as
+   * the mock runtime of dev mode does. `true`: it rejects with an `AbortError`-named plain Error, as the real
+   * `LlamaRuntime` does when the abort lands inside a token read (#860 API3). Both are production shapes, and the server
+   * takes a different branch for each, so an abort row should run under both.
+   */
+  rejectOnAbort?: boolean
+  /**
    * More server deps, spread last (the timeout seams, `estimateBusySeconds`, …). Never one the harness observes:
    * `getToken`, `admitsWork`, `hasActiveDocTask`, `getSettings` or `log` would silently replace `tokenCalls()`/
    * `setToken`, `setAdmitsWork`/`admitChecks()`, `setDocTask`, `tokenRequired` or `logged`, so the harness throws on
@@ -96,6 +103,23 @@ export interface LocalApiHarness {
   stopAll: () => Promise<void>
 }
 
+/**
+ * `stream`, except that where it returns because `signal` aborted, it rejects with an `AbortError`-named plain Error,
+ * the shape `LlamaRuntime`'s aborted read rejects with (`abortReadError`, runtime/llama.ts). The wake/abort logic
+ * stays in `manualSource`; this only changes how an aborted stream ends.
+ */
+async function* rejectingOnAbort(
+  stream: AsyncGenerator<string, void, unknown>,
+  signal: AbortSignal | undefined
+): AsyncGenerator<string, void, unknown> {
+  yield* stream
+  if (signal?.aborted) {
+    const err = new Error('The stream read was aborted.')
+    err.name = 'AbortError'
+    throw err
+  }
+}
+
 /** The deps `localApiHarness` wires to its own observers and switches; `deps` may not carry them. */
 const OBSERVED_DEPS = ['getToken', 'admitsWork', 'hasActiveDocTask', 'getSettings', 'log'] as const
 
@@ -106,6 +130,10 @@ const OBSERVED_DEPS = ['getToken', 'admitsWork', 'hasActiveDocTask', 'getSetting
  */
 export async function localApiHarness(opts: LocalApiHarnessOptions = {}): Promise<LocalApiHarness> {
   const extra = opts.deps ?? {}
+  if (opts.rejectOnAbort && opts.runtime !== 'manual') {
+    // Only the manual source has the two shapes; another kind would test the returning one under a rejecting title.
+    throw new Error("localApiHarness: rejectOnAbort needs runtime: 'manual'")
+  }
   for (const key of OBSERVED_DEPS) {
     if (key in extra) {
       throw new Error(`localApiHarness: deps.${key} would replace the harness's own observer; use its option`)
@@ -126,7 +154,7 @@ export async function localApiHarness(opts: LocalApiHarnessOptions = {}): Promis
         if (kind === 'manual') {
           const src = manualSource()
           sources.push(src)
-          return src.stream(options?.signal)
+          return opts.rejectOnAbort ? rejectingOnAbort(src.stream(options?.signal), options?.signal) : src.stream(options?.signal)
         }
         const tokens = kind === 'echo' ? ['echo: ', messages[messages.length - 1]?.content ?? ''] : [kind.answer]
         return (async function* (): AsyncGenerator<string, void, unknown> {
