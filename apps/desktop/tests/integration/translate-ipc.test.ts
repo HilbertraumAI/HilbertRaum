@@ -27,7 +27,7 @@ import { TRANSLATE_MAX_TEXT_CHARS } from '../../src/shared/types'
 import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls, until } from '../helpers/hang-budget'
+import { until, untilValue } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -104,14 +104,13 @@ function service(deps: {
 }
 
 async function waitForTerminal(event: FakeIpcEvent, jobId: string): Promise<TranslateJob> {
-  for (let i = 0; i < hangPolls(300, 5); i++) {
-    const done = event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trDone(jobId))
-    const err = event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trError(jobId))
-    if (done) return done[1] as TranslateJob
-    if (err) return err[1] as TranslateJob
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error('translate job never reached a terminal state')
+  const call = await untilValue(
+    () =>
+      event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trDone(jobId)) ??
+      event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trError(jobId)),
+    'the translate job reaching a terminal state'
+  )
+  return call[1] as TranslateJob
 }
 
 beforeEach(() => {

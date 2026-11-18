@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { hangBudgetMs, hangPolls, testBudgetMs, until, untilValue, within } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs, until, untilValue, within } from '../helpers/hang-budget'
 
 // #895: the contract of the harness hang detectors that the call sites never exercise (they only take the success path):
 // real time under fake timers and a pinned Date.now, and the documented CI widening.
@@ -44,13 +44,19 @@ describe('untilValue (#895)', () => {
   })
 })
 
+describe('untilValue — a probe that never settles (#895)', () => {
+  it('still fails by name at its deadline', async () => {
+    await expect(
+      within(untilValue(() => new Promise<never>(() => {}), 'the parked probe answering', 20), 'the poll failing by name', 2_000)
+    ).rejects.toThrow('the parked probe answering never happened')
+  })
+})
+
 describe('hang-budget CI widening', () => {
   it('is the identity at a desk and 4x (capped at 45 s, floored at 60 s per test) on CI', () => {
     vi.stubEnv('CI', '')
-    expect([hangBudgetMs(5_000), hangPolls(50, 1), testBudgetMs(10_000)]).toEqual([5_000, 50, 10_000])
+    expect([hangBudgetMs(5_000), testBudgetMs(10_000)]).toEqual([5_000, 10_000])
     vi.stubEnv('CI', 'true')
-    expect([hangBudgetMs(5_000), hangBudgetMs(20_000), hangPolls(50, 1), testBudgetMs(10_000)]).toEqual([
-      20_000, 45_000, 200, 60_000
-    ])
+    expect([hangBudgetMs(5_000), hangBudgetMs(20_000), testBudgetMs(10_000)]).toEqual([20_000, 45_000, 60_000])
   })
 })

@@ -13,7 +13,7 @@ import {
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { hangBudgetMs, testBudgetMs, within } from '../helpers/hang-budget'
+import { testBudgetMs, until, within } from '../helpers/hang-budget'
 
 // #301 P3b — the knowledge-pack SESSION BOUNDARY (findings H4 and M4; checks T07 and T08).
 //
@@ -132,17 +132,13 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
 
 /**
- * Wait up to `ceilingMs` of wall-clock time (`hangBudgetMs`, so wider on CI), resolving as soon as `pred` holds. Never a
- * fixed sleep. A deadline, not a count of timer turns: a 1 ms turn lasts ~1.1 ms on Linux and ~15.6 ms on Windows (#895).
- * Every caller is a positive wait (the negative windows in this file are their own `tick` loops), so a wide bound costs
- * nothing on success: the longest wait measured at an idle desk was ~70 ms, and a loaded Windows leg can stall for seconds.
+ * Resolve `true` as soon as `pred` holds; fail by name (`until`: real time, 5 s, wider on CI) if it never does. Never a
+ * fixed sleep, and a deadline, not a count of timer turns (#895). Every caller is a positive wait (the negative windows
+ * in this file are their own `tick` loops), so a wide bound costs nothing on success: the longest wait measured at an
+ * idle desk was ~70 ms, and a loaded Windows leg can stall for seconds.
  */
-async function waitUntil(pred: () => boolean, ceilingMs = hangBudgetMs(5_000)): Promise<boolean> {
-  const deadline = Date.now() + ceilingMs
-  while (!pred()) {
-    if (Date.now() > deadline) return false
-    await tick()
-  }
+async function waitUntil(pred: () => boolean, what = 'the awaited pack state'): Promise<boolean> {
+  await until(pred, what)
   return true
 }
 

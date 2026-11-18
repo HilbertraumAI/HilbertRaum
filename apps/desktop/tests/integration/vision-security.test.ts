@@ -31,7 +31,7 @@ import { IPC, STREAM } from '../../src/shared/ipc'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls } from '../helpers/hang-budget'
+import { until, untilValue } from '../helpers/hang-budget'
 import { fakeSpawn, sseBody } from '../helpers/fake-sidecar'
 import { pngHeader } from '../helpers/image-fixtures'
 
@@ -81,13 +81,10 @@ const sentinelReq = (): ImageAnalyzeRequest => ({
 })
 
 async function waitForTerminal(jobId: string): Promise<ImageJob> {
-  for (let i = 0; i < hangPolls(200, 5); i++) {
-    const { result } = await invoke(handlers, IPC.imageGetJob, jobId)
-    const job = result as ImageJob
-    if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return job
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error('vision job never reached a terminal state')
+  return untilValue(async () => {
+    const job = (await invoke(handlers, IPC.imageGetJob, jobId)).result as ImageJob
+    return job.state === 'done' || job.state === 'failed' || job.state === 'cancelled' ? job : undefined
+  }, 'the vision job reaching a terminal state')
 }
 
 /**
@@ -96,18 +93,17 @@ async function waitForTerminal(jobId: string): Promise<ImageJob> {
  * Throws BY NAME rather than falling through. The counted loop this replaces did the latter,
  * so when it ran out on a starved CI worker the next assertion failed with an opaque
  * `expected [] to have a length of 1` instead of saying what had not happened (#458, run
- * 34664328086). Its budget is `hangPolls`, so it widens on CI like every other detector.
+ * 34664328086). It is bounded by `until`'s real-time budget, so it widens on CI like every other detector.
  *
  * Every test whose analyze SUCCEEDS awaits this, even when it inspects no rows: otherwise the
  * history write can outlive the file, hit its closed database and log a warning during worker
  * teardown, which vitest 4 turns into a failed run with every test green (vitest-dev/vitest#11153).
  */
 async function waitForDoneEvent(event: { sender: { send: { mock: { calls: unknown[][] } } } }, jobId: string): Promise<void> {
-  for (let i = 0; i < hangPolls(200, 5); i++) {
-    if (event.sender.send.mock.calls.some((c: unknown[]) => c[0] === STREAM.imgDone(jobId))) return
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error(`vision-security: the streamed done event for ${jobId} never arrived`)
+  await until(
+    () => event.sender.send.mock.calls.some((c: unknown[]) => c[0] === STREAM.imgDone(jobId)),
+    `vision-security: the streamed done event for ${jobId}`
+  )
 }
 
 let logCalls: string[]
