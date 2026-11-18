@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -41,6 +41,27 @@ vi.mock('electron', () => ({
   },
   app: { getVersion: () => '0.0.0-test' }
 }))
+// #838: a pass-through `node:fs/promises` (everything hits the real filesystem). Arming `failSyncUnder` with a folder
+// makes the next `open` of a file in that folder return a handle whose fsync fails; the flag is consumed, so a row can
+// check that the export really reached that step. A plain `writeFile` never goes through `open`, so it cannot be failed
+// this way: that is the point of the row that uses it.
+const fsFaults = vi.hoisted(() => ({ failSyncUnder: null as string | null }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const open = (async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args)
+    const dir = fsFaults.failSyncUnder
+    if (dir != null && String(args[0]).startsWith(dir)) {
+      fsFaults.failSyncUnder = null
+      handle.sync = async (): Promise<void> => {
+        throw Object.assign(new Error('EIO: injected fsync failure'), { code: 'EIO' })
+      }
+    }
+    return handle
+  }) as typeof actual.open
+  const mocked = { ...actual, open }
+  return { ...mocked, default: mocked }
+})
 
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
 import {
@@ -222,6 +243,7 @@ beforeEach(() => {
   dialogState.saveResult = { canceled: true }
   dialogState.lastSaveOptions = undefined
   dialogState.gate = undefined
+  fsFaults.failSyncUnder = null
 })
 
 /** Run a tool to a terminal state via the IPC channels (returns the final ids/counts-only state). */
@@ -869,6 +891,23 @@ describe('skills redact_document IPC (S11d)', () => {
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(SECRET_EMAIL)
     expect(JSON.stringify(stateRaw)).not.toContain(out)
+  })
+
+  // #838: the skills text exports (transactions and invoice CSV, invoice JSON/XML, redacted.txt, edited.txt) were
+  // written with a plain `writeFile` straight onto the chosen file, so a failure part-way through destroyed the file the
+  // user chose to replace, while the run said "Nothing was changed." They now take the shared tmp → fsync → rename tail.
+  it('a failed write while replacing an existing redacted.txt keeps the old file, leaves no tmp sibling and fails the run', async () => {
+    const { skillInstallId, conversationId } = makeRedactionHarness(`Contact ${SECRET_EMAIL} today.`)
+    const dir = tempDir()
+    const out = join(dir, 'redacted.txt')
+    writeFileSync(out, 'PREVIOUS COPY')
+    dialogState.saveResult = { canceled: false, filePath: out }
+    fsFaults.failSyncUnder = dir
+    const final = await runTool(skillInstallId, conversationId, 'redact_document', true)
+    expect(fsFaults.failSyncUnder).toBeNull() // consumed: the export opened a file in that folder and reached its fsync
+    expect(final.state).toBe('failed')
+    expect(readFileSync(out, 'utf8')).toBe('PREVIOUS COPY')
+    expect(readdirSync(dir)).toEqual(['redacted.txt'])
   })
 })
 

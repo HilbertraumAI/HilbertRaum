@@ -221,6 +221,10 @@ export async function writePackFileAtomic(
   const tmpPath = packTmpPath(destPath, packId)
   try {
     const fd = await openFileAsync(tmpPath, 'w')
+    // #838: the FIRST error wins. The close used to sit in a `finally`, so a close that failed
+    // after a failed write replaced the write's error — and the pack export shows the raw
+    // message to the user. Boxed, so a thrown `undefined` still counts as a failure.
+    let failure: { err: unknown } | null = null
     try {
       const bytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : content
       const { bytesWritten } = await fd.write(bytes, 0, bytes.length, null)
@@ -230,11 +234,18 @@ export async function writePackFileAtomic(
         throw new Error(`evidence export: short write (${bytesWritten}/${bytes.length} bytes)`)
       }
       await fd.sync()
-    } finally {
-      // Never `.catch(() => {})` here: an unclosed handle would keep the tmp sibling locked
-      // on Windows and defeat the cleanup below. A close failure is a real failure.
-      await fd.close()
+    } catch (err) {
+      failure = { err }
     }
+    // Always closed, never `.catch(() => {})`: an unclosed handle would keep the tmp sibling
+    // locked on Windows and defeat the cleanup below. A close failure after a good write is a
+    // real failure.
+    try {
+      await fd.close()
+    } catch (closeErr) {
+      if (!failure) throw closeErr
+    }
+    if (failure) throw failure.err
     const onDisk = await readFileAsync(tmpPath)
     const hash = sha256Of(onDisk)
     await renameAsync(tmpPath, destPath)

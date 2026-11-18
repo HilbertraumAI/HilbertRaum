@@ -32,9 +32,13 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...mocked, default: mocked }
 })
 // Pass-through `node:fs/promises` (production imports `open`, `rename`, `rm` from it). Arming a flag makes the NEXT `open`
-// return a handle whose fsync fails, or whose write stores one byte short; the flag is consumed, so a row can check that
-// the tail really reached that step.
-const fsFaults = vi.hoisted(() => ({ failSync: false, shortWrite: false }))
+// return a handle whose fsync fails, whose write stores one byte short, whose write fails outright, or whose close fails
+// (after really closing, so the cleanup can still remove the file); each flag is consumed, so a row can check that the
+// tail really reached that step. Every handle's `close` and every `rm` is also recorded in `fsSteps.order`
+// (`close:<path>`, `rm:<path>`), so a row can check that the handle is closed BEFORE its tmp file is removed — an open
+// handle keeps the file locked on Windows, and the delete-on-close semantics of newer Windows would hide a missed close.
+const fsFaults = vi.hoisted(() => ({ failSync: false, shortWrite: false, failWrite: false, failClose: false }))
+const fsSteps = vi.hoisted(() => ({ order: [] as string[] }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const open = (async (...args: Parameters<typeof actual.open>) => {
@@ -43,6 +47,20 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       fsFaults.failSync = false
       handle.sync = async (): Promise<void> => {
         throw Object.assign(new Error('EIO: injected fsync failure'), { code: 'EIO' })
+      }
+    }
+    if (fsFaults.failWrite) {
+      fsFaults.failWrite = false
+      handle.write = (async () => {
+        throw Object.assign(new Error('ENOSPC: injected write failure'), { code: 'ENOSPC' })
+      }) as unknown as typeof handle.write
+    }
+    if (fsFaults.failClose) {
+      fsFaults.failClose = false
+      const close = handle.close.bind(handle)
+      handle.close = async (): Promise<void> => {
+        await close()
+        throw Object.assign(new Error('EIO: injected close failure'), { code: 'EIO' })
       }
     }
     if (fsFaults.shortWrite) {
@@ -56,9 +74,19 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       handle.write = (async (b: Buffer, o: number, l: number, p: number | null) =>
         write(b, o, Math.max(0, l - 1), p)) as unknown as typeof handle.write
     }
+    const path = String(args[0])
+    const closeStep = handle.close.bind(handle) // the failing close above, when armed
+    handle.close = async (): Promise<void> => {
+      fsSteps.order.push(`close:${path}`)
+      return closeStep()
+    }
     return handle
   }) as typeof actual.open
-  const mocked = { ...actual, open }
+  const rm = (async (...args: Parameters<typeof actual.rm>) => {
+    fsSteps.order.push(`rm:${String(args[0])}`)
+    return actual.rm(...args)
+  }) as typeof actual.rm
+  const mocked = { ...actual, open, rm }
   return { ...mocked, default: mocked }
 })
 vi.mock('electron', () => ({
@@ -81,6 +109,8 @@ beforeEach(() => {
   dialogState.result = { canceled: true, filePath: undefined }
   fsFaults.failSync = false
   fsFaults.shortWrite = false
+  fsFaults.failWrite = false
+  fsFaults.failClose = false
 })
 
 function freshDir(): string {
@@ -174,6 +204,40 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
       fsFaults.failSync = true
       await expect(write(OPTIONS, 'payload')).rejects.toThrow(/injected fsync failure/)
       expect(fsFaults.failSync).toBe(false)
+      expect(readdirSync(dir)).toEqual([])
+    }
+  )
+
+  // #838: the handle was closed in a `finally`, so a close that failed after a failed write replaced the write's error:
+  // the user and the log saw the close error, not the cause. The first error wins now — and the handle is still closed,
+  // before the tmp file is removed.
+  it.each(WRITERS)(
+    '%s: a write failure followed by a close failure rejects with the WRITE error, closes before removing, keeps the old file',
+    async (_name, write) => {
+      const dir = freshDir()
+      const dest = join(dir, 'out.txt')
+      writeFileSync(dest, 'OLD CONTENT')
+      dialogState.result = { canceled: false, filePath: dest }
+      fsFaults.failWrite = true
+      fsFaults.failClose = true
+      fsSteps.order.length = 0
+      await expect(write(OPTIONS, 'new content')).rejects.toThrow(/injected write failure/)
+      const tmp = fsSteps.order.find((s) => s.startsWith('rm:'))?.slice('rm:'.length)
+      expect(tmp).toMatch(/\.[0-9a-f]{32}\.tmp$/)
+      expect(fsSteps.order).toEqual([`close:${tmp}`, `rm:${tmp}`])
+      expect(readFileSync(dest, 'utf8')).toBe('OLD CONTENT')
+      expect(readdirSync(dir)).toEqual(['out.txt'])
+    }
+  )
+
+  // A close failure is still a failure when everything before it worked: the bytes may not be on disk.
+  it.each(WRITERS)(
+    '%s: a close failure after a good write still rejects and leaves no tmp sibling',
+    async (_name, write) => {
+      const dir = freshDir()
+      dialogState.result = { canceled: false, filePath: join(dir, 'out.txt') }
+      fsFaults.failClose = true
+      await expect(write(OPTIONS, 'payload')).rejects.toThrow(/injected close failure/)
       expect(readdirSync(dir)).toEqual([])
     }
   )

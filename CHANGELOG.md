@@ -252,6 +252,25 @@ from its first public `1.0.0` release onward.
   reach it. The rail now scrolls on its own, with the mouse wheel or by moving to its buttons
   with the Tab key. It shows no scrollbar, so the labels keep their width, and its buttons keep
   their size (#803).
+- **A change in an evidence review that could not be saved is no longer lost or hidden.** If
+  saving a decision or a note failed, for example because the drive was full, opening another
+  review dropped the change without a word, and opening the same review again showed the old
+  value. Running a bulk action, such as Clear all decisions, hid the error, kept showing
+  "Saving…", and saved the failed change after the bulk action, so a decision came back that
+  the screen showed as cleared. Now the change stays on screen with "Some changes could not be
+  saved yet." and Try again, and Bulk actions waits until it is saved. Opening another review
+  instead says which review has unsaved changes and offers Try again, Discard changes and open,
+  or Back to chat. Locking the workspace still drops a change that could not be saved. The
+  saving status and the Outdated warning are now in place before their text appears, the way
+  screen readers announce text most reliably (#837).
+- **A failed skill export no longer destroys the file you chose to replace.** The transactions
+  and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
+  straight onto the chosen file: a full drive or another failure part-way through left a
+  partial file, and an existing file you were replacing was lost, while the message said "The
+  file could not be saved. Nothing was changed." They are now written to a temporary file
+  first and put in place only when complete, like the other exports, so that message is true.
+  When an export fails while writing, for example an evidence pack, the error shown now names
+  the real cause, such as a full drive, instead of a later error from closing the file (#838).
 
 ## [0.1.65] — 2026-11-11
 

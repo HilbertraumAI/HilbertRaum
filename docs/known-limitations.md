@@ -904,6 +904,23 @@ password recovery — are documented in
     `activity-log.json` action. The event still records the `documentId` + `status` + `chunkCount`,
     so the row is fully resolvable from inside the app; only the human-readable name is withheld
     from the log, matching the chat (conversation title) and collections (project name) channels.
+- **Saving an export REPLACES the chosen file; it never writes into it.** Every export written
+  through the shared atomic writers — the audit-log, diagnostic-log, transcript, result-table,
+  code-block and document-original exports, and since #838 every skills export (the
+  transactions and invoice CSV, invoice JSON and XML, the redacted and edited copies, the DOCX
+  copy) — goes to a temporary sibling file, is flushed to disk, then renamed over the
+  destination, so a failure leaves no partial file and the file being replaced intact. The
+  trade (the evidence pack's AUD-17 posture, see "Evidence review & evidence packs"): (1) the
+  temporary name is the destination plus a ~37-character token, so on a default Windows setup
+  (`LongPathsEnabled` off) a destination within that margin of the 260-character path limit
+  fails cleanly at the temporary file's creation (recovery: a shorter path); (2) the result is
+  a NEW file: a destination that was a hard link is no longer linked (its other names keep the
+  old content), a symbolic link is replaced by a plain file (its target is untouched), and the
+  old file's ACLs and macOS extended attributes do not carry over; (3) the folder must allow
+  creating a file — one that allows overwriting existing files but not creating new ones
+  refuses the export, and on macOS/Linux a read-only destination in a writable folder is
+  replaced; (4) on Windows a destination held open without delete sharing (Excel keeps a CSV
+  open that way) refuses the rename, and the old file stays.
 
 ## Retrieval quality ([`rag-design.md`](rag-design.md) §11)
 
@@ -2713,6 +2730,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the temporary file's creation. The failure is clean and honest — no destination file, no export row, a real
   error — and the trade (an edge-case refusal vs. a silently mislabelled signed-off pack) is
   deliberate. Recovery: save under a shorter path.
+- **A review change whose save failed is still lost when you lock, and the newest changes are
+  lost when you quit.** If saving a decision or a note fails (in practice a full or failing
+  drive), the review keeps the change on screen with "Some changes could not be saved yet." and
+  Try again, Bulk actions waits, and opening another review asks first — Try again, discard the
+  changes, or go back (#837). Locking does not wait for it: Lock now tries the save once more
+  (giving up after about 6 seconds if the drive does not answer), then locks, and an unsaved
+  change is dropped with the rest of the review from memory. That is
+  deliberate — the lock is the user's security action and wins over a failing write, the
+  posture every lock path takes. Quitting the app saves no pending review change at all: a
+  change made less than a second before quitting (the auto-save waits 600 ms), or one whose
+  save failed, is lost.
 
 ## Local API ([`local-api.md`](local-api.md) · [`architecture.md`](architecture.md) "Local API endpoint — design record")
 

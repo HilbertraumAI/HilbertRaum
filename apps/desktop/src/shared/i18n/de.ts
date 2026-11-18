@@ -3606,6 +3606,11 @@ export const de: Record<keyof typeof en, string> = {
   'review.autosave.saved': 'Gespeichert',
   'review.autosave.error': 'Einige Änderungen konnten noch nicht gespeichert werden.',
   'review.autosave.retry': 'Erneut versuchen',
+  'review.unsaved.body':
+    'Einige Änderungen an „{title}“ konnten noch nicht gespeichert werden, deshalb wurde die andere ' +
+    'Prüfung nicht geöffnet. Du kannst es erneut versuchen oder die Änderungen verwerfen und die ' +
+    'andere Prüfung öffnen.',
+  'review.unsaved.discard': 'Änderungen verwerfen und öffnen',
   'review.evidence.title': 'Nachweise',
   'review.evidence.captionRelevance':
     'Die angezeigten Quellen sind die Auszüge, die dem lokalen KI-Modell für diese Antwort vorlagen.',

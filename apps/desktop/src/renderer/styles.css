@@ -2089,7 +2089,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   white-space: nowrap;
 }
 .review-save-state { font-size: var(--text-sm); color: var(--text-muted); margin-left: auto; }
-.review-save-state.error { color: var(--error); }
+.review-save-error { color: var(--error); }
 /* P4 freshness overlay (spec §15.5/§18.4): the Outdated chip joins Draft/Ready (never
    replaces it) and the banner names the drift — border + glyph + text, never color-only. */
 .review-outdated-chip { border-color: var(--warning, var(--border)); }

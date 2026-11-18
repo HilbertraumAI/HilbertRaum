@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react'
+import { memo, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { EvidenceReviewDetail, EvidenceReviewItem } from '@shared/types'
 import { AssistantMarkdown } from '../chat/AssistantMarkdownLazy'
@@ -13,14 +13,17 @@ import {
   bulkMarkHeadingsNotApplicable,
   bulkMarkUndecidedFollowUp,
   deleteReviewSelection,
+  discardAndSwitch,
   editReviewHead,
   editReviewItem,
   flushReviewSession,
   getReviewSessionSnapshot,
+  hasEditsAfterFailedSave,
   linkEvidence,
   markReviewReady,
   openReviewSession,
   reopenReview,
+  retryBlockedSwitch,
   retryReviewSave,
   subscribeReviewSession,
   unlinkEvidence,
@@ -180,15 +183,34 @@ export function ReviewScreen({
   }
 
   if (session.openError || !detail) {
+    const blocked = session.openError?.kind === 'unsaved' ? session.openError : null
     return (
       <div className="screen review-screen">
         <div className="card">
-          <p className="hint">
-            {session.openError?.kind === 'failed'
-              ? localizeServerCopy(t, session.openError.message)
-              : t('review.notFound')}
-          </p>
-          <Button onClick={() => onNavigate('chat')}>‹ {t('review.back')}</Button>
+          {blocked ? (
+            <BlockedSwitchCard
+              title={localizeServerCopy(t, blocked.title)}
+              error={
+                session.saveState === 'error'
+                  ? session.saveError != null
+                    ? localizeServerCopy(t, session.saveError)
+                    : t('review.autosave.error')
+                  : null
+              }
+              resolved={session.saveState === 'saved' && sameTarget(blocked.target, handoff)}
+              onBack={() => onNavigate('chat')}
+              t={t}
+            />
+          ) : (
+            <>
+              <p className="hint">
+                {session.openError?.kind === 'failed'
+                  ? localizeServerCopy(t, session.openError.message)
+                  : t('review.notFound')}
+              </p>
+              <Button onClick={() => onNavigate('chat')}>‹ {t('review.back')}</Button>
+            </>
+          )}
         </div>
       </div>
     )
@@ -283,14 +305,18 @@ export function ReviewScreen({
 
       {/* P4 Outdated banner (spec §15.5/§21.3): names the drift, keeps the §21.3 options
           visible, and carries the acknowledge action. It never blocks reading or editing —
-          only export waits for the acknowledge (§28.6). role=status: it appears async
-          after the freshness check lands. The fact list includes NEWLY-missing sources
+          only export waits for the acknowledge (§28.6). It appears async after the freshness
+          check lands, so the role=status REGION is mounted empty with the review and only the
+          banner inside it appears (#837, design-guidelines §6 M-U1: a region that first appears
+          already holding its text is missed by some screen readers); nothing inside it carries
+          a live role. The fact list includes NEWLY-missing sources
           (fix round FIX-5): a new deletion lapses a prior acknowledge by adding a drift
           fact, so the re-demand must NAME that fact — even though deletion alone never
           opens this banner (it does not flip outdated). Creation-missing sources are not
           drift and stay off the list (their badge lives on the card). */}
+      <div className="review-outdated-region" role="status">
       {freshness?.outdated && (
-        <div className="review-outdated-banner" role="status">
+        <div className="review-outdated-banner">
           <p className="review-outdated-title">
             <span aria-hidden="true">⚠</span> <strong>{t('review.outdated.title')}</strong>
           </p>
@@ -326,6 +352,7 @@ export function ReviewScreen({
           )}
         </div>
       )}
+      </div>
 
       <div className={narrow ? 'review-panes narrow' : 'review-panes'}>
         <div className="review-answer-pane" role="region" aria-label={t('review.answerPane.aria')}>
@@ -360,9 +387,20 @@ export function ReviewScreen({
           {!readOnly && (
           <div className="review-bulk-row">
             {/* Conservative bulk actions ONLY (spec §14.4) — there is deliberately no
-                "mark all supported" anywhere on this screen (tested). */}
+                "mark all supported" anywhere on this screen (tested). Disabled, not hidden, while
+                an edit a failed write left unsaved is waiting (#837 — the store's own refusal
+                condition, `hasEditsAfterFailedSave`); the visible error line with its Try again
+                is the explanation. Other errors leave nothing queued and block nothing.
+                Read from the store's module state, not the snapshot: the snapshot changes
+                whenever this answer can turn from false to true (a failed write sets
+                saveState 'error' as it re-queues), and a stale true while a retry writes only
+                keeps the trigger disabled until that write settles and notifies. Also disabled
+                while a sweep runs (`bulkRunning`, review round 4): one sweep at a time. */}
             <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
+              <DropdownMenu.Trigger
+                asChild
+                disabled={session.bulkRunning || hasEditsAfterFailedSave()}
+              >
                 <Button size="sm">{t('review.bulk.menu')} ▾</Button>
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -509,6 +547,93 @@ export function ReviewScreen({
   )
 }
 
+/**
+ * #837: the card shown in place of a review whose switch was refused — the review the store
+ * still holds has edits a failed write left unsaved. Names it and offers the three ways on:
+ * Try again (the switch goes ahead once they are saved), Discard changes and open (the user's
+ * explicit choice to drop them), Back. design-guidelines §11.12.
+ *
+ * Focus (design-guidelines §6, WCAG 2.4.3; the WorkspaceGate step / PerformanceScreen restore
+ * precedent): the click that led here left with the chat, and the card can replace the review
+ * seconds later, so Try again takes focus when the card appears — the sentence is its
+ * description, so a screen reader reads both — and again when a retry that failed ends (a
+ * browser moves focus off a button while it is disabled). Both actions are disabled while one
+ * runs: a retry can wait out a busy database for seconds; Back stays live.
+ *
+ * Review round 2: the card shows the save error (`error`: the text of the review's own error
+ * line), so a Try again that fails again is visibly and audibly a failure — it is part of Try
+ * again's description. And the card never outlives its cause: when a later save succeeds
+ * while it shows (`resolved`: the old screen's exit flush, a timer; only for the switch this
+ * screen was opened for), nothing is left unsaved, so the card goes ahead with that switch.
+ */
+function BlockedSwitchCard({
+  title,
+  error,
+  resolved,
+  onBack,
+  t
+}: {
+  title: string
+  error: string | null
+  resolved: boolean
+  onBack: () => void
+  t: I18n['t']
+}): JSX.Element {
+  const bodyId = useId()
+  const errorId = useId()
+  const retryRef = useRef<HTMLButtonElement>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!busy) retryRef.current?.focus()
+  }, [busy])
+  useEffect(() => {
+    if (resolved && !busy) void run(retryBlockedSwitch)
+  }, [resolved, busy])
+
+  async function run(action: () => Promise<void>): Promise<void> {
+    setBusy(true)
+    try {
+      await action()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <p id={bodyId}>{t('review.unsaved.body', { title })}</p>
+      {error != null && (
+        <p className="hint error" id={errorId}>
+          {error}
+        </p>
+      )}
+      <div className="actions">
+        <Button
+          ref={retryRef}
+          variant="primary"
+          disabled={busy}
+          aria-describedby={error != null ? `${bodyId} ${errorId}` : bodyId}
+          onClick={() => void run(retryBlockedSwitch)}
+        >
+          {t('review.autosave.retry')}
+        </Button>
+        <Button disabled={busy} onClick={() => void run(discardAndSwitch)}>
+          {t('review.unsaved.discard')}
+        </Button>
+        <Button variant="ghost" onClick={onBack}>
+          ‹ {t('review.back')}
+        </Button>
+      </div>
+    </>
+  )
+}
+
+/** Do two handoff targets name the same review request? */
+function sameTarget(a: ReviewHandoffTarget, b: ReviewHandoffTarget): boolean {
+  if ('reviewId' in a) return 'reviewId' in b && a.reviewId === b.reviewId
+  return 'messageId' in b && a.messageId === b.messageId
+}
+
 /** NEWLY-missing sources in a freshness verdict: state 'missing' minus the ones already
  *  missing at creation (the same rule the summary + pack use — creation-missing is a
  *  recorded fact, not drift). */
@@ -539,7 +664,13 @@ function formatFreshnessDate(iso: string, lang: I18n['lang']): string {
       })
 }
 
-/** Quiet auto-save status (guidelines §6 — labelled text, no bare spinner). */
+/**
+ * Quiet auto-save status (guidelines §6 — labelled text, no bare spinner). Both live regions
+ * are mounted EMPTY with the review and only their text changes (#837, the M-U1 rule): this
+ * line used to be inserted already filled on the first edit, and to swap a status for an
+ * alert on a failure, which some screen readers miss. "Saving… / Saved" is polite; a failure
+ * is an alert carrying its Try again. Nothing inside either region carries a live role.
+ */
 function SaveStateLine({
   state,
   error,
@@ -548,23 +679,44 @@ function SaveStateLine({
   state: 'idle' | 'pending' | 'saved' | 'error'
   error: string | null
   t: I18n['t']
-}): JSX.Element | null {
-  if (state === 'idle') return null
-  if (state === 'error') {
-    return (
-      <span className="review-save-state error" role="alert">
-        {error != null ? localizeServerCopy(t, error) : t('review.autosave.error')}{' '}
-        {/* FIX-2d: retry re-flushes pending edits; with nothing pending (stale handle)
-            it reconciles with the DB instead of no-oping forever. */}
-        <button type="button" className="msg-action" onClick={() => void retryReviewSave()}>
-          {t('review.autosave.retry')}
-        </button>
-      </span>
-    )
+}): JSX.Element {
+  // #837 (review round 6): Try again is disabled while its retry runs, so a double click
+  // cannot start a second retry over the first one's write (the store waits it out as well).
+  const [retrying, setRetrying] = useState(false)
+  async function retry(): Promise<void> {
+    setRetrying(true)
+    try {
+      await retryReviewSave()
+    } finally {
+      setRetrying(false)
+    }
   }
   return (
-    <span className="review-save-state" role="status">
-      {state === 'pending' ? t('review.autosave.saving') : t('review.autosave.saved')}
+    <span className="review-save-state">
+      <span role="status">
+        {state === 'pending'
+          ? t('review.autosave.saving')
+          : state === 'saved'
+            ? t('review.autosave.saved')
+            : ''}
+      </span>
+      <span className="review-save-error" role="alert">
+        {state === 'error' && (
+          <>
+            {error != null ? localizeServerCopy(t, error) : t('review.autosave.error')}{' '}
+            {/* FIX-2d: retry re-flushes pending edits; with nothing pending (stale handle)
+                it reconciles with the DB instead of no-oping forever. */}
+            <button
+              type="button"
+              className="msg-action"
+              disabled={retrying}
+              onClick={() => void retry()}
+            >
+              {t('review.autosave.retry')}
+            </button>
+          </>
+        )}
+      </span>
     </span>
   )
 }

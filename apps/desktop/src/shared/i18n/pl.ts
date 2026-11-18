@@ -3584,6 +3584,10 @@ export const pl: UiCatalog<'pl'> = {
   'review.autosave.saved': 'Zapisano',
   'review.autosave.error': 'Nie udało się jeszcze zapisać części zmian.',
   'review.autosave.retry': 'Spróbuj ponownie',
+  'review.unsaved.body':
+    'Nie udało się jeszcze zapisać części zmian w weryfikacji „{title}”, dlatego nie otwarto ' +
+    'wybranej weryfikacji. Spróbuj ponownie albo odrzuć te zmiany, aby ją otworzyć.',
+  'review.unsaved.discard': 'Odrzuć zmiany i otwórz',
   'review.evidence.title': 'Potwierdzenia',
   'review.evidence.captionRelevance':
     'Pokazane źródła to fragmenty przekazane lokalnemu modelowi AI na potrzeby tej odpowiedzi.',

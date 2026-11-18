@@ -3764,6 +3764,11 @@ export const fr: UiCatalog<'fr'> = {
   'review.autosave.saved': 'Enregistré',
   'review.autosave.error': 'Certaines modifications n’ont pas encore pu être enregistrées.',
   'review.autosave.retry': 'Réessayer',
+  'review.unsaved.body':
+    'Certaines modifications de «\u00A0{title}\u00A0» n’ont pas encore pu être enregistrées\u00A0: ' +
+    'l’autre vérification n’a donc pas été ouverte. Réessayez ou abandonnez ces modifications pour ' +
+    'l’ouvrir.',
+  'review.unsaved.discard': 'Abandonner les modifications et ouvrir',
   'review.evidence.title': 'Justificatifs',
   'review.evidence.captionRelevance':
     'Les sources affichées sont les extraits fournis au modèle d’IA local pour cette réponse.',

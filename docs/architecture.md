@@ -2279,7 +2279,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   "Export original file" — before #90 imported documents had NO export action at all (the reported
   bug); (4) the write is the shared `saveBinaryExport` (`ipc/save-export.ts`), hoisted from
   `registerSkillsIpc`'s module-local DOCX writer and upgraded to the evidence-pack atomic tail
-  (tmp sibling → fsync → rename), which the skills export now gets too; (5) the byte read holds
+  (tmp sibling → fsync → rename), which the skills DOCX export now gets too (the skills TEXT
+  exports — the CSVs, invoice JSON/XML, `redacted.txt`/`edited.txt` — took the same tail through
+  `saveTextExport` only with #838); (5) the byte read holds
   the `beginDocumentWork` lease (released before the dialog opens) so it cannot interleave with a
   password-change re-key of the sidecar; (6) consent + boundary per the evidence-pack §24.3
   posture — renderer ConfirmDialog warning before the native dialog, same copy in the dialog
@@ -12689,7 +12691,10 @@ edit locate→verify→splice.
   never decrypted just to be discovered non-DOCX). The §14 ceiling holds: the **seam** holds the FS/cipher
   reach via the injected closure; the pure tool never does.
 - **Binary write + save dialog.** `saveBinaryFile` (IPC) is the `.docx` sibling of `saveTextFile` (identical
-  save-dialog + privacy posture, `writeFile` with a Buffer, no `'utf8'`). Each document-transform descriptor
+  save-dialog + privacy posture; bytes written verbatim, no BOM). Both go through the shared atomic writers in
+  `ipc/save-export.ts` — `saveBinaryExport` since #90, `saveTextExport` since #838 (tmp sibling → fsync →
+  rename, so a failed write leaves no partial file and the file it was replacing intact; this record first
+  shipped both as a plain `writeFile` onto the chosen path). Each document-transform descriptor
   names its own `docxDialog` (a `.docx` filter) beside its `.txt` `dialog`; the source-format branch lives in
   the **seam** (keyed off the document's stored extension via `readOriginalDocument`): DOCX source → the DOCX
   writer + `redacted.docx`/`edited.docx`; everything else → the unchanged `.txt` path.
@@ -14183,8 +14188,33 @@ reveal + filter that matches the marker AS DISPLAYED incl. DE `Q{n}`); narrow wi
 the pane for a `Modal width='wide'` drawer with focus return. Edits flow through the
 repo's first **debounced auto-save store** (`renderer/lib/reviewSession.ts`: 600 ms,
 drain-before-await, failed patches re-merge under newer values, every post-await write
-`openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()`,
-store purged after). **Ready is read-only** — main refuses item/selection/link mutations
+`openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()` —
+bounded by `REVIEW_LOCK_FLUSH_BOUND_MS` (6 s) so a hung call never holds the lock — and the
+store purged after, which also releases every wait on a call that never answered). **A switch or a sweep never runs over a failed save** (#837): a failed
+write leaves its patch queued with the save-error line + Try again, and every action that
+runs after a flush checks for it — mark ready, export and reopen refuse; a bulk sweep refuses
+(and its Bulk actions trigger is disabled) only while an edit a failed write left unsaved
+is waiting (`hasEditsAfterFailedSave` — other errors queue nothing and block nothing), writes
+what was queued at the click first, and then holds ONE write lane (`sweepLane`): no item flush
+starts while its call is in flight, so at its merge no item write is in flight and the rule is
+exact — an item keeps its local decision iff a decision patch for it is still queued (written
+after the sweep, the last word), otherwise it takes the sweep's value, which is what main
+holds; anything still queued gets the debounce armed, an error is never cleared by the merge,
+and one sweep runs at a time (`bulkRunning`; the trigger is disabled meanwhile); a sweep that
+fails or is refused persisted nothing, so its swept items with nothing queued go back to their
+pre-sweep decisions and its error line stays until the user acts (an edit, Try again), while a
+decision queued during its call is still written after it; a sweep never clears an error that
+was already showing; a failed HEAD edit counts like an item edit; a switch
+flushes until nothing is queued or a write fails (up to four passes, a safety valve, each
+followed by waiting out any flush another caller has in flight) and is refused only then;
+re-opening the SAME review keeps the edit on screen with no re-read; a switch to ANOTHER
+review keeps the open one (detail + patches, no `openToken` bump) and records `openError:
+{ kind: 'unsaved' }`, which the screen renders as a card naming that review, showing the save
+error, with Try again / Discard changes and open / Back (the card goes ahead on its own if a
+later save succeeds while it shows). Only the lock still drops a failed patch —
+`App.lockNow`'s flush is best-effort and the lock wins (`known-limitations.md`). The save line and the Outdated banner announce from
+live regions mounted empty with the review (design-guidelines §6).
+**Ready is read-only** — main refuses item/selection/link mutations
 while ready (head edits stay allowed), the renderer disables the affordances, Reopen
 restores. Reviewer **selections** are carved via a read-only `<textarea>` whose value IS
 `textSnapshot`, so native `selectionStart/End` ARE the persisted UTF-16 offsets (exact by

@@ -2,10 +2,11 @@ import { BrowserWindow, dialog } from 'electron'
 import { open as openFileAsync, rename as renameAsync, rm as rmAsync } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 
-// The shared "export to a user-chosen file" step used by the audit-log, transcript,
-// document and skills exports. The dialog + fs run in MAIN (the renderer has no fs/dialog
-// access). Logging/audit stays at the call sites — what may be recorded differs per
-// export (the audit privacy rule: ids only, never titles/paths derived from content).
+// The shared "export to a user-chosen file" step used by the audit-log, diagnostic-log,
+// transcript, result-table, code-block, document-original and skills (text since #838, DOCX
+// since #90) exports. The dialog + fs run in MAIN (the renderer has no fs/dialog access).
+// Logging/audit stays at the call sites — what may be recorded differs per export (the audit
+// privacy rule: ids only, never titles/paths derived from content).
 
 export interface SaveExportDialogOptions {
   title: string
@@ -67,11 +68,19 @@ export async function saveTextExport(
  * exist. The tmp sibling carries a per-call random token (the AUD-17 posture): two
  * concurrent exports to one destination share no scratch file — the later rename simply
  * replaces the earlier file, as any second save to one path does.
+ *
+ * The handle is ALWAYS closed before the cleanup below (an unclosed handle keeps the tmp
+ * sibling locked on Windows and would defeat the removal), and the FIRST error wins (#838):
+ * a close that fails after a failed write no longer replaces the write's error, which is
+ * the one that names the cause (`ENOSPC`, a short write). A close failure after a good
+ * write still fails the export — the bytes may not have reached the disk.
  */
 async function writeAtomic(destPath: string, bytes: Buffer): Promise<void> {
   const tmpPath = `${destPath}.${randomUUID().replace(/-/g, '')}.tmp`
   try {
     const fd = await openFileAsync(tmpPath, 'w')
+    // Boxed, so a thrown `undefined` still counts as a failure.
+    let failure: { err: unknown } | null = null
     try {
       const { bytesWritten } = await fd.write(bytes, 0, bytes.length, null)
       // POSIX permits short writes; a truncated export must refuse, not half-succeed.
@@ -79,11 +88,15 @@ async function writeAtomic(destPath: string, bytes: Buffer): Promise<void> {
         throw new Error(`export: short write (${bytesWritten}/${bytes.length} bytes)`)
       }
       await fd.sync()
-    } finally {
-      // Never swallow a close failure: an unclosed handle keeps the tmp sibling locked on
-      // Windows and would defeat the cleanup below.
-      await fd.close()
+    } catch (err) {
+      failure = { err }
     }
+    try {
+      await fd.close()
+    } catch (closeErr) {
+      if (!failure) throw closeErr
+    }
+    if (failure) throw failure.err
     await renameAsync(tmpPath, destPath)
   } catch (err) {
     try {

@@ -3577,6 +3577,10 @@ export const es: UiCatalog<'es'> = {
   'review.autosave.saved': 'Guardado',
   'review.autosave.error': 'Algunos cambios todavía no se pudieron guardar.',
   'review.autosave.retry': 'Volver a intentarlo',
+  'review.unsaved.body':
+    'Algunos cambios en «{title}» todavía no se pudieron guardar, así que la otra revisión no se ' +
+    'abrió. Puedes volver a intentarlo o descartar esos cambios y abrirla.',
+  'review.unsaved.discard': 'Descartar cambios y abrir',
   'review.evidence.title': 'Evidencia',
   'review.evidence.captionRelevance':
     'Las fuentes que se muestran son los extractos que se le proporcionaron al modelo de IA ' +
