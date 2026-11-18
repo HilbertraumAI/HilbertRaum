@@ -1179,7 +1179,7 @@ head's own weights + KV.
   'newer', what, found }`, read-only and independent of the password. It runs first in
   `WorkspaceController.init()` (before the failed-lock salvage, the crash sweep and the rekey recovery)
   and in `unlockEncryptedVault` (before the rekey recovery, the `.recovery` roll-forward and the
-  decrypt). A `newer` verdict writes, shreds and renames nothing: the workspace reports `locked`, the
+  decrypt). A `newer` verdict writes, shreds and renames nothing of the vault: the workspace reports `locked`, the
   create flow is refused, and every unlock throws `VaultNewerError`, which the unlock IPC answers with
   `workspace_newer` (+ `main.workspace.newer`, no new key) and a log line naming `what` and `found`.
   While startup's verdict is `newer`, `unlock()` and `create()` re-read the disk first: once the newer
@@ -1194,6 +1194,10 @@ head's own weights + KV.
   | `workspace/hilbertraum.sqlite.enc` and every staged file a recovery would swap in (`.enc.new`, `documents/` and `images/` `*.enc.new`, the journal's entries) | first 8 bytes `HRAUMEN` + an ASCII digit `2`–`9` (`frame`) | any other magic (`HRAUMEN` + `0`, a letter or another byte, i.e. a damaged version byte; `PAIDENC1`, written before 0.1.10; noise): "unrecognised header", the generic unlock error |
   | `workspace/rekey-journal.json` | any numeric `version` above 1 (2, 2.5), whatever the descriptor says (`journal`) | unparseable or another `version`: quarantined as `.corrupt` |
   | `logs/app.log.enc`, `logs/app.1.log.enc` | a `newer` `app.log.enc`: `logging.ts` keeps the session's log in memory and never persists or rotates over it; a `newer` `app.1.log.enc`: only the rotation onto it is skipped (the live `app.log.enc` keeps persisting, up to the 2 MB buffer cap) | a corrupt or foreign-key log: started fresh (overwritten), as before |
+
+  **Not part of the vault:** startup's ZIM transient sweep still runs before the verdict is read
+  (`main/index.ts`): it deletes the knowledge-pack reader's temporary listing files under
+  `workspace/zim-transient/` (a newer build's included), which never hold workspace data.
 
   **Residual:** a `newer` verdict also skips startup's crash sweep, so a newer build's own crash leftovers (its
   plaintext working database and `-wal`/`-shm`, its transient decrypted copies) stay on the drive until a newer
