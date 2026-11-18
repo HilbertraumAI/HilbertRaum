@@ -685,13 +685,13 @@ executables embed an application manifest (UTF-8 code page, long paths; upstream
 SHA-256 values are the official GitHub Releases API `digest` for tag `b12110` AND were confirmed
 against a local download on 2026-11-07; `fetch-runtime` re-verifies each archive before extraction.
 
-| Asset | SHA-256 | Notes |
-|---|---|---|
-| `llama-b12110-bin-win-vulkan-x64.zip` | `9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f` | MIT; Vulkan full build (default win build); ships LLVM `libomp.dll` + `LICENSE-LLVM-OpenMP`; `llama-connect.exe` left out |
-| `llama-b12110-bin-win-cpu-x64.zip` | `98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2` | MIT; pure-CPU safety net; same `libomp.dll` + licence file; `llama-connect.exe` left out |
-| `llama-b12110-bin-macos-arm64.tar.gz` | `4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662` | MIT; Metal (mac arm64); `llama-connect` left out |
-| `llama-b12110-bin-ubuntu-vulkan-x64.tar.gz` | `a5d741940956ec62e8783aee7e5a4c7c761af867d6f027c3277a51e1a3ac59b0` | MIT; Vulkan full build (default linux build); `llama-connect` left out |
-| `llama-b12110-bin-ubuntu-x64.tar.gz` | `368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55` | MIT; pure-CPU safety net; `llama-connect` left out |
+| Asset | SHA-256 | Bytes | Notes |
+|---|---|---|---|
+| `llama-b12110-bin-win-vulkan-x64.zip` | `9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f` | 37,661,146 | MIT; Vulkan full build (default win build); ships LLVM `libomp.dll` + `LICENSE-LLVM-OpenMP`; `llama-connect.exe` left out |
+| `llama-b12110-bin-win-cpu-x64.zip` | `98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2` | 24,708,445 | MIT; pure-CPU safety net; same `libomp.dll` + licence file; `llama-connect.exe` left out |
+| `llama-b12110-bin-macos-arm64.tar.gz` | `4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662` | 16,650,691 | MIT; Metal (mac arm64); `llama-connect` left out |
+| `llama-b12110-bin-ubuntu-vulkan-x64.tar.gz` | `a5d741940956ec62e8783aee7e5a4c7c761af867d6f027c3277a51e1a3ac59b0` | 35,858,360 | MIT; Vulkan full build (default linux build); `llama-connect` left out |
+| `llama-b12110-bin-ubuntu-x64.tar.gz` | `368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55` | 23,051,958 | MIT; pure-CPU safety net; `llama-connect` left out |
 
 **License-review record — llama.cpp b11146 runtime assets (HISTORICAL — the prior pin; status: approved,
 reviewed 2026-09-27, issue #512):** the pin was bumped b9849 → **b11146** (2026-09-23, upstream
@@ -797,8 +797,11 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   silently shipped. Then update
 >   `version` + the per-OS asset `url`s (asset names vary per release) from the
 >   [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), download each
->   asset, promote its real SHA-256 into `sha256`, re-verify the llama.cpp facts the app depends on
->   (`architecture.md` GPU record "llama.cpp facts"), write the licence record above, and
+>   asset, promote its real SHA-256 into `sha256` and its byte count into `size_bytes` (#843: the
+>   GitHub Releases API asset `size`, read in the same call as the `digest`; the in-app engine
+>   dialog shows it, and the licence record's Bytes column repeats it), re-verify the llama.cpp facts
+>   the app depends on (`architecture.md` GPU record "llama.cpp facts"), write the licence record
+>   above, re-check the dialog's licence line below against the new archives, and
 >   regenerate `DRIVE-NOTICES.md` — as a deliberate, reviewed change. A real-hash mismatch makes
 >   `fetch-runtime` delete the archive and fail.
 >   **Re-capture the SSE fixtures** (`apps/desktop/tests/fixtures/chat-sse-*-<pin>.txt`,
@@ -849,12 +852,25 @@ transcriber CLI (`whisper-cli`), fetched with `fetch-runtime --family whisper_cp
 `v1.8.6`). The upstream release ships prebuilt binaries for **Windows only** (R-W1); the
 pinned asset:
 
-| Asset | SHA-256 | Notes |
-|---|---|---|
-| `whisper-bin-x64.zip` (v1.8.6) | `b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822` | MIT; plain-CPU build; binaries nest under `Release/` (the fetch scripts flatten); ships `SDL2.dll` (zlib license — permissive, attribution-free; used only by the demo tools, redistributed as part of the upstream archive) |
+| Asset | SHA-256 | Bytes | Notes |
+|---|---|---|---|
+| `whisper-bin-x64.zip` (v1.8.6) | `b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822` | 4,093,849 | MIT; plain-CPU build; binaries nest under `Release/` (the fetch scripts flatten); ships `SDL2.dll` (zlib license — permissive, attribution-free; used only by the demo tools, redistributed as part of the upstream archive) |
 
 mac/linux whisper builds are compiled from the same MIT source at the pinned tag by the
 drive builder (no new licenses; see `drive-layout.md`).
+
+**What the in-app engine dialog states (#843).** Installing, updating or reinstalling the engine
+from the AI Model screen first shows each archive the job will fetch: its version, size (the pin's
+`size_bytes`; both families' byte counts are the GitHub Releases API asset `size`, read
+2026-11-18 in the same call as the `digest`), full download address and licence. The licence
+line is code-side (`SIDECAR_FAMILY_SPECS` in `assets.ts`, never the drive's yaml) and follows
+the records above: llama.cpp **MIT**, on Windows "MIT, includes Apache-2.0 WITH LLVM-exception
+(libomp.dll)"; whisper.cpp **MIT**, on Windows "MIT, includes zlib (SDL2.dll)". Its link is the
+upstream `LICENSE` at the pinned tag. Both are pre-reviewed, so the dialog asks for no
+acknowledgement (the OCR pattern; the knowledge-pack tools' GPL consent is the exception). A pin
+bump that changes what an archive bundles changes this line in the same PR. **To bump the
+whisper.cpp release:** capture the new asset's `sha256` and `size_bytes` the same way, and
+re-run the checks the yaml header lists.
 
 **License-review record — Whisper model weights (status: approved, reviewed 2026-06-11):**
 OpenAI's Whisper models are **MIT** (github.com/openai/whisper LICENSE). The shipped

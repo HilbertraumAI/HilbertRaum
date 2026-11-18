@@ -14,6 +14,7 @@ import {
   isModelInstalled,
   orderPickerModels
 } from '../lib/modelAvailability'
+import { EngineConfirmDialog } from '../components/EngineConfirmDialog'
 import { computeDownloadGate } from '../lib/downloadGate'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
@@ -28,6 +29,8 @@ import type {
   AppSettings,
   DownloadJob,
   EngineDownloadJob,
+  EngineDownloadPreview,
+  EngineDownloadRequest,
   EngineProblem,
   EngineProblemFamily,
   EngineRecheckResult,
@@ -320,6 +323,14 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   const [engine, setEngine] = useState<EngineStatus | null>(null)
   const [engineJob, setEngineJob] = useState<EngineDownloadJob | null>(rememberedEngineJob)
   const engineJobRef = useRef<EngineDownloadJob | null>(rememberedEngineJob)
+  // #843: the engine install / update / reinstall confirmation — what main's preview says the job
+  // will fetch, the request Confirm sends unchanged, and the clicked surface's title and action label.
+  const [engineConfirm, setEngineConfirm] = useState<{
+    preview: EngineDownloadPreview
+    request: EngineDownloadRequest | undefined
+    titleKey: MessageKey
+    confirmKey: MessageKey
+  } | null>(null)
   // #339 P8-2 (the owner's ruling): the quiet "knowledge-pack tools" row below the two engine
   // banners — the SAME confirm dialog/hook the Knowledge-packs panel notice uses, so the two
   // entry points can never present different facts. Only fetches its own getEngineStatus/
@@ -616,30 +627,34 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     return () => clearInterval(timer)
   }, [engineJob?.jobId, engineJob?.status])
 
-  async function startEngineDownload(): Promise<void> {
+  /**
+   * #843: every engine action asks first. The click reads main's preview of what this exact request
+   * would fetch (`getEnginePlan` — the step selection the job itself runs) and opens the dialog; a
+   * refusal (nothing to update, a repair no longer needed) is shown like a failed start. The request
+   * is kept as it is and sent unchanged on Confirm, so main needs no consent token.
+   */
+  async function askEngine(
+    request: EngineDownloadRequest | undefined,
+    titleKey: MessageKey,
+    confirmKey: MessageKey
+  ): Promise<void> {
     setError(null)
     try {
-      setEngineJob(await window.api.downloadEngine())
+      const preview = await (request === undefined ? window.api.getEnginePlan() : window.api.getEnginePlan(request))
+      if (mountedRef.current) setEngineConfirm({ preview, request, titleKey, confirmKey })
     } catch (e) {
-      setError(friendlyIpcError(e))
+      if (mountedRef.current) setError(friendlyIpcError(e))
     }
   }
 
-  /** #516: "Update" — the same job and gates; main pauses the engine's users only for the swap. */
-  async function startEngineUpdate(families: string[]): Promise<void> {
+  /**
+   * The confirmed engine job: the default install (no argument), #516's "Update" (main pauses the
+   * engine's users only for the swap) or #532's "Install … again" — the same job and gates for each.
+   */
+  async function startEngineJob(request: EngineDownloadRequest | undefined): Promise<void> {
     setError(null)
     try {
-      setEngineJob(await window.api.downloadEngine({ families: families as RuntimeFamily[], update: true }))
-    } catch (e) {
-      setError(friendlyIpcError(e))
-    }
-  }
-
-  /** #532: "Install … again" — the same job and gates as the install, for an engine already here. */
-  async function startEngineRepair(family: EngineProblemFamily): Promise<void> {
-    setError(null)
-    try {
-      setEngineJob(await window.api.downloadEngine({ families: [family], reinstall: true }))
+      setEngineJob(await (request === undefined ? window.api.downloadEngine() : window.api.downloadEngine(request)))
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -1373,7 +1388,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             job: engineJobFor(engineJob, 'install'),
             installKey: opts.installKey,
             primary: true,
-            onStart: () => void startEngineDownload()
+            onStart: () => void askEngine(undefined, opts.titleKey, opts.installKey)
           })}
         </div>
       </Banner>
@@ -1399,7 +1414,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             job: engineJobFor(engineJob, 'update'),
             installKey: 'models.engineUpdate.update',
             primary: false,
-            onStart: () => void startEngineUpdate(families)
+            onStart: () =>
+              void askEngine({ families: families as RuntimeFamily[], update: true }, titleKey, 'models.engineUpdate.update')
           })}
         </div>
       </Banner>
@@ -1416,13 +1432,14 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     if (!(engine?.reinstallableFamilies ?? []).includes(problem.family)) return undefined
     const job = engineJobFor(engineJob, problem.family)
     const voice = problem.family === 'whisper_cpp'
+    const installKey: MessageKey = voice ? 'models.engineProblem.voiceReinstall' : 'models.engineProblem.reinstall'
     return {
       control: engineJobControls({
         job,
-        installKey: voice ? 'models.engineProblem.voiceReinstall' : 'models.engineProblem.reinstall',
+        installKey,
         // The chat banner's reinstall is the fix and leads; the voice hint stays quiet (§11.17 #5).
         primary: !voice,
-        onStart: () => void startEngineRepair(problem.family)
+        onStart: () => void askEngine({ families: [problem.family], reinstall: true }, installKey, installKey)
       }),
       policyAllows: policy?.policy.network.allowModelDownloads === true,
       live: job != null && ENGINE_JOB_LIVE.has(job.status)
@@ -1871,6 +1888,25 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
       <ErrorBanner message={error} t={t} />
 
       {confirming && confirmDialog(confirming)}
+
+      {engineConfirm && (
+        <EngineConfirmDialog
+          open
+          preview={engineConfirm.preview}
+          title={t(engineConfirm.titleKey)}
+          confirmLabel={t(engineConfirm.confirmKey)}
+          downloadsEnabled={downloadsEnabled}
+          blockedReason={downloadsBlockedReason}
+          onConfirm={() => {
+            const { request } = engineConfirm
+            setEngineConfirm(null)
+            void startEngineJob(request)
+          }}
+          onCancel={() => setEngineConfirm(null)}
+          lang={lang}
+          t={t}
+        />
+      )}
 
       {packToolsInstall.family && (
         <KnowledgePackToolsDialog

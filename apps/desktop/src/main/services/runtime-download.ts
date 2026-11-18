@@ -5,7 +5,13 @@ import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { tMain } from './i18n'
-import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
+import type {
+  EngineDownloadJob,
+  EngineDownloadKind,
+  EngineDownloadPreview,
+  EngineDownloadPreviewItem,
+  EngineStatus
+} from '../../shared/types'
 import {
   validateRuntimeSources,
   type RuntimeFamily,
@@ -16,6 +22,7 @@ import {
 } from '../../shared/runtime-sources'
 import {
   downloadToFile,
+  failureReason,
   markerBinaryKey,
   planRuntimeDownload,
   readRuntimeMarker,
@@ -24,11 +31,13 @@ import {
   runtimeInstallCurrent,
   runtimeInstallRelation,
   selectRuntimeBuild,
+  sidecarFamilySpec,
   verifyDownloadedFile,
   writeRuntimeMarker,
   ENGINE_DOWNLOAD_MAX_BYTES,
   SIDECAR_FAMILY_SPECS,
   type FetchFn,
+  type SidecarFamilySpec,
   type RuntimeDownloadPlan
 } from './assets'
 import { sha256File } from './models'
@@ -135,6 +144,9 @@ interface EnginePlan {
    * damaged) install it; the plain install never does.
    */
   cpuNet?: RuntimeDownloadPlan
+  /** #843: the pin's `size_bytes` for the main build and the `cpu/` net (labels, never checked). */
+  sizeBytes: number | null
+  cpuNetSizeBytes: number | null
 }
 
 /**
@@ -177,7 +189,9 @@ function availableEngines(
       plan,
       optional: spec.optional === true,
       license: spec.license ?? null,
-      ...(cpuNet ? { cpuNet } : {})
+      ...(cpuNet ? { cpuNet } : {}),
+      sizeBytes: build.sizeBytes ?? null,
+      cpuNetSizeBytes: cpuNet ? (cpuBuild?.sizeBytes ?? null) : null
     })
   }
   return out
@@ -568,11 +582,188 @@ export type InstalledListener = (
 ) => void
 
 /** One archive a job installs: a family's main build, or (#516 updates, #678 reinstalls) its `cpu/` net. */
-interface InstallStep {
+export interface InstallStep {
   family: EngineFamily
   plan: RuntimeDownloadPlan
   /** The family's main build — the program every spawn site resolves; false for the `cpu/` net. */
   main: boolean
+  /** #843: the pin's `size_bytes` for this archive, or null. The dialog's label; never checked. */
+  sizeBytes: number | null
+}
+
+/** What selects a job's archives: `start()`'s request without the gates and the in-use flags. */
+export type EngineStepRequest = Pick<
+  StartEngineDownloadOptions,
+  'rootPath' | 'manifestsDir' | 'families' | 'reinstall' | 'reinstallBuilds' | 'update' | 'platform' | 'arch'
+>
+
+/** The archives one engine job installs, in install order, and the kind of job (#843). */
+export interface EngineJobSteps {
+  kind: EngineDownloadKind
+  steps: InstallStep[]
+}
+
+/**
+ * THE step selection of an engine job (#843): which archives a request installs, or the friendly
+ * refusal. `EngineDownloadManager.start()` runs it after its gates and its one-job check, and the
+ * confirmation dialog's preview (`engine:plan`, {@link previewEngineDownload}) runs the same
+ * function, so the dialog states what the job plans to fetch when it opens — the `cpu/` net an update
+ * adds, the builds a reinstall replaces — and never offers a selection `start()` would refuse at that
+ * moment (#516's rule for the update notice). It covers the selection only: the gates, the one-job
+ * check, an engine in use (`main.engine.runtimeRunning`, `…transcriptionRunning`,
+ * `…knowledgePackToolsRunning`) and an update's busy check (`main.engine.updateBusy`) stay `start()`'s
+ * and the update handler's, so those refusals can arrive after Confirm, as the same friendly errors
+ * (research C §1.8). Confirm sends the request unchanged and `start()` plans again. P8's in-app updater
+ * extends this function, not a copy of it. Reads the yaml and the install markers only; fetches
+ * nothing.
+ */
+export function planEngineSteps(opts: EngineStepRequest): EngineJobSteps {
+  if (!opts.manifestsDir || !loadSourcesResult(opts.manifestsDir)) {
+    throw new Error(tMain('main.engine.noSources'))
+  }
+  const engines = availableEngines(opts.rootPath, opts.manifestsDir, opts.platform, opts.arch)
+  if (engines.length === 0) {
+    throw new Error(tMain('main.engine.noHostBuild'))
+  }
+  // The DEFAULT selection is every MISSING required family — an OPTIONAL family (kiwix_tools,
+  // #339 P8-1) is never in it: `downloadEngine` takes no arguments, so "install everything
+  // missing" must not be able to reach a copyleft, separately-consented family. Only an
+  // explicit `families: ['kiwix_tools']` installs it (the consent step is P8-2), and
+  // `e.optional` comes from the CODE spec, never from the drive's user-writable yaml.
+  // #516: "missing" means missing. It used to mean "not current by its marker", so on a drive
+  // set up before a pin bump the "Install voice engine" button also re-installed the chat
+  // engine — refused outright while a model ran, and a silent DOWNGRADE of a newer engine. An
+  // engine that is on the drive changes only through an explicit update or reinstall.
+  // An explicit `families` list (the consent step) installs the named families not yet current.
+  // #532: a reinstall keeps the requested families even when current — and only those, so it
+  // needs the explicit list; a family it names that has no build here cannot be repaired here.
+  // #678: it replaces the builds the OS refused — the main build, the `cpu/` net, or both.
+  const wanted = opts.families
+  const reinstall = opts.reinstall === true
+  const update = opts.update === true
+  if ((reinstall || update) && (!wanted || wanted.length === 0)) {
+    throw new Error(tMain('main.engine.badRequest'))
+  }
+  const main = (e: EnginePlan): InstallStep => ({ family: e.family, plan: e.plan, main: true, sizeBytes: e.sizeBytes })
+  const net = (e: EnginePlan, plan: RuntimeDownloadPlan): InstallStep => ({
+    family: e.family,
+    plan,
+    main: false,
+    sizeBytes: e.cpuNetSizeBytes
+  })
+  let steps: InstallStep[]
+  if (update) {
+    steps = []
+    for (const e of engines) {
+      if (e.optional || !wanted?.includes(e.family)) continue
+      // The same presence test `engineStatus().engineVersions` uses, so a notice can never
+      // offer an update this refuses (a fresh copy also restores a missing secondary file).
+      if (existsSync(e.plan.binaryPath) && runtimeInstallRelation(e.plan) === 'older') {
+        steps.push(main(e))
+      }
+      if (e.cpuNet && existsSync(e.cpuNet.binaryPath) && runtimeInstallRelation(e.cpuNet) === 'older') {
+        steps.push(net(e, e.cpuNet))
+      }
+    }
+    if (steps.length === 0) throw new Error(tMain('main.engine.nothingToUpdate'))
+  } else if (reinstall) {
+    const named = engines.filter((e) => wanted?.includes(e.family))
+    if (named.length < (wanted?.length ?? 0)) throw new Error(tMain('main.engine.noHostBuild'))
+    steps = []
+    for (const e of named) {
+      const builds = opts.reinstallBuilds?.[e.family] ?? { main: true, cpuNet: false }
+      if (builds.main) steps.push(main(e))
+      if (builds.cpuNet && e.cpuNet) steps.push(net(e, e.cpuNet))
+    }
+    // Only a refused `cpu/` net that this host's pin has no build for is left (a main folder
+    // provisioned as the processor build over an older Kit's `cpu/`): nothing here can replace it.
+    if (steps.length === 0) throw new Error(tMain('main.engine.noHostBuild'))
+  } else {
+    const selected = engines.filter((e) =>
+      wanted ? wanted.includes(e.family) && !runtimeInstallCurrent(e.plan) : !e.optional && !runtimeBinaryPresent(e.plan)
+    )
+    if (selected.length === 0) {
+      throw new Error(tMain('main.engine.alreadyInstalled'))
+    }
+    steps = selected.map(main)
+  }
+  return { kind: update ? 'update' : reinstall ? 'reinstall' : 'install', steps }
+}
+
+/** A tag the licence link may carry: a plain release name, never a path or a query (the yaml is data). */
+const LICENSE_TAG_RULE = /^[A-Za-z0-9._-]{1,64}$/
+
+/** The upstream `LICENSE` at the pinned tag (#843), or null when the family names no repository. */
+function licenseUrlFor(spec: SidecarFamilySpec | undefined, version: string): string | null {
+  if (!spec?.licenseRepo || !LICENSE_TAG_RULE.test(version)) return null
+  return `${spec.licenseRepo}/blob/${version}/LICENSE`
+}
+
+/**
+ * What a job's steps fetch, as the confirmation dialog states it (#843): per archive its version
+ * (and the one installed there now), backend, full URL, size, and the code-side licence — never
+ * copy and never the drive's yaml for the licence. `totalBytes` is null when any size is unknown.
+ */
+export function engineDownloadPreview(job: EngineJobSteps): EngineDownloadPreview {
+  const items: EngineDownloadPreviewItem[] = job.steps.map((s) => {
+    const spec = sidecarFamilySpec(s.family)
+    return {
+      family: s.family,
+      version: s.plan.version,
+      installed: readRuntimeMarker(s.plan.extractTo)?.version ?? null,
+      backend: s.plan.backend,
+      os: s.plan.os,
+      arch: s.plan.arch,
+      safetyNet: !s.main,
+      url: s.plan.url,
+      sizeBytes: s.sizeBytes,
+      license: spec?.license ?? '',
+      bundledLicense: spec?.bundledLicenses?.[s.plan.os] ?? null,
+      licenseUrl: licenseUrlFor(spec, s.plan.version)
+    }
+  })
+  const known = items.every((i) => i.sizeBytes != null)
+  return {
+    kind: job.kind,
+    items,
+    totalBytes: known ? items.reduce((sum, i) => sum + (i.sizeBytes ?? 0), 0) : null
+  }
+}
+
+/**
+ * The `engine:plan` answer (#843): what `start()` with the same request would fetch, or the same
+ * friendly refusal it would throw. The gates and the one-job check are not part of it: the dialog
+ * shows a closed gate itself (its confirm button is disabled), and `start()` checks both again.
+ */
+export function previewEngineDownload(opts: EngineStepRequest): EngineDownloadPreview {
+  return engineDownloadPreview(planEngineSteps(opts))
+}
+
+/**
+ * Why a job did not finish (#843), for its audit record: a content-free code, never the job's
+ * `error` text. `cancelled` and `networkOff` (#782) are the stops; the rest name where it failed.
+ */
+export type EngineJobEndReason =
+  | 'cancelled'
+  | 'networkOff'
+  | 'checksumMismatch'
+  | 'fileMissing'
+  | 'placeholderHash'
+  | 'download'
+  | 'incomplete'
+  | 'install'
+  | 'notReplaced'
+  // A failure outside every step that records its own reason (an unexpected exception in the run).
+  | 'internal'
+
+/** What a settled job's listeners learn beside its snapshot (#843). */
+export interface EngineJobEnd {
+  /** Null for a `done` job. */
+  reason: EngineJobEndReason | null
+  /** For `download`: the failure's content-free label (`failureReason`: `network`, `http-404`, …). */
+  cause?: string
+  /** What the job set out to fetch (the same preview its dialog showed), or null if unknown. */
+  preview: EngineDownloadPreview | null
 }
 
 /**
@@ -597,17 +788,20 @@ export class EngineDownloadManager {
   /** Issue #323: told the families a finished job installed, AFTER `job.status = 'done'`. */
   private readonly installedListeners = new Set<InstalledListener>()
   /** #516: told every job's final snapshot once its run has settled — done, failed or cancelled. */
-  private readonly settledListeners = new Set<(job: EngineDownloadJob) => void>()
+  private readonly settledListeners = new Set<(job: EngineDownloadJob, end: EngineJobEnd) => void>()
+  /** #843: what each job set out to fetch (its dialog's preview) and why it stopped, for the audit. */
+  private readonly previews = new Map<string, EngineDownloadPreview>()
+  private readonly endReasons = new Map<string, { reason: EngineJobEndReason; cause?: string }>
 
   constructor(private readonly deps: EngineDownloadDeps = {}) {}
 
   /**
    * Subscribe to settled jobs (#516): `cb` receives the job's final snapshot once its run has
    * finished, whatever the outcome — after any `onInstalled` call of a `'done'` job, and after the
-   * manager is free for the next job. A listener fault is logged, never thrown. Returns the
-   * unsubscribe.
+   * manager is free for the next job — and (#843) why it ended and what it set out to fetch. A
+   * listener fault is logged, never thrown. Returns the unsubscribe.
    */
-  onSettled(cb: (job: EngineDownloadJob) => void): () => void {
+  onSettled(cb: (job: EngineDownloadJob, end: EngineJobEnd) => void): () => void {
     this.settledListeners.add(cb)
     return () => {
       this.settledListeners.delete(cb)
@@ -645,68 +839,11 @@ export class EngineDownloadManager {
     if (this.activeJob() !== null) {
       throw new Error(tMain('main.engine.alreadyRunning'))
     }
-    if (!opts.manifestsDir || !loadSourcesResult(opts.manifestsDir)) {
-      throw new Error(tMain('main.engine.noSources'))
-    }
-    const engines = availableEngines(opts.rootPath, opts.manifestsDir, opts.platform, opts.arch)
-    if (engines.length === 0) {
-      throw new Error(tMain('main.engine.noHostBuild'))
-    }
-    // The DEFAULT selection is every MISSING required family — an OPTIONAL family (kiwix_tools,
-    // #339 P8-1) is never in it: `downloadEngine` takes no arguments, so "install everything
-    // missing" must not be able to reach a copyleft, separately-consented family. Only an
-    // explicit `families: ['kiwix_tools']` installs it (the consent step is P8-2), and
-    // `e.optional` comes from the CODE spec, never from the drive's user-writable yaml.
-    // #516: "missing" means missing. It used to mean "not current by its marker", so on a drive
-    // set up before a pin bump the "Install voice engine" button also re-installed the chat
-    // engine — refused outright while a model ran, and a silent DOWNGRADE of a newer engine. An
-    // engine that is on the drive changes only through an explicit update or reinstall.
-    // An explicit `families` list (the consent step) installs the named families not yet current.
-    // #532: a reinstall keeps the requested families even when current — and only those, so it
-    // needs the explicit list; a family it names that has no build here cannot be repaired here.
-    // #678: it replaces the builds the OS refused — the main build, the `cpu/` net, or both.
-    const wanted = opts.families
+    // #843: the ONE step selection; the confirmation dialog's preview runs the same function.
+    const planned = planEngineSteps(opts)
+    const { steps } = planned
     const reinstall = opts.reinstall === true
     const update = opts.update === true
-    if ((reinstall || update) && (!wanted || wanted.length === 0)) {
-      throw new Error(tMain('main.engine.badRequest'))
-    }
-    let steps: InstallStep[]
-    if (update) {
-      steps = []
-      for (const e of engines) {
-        if (e.optional || !wanted?.includes(e.family)) continue
-        // The same presence test `engineStatus().engineVersions` uses, so a notice can never
-        // offer an update this refuses (a fresh copy also restores a missing secondary file).
-        if (existsSync(e.plan.binaryPath) && runtimeInstallRelation(e.plan) === 'older') {
-          steps.push({ family: e.family, plan: e.plan, main: true })
-        }
-        if (e.cpuNet && existsSync(e.cpuNet.binaryPath) && runtimeInstallRelation(e.cpuNet) === 'older') {
-          steps.push({ family: e.family, plan: e.cpuNet, main: false })
-        }
-      }
-      if (steps.length === 0) throw new Error(tMain('main.engine.nothingToUpdate'))
-    } else if (reinstall) {
-      const named = engines.filter((e) => wanted?.includes(e.family))
-      if (named.length < (wanted?.length ?? 0)) throw new Error(tMain('main.engine.noHostBuild'))
-      steps = []
-      for (const e of named) {
-        const builds = opts.reinstallBuilds?.[e.family] ?? { main: true, cpuNet: false }
-        if (builds.main) steps.push({ family: e.family, plan: e.plan, main: true })
-        if (builds.cpuNet && e.cpuNet) steps.push({ family: e.family, plan: e.cpuNet, main: false })
-      }
-      // Only a refused `cpu/` net that this host's pin has no build for is left (a main folder
-      // provisioned as the processor build over an older Kit's `cpu/`): nothing here can replace it.
-      if (steps.length === 0) throw new Error(tMain('main.engine.noHostBuild'))
-    } else {
-      const selected = engines.filter((e) =>
-        wanted ? wanted.includes(e.family) && !runtimeInstallCurrent(e.plan) : !e.optional && !runtimeBinaryPresent(e.plan)
-      )
-      if (selected.length === 0) {
-        throw new Error(tMain('main.engine.alreadyInstalled'))
-      }
-      steps = selected.map((e) => ({ family: e.family, plan: e.plan, main: true }))
-    }
     const families = [...new Set(steps.map((s) => s.family))]
     // CODE-13 + F-32: refuse an install that would pre-clean a dir a LIVE child executes from.
     // A llama_cpp install is refused while the chat runtime OR any other llama-server-backed
@@ -741,6 +878,7 @@ export class EngineDownloadManager {
       update
     }
     this.jobs.set(job.jobId, job)
+    this.previews.set(job.jobId, engineDownloadPreview(planned))
     const controller = new AbortController()
     this.active = { jobId: job.jobId, controller }
     this.runSettled = false // F-33: busy until run() actually settles (not just until cancelled)
@@ -750,20 +888,59 @@ export class EngineDownloadManager {
       ...(reinstall ? { reinstall } : {}),
       ...(update ? { update } : {})
     })
-    void this.run(job, steps, controller, opts.beforeReplace).finally(() => {
-      this.runSettled = true
-      if (this.active?.jobId === job.jobId) this.active = null
-      // #516: every outcome — the IPC layer resumes what an update paused, done or not.
-      const settled = this.get(job.jobId)
-      for (const listener of this.settledListeners) {
-        try {
-          listener(settled)
-        } catch (err) {
-          this.deps.log?.('Engine job settle listener failed', String(err))
+    void this.run(job, steps, controller, opts.beforeReplace)
+      // Every expected failure sets the status and its reason where it happens. An unexpected exception
+      // (one no step catches) used to leave the job reading 'downloading' or 'extracting' for good — a
+      // renderer polling it never saw an end — and an unhandled rejection. It ends the job instead.
+      .catch((err: unknown) => this.failUnexpectedly(job, err))
+      .finally(() => {
+        this.runSettled = true
+        if (this.active?.jobId === job.jobId) this.active = null
+        // #516: every outcome — the IPC layer resumes what an update paused, done or not.
+        const settled = this.get(job.jobId)
+        const end = this.jobEnd(settled)
+        for (const listener of this.settledListeners) {
+          try {
+            listener(settled, end)
+          } catch (err) {
+            this.deps.log?.('Engine job settle listener failed', String(err))
+          }
         }
-      }
-    })
+      })
     return { ...job }
+  }
+
+  /** #843: what job `jobId` set out to fetch (the preview its dialog showed), or null when unknown. */
+  jobPreview(jobId: string): EngineDownloadPreview | null {
+    return this.previews.get(jobId) ?? null
+  }
+
+  /**
+   * An exception no step of `run()` caught: the job fails (its message stays in the local log). It records
+   * no reason, so `jobEnd` reports `internal`, never a guess at the step the job reached.
+   */
+  private failUnexpectedly(job: EngineDownloadJob, err: unknown): void {
+    this.deps.log?.('Engine job failed unexpectedly', { jobId: job.jobId, error: String(err) })
+    if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return
+    job.status = 'failed'
+    job.error = friendlyEngineError(err)
+  }
+
+  /** #843: why a settled job ended, for its audit record — content-free codes only. */
+  private jobEnd(job: EngineDownloadJob): EngineJobEnd {
+    const preview = this.jobPreview(job.jobId)
+    if (job.status === 'done') return { reason: null, preview }
+    const recorded = this.endReasons.get(job.jobId)
+    // A stop records its reason when it lands; a failure where it happens. A job that read
+    // `cancelled` without either (a cancel that won a race with a failure) is a cancel; any other
+    // ending without one is `internal`, never a guess at the step it reached.
+    const fallback: EngineJobEndReason = job.status === 'cancelled' ? 'cancelled' : 'internal'
+    return { reason: recorded?.reason ?? fallback, ...(recorded?.cause ? { cause: recorded.cause } : {}), preview }
+  }
+
+  /** #843: record why `job` stops; the first reason recorded for a job stands. */
+  private noteEnd(job: EngineDownloadJob, reason: EngineJobEndReason, cause?: string): void {
+    if (!this.endReasons.has(job.jobId)) this.endReasons.set(job.jobId, { reason, ...(cause ? { cause } : {}) })
   }
 
   get(jobId: string): EngineDownloadJob {
@@ -798,6 +975,7 @@ export class EngineDownloadManager {
       job.status === 'extracting'
     ) {
       job.status = 'cancelled'
+      this.noteEnd(job, 'cancelled')
       if (this.active?.jobId === jobId) this.active.controller.abort()
       this.deps.log?.('Engine download cancelled', { jobId })
     }
@@ -824,6 +1002,7 @@ export class EngineDownloadManager {
   /** Stop `job` for #782: it reads `cancelled`, and its run discards what it fetched, as a cancel's does. */
   private stopNetworkJob(job: EngineDownloadJob, controller: AbortController): void {
     job.status = 'cancelled'
+    this.noteEnd(job, 'networkOff')
     controller.abort()
     this.deps.log?.('Engine download stopped: internet access was switched off', { jobId: job.jobId })
     this.network.stopped(controller)
@@ -850,6 +1029,8 @@ export class EngineDownloadManager {
     )
     for (const job of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_JOBS))) {
       this.jobs.delete(job.jobId)
+      this.previews.delete(job.jobId)
+      this.endReasons.delete(job.jobId)
     }
   }
 
@@ -903,6 +1084,7 @@ export class EngineDownloadManager {
         } catch (err) {
           job.status = 'failed'
           job.error = err instanceof Error ? err.message : String(err)
+          this.noteEnd(job, 'notReplaced')
           await discard(fetched)
           return
         }
@@ -1018,6 +1200,7 @@ export class EngineDownloadManager {
         await rm(plan.zipDest, { force: true })
         job.status = 'failed'
         job.error = tMain('main.engine.checksumMismatch')
+        this.noteEnd(job, 'checksumMismatch')
         this.deps.log?.('Engine archive checksum mismatch — discarded', {
           expected: plan.sha256,
           actual: verify.actual
@@ -1027,6 +1210,7 @@ export class EngineDownloadManager {
       if (verify.reason === 'missing') {
         job.status = 'failed'
         job.error = tMain('main.engine.fileMissing')
+        this.noteEnd(job, 'fileMissing')
         return 'failed'
       }
       // RT-02: fail CLOSED on a placeholder (non-real) hash. This installs EXECUTABLE code —
@@ -1041,6 +1225,7 @@ export class EngineDownloadManager {
         await rm(plan.zipDest, { force: true })
         job.status = 'failed'
         job.error = tMain('main.engine.unverifiablePlaceholder')
+        this.noteEnd(job, 'placeholderHash')
         this.deps.log?.('Engine archive has a placeholder hash — refusing to install unverified executable', {
           extractTo: plan.extractTo
         })
@@ -1054,6 +1239,7 @@ export class EngineDownloadManager {
       }
       job.status = 'failed'
       job.error = friendlyEngineError(err)
+      this.noteEnd(job, 'download', failureReason(err))
       this.deps.log?.('Engine download failed', { error: String(err) })
       await rm(plan.zipDest, { force: true }).catch(() => undefined)
       return 'failed'
@@ -1105,6 +1291,7 @@ export class EngineDownloadManager {
         await this.clearFailedInstall(plan)
         job.status = 'failed'
         job.error = tMain('main.engine.binaryMissing')
+        this.noteEnd(job, 'incomplete')
         return 'failed'
       }
       if (plan.os !== 'win') {
@@ -1154,6 +1341,7 @@ export class EngineDownloadManager {
       await this.clearFailedInstall(plan)
       job.status = 'failed'
       job.error = friendlyEngineError(err)
+      this.noteEnd(job, 'install')
       this.deps.log?.('Engine download failed', { error: String(err) })
       await rm(plan.zipDest, { force: true }).catch(() => undefined)
       return 'failed'

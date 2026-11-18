@@ -34,6 +34,7 @@ import type {
   DownloadJob,
   DriveStatus,
   EngineDownloadJob,
+  EngineDownloadPreview,
   EngineDownloadRequest,
   EngineRecheckResult,
   EngineStatus,
@@ -202,6 +203,15 @@ const api = {
   // ---- In-app engine (llama.cpp sidecar) downloader ----
   /** Is the real AI engine installed, and (if not) can it be fetched for this host? */
   getEngineStatus: (): Promise<EngineStatus> => ipcRenderer.invoke(IPC.getEngineStatus),
+  /**
+   * #843: what `downloadEngine(request)` would fetch — every archive with its version, size, licence
+   * and full address — for the confirmation dialog. The same payload rule as `downloadEngine`: no
+   * argument = the default install. Read-only.
+   */
+  getEnginePlan: (request?: EngineDownloadRequest): Promise<EngineDownloadPreview> =>
+    request === undefined
+      ? ipcRenderer.invoke(IPC.getEnginePlan)
+      : ipcRenderer.invoke(IPC.getEnginePlan, request),
   /**
    * Start fetching + extracting the host's engine build(s). Gated like model downloads. No
    * argument = the DEFAULT install (every missing required family: llama.cpp, whisper.cpp) —

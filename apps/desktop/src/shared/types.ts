@@ -941,6 +941,47 @@ export interface EngineDownloadRequest {
   update?: boolean
 }
 
+/** Which kind of engine job a request starts (#843): the default install, an update or a reinstall. */
+export type EngineDownloadKind = 'install' | 'update' | 'reinstall'
+
+/** One archive an engine job would fetch, as its confirmation dialog states it (#843). */
+export interface EngineDownloadPreviewItem {
+  /** The family key (`llama_cpp`, `whisper_cpp`, `kiwix_tools`). */
+  family: string
+  /** The version this archive installs (this app's pin). */
+  version: string
+  /** What the install record in the target folder states today, or null when there is none. */
+  installed: string | null
+  backend: string
+  os: string
+  arch: string
+  /** True for the family's pure-CPU safety net (`<os>/cpu/`), false for its main build. */
+  safetyNet: boolean
+  /** The pinned download address, shown in full. */
+  url: string
+  /** The pin's `size_bytes`, or null when the pin carries none. A label only, never checked. */
+  sizeBytes: number | null
+  /** The family's licence (SPDX-style), from the code-side family spec. */
+  license: string
+  /** The other licence this archive carries for a bundled library, or null (#843: Windows only). */
+  bundledLicense: string | null
+  /** The upstream `LICENSE` at the pinned tag, or null. */
+  licenseUrl: string | null
+}
+
+/**
+ * What an engine request would do (#843, `engine:plan`): the archives the job would fetch if it started
+ * now, from the same step selection `EngineDownloadManager.start()` runs (`planEngineSteps`). The job
+ * plans again when it starts (Confirm sends the same request), and main's gates decide then. Read-only:
+ * it fetches nothing.
+ */
+export interface EngineDownloadPreview {
+  kind: EngineDownloadKind
+  items: EngineDownloadPreviewItem[]
+  /** The sum of every item's size, or null when one of them is unknown. */
+  totalBytes: number | null
+}
+
 // ---- In-app OCR language-file install (#410) ----
 //
 // OCR is not an engine family: the language files are plain hash-verified files with their own
@@ -3461,6 +3502,18 @@ export type AuditEventType =
   | 'model_download_started'
   | 'model_download_verified'
   | 'model_download_failed'
+  // #843: installs of the AI engine (llama.cpp, whisper.cpp, the knowledge-pack tools) and of the
+  // OCR language files. Metadata is CODE NAMES, VERSIONS AND COUNTS ONLY — engine: { jobId, kind,
+  // families, versions, sizeBytes, trigger } (`trigger: 'user'` today; an app update will add its
+  // own value, never new types); OCR: { jobId, languages, bytes, trigger }. A failure adds a content-free
+  // `reason` code (`cancelled` and `networkOff` included) and maybe a `cause` label — never the
+  // job's `error` text, which is friendly copy and can name a drive path.
+  | 'engine_install_started'
+  | 'engine_install_finished'
+  | 'engine_install_failed'
+  | 'ocr_install_started'
+  | 'ocr_install_finished'
+  | 'ocr_install_failed'
   | 'document_imported'
   | 'document_reindexed'
   | 'document_deleted'

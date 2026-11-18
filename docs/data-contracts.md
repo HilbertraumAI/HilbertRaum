@@ -1422,6 +1422,27 @@ head's own weights + KV.
   partial test contexts stay valid; every call site is `ctx.audit?.(…)`.
 ✅ **`services/downloads.ts` seam (additive):** `DownloadManagerDeps.audit?` (`DownloadAuditType` =
   the three `model_download_*` values) — injected by `registerDownloadIpc` in production.
+✅ **Engine and OCR installs (#843, additive):** `engine_install_started | engine_install_finished |
+  engine_install_failed`, recorded in `registerEngineIpc` (started once `start()` has resolved, in the
+  `engine:download` handler — a job cannot settle before that, and nothing reorders the two — and the end
+  from `EngineDownloadManager.onSettled`, whose listener now also gets `EngineJobEnd { reason, cause?,
+  preview }`; `kind`, `versions` and `sizeBytes` come from the job's stored plan alone). Neither call can
+  fail the install: an audit fault is logged and dropped. Metadata `{ jobId, kind:
+  'install'|'update'|'reinstall', families, versions: { <family>: <pin> }, sizeBytes: number|null, trigger:
+  'user' }`; a failure adds `reason` (`cancelled`, `networkOff`, `checksumMismatch`, `fileMissing`,
+  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, and `internal` for an exception no
+  step caught — the job then ends `failed` instead of staying in a live status) and, for `download`, `cause`
+  (`failureReason`: `network`, `http-404`, `write`, …). `ocr_install_started | ocr_install_finished |
+  ocr_install_failed` come from `services/ocr-install.ts` through the new `StartOcrInstallOptions.audit?`
+  sink, which `registerEngineIpc` wires to `ctx.audit` adding the same `trigger: 'user'`: `{ jobId,
+  languages, bytes, trigger }`, plus `outcome` when finished and `reason` (the `main.ocr.*` key's last
+  part, `cancelled` or `networkOff`) and `cause` when not; the manager calls the sink inside a guard at both
+  ends, so a failing sink never fails or blocks the install. Never `job.error` (friendly copy that can carry
+  a path). A request refused before a job exists records nothing, as a model download's. A knowledge-pack
+  tools install is an engine job, so it is recorded as `engine_install_*` with `families: ['kiwix_tools']`
+  (the labels say "engine or tools"). An end that is still in the recorder's memory buffer (workspace
+  locked) when the app quits is lost. The names are permanent: an in-app updater records the same types
+  with its own `trigger`.
 ✅ **`services/offlineGuard.ts` seam (additive):** `AssertOfflinePostureDeps.onViolation?(host)`.
 ✅ **IPC** `ipc/registerAuditIpc.ts` — `getAuditEvents`, `exportAuditLog` (JSON, save-dialog
   pattern). **Renderer:** Diagnostics Activity card (on-demand, type filter, paging, export).
@@ -2127,6 +2148,25 @@ whole renderer-visible surface.
   count stays 145) and **no preload change** — `missingOptionalFamilies` and the gate additions ride the existing
   `engineStatus` payload / the existing assert-tool call, unread by the renderer until the
   consent step (#339 P8-2).
+  **#843 additions (the engine's confirmation; one new channel, additive):** `getEnginePlan(request?:
+  EngineDownloadRequest): Promise<EngineDownloadPreview>` (`engine:plan`, read-only; the preload sends
+  NO payload for the argument-less call, as `downloadEngine` does). The handler validates the request
+  exactly like `engine:download` (`parseEngineDownloadRequest`, then `main.engine.nothingToRepair` for a
+  reinstall without a damaged-files verdict) and answers from `previewEngineDownload` = the step
+  selection `EngineDownloadManager.start()` runs (`planEngineSteps`), with the same bundled pins and,
+  for a reinstall, the same refused builds — or throws the selection refusal `start()` would at that
+  moment (`nothingToUpdate`, `alreadyInstalled`, `noHostBuild`, …). The gates, the one-job check, the
+  engine-in-use refusals (`main.engine.runtimeRunning` and its twins) and the update's
+  `main.engine.updateBusy` are not part of it; `start()` and the update handler check them after
+  Confirm (and plan again). `EngineDownloadPreview = { kind:
+  'install'|'update'|'reinstall', items: EngineDownloadPreviewItem[], totalBytes: number|null }`, with
+  `EngineDownloadPreviewItem = { family, version, installed: string|null, backend, os, arch, safetyNet,
+  url, sizeBytes: number|null, license, bundledLicense: string|null, licenseUrl: string|null }`.
+  `license`, `bundledLicense` (per OS) and `licenseUrl` (`<repo>/blob/<version>/LICENSE`, only for a
+  plain tag) come from the code-side `SidecarFamilySpec` (new optional `bundledLicenses`,
+  `licenseRepo`; `license` is now set for the two required families too), `sizeBytes` from the pin's
+  `size_bytes`, which every committed llama.cpp and whisper.cpp build now carries. The renderer sends
+  Confirm's request unchanged to `engine:download`: main keeps no consent token.
 - **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
   (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
   all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:

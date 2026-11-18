@@ -237,8 +237,21 @@ export interface OcrInstallSourceOptions {
   bundledManifestsDir: string | null
 }
 
+/** The OCR install's audit events (#843). */
+export type OcrInstallAuditType = 'ocr_install_started' | 'ocr_install_finished' | 'ocr_install_failed'
+
+/**
+ * Where a job's audit events go (#843): the IPC layer passes the app recorder (`ctx.audit`) and adds
+ * the job's `trigger`. The metadata is language codes, byte counts and content-free codes only
+ * (`{ jobId, languages, bytes }`, plus `outcome` when finished, `reason`/`cause` when not) — never the
+ * job's `error` text.
+ */
+export type OcrInstallAudit = (type: OcrInstallAuditType, message: string, metadata: Record<string, unknown>) => void
+
 export interface StartOcrInstallOptions extends OcrInstallSourceOptions {
   gates: DownloadGates
+  /** #843: records the job's start and its end (finished, or failed with a reason code). */
+  audit?: OcrInstallAudit
   /**
    * Bring the engine slot up to date once every file is in place (`refreshOcrSlot`). Its outcome
    * is the job's `outcome`. Expected never to reject; a rejection reads as `'startFailed'`.
@@ -279,6 +292,8 @@ export class OcrInstallManager {
   private starting = false
   /** False while a `run()` is still settling — a cancelled job's activation may still be running. */
   private runSettled = true
+  /** #843: why each job stopped (the first reason recorded stands), for its audit record. */
+  private readonly endReasons = new Map<string, { reason: string; cause?: string }>()
   private readonly pins: readonly OcrPin[]
 
   constructor(private readonly deps: OcrInstallDeps = {}) {
@@ -366,19 +381,61 @@ export class OcrInstallManager {
       const controller = new AbortController()
       this.active = { jobId: job.jobId, controller }
       this.runSettled = false
+      const languages = plan.map((p) => p.pin.lang)
       this.deps.log?.('OCR install started', {
         jobId: job.jobId,
-        languages: plan.map((p) => p.pin.lang),
+        languages,
         bytes: job.totalBytes
       })
+      const auditMeta = { jobId: job.jobId, languages, bytes: job.totalBytes }
+      // Never throws, like the end's: a failing sink here used to reject start() with the job already
+      // active, so every later install read "already running" until the app restarted.
+      try {
+        opts.audit?.('ocr_install_started', `OCR install started: ${languages.join(', ')}`, { ...auditMeta })
+      } catch (err) {
+        this.deps.log?.('OCR install audit failed', { error: String(err) })
+      }
       void this.run(job, plan, opts, controller).finally(() => {
         this.runSettled = true
         if (this.active?.jobId === job.jobId) this.active = null
+        this.auditEnd(job, opts.audit, auditMeta, languages)
       })
       return { ...job }
     } finally {
       this.starting = false
     }
+  }
+
+  /** #843: the job's one terminal audit event, once its run has settled. Never throws. */
+  private auditEnd(
+    job: OcrInstallJob,
+    audit: OcrInstallAudit | undefined,
+    meta: Record<string, unknown>,
+    languages: readonly string[]
+  ): void {
+    if (!audit) return
+    const what = languages.join(', ')
+    try {
+      if (job.status === 'done') {
+        audit('ocr_install_finished', `OCR install finished: ${what}`, { ...meta, outcome: job.outcome })
+        return
+      }
+      const recorded = this.endReasons.get(job.jobId)
+      const reason = recorded?.reason ?? (job.status === 'cancelled' ? 'cancelled' : 'failed')
+      audit('ocr_install_failed', `OCR install failed: ${what}`, {
+        ...meta,
+        reason,
+        ...(recorded?.cause ? { cause: recorded.cause } : {})
+      })
+    } catch (err) {
+      this.deps.log?.('OCR install audit failed', { error: String(err) })
+    }
+  }
+
+  /** #843: record why `job` stops; the first reason recorded for a job stands. */
+  private noteEnd(job: OcrInstallJob, reason: string, cause?: unknown): void {
+    if (this.endReasons.has(job.jobId)) return
+    this.endReasons.set(job.jobId, { reason, ...(typeof cause === 'string' ? { cause } : {}) })
   }
 
   get(jobId: string): OcrInstallJob {
@@ -405,6 +462,7 @@ export class OcrInstallManager {
     if (!job) return this.get(jobId)
     if (LIVE.has(job.status)) {
       job.status = 'cancelled'
+      this.noteEnd(job, 'cancelled')
       if (this.active?.jobId === jobId) this.active.controller.abort()
       this.deps.log?.('OCR install cancelled', { jobId })
     }
@@ -431,6 +489,7 @@ export class OcrInstallManager {
   /** Stop `job` for #782: it reads `cancelled`, and its run cleans up as a cancel's does. */
   private stopNetworkJob(job: OcrInstallJob, controller: AbortController): void {
     job.status = 'cancelled'
+    this.noteEnd(job, 'networkOff')
     controller.abort()
     this.deps.log?.('OCR install stopped: internet access was switched off', { jobId: job.jobId })
     this.network.stopped(controller)
@@ -448,6 +507,7 @@ export class OcrInstallManager {
     const terminal = [...this.jobs.values()].filter((j) => !LIVE.has(j.status))
     for (const job of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_JOBS))) {
       this.jobs.delete(job.jobId)
+      this.endReasons.delete(job.jobId)
     }
   }
 
@@ -456,6 +516,9 @@ export class OcrInstallManager {
     if (job.status === 'cancelled') return
     job.status = 'failed'
     job.error = tMain(key)
+    // #843: the key's last part is the audit's reason code (`downloadFailed`, `checksumMismatch`, …),
+    // the log's own `reason` its cause (`http-404`, `mismatch`, `rename`, …): both content-free.
+    this.noteEnd(job, key.replace(/^main\.(ocr|download)\./, ''), meta.reason)
     this.deps.log?.('OCR install failed', { jobId: job.jobId, ...meta })
   }
 

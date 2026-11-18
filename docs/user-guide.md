@@ -238,6 +238,14 @@ a link to the license and a tick-box you must check first. The **TranslateGemma*
 model is one of these: it is downloaded on demand (never bundled), used automatically for
 translation once installed, and — like the vision model — needs no starting or selecting.
 
+The **AI engine** and the voice engine download the same way. **Install AI engine**, **Install voice
+engine**, **Update** and **Install the AI engine again** each open a confirmation first. It lists
+every file that action is about to fetch (an update or a repair can include the engine's
+processor-only fallback too), each with its version, size, license and full download address, and
+nothing is downloaded until you confirm. Each engine and OCR-file install is recorded in the Activity panel
+(§10): what was installed, when, and whether it finished, failed or was stopped (the knowledge-pack
+tools' install too, under "Engine or tools").
+
 ### Speed: graphics-card acceleration (automatic)
 
 If your computer has a graphics card (NVIDIA, AMD, or Intel), the app uses it automatically to
@@ -264,13 +272,14 @@ words per second" and "faster than you can read". There is nothing to install or
   then choose **Check again** (or restart the app). When the engine's own files on the drive are
   missing or damaged, the banner also offers **Install the AI engine again**, which downloads a
   fresh, checksum-verified copy (the voice engine's note offers the same). Like every download, it
-  needs **Allow internet access…** in Settings and a drive that permits downloads. Home, the chat
-  and Diagnostics point to the same banner. Step by step:
+  asks first and needs **Allow internet access…** in Settings and a drive that permits downloads.
+  Home, the chat and Diagnostics point to the same banner. Step by step:
   [`troubleshooting.md`](troubleshooting.md), "The AI engine can't run on this computer".
 - When the drive carries an older AI engine (or voice engine) than this app was built for, the
   **AI Model** screen shows a quiet notice, "An update for the AI engine is available". **Update**
-  downloads and checks the new version while your model keeps answering, then pauses the models for
-  a few seconds to replace the files and starts your model again. Settings → Diagnostics lists the
+  shows what it will download and, once you confirm, downloads and checks the new version while your
+  model keeps answering, then pauses the models for a few seconds to replace the files and starts
+  your model again. Settings → Diagnostics lists the
   versions under *Engine versions*.
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
@@ -1294,8 +1303,8 @@ is what disabled it.
 ### The Activity panel (what did the app do?)
 
 **Settings → Diagnostics (advanced) → Activity** shows a local record of what the app did and when — models
-started and stopped, downloads, document imports, workspace lock/unlock, and changes to
-privacy-relevant settings. Use the dropdown to focus on one kind of activity, **Show
+started and stopped, downloads (models, the AI engine and the OCR files), document imports,
+workspace lock/unlock, and changes to privacy-relevant settings. Use the dropdown to focus on one kind of activity, **Show
 earlier activity** to page back, and **Export to file…** to save the record.
 
 The record stays in your workspace (so it is encrypted whenever your workspace is) and is

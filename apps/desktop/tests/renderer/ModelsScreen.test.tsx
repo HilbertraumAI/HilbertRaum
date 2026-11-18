@@ -21,7 +21,7 @@ import {
 } from '../../src/shared/types'
 import { t, tCount } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import { ENGINE_MISSING, engineJob, modelInfo, stubModelsApi } from '../helpers/model-fixtures'
+import { ENGINE_MISSING, engineJob, enginePreview, modelInfo, stubModelsApi } from '../helpers/model-fixtures'
 import { catalogOf } from '../helpers/i18n-catalogs'
 import { renderInLanguage } from '../helpers/render-language'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
@@ -3046,10 +3046,14 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
           missingFamilies: ['llama_cpp']
         })
       ),
-      downloadEngine
+      downloadEngine,
+      getEnginePlan: vi.fn(async () => enginePreview())
     })
     render(<ModelsScreen />)
     await user.click(await screen.findByRole('button', { name: 'Install AI engine' }))
+    // #843: the action asks first; Confirm sends the same argument-less request.
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Install AI engine' }))
     expect(downloadEngine).toHaveBeenCalledTimes(1)
     expect(downloadEngine).toHaveBeenCalledWith()
     expect(downloadEngine.mock.calls[0]).toHaveLength(0)
@@ -3317,12 +3321,14 @@ describe('ModelsScreen — engine download Cancel (SH-1, #144)', () => {
       getEngineStatus: vi.fn(async () => ENGINE_MISSING),
       getEngineJob: vi.fn(async () => live),
       downloadEngine,
-      cancelEngineDownload
+      cancelEngineDownload,
+      getEnginePlan: vi.fn(async () => enginePreview())
     })
     render(<ModelsScreen />)
 
-    // The demo-mode warning offers the install; starting it shows progress + Cancel.
+    // The demo-mode warning offers the install; confirming it (#843) shows progress + Cancel.
     await user.click(await screen.findByRole('button', { name: 'Install AI engine' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Install AI engine' }))
     // Pre-fix TEETH: the live branch rendered ONLY the Progress — no Cancel existed anywhere.
     const cancelBtn = await screen.findByRole('button', { name: 'Cancel download' })
     await user.click(cancelBtn)

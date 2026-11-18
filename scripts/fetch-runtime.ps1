@@ -25,6 +25,13 @@
   selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
   a CPU-era drive to the Vulkan default actually replaces the build).
 
+  An engine NEWER than the drive's pin (#873) is kept: the app's in-app update (#516) installs
+  its own pin and leaves the drive's runtime-sources.yaml as it was, so the marker can be ahead
+  of the yaml. Versions are ordered the way the app orders them (assets.ts
+  compareRuntimeVersions: `b<build>`, or dotted numbers with an optional `v`); a version that
+  cannot be ordered against the pin is re-fetched as before. -AllowDowngrade replaces it anyway;
+  -Commercial always does (a sold drive carries the pin of the app it ships with).
+
   -Commercial (drive builders, #234): a placeholder hash is REFUSED before any download
   (exit 1, nothing extracted, no marker) and a hashless (legacy) marker is re-fetched
   instead of skipped, so a sold drive never carries an unverifiable sidecar.
@@ -54,7 +61,12 @@
 
 .PARAMETER Commercial
   Drive-builder mode: refuse a placeholder hash before any download, re-fetch a hashless
-  (legacy) install marker. build-commercial-drive passes this on every run.
+  (legacy) install marker, and replace an engine newer than the pin with the pin.
+  build-commercial-drive passes this on every run.
+
+.PARAMETER AllowDowngrade
+  Replace an engine whose install marker is NEWER than the drive's pin (an engine the app
+  updated, #873) with the pinned, older one. Without it such an engine is kept.
 
 .PARAMETER DryRun
   Print the plan and download nothing (a -Commercial placeholder refusal still applies).
@@ -74,6 +86,7 @@ param(
   [string] $Backend,
   [ValidateSet('llama_cpp', 'whisper_cpp', 'kiwix_tools', 'ocr')] [string] $Family = 'llama_cpp',
   [switch] $Commercial,
+  [switch] $AllowDowngrade,
   [switch] $DryRun
 )
 
@@ -142,6 +155,31 @@ function Test-StaysInside([string]$Rel) {
     if ($seg -eq '..') { $depth--; if ($depth -lt 0) { return $false } } else { $depth++ }
   }
   return $true
+}
+
+# #873: order two engine release tags of one family the way the app does (assets.ts
+# compareRuntimeVersions): -1 older, 0 equal, 1 newer, $null when either tag has an unknown shape
+# or the two shapes differ. `b<digits>` is a build counter; `v?<digits>(.<digits>)*` a dotted release
+# whose missing trailing parts count as zero. -cmatch and [0-9]: the app's patterns are case-sensitive
+# and ASCII-only, PowerShell's -match and \d are neither. Numbers compare as numbers ('3.10' > '3.8').
+function Get-RuntimeVersionParts([string]$Tag) {
+  $t = "$Tag".Trim()
+  if ($t -cmatch '^b([0-9]+)$') { return @{ Kind = 'build'; Parts = @([decimal]$Matches[1]) } }
+  if ($t -cmatch '^v?([0-9]+(\.[0-9]+)*)$') { return @{ Kind = 'dotted'; Parts = @($Matches[1].Split('.') | ForEach-Object { [decimal]$_ }) } }
+  return $null
+}
+function Compare-RuntimeVersion([string]$Installed, [string]$Pinned) {
+  $a = Get-RuntimeVersionParts $Installed
+  $b = Get-RuntimeVersionParts $Pinned
+  if (-not $a -or -not $b -or $a.Kind -ne $b.Kind) { return $null }
+  $n = [Math]::Max($a.Parts.Count, $b.Parts.Count)
+  for ($i = 0; $i -lt $n; $i++) {
+    $x = if ($i -lt $a.Parts.Count) { $a.Parts[$i] } else { [decimal]0 }
+    $y = if ($i -lt $b.Parts.Count) { $b.Parts[$i] } else { [decimal]0 }
+    if ($x -lt $y) { return -1 }
+    if ($x -gt $y) { return 1 }
+  }
+  return 0
 }
 
 # #339 P8-3: parse a flow-sequence value ("[a, b, c]", or "[]"/empty) into a string array.
@@ -487,13 +525,20 @@ Write-Host ("  files: {0}" -f ($requiredFileNames -join ', '))
 if (Test-Path -LiteralPath $binaryPath) {
   $skip = $false
   $why = 'install marker is missing or differs'
+  # #873: the marker's version when it is newer than the pin (kept unless -Commercial / -AllowDowngrade).
+  $newerKept = $null
+  $newerReplaced = $null
   $allPresent = -not ($requiredFileNames | Where-Object { -not (Test-Path -LiteralPath (Join-Path $extractTo $_)) })
   if (-not $allPresent) {
     $why = 'one or more required files are missing'
   } elseif (Test-Path -LiteralPath $markerPath) {
     try {
       $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
-      if ($marker.version -eq $version -and $marker.backend -eq $build.backend) {
+      if ((Compare-RuntimeVersion ([string]$marker.version) $version) -eq 1) {
+        # Whatever its backend: the app's relation ignores the backend too (runtimeInstallRelation).
+        if ($Commercial) { $newerReplaced = [string]$marker.version }
+        elseif (-not $AllowDowngrade) { $newerKept = [string]$marker.version }
+      } elseif ($marker.version -eq $version -and $marker.backend -eq $build.backend) {
         $skip = $true
         if ($Commercial) {
           $allHashedMarker = $true
@@ -514,6 +559,14 @@ if (Test-Path -LiteralPath $binaryPath) {
     Write-Host "  skip ($binaryName already installed: $version/$($build.backend) per .hilbertraum-runtime.json)" -ForegroundColor Green
     Remove-NeverInstalled
     exit 0
+  }
+  if ($newerKept) {
+    Write-Host "  skip ($binaryName $newerKept is newer than this drive's pin $version, installed by the app; pass -AllowDowngrade to replace it)" -ForegroundColor Green
+    Remove-NeverInstalled
+    exit 0
+  }
+  if ($newerReplaced) {
+    Write-Host "  commercial: replacing the newer $newerReplaced with the pinned $version (a sold drive carries its app's pin)" -ForegroundColor Yellow
   }
   Write-Host "  $binaryName present but $why -- re-fetching $version/$($build.backend)" -ForegroundColor Yellow
 }

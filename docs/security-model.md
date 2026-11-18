@@ -789,7 +789,8 @@ exposed to logging via `WorkspaceController.encryptionKey()` (the same data key 
 ## Audit log data class (Phase 19)
 
 `services/audit.ts` records app activity into the spec §8 `runtime_events` table. The recorded
-families (`AuditEventType` in `shared/types.ts`) span model starts/stops and downloads; document
+families (`AuditEventType` in `shared/types.ts`) span model starts/stops and downloads; the AI engine
+and OCR-file installs (`engine_install_*`, `ocr_install_*`, #843); document
 imports/deletes and lifecycle/collection changes (`document_lifecycle_changed`, `collection_*`);
 document tasks and exports (`document_task_*`, `document_exported`/`summary_exported`); conversation
 lifecycle (`conversation_*`) and the per-answer exports (`message_table_exported`,
@@ -804,7 +805,12 @@ class is defined by a **hard privacy rule**:
   chat content); a code-block save (#286) records `{ messageId, bytes, extension }` — the
   extension is safe only because it comes from the fixed allowlist in
   `shared/code-block-export.ts` (a closed set), never from the fence info string, which is
-  model output; `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
+  model output; an engine or OCR install (#843) records code names, versions, byte counts and
+  content-free reason codes (`{ jobId, kind, families, versions, sizeBytes, trigger }` / `{ jobId,
+  languages, bytes, trigger }`, plus `reason`/`cause` on a failure) — never the job's `error`, which is
+  friendly copy that can carry a drive path or a server's reply (`install-audit.test.ts` pushes a
+  sentinel and the drive path through a failure's error and proves neither reaches a row);
+  `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
   `gpuMode`, `developerMode`) and their boolean/enum values, never any other setting's value.
   **Document titles/filenames are content (S1, full-audit-2026-06-30).** `document_imported` /
   `document_reindexed` (incl. the doc-task *materialize* path) record `documentId` + `status` +

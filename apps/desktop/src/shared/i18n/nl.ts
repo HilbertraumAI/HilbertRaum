@@ -1253,6 +1253,18 @@ export const nl: UiCatalog<'nl'> = {
   'models.engine.downloadingNoTotal': 'AI-engine downloaden…',
   'models.engine.verifying': 'AI-engine controleren…',
   'models.engine.extracting': 'AI-engine uitpakken…',
+  'models.engineConfirm.chatEngine': 'AI-engine (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Spraakengine (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'reserveversie alleen voor de processor',
+  'models.engineConfirm.version': 'Versie',
+  'models.engineConfirm.total': 'Totale grootte',
+  'models.engineConfirm.licenseIncludes': '{license}, bevat {bundled}',
+  'models.engineConfirm.hint':
+    'Elk bestand wordt gedownload van het getoonde adres en vóór gebruik gecontroleerd met de ' +
+    'verwachte controlesom. Er wordt niets over jou of je documenten verstuurd.',
+  'models.engineConfirm.updateNote':
+    'Je model blijft antwoorden zolang de download loopt. Alleen terwijl de bestanden worden ' +
+    'vervangen, pauzeert het een paar seconden.',
   'models.voiceEngine.title': 'Dicteerfunctie toevoegen (optioneel)',
   'models.voiceEngine.explain':
     'Antwoorden in chats en over documenten werken op deze schijf al. De spraakengine is ' +
@@ -1920,6 +1932,12 @@ export const nl: UiCatalog<'nl'> = {
   'diag.audit.model_download_started': 'Download gestart',
   'diag.audit.model_download_verified': 'Download gecontroleerd',
   'diag.audit.model_download_failed': 'Download mislukt',
+  'diag.audit.engine_install_started': 'Download van engine of hulpprogramma’s gestart',
+  'diag.audit.engine_install_finished': 'Engine of hulpprogramma’s geïnstalleerd',
+  'diag.audit.engine_install_failed': 'Installatie van engine of hulpprogramma’s mislukt',
+  'diag.audit.ocr_install_started': 'Download van de OCR-bestanden gestart',
+  'diag.audit.ocr_install_finished': 'OCR-bestanden geïnstalleerd',
+  'diag.audit.ocr_install_failed': 'Installatie van de OCR-bestanden mislukt',
   'diag.audit.document_imported': 'Document geïmporteerd',
   'diag.audit.document_reindexed': 'Document opnieuw geïndexeerd',
   'diag.audit.document_deleted': 'Document verwijderd',

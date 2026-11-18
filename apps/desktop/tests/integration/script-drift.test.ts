@@ -8,12 +8,13 @@ import {
   buildPolicyJson
 } from '../../src/main/services/drive'
 import { SUPPORTED_RUNTIME_FORMATS } from '../../src/main/services/models'
-import { SIDECAR_FAMILY_SPECS, sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
+import { SIDECAR_FAMILY_SPECS, compareRuntimeVersions, sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
 import { isRealSha256 } from '../../src/shared/manifest'
 import { KIT_PLATFORMS, type RuntimeFamily } from '../../src/shared/runtime-sources'
 import { DRIVE_LICENSE_ARTIFACTS, KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
 import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
 import { extractScriptArray } from '../helpers/script-legs'
+import { MARKER_ROWS } from '../helpers/fetch-runtime-markers'
 import { committedRuntimeSources } from '../helpers/catalog'
 
 // Drift guard (audit H5 / M-A1). The drive layout, the format version, and the runtime
@@ -210,6 +211,17 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
     expect(m, 'fetch-runtime.sh --family case allow-list not found').not.toBeNull()
     const families = m![1].split('|').sort()
     expect(families).toEqual([...yamlBuildFamilies(), 'ocr'].sort())
+  })
+})
+
+// #873: fetch-runtime keeps an engine newer than the drive's pin, in the order the app uses (#516). script-execution.test.ts
+// runs the shared table on both twins; this row holds the app's own `compareRuntimeVersions` to the same table, so the
+// twins and the app cannot drift apart. Green on master by design: it guards the table, the script rows guard the scripts.
+describe('TS ↔ shell-script drift (engine version order, #873)', () => {
+  it.each(MARKER_ROWS.map((row) => [row.title, row] as const))('%s: the app orders the two the same way', (_title, row) => {
+    expect(compareRuntimeVersions(row.marker.version, row.pin)).toBe(row.order)
+    const kept = row.order === 1 && !row.flags.includes('Commercial') && !row.flags.includes('AllowDowngrade')
+    expect(row.expect === 'skip-newer').toBe(kept)
   })
 })
 
