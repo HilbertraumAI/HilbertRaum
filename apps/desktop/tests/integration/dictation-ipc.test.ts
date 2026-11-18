@@ -31,6 +31,7 @@ import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-
 import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
 import { t } from '../../src/shared/i18n'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -392,23 +393,33 @@ describe('registerDictationIpc — voice engine refused by the OS (#530)', () =>
     }
   })
 
-  it('an EngineCannotRunError (whisper family) rejects with the engine-cannot-run copy and shreds the temp file', async () => {
+  // #869: and a speech model whose path has no spelling the engine reads on this Windows command line
+  // says so too — renaming the file fixes it, a retry would not.
+  it.each<[string, () => Error, 'main.dictation.engineCannotRun' | 'main.dictation.voiceModelPathUnsupported', string]>([
+    [
+      'an EngineCannotRunError (whisper family) rejects with the engine-cannot-run copy',
+      () =>
+        new EngineCannotRunError('whisper-cli', {
+          family: 'whisper_cpp',
+          reason: 'library-missing',
+          os: 'linux',
+          name: 'libgomp.so.1',
+          exit: 'exit code 127'
+        }),
+      'main.dictation.engineCannotRun',
+      'libgomp'
+    ],
+    ['a WhisperPathError (#869) rejects with the model-path copy', () => new WhisperPathError('-vm'), 'main.dictation.voiceModelPathUnsupported', 'whisper-cli']
+  ])('%s and shreds the temp file', async (_label, refusal, key, detail) => {
     const workspacePath = freshWorkspacePath()
-    const refusal = new EngineCannotRunError('whisper-cli', {
-      family: 'whisper_cpp',
-      reason: 'library-missing',
-      os: 'linux',
-      name: 'libgomp.so.1',
-      exit: 'exit code 127'
-    })
-    registerDictationIpc(ctxWith(workspacePath, throwing(refusal)).ctx)
+    registerDictationIpc(ctxWith(workspacePath, throwing(refusal())).ctx)
     const err = await invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3])).then(
       () => null,
       (e: unknown) => e
     )
-    expect(String(err)).toContain(t('en', 'main.dictation.engineCannotRun'))
+    expect(String(err)).toContain(t('en', key))
     expect(String(err)).not.toContain(DICTATION_FAILED_MESSAGE)
-    expect(String(err)).not.toContain('libgomp') // the technical detail stays out of the toast
+    expect(String(err)).not.toContain(detail) // the technical detail stays out of the toast
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
   })
 })

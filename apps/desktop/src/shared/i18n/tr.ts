@@ -2333,6 +2333,11 @@ export const tr: UiCatalog<'tr'> = {
   'main.ingest.voiceEngineCannotRun':
     'Ses motoru bu bilgisayarda çalışamıyor; bu yüzden bu kayıt yazıya dökülemedi. Ne yapmanız ' +
     'gerektiği Yapay zekâ modeli ekranında gösteriliyor; ardından bu belgeyi yeniden dizinleyin.',
+  'main.ingest.voiceModelPathUnsupported':
+    'Windows’ta ses motoru konuşma modelini açamıyor, çünkü modelin dosya adı bir umlaut, aksanlı ' +
+    'bir harf ya da başka bir ASCII dışı karakter (ç, ğ, ı, ş gibi) içeriyor. Model dosyasını ve ' +
+    'modelin manifestindeki kaydını bu tür karakterler içermeyen bir adla yeniden adlandırın; ' +
+    'ardından bu belgeyi yeniden dizinleyin.',
   'main.ingest.searchModelTimeout':
     'Arama modeli zamanında yanıt vermedi; bu yüzden bu belge dizinlenemedi. Yeniden deneyin.',
   'main.ingest.searchModelCannotStart':
@@ -2740,6 +2745,11 @@ export const tr: UiCatalog<'tr'> = {
   'main.dictation.engineCannotRun':
     'Ses motoru bu bilgisayarda çalışamıyor. Neyin eksik olduğunu Yapay zekâ modeli ekranında ' +
     'görebilirsiniz.',
+  'main.dictation.voiceModelPathUnsupported':
+    'Windows’ta ses motoru modellerinden birini (konuşma modelini veya ses etkinliği algılama ' +
+    'modelini) açamıyor, çünkü dosya adı bir umlaut, aksanlı bir harf ya da başka bir ASCII dışı ' +
+    'karakter (ç, ğ, ı, ş gibi) içeriyor. Bu model dosyasını ve modelin manifestindeki kaydını bu ' +
+    'tür karakterler içermeyen bir adla yeniden adlandırın; ardından yeniden deneyin.',
   'main.preflight.readOnly':
     'Bu sürücü salt okunur görünüyor, bu yüzden uygulama çalışma alanını oluşturamıyor. Farklı ' +
     'bir USB girişi deneyin veya sorun giderme kılavuzuna bakın.',

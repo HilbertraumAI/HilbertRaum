@@ -2523,6 +2523,13 @@ export const en = {
   'main.ingest.engineCannotRun': "The AI engine can't run on this computer, so this document could not be indexed. The AI Model screen says what to do — then try again.",
   'main.ingest.engineLibraryMissing': "The AI engine can't run on this computer because the system library {library} is missing. The AI Model screen says how to fix it — then try again.",
   'main.ingest.voiceEngineCannotRun': "The voice engine can't run on this computer, so this recording could not be transcribed. The AI Model screen says what to do — then re-index this document.",
+  // #869: persist-canonical (display-mapped) — the pinned whisper-cli cannot read the model's
+  // path on a Windows command line; refused before it starts. No path in it. Imports run without
+  // VAD, so only the transcription model can be refused here; the dictation key covers both.
+  'main.ingest.voiceModelPathUnsupported':
+    'On Windows, the voice engine cannot open the transcription model because the model’s file name ' +
+    'contains an umlaut, an accent or another non-ASCII character. Rename the model file and its ' +
+    'entry in the model’s manifest without such characters, then re-index this document.',
   // #634 (design-guidelines §11.23): the search model (the E5 embedder) failed. Chosen by the error's
   // kind, never its text: a start failure's text names the weight file by absolute path. A lock or
   // quit that cut the embed off stores `main.ingest.interrupted` instead.
@@ -2984,6 +2991,11 @@ export const en = {
   'main.dictation.tooLong': 'That recording is too long for dictation. For long recordings, import the audio file as a document instead.',
   'main.dictation.busy': 'Still transcribing the last dictation — one moment.',
   'main.dictation.engineCannotRun': "The voice engine can't run on this computer. The AI Model screen says what is missing.",
+  'main.dictation.voiceModelPathUnsupported':
+    'On Windows, the voice engine cannot open one of its models (the transcription model or the ' +
+    'voice-activity model) because the file name contains an umlaut, an accent or another non-ASCII ' +
+    'character. Rename that model file and its entry in the model’s manifest without such ' +
+    'characters, then try again.',
   'main.preflight.readOnly':
     'This drive appears to be read-only, so the app cannot create its workspace. ' +
     'Try a different USB port, or see the troubleshooting guide.',

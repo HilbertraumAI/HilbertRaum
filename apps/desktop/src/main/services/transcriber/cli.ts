@@ -1,8 +1,10 @@
 import { waitForEngineSpawns } from '../runtime/spawn-gate'
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { createReadStream, createWriteStream, existsSync, readFileSync } from 'node:fs'
+import { once } from 'node:events'
+import { join, resolve as resolvePath } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import {
   defaultThreadCount,
   guardChildStdio,
@@ -22,12 +24,15 @@ import {
 } from '../runtime/engine-load'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
+import { WhisperPathError, planWhisperArgv, whisperCommand } from './argv'
 import type { TranscribeOptions, Transcriber, TranscriptSegment } from './index'
 
 // whisper.cpp CLI transcriber (see index.ts for the CLI-over-server
 // rationale). One child process per file: spawn the pinned `whisper-cli` with the GGML
 // weights, let it write the full transcript JSON (`-oj`) to a TRANSIENT file, parse the
-// `transcription[].offsets` (milliseconds) + text, shred the transient.
+// `transcription[].offsets` (milliseconds) + text, shred the transient. The child starts in the
+// workspace's documents folder and gets every path in a spelling it reads on a Windows command line
+// (#869, `argv.ts`).
 //
 // Caveat: whisper-cli v1.8.6 EXITS 0 even when it cannot
 // decode the input ("failed to read audio data" goes to stderr, no output is written).
@@ -101,6 +106,10 @@ function resolveIdleTimeoutMs(explicit?: number): number {
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** Resolves when `signal` aborts (at once when it already has); never rejects. */
+const untilAborted = (signal: AbortSignal): Promise<void> =>
+  new Promise((r) => (signal.aborted ? r() : signal.addEventListener('abort', () => r(), { once: true })))
+
 /**
  * Grace after SIGTERM before escalating to SIGKILL on a kill (REL-2), mirroring
  * `LlamaServer.stop()`'s `DEFAULT_KILL_GRACE_MS`. A whisper-cli wedged in native decode code
@@ -150,7 +159,8 @@ export interface WhisperCliOptions {
   killGraceMs?: number
   /** Cap on the `suspend()`/`stop()` cleanup await (REL-2). Default `DEFAULT_SUSPEND_TIMEOUT_MS`. */
   suspendTimeoutMs?: number
-  /** #530 test seam: the OS the spawn-error and load-failure classifiers report (default `process.platform`). */
+  /** The OS this runs on (default `process.platform`): what the #530 spawn-error and load-failure
+   *  classifiers report, and which command-line plan the #869 planner makes. A test seam. */
   platform?: NodeJS.Platform
 }
 
@@ -174,6 +184,12 @@ export class WhisperCliTranscriber implements Transcriber {
    * workspace crash-sweep never reaches, so a missed shred leaves transcript content on disk.
    */
   private readonly active = new Map<ChildProcess, Promise<void>>()
+  /**
+   * #869: calls still copying their original into the documents folder (no child yet), mapped to
+   * the same cleanup promise. suspend()/stop() abort each copy and await its shred like a child's:
+   * an engine update suspends without aborting the import's own signal (`registerEngineIpc`).
+   */
+  private readonly copying = new Map<AbortController, Promise<void>>()
   private stopped = false
 
   constructor(opts: WhisperCliOptions) {
@@ -200,40 +216,83 @@ export class WhisperCliTranscriber implements Transcriber {
     if (!opts.workDir) {
       throw new Error('Transcriber workDir is required (transient transcript must stay inside the crash sweep).')
     }
-    const outBase = join(opts.workDir, `${randomUUID()}.parse-transcript`)
-    const jsonPath = `${outBase}.json`
-
-    const args = [
-      '-m', this.modelPath,
-      '-f', filePath,
-      '-l', opts.language ?? 'auto',
-      '-t', String(this.threads),
-      '-pp', // progress lines ("progress = N%" every ~5%)
-      '-oj',
-      '-of', outBase
-    ]
+    // #869: the child starts in workDir and gets every path in a spelling the pinned whisper-cli
+    // reads on a Windows command line (`argv.ts`): files in workDir by their bare names, the models
+    // absolute or relative, an original with no ASCII spelling copied in. Paths are resolved here,
+    // against the app's own working directory, before the child gets another one.
     // #504: voice-activity detection BEFORE decoding, for the calls that ask (dictation). Silero
     // VAD finds the speech segments and whisper decodes only those; a recording with none
     // yields an empty transcript (the JSON is still written, with no segments) instead of a
     // hallucinated word. Imports stay VAD-free: the VAD remaps segment timestamps and audio
     // citations cite time ranges — unmeasured, so not switched on there.
-    if (opts.vad && this.vadModelPath) {
-      args.push('--vad', '-vm', this.vadModelPath, '-vp', String(VAD_SPEECH_PAD_MS))
+    const cwd = resolvePath(opts.workDir)
+    const plan = planWhisperArgv({
+      cwd,
+      modelPath: this.modelPath,
+      vadModelPath: opts.vad && this.vadModelPath ? this.vadModelPath : null,
+      filePath,
+      id: randomUUID(),
+      platform: this.platform ?? process.platform
+    })
+    if ('refused' in plan) {
+      // A model file name only a user's own manifest can give; copying gigabytes per call is no
+      // option. The argument, never the path, goes to the log.
+      log.warn('whisper-cli not started: a model path has no ASCII spelling on this Windows command line', {
+        class: 'whisper:non-ascii-path',
+        arg: plan.refused
+      })
+      throw new WhisperPathError(plan.refused)
+    }
+    const jsonPath = join(opts.workDir, `${plan.outBase}.json`)
+    // #869: the transient copy of an original with no ASCII spelling (Windows only). Plaintext
+    // audio, the same class as an encrypted re-index's decrypted `.parse` transient; the `.parse`
+    // infix keeps it under the startup crash sweep, and the `finally` below shreds it.
+    const copyPath = plan.copyName ? join(opts.workDir, plan.copyName) : null
+
+    const args = [
+      '-m', plan.model,
+      '-f', plan.file,
+      '-l', opts.language ?? 'auto',
+      '-t', String(this.threads),
+      '-pp', // progress lines ("progress = N%" every ~5%)
+      '-oj',
+      '-of', plan.outBase
+    ]
+    if (plan.vadModel) {
+      args.push('--vad', '-vm', plan.vadModel, '-vp', String(VAD_SPEECH_PAD_MS))
     }
 
     // `done` resolves only after the shred below runs. suspend()/stop() await it (via the
-    // `active` map) so a killed child's transient transcript is shredded before the parent
-    // exits (L5).
+    // `active` map, or `copying` while the original is still being copied) so a killed child's
+    // transient transcript, or a partial copy, is shredded before the parent exits (L5).
     let resolveDone: () => void = () => undefined
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve
     })
+    // #869: the copy is aborted by the call's own signal (cancel, lock, quit) AND by suspend()/stop().
+    const copyAbort = copyPath ? new AbortController() : null
+    const copy = copyPath && copyAbort
+      ? {
+          signal: opts.signal ? AbortSignal.any([opts.signal, copyAbort.signal]) : copyAbort.signal,
+          run: async (signal: AbortSignal): Promise<void> => {
+            this.copying.set(copyAbort, done)
+            const out = createWriteStream(copyPath, { flags: 'wx' })
+            try {
+              await pipeline(createReadStream(filePath), out, { signal })
+            } finally {
+              // The partial copy is shredded by the `finally` below — after its handle is closed.
+              if (!out.closed) await once(out, 'close').catch(() => undefined)
+            }
+          }
+        }
+      : undefined
     let registeredChild: ChildProcess | null = null
     try {
-      const { stderrTail } = await this.run(args, opts, (child) => {
+      const { stderrTail } = await this.run(cwd, args, opts, (child) => {
         registeredChild = child
         this.active.set(child, done)
-      })
+        if (copyAbort) this.copying.delete(copyAbort) // a child now: suspend()/stop() kill it instead
+      }, copy)
       let parsed: WhisperJson
       try {
         parsed = JSON.parse(readFileSync(jsonPath, 'utf8')) as WhisperJson
@@ -258,22 +317,28 @@ export class WhisperCliTranscriber implements Transcriber {
       return segments
     } finally {
       shredFile(jsonPath) // the transcript is content — never leave it on disk
+      if (copyPath) shredFile(copyPath) // #869: so is the copied audio
+      if (copyAbort) this.copying.delete(copyAbort)
       if (registeredChild) this.active.delete(registeredChild)
       resolveDone() // unblock any suspend()/stop() waiting on this child's cleanup
     }
   }
 
-  /** Spawn the CLI and resolve on exit, surfacing progress + a bounded stderr tail. */
+  /** Spawn the CLI in `cwd` and resolve on exit, surfacing progress + a bounded stderr tail.
+   *  `copy` (#869: the copy of an original) runs after the waits, right before the spawn; its
+   *  signal is the call's own plus suspend()/stop()'s. */
   private async run(
+    cwd: string,
     args: string[],
     opts: TranscribeOptions,
-    onChild: (child: ChildProcess) => void
+    onChild: (child: ChildProcess) => void,
+    copy?: { signal: AbortSignal; run: (signal: AbortSignal) => Promise<void> }
   ): Promise<{ code: number | null; stderrTail: string }> {
     // #658: a call cancelled (the dictation deadline, a lock during the WAV write) or a transcriber
     // stopped (quit) starts nothing — no model load it would kill at once. Checked before the waits
     // below and again after them: a `stop()` that lands in between has nothing in `active` to kill,
     // so a child spawned after it would outlive the app.
-    const cancelled = (): boolean => opts.signal?.aborted === true || this.stopped
+    const cancelled = (): boolean => opts.signal?.aborted === true || this.stopped || copy?.signal.aborted === true
     if (cancelled()) throw new Error('Transcription was cancelled.')
     // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
     // packaged-build tamper is refused; the audio import then fails per-file with the
@@ -284,11 +349,32 @@ export class WhisperCliTranscriber implements Transcriber {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
     if (cancelled()) throw new Error('Transcription was cancelled.')
+    if (copy) {
+      // #869: a copy is written only past the engine gate and the hash. A cancel, suspend() or
+      // stop() during it aborts it and starts nothing; the caller's `finally` shreds what was
+      // written, and suspend()/stop() await that.
+      try {
+        await copy.run(copy.signal)
+      } catch (err) {
+        if (cancelled()) throw new Error('Transcription was cancelled.')
+        throw err
+      }
+      // An engine install that began its swap during the copy holds this spawn too (#516). The wait
+      // ends early on an abort, so a suspend() never waits on the gate.
+      await Promise.race([waitForEngineSpawns('whisper_cpp'), untilAborted(copy.signal)])
+      if (cancelled()) throw new Error('Transcription was cancelled.')
+    }
     return new Promise((resolve, reject) => {
       let child: ChildProcess
       try {
         // windowsHide (#530): every other sidecar spawn already passed it; this one never did.
-        child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+        // #869: in the documents folder, its bare-name arguments resolve there; the command is
+        // absolute, or a relative one would be looked up from there too.
+        child = this.spawnImpl(whisperCommand(this.binPath), args, {
+          cwd,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true
+        })
       } catch (err) {
         // #658: Node throws SYNCHRONOUSLY for spawn errors outside its short async list — EPERM and
         // `UNKNOWN` among them, how a Windows policy or security software refuses the program
@@ -474,19 +560,24 @@ export class WhisperCliTranscriber implements Transcriber {
   }
 
   /**
-   * Kill in-flight children (workspace lock) — per-file CLI, so next use just respawns.
-   * Awaits each child's full cleanup (exit + transient-transcript shred) before returning,
-   * so the parent cannot exit on quit with an un-shredded transcript still on disk (L5).
+   * Kill in-flight children (workspace lock, engine update) — per-file CLI, so next use just
+   * respawns — and abort the copies still being written (#869). Awaits each one's full cleanup
+   * (exit + transient-transcript shred, or the partial copy's shred) before returning, so the
+   * parent cannot exit on quit with an un-shredded transcript or copy still on disk (L5).
    * The await is BOUNDED (REL-2): a child that ignores even SIGKILL must not hang teardown —
    * past `suspendTimeoutMs` we return regardless (the crash-sweep is the shred backstop).
    */
   async suspend(): Promise<void> {
     const pending = [...this.active.entries()]
     for (const [child] of pending) this.killWithEscalation(child)
-    // Wait for each killed child's `close` to drive transcribe()'s finally (shred + resolve),
-    // but never longer than the cap so a wedged child can't hang quit/lock.
+    // #869: a call still copying its original has no child yet — abort the copy (it then starts
+    // nothing) and await its shred the same way.
+    const copies = [...this.copying.entries()]
+    for (const [abort] of copies) abort.abort()
+    // Wait for each killed child's `close` (or each aborted copy) to drive transcribe()'s finally
+    // (shred + resolve), but never longer than the cap so a wedged child can't hang quit/lock.
     await Promise.race([
-      Promise.all(pending.map(([, done]) => done)),
+      Promise.all([...pending.map(([, done]) => done), ...copies.map(([, done]) => done)]),
       delay(this.suspendTimeoutMs)
     ])
   }

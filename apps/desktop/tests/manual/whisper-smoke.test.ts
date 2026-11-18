@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createWhisperCliTranscriber,
-  resolveWhisperCliPath
+  resolveWhisperCliPath,
+  whisperCliDir
 } from '../../src/main/services/transcriber'
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/cli'
+import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 import { packTranscriptSegments } from '../../src/main/services/ingestion/parsers/audio'
 
 // MANUAL whisper smoke (Phase 36, wave-3 plan §14 R-W2..R-W4 live verification) — NOT CI.
@@ -22,6 +24,12 @@ import { packTranscriptSegments } from '../../src/main/services/ingestion/parser
 //       german_long.mp3                                 (optional: ~60 min for the R-W4 leg)
 //       sample.m4a                                      (optional: the expected-DECODE-FAIL leg)
 //   npx vitest run tests/manual/whisper-smoke.test.ts
+//
+// #869 layout matrix (Windows; its own gate, same drive root): HILBERTRAUM_WHISPER_869=1 with
+// HILBERTRAUM_WHISPER_SMOKE set, plus HILBERTRAUM_WHISPER_869_WAV=<a short 16 kHz mono speech WAV>
+// (default: <HILBERTRAUM_WHISPER_AUDIO>/german.wav) and optionally
+// HILBERTRAUM_WHISPER_869_OTHER_DRIVE=<a second drive's scratch folder, e.g. a `subst Q:` of an empty
+// folder> for the cross-drive leg. Run it alone with `-t "#869"`. See the describe block below.
 //
 // Against the REAL pinned v1.8.6 binary + real GGML weights this proves what the
 // fake-spawn unit tests cannot:
@@ -125,5 +133,200 @@ describe.skipIf(!enabled)('Whisper smoke (manual, real v1.8.6 + real German audi
     // The job UX rests on this: whisper really reports progress as it goes.
     expect(progress.length).toBeGreaterThan(5)
     expect(progress.at(-1)).toBeGreaterThanOrEqual(95)
+  })
+})
+
+// #869 layout matrix. The pinned whisper-cli reads its command line through the Windows ANSI code
+// page: with master's absolute paths a root under `Jörg äöü` crashed it (0xC0000409 while loading the
+// model) and one under `Олена 日本` failed ("input file not found", exit 2), measured on the real
+// model. Each root below is a Kit-shaped copy (the engine folder copied, the models hard-linked) and
+// every leg goes through the app's own service: a stored file, an encrypted first import's foreign
+// original whose name has no ASCII spelling (copied into the documents folder for the run, on
+// Windows), and a dictation with VAD. A model with a non-ASCII file name is refused before anything
+// starts, and a documents folder past MAX_PATH fails as an error, never a crash or a hang.
+// rag-design.md §17 D-Z1 "#787 amendment" is the kiwix twin; architecture.md "Audio transcription
+// (Phase 36)" "#869 amendment" is this one's record.
+const M869 = process.env.HILBERTRAUM_WHISPER_869 === '1' && ROOT.length > 0 && existsSync(ROOT)
+const M869_WAV = process.env.HILBERTRAUM_WHISPER_869_WAV?.trim() || (AUDIO_DIR ? join(AUDIO_DIR, 'german.wav') : '')
+const M869_OTHER_DRIVE = process.env.HILBERTRAUM_WHISPER_869_OTHER_DRIVE?.trim() ?? ''
+
+describe.runIf(M869)('#869 layout matrix (manual, real whisper-cli under non-ASCII roots)', () => {
+  let scratch = ''
+  /** Node 24.13's rmSync silently skips a non-ASCII path (Electron 43's Node 24.22 does not), so the
+   *  "nothing left behind" check runs only where the test runtime can remove such a file at all. */
+  let runtimeRemovesNonAscii = true
+  beforeAll(() => {
+    expect(existsSync(M869_WAV), `speech WAV missing: ${M869_WAV}`).toBe(true)
+    // An ASCII temp root, so its recursive removal works on every Node.
+    scratch = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-869-'))
+    const probe = join(scratch, 'prüfung.tmp')
+    writeFileSync(probe, 'x')
+    rmSync(probe, { force: true })
+    runtimeRemovesNonAscii = !existsSync(probe)
+  })
+  afterAll(() => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true })
+  })
+
+  const weightName = (): string => {
+    const weight = transcriberModel(ROOT)
+    expect(weight, 'no whisper weight under models/transcriber/').toBeTruthy()
+    return weight!.split(/[\\/]/).pop()!
+  }
+  const vadName = (): string => {
+    const vad = readdirSync(join(ROOT, 'models', 'transcriber')).find((f) => /^ggml-silero-.*\.bin$/i.test(f))
+    expect(vad, 'no Silero VAD model under models/transcriber/').toBeTruthy()
+    return vad!
+  }
+  const linkOrCopy = (from: string, to: string): void => {
+    try {
+      linkSync(from, to)
+    } catch {
+      copyFileSync(from, to) // another volume (a `subst` drive counts as one)
+    }
+  }
+  const text = (segments: Array<{ text: string }>): string => segments.map((s) => s.text).join(' ').trim()
+
+  /** A Kit-shaped root: the engine folder copied, the models linked, an empty documents folder. */
+  function provision(root: string, weightAs = weightName()): { docs: string; make: () => ReturnType<typeof createWhisperCliTranscriber> } {
+    const binDir = whisperCliDir(root)
+    mkdirSync(binDir, { recursive: true })
+    for (const e of readdirSync(whisperCliDir(ROOT), { withFileTypes: true })) {
+      if (e.isFile()) copyFileSync(join(whisperCliDir(ROOT), e.name), join(binDir, e.name))
+    }
+    const models = join(root, 'models', 'transcriber')
+    mkdirSync(models, { recursive: true })
+    linkOrCopy(join(ROOT, 'models', 'transcriber', weightName()), join(models, weightAs))
+    linkOrCopy(join(ROOT, 'models', 'transcriber', vadName()), join(models, vadName()))
+    const docs = join(root, 'workspace', 'documents')
+    mkdirSync(docs, { recursive: true })
+    const binPath = resolveWhisperCliPath(root)
+    expect(binPath, `whisper-cli not provisioned under ${root}`).toBeTruthy()
+    return {
+      docs,
+      make: () =>
+        createWhisperCliTranscriber({
+          id: 'whisper-869',
+          binPath: binPath!,
+          modelPath: join(models, weightAs),
+          vadModelPath: join(models, vadName())
+        })
+    }
+  }
+
+  /** Transcribe while sampling the documents folder, so a transient copy is seen while the child runs. */
+  async function sampled(
+    run: () => Promise<Array<{ text: string }>>,
+    docs: string
+  ): Promise<{ text: string; seen: Set<string>; ms: number }> {
+    const seen = new Set<string>()
+    const timer = setInterval(() => {
+      for (const f of readdirSync(docs)) seen.add(f)
+    }, 10)
+    const t0 = Date.now()
+    try {
+      return { text: text(await run()), seen, ms: Date.now() - t0 }
+    } finally {
+      clearInterval(timer)
+    }
+  }
+
+  it.each(['ascii', 'Jörg äöü', 'Олена 日本'])(
+    'under %s: a stored file, a foreign non-ASCII original, a dictation with VAD',
+    { timeout: 900_000 },
+    async (name) => {
+      const root = join(scratch, name, 'HilbertRaum')
+      const { docs, make } = provision(root)
+      const transcriber = make()
+
+      const stored = join(docs, 'doc-1.wav')
+      copyFileSync(M869_WAV, stored)
+      const a = await sampled(() => transcriber.transcribe(stored, { workDir: docs, language: 'de' }), docs)
+      expect(a.text.length, `${name}: stored file`).toBeGreaterThan(10)
+
+      // An encrypted first import parses the user's original where it is (ingestion/index.ts).
+      const origin = join(scratch, name, 'Jörg', 'Musik', 'Sitzung März.wav')
+      mkdirSync(join(scratch, name, 'Jörg', 'Musik'), { recursive: true })
+      copyFileSync(M869_WAV, origin)
+      const b = await sampled(() => transcriber.transcribe(origin, { workDir: docs, language: 'de' }), docs)
+      expect(b.text.length, `${name}: foreign original`).toBeGreaterThan(10)
+      const copies = [...b.seen].filter((f) => /\.parse-audio\.wav$/.test(f))
+      expect(copies.length, `${name}: the transient copy (Windows only)`).toBe(process.platform === 'win32' ? 1 : 0)
+
+      const dictation = join(docs, '00000000-dict-869.parse-dictation.wav')
+      copyFileSync(M869_WAV, dictation)
+      const c = await sampled(() => transcriber.transcribe(dictation, { workDir: docs, vad: true }), docs)
+      expect(c.text.length, `${name}: dictation with VAD`).toBeGreaterThan(10)
+
+      if (runtimeRemovesNonAscii) {
+        // The transcripts and the copy are shredded; only what this test put there is left.
+        expect(readdirSync(docs).sort(), `${name}: left in documents`).toEqual(['00000000-dict-869.parse-dictation.wav', 'doc-1.wav'])
+      }
+      // eslint-disable-next-line no-console
+      console.info(
+        `[whisper-869] ${name}: stored ${a.ms} ms "${a.text.slice(0, 40)}" | original ${b.ms} ms, copies seen ${copies.length} ` +
+          `"${b.text.slice(0, 40)}" | dictation+VAD ${c.ms} ms "${c.text.slice(0, 40)}" | clean-check ${runtimeRemovesNonAscii}`
+      )
+    }
+  )
+
+  // A Kit on another drive than the original: no relative spelling exists across drives, so a
+  // non-ASCII original is copied in and an ASCII one goes absolute.
+  it.runIf(M869_OTHER_DRIVE.length > 0 && process.platform === 'win32')(
+    'a Kit on another drive: a non-ASCII original is copied in, an ASCII one read where it is',
+    { timeout: 900_000 },
+    async () => {
+      const root = join(M869_OTHER_DRIVE, 'Übungen', 'HilbertRaum')
+      try {
+        const { docs, make } = provision(root)
+        const transcriber = make()
+        const nonAscii = join(scratch, 'cross', 'Jörg', 'Musik', 'Sitzung März.wav')
+        const ascii = join(scratch, 'cross', 'Public', 'meeting.wav')
+        for (const f of [nonAscii, ascii]) {
+          mkdirSync(join(f, '..'), { recursive: true })
+          copyFileSync(M869_WAV, f)
+        }
+        const n = await sampled(() => transcriber.transcribe(nonAscii, { workDir: docs, language: 'de' }), docs)
+        const s = await sampled(() => transcriber.transcribe(ascii, { workDir: docs, language: 'de' }), docs)
+        expect(n.text.length).toBeGreaterThan(10)
+        expect(s.text.length).toBeGreaterThan(10)
+        expect([...n.seen].filter((f) => f.includes('.parse-audio')).length).toBe(1)
+        expect([...s.seen].filter((f) => f.includes('.parse-audio')).length).toBe(0)
+        // eslint-disable-next-line no-console
+        console.info(`[whisper-869] other drive: copied original ${n.ms} ms "${n.text.slice(0, 40)}" | ASCII original ${s.ms} ms`)
+      } finally {
+        rmSync(join(M869_OTHER_DRIVE, 'Übungen'), { recursive: true, force: true })
+      }
+    }
+  )
+
+  // Only a user's own manifest can name a model file outside ASCII; on Windows the call is refused,
+  // typed, before anything starts. POSIX reads any name.
+  it('a model with a non-ASCII file name is refused on Windows, read elsewhere', { timeout: 600_000 }, async () => {
+    const { docs, make } = provision(join(scratch, 'refusal', 'HilbertRaum'), 'ggml-small-für-mich.bin')
+    const stored = join(docs, 'doc-1.wav')
+    copyFileSync(M869_WAV, stored)
+    const run = make().transcribe(stored, { workDir: docs, language: 'de' })
+    if (process.platform === 'win32') await expect(run).rejects.toBeInstanceOf(WhisperPathError)
+    else expect(text(await run).length).toBeGreaterThan(10)
+  })
+
+  // A documents folder past MAX_PATH: Windows refuses a child working directory of 258+ characters
+  // and Node's spawn fails (ENOENT, absorbed by `guardChildStdio`, #790). It must reject, not crash or
+  // hang. Such a folder could not work before either: whisper-cli opens its files without a long-path
+  // prefix.
+  it.runIf(process.platform === 'win32')('a documents folder past MAX_PATH fails as an error', { timeout: 600_000 }, async () => {
+    const { make } = provision(join(scratch, 'deep', 'HilbertRaum'))
+    const docs = join(scratch, 'deep', 'd'.repeat(120), 'e'.repeat(120), 'workspace', 'documents')
+    expect(docs.length).toBeGreaterThan(260)
+    mkdirSync(docs, { recursive: true })
+    const stored = join(docs, 'doc-1.wav')
+    copyFileSync(M869_WAV, stored)
+    const err = await make()
+      .transcribe(stored, { workDir: docs, language: 'de' })
+      .then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    // eslint-disable-next-line no-console
+    console.info(`[whisper-869] MAX_PATH documents folder (${docs.length} chars): ${String(err).slice(0, 160)}`)
   })
 })

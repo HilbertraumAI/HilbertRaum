@@ -1226,7 +1226,20 @@ every imported document readable on a lost drive.
   same vault key, fresh IV per file). `sha256`/`size_bytes` on the document row describe the
   plaintext content in both modes.
 - **Import:** the original file (still on disk at import time) is parsed directly; only the
-  encrypted copy is written to the workspace — no plaintext copy ever lands there.
+  encrypted copy is written to the workspace — no plaintext copy lands there, with one exception:
+  **#869 (Windows, audio only):** the pinned whisper-cli reads its command line in the system's
+  code page, so a recording whose name or folder has characters outside that code page (Cyrillic
+  or Chinese on a Western-European Windows) cannot be named to it; umlauts on such a Windows read
+  fine. The app does not guess the code page: when the original's path has no ASCII spelling from
+  `workspace/documents/` (a non-ASCII name, or a non-ASCII folder a relative path cannot reach,
+  e.g. a Kit on `D:\` and the file in `C:\Users\Jörg\Musik\`), the transcriber copies it to a
+  **transient** `<uuid>.parse-audio<ext>` in that folder, right before the child starts, and
+  **shreds** it in the same `finally` as the transcript JSON on every outcome (success, failure,
+  cancel). A cancel, a lock, a quit or an engine update that lands while the copy is still being
+  written aborts it (no child is started) and `suspend()`/`stop()` return only after the partial
+  copy is shredded (bounded, like a running child, by the 10 s cleanup cap). Same data class and
+  lifetime as the re-index transient below; the `.parse` infix puts it under the crash sweep
+  (`architecture.md` "Audio transcription (Phase 36)", "#869 amendment").
 - **Re-index:** the stored `.enc` is decrypted to a **transient** working file
   (`<id>.parse<ext>`) for the parser and **shredded** when parsing finishes (success or failure).
 - **Crash recovery:** `shredStalePlaintext` (startup, encrypted vaults) also sweeps stray
