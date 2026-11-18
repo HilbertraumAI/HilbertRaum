@@ -582,10 +582,14 @@ Without internet (or on a drive you set up yourself), add the files instead by r
 `prepare-drive --with-assets`, or fetch only the OCR family with `fetch-runtime --family ocr`
 (`.ps1 -Family ocr` on Windows) — see [`packaging.md`](packaging.md). **Files added this way
 while the app is running are noticed at the next start** — restart the app after adding them.
-If the row names only this setup route and offers no download button, the drive has no usable
-OCR download list — its `model-manifests/runtime-sources.yaml` pins different OCR files than this
-version of the app accepts (the app checks the files against checksums built into it); use the
-script route, or update the app.
+A drive set up with an older version of the app is fine: when the drive's OCR download list
+(`model-manifests/runtime-sources.yaml`) lacks a file this version uses, or names another
+version of it, the app takes that file from its own list (it checks every file against checksums
+built into it). If the row still names only this setup route and offers no download button,
+neither list carries the right files, which points to a damaged app folder. Copy this version of
+HilbertRaum onto the drive again, or refresh the drive's list with `prepare-drive` from the
+matching release and then use the script route (the script reads the drive's list, so on its own
+it fetches only what that older list names).
 
 ---
 

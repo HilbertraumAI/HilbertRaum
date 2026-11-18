@@ -296,7 +296,8 @@ function initBackend(): void {
   for (const warning of policyWarnings) audit('policy_warning', warning)
 
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
-  // #842: the app's own copy, never the launcher's override — the engine pins and the OCR fallback.
+  // #842: the app's own copy, never the launcher's override — the engine pins, and the OCR installer's
+  // second list (per file, #841).
   const bundledManifestsDir = resolveBundledManifestsDir({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -851,8 +852,8 @@ function initBackend(): void {
   registerImagesIpc(ctx, ctx.vision)
   registerTranslateIpc(ctx, ctx.translateJobs)
   registerDownloadIpc(ctx)
-  // The engine pins are `ctx.bundledManifestsDir` (#842); the OCR installer falls back to it when
-  // the drive's yaml carries no `ocr:` block (#410).
+  // The engine pins are `ctx.bundledManifestsDir` (#842); the OCR installer takes each file the
+  // drive's yaml does not pin with the right hash from it (#410, #841).
   registerEngineIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)

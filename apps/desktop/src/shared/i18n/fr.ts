@@ -2983,9 +2983,10 @@ export const fr: UiCatalog<'fr'> = {
     'Ce disque ne contient pas de liste de téléchargement pour les fichiers OCR. Ajoutez-les ' +
     'plutôt avec les scripts de préparation du disque («\u00A0fetch-runtime --family ocr\u00A0»).',
   'main.ocr.sourcesMismatch':
-    'La liste de téléchargement des fichiers OCR sur ce disque ne correspond pas à cette version ' +
-    'de HilbertRaum\u00A0: rien n’a donc été téléchargé. Ajoutez plutôt les fichiers avec les ' +
-    'scripts de préparation du disque («\u00A0fetch-runtime --family ocr\u00A0»).',
+    'Ni la liste de téléchargement des fichiers OCR sur ce disque ni celle de cette copie de ' +
+    'HilbertRaum ne contient les fichiers qu’utilise cette version\u00A0: rien n’a donc été ' +
+    'téléchargé. Ajoutez plutôt les fichiers avec les scripts de préparation du disque ' +
+    '(«\u00A0fetch-runtime --family ocr\u00A0»).',
   'main.ocr.alreadyInstalled':
     'Les fichiers OCR sont déjà sur ce disque. Si la reconnaissance de texte n’est toujours pas ' +
     'proposée, redémarrez HilbertRaum.',

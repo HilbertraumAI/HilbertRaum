@@ -894,7 +894,9 @@ has its own narrow installer (`services/ocr-install.ts`). Its trust anchor is **
 `OCR_PINS` table carries each language's sha256 and exact size, drift-tested against the table
 below and the committed yaml (`tests/unit/ocr-pins.test.ts`); the yaml contributes only the
 download URL (its `dest` is ignored — the destination is always `ocr/<lang>.traineddata.gz`), and
-a yaml whose sha256 differs from the pin is refused. **Changing the pinned data version therefore
+an entry whose sha256 differs from the pin is never used. Each file comes from the drive's yaml
+when its entry matches the pin, else from the app's own copy; with no matching entry in either,
+the install is refused (#841). **Changing the pinned data version therefore
 means editing three places together:** the yaml `ocr:` block, this table, and `OCR_PINS` — the
 drift test fails until they agree.
 

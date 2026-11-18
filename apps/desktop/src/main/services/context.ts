@@ -93,8 +93,8 @@ export interface AppContext {
    * `resources/model-manifests`; dev, the checkout's), never `HILBERTRAUM_MANIFESTS_DIR`. The AI-engine
    * pins come from here, never from `manifestsDir` (#842: on a launcher start that is the drive's
    * copy, so a new app on a drive whose manifests were not refreshed compared the engine with the
-   * drive's old pin and never offered its update). Also the OCR installer's fallback source list
-   * (#410). Required, so no context can leave it out by accident; null reads as "no engine sources".
+   * drive's old pin and never offered its update). Also the OCR installer's second source list, per
+   * file (#410, #841). Required, so no context can leave it out by accident; null reads as "no engine sources".
    */
   bundledManifestsDir: string | null
   /**

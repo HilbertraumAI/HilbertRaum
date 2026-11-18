@@ -14583,9 +14583,14 @@ they rest on._
 
 **§3 Design as built.**
 - **Service** `services/ocr-install.ts` (Electron-free). `OCR_PINS` + `OCR_LICENSE`;
-  `resolveOcrSources` reads the drive's yaml `ocr:` block, falls back to the app-bundled copy only
-  when the drive's offers no usable block (none, or a yaml that does not validate as a whole), and refuses a block that lacks a pinned language or pins a
-  different sha256 (`mismatch` — never "fixed" by falling back); `planOcrDownloads` over the pins
+  `resolveOcrSources` resolves per pinned file: the first source list whose entry for that file
+  carries the pinned sha256, the drive's yaml `ocr:` block first, then the app-bundled copy (a
+  yaml that does not validate as a whole offers no block). An entry with another sha256 is never
+  used; `mismatch` only when some pinned file has a matching entry in no list, `none` when no list
+  offers a block. (#841, 2026-11-18: a valid drive block that lacked a pinned file or pinned
+  another sha256 used to be refused as a whole without trying the bundle, so a drive prepared
+  before `osd` (#538) offered no in-app download once a newer app was copied onto it. The yaml
+  only ever chooses the host; the bytes are the code pins' either way.) `planOcrDownloads` over the pins
   (code hash + fixed `ocr/<lang>.traineddata.gz` destination, yaml URL) skips present + matching
   files. `prepareOcrFolder` creates `ocr/` when missing and refuses a symlink/junction, a
   non-directory, or a realpath outside the root — at start and before every write. Per file:

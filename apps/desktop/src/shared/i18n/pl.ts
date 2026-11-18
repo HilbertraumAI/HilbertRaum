@@ -2847,9 +2847,9 @@ export const pl: UiCatalog<'pl'> = {
     'Na tym dysku nie ma listy pobierania plików OCR. Zamiast tego dodaj je za pomocą skryptów ' +
     'konfiguracji dysku („fetch-runtime --family ocr”).',
   'main.ocr.sourcesMismatch':
-    'Lista pobierania plików OCR na tym dysku nie pasuje do tej wersji aplikacji HilbertRaum, ' +
-    'więc niczego nie pobrano. Zamiast tego dodaj pliki za pomocą skryptów konfiguracji dysku ' +
-    '(„fetch-runtime --family ocr”).',
+    'Ani lista pobierania plików OCR na tym dysku, ani lista w tej kopii HilbertRaum nie zawiera ' +
+    'plików, których używa ta wersja, więc niczego nie pobrano. Zamiast tego dodaj pliki za ' +
+    'pomocą skryptów konfiguracji dysku („fetch-runtime --family ocr”).',
   'main.ocr.alreadyInstalled':
     'Pliki OCR są już na tym dysku. Jeśli rozpoznawanie tekstu nadal nie jest dostępne, uruchom ' +
     'ponownie aplikację HilbertRaum.',

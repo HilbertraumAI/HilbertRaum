@@ -961,13 +961,15 @@ export interface OcrInstallLanguage {
 
 /** What the OCR install dialog states and whether the action can be offered (`ocr:status`). */
 export interface OcrInstallStatus {
-  /** A source list matching the code pins was found (the drive's yaml, else the app-bundled one). */
+  /** Every pinned file has an entry with its pinned hash in some source list (per file: the drive's
+   *  yaml first, then the app's own copy, #841). */
   available: boolean
   /** Every pinned language, in pin order. */
   languages: OcrInstallLanguage[]
   /** Bytes still to download: the sizes of the languages not yet installed. */
   totalBytes: number
-  /** The host(s) the files come from, computed in main from the pinned URLs; null when unavailable. */
+  /** The host(s) the files still to download come from (every file's once all are in place),
+   *  computed in main from the pinned URLs; null when unavailable. */
   sourceHost: string | null
   /** The licence of the language data (code-side: `Apache-2.0`). */
   license: string

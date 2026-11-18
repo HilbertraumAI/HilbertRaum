@@ -308,7 +308,8 @@ Key config points:
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them for the model list via `resolveManifestsDir(app.getAppPath())`, which walks up to
   `resources/model-manifests`; `HILBERTRAUM_MANIFESTS_DIR` (the launchers set it to the drive's copy)
-  overrides that. The AI-engine pins (install, repair, the update notice) and the OCR fallback read
+  overrides that. The AI-engine pins (install, repair, the update notice) and the OCR installer's
+  second source list (per file, where the drive's list lacks it or pins another file, #841) read
   this bundled copy only, by `resolveBundledManifestsDir`: exactly `<process.resourcesPath>/model-manifests`,
   no walk-up and no override, and none when it is missing (#842). Engine entries added to a drive's
   `runtime-sources.yaml` therefore reach the scripts, never the app. Weights + sidecar binaries + the

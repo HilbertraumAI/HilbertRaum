@@ -68,6 +68,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The OCR files can be downloaded in the app on a drive set up with an older version.** If the
+  drive's download list predated the files this version of HilbertRaum uses (a drive prepared with
+  a version before 0.1.63 has no page-orientation file in it), the AI Model screen and the Documents rows
+  offered no download, only the setup scripts. The app now takes each file from the drive's list
+  when it names the right file, and from its own list otherwise (#841).
 - **A lock that finds the workspace's working file removed or damaged now finishes, and says what
   was lost.** If something outside HilbertRaum deleted or overwrote the open working copy of an
   encrypted workspace, the lock was refused and the workspace stayed half open until you quit:
