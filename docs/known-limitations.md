@@ -2120,7 +2120,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   a restart (the job says so — a live recognizer is never replaced mid-session); and the
   **reranker and embedder** keep the startup-frozen selection (the embedder handle is captured at
   wiring time in `main/index.ts` and must never swap mid-session anyway — an index embedded by
-  one model is unusable with another).
+  one model is unusable with another). **Which** embedder is the manifest flagged
+  `default_for_role` (the E5), else the first embeddings manifest in walk order (#848); the
+  workspace's `activeEmbeddingModelId` setting does not choose it. The flag decides whether or not the
+  E5's file is present: with the E5 weight missing, the app runs on the built-in mock embedder (document
+  search finds nothing, every document reads as needing a re-index) even when another embeddings model is
+  installed. That is deliberate: the other model's vectors are a different space from the index the E5
+  built, so a silent switch would leave every document stale now and again when the E5 returns. Download
+  the E5 again from the AI Model screen ("Check all model files" shows a damaged one). It is written only by
+  `models:select` (which the AI Model screen never calls for embeddings), and its one visible reader is
+  the Performance screen's embeddings row, so if it were ever set that row could name a model other than
+  the one in use. Honouring a workspace choice belongs to the deferred embedder swap.
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start

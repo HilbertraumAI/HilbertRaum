@@ -5,7 +5,9 @@ import { foldCase } from '@shared/text-fold'
 export type ModelTask = 'chat' | 'documents' | 'translation' | 'vision' | 'transcriber'
 export type LibraryView = 'installed' | 'browse'
 
-export function modelTask(model: ModelInfo): ModelTask {
+/** The task a model serves; null for a model for a newer HilbertRaum (#847), which serves none here. */
+export function modelTask(model: ModelInfo): ModelTask | null {
+  if (model.role === 'unknown') return null
   return model.role === 'embeddings' || model.role === 'reranker' ? 'documents' : model.role
 }
 
@@ -13,10 +15,33 @@ export function modelTask(model: ModelInfo): ModelTask {
  * #313 — the view half of `ModelsScreen`'s `visibleModels` filter, extracted so the screen and
  * `availableFamilies` below read the SAME rule and can never disagree about which view a model
  * belongs to. "On this drive" lists a model whose state is known-usable or repairable
- * (`isModelOnDrive`); Browse imposes no view restriction at all.
+ * (`isModelOnDrive`); Browse imposes no view restriction at all. A model for a newer HilbertRaum
+ * (#847) is never a library row: `newerAppRows` lists it apart.
  */
 export function matchesLibraryView(model: ModelInfo, view: LibraryView): boolean {
+  if (model.role === 'unknown') return false
   return view !== 'installed' || isModelOnDrive(model)
+}
+
+/**
+ * #847 — the rows of the screen's trailing "Needs a newer HilbertRaum" section: the models for a newer
+ * HilbertRaum (`role: 'unknown'`) the current view and filters yield. "On this drive" lists one whose
+ * declared files are all present — `filesPresent`, the main process's existence check and the only presence
+ * contract this view reads beyond `isModelOnDrive` (design-guidelines §15) — and Browse lists every one. They
+ * serve no task and offer no family option, so a task or family filter hides them; search applies as to every
+ * row.
+ */
+export function newerAppRows(
+  models: ModelInfo[],
+  opts: { view: LibraryView; task: ModelTask | 'all'; family: string; query: string }
+): ModelInfo[] {
+  if (opts.task !== 'all' || opts.family !== 'all') return []
+  return models.filter(
+    (m) =>
+      m.role === 'unknown' &&
+      (opts.view !== 'installed' || m.filesPresent === true) &&
+      matchesModelSearch(m, opts.query)
+  )
 }
 
 /**

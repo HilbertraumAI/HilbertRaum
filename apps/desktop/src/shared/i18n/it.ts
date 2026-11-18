@@ -1163,6 +1163,11 @@ export const it: UiCatalog<'it'> = {
   'models.library.translation': 'Traduzione',
   'models.library.images': 'Immagini',
   'models.library.voice': 'Voce',
+  'models.newerApp.heading': 'Richiede una versione più recente di HilbertRaum',
+  'models.newerApp.badge': 'App da aggiornare',
+  'models.newerApp.hint':
+    'Questo modello è per una versione più recente di HilbertRaum. Aggiorna l’app su questo computer ' +
+    'per usarlo.',
   'models.library.memory': 'Memoria minima: {size}',
   'models.library.clear': 'Cancella i filtri',
   'models.library.showVariants': 'Mostra tutte le varianti ({count})',

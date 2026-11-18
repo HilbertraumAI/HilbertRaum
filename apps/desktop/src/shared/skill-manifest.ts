@@ -267,8 +267,11 @@ const BIDI_CONTROL_RE = new RegExp('[\\u202A-\\u202E\\u2066-\\u2069]')
 /** Strict semver core MAJOR.MINOR.PATCH (drives upgrade/downgrade comparison — §6.5/§9). */
 export const SKILL_SEMVER_RE = /^\d+\.\d+\.\d+$/
 
-/** Parse the leading MAJOR.MINOR.PATCH of a version, ignoring any `-prerelease`/`+build` suffix. */
-function parseSemverCore(v: string): [number, number, number] | null {
+/**
+ * Parse the leading MAJOR.MINOR.PATCH of a version, ignoring any `-prerelease`/`+build` suffix. null = not a
+ * version the §6.5 gate can compare (the registry's #846 re-enable then acts on nothing).
+ */
+export function parseSemverCore(v: string): [number, number, number] | null {
   const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim())
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
 }

@@ -296,6 +296,23 @@ from its first public `1.0.0` release onward.
   retrieval settings that no screen shows are kept within fixed limits as well: a negative or
   huge number of excerpts is brought into range, and NaN or infinity, which used to be stored as
   an empty value, is no longer stored (#868).
+- **A built-in skill that needed a newer HilbertRaum switches itself on once you update.** The
+  app kept such a skill off, as it should, but nothing turned it back on after the update, so it
+  looked like a skill you had switched off yourself. The app now records why a skill is off. A
+  built-in skill that was off only because the app was too old comes back on; a skill you switched
+  off stays off, and so does one you imported (#846).
+- **A model meant for a newer HilbertRaum is now listed on the AI Model screen instead of
+  disappearing.** When the drive holds a model this version of the app can't use, for example
+  after the app on another computer was updated, the model used to vanish from the list without a
+  word, even when its files were on the drive. It now shows at the end of the list under "Needs a
+  newer HilbertRaum", with a note to update the app on this computer. It can't be downloaded,
+  started or checked from here. It also shows under "On this drive" when its files are there
+  (#847).
+- **The document-search model no longer depends on the order a drive lists its files in.** On a
+  drive formatted like most USB sticks, a second document-search model added to the drive could
+  have taken over from the current one, depending only on which file was copied first. Every
+  document would then have needed indexing again. The app now always uses the one marked as the
+  default, and otherwise reads the model list in a fixed order on every computer (#848).
 
 ## [0.1.65] — 2026-11-11
 

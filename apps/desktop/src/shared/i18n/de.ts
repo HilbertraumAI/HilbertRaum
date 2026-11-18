@@ -1250,6 +1250,11 @@ export const de: Record<keyof typeof en, string> = {
   'models.library.translation': 'Übersetzung',
   'models.library.images': 'Bilder',
   'models.library.voice': 'Spracheingabe',
+  'models.newerApp.heading': 'Neuere HilbertRaum-Version nötig',
+  'models.newerApp.badge': 'Neuere App nötig',
+  'models.newerApp.hint':
+    'Dieses Modell ist für eine neuere HilbertRaum-Version. Aktualisiere die App auf diesem ' +
+    'Computer, um es zu nutzen.',
   'models.library.memory': 'Mindestarbeitsspeicher: {size}',
   'models.library.clear': 'Filter zurücksetzen',
   'models.library.showVariants': 'Alle Varianten anzeigen ({count})',

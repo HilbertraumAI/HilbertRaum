@@ -1100,6 +1100,11 @@ export const nl: UiCatalog<'nl'> = {
   'models.library.translation': 'Vertaling',
   'models.library.images': 'Afbeeldingen',
   'models.library.voice': 'Spraak',
+  'models.newerApp.heading': 'Nieuwere versie van HilbertRaum nodig',
+  'models.newerApp.badge': 'Nieuwere app nodig',
+  'models.newerApp.hint':
+    'Dit model is voor een nieuwere versie van HilbertRaum. Werk de app op deze computer bij om het ' +
+    'te gebruiken.',
   'models.library.memory': 'Minimaal geheugen: {size}',
   'models.library.clear': 'Filters wissen',
   'models.library.showVariants': 'Alle varianten tonen ({count})',

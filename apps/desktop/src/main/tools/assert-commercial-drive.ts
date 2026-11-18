@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { assertCommercialDrive, type CommercialAssertion } from '../services/commercial-drive'
-import { discoverManifests } from '../services/models'
+import { discoverManifests, setManifestAppVersion } from '../services/models'
 import {
   isKitPlatform,
   KIT_PLATFORMS,
@@ -98,6 +98,14 @@ function readDriveInputs(root: string): DriveInputs {
     const discovered = discoverManifests(manifestsDir)
     manifests = discovered.manifests
     for (const e of discovered.errors) problems.push(`model manifest invalid: ${e}`)
+    // #847: discovery lists a manifest for a newer HilbertRaum instead of reporting it invalid. A Kit is built
+    // with its own app version, so on a Kit one is always a defect: count it, by role and version.
+    for (const { manifest: u, sourceFile } of discovered.unsupported) {
+      const why = [u.role ? `role "${u.role}"` : 'no role', u.minAppVersion ? `min_app_version ${u.minAppVersion}` : null]
+      problems.push(
+        `model manifest for a newer HilbertRaum: ${sourceFile} (${why.filter(Boolean).join(', ')}) — the app on this Kit cannot use it`
+      )
+    }
     summary.push(`${manifests.length} model manifest(s)`)
   }
   let runtime: RuntimeSources | null = null
@@ -152,6 +160,8 @@ async function main(argv: string[]): Promise<number> {
     console.info = toStderr
     console.debug = toStderr
   }
+  // #847 (a+): a manifest's `min_app_version` is judged against the app version this Kit ships.
+  setManifestAppVersion(args.appVersion)
   const inputs = readDriveInputs(args.target)
   const result: CommercialAssertion = await assertCommercialDrive(
     args.target,

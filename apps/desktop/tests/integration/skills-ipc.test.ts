@@ -453,6 +453,23 @@ describe('skills IPC — enableSkill policy (#583)', () => {
     expect(getSkillsByDeclaredId(db, 'shared').filter((s) => s.enabled)).toHaveLength(1)
   })
 
+  // #846: the reason the reconcile reads to tell the user's "off" (never undone) from the version gate's.
+  it('records why a skill is off: the user (disable), a same-id sibling (enable); enabling clears it', async () => {
+    const { db } = seededHarness({ app: [{ id: 'shared' }], user: [{ id: 'shared' }] }, { reconcile: true })
+    const reasonOf = (installId: string): string | null =>
+      (db.prepare('SELECT disabled_reason FROM skills WHERE install_id = ?').get(installId) as {
+        disabled_reason: string | null
+      }).disabled_reason
+
+    await invoke(handlers, IPC.enableSkill, 'user:shared')
+    expect(reasonOf('app:shared')).toBe('duplicate')
+    expect(reasonOf('user:shared')).toBeNull()
+    await invoke(handlers, IPC.disableSkill, 'user:shared')
+    expect(reasonOf('user:shared')).toBe('user')
+    await invoke(handlers, IPC.enableSkill, 'app:shared')
+    expect(reasonOf('app:shared')).toBeNull()
+  })
+
   it('refuses enabling a skill that needs a newer app and changes nothing', async () => {
     const { db } = seededHarness({ user: [{ id: 'too-new', minAppVersion: '99.0.0' }] }, { reconcile: true })
     expect(enabledOf(db, 'user:too-new')).toBe(false)

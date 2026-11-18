@@ -1168,6 +1168,11 @@ export const ru: UiCatalog<'ru'> = {
   'models.library.translation': 'Перевод',
   'models.library.images': 'Изображения',
   'models.library.voice': 'Распознавание речи',
+  'models.newerApp.heading': 'Нужна более новая версия HilbertRaum',
+  'models.newerApp.badge': 'Нужно обновление',
+  'models.newerApp.hint':
+    'Эта модель предназначена для более новой версии HilbertRaum. Обновите приложение на этом ' +
+    'компьютере, чтобы ее использовать.',
   'models.library.memory': 'Минимальный объем оперативной памяти: {size}',
   'models.library.clear': 'Сбросить фильтры',
   'models.library.showVariants': 'Показать все варианты ({count})',

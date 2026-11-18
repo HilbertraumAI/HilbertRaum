@@ -790,6 +790,67 @@ describe('ModelsScreen — installed and catalog library views', () => {
   })
 })
 
+// #847: a model for a newer HilbertRaum (a role this build does not know, or a `min_app_version` above this app) is
+// listed in its own trailing section, with nothing to act on, instead of vanishing. Frozen old-reader contract: the
+// app-update plan's Appendix B.
+describe('ModelsScreen — a model for a newer HilbertRaum (#847)', () => {
+  const newer = (over: Partial<ModelInfo>): ModelInfo =>
+    model({
+      role: 'unknown',
+      declaredRole: 'hologram',
+      needsNewerApp: true,
+      state: 'unsupported',
+      family: 'holo',
+      download: undefined,
+      ...over
+    })
+  const heading = (): string => t('en', 'models.newerApp.heading')
+
+  it('lists it last under its own heading, with the hint and nothing to download, use or verify', async () => {
+    const user = userEvent.setup()
+    stub({
+      models: [
+        model({ id: 'chat-ok', displayName: 'Chat OK', state: 'installed' }),
+        newer({ id: 'holo-here', displayName: 'Holo Here', filesPresent: true }),
+        newer({ id: 'holo-elsewhere', displayName: 'Holo Elsewhere', filesPresent: false })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Chat OK')
+
+    // On this drive: only the one whose files are here.
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
+    const onDrive = within(screen.getByRole('region', { name: heading() }))
+    expect(onDrive.getByText('Holo Here')).toBeVisible()
+    expect(onDrive.queryByText('Holo Elsewhere')).not.toBeInTheDocument()
+    expect(onDrive.getByText(t('en', 'models.newerApp.badge'))).toBeVisible()
+    expect(onDrive.getByText(t('en', 'models.newerApp.hint'))).toBeVisible()
+    expect(onDrive.queryAllByRole('button')).toEqual([])
+    expect(onDrive.queryByText(t('en', 'models.tech.summary'))).not.toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent).at(-1)).toBe(heading())
+    expect(screen.getByText(tCount('en', 'models.library.results', 2))).toBeInTheDocument() // counted with the rows
+
+    // Browse lists both; the family options never offer its family.
+    await user.click(screen.getByRole('radio', { name: 'Browse models' }))
+    expect(within(screen.getByRole('region', { name: heading() })).getByText('Holo Elsewhere')).toBeVisible()
+    const families = within(screen.getByRole('combobox', { name: 'Family' }))
+      .getAllByRole('option')
+      .map((o) => o.textContent)
+    expect(families).not.toContain('holo')
+
+    // It is no task's model: a task filter hides the section.
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'chat')
+    expect(screen.queryByRole('region', { name: heading() })).not.toBeInTheDocument()
+  })
+
+  it('is listed even when nothing else matches: no "no models" message hides it', async () => {
+    stub({ models: [newer({ id: 'holo-only', displayName: 'Holo Only', filesPresent: false })] })
+    render(<ModelsScreen />)
+    expect(await screen.findByText('Holo Only')).toBeVisible()
+    expect(screen.queryByText(t('en', 'models.library.noAlternatives'))).not.toBeInTheDocument()
+  })
+})
+
 // #527: the composer's dictation hint ("Get the speech model") opens this screen through the
 // 'models:voice' deep link. It used to land on "On this drive" — where a missing speech model, by
 // definition, is not listed — so the user had to find Browse and the Voice task themselves.
