@@ -276,7 +276,7 @@ from its first public `1.0.0` release onward.
   which models are active, the benchmark and graphics card results, and the list of model files
   already checked, which lets a file skip its next check. No screen did this, but a fault in the
   window could have. Such values are now ignored and the rest of the save goes through. The
-  retrieval settings that no screen shows are kept within working limits as well: a negative or
+  retrieval settings that no screen shows are kept within fixed limits as well: a negative or
   huge number of excerpts is brought into range, and NaN or infinity, which used to be stored as
   an empty value, is no longer stored (#868).
 

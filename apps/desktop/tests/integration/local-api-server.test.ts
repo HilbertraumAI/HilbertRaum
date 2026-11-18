@@ -87,17 +87,29 @@ describe('LocalApiServer — bind posture (D2/O5)', () => {
     ['::1', '127.0.0.1']
   ])('a port taken on %s surfaces PortInUseError + lastError (never a crash), leaves no listener on %s, and a deliberate stop clears it — "off" is off, not broken', async ([taken, other], { skip }) => {
     // The blocker takes an ephemeral port and the row reads it back: no gap in which another process could take it.
-    const blocker = net.createServer()
-    const blocked = await new Promise<string | null>((r) => {
-      blocker.once('error', (err: NodeJS.ErrnoException) => r(err.code ?? String(err)))
-      blocker.listen(0, taken, () => r(null))
-    })
-    skip(blocked !== null && taken === '::1', `this host has no IPv6 loopback (${blocked})`)
-    expect(blocked).toBeNull()
-    onTestFinished(() => new Promise<void>((r) => blocker.close(() => r())))
-    const takenPort = (blocker.address() as net.AddressInfo).port
-    // So a listener found on the other loopback below can only be the server's.
-    expect(await accepts(other, takenPort), `something already listens on ${other}:${takenPort}`).toBe(false)
+    // That port is free on `taken`, but an unrelated program may hold the same number on `other`; then a listener
+    // found there below could be that program's, not the server's, so the row draws another port (a few tries).
+    const close = (s: net.Server): Promise<void> => new Promise<void>((r) => s.close(() => r()))
+    let blocker: net.Server | null = null
+    let takenPort = 0
+    for (let attempt = 0; attempt < 5 && blocker === null; attempt++) {
+      const candidate = net.createServer()
+      const blocked = await new Promise<string | null>((r) => {
+        candidate.once('error', (err: NodeJS.ErrnoException) => r(err.code ?? String(err)))
+        candidate.listen(0, taken, () => r(null))
+      })
+      skip(blocked !== null && taken === '::1', `this host has no IPv6 loopback (${blocked})`)
+      expect(blocked).toBeNull()
+      const port = (candidate.address() as net.AddressInfo).port
+      if (await accepts(other, port)) {
+        await close(candidate)
+        continue
+      }
+      blocker = candidate
+      takenPort = port
+    }
+    expect(blocker, `every drawn port was already held on ${other}`).not.toBeNull()
+    onTestFinished(() => (blocker ? close(blocker) : undefined))
     const mgr = new RuntimeManager(() => {
       throw new Error('unused')
     })
