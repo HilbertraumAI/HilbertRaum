@@ -303,9 +303,9 @@ carries ONLY the language data under `ocr/`:
   recognition for scans and photos (optional)"* row on the **AI Model** screen, offers
   **Download OCR files** — a facts-only confirmation, then the pinned `deu` + `eng` files (and `osd`, #538) land in
   `ocr/`. The app pins their sha256 + exact size in code (`services/ocr-install.ts`,
-  drift-tested against the yaml); from the yaml it takes only the URL, never the `dest`. When
-  the drive's yaml offers no usable `ocr:` block (none, or the file does not validate) it falls back
-  to the app-bundled copy; a valid block pinning other files is refused.
+  drift-tested against the yaml); from the yaml it takes only the URL, never the `dest`. Each file
+  comes from the drive's yaml when its entry carries the pinned hash, else from the app's own copy
+  (#841); a file neither list pins that way is refused.
 - **Offline / DIY:** fetch with **`fetch-runtime --family ocr`** (`-Family ocr` on PowerShell) —
   one run covers every OS (the data is platform-independent).
 - Shipped files: `deu.traineddata.gz` (1.27 MB) + `eng.traineddata.gz` (2.82 MB), the

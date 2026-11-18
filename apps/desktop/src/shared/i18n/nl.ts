@@ -2786,9 +2786,10 @@ export const nl: UiCatalog<'nl'> = {
     'Deze schijf heeft geen downloadlijst voor de OCR-bestanden. Voeg ze in plaats daarvan toe ' +
     'met de scripts voor het instellen van de schijf (“fetch-runtime --family ocr”).',
   'main.ocr.sourcesMismatch':
-    'De downloadlijst voor de OCR-bestanden op deze schijf past niet bij deze versie van ' +
-    'HilbertRaum, dus er is niets gedownload. Voeg de bestanden in plaats daarvan toe met de ' +
-    'scripts voor het instellen van de schijf (“fetch-runtime --family ocr”).',
+    'Noch de downloadlijst voor de OCR-bestanden op deze schijf, noch die in deze kopie van ' +
+    'HilbertRaum noemt de bestanden die deze versie gebruikt, dus er is niets gedownload. Voeg de ' +
+    'bestanden in plaats daarvan toe met de scripts voor het instellen van de schijf ' +
+    '(“fetch-runtime --family ocr”).',
   'main.ocr.alreadyInstalled':
     'De OCR-bestanden staan al op deze schijf. Wordt tekstherkenning nog steeds niet aangeboden, ' +
     'start HilbertRaum dan opnieuw.',

@@ -2882,9 +2882,10 @@ export const de: Record<keyof typeof en, string> = {
     'Auf diesem Laufwerk gibt es keine Download-Liste für die OCR-Dateien. Ergänze sie ' +
     'stattdessen mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
   'main.ocr.sourcesMismatch':
-    'Die Download-Liste für die OCR-Dateien auf diesem Laufwerk passt nicht zu dieser Version ' +
-    'von HilbertRaum, deshalb wurde nichts heruntergeladen. Ergänze die Dateien stattdessen ' +
-    'mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
+    'Weder die Download-Liste für die OCR-Dateien auf diesem Laufwerk noch die in dieser Kopie von ' +
+    'HilbertRaum nennt die Dateien, die diese Version verwendet, deshalb wurde nichts ' +
+    'heruntergeladen. Ergänze die Dateien stattdessen mit den Einrichtungsskripten des Laufwerks ' +
+    '(„fetch-runtime --family ocr“).',
   'main.ocr.alreadyInstalled':
     'Die OCR-Dateien liegen bereits auf diesem Laufwerk. Wenn die Texterkennung trotzdem ' +
     'nicht angeboten wird, starte HilbertRaum neu.',

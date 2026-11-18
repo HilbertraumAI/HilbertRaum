@@ -2902,9 +2902,9 @@ export const en = {
     'This drive has no download list for the OCR files. Add them with the drive setup ' +
     'scripts instead ("fetch-runtime --family ocr").',
   'main.ocr.sourcesMismatch':
-    'The OCR download list on this drive does not match this version of HilbertRaum, so ' +
-    'nothing was downloaded. Add the files with the drive setup scripts instead ' +
-    '("fetch-runtime --family ocr").',
+    'Neither the OCR download list on this drive nor the one in this copy of HilbertRaum names ' +
+    'the files this version uses, so nothing was downloaded. Add the files with the drive setup ' +
+    'scripts instead ("fetch-runtime --family ocr").',
   'main.ocr.alreadyInstalled':
     'The OCR files are already on this drive. If text recognition is still not offered, ' +
     'restart HilbertRaum.',

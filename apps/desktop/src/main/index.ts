@@ -851,8 +851,8 @@ function initBackend(): void {
   registerImagesIpc(ctx, ctx.vision)
   registerTranslateIpc(ctx, ctx.translateJobs)
   registerDownloadIpc(ctx)
-  // The engine pins are `ctx.bundledManifestsDir` (#842); the OCR installer falls back to it when
-  // the drive's yaml carries no `ocr:` block (#410).
+  // The engine pins are `ctx.bundledManifestsDir` (#842); the OCR installer takes each file the
+  // drive's yaml does not pin with the right hash from it (#410, #841).
   registerEngineIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)

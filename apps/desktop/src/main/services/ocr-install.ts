@@ -33,15 +33,16 @@ import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 //
 // - WHAT is installed is anchored in CODE (`OCR_PINS`: language, sha256, exact size), drift-tested
 //   against the committed `model-manifests/runtime-sources.yaml`. The drive's user-writable yaml
-//   contributes ONLY the download URL of each pinned language — a yaml whose sha256 differs from
-//   the pin is refused, its `dest` is ignored (the destination is always `ocr/<lang>.traineddata.gz`
+//   contributes ONLY the download URL of each pinned language — an entry whose sha256 differs from
+//   the pin is never used, its `dest` is ignored (the destination is always `ocr/<lang>.traineddata.gz`
 //   under the drive root) and its other languages are ignored. So the yaml can at most redirect the
 //   host (the accepted trust-by-location residual, security-model.md S4), never choose the bytes or
 //   the path. No URL literal lives in `src/` (the R-O2 no-CDN sentinel in tests/unit/ocr.test.ts).
-// - Sources: the drive's `model-manifests/` first; when that yaml offers no usable `ocr:` block
-//   (none, or the file does not validate as a whole), the app-bundled copy (a bare portable exe
-//   reads the bundled one anyway). Neither → unavailable. A VALID drive block that pins other
-//   files is refused, never "fixed" by the fallback.
+// - Sources, per pinned file (#841): the first list whose entry for it carries the pinned sha256,
+//   the drive's `model-manifests/` first (a drive owner's mirror keeps working), then the app's own
+//   copy, which matches the pins by construction (a bare portable exe reads the bundled one anyway).
+//   A yaml that does not validate as a whole offers no list. No list → unavailable; a file that
+//   matches in no list → mismatch, refused.
 // - `planOcrDownloads` decides what to fetch, so a present file matching its pin is skipped — the
 //   same hash-is-state rule `prepare-drive` / `fetch-runtime --family ocr` and the sell gate use.
 // - Per file: `<dest>.part` → `downloadToFile` (https-only per hop, private-host deny, ≤5 redirects,
@@ -157,18 +158,12 @@ function resolveOcrSources(
   )
   const blocks = dirs.map(loadOcrBlock).filter((b): b is OcrSources => b !== null)
   if (blocks.length === 0) return { kind: 'none' }
+  const entries = blocks.flatMap((b) => b.files) // in list order: the drive's first
   const urls = new Map<string, string>()
   for (const pin of pins) {
-    let url: string | null = null
-    for (const block of blocks) {
-      const file = block.files.find((f) => f.lang === pin.lang && f.sha256 === pin.sha256)
-      if (file) {
-        url = file.url
-        break
-      }
-    }
-    if (url === null) return { kind: 'mismatch' }
-    urls.set(pin.lang, url)
+    const file = entries.find((f) => f.lang === pin.lang && f.sha256 === pin.sha256)
+    if (!file) return { kind: 'mismatch' }
+    urls.set(pin.lang, file.url)
   }
   return { kind: 'ok', urls }
 }
@@ -310,11 +305,16 @@ export class OcrInstallManager {
       sizeBytes: pin.sizeBytes,
       installed: tasks.find((t) => t.lang === pin.lang)?.status === 'present-verified'
     }))
+    // The confirmation's "From" names the hosts this install will contact: those of the files still
+    // to fetch (#841 can mix the drive's list and the app's own), or every file's once all are in place.
+    const toFetch = urls
+      ? new Map([...urls].filter(([lang]) => !languages.some((l) => l.lang === lang && l.installed)))
+      : null
     return {
       available: resolved.kind === 'ok',
       languages,
       totalBytes: languages.filter((l) => !l.installed).reduce((sum, l) => sum + l.sizeBytes, 0),
-      sourceHost: urls ? sourceHosts(urls) : null,
+      sourceHost: urls ? sourceHosts(toFetch && toFetch.size > 0 ? toFetch : urls) : null,
       license: OCR_LICENSE
     }
   }

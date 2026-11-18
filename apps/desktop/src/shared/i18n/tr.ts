@@ -2657,9 +2657,9 @@ export const tr: UiCatalog<'tr'> = {
     'Bu sürücüde OCR dosyaları için bir indirme listesi yok. Dosyaları bunun yerine sürücü ' +
     'kurulum betikleriyle ekleyin (“fetch-runtime --family ocr”).',
   'main.ocr.sourcesMismatch':
-    'Bu sürücüdeki OCR indirme listesi bu HilbertRaum sürümüyle eşleşmiyor; bu yüzden hiçbir şey ' +
-    'indirilmedi. Dosyaları bunun yerine sürücü kurulum betikleriyle ekleyin (“fetch-runtime ' +
-    '--family ocr”).',
+    'Ne bu sürücüdeki OCR indirme listesi ne de bu HilbertRaum kopyasındaki liste bu sürümün ' +
+    'kullandığı dosyaları içeriyor; bu yüzden hiçbir şey indirilmedi. Dosyaları bunun yerine ' +
+    'sürücü kurulum betikleriyle ekleyin (“fetch-runtime --family ocr”).',
   'main.ocr.alreadyInstalled':
     'OCR dosyaları zaten bu sürücüde. Metin tanıma hâlâ sunulmuyorsa HilbertRaum’u yeniden ' +
     'başlatın.',

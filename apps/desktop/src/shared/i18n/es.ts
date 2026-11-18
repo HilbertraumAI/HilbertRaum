@@ -2830,9 +2830,9 @@ export const es: UiCatalog<'es'> = {
     'Esta unidad no tiene una lista de descargas para los archivos de OCR. En su lugar, ' +
     'agrégalos con los scripts de configuración de la unidad («fetch-runtime --family ocr»).',
   'main.ocr.sourcesMismatch':
-    'La lista de descargas de OCR de esta unidad no corresponde a esta versión de HilbertRaum, ' +
-    'así que no se descargó nada. En su lugar, agrega los archivos con los scripts de ' +
-    'configuración de la unidad («fetch-runtime --family ocr»).',
+    'Ni la lista de descargas de OCR de esta unidad ni la de esta copia de HilbertRaum incluyen ' +
+    'los archivos que usa esta versión, así que no se descargó nada. En su lugar, agrega los ' +
+    'archivos con los scripts de configuración de la unidad («fetch-runtime --family ocr»).',
   'main.ocr.alreadyInstalled':
     'Los archivos de OCR ya están en esta unidad. Si el reconocimiento de texto sigue sin estar ' +
     'disponible, reinicia HilbertRaum.',

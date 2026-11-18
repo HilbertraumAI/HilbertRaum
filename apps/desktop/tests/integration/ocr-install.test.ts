@@ -254,6 +254,35 @@ describe('sources / destinations (#410)', () => {
     expect(existsSync(join(root, ocrPinRelPath('eng')))).toBe(true)
   })
 
+  // The app's own list is checked against the pins too: with both lists present, a file neither
+  // carries with its pinned hash is still a mismatch, refused before any request.
+  it('a file that neither list pins with its hash is a mismatch, though both lists are there (#841)', async () => {
+    const root = tempRoot('ocr')
+    const driveManifests = manifestsDirWith(root, ocrYaml({ omitLangs: ['eng'] }))
+    const bundled = tempRoot('ocr-bundled')
+    writeFileSync(join(bundled, 'runtime-sources.yaml'), ocrYaml({ host: 'https://bundled.example.test', engSha: sha256('not-eng') }))
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
+    expect((await mgr.status(sourceOpts(root, driveManifests, bundled))).available).toBe(false)
+    await expect(mgr.start(startOpts(root, driveManifests, bundled))).rejects.toThrow(tMain('main.ocr.sourcesMismatch'))
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  // The confirmation's "From" names only the hosts the install will contact: with `deu` already in
+  // place, only `eng` is fetched, from the app's own list, so the drive's mirror is not named.
+  it('the confirmation names only the hosts of the files still to fetch (#841)', async () => {
+    const root = tempRoot('ocr')
+    mkdirSync(join(root, 'ocr'), { recursive: true })
+    writeFileSync(join(root, ocrPinRelPath('deu')), DEU_BYTES)
+    const driveManifests = manifestsDirWith(root, ocrYaml({ host: 'https://drive-mirror.example.test', omitLangs: ['eng'] }))
+    const bundled = tempRoot('ocr-bundled')
+    writeFileSync(join(bundled, 'runtime-sources.yaml'), ocrYaml({ host: 'https://bundled.example.test' }))
+    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
+    const status = await mgr.status(sourceOpts(root, driveManifests, bundled))
+    expect(status.languages.map((l) => [l.lang, l.installed])).toEqual([['deu', true], ['eng', false]])
+    expect(status.sourceHost).toBe('bundled.example.test')
+  })
+
   it('falls back to the app-bundled source list when the drive yaml carries no ocr: block', async () => {
     const root = tempRoot('ocr')
     const driveManifests = manifestsDirWith(root, ocrYaml({ noOcrBlock: true }))
