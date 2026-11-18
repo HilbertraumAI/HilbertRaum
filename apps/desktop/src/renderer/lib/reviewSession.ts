@@ -102,6 +102,18 @@ let timer: ReturnType<typeof setTimeout> | null = null
 let flushInFlight: Promise<void> | null = null
 /** Guards stale async opens (switching reviews mid-load) and post-purge resolutions. */
 let openToken = 0
+/**
+ * Bumped by `purgeReviewSession` (the lock) only — not by an open: the switch's flush loop
+ * checks it so a lock landing mid-write ends the switch, without one open cancelling another.
+ */
+let purgeEpoch = 0
+/**
+ * #837 sweep rule: every DECISION edit is stamped with a rising number (`decidedAt`). A sweep
+ * remembers the number at its click; an item decided after it keeps its local decision through
+ * the sweep's optimistic apply and merge, whether its write is still queued, in flight or done.
+ */
+let decisionSeq = 0
+const decidedAt = new Map<string, number>()
 
 function notify(): void {
   for (const fn of listeners) fn()
@@ -142,11 +154,6 @@ function hasUnsavedEdits(): boolean {
   return pendingItems.size > 0 || pendingHead != null
 }
 
-/** True while item `itemId` has a queued DECISION edit (newer than anything main returns). */
-function hasQueuedDecision(itemId: string): boolean {
-  return pendingItems.get(itemId)?.decision !== undefined
-}
-
 /**
  * #837: an edit a FAILED write left unsaved is waiting for the user's Try again — the one
  * state a switch to another review or a bulk sweep must not run over. (Any other error —
@@ -178,10 +185,13 @@ export async function openReviewSession(target: ReviewHandoffTarget): Promise<vo
   // StrictMode runs that cleanup once more on mount) is waited out: it holds its patches OFF
   // the queue while it writes, a failed write puts its patch back, and the reset below would
   // otherwise leave that failure to land under the new token and be dropped. The pass count is
-  // only a safety valve against edits that never stop arriving.
+  // only a safety valve against edits that never stop arriving. A lock (purge) landing during
+  // any of these waits ends the switch: nothing is opened into the purged store.
+  const epoch = purgeEpoch
   for (let pass = 0; pass < SWITCH_FLUSH_PASSES; pass++) {
     await flushReviewSession().catch(() => {})
     while (flushInFlight) await flushInFlight
+    if (epoch !== purgeEpoch) return
     if (!hasUnsavedEdits() || state.saveState === 'error') break
   }
   // #837: edits still queued now are ones a write FAILED to save (or, past the safety valve,
@@ -202,6 +212,7 @@ export async function openReviewSession(target: ReviewHandoffTarget): Promise<vo
   clearTimer()
   pendingItems = new Map()
   pendingHead = null
+  decidedAt.clear()
   state = { ...INITIAL, loading: true }
   notify()
   try {
@@ -300,6 +311,7 @@ export function editReviewItem(itemId: string, patch: EvidenceReviewItemPatch): 
   if (!state.detail || state.detail.status === 'ready') return
   applyItemLocally(itemId, patch)
   pendingItems.set(itemId, mergeItemPatch(pendingItems.get(itemId), patch))
+  if (patch.decision !== undefined) decidedAt.set(itemId, ++decisionSeq)
   setState({ saveState: 'pending', saveError: null })
   armTimer()
 }
@@ -770,10 +782,13 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
   const reviewId = opened.id
   const token = openToken
   // The rule (#837): what was queued when the sweep was asked for is written FIRST, so the
-  // sweep overrides it; a decision made AFTER that (while this flush writes, or while the
+  // sweep overrides it; a decision made AFTER the click (while this flush writes, or while the
   // sweep's own call is in flight) is newer than the sweep — it stays on screen, the optimistic
-  // apply and the merge below leave it alone, and its queued write is the last word, so the
+  // apply and the merge below leave it alone (`decidedAt` > the click's number, whether its
+  // write is still queued, in flight or already done), and its write is the last word, so the
   // screen and the database agree. A flush another caller has in flight is waited out too.
+  const clickSeq = decisionSeq
+  const decidedAfterClick = (itemId: string): boolean => (decidedAt.get(itemId) ?? 0) > clickSeq
   await flushReviewSession()
   while (flushInFlight) await flushInFlight
   if (token !== openToken) return
@@ -788,7 +803,7 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
   if (ids.size === 0) return
   // Optimistic apply — ONE state commit for the whole sweep, never one per item.
   const optimistic = detail.items.map((i) =>
-    ids.has(i.id) && !hasQueuedDecision(i.id) ? { ...i, decision } : i
+    ids.has(i.id) && !decidedAfterClick(i.id) ? { ...i, decision } : i
   )
   setState({
     detail: { ...detail, items: optimistic, gate: computeReadyGate(optimistic) },
@@ -808,20 +823,21 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
     }
     // Merge the persisted DECISIONS only: a note typed while the sweep was in flight is
     // still pending locally and must not be reverted by the returned rows. Nor is a DECISION
-    // made meanwhile (#837): it is newer than the sweep and its queued write lands after it,
-    // so the screen keeps it — taking the sweep's value would show one decision while the
-    // database ends with another.
+    // made after the click (#837): it is newer than the sweep and its write lands after it, so
+    // the screen keeps it — taking the sweep's value would show one decision while the
+    // database ends with another (also when that write already left the queue: in flight).
     const byId = new Map(updated.map((i) => [i.id, i]))
     const items = current.items.map((i) => {
       const fresh = byId.get(i.id)
-      if (!fresh || hasQueuedDecision(i.id)) return i
+      if (!fresh || decidedAfterClick(i.id)) return i
       return { ...i, decision: fresh.decision }
     })
     setState({
       detail: { ...current, items, gate: computeReadyGate(items) },
-      // Only claim "saved" when nothing else is queued: an edit made WHILE the sweep was in
-      // flight is still debounced, and its own flush reports that outcome.
-      saveState: pendingItems.size > 0 || pendingHead != null ? 'pending' : 'saved',
+      // Only claim "saved" when nothing else is queued or being written: an edit made WHILE
+      // the sweep was in flight is still debounced (or writing), and its flush reports that.
+      saveState:
+        pendingItems.size > 0 || pendingHead != null || flushInFlight != null ? 'pending' : 'saved',
       saveError: null
     })
   } catch (e) {
@@ -852,9 +868,11 @@ export function bulkMarkUndecidedFollowUp(): Promise<void> {
  */
 export function purgeReviewSession(): void {
   openToken += 1
+  purgeEpoch += 1
   clearTimer()
   pendingItems = new Map()
   pendingHead = null
+  decidedAt.clear()
   flushInFlight = null
   state = INITIAL
   notify()

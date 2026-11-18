@@ -301,6 +301,27 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
 
   // Review round 1: Discard waits for a write in flight; a lock (purge) landing during that wait ends the refusal, and
   // Discard must then open nothing — the switch it was asked for belongs to a workspace that is now locked.
+  // Review round 3 (verified by probe): the switch's flush loop awaits writes; a lock (purge) landing during one of them
+  // must end the switch — it used to go on and load the target into the purged store.
+  it('a lock landing while the switch’s flush is writing loads nothing: the purged store stays empty', async () => {
+    const first = makeDetail()
+    const second = makeDetail({ id: 'r2', messageId: 'm2' })
+    const write = deferred<EvidenceReviewItem>()
+    const updateEvidenceReviewItem = vi.fn(() => write.promise)
+    const getEvidenceReview = vi.fn(async (id: string) => (id === 'r2' ? second : first))
+    stubReviewApi({ getEvidenceReview, updateEvidenceReviewItem })
+    await openWith(first)
+    editReviewItem('i1', { decision: 'supported' })
+
+    const switching = openReviewSession({ reviewId: 'r2' })
+    await vi.waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1)) // the switch's flush writes i1…
+    purgeReviewSession() // …when the lock lands
+    write.resolve(makeItem({ id: 'i1', decision: 'supported' }))
+    await switching
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+    expect(getReviewSessionSnapshot()).toMatchObject({ detail: null, loading: false, openError: null, saveState: 'idle' })
+  })
+
   it('a lock landing while Discard waits for a write leaves the purged store empty and reads nothing', async () => {
     const first = makeDetail({ title: 'Lease check' })
     const second = makeDetail({ id: 'r2', messageId: 'm2' })
@@ -894,6 +915,48 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
   // #837 review round 1: a DECISION made while the sweep's IPC is in flight is newer than the sweep. The merge of the
   // returned rows used to overwrite it on screen while its queued write still landed after the sweep (screen
   // `not_reviewed`, database `not_supported`). The screen now keeps it, and it is the last write.
+  // Review round 3 (verified by probe): a decision made during the pre-sweep flush waits for its 600 ms debounce. When
+  // that timer fires while the sweep's call is still in flight, the patch has left the queue (it is being written), and
+  // a merge that only looked at the queue took the sweep's value: screen `not_reviewed` + "Saved", database
+  // `not_supported`. A decision made after the click now keeps its local value whatever its write is doing.
+  it('a decision made after the click whose write runs while the sweep is in flight still wins on screen', async () => {
+    vi.useFakeTimers()
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const backend = bulkBackend(items)
+    const order: string[] = []
+    const firstWrite = deferred()
+    const sweep = deferred()
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      order.push(`item:${id}`)
+      if (order.length === 1) await firstWrite.promise
+      return makeItem({ id, ...patch })
+    })
+    const bulkSpy = vi.fn(async (reviewId: string, action: EvidenceReviewBulkAction) => {
+      order.push(`bulk:${action}`)
+      await sweep.promise
+      return backend.spy(reviewId, action)
+    })
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: bulkSpy
+    })
+    await openWith(detail)
+
+    editReviewItem('p1', { decision: 'supported' })
+    const sweeping = bulkClearDecisions() // its flush is writing p1
+    editReviewItem('p2', { decision: 'not_supported' }) // decided after the click
+    firstWrite.resolve()
+    await vi.advanceTimersByTimeAsync(0) // the sweep's call goes out and waits
+    expect(order).toEqual(['item:p1', 'bulk:clear_decisions'])
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // p2's debounce fires mid-sweep: written now
+    expect(order).toEqual(['item:p1', 'bulk:clear_decisions', 'item:p2'])
+    sweep.resolve()
+    await sweeping
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p2')!.decision).toBe('not_supported')
+  })
+
   it('a decision made while the sweep is in flight stays on screen and is written after the sweep', async () => {
     const items = bulkItems()
     const detail = makeDetail({ items })

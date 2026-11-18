@@ -1000,6 +1000,34 @@ describe('ReviewScreen — a failed save is never dropped silently (#837)', () =
 
   // Review round 2: the card names a failure. If a later save succeeds while it shows (the old screen's exit flush, a
   // timer), that failure is gone, so the card goes ahead with the switch it was shown for instead of claiming it.
+  // Review round 3: the go-ahead is for the switch THIS screen was opened for. A refusal left over from an earlier
+  // switch (the user went Back, a save then succeeded, and they opened a third review) must not open the old target.
+  it('a card left over from an earlier switch never opens that switch’s target when the screen opens another review', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview } = await switchAfterFailedEdit(fail)
+    fail.on = false
+    cleanup() // Back to chat: the card's screen unmounts; its exit flush now succeeds
+    await act(async () => {
+      await flushReviewSession()
+    })
+    render(<ReviewScreen handoff={{ reviewId: 'r3' }} onNavigate={noop} />)
+    await waitFor(() => expect(getEvidenceReview).toHaveBeenCalledWith('r3'))
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+  })
+
+  // Review round 3: while the card's own Try again runs, its save succeeding must not start a second open.
+  it('when Try again’s save succeeds, the card opens the other review once, not twice', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview } = await switchAfterFailedEdit(fail)
+    fail.on = false
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.autosave.retry') }))
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50)) // let any second open run
+    })
+    expect(getEvidenceReview.mock.calls.filter((c) => c[0] === 'r2')).toHaveLength(1)
+  })
+
   it('if a later save succeeds while the card shows, the card goes ahead and opens the other review', async () => {
     const fail = { on: true }
     const { getEvidenceReview, updateEvidenceReviewItem } = await switchAfterFailedEdit(fail)

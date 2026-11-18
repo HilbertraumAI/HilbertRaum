@@ -390,7 +390,11 @@ export function ReviewScreen({
                 "mark all supported" anywhere on this screen (tested). Disabled, not hidden, while
                 an edit a failed write left unsaved is waiting (#837 — the store's own refusal
                 condition, `hasEditsAfterFailedSave`); the visible error line with its Try again
-                is the explanation. Other errors leave nothing queued and block nothing. */}
+                is the explanation. Other errors leave nothing queued and block nothing.
+                Read from the store's module state, not the snapshot: the snapshot changes
+                whenever this answer can turn from false to true (a failed write sets
+                saveState 'error' as it re-queues), and a stale true while a retry writes only
+                keeps the trigger disabled until that write settles and notifies. */}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild disabled={hasEditsAfterFailedSave()}>
                 <Button size="sm">{t('review.bulk.menu')} ▾</Button>
