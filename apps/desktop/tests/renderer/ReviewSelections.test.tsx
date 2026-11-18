@@ -287,7 +287,7 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
     expect(
       screen.getByText(t('en', 'review.progress', { decided: 1, required: 2 }))
     ).toBeInTheDocument()
-    // Decide block 1: the renderer's own gate (computeReadyGate, reviewSession.ts:369) now runs over all three items.
+    // Decide block 1: the store's live gate (the shared deriveReadyGate) now runs over all three items.
     const item1 = screen.getByRole('listitem', { name: t('en', 'review.item.aria', { n: 1 }) })
     fireEvent.click(
       within(item1).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })

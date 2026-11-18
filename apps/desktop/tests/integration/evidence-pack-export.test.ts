@@ -706,6 +706,11 @@ describe('helpers', () => {
     expect(suggestedPackFileName('Ärger — größer', 'html')).toBe('Ärger  größer.html')
     expect(suggestedPackFileName('Contract questions', 'pdf')).toBe('Contract questions.pdf')
     expect(suggestedPackFileName('   ', 'pdf')).toBe('evidence-pack.pdf')
+    // #839 P1h: the stem stops at 60 characters, counted in code points, so the cut never leaves half an astral
+    // letter (U+20000, CJK Ext-B: two UTF-16 units) as a lone surrogate in the suggested name.
+    expect(suggestedPackFileName('A'.repeat(100), 'html')).toBe(`${'A'.repeat(60)}.html`)
+    const astral = '\u{20000}'
+    expect(suggestedPackFileName(`${'A'.repeat(59)}${astral}${astral}`, 'pdf')).toBe(`${'A'.repeat(59)}${astral}.pdf`)
   })
 
   // AUD-15: the writer is ASYNC (fs.promises + a FileHandle fsync) so a multi-MB pack no

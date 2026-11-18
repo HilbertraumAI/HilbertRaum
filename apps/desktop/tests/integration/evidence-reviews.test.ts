@@ -765,6 +765,9 @@ describe('status derivation through the service (D-7 + spec §18.4)', () => {
     expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 0, endOffset: 3 })).toBeNull()
     expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 1, endOffset: 1 })).toBeNull()
     expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: -1, endOffset: 1 })).toBeNull()
+    // Offsets are UTF-16 indexes: a fraction is refused, never rounded (#839 S2; IPC passes any number).
+    expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 0.5, endOffset: 2 })).toBeNull()
+    expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 0, endOffset: 1.5 })).toBeNull()
     expect(createEvidenceSelection(db, review.id, { blockKey: 'b0', startOffset: 0, endOffset: 2 })).not.toBeNull()
   })
 

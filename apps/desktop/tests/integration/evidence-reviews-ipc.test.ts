@@ -74,6 +74,7 @@ import {
   useOfflineGuard
 } from '../helpers/evidence-fixtures'
 import type { FakePrintElectronState, FakePrintWindow } from '../helpers/fake-print-window'
+import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers
@@ -99,7 +100,7 @@ beforeEach(() => {
 })
 
 /** One workspace + the real registrar on H's tripwired context. */
-function harness(o: { unlocked?: () => boolean } = {}) {
+function harness(o: { unlocked?: () => boolean; manifestsDir?: string } = {}) {
   const { db, root } = freshWorkspaceDb('epipc')
   const c = evidenceIpcContext(db, root, o)
   registerEvidenceReviewsIpc(c.ctx)
@@ -257,6 +258,19 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
 
     // -- the phase's hard rule, asserted over the WHOLE flow (the offline guard: after every test):
     expect(runtimeTouched).toEqual([]) // model runtime never consulted, never started
+  })
+
+  // #839 F2: every other row runs with no manifests dir (display name honestly null). With the drive's catalog, create
+  // stamps the model's catalog name once, main-side; the renderer never supplies it.
+  it('create stamps the catalog display name of the conversation model into the generation snapshot', async () => {
+    const { db, runtimeTouched } = harness({ manifestsDir: manifestsDirWith(rawManifest()) })
+    const { messageId } = seedAssistantAnswer(db, { ...RELEVANCE, modelId: 'qwen3-4b-instruct-q4' })
+    const created = (await invoke(handlers, IPC.createEvidenceReview, messageId)).result as EvidenceReviewDetail
+    expect(created.generationSnapshot).toMatchObject({
+      modelId: 'qwen3-4b-instruct-q4',
+      modelDisplayName: 'Qwen3 4B Instruct Q4'
+    })
+    expect(runtimeTouched).toEqual([])
   })
 
   it('payload guards: malformed ids and shapes read as unknown; create refuses garbage loudly', async () => {
@@ -590,6 +604,8 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
       { name: 'PDF', extensions: ['pdf'] }
     ])
     expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
+    // §24.3 (#839 F3): the pack leaves the encrypted workspace; the dialog says so (the macOS sheet shows `message`).
+    expect(ipcState.saveDialog.lastOptions?.message).toBe(tShared('en', 'review.export.encryptionWarning'))
     expect(h.runtimeTouched).toEqual([])
   })
 })

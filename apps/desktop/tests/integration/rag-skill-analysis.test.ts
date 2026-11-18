@@ -23,6 +23,7 @@ import type { Message } from '../../src/shared/types'
 import type { Db } from '../../src/main/services/db'
 import { getSkill } from '../../src/main/services/skills/registry'
 import { createConversation, listMessages } from '../../src/main/services/chat'
+import { loadResultTable } from '../../src/main/services/tables/store'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { SCAN_MARKER_TYPE } from '../../src/main/services/analysis/extract'
@@ -394,6 +395,11 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
     expect(h.runtime.calls).toBe(0)
     expect(msg.content).toContain('```json')
     expect(msg.content).toContain('"totalIn": 2500')
+    // #839 R1: the answer's rows persist with it and the returned message says so, so "Export CSV" shows on the live
+    // answer (every other suite seeds the table directly); a reload reads the same flag.
+    expect(msg.hasResultTable).toBe(true)
+    expect(loadResultTable(h.db, msg.id)?.rows.length).toBeGreaterThan(0)
+    expect(listMessages(h.db, h.conversationId).find((m) => m.id === msg.id)?.hasResultTable).toBe(true)
   })
 })
 

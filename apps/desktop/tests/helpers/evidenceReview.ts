@@ -10,16 +10,13 @@ import type {
   EvidenceSourceSnapshot
 } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
-import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
-import { deriveReadyGate } from '../../src/main/services/evidence-reviews'
+import { EVIDENCE_PACK_OPTION_DEFAULTS, deriveReadyGate } from '../../src/shared/evidence-review'
 import { stubApi } from './renderer'
 
 // Shared renderer-test fixtures for the EP-1 review workspace (plan §7): one detail shaped
 // exactly like the Phase-1 `getEvidenceReview` read-model. Tests override per case.
-// The fixture gate comes from MAIN's `deriveReadyGate` — the authority a real detail would
-// carry — NOT from the renderer's `computeReadyGate` mirror, so footer/gating tests never
-// validate the mirror against itself (review FIX-4; the mirror's equivalence is pinned
-// separately in tests/unit/evidence-review-gate.test.ts).
+// The fixture gate comes from `deriveReadyGate` (`shared/evidence-review.ts`), the one D-7 gate
+// main and the renderer both run (#839); its matrix is tests/unit/evidence-review-gate.test.ts.
 //
 // P4: every successful session open now fires `refreshEvidenceReviewState` (plan §9.1 "on
 // review open"), so review test files stub it structurally via `stubReviewApi` below —
@@ -100,6 +97,8 @@ export function makeDetail(over: Partial<EvidenceReviewDetail> = {}): EvidenceRe
         machineLabel: 'S1',
         kind: 'direct_excerpt',
         identity: 'resolved',
+        // Production always sends one (#839); undefined only reads as 'document' by tolerance.
+        sourceKind: 'document',
         documentId: 'd1',
         documentTitle: 'contract.pdf',
         documentSha256: 'ab'.repeat(32),

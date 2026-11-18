@@ -516,7 +516,7 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
 describe('IPC surface (new P4 channels + real overlay)', () => {
   it('refreshState + acknowledge round-trip; the detail read carries the REAL overlay', async () => {
     const { db, root } = freshWorkspaceDb('epfresh')
-    const { ctx } = evidenceIpcContext(db, root)
+    const { ctx, runtimeTouched } = evidenceIpcContext(db, root)
     registerEvidenceReviewsIpc(ctx)
     const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
@@ -551,6 +551,8 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     // `true` cannot be bound by node:sqlite, so only `safeId` keeps these two from throwing.
     expect((await invoke(handlers, IPC.refreshEvidenceReviewState, true)).result).toBeNull()
     expect((await invoke(handlers, IPC.acknowledgeEvidenceReviewFreshness, true)).result).toBeNull()
+    // Stored facts only (#839 F6): no handler here consulted the model runtime, not even inside its own try/catch.
+    expect(runtimeTouched).toEqual([])
   })
 
   it('FIX-6: an outdated-unacknowledged export over the WIRE rejects with the LOCALIZED copy — no file, no row, no audit event', async () => {
@@ -578,7 +580,7 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
 
   it('sourceContext rejects unknown review ids, unknown keys, and unresolved sources', async () => {
     const { db, root } = freshWorkspaceDb('epfresh')
-    const { ctx } = evidenceIpcContext(db, root)
+    const { ctx, runtimeTouched } = evidenceIpcContext(db, root)
     registerEvidenceReviewsIpc(ctx)
     const { reviewId } = seedReview(db)
     const { result: unknownReview } = await invoke(handlers, IPC.getEvidenceSourceContext, 'nope', 'S1')
@@ -593,6 +595,7 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     expect(malformed).toBeNull()
     // The REVIEW id does reach SQL: `true` cannot be bound, so only `safeId` keeps this from throwing.
     expect((await invoke(handlers, IPC.getEvidenceSourceContext, true, 'S1')).result).toBeNull()
+    expect(runtimeTouched).toEqual([]) // #839 F6
   })
 })
 
@@ -719,6 +722,29 @@ describe('source-in-context (D-5) — stored extraction only', () => {
     expect(ctx.located).toBe(false)
     expect(ctx.before).toBeNull()
     expect(ctx.match).toBeNull()
+  })
+
+  // #839 F4b: a citation may carry no excerpt (`snippet` is optional). There is nothing to look for, so the source is
+  // never "located": without the empty-needle guard, `text.includes(null)` searches for the word "null", accepts a
+  // cited chunk that contains it, and the context read throws.
+  it('a citation with no excerpt is never located, whatever its cited chunk says', () => {
+    const { db } = freshWorkspaceDb('epfresh')
+    const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
+    const chunkId = seedEvidenceChunk(db, { documentId: docId, index: 0, text: 'Any other clause is null and void.', page: 1 })
+    const { messageId } = seedAssistantAnswer(db, {
+      content: 'Claim. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'contract.pdf', documentId: docId, chunkId }],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const detail = seedEvidenceReview(db, { messageId })
+    expect(getEvidenceSourceContext(db, detail.id, 'S1')).toMatchObject({
+      availability: 'available',
+      snippet: null,
+      located: false,
+      before: null,
+      match: null,
+      after: null
+    })
   })
 
   it('a truncated (…-terminated) snippet still locates by its prefix', () => {

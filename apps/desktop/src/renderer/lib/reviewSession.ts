@@ -10,6 +10,7 @@ import type {
   EvidenceReviewPatch,
   ReviewDecision
 } from '@shared/types'
+import { deriveReadyGate } from '@shared/evidence-review'
 import { friendlyIpcError } from './errors'
 
 // Evidence-review session store (EP-1 plan §7.5) — the doctasks idiom (module store +
@@ -359,7 +360,7 @@ function applyItemLocally(itemId: string, patch: EvidenceReviewItemPatch): void 
         }
       : item
   )
-  setState({ detail: { ...detail, items, gate: computeReadyGate(items) } })
+  setState({ detail: { ...detail, items, gate: deriveReadyGate(items) } })
 }
 
 /** Record an item edit: optimistic apply + pending patch + debounce. Refused while the
@@ -538,25 +539,13 @@ export async function discardAndSwitch(): Promise<void> {
 }
 
 /**
- * Mirror of the main-side D-7 ready gate (`deriveReadyGate`) for LIVE progress while edits
- * are still optimistic: required = non-heading BLOCK items (NULL/unknown kind counts as
- * required — the safe direction), decided = any decision other than 'not_reviewed'
- * ('not_applicable' counts as decided). Selections never gate. The AUTHORITATIVE gate for
- * the ready transition itself comes back from `markEvidenceReviewReady` (main recomputes
- * from persisted rows); a main-sourced `detail.gate` is kept as-is on open — this mirror
- * runs only on optimistic in-between edits. Equivalence with main's `deriveReadyGate` is
- * PINNED by a matrix test (review FIX-4 — `tests/unit/evidence-review-gate.test.ts`).
+ * The D-7 gate for LIVE progress while edits are still optimistic: main's own function
+ * (`shared/evidence-review.ts`), run over the store's items. The AUTHORITATIVE gate for the
+ * ready transition comes back from `markEvidenceReviewReady` (main recomputes from persisted
+ * rows); a main-sourced `detail.gate` is kept as-is on open. Exported under this name for open
+ * PR #511, whose preview harness imports it from here (#839, gate G-17).
  */
-export function computeReadyGate(items: readonly EvidenceReviewItem[]): EvidenceReadyGate {
-  let requiredTotal = 0
-  let decidedTotal = 0
-  for (const item of items) {
-    if (item.kind !== 'block' || item.blockKind === 'heading') continue
-    requiredTotal += 1
-    if (item.decision !== 'not_reviewed') decidedTotal += 1
-  }
-  return { eligible: decidedTotal === requiredTotal, requiredTotal, decidedTotal }
-}
+export { deriveReadyGate as computeReadyGate }
 
 /** Merge a returned head (markReady/reopen) into the open detail. */
 function mergeHead(review: EvidenceReview, gate?: EvidenceReadyGate): void {
@@ -758,7 +747,7 @@ export async function addReviewSelection(
     if (created == null) return 'refused'
     // Append — the service assigns the next ordinal, so local order matches the next read.
     const items = [...detail.items, created]
-    setState({ detail: { ...detail, items, gate: computeReadyGate(items) } })
+    setState({ detail: { ...detail, items, gate: deriveReadyGate(items) } })
     return 'added'
   } catch (e) {
     if (token !== openToken) return 'failed'
@@ -779,7 +768,7 @@ export async function deleteReviewSelection(itemId: string): Promise<void> {
     const detail = state.detail
     if (!detail) return
     const items = detail.items.filter((i) => i.id !== itemId)
-    setState({ detail: { ...detail, items, gate: computeReadyGate(items) } })
+    setState({ detail: { ...detail, items, gate: deriveReadyGate(items) } })
   } catch (e) {
     if (token !== openToken) return
     setState({ saveState: 'error', saveError: friendlyIpcError(e) })
@@ -891,7 +880,7 @@ async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, toke
   // already showing stays (review round 5): only a later successful save or Try again clears it.
   const optimistic = detail.items.map((i) => (before.has(i.id) ? { ...i, decision } : i))
   setState({
-    detail: { ...detail, items: optimistic, gate: computeReadyGate(optimistic) },
+    detail: { ...detail, items: optimistic, gate: deriveReadyGate(optimistic) },
     ...(state.saveState === 'error' ? null : { saveState: 'pending', saveError: null })
   })
   // A failed or refused sweep: every swept item with nothing queued goes back to its pre-sweep
@@ -903,7 +892,7 @@ async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, toke
       const items = current.items.map((i) =>
         before.has(i.id) && !queuedDecision(i.id) ? { ...i, decision: before.get(i.id)! } : i
       )
-      setState({ detail: { ...current, items, gate: computeReadyGate(items) } })
+      setState({ detail: { ...current, items, gate: deriveReadyGate(items) } })
     }
     sweepFailed = true
     setState({ saveState: 'error', saveError })
@@ -941,7 +930,7 @@ async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, toke
     // queued, "Saved" when nothing is.
     const failed = state.saveState === 'error'
     setState({
-      detail: { ...current, items, gate: computeReadyGate(items) },
+      detail: { ...current, items, gate: deriveReadyGate(items) },
       ...(failed ? null : { saveState: queued ? 'pending' : 'saved', saveError: null })
     })
     // Anything queued gets a scheduled write, so the line never stands on "Saving…" with

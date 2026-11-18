@@ -1648,16 +1648,19 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   byte-identical), `createEvidenceSelection` (refuses out-of-range AND surrogate-splitting
   offsets — never clamps; F-15), `deleteEvidenceSelection` (selections only — block items are
   structural), `setEvidenceLink` (upsert per (item, key); refuses unknown source keys),
-  `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`, and the pure
+  `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`. The pure
   `deriveReadyGate` (D-7: required = non-heading block items, NULL `blockKind` counts as
-  required; 'not_applicable' counts as decided; selections never gate).
+  required; 'not_applicable' counts as decided; selections never gate) lives in
+  `shared/evidence-review.ts` since #839: the renderer's review store runs the same function
+  for live progress (it was a byte-identical renderer copy, `computeReadyGate`, under an
+  equivalence matrix; that name is still exported from `reviewSession.ts` for PR #511).
 ✅ **Audit literals (types only — no emitter until Phase 1):** `evidence_review_created`,
   `evidence_review_ready`, `evidence_review_deleted`, `evidence_pack_exported`. Metadata
   contract: ids/counts ONLY — never titles, notes, reviewer labels, snippets, or paths.
   (The exhaustive Diagnostics label record forced the matching `diag.audit.*` EN/DE keys to
   land now; behaviorally inert until an event exists.)
-✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix, the FIX-4 renderer-mirror
-  equivalence, the pure snapshot parsers, and the spec-§9.1 `isReviewEligible` rule) +
+✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix, the pure snapshot parsers,
+  and the spec-§9.1 `isReviewEligible` rule) +
   `tests/integration/evidence-reviews.test.ts` (schema on fresh/reopened DBs via `listTables`;
   decided items, notes and the reviewer label surviving a reopen (the restart leg, moved from
   `evidence-reviews-ipc.test.ts`); a pre-P4 workspace gaining `freshness_ack_json`;
@@ -1878,7 +1881,8 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
   `<meta charset>` is the contract; recorded hash = on-disk bytes).
   `suggestedPackFileName(title, format)` slugs the review title (content — which is why
-  path/name never reach audit) + the format's extension.
+  path/name never reach audit), capped at 60 code points (never half an astral letter, #839),
+  + the format's extension.
 ✅ **PDF print harness (P6, `main/services/evidence-pack/print-pdf.ts` — plan §11/D-1):**
   `printEvidencePackHtmlToPdf(html, {packId})` → PDF `Buffer`. Dedicated
   hidden `BrowserWindow` per print — `SECURE_WINDOW_WEB_PREFERENCES` spread (sandboxed),

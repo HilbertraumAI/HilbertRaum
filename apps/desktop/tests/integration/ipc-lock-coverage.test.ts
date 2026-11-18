@@ -167,7 +167,9 @@ const MODULES: Array<{
   {
     name: 'registerEvidenceReviewsIpc',
     register: registerEvidenceReviewsIpc,
-    exempt: new Set<string>()
+    exempt: new Set<string>(),
+    // #839 F5: every evidence channel, not only the one the IPC suite drives, says the module's own sentence.
+    lockedCopy: t('en', 'main.evidenceReviews.locked')
   },
   // local-api wave P4: all three channels read or write the access-key table in the
   // workspace DB (mint / copy / rotate) — none may answer a locked vault.

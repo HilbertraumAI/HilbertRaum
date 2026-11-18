@@ -6,6 +6,7 @@ import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
 import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
 import { makeSummary } from '../helpers/evidenceReview'
+import { t } from '../../src/shared/i18n'
 
 // AUD-12 — the chat transcript's evidence-review chip state costs ONE IPC round trip per
 // conversation open, no matter how long the history is.
@@ -78,7 +79,7 @@ async function settleUntilQuiescent(count: () => number): Promise<void> {
 }
 
 describe('AUD-12 — chat chip state is ONE round trip per conversation open', () => {
-  it(`opens a ${HISTORY_ANSWERS}-answer conversation with exactly ONE batch call`, async () => {
+  it(`opens a ${HISTORY_ANSWERS}-answer conversation with exactly ONE batch call, each chip on its own answer`, async () => {
     const messages = longHistory()
     const getEvidenceReviewSummariesForConversation = vi.fn(async () => [
       makeSummary({ id: 'r-a3', messageId: 'a3' }),
@@ -107,6 +108,17 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
     // cost scaled with the history).
     expect(getEvidenceReviewSummariesForConversation).toHaveBeenCalledTimes(1)
     expect(getEvidenceReviewSummariesForConversation).toHaveBeenCalledWith('c1')
+    // The batch is keyed by MESSAGE id renderer-side (#839 U2f): each summary's chip lands on its own answer, and
+    // every other answer shows none.
+    const chipOf = (block: Element): string | null => block.querySelector('.msg-review-chip')?.textContent ?? null
+    await waitFor(() => {
+      const chips = [...document.querySelectorAll('.msg-block.assistant')].map(chipOf)
+      expect(chips).toHaveLength(HISTORY_ANSWERS)
+      expect(chips.flatMap((chip, i) => (chip === null ? [] : [[`a${i + 1}`, chip]]))).toEqual([
+        ['a3', expect.stringContaining(t('en', 'review.status.draft'))],
+        ['a7', expect.stringContaining(t('en', 'review.status.ready'))]
+      ])
+    })
   })
 
   it('a failing batch read is not retried', async () => {
