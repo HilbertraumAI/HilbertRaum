@@ -115,6 +115,24 @@ describe('resolveModelByRole (M-A3)', () => {
     ).toBe('a-embed')
   })
 
+  // #848 review (frozen constraint, model-policy `default_for_role`): the flag decides among the USABLE manifests. When
+  // no usable manifest of the role is flagged (the flagged one is invalid, or a later release moved it to "needs a newer
+  // HilbertRaum"), the first usable manifest of the role in walk order is the model, the rule of an unflagged set. So a
+  // release must never make the flagged manifest unusable for an older build without flagging a replacement.
+  it('falls back to the first usable manifest of the role when the flagged one is not usable (#848)', () => {
+    setManifestAppVersion('1.0.0')
+    try {
+      const dir = manifestsDirWith(roleManifest('a-other', 'embeddings', 512), {
+        ...roleManifest('z-default', 'embeddings', 512),
+        default_for_role: true,
+        min_app_version: '2.0.0'
+      })
+      expect(resolveModelByRole(dir, ROOT, 'embeddings')?.id).toBe('a-other')
+    } finally {
+      setManifestAppVersion('')
+    }
+  })
+
   // #847 (a+): a manifest for a newer HilbertRaum is display-only. A known role whose `min_app_version` this app
   // does not meet must never become the role's model: this build would start a model it cannot run.
   it('never resolves a manifest for a newer HilbertRaum (#847)', () => {

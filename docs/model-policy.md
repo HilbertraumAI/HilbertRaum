@@ -274,7 +274,15 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   the index; rag-design "Embedding during ingestion"). To move the default, move the flag. At most one
   manifest per role sets it (`committed-catalog.test.ts`). It is accepted on chat, where nothing reads it
   (the active chat model is the user's pick). The workspace's `activeEmbeddingModelId` setting does not
-  choose the embedder (known-limitations.md).
+  choose the embedder (known-limitations.md). The flag decides among the USABLE manifests only: when no
+  usable manifest of the role is flagged (none ever was, or the flagged one is invalid or, for an older app,
+  for a newer HilbertRaum), the first usable manifest of the role in walk order is the model, another
+  embedder included. **Frozen constraint:** a release must never make the `default_for_role` manifest
+  unusable for an older build (no `min_app_version` on it, no field change that build rejects) without
+  flagging a usable replacement in the same release. One function, `pickManifestForRole`
+  (`shared/manifest.ts`), is this rule for what the app composes (`resolveModelByRole`), the Performance
+  screen's role rows and the AI Model screen's ★ on an embeddings card. That ★ marks the composed model when
+  it fits this machine's RAM, and no embeddings card otherwise (the ★ is runnable by construction).
 - **Fields an older app reads are ignored where they are inert, never rejected (#848, D848-3).** A
   manifest field this release reads must not make a later release's manifest vanish from it: a field that
   does nothing for a role is accepted there (`default_for_role` on chat). The older rule that rejects

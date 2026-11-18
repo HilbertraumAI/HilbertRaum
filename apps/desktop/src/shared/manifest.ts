@@ -393,6 +393,19 @@ function isUnsafeManifestPath(p: string): boolean {
 }
 
 /**
+ * #848: THE model for a role, among the USABLE manifests (`discoverManifests().manifests`, walk order): the first one
+ * flagged `default_for_role`, present on the drive or not, else the first of the role. One rule for every place that
+ * names "the role's model" — `resolveModelByRole` (what the app composes), the Performance screen's rows, the
+ * Models-screen ★ on an embeddings card — so they cannot disagree. When no usable manifest of the role is flagged
+ * (none ever was, or the flagged one is invalid or for a newer HilbertRaum), the walk-order fallback applies; hence the
+ * frozen constraint that a release never makes the flagged manifest unusable for an older build without flagging a
+ * replacement (model-policy.md `default_for_role`).
+ */
+export function pickManifestForRole(manifests: readonly ModelManifest[], role: ModelRole): ModelManifest | undefined {
+  return manifests.find((m) => m.role === role && m.defaultForRole === true) ?? manifests.find((m) => m.role === role)
+}
+
+/**
  * #847: does this parsed manifest name a role this build does not know? Only a NON-EMPTY string outside the
  * known roles counts; a missing, blank or non-string role stays an error in `validateManifest`, exactly as
  * before (a typo of the field is not a newer manifest).

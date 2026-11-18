@@ -1136,6 +1136,24 @@ describe('buildModelList — the download size the confirmation states (#768)', 
   })
 })
 
+// #848 review: an embeddings card has nothing to select (the app composes its own pick), so its ★ marks the model the
+// app composes — the flagged default (`pickManifestForRole`) — and only when that model fits this machine's RAM (the ★
+// is runnable by construction, design-guidelines §11). Never another embeddings manifest the RAM ranking prefers.
+describe('buildModelList — the ★ on the embedder follows the composed model (#848)', () => {
+  it('stars the flagged default, not a better-ranked embeddings manifest, and nothing when the default does not fit', async () => {
+    const dir = manifestsDirWith(
+      rawManifest({ id: 'a-ranked', role: 'embeddings', recommendation_rank: 10, recommended_min_ram_gb: 1, recommended_ram_gb: 2 }),
+      rawManifest({ id: 'z-default', role: 'embeddings', default_for_role: true, recommended_min_ram_gb: 4, recommended_ram_gb: 8 })
+    )
+    const starred = async (machineRamGb: number): Promise<string[]> =>
+      (await buildModelList({ manifestsDir: dir, rootPath: tempRoot('root'), developerMode: true, machineRamGb })).models
+        .filter((m) => m.recommended)
+        .map((m) => m.id)
+    expect(await starred(16)).toEqual(['z-default'])
+    expect(await starred(2)).toEqual([]) // the default needs 4 GB: no ★ at all, never the model the app would not run
+  })
+})
+
 describe('buildModelList — RAM gate', () => {
   it('flags models above the machine RAM and recommends the best RAM fit', async () => {
     const dir = manifestsDirWith(

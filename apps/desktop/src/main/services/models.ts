@@ -8,6 +8,7 @@ import {
   isRealSha256,
   manifestNeedsNewerApp,
   parseUnsupportedManifest,
+  pickManifestForRole,
   validateManifest,
   type ModelManifest,
   type ModelRole,
@@ -1665,7 +1666,12 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null },
     opts.speedSignal
   )
-  const recommendedEmbed = recommendModelIdByRam(all, ram, 'embeddings')
+  // #848 review: an embeddings card has nothing to select (the app composes its own pick), so its ★ marks the model
+  // the app composes (`pickManifestForRole`, the flagged default), never another embeddings manifest the RAM ranking
+  // would prefer; and only when it fits this machine's RAM, because the ★ is runnable by construction.
+  const embedPick = pickManifestForRole(all, 'embeddings')
+  const recommendedEmbed =
+    embedPick && Number.isFinite(ram) && ram > 0 && embedPick.recommendedMinRamGb <= ram ? embedPick.id : null
 
   // RT-3 lazy mode: when `onlyVerifyModelId` is present, hash only that model; report every
   // other present weight without hashing. `'onlyVerifyModelId' in opts` distinguishes a

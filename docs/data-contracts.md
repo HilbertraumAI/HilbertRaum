@@ -317,7 +317,9 @@ hard total (the number drifted twice, see DOC-3/F-20).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendChatModelId` (dispatching to
 `recommendModelIdByRam` / `recommendModelIdByVram`; `recommendModelId` is the legacy
-profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`.
+profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`. The embeddings ★ (`ModelInfo.recommended`
+on an embeddings card) is `pickManifestForRole(all, 'embeddings')` when it fits the machine's RAM, not a RAM ranking
+(#848 review; the same pick `resolveModelByRole` composes and the Performance rows name).
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
 `shared/types.ts`. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
 resolved against the **drive root**.

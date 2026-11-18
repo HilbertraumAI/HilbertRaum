@@ -36,6 +36,8 @@ import {
   stubChatRuntime
 } from '../helpers/performance-fixture'
 import { runtimeStatus } from '../helpers/status'
+import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
+import { resolveModelByRole } from '../../src/main/services/resolve-model'
 
 // The snapshot's memory class reads the platform, and no CI leg runs tests on macOS, so
 // these rows state it. Apple Silicon has its own rows in unit/performance and performance-gpu.
@@ -228,6 +230,23 @@ describe('buildPerformanceSnapshot', () => {
     expect(rows.find((r) => r.role === 'reranker')).toMatchObject({ device: 'cpu', loaded: true, lifetime: 'session' })
     expect(rows.find((r) => r.role === 'embeddings')).toMatchObject({ device: 'cpu', loaded: true })
     expect(rows.find((r) => r.role === 'transcriber')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'per-use' })
+  })
+
+  // #848 review: the Performance screen names a role's model by the SAME pick the app composes with (the flagged
+  // default first, `pickManifestForRole` behind `resolveModelByRole`), never simply the first file of the role, so the
+  // embedder row cannot name a model the app does not run. (The `activeEmbeddingModelId` read is a separate follow-up.)
+  it('names the embedder the app composes: the flagged default, even when another embeddings manifest sorts first (#848)', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult() })
+    const dir = manifestsDirWith(
+      rawManifest({ id: 'a-second', role: 'embeddings', local_path: 'models/embeddings/a-second.gguf' }),
+      rawManifest({ id: 'z-default', role: 'embeddings', local_path: 'models/embeddings/z-default.gguf', default_for_role: true })
+    )
+    const rows = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: dir, embedder: { isLoaded: () => false } })).placement.models
+    const row = rows.find((r) => r.role === 'embeddings')
+    expect(row?.modelId).toBe('z-default')
+    expect(row?.modelId).toBe(resolveModelByRole(dir, root, 'embeddings')?.id)
   })
 
   it('the chat row is "loaded" only once the ACTIVE model is running and ready (DR6)', () => {

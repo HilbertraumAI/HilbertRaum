@@ -13,7 +13,7 @@ import type {
   PerformanceSnapshot,
   ResidentModelRow
 } from '../../shared/types'
-import type { ModelManifest } from '../../shared/manifest'
+import { pickManifestForRole, type ModelManifest } from '../../shared/manifest'
 import { detectSystem, runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
 import { effectiveReadOrPersisted, liveChatRecommendation } from './registerModelIpc'
 import { notifyPerformanceChanged } from './performance-notify'
@@ -1042,7 +1042,10 @@ function buildPlacement(
   // landed on the CPU backend, translation when its sidecar's posture is the forced
   // `--device none` (`deviceStatus().device === 'cpu'`, the session fallback latch) or its last
   // start's load log put no buffer on a graphics device (`gpuBuffers === false`, #671).
-  const byRole = (role: ModelManifest['role']): ModelManifest | undefined => manifests.find((m) => m.role === role)
+  // #848 review: a role's model is the one the app composes (`pickManifestForRole`, the function behind
+  // `resolveModelByRole`: the flagged default, else the first in walk order), so a row can never name a model the
+  // app does not run. The embeddings row still prefers `activeEmbeddingModelId` (a separate follow-up).
+  const byRole = (role: ModelManifest['role']): ModelManifest | undefined => pickManifestForRole(manifests, role)
   const embeddingsManifest = settings.activeEmbeddingModelId
     ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
     : byRole('embeddings')
