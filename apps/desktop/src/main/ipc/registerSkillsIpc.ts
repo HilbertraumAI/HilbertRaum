@@ -1,6 +1,5 @@
 import { app, BrowserWindow, dialog } from 'electron'
 import { guardedHandleFor } from './guarded-handle'
-import { writeFile } from 'node:fs/promises'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { createPickerTokens } from './picker-tokens'
@@ -15,7 +14,7 @@ import type {
   StartSkillRunResult
 } from '../../shared/types'
 import { buildDocumentSegmentReader, buildOriginalDocumentReader } from './documentSegments'
-import { bomFor, saveBinaryExport } from './save-export'
+import { saveBinaryExport, saveTextExport } from './save-export'
 import { getLatestUserMessage } from '../services/chat'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -91,25 +90,28 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // none (bank + invoice CSV). The i18n KEYS are resolved here (this closure owns `tMain`), so the
   // dispatch stays content-free. This kills the one-CSV-dialog-for-every-export drift (a redaction copy
   // no longer gets an "Export transactions" title + a `.csv` filter fighting `redacted.txt`).
+  // Serves the transactions and invoice CSV, invoice JSON/XML, `redacted.txt` and `edited.txt` exports.
+  // #838: the dialog + write are the shared `saveTextExport` (save-export.ts), the mirror of `saveBinaryFile`
+  // below: same dialog options and focused-window parenting, the BOM by the CHOSEN path's extension (audit
+  // 2026-07-16 F-10, owner decision D-A 2026-07-17 — `.csv` gets the UTF-8 BOM so Excel, the primary consumer of
+  // the transactions/invoice CSVs, detects the encoding on double-click; `.txt` gets the BOM the P4 posture
+  // mandates for plain text; JSON/XML stay BOM-free), and the atomic tmp → fsync → rename tail. This export used
+  // to `writeFile` straight onto the chosen file, so a failure part-way through left a partial file and, when
+  // replacing a file, destroyed the old one — while the run said "Nothing was changed." Same bytes on success.
   const saveTextFile = async (
     defaultFileName: string,
     content: string,
     dialogMeta: SaveFileDialogMeta = SAVE_DIALOG_CSV
   ): Promise<boolean> => {
-    const win = BrowserWindow.getFocusedWindow()
-    const options = {
-      title: tMain(dialogMeta.titleKey),
-      defaultPath: defaultFileName,
-      filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
-    }
-    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return false
-    // Prefix by the CHOSEN path's extension (audit 2026-07-16 F-10, owner decision D-A 2026-07-17):
-    // `.csv` gets the UTF-8 BOM so Excel — the primary consumer of the transactions/invoice CSVs —
-    // detects the encoding on double-click (no more garbled umlauts); `.txt` (redacted.txt/edited.txt)
-    // now gets the BOM the P4 posture always mandated for plain text. JSON/XML stay BOM-free (bomFor).
-    await writeFile(result.filePath, bomFor(result.filePath) + content, 'utf8')
-    return true
+    const filePath = await saveTextExport(
+      {
+        title: tMain(dialogMeta.titleKey),
+        defaultPath: defaultFileName,
+        filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
+      },
+      content
+    )
+    return filePath != null
   }
 
   // Phase 9 (D77): the MAIN-side BINARY write for the same-format DOCX export — the `.docx` sibling of

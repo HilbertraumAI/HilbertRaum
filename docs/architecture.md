@@ -2279,7 +2279,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   "Export original file" — before #90 imported documents had NO export action at all (the reported
   bug); (4) the write is the shared `saveBinaryExport` (`ipc/save-export.ts`), hoisted from
   `registerSkillsIpc`'s module-local DOCX writer and upgraded to the evidence-pack atomic tail
-  (tmp sibling → fsync → rename), which the skills export now gets too; (5) the byte read holds
+  (tmp sibling → fsync → rename), which the skills DOCX export now gets too (the skills TEXT
+  exports — the CSVs, invoice JSON/XML, `redacted.txt`/`edited.txt` — took the same tail through
+  `saveTextExport` only with #838); (5) the byte read holds
   the `beginDocumentWork` lease (released before the dialog opens) so it cannot interleave with a
   password-change re-key of the sidecar; (6) consent + boundary per the evidence-pack §24.3
   posture — renderer ConfirmDialog warning before the native dialog, same copy in the dialog
@@ -12625,7 +12627,10 @@ edit locate→verify→splice.
   never decrypted just to be discovered non-DOCX). The §14 ceiling holds: the **seam** holds the FS/cipher
   reach via the injected closure; the pure tool never does.
 - **Binary write + save dialog.** `saveBinaryFile` (IPC) is the `.docx` sibling of `saveTextFile` (identical
-  save-dialog + privacy posture, `writeFile` with a Buffer, no `'utf8'`). Each document-transform descriptor
+  save-dialog + privacy posture; bytes written verbatim, no BOM). Both go through the shared atomic writers in
+  `ipc/save-export.ts` — `saveBinaryExport` since #90, `saveTextExport` since #838 (tmp sibling → fsync →
+  rename, so a failed write leaves no partial file and the file it was replacing intact; this record first
+  shipped both as a plain `writeFile` onto the chosen path). Each document-transform descriptor
   names its own `docxDialog` (a `.docx` filter) beside its `.txt` `dialog`; the source-format branch lives in
   the **seam** (keyed off the document's stored extension via `readOriginalDocument`): DOCX source → the DOCX
   writer + `redacted.docx`/`edited.docx`; everything else → the unchanged `.txt` path.

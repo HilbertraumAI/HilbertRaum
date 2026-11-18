@@ -22,14 +22,16 @@ import { join } from 'node:path'
 //      bytes read back OFF DISK;
 //   3. the handle is closed on every path, including failure (an unclosed handle keeps the
 //      tmp file locked on Windows and would defeat the cleanup).
-// Two knobs on the same pass-throughs reach the failure paths a real disk rarely shows:
-// `shortWrite` makes the handle's write store one byte short, `tamper` runs just before the
-// read-back (so the bytes on disk can differ from the buffer that was written).
+// Three knobs on the same pass-throughs reach the failure paths a real disk rarely shows:
+// `shortWrite` makes the handle's write store one byte short, `failClose` makes the handle's close
+// reject after it really closed (#838), `tamper` runs just before the read-back (so the bytes on
+// disk can differ from the buffer that was written).
 
 const calls = vi.hoisted(() => ({
   sync: [] as Array<{ fn: string; path: string }>,
   order: [] as string[],
   shortWrite: false,
+  failClose: false,
   tamper: null as null | ((path: string) => void)
 }))
 
@@ -77,6 +79,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
                   (inner[2] as number) - 1,
                   inner[3]
                 ])
+              }
+              if (prop === 'close' && calls.failClose) {
+                // Really close (so the cleanup can remove the file on Windows), then report a failure.
+                return (async () => {
+                  await (value as () => Promise<void>).apply(target, [])
+                  throw new Error('EIO: injected close failure')
+                })()
               }
               return (value as (...a: unknown[]) => unknown).apply(target, inner)
             }
@@ -257,6 +266,38 @@ describe('AUD-15 — the evidence-pack export tail is async fs, not sync fs on t
     expect(existsSync(tmp)).toBe(false)
     expect(existsSync(dest2)).toBe(false)
     expect(syncCallsUnder(root)).toEqual([])
+    expect(listEvidenceExports(db, reviewId)).toEqual([])
+
+    // #838: the same short write, and then the close fails too. The export reports the WRITE failure (the close used to
+    // replace it), the handle is still closed before the tmp is removed, and nothing is left or recorded.
+    const dest3 = join(root, 'short-and-close.html')
+    calls.order.length = 0
+    calls.shortWrite = true
+    calls.failClose = true
+    try {
+      await expect(exportEvidencePackToFile(db, reviewId, {}, exportDeps(dest3))).rejects.toThrow(/short write/)
+    } finally {
+      calls.shortWrite = false
+      calls.failClose = false
+    }
+    const tmp3 = tmpSiblingUsed(dest3)
+    expect(calls.order.indexOf(`rm:${tmp3}`)).toBeGreaterThan(calls.order.indexOf(`close:${tmp3}`))
+    expect(calls.order.indexOf(`close:${tmp3}`)).toBeGreaterThanOrEqual(0)
+    expect(existsSync(tmp3)).toBe(false)
+    expect(existsSync(dest3)).toBe(false)
+    expect(listEvidenceExports(db, reviewId)).toEqual([])
+
+    // A close that fails after a GOOD write is still a failure (the bytes may not be on disk): rejected, nothing left.
+    const dest4 = join(root, 'close-only.html')
+    calls.order.length = 0
+    calls.failClose = true
+    try {
+      await expect(exportEvidencePackToFile(db, reviewId, {}, exportDeps(dest4))).rejects.toThrow(/injected close failure/)
+    } finally {
+      calls.failClose = false
+    }
+    expect(existsSync(tmpSiblingUsed(dest4))).toBe(false)
+    expect(existsSync(dest4)).toBe(false)
     expect(listEvidenceExports(db, reviewId)).toEqual([])
   })
 

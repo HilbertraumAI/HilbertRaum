@@ -944,12 +944,19 @@ function bulkUpdateStatement(action: EvidenceReviewBulkAction): {
                WHERE review_id = ? AND decision IN (${DECIDED_PLACEHOLDERS})`,
         extra: DECIDED_DECISION_LITERALS
       }
-    default:
+    case 'undecided_follow_up':
       return {
         sql: `UPDATE evidence_review_items SET decision = 'follow_up', updated_at = ?
                WHERE review_id = ? AND decision NOT IN (${DECIDED_PLACEHOLDERS})`,
         extra: DECIDED_DECISION_LITERALS
       }
+    default: {
+      // Compile-time: exhaustive over the union — a new bulk action fails this assignment.
+      // Runtime: an unknown name sweeps NOTHING (the IPC guard never passes one,
+      // `safeBulkAction`); it throws before the transaction opens.
+      const unknown: never = action
+      throw new Error(`evidence review: unknown bulk action ${String(unknown)}`)
+    }
   }
 }
 

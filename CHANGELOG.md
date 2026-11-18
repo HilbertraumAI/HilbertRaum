@@ -243,6 +243,14 @@ from its first public `1.0.0` release onward.
   or Back to chat. Locking the workspace still drops a change that could not be saved. The
   saving status and the Outdated warning are now in place before their text appears, the way
   screen readers announce text most reliably (#837).
+- **A failed skill export no longer destroys the file you chose to replace.** The transactions
+  and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
+  straight onto the chosen file: a full drive or another failure part-way through left a
+  partial file, and an existing file you were replacing was lost, while the message said "The
+  file could not be saved. Nothing was changed." They are now written to a temporary file
+  first and put in place only when complete, like the other exports, so that message is true.
+  When an export fails while writing, for example an evidence pack, the error shown now names
+  the real cause, such as a full drive, instead of a later error from closing the file (#838).
 
 ## [0.1.65] — 2026-11-11
 

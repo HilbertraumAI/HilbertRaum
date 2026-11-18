@@ -1985,7 +1985,9 @@ and the §14 ceiling is exactly as before (no raw `Db`/SQL/FS/net handle in a to
 confidence`) are **content-class**: encrypted DB only, never logged/audited, never exported (§9.5).
 - **The CSV export is the first real FS-write from a skill tool — kept main-side and off every log.** The
   pure tool only *produces* the CSV string (validated against its `outputSchema`); the **seam** does the
-  write, via a main-side `dialog.showSaveDialog` + `writeFile` to a **user-chosen path** — the deliberate
+  write, via a main-side `dialog.showSaveDialog` + the shared atomic `saveTextExport` (tmp sibling → fsync →
+  rename since #838, so a failed write never leaves a partial file or destroys the file being replaced) to a
+  **user-chosen path** — the deliberate
   user-export-of-content precedent (`exportConversation`/`exportSkill`). There is **no FS handle in the
   `SkillToolContext`**; the save capability is injected into the dispatch as an opaque `saveTextFile`. It is
   gated twice: the `export-file` permission ⇒ the renderer's confirm modal ⇒ `confirmed: true` ⇒ the gate
