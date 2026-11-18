@@ -1238,9 +1238,14 @@ password. Four guards close this:
   through `node:fs` (an index cannot be read by name: `INDEXED BY` fails on the app's partial
   index). It also reads the last row of every rowid table, the path the latest writes put near
   the end of the file. SQLite's CORRUPT or NOTADB, or an index root that is no b-tree page, means
-  the file is damaged; any other failure means the probe could not decide, which is never read as
-  lost. On Windows it opens the file in the `\\?\` long-path form, which SQLite needs for a path of
-  260 characters or more (a `.recovery` beside a 251-character working file). A
+  the file is damaged; so do a schema format number no SQLite writes (header byte 47 above 4,
+  which SQLite refuses with a plain error) and a row whose record claims a value longer than SQLite
+  allows (TOOBIG; damage for the probe's own reads only, not for the unlock's open), two shapes of
+  noise the review's fuzz found (review round 3); any other failure means the probe could not
+  decide, which is never read as lost. It reads the schema with `trusted_schema` OFF (on by default
+  in `node:sqlite`), since it may parse a file found on the drive before any unlock. On Windows it
+  opens the file in the `\\?\` long-path form, which SQLite needs for a path of 260 characters or
+  more (a `.recovery` beside a 251-character working file). A
   real database that fails it (one damaged page on a path the probe reads) is treated like
   noise: the lock finishes at the last snapshot, as #855 does, and that session's changes are
   lost (owner decision G-4: discard, not quarantine). **What it misses:** it reads the schema,

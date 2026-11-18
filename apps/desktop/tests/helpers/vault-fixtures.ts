@@ -206,6 +206,50 @@ export function plantProbeTrap(db: Db): void {
   db.exec('CREATE TABLE w3_probe_trap (a, b AS (w3_probe_trap(a)) VIRTUAL); INSERT INTO w3_probe_trap (a) VALUES (1);')
 }
 
+/** SQLite's varint: 7-bit groups, high bit set on all but the last (values below 2^56 here). */
+function sqliteVarint(n: number): Buffer {
+  const groups: number[] = []
+  do {
+    groups.unshift(n % 128)
+    n = Math.floor(n / 128)
+  } while (n > 0)
+  return Buffer.from(groups.map((g, i) => (i < groups.length - 1 ? g | 0x80 : g)))
+}
+
+/**
+ * Noise SQLite reports as SQLITE_TOOBIG, not CORRUPT (#876 review round 3): the first cell of the table leaf at
+ * `rootPage` (4,096-byte pages) is rewritten into the page's free area as a record whose first column claims a TEXT value
+ * longer than SQLite allows (1,000,000,001 bytes), inside a payload sized so that its on-page part and overflow pointer
+ * still fit. Reading that row's first column fails "string or blob too big". The shape Fable's fuzz found (pages that
+ * keep their 8-byte b-tree header over noise bodies), made deterministic.
+ */
+export function oversizedFirstCell(path: string, rootPage: number): void {
+  const pageSize = 4096
+  const minLocal = Math.floor(((pageSize - 12) * 32) / 255) - 23
+  const payload = minLocal + Math.ceil((1e9 + 1 - minLocal) / (pageSize - 4)) * (pageSize - 4)
+  const serial = sqliteVarint(2 * 1_000_000_001 + 13)
+  const header = Buffer.concat([Buffer.from([1 + serial.length + 2]), serial, Buffer.from([0, 0])])
+  const cell = Buffer.concat([
+    sqliteVarint(payload),
+    Buffer.from([1]),
+    header,
+    Buffer.alloc(minLocal - header.length, 0x41),
+    Buffer.from([0, 0, 0, 2])
+  ])
+  const fd = openSync(path, 'r+')
+  try {
+    const page = Buffer.alloc(pageSize)
+    readSync(fd, page, 0, pageSize, (rootPage - 1) * pageSize)
+    if (page[0] !== 0x0d) throw new Error(`oversizedFirstCell: page ${rootPage} is no table leaf (type ${page[0]})`)
+    const at = 8 + 2 * page.readUInt16BE(3) + 64 // in the free area, past the cell pointers
+    cell.copy(page, at)
+    page.writeUInt16BE(at, 8)
+    writeSync(fd, page, 0, pageSize, (rootPage - 1) * pageSize)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /**
  * The existing vault at `vp` (created under `password`) whose open cannot finish on a healthy database (#844): a
  * trigger aborts, with `abortMessage`, the next open's write at `at`. `'backfill'`: a document holds OCR pages but no

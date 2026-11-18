@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -39,6 +40,7 @@ import {
   freshVaultPaths,
   lockedVault,
   noisePastPageOne,
+  oversizedFirstCell,
   plantProbeTrap,
   thrownBy,
   unlockedController,
@@ -461,6 +463,59 @@ describe('issue #876 — a lock whose checkpoint could not finish keeps the sess
     ctrl.lock()
   })
 
+  // #876 review round 3 (R2-S2): the branch a real full drive takes through the retry. The retry's checkpoint cannot
+  // write the main file, so it FAILS (not busy, not damage); the WAL still holds the session, and the lock must refuse.
+  // A read-only main file stands in for the full drive: the close leaves a stale main file and the session's `-wal`.
+  // (Not as root on POSIX, which writes through a read-only mode.)
+  it.skipIf(process.getuid?.() === 0)('a retry that cannot write the main file (the full-drive branch) still refuses: .enc untouched, the session back once it is writable', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    const db = ctrl.requireDb()
+    writeTheSession(db)
+    const staleMain = readFileSync(vp.dbPath) // before the lock's checkpoint: the commits are only in the WAL
+    const sessionWal = readFileSync(`${vp.dbPath}-wal`)
+    const close = db.close.bind(db)
+    ;(db as unknown as { close: () => void }).close = () => {
+      close()
+      writeFileSync(vp.dbPath, staleMain)
+      writeFileSync(`${vp.dbPath}-wal`, sessionWal)
+      chmodSync(vp.dbPath, 0o444)
+    }
+    const encBefore = readFileSync(vp.encPath)
+    try {
+      expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
+      expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    } finally {
+      if (existsSync(vp.dbPath)) chmodSync(vp.dbPath, 0o666) // a lock that went through shredded it
+    }
+    // Writable again, and the session was never lost. The refused lock's re-open of the read-only file could not
+    // finish (best effort, CODE-1a: the closed handle stays and the session reports unlocked), so the next lock fails
+    // on that handle and re-opens it (the open replays the WAL); the one after goes through with the session.
+    expect(ctrl.isUnlocked()).toBe(true)
+    expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
+    expect(ctrl.lock()).not.toHaveProperty('lockNotice')
+    ctrl.unlock(PW)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+    ctrl.lock()
+  })
+
+  // When the WAL refuses the lock before the probe ran, the controller's catch probes the file itself; a structure it
+  // cannot read (not damage) is noted there too, once (#876 review round 2).
+  it('a refused lock whose probe ran in the catch notes the header fallback there, once', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    plantProbeTrap(ctrl.requireDb())
+    ctrl.requireDb().exec('PRAGMA wal_checkpoint(TRUNCATE); PRAGMA busy_timeout = 0;') // the trap in the main file
+    const release = holdTheWal(vp.dbPath)
+    writeTheSession(ctrl.requireDb())
+    try {
+      expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
+      expect(ctrl.takeProbeFallbacks()).toEqual([{ site: 'lock', code: expect.stringMatching(/^sqlite 1\b/) }])
+    } finally {
+      release()
+    }
+  })
+
   it('a main file torn where a full drive stopped the checkpoint, beside a -wal that holds the commits: refused, the session kept, nothing discarded', () => {
     const vp = lockedVault('vault-876', PW)
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, enospc) // the drive is full for the encrypt too
@@ -616,6 +671,42 @@ describe('issue #876 — a -wal that holds nothing, and a structure the probe ca
       }
       reader.close()
     }
+    ctrl.unlock(PW)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(7171)
+    ctrl.lock()
+  })
+
+  // #876 review round 3 (R2-S1): two shapes of noise that SQLite reports with a code other than CORRUPT/NOTADB. The
+  // round-2 header fallback encrypted both over `.enc`; they are damage, so the lock finishes at the last snapshot.
+  it.each<[string, (path: string, collectionsRoot: number) => void]>([
+    ['the schema-format byte (offset 47) is noise, the rest of the header intact', (path) => {
+      const fd = openSync(path, 'r+')
+      try {
+        writeSync(fd, Buffer.from([9]), 0, 1, 47)
+      } finally {
+        closeSync(fd)
+      }
+    }],
+    ['a cell claims a value longer than SQLite allows (SQLITE_TOOBIG)', (path, collectionsRoot) => oversizedFirstCell(path, collectionsRoot)]
+  ])('a working file in which %s finishes at the last snapshot with the notice, .enc untouched', (_what, spoil) => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    updateSettings(ctrl.requireDb(), { contextTokens: 7171 })
+    ctrl.lock() // the last good snapshot holds 7171
+    ctrl.unlock(PW)
+    const db = ctrl.requireDb()
+    const collectionsRoot = (db.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'collections'").get() as { rootpage: number })
+      .rootpage
+    updateSettings(db, { contextTokens: 8282 })
+    const close = db.close.bind(db)
+    ;(db as unknown as { close: () => void }).close = () => {
+      close()
+      spoil(vp.dbPath, collectionsRoot)
+    }
+    const encBefore = readFileSync(vp.encPath)
+
+    expect(ctrl.lock()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+    expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
     ctrl.unlock(PW)
     expect(getSettings(ctrl.requireDb()).contextTokens).toBe(7171)
     ctrl.lock()

@@ -1139,8 +1139,10 @@ head's own weights + KV.
   `\\?\` long form on Windows) that reads the schema, the first row of every table and the last row
   of every rowid table, then the root-page header of every index through `node:fs`. It reads the
   main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file.
-  `damaged` = the SQLite header, but SQLite calls the structure CORRUPT or
-  NOTADB, or an index root is no b-tree page; `not-database` = no SQLite header (noise, empty,
+  `damaged` = the SQLite header, but SQLite calls the structure CORRUPT, NOTADB or (the probe's
+  own reads only, review round 3) TOOBIG, or an index root is no b-tree page, or the page size or
+  the schema format number (header byte 47 above 4) is one no SQLite writes; the schema is read with
+  `trusted_schema` OFF; `not-database` = no SQLite header (noise, empty,
   cut short); `unknown` = the header read itself failed (a hold), never read as lost; `unchecked`
   (review round 2) = the header reads but the structure could not be read for a reason that is not
   damage (any other SQLite error, an index-root read that fails), with `code` (SQLite's result code

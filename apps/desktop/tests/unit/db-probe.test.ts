@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { openDatabase, probeDatabaseFile, walAwaitsCheckpoint } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { tempRoot } from '../helpers/db-fixtures'
-import { plantProbeTrap } from '../helpers/vault-fixtures'
+import { oversizedFirstCell, plantProbeTrap } from '../helpers/vault-fixtures'
 
 // #876: the lock's guard, the #855 lost-copy verdict, the init() salvage, the `.recovery` roll-forward and the v1 rekey
 // stage all decide "is this file a database?" before they encrypt it over `.enc` or shred it. A 16-byte header check
@@ -167,6 +167,26 @@ describe('probeDatabaseFile (#876)', () => {
   it.runIf(uncReachable)('a database on a UNC path is a database', () => {
     expect(probeDatabaseFile(unc).verdict).toBe('database')
     expect(readdirSync(dirname(local))).toEqual(['hilbertraum.sqlite'])
+  })
+
+  // #876 review round 3: two shapes of noise that SQLite reports with a code other than CORRUPT/NOTADB, so the round-2
+  // fallback encrypted them: the schema-format number (header offset 44; SQLite reads its low byte, offset 47) above 4
+  // ("unsupported file format", SQLITE_ERROR) with the rest of the header intact, and a cell whose record claims a value
+  // longer than SQLite allows (SQLITE_TOOBIG). Both are proven damage.
+  it.each<[string, (path: string, roots: Record<string, number>) => void]>([
+    ['the schema-format byte (offset 47) above 4, the rest of the header intact', (path) => {
+      const fd = openSync(path, 'r+')
+      try {
+        writeSync(fd, Buffer.from([9]), 0, 1, 47)
+      } finally {
+        closeSync(fd)
+      }
+    }],
+    ['a first cell claiming a value longer than SQLite allows (SQLITE_TOOBIG)', (path, roots) => oversizedFirstCell(path, roots.collections)]
+  ])('%s is damaged', (_what, spoil) => {
+    const { path, roots } = appDatabase('collections')
+    spoil(path, roots)
+    expect(probeDatabaseFile(path).verdict).toBe('damaged')
   })
 
   // #876 review round 2: the probe may only ADD a refusal or a discard for proven damage. When its SQLite stage fails

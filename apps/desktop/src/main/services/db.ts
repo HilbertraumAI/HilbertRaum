@@ -1128,14 +1128,30 @@ const SQLITE_NOTADB = 26
  * a backfill) is an open that could not finish, not damage.
  */
 export function sqliteJudgedDamaged(err: unknown): boolean {
+  const code = sqlitePrimaryCode(err)
+  return code === SQLITE_CORRUPT || code === SQLITE_NOTADB
+}
+
+/** The primary SQLite result code of a `node:sqlite` error (the low byte of its extended `errcode`), else null. */
+function sqlitePrimaryCode(err: unknown): number | null {
   const code = (err as { errcode?: unknown } | null)?.errcode
-  return typeof code === 'number' && ((code & 0xff) === SQLITE_CORRUPT || (code & 0xff) === SQLITE_NOTADB)
+  return typeof code === 'number' ? code & 0xff : null
 }
 
 /**
+ * SQLITE_TOOBIG: a value longer than SQLite allows. Damage only inside {@link probeDatabaseFile}, whose reads (the
+ * schema, one row per table) can meet such a value only where a record's header claims one, which noise does (#876
+ * review round 3: Fable's fuzz). The open's verdict ({@link sqliteJudgedDamaged}: the unlock's #844 split, the lock's
+ * WAL retry) keeps it out: a backfill or a statement there can raise it on a healthy database (a value over this
+ * build's limit, a bug in a step), and calling that damage would condemn the vault.
+ */
+const SQLITE_TOOBIG = 18
+
+/**
  * What {@link probeDatabaseFile} found at a path (#876): a `database` SQLite can read the structure of; `damaged`, a
- * file that starts with the SQLite header but whose structure SQLite calls CORRUPT or NOTADB (or an index root that is
- * no b-tree page, or a page size no database has); `not-database`, no SQLite header at all (noise, a shred survivor, an
+ * file that starts with the SQLite header but whose structure SQLite calls CORRUPT or NOTADB, or whose rows claim a value
+ * longer than SQLite allows (TOOBIG), or an index root that is no b-tree page, a page size no database has, a schema
+ * format no SQLite writes; `not-database`, no SQLite header at all (noise, a shred survivor, an
  * empty or cut-short file); `gone` (ENOENT); `unknown`, the header read itself failed (a hold, a permission error),
  * which no caller may read as "lost"; `unchecked` (review round 2), the header reads but the structure could not be read
  * for a reason that is NOT damage (SQLite could not open the file through its URI, an I/O error, out of memory, a table
@@ -1308,12 +1324,13 @@ export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
  *    index cannot be read by name (`INDEXED BY` throws "no query solution" on a partial index, and the app has one,
  *    `idx_documents_pending_dest`, so such a probe would refuse every lock; A1 §2.5, trap 2).
  *
- * SQLite's CORRUPT or NOTADB is `damaged`; any other SQLite failure, and an index-root read that fails after the header
- * read, is `unchecked` (with the code): the probe adds a refusal or a discard only for proven damage, so the callers
- * judge an `unchecked` file by its header, as before. A header read that fails is `unknown`. What it reads (the schema, each
- * index root, each table's leftmost and, for rowid tables, rightmost path) is a small part of a large file. It catches
- * an overwrite that starts at the beginning of the file (#208's shred: the review's fuzz missed none of 1,820) or runs
- * to its end (1 of 200 missed), but mostly misses noise confined to a range or a page in between (57–91 % missed in
+ * SQLite's CORRUPT, NOTADB or TOOBIG is `damaged` (as are a page size or a schema format number no SQLite writes, in
+ * step 1); any other SQLite failure, and an index-root read that fails after the header read, is `unchecked` (with the
+ * code): the probe adds a refusal or a discard only for proven damage, so the callers judge an `unchecked` file by its
+ * header, as before. A header read that fails is `unknown`. The schema is read with `trusted_schema` OFF. What it
+ * reads (the schema, each index root, each table's leftmost and, for rowid tables, rightmost path) is a small part of a
+ * large file. It catches an overwrite that starts at the beginning of the file (#208's shred: the review's fuzz missed
+ * none of 1,820) or runs to its end (1 of 200 missed), but mostly misses noise confined to a range or a page in between (57–91 % missed in
  * that fuzz), as the header check did. Milliseconds on a warm cache (the lock logs it as `vault_lock_done.probeMs`); a few hundred
  * random reads on a cold one. Writes nothing and leaves no sidecar. It reads the main file ALONE: when commits still
  * sit in the `-wal` (a checkpoint that did not finish) its verdict is about a stale or torn file, so a caller about to
@@ -1332,6 +1349,10 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
       const stored = header.readUInt16BE(16)
       pageSize = stored === 1 ? 65_536 : stored
       if (pageSize < 512 || pageSize > 65_536 || (pageSize & (pageSize - 1)) !== 0) return answer('damaged')
+      // The schema format number (offset 44, a big-endian u32 of which SQLite reads only the low byte): no SQLite
+      // writes one above 4, and SQLite refuses it with a plain SQLITE_ERROR ("unsupported file format"), which step 2
+      // would report as `unchecked` (#876 review round 3).
+      if (header[47] > 4) return answer('damaged')
       usableSize = pageSize - header[20]
     } finally {
       closeSync(fd)
@@ -1343,6 +1364,10 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
   let db: Db | null = null
   try {
     db = new DatabaseSync(immutableUri(path), { readOnly: true })
+    // The schema read here is whatever the file holds, possibly before any unlock (the init() salvage): no function a
+    // view, trigger or generated column in it names runs with the trust SQLite gives a schema by default (ON in
+    // node:sqlite's build). The app's own schema needs no such trust (#876 review round 3).
+    db.exec('PRAGMA trusted_schema = OFF;')
     const objects = db.prepare('SELECT type, name, rootpage FROM sqlite_schema').all() as Array<{
       type: string
       name: string
@@ -1361,7 +1386,9 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
       } else if (o.type === 'index') indexRoots.push(o.rootpage)
     }
   } catch (err) {
-    return sqliteJudgedDamaged(err) ? answer('damaged') : { verdict: 'unchecked', code: failureCode(err) }
+    return sqliteJudgedDamaged(err) || sqlitePrimaryCode(err) === SQLITE_TOOBIG
+      ? answer('damaged')
+      : { verdict: 'unchecked', code: failureCode(err) }
   } finally {
     try {
       db?.close()
