@@ -8,7 +8,18 @@
 // fs calls go through the mocked module like the suites' own, every wrapper there is pass-through until armed, and
 // the vault primitives below DO reach the recorded `openSync` / `renameSync` / `fsyncSync`. So build the vault state
 // above the `mockClear()` lines (and before arming a failure), never between a `mockClear()` and the measured call.
-import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { SCHEMA_VERSION } from '../../src/main/services/db'
@@ -160,6 +171,26 @@ export function corruptVault<T extends VaultPaths>(vp: T, password: string): T {
   rmSync(src)
   rmSync(vp.dbPath)
   return vp
+}
+
+/**
+ * #876's shape on the SQLite file at `path`: page 1 (the header and the schema root) kept, every byte after it
+ * overwritten in place with random noise, as a write through another program's `r+` handle lands (#208). The first 16
+ * bytes still read "SQLite format 3", so only a probe of the structure can tell. Call it on a file nothing else has
+ * open for writing.
+ */
+export function noisePastPageOne(path: string): void {
+  const fd = openSync(path, 'r+')
+  try {
+    const head = Buffer.alloc(18)
+    readSync(fd, head, 0, head.length, 0)
+    const stored = head.readUInt16BE(16)
+    const pageSize = stored === 1 ? 65_536 : stored
+    const size = fstatSync(fd).size
+    if (size > pageSize) writeSync(fd, randomBytes(size - pageSize), 0, size - pageSize, pageSize)
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /**

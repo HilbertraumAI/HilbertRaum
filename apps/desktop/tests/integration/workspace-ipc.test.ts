@@ -240,6 +240,24 @@ describe('registerWorkspaceIpc', () => {
       'the OCR engine through suspend, never its latching stop (BE-5)',
       (call, latchingStop) => ({ extra: { ocrEngine: { suspend: call, stop: latchingStop } } }),
       true
+    ],
+    // #860 L1: the reranker has seen recent questions and chunk text, and whisper-cli reads decrypted audio.
+    [
+      'the reranker through suspend, never its latching stop (#860 L1)',
+      (call, latchingStop) => ({ extra: { reranker: { suspend: call, stop: latchingStop } } }),
+      true
+    ],
+    [
+      'the transcriber through suspend, never its latching stop (#860 L1)',
+      (call, latchingStop) => ({ extra: { transcriber: { suspend: call, stop: latchingStop } } }),
+      true
+    ],
+    // #860 L2: an embedder that has `suspend` is suspended; its latching `stop` would leave every embed after the next
+    // unlock failing with "Embedder is stopped".
+    [
+      'the embedder through suspend when it has one, never its latching stop (#860 L2)',
+      (call, latchingStop) => ({ suspendEmbedder: call, stopEmbedder: latchingStop }),
+      true
     ]
   ])('lockWorkspace tears down %s while the DB is still open', async (_boundary, install, hasLatchingStop) => {
     const ctrl = unlockedVault()
@@ -357,15 +375,91 @@ describe('registerWorkspaceIpc', () => {
     expect(ctrl.isUnlocked()).toBe(false) // re-encrypted only AFTER the settle
   })
 
-  it('lockWorkspace still locks when a sidecar stop fails (allSettled)', async () => {
+  // #860 L10: …but never longer than the shipped 5 s bound. An unwind that never ends (a handler wedged in a parser,
+  // a skill run parked in a save dialog that was already open) must not hang "Lock now": at the bound the lock goes on
+  // and forfeits only that task's own write. The clock is driven 1 ms short of the bound, then to it. The doc task's
+  // bound is the handler's own race; a skill run's is the real controller's, which the handler hands the bound.
+  it.each([
+    [
+      'doc-task',
+      (base: Record<string, unknown>, reached: () => void) => {
+        base.docTasks = {
+          cancelAllDocTasks: vi.fn(),
+          abortActiveBuild: vi.fn(),
+          awaitActiveTaskSettled: () => {
+            reached()
+            return new Promise<void>(() => {})
+          }
+        }
+      }
+    ],
+    [
+      'skill-run',
+      (base: Record<string, unknown>, reached: () => void) => {
+        const runs = new SkillRunController()
+        // A run that ignores its abort: it stays running for good.
+        runs.start({ skillInstallId: 's', toolName: 'redact_document', documentId: 'doc-l10', documentCount: 1, runner: () => new Promise(() => {}) })
+        const awaitSettled = runs.awaitSettled.bind(runs)
+        runs.awaitSettled = (timeoutMs: number) => {
+          reached()
+          return awaitSettled(timeoutMs)
+        }
+        base.skillRuns = runs
+      }
+    ]
+  ])('lockWorkspace stops waiting for a cancelled %s that never settles at the 5 s bound (#860 L10)', async (_lane, install) => {
     const ctrl = unlockedVault()
-    registerWorkspaceIpc(
-      workspaceIpcCtx(ctrl, {
+    const base = workspaceIpcCtx(ctrl) as unknown as Record<string, unknown>
+    let reached!: () => void
+    const settleAwaited = new Promise<void>((r) => (reached = r))
+    install(base, reached)
+    registerWorkspaceIpc(base as unknown as AppContext)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let done = false
+      const lockP = invoke(handlers, IPC.lockWorkspace).then((r) => {
+        done = true
+        return r
+      })
+      await settleAwaited
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(done).toBe(false)
+      expect(ctrl.isUnlocked()).toBe(true) // still waiting, the DB open
+      await vi.advanceTimersByTimeAsync(1)
+      const { result } = await lockP
+      expect(result).toMatchObject({ state: 'locked' })
+      expect(ctrl.isUnlocked()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // An optional service that fails to stop must never block the security action: the sidecars settle together
+  // (allSettled), and the local API's stop, which runs first, on its own (#860 L8).
+  it.each<[string, WorkspaceIpcCtxOptions]>([
+    [
+      'a sidecar stop fails (allSettled)',
+      {
         stopRuntime: async () => {
           throw new Error('sidecar wedged')
         }
-      })
-    )
+      }
+    ],
+    [
+      'the local API stop fails (#860 L8)',
+      {
+        extra: {
+          localApi: {
+            stop: async () => {
+              throw new Error('listener wedged')
+            }
+          }
+        }
+      }
+    ]
+  ])('lockWorkspace still locks when %s', async (_what, opts) => {
+    const ctrl = unlockedVault()
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, opts))
     const { result } = await invoke(handlers, IPC.lockWorkspace)
     expect(result).toMatchObject({ state: 'locked' })
     expect(ctrl.isUnlocked()).toBe(false)

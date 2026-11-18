@@ -1119,7 +1119,22 @@ head's own weights + KV.
   fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
   its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
   and `VaultOpenFailedError` when the open could not finish otherwise (#844).
-  `lockEncryptedVault(vaultPaths, db, key)` (checkpoint+close → re-encrypt → shred).
+  `lockEncryptedVault(vaultPaths, db, key)` (checkpoint+close → `-wal` check → probe → re-encrypt →
+  shred; it refuses to encrypt when `walAwaitsCheckpoint` says the checkpoint did not finish, and
+  unless the probe says `database`). **`walAwaitsCheckpoint(dbPath)`** (`services/db.ts`, #876
+  review round 1): true when `<dbPath>-wal` has a valid WAL header (magic `0x377f0682`/`0x377f0683`)
+  and frames after it (more than 32 bytes), or exists but cannot be read; a noise `-wal` is false.
+  **`probeDatabaseFile(path)`**
+  (`services/db.ts`, #876) → `'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'`: the
+  header through `node:fs`, then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
+  `\\?\` long form on Windows) that reads the schema, the first row of every table and the last row
+  of every rowid table, then the root-page header of every index through `node:fs`. It reads the
+  main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file. `damaged` = the SQLite header, but SQLite calls the structure CORRUPT or
+  NOTADB, or an index root is no b-tree page; `not-database` = no SQLite header (noise, empty,
+  cut short); `unknown` = the probe could not decide (a hold, any other SQLite error), never read
+  as lost. The one verdict for the lock's guard and its #855 verdict, the startup salvage, the
+  `.recovery` roll-forward and `stageRekey`. `sqliteJudgedDamaged(err)` (the #844 classifier)
+  lives beside it.
   `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that
   allows it and a dev build; the `developerMode` setting plays no part (it lives in the encrypted DB).
 - **Vault format versions (#845):** `vaultFormatVerdict(vaultPaths) → { kind: 'ok' } | { kind:

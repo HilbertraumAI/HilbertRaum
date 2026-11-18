@@ -21,7 +21,7 @@ import { tMain } from './i18n'
 import { canonicalLeafFor } from './ingestion/stored-copy-leaf'
 import { perfMark, perfMs } from './perf'
 import type { Db } from './db'
-import { isWorkspaceNewerError, openDatabase } from './db'
+import { isWorkspaceNewerError, openDatabase, probeDatabaseFile, sqliteJudgedDamaged, walAwaitsCheckpoint } from './db'
 import { seedSettings, updateSettings } from './settings'
 import type { PrivacyPolicy, WorkspaceMode, WorkspaceStateInfo } from '../../shared/types'
 import {
@@ -199,22 +199,6 @@ export class VaultOpenFailedError extends Error {
       sqlite: typeof c?.errstr === 'string' ? c.errstr : null
     }
   }
-}
-
-/** SQLite's primary result codes for "this is not a database" and "this database is corrupt". */
-const SQLITE_CORRUPT = 11
-const SQLITE_NOTADB = 26
-
-/**
- * Whether SQLite itself judged the file damaged (#844): `node:sqlite` errors carry SQLite's
- * extended result code as `errcode`, whose low byte is the primary code. Noise fails the first
- * read with NOTADB (#208); a real database with a damaged page passes that read and fails a later
- * statement with CORRUPT. Anything else (a full drive, an I/O error, a constraint, a JS error in
- * a backfill) is an open that could not finish, not damage.
- */
-function sqliteJudgedDamaged(err: unknown): boolean {
-  const code = (err as { errcode?: unknown } | null)?.errcode
-  return typeof code === 'number' && ((code & 0xff) === SQLITE_CORRUPT || (code & 0xff) === SQLITE_NOTADB)
 }
 
 /** What a failure of the unlock's open, or of its own settings writes, is thrown as (#208, #247,
@@ -869,35 +853,6 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
 }
 
 /**
- * #855 — what a refused lock finds at the working file: still a `database` (re-open it), `gone`
- * (ENOENT), `not-database` (readable, but no SQLite header), or `unknown` (the probe itself failed:
- * a hold, a permission error). Only `gone` and `not-database` are judged lost.
- */
-function probeWorkingCopy(path: string): 'database' | 'gone' | 'not-database' | 'unknown' {
-  try {
-    return fileHasSqliteHeader(path) ? 'database' : 'not-database'
-  } catch (err) {
-    return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'gone' : 'unknown'
-  }
-}
-
-/** A real SQLite database file starts with this 16-byte header. */
-const SQLITE_HEADER = Buffer.from('SQLite format 3\u0000')
-
-/** True when the file begins with the SQLite header (guards the CODE-1b roll-forward
- *  against garbage — e.g. a failed shred's random-overwrite whose unlink also failed). */
-function fileHasSqliteHeader(path: string): boolean {
-  const buf = Buffer.alloc(SQLITE_HEADER.length)
-  const fd = openSync(path, 'r')
-  try {
-    const got = readSync(fd, buf, 0, buf.length, 0)
-    return got === buf.length && buf.equals(SQLITE_HEADER)
-  } finally {
-    closeSync(fd)
-  }
-}
-
-/**
  * full-audit 2026-07-11 CODE-1b — the salvage half of the startup crash sweep. A FAILED
  * lock (encryptFile threw after checkpoint + close — ENOSPC is realistic on a nearly-full
  * stick) leaves the plaintext working file as the ONLY fresh copy of the session's data,
@@ -914,7 +869,8 @@ function fileHasSqliteHeader(path: string): boolean {
  *     mid-checkpoint (torn), so rolling it forward could replace the intact stale `.enc`
  *     with garbage. That state stays shredded — the documented power-cut trade-off
  *     (docs/security-model.md "Lock failure & durability");
- *   • the file starts with the SQLite header — a failed shred's random-overwrite must
+ *   • the file is a database SQLite can read (`probeDatabaseFile`, #876): a failed shred's
+ *     random-overwrite, or a file whose header survived but whose structure did not, must
  *     never be re-encrypted over the good `.enc`.
  *
  * Returns what happened, because the caller's next step depends on it (#242): `'preserved'`
@@ -930,7 +886,11 @@ export function preserveNewerPlaintext(vaultPaths: VaultPaths): PreserveOutcome 
     if (!existsSync(vaultPaths.dbPath) || !existsSync(vaultPaths.encPath)) return 'not-needed'
     if (existsSync(`${vaultPaths.dbPath}-wal`) || existsSync(`${vaultPaths.dbPath}-shm`)) return 'not-needed'
     if (statSync(vaultPaths.dbPath).mtimeMs <= statSync(vaultPaths.encPath).mtimeMs) return 'not-needed'
-    if (!fileHasSqliteHeader(vaultPaths.dbPath)) return 'not-needed'
+    // #876: the structure, not only the header. A probe that cannot decide (a hold, the file
+    // vanishing) refuses the sweep, as any other doubt here does (#242).
+    const probe = probeDatabaseFile(vaultPaths.dbPath)
+    if (probe === 'not-database' || probe === 'damaged') return 'not-needed'
+    if (probe !== 'database') return 'failed'
     const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
     // full-audit 2026-07-12 REL-1 — shred a pre-existing `.recovery` BEFORE the rename. Any
     // `.recovery` coexisting with a working dbPath is spent or garbage (an intervening unlock
@@ -1205,13 +1165,9 @@ export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataK
   // #208 — same guard as the lock path: the staged file replaces `.enc` right after the
   // descriptor commit, so encrypting a shred-survivor (or anything else that is not the
   // checkpointed database) here would destroy the vault through the rekey journal instead.
-  let sourceIsDatabase = false
-  try {
-    sourceIsDatabase = fileHasSqliteHeader(vaultPaths.dbPath)
-  } catch {
-    /* unreadable working file → refuse below */
-  }
-  if (!sourceIsDatabase) {
+  // #876: the structure, not only the header; an unreadable working file is refused too. The
+  // probe reads the main file the checkpoint above completed, beside the open connection.
+  if (probeDatabaseFile(vaultPaths.dbPath) !== 'database') {
     throw new Error(
       'Refusing to stage the password change: the working database file is not a SQLite ' +
         'database (it may have been overwritten).'
@@ -1553,7 +1509,8 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     // failed lock — or (b) if the shred's random-overwrite ran but the unlink failed,
     // encrypt GARBAGE over the good `.enc` (GCM verifies fine — it is our own ciphertext)
     // and destroy the workspace. So roll forward only a snapshot that is still the
-    // freshest data: a real SQLite file (header) strictly NEWER than `.enc` (mtime; a
+    // freshest data: a database SQLite can read (`probeDatabaseFile`: the structure, not only
+    // the header, #876) strictly NEWER than `.enc` (mtime; a
     // missing `.enc` counts as older — restoring an unlockable vault beats none). Anything
     // else is a spent or corrupt leftover: shred it (retrying the failed unlink) and
     // unlock normally.
@@ -1567,8 +1524,11 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       // survives untouched.
       let fresher: boolean | null = null
       try {
+        // A probe that cannot decide (a hold, the file vanishing) is the probe error handled below.
+        const probe = probeDatabaseFile(recoveryPath)
+        if (probe === 'unknown' || probe === 'gone') throw new Error(`The .recovery probe could not decide (${probe})`)
         fresher =
-          fileHasSqliteHeader(recoveryPath) &&
+          probe === 'database' &&
           (!existsSync(vaultPaths.encPath) ||
             statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
       } catch {
@@ -1693,18 +1653,31 @@ export function lockEncryptedVault(
   // `.enc` (a recoverable vault) instead of replacing it with authenticated noise; the
   // session's unsaved delta is already lost either way. An UNREADABLE source is refused
   // too — encrypting bytes we cannot even probe over the vault is never the safe branch.
-  // The controller maps the throw like any lock failure (CODE-1a), and the next launch's
-  // sweep shreds the garbage (no SQLite header ⇒ preserveNewerPlaintext ignores it).
-  let sourceIsDatabase = false
-  try {
-    sourceIsDatabase = fileHasSqliteHeader(vaultPaths.dbPath)
-  } catch {
-    /* unreadable/missing working file → refuse the encrypt below */
+  // The controller maps the throw like any lock failure (CODE-1a); since #855 it finishes the
+  // lock at the last snapshot when its own probe judges the file gone or no database.
+  // #876 — "a database" is SQLite's verdict on the STRUCTURE (`probeDatabaseFile`), not the
+  // 16-byte header: the checkpoint above writes page 1 back from the WAL, so a file overwritten
+  // in place while the session's last commits sat there starts with a valid header over noise.
+  // #876 review round 1 — a `-wal` that still holds commits after the close means the checkpoint
+  // did not finish (a full drive: commits still land in the WAL's allocated space, the copy back
+  // fails where the main file has to grow). The main file alone is then stale, or torn where the
+  // copy stopped, while the session is intact in it plus the WAL. Encrypting that main file would
+  // lose the session's commits once the WAL is shredded below (which happened before); judging it
+  // with the probe would call a good session damaged. So refuse first: the controller re-opens the
+  // session (the open replays the WAL) and the user frees space and locks again (CODE-1a).
+  if (walAwaitsCheckpoint(vaultPaths.dbPath)) {
+    throw new Error(
+      'Refusing to lock: the checkpoint did not finish, so the -wal still holds commits the working ' +
+        'database file lacks. Keeping the session open and the previous encrypted snapshot.'
+    )
   }
-  if (!sourceIsDatabase) {
+  const probeT0 = performance.now()
+  const probe = probeDatabaseFile(vaultPaths.dbPath)
+  const probeMs = perfMs(probeT0)
+  if (probe !== 'database') {
     throw new Error(
       'Refusing to lock: the working database file is not a SQLite database (it may have ' +
-        'been overwritten). Keeping the previous encrypted snapshot.'
+        `been overwritten; probe: ${probe}). Keeping the previous encrypted snapshot.`
     )
   }
   const encryptT0 = performance.now()
@@ -1717,6 +1690,7 @@ export function lockEncryptedVault(
   // appendFileSync, so it lands before app.exit(). checkpointMs includes db.close().
   perfMark('vault_lock_done', {
     checkpointMs,
+    probeMs,
     encryptMs,
     shredMs: perfMs(shredT0),
     dbBytes
@@ -2262,15 +2236,17 @@ export class WorkspaceController {
         // `.enc`.
         //
         // #855 — and a working file that is GONE, or there but no longer a database (#208's
-        // noise, a truncation), holds nothing newer than `.enc`: the session's changes since
-        // the last lock are lost either way, and `.enc` is the last good snapshot. So the lock
+        // noise, a truncation, and since #876 a header over noise: `probeDatabaseFile` judges
+        // the structure, the same probe the guard above refused on), holds nothing newer than
+        // `.enc`: the session's changes since the last lock are lost either way, and `.enc` is the
+        // last good snapshot. So the lock
         // FINISHES instead of keeping a closed handle (which left the session reporting
         // `unlocked` on a database that no call could use, refused every later lock and kept
         // the key in memory until quit): shred what is left — the noise itself, and the
         // `-wal`/`-shm` a vanished main file leaves behind (SQLite sees the database moved and
         // skips the delete on close), plaintext pages no main file can replay — zero the key,
         // and report `locked` with a notice the lock screen shows. That is what the next
-        // launch's sweep would do (`preserveNewerPlaintext` keeps only a header-bearing file
+        // launch's sweep would do (`preserveNewerPlaintext` keeps only a database SQLite can read
         // with no live sidecars), done now, so an unlock in this session opens `.enc` at once.
         // A file the probe cannot READ (a hold, a permission error) is not judged lost: it may
         // be the only fresh copy, so it keeps the closed handle, and with it the refusal of any
@@ -2279,8 +2255,17 @@ export class WorkspaceController {
         // vanished (a USB stick dropping out, a folder moved away) reads as ENOENT for both, and
         // the working file may come back newer than `.enc`.
         const dbPath = this.vaultPaths.dbPath
-        const workingCopy = probeWorkingCopy(dbPath)
-        if ((workingCopy === 'gone' || workingCopy === 'not-database') && existsSync(this.vaultPaths.encPath)) {
+        // #876 review round 1: a `-wal` that still holds commits beside a working file that is there
+        // means the checkpoint did not finish (a full drive), not that the session is lost: the probe
+        // reads the main file alone, which is then stale or torn while the session is intact in it
+        // plus the WAL. Never discarded; re-opened below (the open replays the WAL). A `-wal` that is
+        // noise holds nothing, and a WAL whose main file is gone cannot be replayed: both are judged as
+        // before.
+        const workingCopy = probeDatabaseFile(dbPath)
+        const walPending = workingCopy !== 'gone' && walAwaitsCheckpoint(dbPath)
+        const lost =
+          workingCopy === 'gone' || (!walPending && (workingCopy === 'not-database' || workingCopy === 'damaged'))
+        if (lost && existsSync(this.vaultPaths.encPath)) {
           shredFile(dbPath)
           cleanSidecars(dbPath)
           this.dropKeyAndHandle()
@@ -2289,9 +2274,10 @@ export class WorkspaceController {
         // Not judged lost, but a main file that is gone still leaves its `-wal`/`-shm` behind
         // (#853): plaintext pages no main file can replay, shredded now rather than left on the
         // drive until the next launch. Only then: beside an existing file, an un-checkpointed WAL
-        // (a checkpoint that hit the full disk) may hold data the next launch's salvage needs.
+        // (a checkpoint that hit the full disk) holds the session: the re-open replays it, whatever the
+        // main file alone looks like.
         try {
-          if (workingCopy === 'database') this._db = openDatabase(dbPath)
+          if (workingCopy === 'database' || (walPending && workingCopy !== 'unknown')) this._db = openDatabase(dbPath)
           else if (workingCopy === 'gone') cleanSidecars(dbPath)
         } catch {
           // Re-open is best-effort: if the disk is too broken even for that, keep the
@@ -2305,9 +2291,10 @@ export class WorkspaceController {
     }
     // AUD-02: the branch above is skipped for a `plaintext_dev` workspace — there is no vault to
     // re-encrypt, so `lock()` is a deliberate no-op and the DB stays OPEN. Disarm the latch in
-    // that case (and in any other path that leaves the DB open), or an interactive "Lock now" on
-    // a dev workspace would leave the session refusing every content surface for good: only an
-    // unlock clears the latch, and a plaintext workspace never unlocks again.
+    // that case (and in any other path that leaves the DB open). The UI offers no Lock now on a
+    // dev workspace, but a direct `workspace:lock` call arms the latch, and left armed it would
+    // refuse every content surface for good: only an unlock clears the latch, and a plaintext
+    // workspace never unlocks again.
     if (this._db !== null) this._locking = false
     return this.getState()
   }

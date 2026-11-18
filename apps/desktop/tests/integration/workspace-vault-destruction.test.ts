@@ -15,6 +15,8 @@ import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { inspect } from 'node:util'
 import {
+  decryptFile,
+  type encryptFile,
   unlockEncryptedVault,
   lockEncryptedVault,
   stageRekey,
@@ -27,12 +29,16 @@ import {
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { Db } from '../../src/main/services/db'
+import { openRawDb } from '../helpers/db-fixtures'
 import {
   ENCRYPTION_REQUIRED,
   corruptVault,
   damagedVault,
   freshVaultPaths,
   lockedVault,
+  noisePastPageOne,
+  thrownBy,
+  unlockedController,
   upgradeBlockedVault
 } from '../helpers/vault-fixtures'
 
@@ -53,8 +59,27 @@ import {
 // (The fourth guard — app.requestSingleInstanceLock in main/index.ts — is Electron-level
 // and covered by the release smoke, not unit-testable here.)
 
-/** A stub whose checkpoint/close are irrelevant to the guard under test. */
-const closedDbStub = { exec: () => {}, close: () => {} } as unknown as Db
+/** A stub whose checkpoint/close are irrelevant to the guard under test; a query finds no rows (so a guard that lets
+ *  the file through reaches the write it exists to stop, instead of failing on the stub). */
+const closedDbStub = { exec: () => {}, close: () => {}, prepare: () => ({ all: () => [] }) } as unknown as Db
+
+/** Overwrite the whole file at `path` in place with random bytes (an r+ write, as #208's second instance did). */
+function noiseInPlace(path: string): void {
+  const size = statSync(path).size
+  const fd = openSync(path, 'r+')
+  try {
+    writeSync(fd, randomBytes(size), 0, size, 0)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Commits that allocate pages, so page 1 (its in-header page count) is written to the WAL and not yet back in the
+ *  main file: the state an import leaves behind. */
+function growInTheWal(db: Db): void {
+  const insert = db.prepare('INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)')
+  for (let i = 0; i < 200; i++) insert.run(`w3-876-${i}`, JSON.stringify('x'.repeat(1000)), new Date().toISOString())
+}
 
 describe('issue #208 — the vault must never be overwritten with authenticated garbage', () => {
   it('end to end: a second instance startup sweep + first instance lock-on-quit must not destroy the vault', () => {
@@ -128,13 +153,29 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
         // #208's shred survivor, in place (an r+ write passes SQLite's share modes on Windows
         // too). Checkpointed first, so the lock's own checkpoint has no page to write back.
         ctrl.requireDb().exec('PRAGMA wal_checkpoint(TRUNCATE);')
-        const size = statSync(vp.dbPath).size
-        const fd = openSync(vp.dbPath, 'r+')
-        try {
-          writeSync(fd, randomBytes(size), 0, size, 0)
-        } finally {
-          closeSync(fd)
-        }
+        noiseInPlace(vp.dbPath)
+      }
+    ],
+    [
+      // #876: the same overwrite while the session's last commits, page 1 among them, still sit in the WAL. The
+      // lock's own checkpoint then writes page 1 back over the noise, so the file starts with a valid SQLite header
+      // again (the row below shows it) and only a probe of its structure can tell it is no database.
+      'overwritten with noise while page 1 sat in the WAL (#876)',
+      (ctrl: WorkspaceController, vp: VaultPaths): void => {
+        growInTheWal(ctrl.requireDb())
+        noiseInPlace(vp.dbPath)
+      }
+    ],
+    [
+      // #208's full sweep shreds the `-wal` and `-shm` in place too. A `-wal` that is noise holds no commits (no WAL
+      // header), so it must not stand in the way of the lock that finishes at the last snapshot (#876 round 1: only a
+      // `-wal` with a valid header means the checkpoint did not finish). The handle is closed first, so SQLite does not
+      // own the planted sidecars.
+      'overwritten with noise, its -wal and -shm too (#208 full sweep)',
+      (ctrl: WorkspaceController, vp: VaultPaths): void => {
+        ctrl.requireDb().close()
+        noiseInPlace(vp.dbPath)
+        for (const suffix of ['-wal', '-shm']) writeFileSync(`${vp.dbPath}${suffix}`, randomBytes(64 * 1024))
       }
     ]
   ])('a lock whose working file was %s finishes at the last good snapshot: nothing left at rest, the key dropped, and the same session unlocks again (#853, #855)', (_how, loseWorkingFile) => {
@@ -170,6 +211,24 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     expect(settings.contextTokens).toBe(7171)
     expect(settings.workspaceMode).toBe('encrypted')
     expect(ctrl.lock()).not.toHaveProperty('lockNotice')
+  })
+
+  // #876's precondition, so the row above cannot pass through the old guard: after that overwrite, a checkpoint like
+  // the lock's own writes page 1 back from the WAL, and the file starts with the 16-byte SQLite header the guard used
+  // to check, although every page past it is noise.
+  it('after an in-place overwrite, a checkpoint writes page 1 back: the header reads as SQLite again over noise (#876)', () => {
+    const vp = freshVaultPaths('vault-876')
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.create('correct horse battery', 'encrypted')
+    const db = ctrl.requireDb()
+    growInTheWal(db)
+    noiseInPlace(vp.dbPath)
+    expect(readFileSync(vp.dbPath).subarray(0, 16).toString('latin1')).not.toBe('SQLite format 3\u0000')
+
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    expect(readFileSync(vp.dbPath).subarray(0, 16).toString('latin1')).toBe('SQLite format 3\u0000')
+    ctrl.lock()
   })
 
   // #855's boundary: only a file that is provably gone or provably not a database is judged lost.
@@ -260,12 +319,22 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
     expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
   })
 
-  it('stageRekey refuses a non-SQLite working file (the rekey journal must not stage garbage)', () => {
+  it.each<[string, (vp: VaultPaths, key: Buffer) => void]>([
+    ['non-SQLite', (vp) => writeFileSync(vp.dbPath, randomBytes(4096))],
+    [
+      // #876: the header reads, the pages past it do not.
+      'header-bearing but structurally broken',
+      (vp, key) => {
+        decryptFile(vp.encPath, vp.dbPath, key)
+        noisePastPageOne(vp.dbPath)
+      }
+    ]
+  ])('stageRekey refuses a %s working file (the rekey journal must not stage garbage)', (_what, plant) => {
     const vp = lockedVault('vault-208', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     lockEncryptedVault(vp, db, key)
 
-    writeFileSync(vp.dbPath, randomBytes(4096))
+    plant(vp, key)
     const dataKey = randomBytes(32)
     expect(() => stageRekey(vp, closedDbStub, key, dataKey)).toThrowError(/not a SQLite database/)
     expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
@@ -293,6 +362,102 @@ describe('issue #208 — the vault must never be overwritten with authenticated 
 
     // And the damaged `.enc` is left untouched, byte for byte, as evidence/recovery material.
     expect(readFileSync(vp.encPath).equals(damagedEnc)).toBe(true)
+  })
+})
+
+// #876 (review round 1) — the structural probe reads the main file alone (`immutable=1`), so it is right only when the
+// lock's checkpoint has copied every commit into it. When that checkpoint cannot finish (a full drive: commits still
+// land in the WAL's allocated space, and the copy back fails where the main file has to grow), the close leaves a
+// `-wal` that holds commits the main file lacks. The main file alone is then stale, or torn where the checkpoint
+// stopped; the session itself is intact. The lock must refuse ("free some space and try again") and keep the session
+// open, never judge it lost, and never encrypt the stale main file over `.enc` (which master did, then shredded the
+// WAL). The app holds one connection to the workspace database; here a second one holding a read transaction from
+// before the session's commits stands in for the full drive: the checkpoint cannot pass it, and the first close is not
+// the last, so the `-wal` really survives (no patched handle).
+describe('issue #876 — a lock whose checkpoint could not finish keeps the session', () => {
+  const PW = 'pw'
+  const enospc: typeof encryptFile = () => {
+    throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+  }
+
+  /** A second connection's read transaction from before the session's commits (released by the returned function):
+   *  no checkpoint can copy those commits past it, and the session's close is not the last one. */
+  function holdTheWal(dbPath: string): () => void {
+    const reader = openRawDb(dbPath)
+    reader.exec('BEGIN')
+    reader.prepare('SELECT count(*) AS n FROM settings').get() // the read transaction starts here
+    return () => {
+      try {
+        reader.exec('COMMIT')
+      } finally {
+        reader.close()
+      }
+    }
+  }
+
+  /** The session's commits: 200 rows that allocate pages past the old end of the file, and one setting. */
+  function writeTheSession(db: Db): void {
+    growInTheWal(db)
+    updateSettings(db, { contextTokens: 4242 })
+  }
+
+  it('a stale but consistent main file beside a -wal that holds the commits: refused, .enc untouched, the session kept', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    ctrl.requireDb().exec('PRAGMA busy_timeout = 0;') // the lock's checkpoint gives up at once instead of after 5 s
+    const release = holdTheWal(vp.dbPath)
+    writeTheSession(ctrl.requireDb())
+    const encBefore = readFileSync(vp.encPath)
+    try {
+      expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
+      expect(ctrl.isUnlocked()).toBe(true)
+      expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+      expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    } finally {
+      release()
+    }
+    // Once nothing holds the WAL back, the lock goes through, with the session in `.enc`.
+    expect(ctrl.lock()).not.toHaveProperty('lockNotice')
+    ctrl.unlock(PW)
+    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+    ctrl.lock()
+  })
+
+  it('a main file torn where a full drive stopped the checkpoint, beside a -wal that holds the commits: refused, the session kept, nothing discarded', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, enospc) // the drive is full for the encrypt too
+    ctrl.init()
+    ctrl.unlock(PW)
+    ctrl.requireDb().exec('PRAGMA busy_timeout = 0;') // the lock's checkpoint gives up at once instead of after 5 s
+    const release = holdTheWal(vp.dbPath)
+    writeTheSession(ctrl.requireDb())
+    // What that checkpoint leaves: the latest WAL copy of every page that fits in the old file written back (page 1
+    // first, so the header claims pages the file does not have), nothing past the old end.
+    const wal = readFileSync(`${vp.dbPath}-wal`)
+    const pageSize = wal.readUInt32BE(8)
+    const oldPages = statSync(vp.dbPath).size / pageSize
+    const latest = new Map<number, Buffer>()
+    for (let off = 32; off + 24 + pageSize <= wal.length; off += 24 + pageSize) {
+      latest.set(wal.readUInt32BE(off), wal.subarray(off + 24, off + 24 + pageSize))
+    }
+    const fd = openSync(vp.dbPath, 'r+')
+    try {
+      for (const [page, bytes] of latest) if (page <= oldPages) writeSync(fd, bytes, 0, pageSize, (page - 1) * pageSize)
+    } finally {
+      closeSync(fd)
+    }
+    expect([...latest.keys()].some((page) => page > oldPages)).toBe(true) // the session grew the file
+    const encBefore = readFileSync(vp.encPath)
+    try {
+      expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
+      expect(ctrl.isUnlocked()).toBe(true)
+      const db = ctrl.requireDb()
+      expect(getSettings(db).contextTokens).toBe(4242)
+      expect((db.prepare("SELECT count(*) AS n FROM settings WHERE key LIKE 'w3-876-%'").get() as { n: number }).n).toBe(200)
+      expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    } finally {
+      release()
+    }
   })
 })
 

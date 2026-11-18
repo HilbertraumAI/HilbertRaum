@@ -26,7 +26,8 @@ import {
   RECOVERY_SUFFIX,
   VaultOpenFailedError,
   WorkspaceController,
-  WrongPasswordError
+  WrongPasswordError,
+  vaultPathsFrom
 } from '../../src/main/services/workspace-vault'
 import { randomBytes } from 'node:crypto'
 import { encrypt, decrypt, serializeBlob, deserializeBlob } from '../../src/main/services/security/crypto'
@@ -41,6 +42,7 @@ import {
   failedLockState,
   freshVaultPaths,
   lockedVault,
+  noisePastPageOne,
   tagFailingVault,
   thrownBy,
   unlockedController,
@@ -817,18 +819,79 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
-  it('CODE-1b: a non-SQLite (garbage) newer working file is still shredded, never rolled forward', () => {
+  it.each<[string, (vp: FreshVaultPaths) => void]>([
+    [
+      'a non-SQLite (garbage)',
+      (vp) => {
+        // E.g. a failed shred's random-overwrite survived its unlink: newer than `.enc`, no
+        // sidecars — but rolling THAT forward would replace the intact `.enc` with garbage.
+        writeFileSync(vp.dbPath, 'garbage that is not a database')
+        backdate(vp.encPath)
+      }
+    ],
+    [
+      // #876: the failed-lock signature holds (newer, cleanly closed, the SQLite header), but past page 1 it is no
+      // longer a database: rolled forward, it would be encrypted over `.enc` and the next unlock would find it damaged.
+      'a header-bearing but structurally broken',
+      (vp) => {
+        failedLockState(vp)
+        noisePastPageOne(vp.dbPath)
+      }
+    ]
+  ])('CODE-1b: %s newer working file is still shredded, never rolled forward', (_what, plant) => {
     const vp = lockedVault('vault', 'pw')
-    // E.g. a failed shred's random-overwrite survived its unlink: newer than `.enc`, no
-    // sidecars — but rolling THAT forward would replace the intact `.enc` with garbage.
-    writeFileSync(vp.dbPath, 'garbage that is not a database')
-    backdate(vp.encPath)
+    plant(vp)
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
     expect(ctl.unlock('pw').state).toBe('unlocked')
+    // The `.enc` snapshot opened.
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+    ctl.lock()
+  })
+
+  // #242 / #876: a newer working file the probe cannot read (a hold, a permission error) may be the only fresh copy of
+  // the last session. The start must neither move nor sweep it, and refuses to open over it until a retry can read it.
+  // A directory under the file's name stands in for the unreadable file on every OS.
+  it('CODE-1b: a newer working file the probe cannot read is never swept: the start refuses to open over it (#242, #876)', () => {
+    const vp = lockedVault('vault', 'pw')
+    backdate(vp.encPath)
+    mkdirSync(vp.dbPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.isRecoveryBlocked()).toBe(true)
+    expect(existsSync(vp.dbPath)).toBe(true)
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultRecoveryBlockedError')
+  })
+
+  // #876 round 1: SQLite cannot open a path of 260 characters or more on Windows unless it is written in the `\\?\`
+  // long form; `node:fs` can. With a working file of 251 characters (which SQLite opens), the `.recovery` beside it is
+  // 260. The old header read rolled it forward; a probe that answered `unknown` there would refuse every unlock.
+  it('CODE-1b: a recovery snapshot whose path is past Windows MAX_PATH still rolls forward (#876)', () => {
+    const root = tempRoot('vault-long')
+    const configPath = join(root, 'config')
+    mkdirSync(configPath)
+    const dirLength = 251 - 1 - 'hilbertraum.sqlite'.length
+    let dir = root
+    while (dirLength - dir.length > 62) dir = join(dir, 'w'.repeat(60))
+    dir = join(dir, 'x'.repeat(dirLength - dir.length - 1))
+    mkdirSync(dir, { recursive: true })
+    const vp = vaultPathsFrom({ configPath, dbPath: join(dir, 'hilbertraum.sqlite') })
+    expect(vp.dbPath.length).toBe(251)
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    failedLockState(vp) // a cleanly closed working file holding 7171, newer than `.enc`
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    expect(recoveryPath.length).toBe(260)
+    expect(existsSync(recoveryPath)).toBe(true)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    expect(existsSync(recoveryPath)).toBe(false)
     ctl.lock()
   })
 
@@ -865,22 +928,35 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
-  it('CODE-1b guard (F1): a garbage (shred-overwritten) .recovery is never encrypted over the good .enc', () => {
+  it.each<[string, (recoveryPath: string, vp: FreshVaultPaths, key: Buffer) => void]>([
+    [
+      'a garbage (shred-overwritten)',
+      // The failed-unlink aftermath of a shred whose OVERWRITE ran: random bytes, newer than
+      // `.enc`, no SQLite header.
+      (recoveryPath) => writeFileSync(recoveryPath, randomBytes(4096))
+    ],
+    [
+      // #876: a real copy of the database whose pages past page 1 are noise: the header reads, the structure does not.
+      'a header-bearing but structurally broken',
+      (recoveryPath, vp, key) => {
+        decryptFile(vp.encPath, recoveryPath, key)
+        noisePastPageOne(recoveryPath)
+      }
+    ]
+  ])('CODE-1b guard (F1): %s .recovery is never encrypted over the good .enc', (_what, plant) => {
     const vp = lockedVault('vault', 'pw')
     const { db, key } = unlockEncryptedVault(vp, 'pw')
     updateSettings(db, { contextTokens: 6161 })
     lockEncryptedVault(vp, db, key)
-    // `.enc` backdated, so the leftover below is strictly NEWER and the freshness check lets it
-    // through: only the header guard stands between it and the vault (an mtime tie on a coarse
+
+    // Unguarded, unlock would encrypt this over `.enc` (GCM verifies fine — it is our own
+    // ciphertext) and openDatabase would then fail: the workspace destroyed.
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    plant(recoveryPath, vp, key)
+    // `.enc` backdated, so the leftover is strictly NEWER and the freshness check lets it
+    // through: only the database check stands between it and the vault (an mtime tie on a coarse
     // clock would let the freshness check refuse it instead).
     backdate(vp.encPath)
-
-    // The failed-unlink aftermath of a shred whose OVERWRITE ran: random bytes, newer than
-    // `.enc`, no SQLite header. Unguarded, unlock would encrypt this over `.enc` (GCM
-    // verifies fine — it is our own ciphertext) and openDatabase would then fail: the
-    // workspace destroyed.
-    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
-    writeFileSync(recoveryPath, randomBytes(4096))
 
     const ctl = unlockedController(vp, 'pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161) // data intact

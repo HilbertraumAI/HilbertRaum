@@ -1058,8 +1058,12 @@ explicitly:
   **unlocked** state (key kept for the retry); the IPC layer surfaces "could not lock — free
   space and retry" (`main.workspace.lockFailed`) and audits a content-free
   `workspace_lock_failed`. The stale `.enc` is untouched (`encryptFile` is atomic
-  tmp→rename), so the last good snapshot always survives. The re-open runs only while the
-  working file still exists and starts with the SQLite header (#853): `openDatabase` creates a
+  tmp→rename), so the last good snapshot always survives. A checkpoint that did not finish (a
+  full drive leaves the commits in the `-wal`) is refused the same way before anything is
+  encrypted, and the re-open replays the WAL (#876 review round 1). The re-open runs only while the
+  working file still exists and is a database, or the `-wal` beside it still holds the session
+  (#853; since #876 judged by the structure, see "Never encrypt a non-database over `.enc`"):
+  `openDatabase` creates a
   missing file, so after something removed the live working file (POSIX allows unlinking an
   open file) a re-open would hand the session an empty database, and the next lock (a retry,
   or `shutdown()` at quit) would encrypt it over `.enc`.
@@ -1072,7 +1076,8 @@ explicitly:
   behind when its main file was unlinked), zeroes the key and returns `locked` with
   `lockNotice: 'working_copy_lost'`. The lock screen then says the changes since the previous
   lock are lost (`gate.unlock.workingCopyLost`), and an unlock in the same session opens `.enc`.
-  This is what the next launch's sweep would do anyway, done at once. A working file the header
+  This is what the next launch's sweep would do anyway, done at once. Since #876 "no longer a
+  database" includes a file whose header reads but whose structure does not. A working file the
   probe cannot read (a hold, a permission error) is not judged lost, since it may be the only
   fresh copy: the lock is refused as before, the controller keeps its closed handle, so no unlock
   in this session decrypts the stale `.enc` over it. A retry once the hold clears re-opens it
@@ -1086,9 +1091,10 @@ explicitly:
   crash sweep must NOT shred the working file — it is the only fresh copy of the session's
   data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer
   than `.enc`** by mtime, **no live `-wal`/`-shm`** — the checkpoint + close ran — and a
-  valid SQLite header) and moves it aside as `<db>.recovery`; the next successful unlock
+  database SQLite can read: since #876 its structure, not only the header) and moves it aside as
+  `<db>.recovery`; the next successful unlock
   re-encrypts it over the stale `.enc` (roll-forward) before the normal decrypt. The
-  roll-forward re-applies the same freshness + header guards at unlock (a best-effort
+  roll-forward re-applies the same freshness + database guards at unlock (a best-effort
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
   good `.enc`). Anything not matching that narrow signature is shredded as before.
@@ -1190,15 +1196,59 @@ password. Four guards close this:
   own `userData` suffix (`-dev`), so `npm run dev` no longer operates on the production
   vault at all (mixed dev/release access to one vault is what widened the incident
   window). Residual: two processes with *different* `userData` pointed at one drive
-  workspace (e.g. a dev run with `HILBERTRAUM_DRIVE_ROOT` beside a portable exe on that
-  drive) bypass the Electron lock — the write guard below bounds the damage there.
+  workspace bypass the Electron lock — the write guard below bounds the damage there. A dev
+  run with `HILBERTRAUM_DRIVE_ROOT` beside a portable exe on that drive is one; **two user
+  accounts on one computer** (fast user switching), each starting the Kit's app from the same
+  drive, are the one an ordinary user can reach (found in #876's analysis): `userData` lives in
+  each account's own profile, so both instances are primary.
 - **Never encrypt a non-database over `.enc`.** The CODE-1b roll-forward has carried a
   SQLite-header guard since 2026-07-11; the incident proved the **plain lock path** — the
   most-travelled write to `.enc` — did not. `lockEncryptedVault` (and `stageRekey`, whose
   staged file replaces `.enc` after the descriptor commit) now refuse to encrypt a working
-  file that does not start with the SQLite header, or that cannot be probed at all. A
+  file that is not a database, or that cannot be probed at all. A
   refused lock keeps the stale `.enc` — a recoverable workspace — instead of replacing it
   with authenticated garbage; the session delta is already lost either way.
+  **Since #876 "a database" is SQLite's verdict on the structure, not the 16-byte header.**
+  The lock checkpoints before it checks, and the checkpoint copies every page still in the WAL
+  back into the main file. A file overwritten in place while the session's last commits sat
+  there gets page 1 (the header and the schema root) back over the noise, so it passed the
+  header check (reproduced). One probe, `probeDatabaseFile` (`services/db.ts`), now answers for
+  all five places that decide: the lock's guard and its #855 verdict, the startup salvage
+  (`preserveNewerPlaintext`), the unlock's `.recovery` roll-forward and the v1 rekey stage. It
+  reads the header through `node:fs` first, then opens the file read-only with SQLite's
+  `immutable=1` (no lock, no `-wal`/`-shm`: a plain read-only open of a WAL-mode file leaves
+  both behind, and live sidecars make the next startup's salvage shred the file), reads the whole
+  schema and the first row of every table, and checks the root-page header of every index
+  through `node:fs` (an index cannot be read by name: `INDEXED BY` fails on the app's partial
+  index). It also reads the last row of every rowid table, the path the latest writes put near
+  the end of the file. SQLite's CORRUPT or NOTADB, or an index root that is no b-tree page, means
+  the file is damaged; any other failure means the probe could not decide, which is never read as
+  lost. On Windows it opens the file in the `\\?\` long-path form, which SQLite needs for a path of
+  260 characters or more (a `.recovery` beside a 251-character working file). A
+  real database that fails it (one damaged page on a path the probe reads) is treated like
+  noise: the lock finishes at the last snapshot, as #855 does, and that session's changes are
+  lost (owner decision G-4: discard, not quarantine). **What it misses:** it reads the schema,
+  every index root and each table's first and last row, a small part of a large file. It caught
+  every overwrite that starts at the beginning of the file (#208's shred: none missed of 1,820 in
+  the review's fuzz) and all but 1 of 200 that run to its end, but misses most noise confined to
+  a range or a single page in between (57–91 % in that fuzz), as the header check did (see
+  `known-limitations.md`). Cost: about 4 ms on a
+  warm cache for a 365 MiB or a 1.4 GiB workspace (108 b-trees; 6 ms under Electron 43),
+  against 1.3 s and 4.7 s for `PRAGMA quick_check`; the lock logs it as
+  `vault_lock_done.probeMs` (`benchmark.md` "Perf marks").
+  **The probe reads the main file alone, so it is right only after the checkpoint finished**
+  (#876 review round 1). On a full drive commits still land in the WAL's allocated space while
+  the checkpoint's copy back fails where the main file has to grow, and the close leaves a
+  `-wal` that holds them: the main file alone is then stale, or torn where the copy stopped,
+  while the session is intact in it plus the WAL. So before it probes, the lock checks for a
+  `-wal` with a valid WAL header and frames after the close (`walAwaitsCheckpoint`); if there is
+  one, it refuses like any failed lock (CODE-1a, "free some space and try again"): the controller
+  re-opens the session (the open replays the WAL) and the #855 verdict never calls it lost.
+  Before this, both the header check and the first probe got it wrong: the header check let a
+  stale but consistent main file be encrypted over `.enc` and then shredded the WAL (the
+  session's commits lost), and the probe called a torn one damaged and discarded the session.
+  A `-wal` that is noise (#208's sweep shreds the sidecars too) holds nothing and does not count.
+  The app keeps one connection to the workspace database, so a normal lock never leaves one.
 - **"Vault damaged" is not "wrong password".** An unlock that passes the descriptor
   verifier and authenticates the `.enc` GCM tag but cannot `openDatabase` the decrypted
   bytes throws a typed `VaultDamagedError`, surfaced as its own
@@ -1517,11 +1567,15 @@ developer signal. A commercial build (not dev, `encryptionRequired` or no policy
 ### App-shell gate & lifecycle (spec §7.1)
 `WorkspaceController.init()` runs at startup: an encrypted descriptor → stay **locked** until unlock;
 no descriptor + plaintext permitted → open plaintext (dev); otherwise **uninitialized** → onboarding.
-The renderer shows the create-password / unlock gate (`WorkspaceGate`) until `workspaceReady`
-(`getWorkspaceState()` IPC). A **Lock now** control re-encrypts on demand — it first aborts any
-in-flight generations and stops BOTH sidecars (chat runtime + E5 embedder; a llama-server keeps
-recent prompts in its in-memory KV cache), then locks. Unlock restarts the chat runtime in the
-background (the active-model auto-start); the embedder restarts lazily on the next embed.
+The renderer shows the create-password / unlock gate (`WorkspaceGate`) until `getWorkspaceState()`
+reports `unlocked`. A **Lock now** control re-encrypts on demand. It first ends the work in flight
+(answers, document tasks, skill runs, the benchmark, Translate jobs, plaintext reads,
+knowledge-pack operations), stops the local API, then stops every sidecar that can hold user text
+(chat runtime, embedder, reranker, transcriber, OCR worker, vision, kiwix, translator; a
+llama-server keeps recent prompts in its in-memory KV cache), and only then re-encrypts
+(`runLockTeardown`, `ipc/registerWorkspaceIpc.ts`). Unlock restarts the chat runtime in the
+background (the active-model auto-start) and an opted-in local API; the other sidecars restart
+lazily on their next use.
 `will-quit` likewise locks (re-encrypt + shred) alongside stopping the sidecars. Both also abort,
 settle and sweep the **plaintext operations** in flight — a document **preview**, a **re-index**,
 an import's **prepare** phase, a **dictation** and the two **export** readers — before the vault
@@ -1681,8 +1735,9 @@ already-unlocked controller, deliberately, so an `unlockWorkspace` landing mid-t
 re-open the admission window either). The IPC handler answers such an unlock with the workspace's
 state and stops there (#858): it records no `workspace_unlocked` audit event for the unchecked
 password, re-attaches no log key and restarts nothing. Two further no-op cases are covered: `lock()` disarms itself
-whenever it returns with the DB still open (a `plaintext_dev` workspace has no vault to
-re-encrypt, so its "Lock now" is a deliberate no-op and must not brick the dev session).
+whenever it returns with the DB still open (a `plaintext_dev` workspace has nothing to
+re-encrypt, so `lock()` returns with the database open; the UI offers no Lock now there, but a
+direct `workspace:lock` call must not leave the latch armed, so `lock()` disarms it).
 
 **The quit path arms it too.** `performShutdown` calls `beginLock()` beside the runtime manager's
 shutdown latch, in its own best-effort `try`. Quit has the same window — up to ~10 s of awaited
