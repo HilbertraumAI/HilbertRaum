@@ -192,6 +192,27 @@ describe('validateManifest', () => {
     expect(validateManifest(rawManifest({ role: 'embeddings', disable_prompt_cache: false })).ok).toBe(false)
   })
 
+  // #848: `default_for_role` names the manifest `resolveModelByRole` takes for its role ahead of walk order. A typo fails
+  // the manifest like every optional field's; on chat it is inert (the active chat model is the user's pick) and accepted,
+  // never rejected: a field this release reads must not make a later manifest vanish from it (D848-3).
+  it('parses default_for_role: true; false and absent both leave the field off (#848)', () => {
+    expect(validateManifest(rawManifest({ role: 'embeddings', default_for_role: true })).manifest?.defaultForRole).toBe(true)
+    for (const raw of [rawManifest({ role: 'embeddings', default_for_role: false }), rawManifest({ role: 'embeddings' })]) {
+      const res = validateManifest(raw)
+      expect(res.ok).toBe(true)
+      expect(res.manifest).not.toHaveProperty('defaultForRole')
+    }
+  })
+
+  it('rejects a non-boolean default_for_role, and accepts the flag on chat, where nothing reads it (#848)', () => {
+    for (const value of ['true', 'yes', 1, null, ['embeddings']]) {
+      const res = validateManifest(rawManifest({ role: 'embeddings', default_for_role: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('default_for_role')), String(value)).toBe(true)
+    }
+    expect(validateManifest(rawManifest({ role: 'chat', default_for_role: true })).ok).toBe(true)
+  })
+
   // vuln-scan-2026-06-21 [path-traversal]: a hostile manifest's local_path is rejected at the
   // source so discoverManifests records it in errors and SKIPS it — the throw on the model-list
   // path (which broke the whole Models screen) can no longer be reached by these shapes.

@@ -262,7 +262,11 @@ noted below.
   `composeServices` discovers manifests ONCE per composition pass and threads the result into its
   role resolvers (`resolveModelByRole` takes an optional pre-discovered list) — the per-action IPC
   callers and the issue-#40 `onModelInstalled` refresh still re-discover; deliberately NO stateful
-  module cache, which could serve stale results. PF-7a: the Home runtime poll keeps the previous
+  module cache, which could serve stale results. **#848 amendment:** the walk takes each folder's entry
+  names in code-unit order on every OS (it was raw `readdirSync` order, sorted only on NTFS), and a resolver
+  takes the manifest of its role flagged `default_for_role: true` first (the committed E5 sets it), present or
+  not, so a second manifest of a role never re-points the embedder, reranker, transcriber or translator by
+  file name. PF-7a: the Home runtime poll keeps the previous
   state object on a value-unchanged tick (React bails out of the re-render) and stops entirely once
   the model runs, with a window-focus re-check instead (the ChatScreen poll-while-not-running
   pattern). PF-7b: the doc-task store's 400 ms poll ports the skillruns `sameRun` no-change gate

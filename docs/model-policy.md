@@ -258,9 +258,28 @@ manifest's YAML comment carrying its arithmetic; `model-benchmarks.md` §6.6),
 `host_mapped_weights_mib` (number ≥ 0, #321; the weights that stay host-mapped on a full offload,
 which the same estimate subtracts — absent charges the whole file to the card), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
-vision role + mmproj projector" below), an optional **`files:` list** (below, #310), and
-`min_app_version` (below, #847). Unknown extra keys (e.g. `supports_tools`, `dimensions`) are ignored
-by the validator.
+vision role + mmproj projector" below), an optional **`files:` list** (below, #310),
+`min_app_version` (below, #847) and `default_for_role` (below, #848). Unknown extra keys (e.g.
+`supports_tools`, `dimensions`) are ignored by the validator.
+
+- **`default_for_role`** (optional boolean, default `false`, #848) makes THIS manifest its role's model.
+  `resolveModelByRole` (the embedder, the reranker, the transcriber, the translator) takes the first
+  manifest of the role that sets it, else the first of the role in walk order. Discovery walks
+  `model-manifests/` depth first, each folder's entry names in code-unit order, on every OS (FAT/exFAT,
+  ext4 and APFS do not list a folder sorted, NTFS does), so the order no longer depends on the drive. The
+  committed embedder, `multilingual-e5-small-q8`, sets it, so an embeddings manifest a later release or a
+  user adds never re-points the embedder; that would ask the user to re-index the whole library. The flag
+  decides whether or not the flagged model's file is present: with the E5 weight missing the app runs on the
+  mock embedder even when another embeddings model is installed, deliberately (its vectors would not match
+  the index; rag-design "Embedding during ingestion"). To move the default, move the flag. At most one
+  manifest per role sets it (`committed-catalog.test.ts`). It is accepted on chat, where nothing reads it
+  (the active chat model is the user's pick). The workspace's `activeEmbeddingModelId` setting does not
+  choose the embedder (known-limitations.md).
+- **Fields an older app reads are ignored where they are inert, never rejected (#848, D848-3).** A
+  manifest field this release reads must not make a later release's manifest vanish from it: a field that
+  does nothing for a role is accepted there (`default_for_role` on chat). The older rule that rejects
+  `speculative_decoding` and `disable_prompt_cache` outside chat predates this principle and stays as
+  shipped. A later release that needs either on another role uses `min_app_version` (below).
 
 - **A manifest for a newer HilbertRaum (#847)** is not invalid. A `role` this build does not know (a
   non-empty string outside the six roles) or a `min_app_version` above the running app routes the file,

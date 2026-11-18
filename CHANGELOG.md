@@ -304,6 +304,11 @@ from its first public `1.0.0` release onward.
   newer HilbertRaum", with a note to update the app on this computer. It can't be downloaded,
   started or checked from here. It also shows under "On this drive" when its files are there
   (#847).
+- **The document-search model no longer depends on the order a drive lists its files in.** On a
+  drive formatted like most USB sticks, a second document-search model added to the drive could
+  have taken over from the current one, depending only on which file was copied first. Every
+  document would then have needed indexing again. The app now always uses the one marked as the
+  default, and otherwise reads the model list in a fixed order on every computer (#848).
 
 ## [0.1.65] — 2026-11-11
 

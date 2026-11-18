@@ -873,6 +873,15 @@ describe('committed catalog — the single-manifest roles (TQ-2)', () => {
     }
   })
 
+  // #848: a release names its default for a role explicitly, so a later manifest of that role (a release's or a user's)
+  // never re-points the embedder by file-name order. Two flagged manifests of one role would decide nothing again.
+  it('the embedder is flagged default_for_role, and no role has two flagged manifests (#848)', () => {
+    const flagged = committedManifests().filter((m) => m.defaultForRole)
+    expect(flagged.filter((m) => m.role === 'embeddings').map((m) => m.id)).toEqual(['multilingual-e5-small-q8'])
+    const roles = flagged.map((m) => m.role)
+    expect(new Set(roles).size, roles.join(', ')).toBe(roles.length)
+  })
+
   it('the transcriber declares its Silero VAD file beside the weight (#504)', () => {
     const whisper = committedManifests().find((m) => m.role === 'transcriber')
     expect(whisper, 'one transcriber manifest').toBeDefined()

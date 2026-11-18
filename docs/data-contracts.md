@@ -1250,7 +1250,11 @@ head's own weights + KV.
   `createE5Embedder(opts)`. **`Embedder` gained optional `stop?(): Promise<void>`** (mock omits it).
 ✅ **`services/embeddings/factory.ts`** — `createSelectedEmbedder({ rootPath, model, … }) → Embedder`
   (real `E5Embedder` iff binary + E5 weights present; else `MockEmbedder`). `EmbeddingModelInfo {
-  id, modelPath, dimensions?, contextTokens? }`.
+  id, modelPath, dimensions?, contextTokens? }`. The model is `resolveModelByRole('embeddings')`'s pick
+  (#848): the manifest flagged `default_for_role: true` (`ModelManifest.defaultForRole`), else the first
+  of the role in `discoverManifests`' walk (each folder's entry names in code-unit order, on every OS). The
+  flag decides whether or not the file is present: a missing default weight composes the `MockEmbedder`,
+  never another installed embeddings model. `activeEmbeddingModelId` does not choose it.
 ✅ **`VectorIndex`** — optional 3rd ctor arg `{ embeddingModelId? }`: a non-empty id scopes the cosine
   scan to `WHERE embedding_model_id = ?` (mismatch guard); default scans all rows. **`rag.retrieve`**
   passes `{ embeddingModelId: embedder.id }`.

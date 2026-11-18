@@ -28,6 +28,13 @@ export interface ResolvedModel {
  * `contextTokens` for the roles that need it). Returns null when no manifest dir is known
  * or no manifest for the role exists (→ the role's selector falls back to mock/null).
  * Never throws — a malformed manifest dir reads as "no model".
+ *
+ * #848 — WHICH manifest: the first one flagged `default_for_role: true`, else the first of the role in walk
+ * order (`discoverManifests` takes each folder's entry names in code-unit order). The flag is what keeps the
+ * embedder put when a release or a user adds a second embeddings manifest, on every app that shares the drive;
+ * without it the pick would follow file names. It decides whether or not the flagged file is present: a missing
+ * default embedder composes the mock, never another installed one, whose vectors would not match the index. The workspace's `activeEmbeddingModelId` setting does not decide it (settings are
+ * unreadable here, and the embedder never swaps mid-session; known-limitations.md).
  */
 export function resolveModelByRole(
   manifestsDir: string | null,
@@ -47,7 +54,9 @@ export function resolveModelByRole(
   if (!manifestsDir) return null
   try {
     const manifests = opts.discovered ?? discoverManifests(manifestsDir).manifests
-    const found = manifests.find((m) => m.manifest.role === role)
+    const found =
+      manifests.find((m) => m.manifest.role === role && m.manifest.defaultForRole === true) ??
+      manifests.find((m) => m.manifest.role === role)
     if (!found) return null
     const resolved: ResolvedModel = {
       id: found.manifest.id,

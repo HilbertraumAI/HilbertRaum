@@ -92,6 +92,29 @@ describe('resolveModelByRole (M-A3)', () => {
     expect(resolveModelByRole(manifestsDirWith(roleManifest('qwen3-chat', 'chat')), ROOT, 'reranker')).toBeNull()
   })
 
+  // #848: which embeddings manifest is the embedder must not depend on the order a drive lists its files in (FAT/exFAT
+  // and ext4 do not sort). The one flagged `default_for_role` wins in either order; without a flag, the first in walk
+  // order (discovery sorts the walk, `manifest-discovery-order.test.ts`). Generic: every role resolved here.
+  it('takes the manifest flagged default_for_role in either order, else the first in walk order (#848)', () => {
+    const plain = validManifest({ id: 'a-embed', role: 'embeddings', local_path: 'models/embeddings/a.gguf' })
+    const other = validManifest({ id: 'b-embed', role: 'embeddings', local_path: 'models/embeddings/b.gguf' })
+    const flagged = validManifest({
+      id: 'z-embed',
+      role: 'embeddings',
+      local_path: 'models/embeddings/z.gguf',
+      default_for_role: true
+    })
+    const flaggedRerank = validManifest({ id: 'r', role: 'reranker', local_path: 'models/reranker/r.gguf', default_for_role: true })
+    for (const list of [[plain, flagged, other], [flagged, other, plain], [other, plain, flagged]]) {
+      const ids = list.map((m) => m.id).join(',')
+      expect(resolveModelByRole('C:/m', ROOT, 'embeddings', { discovered: list.map((m) => discovered(m)) })?.id, ids).toBe('z-embed')
+    }
+    // A flag on another role decides nothing for this one.
+    expect(
+      resolveModelByRole('C:/m', ROOT, 'embeddings', { discovered: [flaggedRerank, plain, other].map((m) => discovered(m)) })?.id
+    ).toBe('a-embed')
+  })
+
   // #847 (a+): a manifest for a newer HilbertRaum is display-only. A known role whose `min_app_version` this app
   // does not meet must never become the role's model: this build would start a model it cannot run.
   it('never resolves a manifest for a newer HilbertRaum (#847)', () => {

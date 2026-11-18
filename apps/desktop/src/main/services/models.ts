@@ -142,10 +142,18 @@ export function resolveBundledManifestsDir(opts: {
   return existsSync(dir) && statSync(dir).isDirectory() ? dir : null
 }
 
-/** Recursively collect manifest file paths under a directory. */
+/**
+ * Recursively collect manifest file paths under a directory, every folder's entries in CODE-UNIT order (#848).
+ * The walk order is every first-of-role pick (the embedder, reranker, transcriber, translator), the ★ tie-breaks
+ * and the winner of a duplicate id, and only NTFS lists a folder sorted: FAT/exFAT (a Kit), ext4 and APFS do not.
+ * A plain `<` comparison, never `localeCompare` (ICU and locale dependent), so every OS and UI language agree.
+ */
 function collectManifestFiles(dir: string): string[] {
   const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  )
+  for (const entry of entries) {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       out.push(...collectManifestFiles(full))

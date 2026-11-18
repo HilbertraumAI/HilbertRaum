@@ -212,6 +212,13 @@ export interface ModelManifest {
    * order, so a nested `local_path:`/`sha256:` pair placed earlier would poison them.
    */
   files?: RequiredFileSpec[]
+  /**
+   * `default_for_role` (#848): THIS is the model `resolveModelByRole` takes for its role, present or not, ahead of
+   * the walk order (each folder's entry names in code-unit order), so a later manifest of the same role — a
+   * release's or a user's — never re-points it by file name. Absent (= false) on every manifest but the committed embedder's. Generic over roles; inert on chat
+   * (the active chat model is the user's pick), where it is accepted, never rejected (D848-3).
+   */
+  defaultForRole?: true
 }
 
 export interface ValidationResult {
@@ -548,6 +555,19 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
+  // Optional role default (#848): a boolean when present. Accepted on every role: on chat nothing reads it, and a
+  // field this release reads is ignored where it is inert, never rejected (D848-3), so a later manifest that uses it
+  // differently does not vanish from this build.
+  let defaultForRole = false
+  const dfr = raw['default_for_role']
+  if (dfr !== undefined) {
+    if (typeof dfr !== 'boolean') {
+      errors.push('"default_for_role" must be a boolean when present')
+    } else {
+      defaultForRole = dfr
+    }
+  }
+
   // Optional speculative-decoding opt-in (#182). Closed enum (see SpeculativeDecoding) and
   // chat-only — the chat start ladder is the sole consumer, so a value on an embeddings or
   // vision manifest would be silently inert; rejected rather than ignored.
@@ -863,7 +883,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       ...(download ? { download } : {}),
       ...(inputModalities ? { inputModalities } : {}),
       ...(mmproj ? { mmproj } : {}),
-      ...(files ? { files } : {})
+      ...(files ? { files } : {}),
+      ...(defaultForRole ? { defaultForRole: true as const } : {})
     }
   }
 }

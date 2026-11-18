@@ -27,6 +27,9 @@ download:
 bundled_on_preconfigured_drive: true
 # The default embedding model for every profile.
 recommended_profiles: [TINY, LITE, BALANCED, PRO, UNKNOWN]
+# #848: THE embedder, whatever other embeddings manifest a release or a user adds to this folder (without it, the
+# first in file-name order would win). Moving the default means moving this flag, so every app on the drive agrees.
+default_for_role: true
 license_review:
   status: approved
   reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"

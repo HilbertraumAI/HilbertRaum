@@ -331,7 +331,19 @@ change) is clean. Rows are tagged with **`embedder.id`**, the id search scopes b
 change is always detectable. (As first built, the tag was `settings.activeEmbeddingModelId`
 with `embedder.id` as the fallback; §10 "Embedder-visibility honesty" stopped passing the setting
 into ingestion — it lives on as the selected manifest — and #660 removed the `embeddingModelId`
-override that no production caller set any more.)
+override that no production caller set any more.) **Which manifest is the embedder (#848):** the
+embeddings manifest flagged `default_for_role: true` (the committed E5 sets it), else the first
+embeddings manifest in walk order (`discoverManifests` takes each folder's entry names in code-unit
+order, on every file system). Before #848 it was simply the first the folder listing returned, so on a
+FAT/exFAT Kit a second embeddings manifest could flip the embedder by file-creation order, mark every
+document stale and, if that model's file was missing, fall back to the mock embedder. The flag decides
+whether or not the flagged model's file is present: with the E5 weight missing the app composes the MOCK
+embedder even when another embeddings model is installed. That is the deliberate choice (research option
+D, "prefer an installed manifest", was declined): the vectors in the index carry the E5's id and live in
+its space, so switching silently to another model would mark every document stale, and again when the E5
+returns; the mock leaves the index untouched until the E5 is downloaded again. The workspace's
+`activeEmbeddingModelId` setting still does not choose it (settings are unreadable before unlock, when
+the embedder is composed); honouring a workspace choice belongs to the deferred embedder swap.
 
 ### `embeddings` table (spec §8) + BLOB encoding (LOCKED)
 
