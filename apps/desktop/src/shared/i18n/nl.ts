@@ -3505,6 +3505,11 @@ export const nl: UiCatalog<'nl'> = {
   'review.autosave.saved': 'Opgeslagen',
   'review.autosave.error': 'Sommige wijzigingen konden nog niet worden opgeslagen.',
   'review.autosave.retry': 'Opnieuw proberen',
+  'review.unsaved.body':
+    'Sommige wijzigingen in “{title}” konden nog niet worden opgeslagen, daarom is de andere ' +
+    'beoordeling niet geopend. Probeer het opnieuw, of negeer deze wijzigingen en open de andere ' +
+    'beoordeling.',
+  'review.unsaved.discard': 'Wijzigingen negeren en openen',
   'review.evidence.title': 'Onderbouwing',
   'review.evidence.captionRelevance':
     'De getoonde bronnen zijn de fragmenten die het lokale AI-model voor dit antwoord heeft ' +

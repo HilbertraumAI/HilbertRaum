@@ -40,6 +40,13 @@ import { friendlyIpcError } from './errors'
 // after a switch can never corrupt the next review's detail. Item-level edits additionally
 // refuse while the review is `ready` (FIX-1 — main refuses them too; the store guard keeps
 // the UI from ever showing an optimistic value main would reject).
+//
+// A failed save is never run over (#837): a failed write leaves its patch queued and the
+// save-error line showing, and every action that runs after a flush checks for that. Mark
+// ready, export and reopen refuse; a sweep refuses; a switch to ANOTHER review is refused
+// with a choice (`openError.kind === 'unsaved'`: Try again / Discard changes and open / Back)
+// and re-opening the SAME review keeps the edit on screen. Only the lock still drops a failed
+// patch (`App.lockNow` — the user's security action wins; known-limitations).
 
 export type ReviewHandoffTarget = { reviewId: string } | { messageId: string }
 
@@ -51,9 +58,16 @@ export interface ReviewSessionState {
   loading: boolean
   /**
    * Open failure: 'notFound' = a reviewId handoff resolved null (deleted/stale);
-   * otherwise the friendly (main-localized) message text.
+   * 'failed' = the friendly (main-localized) message text; 'unsaved' (#837) = the switch to
+   * `target` was REFUSED because the review still in `detail` (titled `title`) has edits a
+   * failed write left queued — `detail` and those edits are kept untouched, and the screen
+   * offers `retryBlockedSwitch` / `discardAndSwitch` / Back.
    */
-  openError: { kind: 'notFound' } | { kind: 'failed'; message: string } | null
+  openError:
+    | { kind: 'notFound' }
+    | { kind: 'failed'; message: string }
+    | { kind: 'unsaved'; title: string; target: ReviewHandoffTarget }
+    | null
   saveState: ReviewSaveState
   /** Friendly copy for a failed flush (shown beside the retry action); null otherwise. */
   saveError: string | null
@@ -123,10 +137,51 @@ function armTimer(): void {
   }, REVIEW_SAVE_DEBOUNCE_MS)
 }
 
+/** True while any edit is queued and not yet written (debounced, mid-flight, or left by a failed write). */
+function hasUnsavedEdits(): boolean {
+  return pendingItems.size > 0 || pendingHead != null
+}
+
+/** True while a queued item edit carries a DECISION (what a bulk sweep would overwrite). */
+function hasPendingDecision(): boolean {
+  for (const patch of pendingItems.values()) if (patch.decision !== undefined) return true
+  return false
+}
+
+/** Does `target` name the review already in the store? */
+function isOpenReview(target: ReviewHandoffTarget): boolean {
+  const detail = state.detail
+  if (!detail) return false
+  return 'reviewId' in target ? target.reviewId === detail.id : target.messageId === detail.messageId
+}
+
 /** Open (or create — the idempotent Phase-1 create) a review for the handoff target. */
 export async function openReviewSession(target: ReviewHandoffTarget): Promise<void> {
   // A previous review's unsaved edits are flushed first so switching reviews loses nothing.
   await flushReviewSession().catch(() => {})
+  // A pass that ends with edits which landed WHILE it was writing re-arms the debounce and
+  // returns: one more (bounded) pass writes those too. A FAILED write is not retried here —
+  // the failure stands, with its error line, until the user's Try again.
+  if (hasUnsavedEdits() && state.saveState !== 'error') await flushReviewSession().catch(() => {})
+  // A flush ANOTHER caller started meanwhile (a screen's exit flush; React StrictMode runs that
+  // cleanup once more on mount) holds its patches OFF the queue while it writes. Wait it out, so
+  // the check below sees every unsaved edit: a failed write puts its patch back, and the reset
+  // would otherwise leave that failure to land under the new token and be dropped.
+  while (flushInFlight) await flushInFlight
+  // #837: edits still queued now are ones a write FAILED to save (or, rarely, ones that landed
+  // during the second pass). The reset below used to drop them without a word.
+  if (hasUnsavedEdits() && state.detail) {
+    if (isOpenReview(target)) {
+      // The same review: no reset and no re-read over the edit — it stays on screen with its
+      // save-error line and Try again. A refused switch away from it is over.
+      if (state.openError) setState({ openError: null })
+      return
+    }
+    // Another review: keep this one (detail + queued edits) and refuse, naming it. No token
+    // bump and no read: nothing is written on behalf of a review that is not open.
+    setState({ openError: { kind: 'unsaved', title: state.detail.title, target } })
+    return
+  }
   const token = ++openToken
   clearTimer()
   pendingItems = new Map()
@@ -354,6 +409,37 @@ export async function retryReviewSave(): Promise<void> {
   } catch {
     /* still unreachable — keep the error state for another retry */
   }
+}
+
+/**
+ * #837, the refused switch's "Try again": re-flush, and switch only when nothing is left
+ * unsaved (`openReviewSession` re-checks; while the write keeps failing the refusal stands).
+ */
+export async function retryBlockedSwitch(): Promise<void> {
+  const blocked = state.openError
+  if (blocked?.kind !== 'unsaved') return
+  await openReviewSession(blocked.target)
+}
+
+/**
+ * #837, the refused switch's "Discard changes and open": drop the unsaved edits of the review
+ * on screen — the user's explicit choice, the only way they are lost before a lock — then
+ * switch. A write still in flight settles first, so a late failure cannot re-queue a patch the
+ * user just discarded.
+ */
+export async function discardAndSwitch(): Promise<void> {
+  if (state.openError?.kind !== 'unsaved') return
+  while (flushInFlight) await flushInFlight
+  // Re-read after the wait: a lock (purge), a switch that went ahead, or the same review opened
+  // again all end the refusal, and then there is nothing left to discard. (This is the post-await
+  // guard here: every `openToken` bump also resets `openError`, so a token check would add
+  // nothing, and it would miss the same-review case, which clears the refusal without a bump.)
+  const blocked = state.openError
+  if (blocked?.kind !== 'unsaved') return
+  clearTimer()
+  pendingItems = new Map()
+  pendingHead = null
+  await openReviewSession(blocked.target)
 }
 
 /**
@@ -641,11 +727,18 @@ function bulkTargets(
         decision: 'not_reviewed',
         ids: new Set(items.filter((i) => i.decision !== 'not_reviewed').map((i) => i.id))
       }
-    default:
+    case 'undecided_follow_up':
       return {
         decision: 'follow_up',
         ids: new Set(items.filter((i) => i.decision === 'not_reviewed').map((i) => i.id))
       }
+    default: {
+      // Compile-time: exhaustive over the union — a new bulk action fails this assignment.
+      // Runtime: an unknown name targets nothing (an empty set is a no-op sweep, no IPC).
+      const unknown: never = action
+      void unknown
+      return { decision: 'not_reviewed', ids: new Set() }
+    }
   }
 }
 
@@ -662,6 +755,18 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
   // Land any debounced per-item edits BEFORE the sweep, so the sweep is the last word.
   await flushReviewSession()
   if (token !== openToken) return
+  // #837: a decision made WHILE that flush was writing re-armed the debounce, and its timer
+  // would write it AFTER the sweep: one more (bounded) pass lands it first.
+  if (hasPendingDecision() && state.saveState !== 'error') {
+    await flushReviewSession()
+    if (token !== openToken) return
+  }
+  // #837: never sweep over a failed save (the markReviewReady / exportReviewPack / reopenReview
+  // idiom). The optimistic apply below would clear the error line, and the failed patch, still
+  // queued, would be written AFTER the sweep: the database gets back a decision the screen shows
+  // swept. A DECISION still queued after the second pass (made during it) is refused for the
+  // same reason; a queued note is fine (the merge below keeps notes).
+  if (state.saveState === 'error' || hasPendingDecision()) return
   const detail = state.detail
   if (!detail || detail.id !== reviewId || detail.status === 'ready') return
   const { ids, decision } = bulkTargets(detail.items, action)
@@ -685,11 +790,15 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
       return
     }
     // Merge the persisted DECISIONS only: a note typed while the sweep was in flight is
-    // still pending locally and must not be reverted by the returned rows.
+    // still pending locally and must not be reverted by the returned rows. Nor is a DECISION
+    // made meanwhile (#837): it is newer than the sweep and its queued write lands after it,
+    // so the screen keeps it — taking the sweep's value would show one decision while the
+    // database ends with another.
     const byId = new Map(updated.map((i) => [i.id, i]))
     const items = current.items.map((i) => {
       const fresh = byId.get(i.id)
-      return fresh ? { ...i, decision: fresh.decision } : i
+      if (!fresh || pendingItems.get(i.id)?.decision !== undefined) return i
+      return { ...i, decision: fresh.decision }
     })
     setState({
       detail: { ...current, items, gate: computeReadyGate(items) },

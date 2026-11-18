@@ -3653,6 +3653,13 @@ export const en = {
   'review.autosave.saved': 'Saved',
   'review.autosave.error': 'Some changes could not be saved yet.',
   'review.autosave.retry': 'Try again',
+  // #837: the card shown instead of another review while the open one still has edits a failed
+  // write left unsaved. {title} = that open review's title. Its buttons: Try again
+  // (review.autosave.retry), review.unsaved.discard, and Back to chat (review.back).
+  'review.unsaved.body':
+    'Some changes to “{title}” could not be saved yet, so the other review was not opened. Try ' +
+    'again, or discard those changes and open it.',
+  'review.unsaved.discard': 'Discard changes and open',
   // Evidence pane honesty captions (spec §11.4/§24.3). The whole-document caption is the
   // load-bearing "provenance, not citations" claim — asserted by exact key in tests.
   'review.evidence.title': 'Evidence',

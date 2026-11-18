@@ -169,8 +169,9 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
     expect(await screen.findByText(t('en', 'review.selection.refused'))).toBeInTheDocument()
     // Still two review items — nothing was added, and the screen kept working.
     expect(screen.getAllByRole('listitem')).toHaveLength(2)
-    // Never rendered as a save failure (the hint is a retry nudge, not an error state).
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // Never rendered as a save failure (the hint is a retry nudge, not an error state): the auto-save line's alert region
+    // is mounted empty with the screen (#837) and stays empty.
+    for (const alert of screen.queryAllByRole('alert')) expect(alert).toBeEmptyDOMElement()
     assertNoUnexpectedApiCalls()
   })
 

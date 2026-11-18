@@ -1471,8 +1471,27 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
   localized text. Selection recolors via border+weight, never color alone.
 - **Debounced auto-save with a labelled status line:** the repo's first auto-save
   (`lib/reviewSession.ts`, 600 ms debounce, loss-free flush; flush on screen exit and BEFORE
-  vault lock). The UI voice is a quiet `role="status"` "Saving… / Saved" line and a
-  `role="alert"` + retry on failure — no unlabeled spinner (§6), no toast spam.
+  vault lock). The UI voice is a quiet "Saving… / Saved" line in a `role="status"` region and
+  the failure + **Try again** in a `role="alert"` region beside it — no unlabeled spinner (§6),
+  no toast spam. Both regions (and the Outdated banner's `role="status"` region) are mounted
+  EMPTY with the review and only their text changes (#837, the §6 rule; the line used to be
+  inserted already filled, and to swap status for alert on one node).
+- **A failed save is never run over (#837):** while the save error shows, **Bulk actions** is
+  disabled (not hidden — the error line beside the title is the explanation) and the store
+  refuses the sweep; re-opening the same review keeps the unsaved edit on screen with its
+  error line. A switch to ANOTHER review shows a card in its place, in the shape of the
+  screen's existing open-error card (no new component, no focus move): one sentence naming
+  the review whose changes could not be saved and saying the other review was not opened
+  (`review.unsaved.body`), then **Try again** (primary, reuses `review.autosave.retry` — saves,
+  then opens the other review), **Discard changes and open** (`review.unsaved.discard` — the
+  only way such an edit is lost before a lock, and the user's own choice) and the ghost
+  **‹ Back to chat** (`review.back`). The card can replace the review seconds after the click
+  that led to it, and that click's button left with the chat, so **Try again takes focus**
+  when the card appears, with the sentence as its description (`aria-describedby`, so a
+  screen reader reads both), and again after a retry that failed (the WorkspaceGate step /
+  PerformanceScreen restore precedent, WCAG 2.4.3). Try again and Discard are disabled while
+  one of them runs; Back stays live. The lock still drops an unsaved edit: the user's
+  security action wins (`known-limitations.md`).
 - **Honesty captions are keys, not prose:** the evidence pane's per-mode caption
   (`review.evidence.captionRelevance|WholeDoc|Structured`) and the per-item
   "No direct source marker" / "Derived through whole-document analysis" notes are asserted

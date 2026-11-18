@@ -2685,6 +2685,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the temporary file's creation. The failure is clean and honest — no destination file, no export row, a real
   error — and the trade (an edge-case refusal vs. a silently mislabelled signed-off pack) is
   deliberate. Recovery: save under a shorter path.
+- **A review change whose save failed is still lost when you lock, and the newest changes are
+  lost when you quit.** If saving a decision or a note fails (in practice a full or failing
+  drive), the review keeps the change on screen with "Some changes could not be saved yet." and
+  Try again, Bulk actions waits, and opening another review asks first — Try again, discard the
+  changes, or go back (#837). Locking does not wait for it: Lock now tries the save once more,
+  then locks, and an unsaved change is dropped with the rest of the review from memory. That is
+  deliberate — the lock is the user's security action and wins over a failing write, the
+  posture every lock path takes. Quitting the app saves no pending review change at all: a
+  change made less than a second before quitting (the auto-save waits 600 ms), or one whose
+  save failed, is lost.
 
 ## Local API ([`local-api.md`](local-api.md) · [`architecture.md`](architecture.md) "Local API endpoint — design record")
 

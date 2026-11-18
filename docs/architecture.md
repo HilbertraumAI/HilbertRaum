@@ -14120,7 +14120,20 @@ the pane for a `Modal width='wide'` drawer with focus return. Edits flow through
 repo's first **debounced auto-save store** (`renderer/lib/reviewSession.ts`: 600 ms,
 drain-before-await, failed patches re-merge under newer values, every post-await write
 `openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()`,
-store purged after). **Ready is read-only** — main refuses item/selection/link mutations
+store purged after). **A switch or a sweep never runs over a failed save** (#837): a failed
+write leaves its patch queued with the save-error line + Try again, and every action that
+runs after a flush checks for it — mark ready, export and reopen refuse; a bulk sweep refuses
+(and its Bulk actions trigger is disabled) while the error shows, lands a decision made
+during its own flush with one more bounded pass before it sweeps, and keeps on screen a
+decision made while the sweep itself is in flight (its queued write lands after the sweep,
+so screen and database agree); a failed HEAD edit counts like an item edit; re-opening the
+SAME review keeps the edit on screen with no re-read; a switch to ANOTHER review keeps the
+open one (detail + patches, no `openToken` bump) and records `openError: { kind: 'unsaved' }`, which
+the screen renders as a card naming that review with Try again / Discard changes and open /
+Back. Only the lock still drops a failed patch — `App.lockNow`'s flush is best-effort and
+the lock wins (`known-limitations.md`). The save line and the Outdated banner announce from
+live regions mounted empty with the review (design-guidelines §6).
+**Ready is read-only** — main refuses item/selection/link mutations
 while ready (head edits stay allowed), the renderer disables the affordances, Reopen
 restores. Reviewer **selections** are carved via a read-only `<textarea>` whose value IS
 `textSnapshot`, so native `selectionStart/End` ARE the persisted UTF-16 offsets (exact by

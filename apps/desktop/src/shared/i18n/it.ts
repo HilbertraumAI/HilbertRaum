@@ -3605,6 +3605,10 @@ export const it: UiCatalog<'it'> = {
   'review.autosave.saved': 'Salvato',
   'review.autosave.error': 'Non è stato ancora possibile salvare alcune modifiche.',
   'review.autosave.retry': 'Riprova',
+  'review.unsaved.body':
+    'Non è stato ancora possibile salvare alcune modifiche a «{title}», quindi l’altra verifica non ' +
+    'è stata aperta. Riprova oppure scarta queste modifiche e aprila.',
+  'review.unsaved.discard': 'Scarta le modifiche e apri',
   'review.evidence.title': 'Riscontri',
   'review.evidence.captionRelevance':
     'Le fonti mostrate sono gli estratti forniti al modello IA locale per questa risposta.',

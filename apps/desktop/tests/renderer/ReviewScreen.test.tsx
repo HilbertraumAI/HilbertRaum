@@ -5,8 +5,9 @@ import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { t } from '../../src/shared/i18n'
-import type { EvidenceReviewItemPatch } from '../../src/shared/types'
+import type { EvidenceReviewFreshness, EvidenceReviewItemPatch } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { deferred } from '../helpers/deferred'
 import {
   archiveSource,
   bulkBackend,
@@ -655,8 +656,8 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
         ]
       })
     })
-    await screen.findByText(t('en', 'review.outdated.title'))
-    const banner = screen.getByRole('status')
+    // The banner is the status region that holds its title (the save line is a status region too, #837).
+    const banner = (await screen.findByText(t('en', 'review.outdated.title'))).closest('[role="status"]') as HTMLElement
     expect(
       within(banner).getByText(t('en', 'review.outdated.sourcesChanged.one', { count: 1 }))
     ).toBeInTheDocument()
@@ -756,12 +757,12 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
         ]
       })
     })
-    await screen.findByText(t('en', 'review.outdated.title'))
+    const title = await screen.findByText(t('en', 'review.outdated.title'))
     // The card: the creation fact, never a second "no longer present" badge (EvidencePane.tsx:269).
     expect(screen.getByText(t('en', 'review.source.missingAtCreation'))).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'review.source.missingNow'))).toBeNull()
-    // The banner: the changed source is drift; the creation-missing one is not (ReviewScreen.tsx:513-523).
-    const banner = screen.getByRole('status')
+    // The banner: the changed source is drift; the creation-missing one is not (ReviewScreen.tsx `countMissingNow`).
+    const banner = title.closest('[role="status"]') as HTMLElement
     expect(
       within(banner).getByText(t('en', 'review.outdated.sourcesChanged.one', { count: 1 }))
     ).toBeInTheDocument()
@@ -841,6 +842,197 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
       within(dialog).getByText(t('en', 'review.sourceContext.excerptHeading'))
     ).toBeInTheDocument()
     assertNoUnexpectedApiCalls()
+  })
+})
+
+// #837: a review write that fails (a disk or SQLite I/O failure in practice) must stay visible and retryable, and a
+// switch to another review must never drop the unsaved edit silently.
+describe('ReviewScreen — a failed save is never dropped silently (#837)', () => {
+  const DISK_FULL = "Error invoking remote method 'evidence:updateItem': Error: database or disk is full"
+
+  /** Decide item 1 as Supported, then wait out the 600 ms debounce for the write to fail and Try again to show. */
+  async function decideFirstItemAndWaitForFailure(): Promise<HTMLElement> {
+    const items = screen.getAllByRole('listitem')
+    fireEvent.click(
+      within(items[0]).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
+    )
+    return screen.findByRole('button', { name: t('en', 'review.autosave.retry') }, { timeout: 3000 })
+  }
+
+  // #839 U1e.
+  it('a failed write shows the save-error line, and Try again saves the edit and clears it', async () => {
+    let fail = true
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (fail) throw new Error(DISK_FULL)
+      return makeItem({ id, ...patch })
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const retry = await decideFirstItemAndWaitForFailure()
+    expect(screen.getByText(/database or disk is full/)).toBeInTheDocument()
+
+    fail = false
+    fireEvent.click(retry)
+    expect(await screen.findByText(t('en', 'review.autosave.saved'))).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'review.autosave.retry') })).toBeNull()
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(2)
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
+  })
+
+  it('while a save error shows, the Bulk actions trigger is disabled, and it comes back once the edit is saved', async () => {
+    let fail = true
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (fail) throw new Error(DISK_FULL)
+      return makeItem({ id, ...patch })
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const bulk = screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })
+    expect(bulk).toBeEnabled()
+    const retry = await decideFirstItemAndWaitForFailure()
+    expect(bulk).toBeDisabled()
+
+    fail = false
+    fireEvent.click(retry)
+    await waitFor(() => expect(bulk).toBeEnabled())
+  })
+
+  /** Review r1 ("Lease check") with a failed edit, then the real switch path: the screen unmounts (its exit flush fails
+   *  again) and mounts for r2 ("Gamma"). Returns the stubs once that mount shows the refusal card naming r1. */
+  async function switchAfterFailedEdit(fail: { on: boolean; hold?: Promise<void> }): Promise<{
+    onNavigate: ReturnType<typeof vi.fn>
+    getEvidenceReview: ReturnType<typeof vi.fn>
+    updateEvidenceReviewItem: ReturnType<typeof vi.fn>
+  }> {
+    const first = makeDetail({ title: 'Lease check' })
+    const second = makeDetail({
+      id: 'r2',
+      messageId: 'm2',
+      items: [makeItem({ id: 'j1', reviewId: 'r2', textSnapshot: 'Gamma' })]
+    })
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (fail.hold) await fail.hold // a test can hold a write in flight
+      if (fail.on) throw new Error(DISK_FULL)
+      return makeItem({ id, ...patch })
+    })
+    const getEvidenceReview = vi.fn(async (id: string) => (id === 'r2' ? second : first))
+    const onNavigate = vi.fn()
+    const { view } = await renderReview({
+      detail: first,
+      api: { getEvidenceReview, updateEvidenceReviewItem },
+      props: { onNavigate }
+    })
+    await decideFirstItemAndWaitForFailure()
+    view.unmount()
+    render(<ReviewScreen handoff={{ reviewId: 'r2' }} onNavigate={onNavigate} />)
+    // Wait at once: the failed exit flush settles after the mount, inside this wait.
+    await screen.findByText(t('en', 'review.unsaved.body', { title: 'Lease check' }))
+    return { onNavigate, getEvidenceReview, updateEvidenceReviewItem }
+  }
+
+  it('switching to another review shows a card naming the unsaved review; Try again saves first, then opens it', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview, updateEvidenceReviewItem } = await switchAfterFailedEdit(fail)
+    expect(screen.getByText(t('en', 'review.unsaved.body', { title: 'Lease check' }))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('en', 'review.unsaved.discard') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: new RegExp(t('en', 'review.back')) })).toBeInTheDocument()
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+
+    // Try again while the disk is still full: one more write, and the card stays.
+    const writes = updateEvidenceReviewItem.mock.calls.length
+    const retry = screen.getByRole('button', { name: t('en', 'review.autosave.retry') })
+    fireEvent.click(retry)
+    await waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(writes + 1))
+    await waitFor(() => expect(retry).toBeEnabled()) // the retry has run its course
+    expect(screen.getByText(t('en', 'review.unsaved.body', { title: 'Lease check' }))).toBeInTheDocument()
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+
+    // The disk recovers: Try again writes the edit, then opens r2.
+    fail.on = false
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.autosave.retry') }))
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    const lastWrite = updateEvidenceReviewItem.mock.invocationCallOrder.at(-1)!
+    const r2Read = getEvidenceReview.mock.invocationCallOrder[getEvidenceReview.mock.calls.findIndex((c) => c[0] === 'r2')]!
+    expect(lastWrite).toBeLessThan(r2Read)
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
+  })
+
+  // Review round 1 (design-guidelines §6, WCAG 2.4.3): the card replaces the review seconds after the click that led
+  // here, and that click's button left with the chat. Try again takes focus when the card appears, and the card's
+  // sentence is its description, so a screen reader reads both (the WorkspaceGate step-focus precedent).
+  it('the card puts focus on Try again when it appears, described by the card’s sentence', async () => {
+    await switchAfterFailedEdit({ on: true })
+    const retry = screen.getByRole('button', { name: t('en', 'review.autosave.retry') })
+    await waitFor(() => expect(retry).toHaveFocus())
+    expect(retry).toHaveAccessibleDescription(t('en', 'review.unsaved.body', { title: 'Lease check' }))
+  })
+
+  it('Try again and Discard are disabled while the retry writes, and focus returns to Try again when it fails again', async () => {
+    const fail: { on: boolean; hold?: Promise<void> } = { on: true }
+    const { getEvidenceReview } = await switchAfterFailedEdit(fail)
+    const retry = screen.getByRole('button', { name: t('en', 'review.autosave.retry') })
+    const discard = screen.getByRole('button', { name: t('en', 'review.unsaved.discard') })
+    const write = deferred()
+    fail.hold = write.promise
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toBeDisabled())
+    expect(discard).toBeDisabled()
+    // Focus leaves Try again while the retry runs (a browser moves it off the disabled button; jsdom cannot blur a
+    // disabled element, so it goes to the still-live Back here). When the retry fails, it comes back to Try again.
+    const back = screen.getByRole('button', { name: new RegExp(t('en', 'review.back')) })
+    back.focus()
+    expect(back).toHaveFocus()
+    write.resolve() // the held write goes ahead, and fails again
+    await waitFor(() => expect(retry).toBeEnabled())
+    expect(discard).toBeEnabled()
+    await waitFor(() => expect(retry).toHaveFocus())
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+  })
+
+  it('on that card, Back returns to chat and Discard changes and open opens the other review without the edit', async () => {
+    const { onNavigate, updateEvidenceReviewItem } = await switchAfterFailedEdit({ on: true })
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(t('en', 'review.back')) }))
+    expect(onNavigate).toHaveBeenCalledWith('chat')
+
+    const writes = updateEvidenceReviewItem.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.unsaved.discard') }))
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(writes)
+  })
+})
+
+// #837 part 3 (design-guidelines §6, M-U1): a live region that first appears already holding its text is missed by some
+// screen readers. Both of this screen's late-arriving lines (the Outdated banner, the auto-save line) are announced from
+// regions mounted EMPTY with the review; these rows pin that the text lands inside a node that existed before it.
+// Whether Narrator then speaks it is a by-ear check (live-region-nesting.test.ts states the same limit).
+describe('ReviewScreen — live regions exist before their text arrives (#837)', () => {
+  it('the Outdated banner lands inside a status region that was mounted before the verdict', async () => {
+    const verdict = deferred<EvidenceReviewFreshness | null>()
+    await renderReview({ api: { refreshEvidenceReviewState: vi.fn(() => verdict.promise) } })
+    const statusBefore = screen.getAllByRole('status')
+
+    verdict.resolve(makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] }))
+    const title = await screen.findByText(t('en', 'review.outdated.title'))
+    expect(statusBefore).toContain(title.closest('[role="status"]'))
+  })
+
+  it('the auto-save line’s regions are mounted before the first edit: Saving… and a failure land inside them', async () => {
+    const updateEvidenceReviewItem = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'evidence:updateItem': Error: database or disk is full")
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const statusBefore = screen.getAllByRole('status')
+    const alertBefore = screen.getAllByRole('alert')
+
+    fireEvent.click(
+      within(screen.getAllByRole('listitem')[0]).getByRole('radio', {
+        name: new RegExp(t('en', 'review.decision.supported'))
+      })
+    )
+    const saving = screen.getByText(t('en', 'review.autosave.saving'))
+    expect(statusBefore).toContain(saving.closest('[role="status"]'))
+    const failure = await screen.findByText(/database or disk is full/, {}, { timeout: 3000 })
+    expect(alertBefore).toContain(failure.closest('[role="alert"]'))
   })
 })
 

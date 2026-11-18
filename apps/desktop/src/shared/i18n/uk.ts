@@ -3570,6 +3570,10 @@ export const uk: UiCatalog<'uk'> = {
   'review.autosave.saved': 'Збережено',
   'review.autosave.error': 'Деякі зміни поки що не вдалося зберегти.',
   'review.autosave.retry': 'Спробувати ще раз',
+  'review.unsaved.body':
+    'Деякі зміни в перевірці «{title}» поки що не вдалося зберегти, тому іншу перевірку не відкрито. ' +
+    'Спробуйте ще раз або відмовтеся від цих змін, щоб її відкрити.',
+  'review.unsaved.discard': 'Відмовитися від змін і відкрити',
   'review.evidence.title': 'Обґрунтування',
   'review.evidence.captionRelevance':
     'Показані джерела — це уривки, які було передано локальній ШІ-моделі для цієї відповіді.',

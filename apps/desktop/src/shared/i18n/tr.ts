@@ -3320,6 +3320,10 @@ export const tr: UiCatalog<'tr'> = {
   'review.autosave.saved': 'Kaydedildi',
   'review.autosave.error': 'Bazı değişiklikler henüz kaydedilemedi.',
   'review.autosave.retry': 'Yeniden dene',
+  'review.unsaved.body':
+    '“{title}” incelemesindeki bazı değişiklikler henüz kaydedilemedi, bu yüzden diğer inceleme ' +
+    'açılmadı. Yeniden deneyin ya da bu değişikliklerden vazgeçip diğer incelemeyi açın.',
+  'review.unsaved.discard': 'Değişikliklerden vazgeç ve aç',
   'review.evidence.title': 'Dayanaklar',
   'review.evidence.captionRelevance':
     'Gösterilen kaynaklar, bu yanıt için yerel yapay zekâ modeline verilen alıntılardır.',
