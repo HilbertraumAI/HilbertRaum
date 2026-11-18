@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-18 — the closed 2026-10-14 DEP-7 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-18 (preamble budget, making room for the follow-ups wave 2 line). Its
+record is unchanged: architecture.md "Dependabot triage — design record (wave DEP-7)". Its one open item, the
+PDF gold set (corpus not on this machine), is still noted by the 2026-11-10 #792 entry; #698 was fixed. Citations
+of this entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **DEP-7 — Dependabot alerts #124–#127 triaged: one fixed, three dismissed with written reasons (`fix/dep7-alerts-124-127`).** #125 (high): source-map-js 1.2.1 → 1.2.2, lockfile only, one entry, build tooling
+only (nothing ships). #127: sprintf-js has no patched release; the Kit carries it only for mammoth's CLI, and `extractRawText` from the packaged `app.asar` loads 154 modules, none from argparse or sprintf-js. #124/#126: katex
+0.16.47 has no patch on its line, every dependent's range stops before 0.17, and nothing sets KaTeX's `trust`; the advisory needs a prototype-pollution bug the renderer is not known to have. Owner calls: dismiss #127 as not used
+and #124/#126 as a tolerable risk (posted by the owner), no `overrides`, the `~0.16.47` pin stays. Two pins guard those premises (each red under its mutation). Found: KaTeX's output skips rehype-sanitize (`trust` is its gate;
+security-model), and the renderer bundles KaTeX twice (#698). Record: architecture.md "Dependabot triage — design record (wave DEP-7)". Open: the PDF gold set (corpus not on this machine); #698 fixed, above._
+
 ## 2026-11-18 — the 2026-11-18 follow-ups wave entry retired verbatim (wave closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-18, when the wave closed (PR #886 merged as `eab53ae0`, the last
