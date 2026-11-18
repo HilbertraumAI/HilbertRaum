@@ -27,6 +27,15 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-18 — the 2026-11-18 follow-ups wave entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-18, when the wave closed (PR #886 merged as `eab53ae0`, the last
+of PRs #878–#886); a short outcome entry with the open follow-ups (#887–#899) replaces it there. Its
+records are unchanged and listed in that entry. Citations of this entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-11-18 — **Follow-ups wave (the review + export and vault + local API audit follow-ups, plus the app-update analysis issues): open.** Nine PRs in this order: W1 doc drift (#850, parts of #840/#861), W7 #869, W2 #845, W5 #837 + #838, W4 #868, W3 #876 + #875, W6 #843 + #873, W8 #846 + #847 + #848, W9 close-out (#839, #840, #860, #861). #849 stays with the app-update plan. Merged 2026-11-18: W1 #878, W7 #879, W2 #880, W5 #881, W4 #882, W6 #883, W3 #884, W8 #885 (closed #850, #869, #845, #837, #838, #868, #843, #873, #876, #875, #846, #847, #848). Open: W9 = PR #886 (#839, #840, #860, #861); then the wave review and the close (retire this line)._
+
 ## 2026-11-18 — the two closed 2026-11-16 test audit entries retired verbatim (follow-ups wave opened)
 
 Retired from `BUILD_STATE.md` on 2026-11-18, when the follow-ups wave opened; a single wave line there names their open
