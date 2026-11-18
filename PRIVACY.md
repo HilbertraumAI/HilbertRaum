@@ -126,16 +126,17 @@ that needs them. Three things must all be true before a single byte moves:
    drive's policy disables it) — or turned it back on if you had switched it off.
 3. You confirmed that specific download in a dialog showing its size, license, and source address —
    including explicitly accepting the license when it hasn't been pre-reviewed. The knowledge-pack
-   tools are GPL-3.0-or-later and always show that license for you to accept. The OCR files (two
-   language files, German and English, about 4 MB together, Apache-2.0, from `cdn.jsdelivr.net`)
-   show their languages, size, license and source host; their license is pre-reviewed, so there
+   tools are GPL-3.0-or-later and always show that license for you to accept. The OCR files (three
+   files — German, English and the page-orientation data — about 8.6 MB together, Apache-2.0, from
+   `cdn.jsdelivr.net`) show the files, size, license and source host; their license is pre-reviewed, so there
    is nothing extra to accept.
 
 The request goes only to the address printed in the model's local manifest — the knowledge-pack
 tools and the OCR files instead ride the pinned `runtime-sources.yaml`, not a model manifest, but
 the same address-only, no-telemetry rule applies. For the OCR files the app itself fixes which
 files it accepts (their checksums and sizes are built into the app) and where they go (the drive's
-`ocr/` folder); the list on the drive only supplies the download address. Nothing about you, your prompts, or your documents is
+`ocr/` folder); the drive's list, or the app's own copy when the drive's has no matching entry,
+supplies only the download address. Nothing about you, your prompts, or your documents is
 ever sent. There are **no update checks, no model catalog, and no background downloads** — with
 the checkbox off (or no internet at all) the app is fully usable and makes no internet calls.
 Every downloaded file is checked against its expected checksum before the app will use it.

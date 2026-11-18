@@ -145,7 +145,7 @@ start, see [Linux: the AppImage does not start](docs/troubleshooting.md#linux-th
   simulated answers) and an AI model of your choice. Two more downloads are optional: the
   kiwix-tools binaries (GPL-3.0-or-later) that power offline knowledge packs, offered from the
   **Knowledge packs** panel's tools-missing notice or a mirror on the **AI Model** screen, and the
-  text-recognition (OCR) files (German, English and page orientation, about 8 MB, Apache-2.0)
+  text-recognition (OCR) files (German, English and page orientation, about 8.6 MB, Apache-2.0)
   that read scanned PDFs and photos, offered on a scan or photo in **Documents** that needs them and on the
   **AI Model** screen — each only once you ask for it. The only things the app ever downloads are
   AI models, the AI engine, the optional knowledge-pack tools and the optional text-recognition
@@ -202,7 +202,7 @@ machine with 12 GB or less you may prefer the smaller bundled Qwen3-4B, which yo
 `-AllModels` or from the AI Model screen), the embeddings model (for document Q&A), the
 reranker, the Whisper transcriber model, and the vision model (for image understanding), plus
 both sidecar runtimes (`llama.cpp` for chat and embeddings, `whisper.cpp` for audio) and the
-OCR language files (`deu`/`eng`, ~4 MB, for scanned-PDF and photo text recognition). That is
+OCR language files (`deu`/`eng` plus the `osd` page-orientation data, ~8.6 MB, for scanned-PDF and photo text recognition). That is
 enough to chat, ask questions about your documents, get higher-quality retrieval, transcribe
 audio, understand images, and OCR scanned documents out of the box. Any other models (larger
 chat models) can be downloaded from inside the app later, on demand. To provision every model

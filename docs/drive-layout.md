@@ -56,7 +56,8 @@ From the root, these paths are derived and created (idempotently) on first run:
 > `resolveManifestsDir` precedent).
 
 `buildDriveStatus()` reports root/workspace/models/logs paths, prepared-drive flag, writability,
-free space, and OS/arch — surfaced on the **Diagnostics** screen.
+free space, the size of `workspace/images/` (`0` when empty, unknown when unreadable), and OS/arch —
+surfaced on the **Diagnostics** screen.
 
 ## Prepared external drive (commercial layout, spec §6)
 
@@ -196,7 +197,12 @@ drive is the same flow as building it, run again from a machine with the repo:
 4. `verify-models --target <drive> --strict` confirms every weight still verifies; on a Kit,
    `--kit` checks what it ships and leaves the in-app catalog alone (#766).
 
-The user's `workspace/` (and its encrypted data) is never modified by an update.
+An update does not edit your `workspace/` files itself. The first time a newer version opens the
+workspace it may upgrade the database inside it (new columns, indexes and search tables) and
+records the schema version it wrote. Versions 0.1.60 and later refuse to open a workspace whose
+schema version is newer than their own, so after an update that raises it, an older version can no
+longer open that workspace; 0.1.59 and older do not check. No release so far has raised it: it has
+been 1 since 0.1.60.
 
 ## Preparing a drive (scripts)
 

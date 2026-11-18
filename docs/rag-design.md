@@ -2836,8 +2836,10 @@ exist; snapshotted `documentSha256` → does the CURRENT stored `documents.sha25
 by ingestion) still equal it — the check never re-hashes and never opens a source file, so
 it is cheap, offline, and works identically in an encrypted workspace. The answer text
 compares exactly (`messages.content` vs `answer_snapshot`); coverage compares on a fixed
-semantic projection (mode/counts/tree status/tier/truncated/unparsed/fullyChunked —
-`nodeIds` and unknown extras are display plumbing, not claims, and never flag drift).
+semantic projection (mode, chunksCovered/chunksTotal, treeStatus, treeLevels, tier, truncated,
+unparsedChunks, fullyChunked, and the #643 `labelledExcerpts` stamp only when set). `nodeIds` and
+unknown extras are display plumbing, not claims, and never flag drift; the field set is
+compile-checked against `CoverageInfo` (AUD-19).
 
 Per-source verdicts inherit §16.2's honesty split: resolved + row + both hashes →
 `unchanged`/`changed`; resolved + row gone → `missing`; unresolved identity or an absent

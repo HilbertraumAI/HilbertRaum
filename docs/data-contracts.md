@@ -299,7 +299,7 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
 (rootPath, workspacePath, modelsPath, logsPath, configPath, dbPath, isPreparedDrive).
-`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable). See `docs/drive-layout.md`.
+`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable, and `imagesBytes`: the size of `workspace/images/`, `0` when empty, `null` when unreadable). See `docs/drive-layout.md`.
 
 ### Core IPC (Phase 1 live)
 ✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in
@@ -1130,8 +1130,9 @@ head's own weights + KV.
   **Schema stamp (#247):** the workspace database carries `PRAGMA user_version` =
   `SCHEMA_VERSION` (`services/db.ts`; `1` since PR #289). `openDatabase` reads it before any
   PRAGMA that writes: `0` (every database written before the stamp) and any lower value run the
-  additive migrations and are stamped in place; an equal value writes nothing (a second open is
-  a no-op); a HIGHER value throws the typed `WorkspaceNewerError` with the handle closed and the
+  additive migrations and are stamped in place; an equal value skips only the stamp write — the
+  additive migrations still run on every open, so an equal-stamped file missing a newer column gets
+  it, and on a complete schema a second open changes nothing; a HIGHER value throws the typed `WorkspaceNewerError` with the handle closed and the
   file byte-identical. Bump `SCHEMA_VERSION` only for a change an older build must not open.
   Builds ≤ 0.1.59 never read the stamp, so it protects only pairs whose older build is newer
   than PR #289;
@@ -1845,12 +1846,13 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   unacknowledged (`EvidencePackOutdatedError` → localized
   `main.evidenceReviews.exportOutdated`, thrown BEFORE any dialog/file work), and INJECTS
   the verdict into `buildEvidencePackModel(detail, options, meta, freshness?)` (4th
-  OPTIONAL param — the model stays pure; goldens inject fixed verdicts). Pack rendering:
+  OPTIONAL param — the model stays pure; the goldens run the real export pipeline, so their verdicts come from the seeded workspace). Pack rendering:
   cover outdated warning + acknowledge stamp (§21.3 "prominent snapshot warning"),
   coverage-section mismatch records (`packExport.coverage.answerChangedNow`/
   `coverageChangedNow`/`sourcesChangedNow`/`sourcesMissingNow` — missing counts NEW
-  deletions only) + `freshnessChecked` note (the P3 fixed `freshnessNote` renders only
-  when NO verdict was injected), per-card §15.4/§15.5 warnings, and the §16.1.7 source
+  deletions only) + `freshnessChecked` note (the P3 fixed `freshnessNote` is the pure
+  model's no-verdict branch, reachable only by direct model/render callers such as tests; every
+  exported pack carries `freshnessChecked`), per-card §15.4/§15.5 warnings, and the §16.1.7 source
   register column becomes **Availability at export** (available / changed-since-review /
   missing / cannot-verify from `EvidencePackSource.currentState`). A deleted source NEVER
   blocks export (§28.7). Model additions: `EvidencePackFreshness` + `outdated` overridden
