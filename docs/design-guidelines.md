@@ -1479,9 +1479,11 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
 - **A failed save is never run over (#837):** while an edit a failed write left unsaved is
   waiting, **Bulk actions** is disabled (not hidden — the error line beside the title is the
   explanation) and the store refuses the sweep; any other error (a failed acknowledge, link
-  or selection) leaves nothing queued and blocks nothing. A decision made after a sweep was
-  asked for stays on screen and is saved after it. Re-opening the same review keeps the
-  unsaved edit on screen with its error line. A switch to ANOTHER review is refused only
+  or selection) leaves nothing queued and blocks nothing. Bulk actions is also disabled while
+  a sweep runs (one at a time). No item save runs during a sweep: a decision still waiting to
+  be saved when the sweep returns stays on screen and is saved after it; every other item
+  shows what the sweep saved, so the screen and the saved review agree. Re-opening the same
+  review keeps the unsaved edit on screen with its error line. A switch to ANOTHER review is refused only
   when a write actually failed (edits that are merely still being saved are written first,
   and the switch goes ahead); then a card shows in its place — `BlockedSwitchCard` inside
   the screen's existing open-error card: one sentence naming the review whose changes could

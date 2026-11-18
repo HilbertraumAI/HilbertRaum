@@ -883,6 +883,34 @@ describe('ReviewScreen — a failed save is never dropped silently (#837)', () =
     expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
   })
 
+  // Review round 4: one sweep at a time — while a sweep's call is in flight the trigger is disabled (the store ignores a
+  // second sweep too), and it comes back when the sweep settles.
+  it('while a sweep is in flight, the Bulk actions trigger is disabled; it comes back when the sweep settles', async () => {
+    const detail = makeDetail({
+      items: [
+        makeItem({ id: 'h1', blockKind: 'heading', textSnapshot: '## Heading', decision: 'not_reviewed' }),
+        makeItem({ id: 'p1', textSnapshot: 'Alpha [S1]', decision: 'supported' }),
+        makeItem({ id: 'p2', blockKey: 'b2-paragraph-x', textSnapshot: 'Beta' })
+      ]
+    })
+    const bulk = bulkBackend(detail.items)
+    const sweep = deferred()
+    const applyEvidenceReviewBulkAction = vi.fn(async (reviewId: string, action: Parameters<typeof bulk.spy>[1]) => {
+      await sweep.promise
+      return bulk.spy(reviewId, action)
+    })
+    await renderReview({ detail, api: { applyEvidenceReviewBulkAction } })
+    const trigger = screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })
+
+    openBulkMenu()
+    fireEvent.click(await screen.findByText(t('en', 'review.bulk.headingsNa')))
+    await waitFor(() => expect(applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    expect(trigger).toBeDisabled()
+    sweep.resolve()
+    await waitFor(() => expect(trigger).toBeEnabled())
+    expect(applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1)
+  })
+
   // Review round 2: only an edit a failed write left unsaved disables the trigger (the store's own refusal condition).
   it('after a failed acknowledge (nothing queued), the Bulk actions trigger stays enabled', async () => {
     await renderReview({

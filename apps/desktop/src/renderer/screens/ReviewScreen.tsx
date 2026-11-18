@@ -394,9 +394,13 @@ export function ReviewScreen({
                 Read from the store's module state, not the snapshot: the snapshot changes
                 whenever this answer can turn from false to true (a failed write sets
                 saveState 'error' as it re-queues), and a stale true while a retry writes only
-                keeps the trigger disabled until that write settles and notifies. */}
+                keeps the trigger disabled until that write settles and notifies. Also disabled
+                while a sweep runs (`bulkRunning`, review round 4): one sweep at a time. */}
             <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild disabled={hasEditsAfterFailedSave()}>
+              <DropdownMenu.Trigger
+                asChild
+                disabled={session.bulkRunning || hasEditsAfterFailedSave()}
+              >
                 <Button size="sm">{t('review.bulk.menu')} ▾</Button>
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>

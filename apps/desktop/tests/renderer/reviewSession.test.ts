@@ -6,7 +6,8 @@ import type {
   EvidenceReviewDetail,
   EvidenceReviewFreshness,
   EvidenceReviewItem,
-  EvidenceReviewItemPatch
+  EvidenceReviewItemPatch,
+  ReviewDecision
 } from '../../src/shared/types'
 import {
   REVIEW_SAVE_DEBOUNCE_MS,
@@ -912,51 +913,252 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     }
   })
 
-  // #837 review round 1: a DECISION made while the sweep's IPC is in flight is newer than the sweep. The merge of the
-  // returned rows used to overwrite it on screen while its queued write still landed after the sweep (screen
-  // `not_reviewed`, database `not_supported`). The screen now keeps it, and it is the last write.
-  // Review round 3 (verified by probe): a decision made during the pre-sweep flush waits for its 600 ms debounce. When
-  // that timer fires while the sweep's call is still in flight, the patch has left the queue (it is being written), and
-  // a merge that only looked at the queue took the sweep's value: screen `not_reviewed` + "Saved", database
-  // `not_supported`. A decision made after the click now keeps its local value whatever its write is doing.
-  it('a decision made after the click whose write runs while the sweep is in flight still wins on screen', async () => {
+  // ---- Review round 4: ONE write lane ----
+  // Item writes used to run CONCURRENTLY with a sweep, and every rule that tried to reconcile them afterwards missed a
+  // case. Now no item flush starts while a sweep's call is in flight (it waits for the sweep to settle), so at the
+  // merge no item write is in flight, and the merge rule is exact: an item keeps its local decision iff a decision patch
+  // for it is still QUEUED (it will be written after the sweep); otherwise the sweep's value is the truth. These rows
+  // run against a main stand-in that PERSISTS both write paths in arrival order, and end by checking the screen against
+  // it: equal, or a visible error — and never a save line stuck on "Saving…".
+
+  /** Main's persisted decisions, item writes and sweeps applied in arrival order. `holdNext*` parks the next call of
+   *  that kind until the returned gate resolves; `failNextItemWrite` makes the next item write reject. */
+  function persistingMain(items: readonly EvidenceReviewItem[]) {
+    const db = new Map(items.map((i) => [i.id, i.decision]))
+    const order: string[] = []
+    let holdItem: Deferred<void> | null = null
+    let holdBulk: Deferred<void> | null = null
+    let failItem = false
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      order.push(`item:${id}`)
+      const gate = holdItem
+      holdItem = null
+      if (gate) await gate.promise
+      if (failItem) {
+        failItem = false
+        throw new Error('disk I/O error')
+      }
+      if (patch.decision !== undefined) db.set(id, patch.decision)
+      return makeItem({ id, decision: db.get(id)! })
+    })
+    const applyEvidenceReviewBulkAction = vi.fn(async (_reviewId: string, action: EvidenceReviewBulkAction) => {
+      order.push(`bulk:${action}`)
+      const gate = holdBulk
+      holdBulk = null
+      if (gate) await gate.promise
+      for (const item of items) {
+        const now = db.get(item.id)!
+        if (action === 'clear_decisions' && now !== 'not_reviewed') db.set(item.id, 'not_reviewed')
+        if (action === 'headings_not_applicable' && item.blockKind === 'heading') db.set(item.id, 'not_applicable')
+        if (action === 'undecided_follow_up' && now === 'not_reviewed') db.set(item.id, 'follow_up')
+      }
+      return items.map((i) => ({ ...i, decision: db.get(i.id)! }))
+    })
+    return {
+      db,
+      order,
+      updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction,
+      holdNextItem(): Deferred<void> {
+        holdItem = deferred()
+        return holdItem
+      },
+      holdNextBulk(): Deferred<void> {
+        holdBulk = deferred()
+        return holdBulk
+      },
+      failNextItemWrite(): void {
+        failItem = true
+      }
+    }
+  }
+
+  /** The screen tells the truth: not stuck on "Saving…", and every decision equals the persisted one unless a save
+   *  error is showing (the error line + Try again). */
+  function expectTruthful(db: Map<string, ReviewDecision>): void {
+    const s = getReviewSessionSnapshot()
+    expect(s.saveState).not.toBe('pending')
+    if (s.saveState === 'error') return
+    expect(Object.fromEntries(s.detail!.items.map((i) => [i.id, i.decision]))).toEqual(Object.fromEntries(db))
+  }
+
+  // Review round 4 (1): a timer flush already writing at the click; a decision made after the click is drained by the
+  // sweep's own pre-sweep flush and written BEFORE the sweep, so main sweeps over it. The screen must show that.
+  it('a decision written before the sweep (order item:p1, item:h1, bulk) shows the swept value, as main has it', async () => {
     vi.useFakeTimers()
     const items = bulkItems()
     const detail = makeDetail({ items })
-    const backend = bulkBackend(items)
-    const order: string[] = []
-    const firstWrite = deferred()
-    const sweep = deferred()
-    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
-      order.push(`item:${id}`)
-      if (order.length === 1) await firstWrite.promise
-      return makeItem({ id, ...patch })
-    })
-    const bulkSpy = vi.fn(async (reviewId: string, action: EvidenceReviewBulkAction) => {
-      order.push(`bulk:${action}`)
-      await sweep.promise
-      return backend.spy(reviewId, action)
-    })
+    const main = persistingMain(items)
     stubReviewApi({
       getEvidenceReview: vi.fn(async () => detail),
-      updateEvidenceReviewItem,
-      applyEvidenceReviewBulkAction: bulkSpy
+      updateEvidenceReviewItem: main.updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction
     })
     await openWith(detail)
 
     editReviewItem('p1', { decision: 'supported' })
-    const sweeping = bulkClearDecisions() // its flush is writing p1
-    editReviewItem('p2', { decision: 'not_supported' }) // decided after the click
-    firstWrite.resolve()
-    await vi.advanceTimersByTimeAsync(0) // the sweep's call goes out and waits
-    expect(order).toEqual(['item:p1', 'bulk:clear_decisions'])
-    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // p2's debounce fires mid-sweep: written now
-    expect(order).toEqual(['item:p1', 'bulk:clear_decisions', 'item:p2'])
-    sweep.resolve()
+    const p1Write = main.holdNextItem()
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // the timer's flush is writing p1…
+    expect(main.order).toEqual(['item:p1'])
+    const sweeping = bulkClearDecisions() // …when the user clicks Clear all decisions
+    editReviewItem('h1', { decision: 'not_applicable' }) // decided after the click
+    p1Write.resolve()
     await sweeping
-    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p2')!.decision).toBe('not_supported')
+    expect(main.order).toEqual(['item:p1', 'item:h1', 'bulk:clear_decisions'])
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.db.get('h1')).toBe('not_reviewed')
+    expectTruthful(main.db)
   })
 
+  // Review round 4 (round-3 probe): a decision made during the pre-sweep flush waits for its debounce; that timer
+  // fires while the sweep's call is in flight. Its write now waits for the sweep, so it lands after it.
+  it('a debounce that fires while the sweep is in flight writes after the sweep: the decision wins on screen and in main', async () => {
+    vi.useFakeTimers()
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const main = persistingMain(items)
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem: main.updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction
+    })
+    await openWith(detail)
+
+    editReviewItem('p1', { decision: 'supported' })
+    const p1Write = main.holdNextItem()
+    const sweep = main.holdNextBulk()
+    const sweeping = bulkClearDecisions() // its flush is writing p1
+    editReviewItem('p2', { decision: 'not_supported' }) // decided after the click
+    p1Write.resolve()
+    await vi.advanceTimersByTimeAsync(0) // the sweep's call goes out and waits
+    expect(main.order).toEqual(['item:p1', 'bulk:clear_decisions'])
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // p2's debounce fires mid-sweep…
+    expect(main.order).toEqual(['item:p1', 'bulk:clear_decisions']) // …and its write waits for the sweep
+    sweep.resolve()
+    await sweeping
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['item:p1', 'bulk:clear_decisions', 'item:p2'])
+    expect(main.db.get('p2')).toBe('not_supported')
+    expectTruthful(main.db)
+  })
+
+  // Review round 4 (2): that after-click decision's write FAILS. It used to fail during the sweep, and the sweep's merge
+  // then cleared the error and left "Saving…" with nothing scheduled. Now the failure lands after the sweep: the error
+  // line and Try again show, the screen keeps the local decision, and nothing claims "saved".
+  it('an after-click decision whose write fails after the sweep shows the error and Try again, never "Saving…" for good', async () => {
+    vi.useFakeTimers()
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const main = persistingMain(items)
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem: main.updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction
+    })
+    await openWith(detail)
+
+    editReviewItem('p1', { decision: 'supported' })
+    const p1Write = main.holdNextItem()
+    const sweep = main.holdNextBulk()
+    const sweeping = bulkClearDecisions()
+    editReviewItem('p2', { decision: 'not_supported' }) // decided after the click
+    p1Write.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(main.order).toEqual(['item:p1', 'bulk:clear_decisions'])
+    main.failNextItemWrite() // p2's write will fail
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    sweep.resolve()
+    await sweeping
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    const s = getReviewSessionSnapshot()
+    expect(s).toMatchObject({ saveState: 'error', saveError: 'disk I/O error' })
+    expect(s.detail!.items.find((i) => i.id === 'p2')!.decision).toBe('not_supported')
+    expect(main.db.get('p2')).toBe('not_reviewed') // swept; the failed write never landed
+    expectTruthful(main.db)
+
+    await retryReviewSave() // Try again, with the disk back
+    expect(main.db.get('p2')).toBe('not_supported')
+    expect(getReviewSessionSnapshot().saveState).toBe('saved')
+    expectTruthful(main.db)
+  })
+
+  // Review round 4 (B, the other half of the rule): an item with nothing queued takes what main's sweep returned, even
+  // where the screen's optimistic guess was different (here the screen was stale: main already had p1 decided).
+  it('an item with nothing queued shows what main swept, even where the screen guessed differently', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items }) // the screen shows p1 undecided…
+    const main = persistingMain(items)
+    main.db.set('p1', 'supported') // …but main has it decided
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem: main.updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction
+    })
+    await openWith(detail)
+    await bulkMarkUndecidedFollowUp()
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p1')!.decision).toBe('supported')
+    expectTruthful(main.db)
+  })
+
+  // Review round 4 (C): the sweep's merge never clears an error that landed while it ran. Under the one write lane no
+  // item write can fail meanwhile, but an acknowledge can: its error line must survive the sweep's success.
+  it('an error that lands while the sweep runs is still showing after the sweep succeeds', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const main = persistingMain(items)
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem: main.updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction,
+      acknowledgeEvidenceReviewFreshness: vi.fn(async () => {
+        throw new Error('db gone')
+      })
+    })
+    await openWith(detail)
+
+    const sweep = main.holdNextBulk()
+    const sweeping = bulkClearDecisions()
+    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    expect(await acknowledgeReviewFreshness()).toBe(false) // fails while the sweep is in flight
+    sweep.resolve()
+    await sweeping
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error', saveError: 'db gone' })
+    expect(Object.fromEntries(getReviewSessionSnapshot().detail!.items.map((i) => [i.id, i.decision]))).toEqual(
+      Object.fromEntries(main.db)
+    )
+  })
+
+  // Review round 4 (3): two sweeps must never overlap (the first's merge used to overwrite the second's optimistic
+  // values and could claim "saved" while the second was still in flight): a second bulk action while one runs does
+  // nothing (the screen disables the trigger meanwhile).
+  it('a second bulk action while one is in flight is ignored: one sweep call, a truthful screen', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const main = persistingMain(items)
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem: main.updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: main.applyEvidenceReviewBulkAction
+    })
+    await openWith(detail)
+
+    const sweep = main.holdNextBulk()
+    const first = bulkClearDecisions()
+    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    await bulkMarkHeadingsNotApplicable() // the second click
+    expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1)
+    expect(getReviewSessionSnapshot().bulkRunning).toBe(true)
+    sweep.resolve()
+    await first
+    expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1)
+    expect(main.order).toEqual(['bulk:clear_decisions'])
+    expect(getReviewSessionSnapshot().bulkRunning).toBe(false)
+    expectTruthful(main.db)
+  })
+
+  // #837 review round 1: a DECISION made while the sweep's IPC is in flight is newer than the sweep. The merge of the
+  // returned rows used to overwrite it on screen while its queued write still landed after the sweep (screen
+  // `not_reviewed`, database `not_supported`). The screen now keeps it, and it is the last write.
   it('a decision made while the sweep is in flight stays on screen and is written after the sweep', async () => {
     const items = bulkItems()
     const detail = makeDetail({ items })

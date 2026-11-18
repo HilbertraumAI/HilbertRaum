@@ -80,6 +80,12 @@ export interface ReviewSessionState {
    * `detail.outdated` is not consumed (write-path returns carry a constant-false overlay).
    */
   freshness: EvidenceReviewFreshness | null
+  /**
+   * #837 (review round 4): a bulk sweep is running, from the click until its merge is done. A
+   * second sweep meanwhile is ignored, and the screen disables Bulk actions — two overlapping
+   * sweeps would merge over each other's optimistic values.
+   */
+  bulkRunning: boolean
 }
 
 const INITIAL: ReviewSessionState = {
@@ -88,7 +94,8 @@ const INITIAL: ReviewSessionState = {
   openError: null,
   saveState: 'idle',
   saveError: null,
-  freshness: null
+  freshness: null,
+  bulkRunning: false
 }
 
 /** Debounce between an edit and its IPC flush (spec §26 — batch related writes). */
@@ -108,12 +115,12 @@ let openToken = 0
  */
 let purgeEpoch = 0
 /**
- * #837 sweep rule: every DECISION edit is stamped with a rising number (`decidedAt`). A sweep
- * remembers the number at its click; an item decided after it keeps its local decision through
- * the sweep's optimistic apply and merge, whether its write is still queued, in flight or done.
+ * #837 (review round 4) — ONE write lane: set while a bulk sweep's call is in flight, until its
+ * merge is done. `flushReviewSession` waits on it like on `flushInFlight`, so no item write
+ * (debounce timer, screen exit, switch, lock) runs concurrently with a sweep; the sweep itself
+ * waits out any item flush before it starts.
  */
-let decisionSeq = 0
-const decidedAt = new Map<string, number>()
+let sweepLane: Promise<void> | null = null
 
 function notify(): void {
   for (const fn of listeners) fn()
@@ -212,7 +219,6 @@ export async function openReviewSession(target: ReviewHandoffTarget): Promise<vo
   clearTimer()
   pendingItems = new Map()
   pendingHead = null
-  decidedAt.clear()
   state = { ...INITIAL, loading: true }
   notify()
   try {
@@ -311,7 +317,6 @@ export function editReviewItem(itemId: string, patch: EvidenceReviewItemPatch): 
   if (!state.detail || state.detail.status === 'ready') return
   applyItemLocally(itemId, patch)
   pendingItems.set(itemId, mergeItemPatch(pendingItems.get(itemId), patch))
-  if (patch.decision !== undefined) decidedAt.set(itemId, ++decisionSeq)
   setState({ saveState: 'pending', saveError: null })
   armTimer()
 }
@@ -342,10 +347,11 @@ export function editReviewHead(patch: EvidenceReviewPatch): void {
 /**
  * Flush all pending patches now. Waits until NO flush is in flight (a loop, not a single
  * await — a timer-started run replacing `flushInFlight` mid-wait must also be awaited,
- * FIX-2b), then drains whatever is pending at that point. Loss-free: see the module header.
+ * FIX-2b) and no bulk sweep's call is in flight (`sweepLane`, the one write lane), then
+ * drains whatever is pending at that point. Loss-free: see the module header.
  */
 export async function flushReviewSession(): Promise<void> {
-  while (flushInFlight) await flushInFlight
+  while (flushInFlight || sweepLane) await (flushInFlight ?? sweepLane)
   if (pendingItems.size === 0 && pendingHead == null) return
   const run = doFlush()
   flushInFlight = run
@@ -729,8 +735,9 @@ export async function deleteReviewSelection(itemId: string): Promise<void> {
 // (the user-visible half) a crash or failure part-way through leaving the review HALF-swept:
 // a state no user action can produce and none can explain. Per-item edits queued when the
 // sweep is asked for are flushed FIRST (the markReviewReady idiom), so the sweep overrides
-// them; a decision made after that is newer than the sweep, stays on screen and is written
-// after it (#837 — `applyBulkAction`), so the screen never shows a sweep the database undid.
+// them; while the sweep's call is in flight no item write runs (the one write lane, #837 —
+// `runSweep`), so a decision still queued at its merge is written after it and kept on
+// screen, and every other item shows what main swept: the screen never disagrees with main.
 
 /** Which items a bulk action targets locally — the mirror of main's SQL predicates, used
  *  for the optimistic apply only (main re-derives from persisted rows and its returned
@@ -779,16 +786,29 @@ function bulkTargets(
 async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> {
   const opened = state.detail
   if (!opened || opened.status === 'ready') return
+  // #837 (review round 4): one sweep at a time — a second one while a sweep runs does nothing
+  // (the screen disables Bulk actions meanwhile).
+  if (state.bulkRunning) return
   const reviewId = opened.id
   const token = openToken
-  // The rule (#837): what was queued when the sweep was asked for is written FIRST, so the
-  // sweep overrides it; a decision made AFTER the click (while this flush writes, or while the
-  // sweep's own call is in flight) is newer than the sweep — it stays on screen, the optimistic
-  // apply and the merge below leave it alone (`decidedAt` > the click's number, whether its
-  // write is still queued, in flight or already done), and its write is the last word, so the
-  // screen and the database agree. A flush another caller has in flight is waited out too.
-  const clickSeq = decisionSeq
-  const decidedAfterClick = (itemId: string): boolean => (decidedAt.get(itemId) ?? 0) > clickSeq
+  setState({ bulkRunning: true })
+  try {
+    await runSweep(action, reviewId, token)
+  } finally {
+    if (token === openToken && state.bulkRunning) setState({ bulkRunning: false })
+  }
+}
+
+/**
+ * The sweep itself (#837). What was queued when the sweep was asked for is written FIRST (the
+ * flush below), so the sweep overrides it. Then ONE write lane: from the sweep's call until its
+ * merge is done, no item flush starts (`flushReviewSession` waits on `sweepLane`), so at the
+ * merge no item write is in flight and the merge rule is exact: an item keeps its local
+ * decision iff a decision patch for it is still QUEUED — it is written after the sweep, so it
+ * is the last word — and otherwise takes the sweep's returned value, which is what main holds.
+ * The optimistic apply follows the same rule.
+ */
+async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, token: number): Promise<void> {
   await flushReviewSession()
   while (flushInFlight) await flushInFlight
   if (token !== openToken) return
@@ -801,15 +821,21 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
   if (!detail || detail.id !== reviewId || detail.status === 'ready') return
   const { ids, decision } = bulkTargets(detail.items, action)
   if (ids.size === 0) return
+  const queuedDecision = (itemId: string): boolean => pendingItems.get(itemId)?.decision !== undefined
   // Optimistic apply — ONE state commit for the whole sweep, never one per item.
   const optimistic = detail.items.map((i) =>
-    ids.has(i.id) && !decidedAfterClick(i.id) ? { ...i, decision } : i
+    ids.has(i.id) && !queuedDecision(i.id) ? { ...i, decision } : i
   )
   setState({
     detail: { ...detail, items: optimistic, gate: computeReadyGate(optimistic) },
     saveState: 'pending',
     saveError: null
   })
+  let releaseLane: () => void = () => {}
+  const lane = new Promise<void>((resolve) => {
+    releaseLane = resolve
+  })
+  sweepLane = lane
   try {
     const updated = await window.api.applyEvidenceReviewBulkAction(reviewId, action)
     if (token !== openToken) return // purge/switch landed mid-flight — never write
@@ -821,28 +847,33 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
       setState({ saveState: 'error', saveError: null })
       return
     }
-    // Merge the persisted DECISIONS only: a note typed while the sweep was in flight is
-    // still pending locally and must not be reverted by the returned rows. Nor is a DECISION
-    // made after the click (#837): it is newer than the sweep and its write lands after it, so
-    // the screen keeps it — taking the sweep's value would show one decision while the
-    // database ends with another (also when that write already left the queue: in flight).
+    // Merge the persisted DECISIONS only: a note typed while the sweep was in flight is still
+    // queued and must not be reverted by the returned rows; a DECISION still queued is newer
+    // than the sweep and is written after it, so the screen keeps it.
     const byId = new Map(updated.map((i) => [i.id, i]))
     const items = current.items.map((i) => {
       const fresh = byId.get(i.id)
-      if (!fresh || decidedAfterClick(i.id)) return i
+      if (!fresh || queuedDecision(i.id)) return i
       return { ...i, decision: fresh.decision }
     })
+    const queued = hasUnsavedEdits()
+    // Never clear an error that landed meanwhile (under the one lane no item write can fail
+    // during the sweep, but an acknowledge or a link can); otherwise "Saving…" while anything is
+    // queued, "Saved" when nothing is.
+    const failed = state.saveState === 'error'
     setState({
       detail: { ...current, items, gate: computeReadyGate(items) },
-      // Only claim "saved" when nothing else is queued or being written: an edit made WHILE
-      // the sweep was in flight is still debounced (or writing), and its flush reports that.
-      saveState:
-        pendingItems.size > 0 || pendingHead != null || flushInFlight != null ? 'pending' : 'saved',
-      saveError: null
+      ...(failed ? null : { saveState: queued ? 'pending' : 'saved', saveError: null })
     })
+    // Anything queued gets a scheduled write, so the line never stands on "Saving…" with
+    // nothing to end it; a failure of that write then shows the error line + Try again.
+    if (queued) armTimer()
   } catch (e) {
     if (token !== openToken) return
     setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+  } finally {
+    if (sweepLane === lane) sweepLane = null
+    releaseLane()
   }
 }
 
@@ -872,8 +903,8 @@ export function purgeReviewSession(): void {
   clearTimer()
   pendingItems = new Map()
   pendingHead = null
-  decidedAt.clear()
   flushInFlight = null
+  sweepLane = null // the sweep's own finally still releases its waiters
   state = INITIAL
   notify()
 }
