@@ -81,7 +81,7 @@ import { getSkill } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import type { RunnableTool, RunnableToolSet, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls } from '../helpers/hang-budget'
+import { untilValue } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seedStoredTextDoc } from '../helpers/doc-fixtures'
 import { writeSkillPackage, type SkillSpec } from '../helpers/skill-fixtures'
@@ -229,13 +229,10 @@ function makeUserSkillHarness(statementText: string): Harness {
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 async function pollUntilTerminal(runHandle: string): Promise<SkillRunState> {
-  for (let i = 0; i < hangPolls(50, 1); i++) {
-    const { result } = await invoke(handlers, IPC.getSkillRun, runHandle)
-    const state = result as SkillRunState | null
-    if (state && state.state !== 'running') return state
-    await flush()
-  }
-  throw new Error('run did not terminate')
+  return untilValue(async () => {
+    const state = (await invoke(handlers, IPC.getSkillRun, runHandle)).result as SkillRunState | null
+    return state && state.state !== 'running' ? state : undefined
+  }, `skill run ${runHandle} reaching a terminal state`)
 }
 
 beforeEach(() => {

@@ -3,6 +3,7 @@ import type { MessageKey, UiLanguage } from '@shared/i18n'
 import { fmtDiskSize } from '@shared/format'
 import { ConfirmDialog } from './Dialog'
 import { englishTranslator, type Translator } from './translator'
+import { httpsLink } from '../lib/httpsLink'
 
 // The AI engine's install / update / reinstall confirmation (#843). PRIVACY.md item 3 promises a
 // dialog with the size, licence and source address of "that specific download"; the engine actions
@@ -36,17 +37,6 @@ const FAMILY_NAMES: Record<string, MessageKey> = {
   whisper_cpp: 'models.engineConfirm.voiceEngine'
 }
 
-/** The licence link's href + host, or null unless it parses as https (#236, `licenseLink` in ModelsScreen). */
-function licenseLink(url: string | null): { href: string; host: string } | null {
-  if (!url) return null
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'https:' ? { href: parsed.href, host: parsed.host } : null
-  } catch {
-    return null
-  }
-}
-
 function itemTitle(item: EngineDownloadPreviewItem, t: Translator): string {
   const key = FAMILY_NAMES[item.family]
   const name = key ? t(key) : item.family
@@ -77,7 +67,7 @@ export function EngineConfirmDialog({
       onCancel={onCancel}
     >
       {preview.items.map((item) => {
-        const link = licenseLink(item.licenseUrl)
+        const link = httpsLink(item.licenseUrl)
         const from = preview.kind === 'update' && item.installed && item.installed !== item.version ? `${item.installed} → ` : ''
         return (
           <div key={item.url}>

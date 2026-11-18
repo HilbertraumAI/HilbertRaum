@@ -10,6 +10,7 @@ import {
 import type { AppContext } from '../../src/main/services/context'
 import { workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
+import { until } from '../helpers/hang-budget'
 
 // REL-4 (full-audit-2026-06-29 follow-up): the QUIT teardown must abort in-flight chat/RAG streams
 // BEFORE runtime.stop() — like the workspace-LOCK path — so a partial reply unwinds as an ABORT and
@@ -228,7 +229,7 @@ describe('performShutdown ordering (REL-4)', () => {
     })
 
     const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
-    while (!order.includes('runtime.stop')) await tick()
+    await until(() => order.includes('runtime.stop'), 'the runtime stop')
     await tick()
     await tick()
     // The sidecars were stopped, but lock() has NOT run — the teardown is blocked on the settle.
@@ -277,7 +278,7 @@ describe('performShutdown ordering (REL-4)', () => {
     })
 
     const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
-    while (!order.includes('runtime.stop')) await tick()
+    await until(() => order.includes('runtime.stop'), 'the runtime stop')
     await tick()
     await tick()
     // The sidecars stopped, but lock() has NOT run — the teardown is blocked on the settle.

@@ -4,6 +4,7 @@ import type { UiLanguage } from '@shared/i18n'
 import { fmtPackSize } from '@shared/format'
 import { ConfirmDialog } from './Dialog'
 import { englishTranslator, type Translator } from './translator'
+import { httpsLink, type HttpsLink } from '../lib/httpsLink'
 
 // Knowledge-pack tools install consent (#339 P8-2, the owner's 2026-09-06 ruling): the SAME
 // shape as the model-download confirm (`ModelsScreen.tsx` confirmDialog, ~842-897) — a
@@ -33,18 +34,11 @@ export interface KnowledgePackToolsDialogProps {
 const GPL_3_0_URL = 'https://www.gnu.org/licenses/gpl-3.0.html'
 
 /**
- * The licence link's href + host, or null when it must not render as a link (#236, mirroring
- * `ModelsScreen.tsx`'s `licenseLink`): only for the `GPL-3.0-or-later` licence this dialog knows
- * about, and only when the fixed URL parses as https.
+ * The licence link's href + host, or null when it must not render as a link (#236): only for the
+ * `GPL-3.0-or-later` licence this dialog knows about, through the shared https-only parse.
  */
-function licenseLink(license: string): { href: string; host: string } | null {
-  if (license !== 'GPL-3.0-or-later') return null
-  try {
-    const parsed = new URL(GPL_3_0_URL)
-    return parsed.protocol === 'https:' ? { href: parsed.href, host: parsed.host } : null
-  } catch {
-    return null
-  }
+function licenseLink(license: string): HttpsLink | null {
+  return license === 'GPL-3.0-or-later' ? httpsLink(GPL_3_0_URL) : null
 }
 
 export function KnowledgePackToolsDialog({

@@ -2212,7 +2212,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       job: () => current,
       downloadModel: async () => {
         if (rejectNext) {
-          throw new Error("Error invoking remote method 'models:download': Error: start refused")
+          throw new Error("Error invoking remote method 'downloads:start': Error: start refused")
         }
         return current
       }

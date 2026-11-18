@@ -1086,3 +1086,20 @@ describe('repo hygiene — scripts/*.sh are executable in git (#512)', () => {
     expect(notExecutable).toEqual([])
   })
 })
+
+// #891: the "Use this model" channel is `runtime:use` (IPC.useModel). A "models"-prefixed spelling of it, written by
+// analogy with `models:select` and then copied from comment to comment, sent readers hunting for a channel that does not
+// exist. The frozen archive (docs/build-log.md) keeps retired text verbatim, so it is the one exemption.
+const STALE_USE_CHANNEL = ['models', 'use'].join(':') // not written whole, so this file is not its own offender
+describe(`repo hygiene — no stale ${STALE_USE_CHANNEL} channel name (#891)`, () => {
+  it('names the use-model channel runtime:use in every tracked text file outside docs/build-log.md', () => {
+    // Every tracked text file, so a skill, a launcher, a manifest or a config comment is covered too.
+    const TEXT_FILE = /\.(tsx?|[cm]?[jt]s|json|md|ya?ml|sh|ps1|cmd|command|txt|html|css)$/
+    const files = execFileSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' })
+      .split('\0')
+      .filter((p) => TEXT_FILE.test(p) && p !== 'docs/build-log.md')
+    expect(files.length).toBeGreaterThan(500) // the scan reads the real tree, not an empty list
+    const offenders = files.filter((p) => readFileSync(join(REPO_ROOT, p), 'utf8').includes(STALE_USE_CHANNEL))
+    expect(offenders).toEqual([])
+  })
+})

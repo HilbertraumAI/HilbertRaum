@@ -35,13 +35,13 @@ import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 // the ONE place both the sidecar's own posture and this per-ask scope are computed, so the two
 // cannot disagree. Step 4-7 (Wave 7 ruling (a)) added an EVENT-TIME suspend on every
 // settings-writing channel that touches `activeModelId` (`settings:update`, `models:select`,
-// `models:use`) or `gpuMode`/`gpuAutoDisabled`, so a resident sidecar's NEXT `rerank()` would
+// `runtime:use`) or `gpuMode`/`gpuAutoDisabled`, so a resident sidecar's NEXT `rerank()` would
 // re-resolve promptly rather than waiting for its own use-time check to notice. `gpuAutoDisabled`
 // also moves through two further seams no suspend covers (`tryGpuAgain`, `main/index.ts`'s
 // `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see `channels.json`.
 // Step 4-8 (Wave 8 ruling (a)) found that `activeModelId` was never a safe posture input in the
 // first place — it is a proxy for "the chat model that will be loaded", true only once
-// `models:use`'s multi-GB weight hash and load finish, and false for the whole window before
+// `runtime:use`'s multi-GB weight hash and load finish, and false for the whole window before
 // that. The helper's chat-model input is now the RUNTIME's COMMITTED model
 // (`RuntimeManager.activeModelId()`), never the setting; a chat start in flight or pending, or a
 // GPU-posture translation occupant, also forces `cpu` (ruling (a), ruling (b)(T)). What actually

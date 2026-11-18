@@ -180,6 +180,28 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
     }
   )
 
+  // #894: the dialog's link is a fixed GNU URL offered only for the licence it knows; any other licence name
+  // states the name and links nowhere (the gate that stays in the dialog when the https parse is shared).
+  it('#894: a licence the dialog does not know is stated as text with no link', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: false, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [],
+      getEngineStatus: async () =>
+        engineStatusWithMissingTools({ optionalFamilies: [engineOptionalFamily({ license: 'MIT' })] }),
+      getPolicy: async () => allowedPolicy()
+    })
+    render(
+      <I18nProvider>
+        <PacksPanel />
+      </I18nProvider>
+    )
+    await user.click(await screen.findByRole('button', { name: 'Install the knowledge-pack tools…' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('License').nextElementSibling?.textContent).toBe('MIT')
+    expect(within(dialog).queryByRole('link')).toBeNull()
+  })
+
   it('#339 P8-2: a failed install shows the error and Try again', async () => {
     const user = userEvent.setup()
     const downloadEngine = vi.fn(

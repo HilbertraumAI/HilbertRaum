@@ -1118,11 +1118,17 @@ caught only `Date.now() - start > N`. CI then failed `vision-security.test.ts` (
 hard-coded in disguise, and worse than the wall-clock form in two ways: it does not widen on CI
 **and it falls through silently**, leaving the next assertion to fail with something opaque —
 here `expected [] to have a length of 1`, which says nothing about the event that never arrived.
-The suite's **16** counted loops across 7 files now use `hangPolls(n, stepMs)`, which applies the
-same 4×/45 s contract in steps. Where a counted loop can fall through, prefer failing by name
-after it (`vision-security`'s `waitForDoneEvent` is the pattern); `waitForTerminal` in the same
-file already did. **When adding a poll loop, bound it in wall-clock terms through one of these
-two helpers and make its exhaustion an error, never a `break` into the next assertion.**
+**A count of loop turns is not a time bound either, and its length depends on the platform
+(#895).** A 0 or 1 ms `setTimeout` step lasts about 1.1 ms on Linux but about 15.6 ms on Windows
+(its timer resolution), and a 5 ms step 5 ms vs 15.6 ms, so `for (i < 200) await setTimeout(r, 0)`
+is a ~0.23 s detector on the ubuntu runner and a ~3 s one at a Windows desk: ~14× narrower exactly
+where CI runs. The flake was a skill-run poll waiting on real file and database work
+(`model-occupancy-ipc`). #895 moved every counted poll onto `until` (a sync condition) or
+`untilValue` (a sync or async probe whose answer the caller wants back; each probe call is raced
+against the time left, so a probe that never settles still fails by name), both of which read the
+real clock, and retired the counted-loop helper. **When adding a poll loop, bound it in wall-clock
+terms through one of these helpers and make its exhaustion an error, never a `break` into the next
+assertion.**
 
 **Widening does not help a race the desk loses too: start the clock at the event (#549).** Both
 helpers widen only on CI, and wave DEP-6's two flakes lost at a desk under full-suite load.

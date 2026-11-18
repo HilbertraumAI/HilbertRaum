@@ -371,7 +371,7 @@ describe('DocumentsScreen — CODE-35 preview load-more error placement', () => 
     const previewDocument = vi.fn(async () => firstPage())
     const previewDocumentPage = vi.fn(async () => {
       throw new Error(
-        "Error invoking remote method 'docs:previewPage': Error: The workspace is locked. Unlock it to continue."
+        "Error invoking remote method 'docs:preview-page': Error: The workspace is locked. Unlock it to continue."
       )
     })
     stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage })

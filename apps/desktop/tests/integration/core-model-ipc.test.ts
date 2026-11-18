@@ -1486,12 +1486,12 @@ describe('registerModelIpc', () => {
   })
 
   // Step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped Opus review of step 4-6's finding
-  // C2): `models:select` and `models:use` both reach `activeModelId` through `selectModel` ->
+  // C2): `models:select` and `runtime:use` both reach `activeModelId` through `selectModel` ->
   // `updateSettings` (`services/models.ts`), bypassing `registerCoreIpc.ts`'s `settings:update`
   // handler (and its suspend hook) entirely — so each of these two channels must make the SAME
   // REAL-flip suspend decision on its own, through the SAME shared predicate
   // (`rerankerPostureInputsChanged`, `rag/device-posture.ts`), never a third independent copy.
-  describe('models:select / models:use suspend the reranker on a REAL activeModelId change (step 4-7, Wave 7 rulings (a), (c))', () => {
+  describe('models:select / runtime:use suspend the reranker on a REAL activeModelId change (step 4-7, Wave 7 rulings (a), (c))', () => {
     it('models:select with a chat model id suspends the sidecar (channel 2 of 3)', async () => {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
@@ -1536,7 +1536,7 @@ describe('registerModelIpc', () => {
       expect(suspend).not.toHaveBeenCalled()
     })
 
-    it('models:use (select + start) suspends the sidecar (channel 3 of 3) -- twice: the event-time release AND Wave 8 ruling (a)\'s committed-switch suspend (a REAL LlamaReranker\'s single-flight teardown shares these into ONE pass; this fake counts raw calls)', async () => {
+    it('runtime:use (select + start) suspends the sidecar (channel 3 of 3) -- twice: the event-time release AND Wave 8 ruling (a)\'s committed-switch suspend (a REAL LlamaReranker\'s single-flight teardown shares these into ONE pass; this fake counts raw calls)', async () => {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
         db: seededDb(),
@@ -1558,7 +1558,7 @@ describe('registerModelIpc', () => {
       expect(suspend).toHaveBeenCalledTimes(2)
     })
 
-    it('models:use with the SAME chat model id already COMMITTED (no real flip on either check) does not suspend', async () => {
+    it('runtime:use with the SAME chat model id already COMMITTED (no real flip on either check) does not suspend', async () => {
       const suspend = vi.fn(async () => undefined)
       const db = seededDb()
       updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
@@ -1587,7 +1587,7 @@ describe('registerModelIpc', () => {
     // `models:select`, which never commits a runtime at all — under Wave 8's option B′ the
     // posture reads `RuntimeManager.activeModelId()` (the COMMITTED model), never
     // `settings.activeModelId`, so a test that only ever writes the setting proves nothing about
-    // the posture any more. This version drives `models:use` — a REAL committed switch — against
+    // the posture any more. This version drives `runtime:use` — a REAL committed switch — against
     // a fake runtime manager that tracks its own commit, and a REAL LlamaReranker wired to the
     // SAME shared posture helper `main/index.ts`'s own seam uses
     // (`resolveRerankerDevicePosture`/`snapshotRerankerOccupancy`), proving the caller's job that
@@ -1603,7 +1603,7 @@ describe('registerModelIpc', () => {
     // step 4-6, finding C2). Committed qwen3.5-9b-ud-q4kxl needs ~7284.1 MiB (remainder 219.9 <
     // the 2808.2 MiB floor) => posture 'cpu'; switching to qwen3.5-4b-ud-q4kxl needs ~3837.4 MiB
     // (remainder 3666.6 >= the floor) => posture 'gpu' once COMMITTED.
-    it('end to end: a COMMITTED model switch (models:use) suspends the sidecar, and the NEXT rerank() lazily restarts and resolves the NEW posture from the runtime\'s committed model (not merely a restart)', async () => {
+    it('end to end: a COMMITTED model switch (runtime:use) suspends the sidecar, and the NEXT rerank() lazily restarts and resolves the NEW posture from the runtime\'s committed model (not merely a restart)', async () => {
       class FakeChild extends EventEmitter implements ChildProcessLike {
         pid = 9
         killed = false

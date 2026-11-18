@@ -56,7 +56,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { VaultBusyError } from '../../src/main/services/workspace-vault'
 import { testCipher } from '../helpers/test-cipher'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls, until } from '../helpers/hang-budget'
+import { until, untilValue } from '../helpers/hang-budget'
 import { pngHeader } from '../helpers/image-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -123,13 +123,10 @@ const goodReq = (): ImageAnalyzeRequest => ({
 })
 
 async function waitForTerminal(jobId: string): Promise<ImageJob> {
-  for (let i = 0; i < hangPolls(200, 5); i++) {
-    const { result } = await invoke(handlers, IPC.imageGetJob, jobId)
-    const job = result as ImageJob
-    if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return job
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error('analyze job never reached a terminal state')
+  return untilValue(async () => {
+    const job = (await invoke(handlers, IPC.imageGetJob, jobId)).result as ImageJob
+    return job.state === 'done' || job.state === 'failed' || job.state === 'cancelled' ? job : undefined
+  }, 'the analyze job reaching a terminal state')
 }
 
 // F-12 (audit 2026-07-16): history persistence is now ASYNC and the done EVENT is streamed only AFTER
@@ -138,14 +135,14 @@ async function waitForTerminal(jobId: string): Promise<ImageJob> {
 // session/turn/stored image exist. Wait for the streamed terminal (imgDone/imgError) — the renderer's
 // real signal — which guarantees persistence is done. Returns the streamed job payload.
 async function waitForImgSend(event: FakeIpcEvent, jobId: string): Promise<ImageJob> {
-  for (let i = 0; i < hangPolls(200, 5); i++) {
-    const call = event.sender.send.mock.calls.find(
-      (c: unknown[]) => c[0] === STREAM.imgDone(jobId) || c[0] === STREAM.imgError(jobId)
-    )
-    if (call) return call[1] as ImageJob
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error('analyze job never streamed a terminal event')
+  const call = await untilValue(
+    () =>
+      event.sender.send.mock.calls.find(
+        (c: unknown[]) => c[0] === STREAM.imgDone(jobId) || c[0] === STREAM.imgError(jobId)
+      ),
+    'the analyze job streaming a terminal event'
+  )
+  return call[1] as ImageJob
 }
 
 beforeEach(() => {

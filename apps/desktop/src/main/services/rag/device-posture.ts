@@ -38,7 +38,7 @@ import {
  *
  * **Wave 8 ruling (a) (step 4-8) resolved a THIRD gap, finding C3 (scoped Opus review of step
  * 4-7):** `settings.activeModelId` is a PROXY for "the chat model that will be loaded" — a proxy
- * this helper trusted at the one moment it is guaranteed false, the whole `models:use` hash +
+ * this helper trusted at the one moment it is guaranteed false, the whole `runtime:use` hash +
  * load window, during which the OLD model is still resident while the setting already names the
  * NEW one. This helper's chat-model input is now the RUNTIME's COMMITTED model
  * (`RuntimeManager.activeModelId()`, `occupancy.committedModelId` below) — never the setting, and
@@ -50,7 +50,7 @@ import {
  * only at cold-start, is Q (`reranker/llama.ts`'s `resolveServer`) — this helper is consulted
  * fresh on every `rerank()` call, not once per sidecar lifetime. Wave 7's three event-time
  * suspends (`gpuMode`/`gpuAutoDisabled`/`activeModelId` via `settings:update`/`models:select`/
- * `models:use`) stay as early release — a head start before the next `rerank()` would have
+ * `runtime:use`) stay as early release — a head start before the next `rerank()` would have
  * resolved the new posture on its own — not what makes the posture correct; Q is.
  *
  * Impure (reads `settings.gpuProbe`, resolves a manifest off disk, reads the runtime manager and
@@ -363,7 +363,7 @@ export interface RerankerPostureSnapshot {
  * the resident reranker sidecar's EARLY-RELEASE posture?" (Wave 8: Q, not this event-time check,
  * is what makes the posture correct at every moment — see `resolveRerankerDevicePosture`'s own
  * doc comment), called from `registerCoreIpc.ts`'s `settings:update` handler and from both of
- * `registerModelIpc.ts`'s `selectModel` call sites (`models:select`, `models:use`) — never three
+ * `registerModelIpc.ts`'s `selectModel` call sites (`models:select`, `runtime:use`) — never three
  * independent copies of the same comparison.
  *
  * REAL-flip only: a caller must snapshot `before` off `getSettings` BEFORE the write and pass the

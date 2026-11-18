@@ -20,6 +20,7 @@ import { computeDownloadGate } from '../lib/downloadGate'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
 import { useOcrInstall } from '../lib/useOcrInstall'
+import { httpsLink } from '../lib/httpsLink'
 import { useEngineProblemsRead } from '../lib/useEngineProblems'
 import type { ModelsFocus } from '../navigation'
 import { useT } from '../i18n'
@@ -91,24 +92,6 @@ const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; i
  */
 function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): string {
   return bytes != null ? fmtDiskGb(bytes, lang) : `${fmt1(fallbackGb, lang)}${unitJoin(lang)}GB`
-}
-
-/**
- * The licence link as rendered — its href and the host shown beside it — or null when it must
- * not render as a link (#236): the manifest validator already refuses a non-https `license_url`,
- * but a stale cached manifest or a hostile one that slipped past an older build must not become
- * a clickable `javascript:` or `http:` anchor behind the fixed "read the license" label.
- * Stricter than the chat-link gate, which also allows `http:`. Returning both from one parse
- * keeps the anchor and the validated host from ever diverging.
- */
-function licenseLink(url: string | null | undefined): { href: string; host: string } | null {
-  if (!url) return null
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'https:' ? { href: parsed.href, host: parsed.host } : null
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -1338,7 +1321,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   function confirmDialog(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     const needsAck = !m.download.licenseApproved
-    const license = licenseLink(m.download.licenseUrl)
+    const license = httpsLink(m.download.licenseUrl)
     const close = (): void => {
       setConfirming(null)
       setLicenseAck(false)

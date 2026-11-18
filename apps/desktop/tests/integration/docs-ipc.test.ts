@@ -204,7 +204,7 @@ function ctxWith(db: Db, workspacePath: string, o: CtxOverrides = {}): AppContex
 }
 
 /** Poll a job-status channel until `done`; a hang fails by name after `hangBudgetMs(localMs)` instead of falling
- *  through silently into the next assertion (the hang-budget.ts `hangPolls` warning). */
+ *  through silently into the next assertion (the hang-budget.ts `until` warning about counted loops). */
 async function pollDone<T extends { done: boolean }>(what: string, channel: string, ...args: unknown[]): Promise<T> {
   const deadline = Date.now() + hangBudgetMs(5_000)
   for (;;) {
