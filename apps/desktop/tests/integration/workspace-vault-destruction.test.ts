@@ -488,15 +488,28 @@ describe('issue #876 — a lock whose checkpoint could not finish keeps the sess
     } finally {
       if (existsSync(vp.dbPath)) chmodSync(vp.dbPath, 0o666) // a lock that went through shredded it
     }
-    // Writable again, and the session was never lost. The refused lock's re-open of the read-only file could not
-    // finish (best effort, CODE-1a: the closed handle stays and the session reports unlocked), so the next lock fails
-    // on that handle and re-opens it (the open replays the WAL); the one after goes through with the session.
+    // Writable again, and the session was never lost.
     expect(ctrl.isUnlocked()).toBe(true)
-    expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
-    expect(ctrl.lock()).not.toHaveProperty('lockNotice')
-    ctrl.unlock(PW)
-    expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
-    ctrl.lock()
+    if (process.platform === 'win32') {
+      // The refused lock's re-open of the read-only file could not finish (best effort, CODE-1a: the closed handle
+      // stays and the session reports unlocked), so the next lock fails on that handle and re-opens it (the open
+      // replays the WAL); the one after goes through with the session.
+      expect(thrownBy(() => ctrl.lock()).name).toBe('VaultLockError')
+      expect(ctrl.lock()).not.toHaveProperty('lockNotice')
+      ctrl.unlock(PW)
+      expect(getSettings(ctrl.requireDb()).contextTokens).toBe(4242)
+      ctrl.lock()
+    } else {
+      // On POSIX, SQLite opens a read-only file READ-ONLY instead of failing, so the refused lock's re-open keeps a
+      // read-only connection, which can never checkpoint: an artifact of this stand-in (a full drive does not make the
+      // file read-only). What holds everywhere: the session is still on disk, in the -wal beside the stale main file.
+      const reader = openRawDb(vp.dbPath, { readOnly: true })
+      try {
+        expect(getSettings(reader as unknown as Db).contextTokens).toBe(4242)
+      } finally {
+        reader.close()
+      }
+    }
   })
 
   // When the WAL refuses the lock before the probe ran, the controller's catch probes the file itself; a structure it
