@@ -101,8 +101,8 @@ export class TranslateJobService {
     // entry, so this would fall through to its generic "something went wrong" banner rather
     // than locked-specific copy. That is accepted, not overlooked — this guard is unreachable
     // in production today (the one call site is the IPC handler, which refuses first with the
-    // module's localized locked copy), so it exists for non-IPC callers, and adding a renderer
-    // code + en/de copy for a path no user can reach would be dead weight.
+    // module's localized locked copy), so it is defence in depth for a future caller outside IPC,
+    // and adding a renderer code + en/de copy for a path no user can reach would be dead weight.
     if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
     const translator = this.deps.getTranslator()
     if (!translator) return failedJob('noModel')

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { existsSync, mkdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { listTables, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { log } from '../../src/main/services/logging'
-import { tempRoot, openFreshDb } from '../helpers/db-fixtures'
+import { listTables, tempRoot, openFreshDb } from '../helpers/db-fixtures'
 import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 import {
   createSkillRegistry,

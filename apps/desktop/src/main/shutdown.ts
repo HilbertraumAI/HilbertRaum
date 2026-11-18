@@ -88,7 +88,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   // Nothing on this path clears the latch and the process exits, so arming it is terminal by
   // construction — exactly what quit wants.
   try {
-    ctx?.workspace.beginLock?.()
+    ctx?.workspace.beginLock()
   } catch {
     /* best-effort */
   }
@@ -310,7 +310,7 @@ export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = 
   const killSidecarChildren = deps.killSidecarChildren ?? killRegisteredSidecarChildren
   const log = deps.log ?? realLog
   try {
-    ctx?.workspace.beginLock?.()
+    ctx?.workspace.beginLock()
   } catch {
     /* best-effort */
   }

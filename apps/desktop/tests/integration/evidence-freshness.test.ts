@@ -45,11 +45,7 @@ import {
   updateEvidenceReviewItem
 } from '../../src/main/services/evidence-reviews'
 import { t as tShared } from '../../src/shared/i18n'
-import type {
-  CoverageInfo,
-  EvidenceReviewFreshness,
-  EvidenceReviewSummary
-} from '../../src/shared/types'
+import type { CoverageInfo, EvidenceReviewFreshness } from '../../src/shared/types'
 import { freshWorkspaceDb } from '../helpers/db-fixtures'
 import {
   evidenceIpcContext,
@@ -518,11 +514,11 @@ describe('export after drift (spec §28.6/§28.7 + §20.1 refresh step)', () => 
 })
 
 describe('IPC surface (new P4 channels + real overlay)', () => {
-  it('refreshState + acknowledge round-trip; detail/summary reads carry the REAL overlay', async () => {
+  it('refreshState + acknowledge round-trip; the detail read carries the REAL overlay', async () => {
     const { db, root } = freshWorkspaceDb('epfresh')
-    const { ctx } = evidenceIpcContext(db, root)
+    const { ctx, runtimeTouched } = evidenceIpcContext(db, root)
     registerEvidenceReviewsIpc(ctx)
-    const { reviewId, messageId, docId } = seedReview(db)
+    const { reviewId, docId } = seedReview(db)
     db.prepare('UPDATE documents SET sha256 = ? WHERE id = ?').run('ff'.repeat(32), docId)
 
     const { result: freshRaw } = await invoke(handlers, IPC.refreshEvidenceReviewState, reviewId)
@@ -530,10 +526,8 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     expect(fresh.outdated).toBe(true)
     expect(fresh.acknowledgedAt).toBeNull()
 
-    // The entry-point summary + the detail read now report the computed overlay (the chat
-    // chip renders from this) — while the stored status row is untouched.
-    const { result: summaryRaw } = await invoke(handlers, IPC.getEvidenceReviewForMessage, messageId)
-    expect((summaryRaw as EvidenceReviewSummary).outdated).toBe(true)
+    // The detail read now reports the computed overlay (the chat chip's batch read is
+    // evidence-review-batch-ops.test.ts's) — while the stored status row is untouched.
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, reviewId)
     expect((detailRaw as { outdated: boolean }).outdated).toBe(true)
     expect(reviewHeadRow(db, reviewId).status).toBe('draft')
@@ -545,8 +539,8 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     )
     expect((ackRaw as EvidenceReviewFreshness).acknowledgedAt).toBeTruthy()
     // Acknowledged ≠ fresh: the overlay stays true (the drift still exists).
-    const { result: stillRaw } = await invoke(handlers, IPC.getEvidenceReviewForMessage, messageId)
-    expect((stillRaw as EvidenceReviewSummary).outdated).toBe(true)
+    const { result: stillRaw } = await invoke(handlers, IPC.getEvidenceReview, reviewId)
+    expect((stillRaw as { outdated: boolean }).outdated).toBe(true)
 
     // Malformed ids refuse.
     const { result: badFresh } = await invoke(handlers, IPC.refreshEvidenceReviewState, 42)
@@ -557,6 +551,8 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     // `true` cannot be bound by node:sqlite, so only `safeId` keeps these two from throwing.
     expect((await invoke(handlers, IPC.refreshEvidenceReviewState, true)).result).toBeNull()
     expect((await invoke(handlers, IPC.acknowledgeEvidenceReviewFreshness, true)).result).toBeNull()
+    // Stored facts only (#839 F6): no handler here consulted the model runtime, not even inside its own try/catch.
+    expect(runtimeTouched).toEqual([])
   })
 
   it('FIX-6: an outdated-unacknowledged export over the WIRE rejects with the LOCALIZED copy — no file, no row, no audit event', async () => {
@@ -584,7 +580,7 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
 
   it('sourceContext rejects unknown review ids, unknown keys, and unresolved sources', async () => {
     const { db, root } = freshWorkspaceDb('epfresh')
-    const { ctx } = evidenceIpcContext(db, root)
+    const { ctx, runtimeTouched } = evidenceIpcContext(db, root)
     registerEvidenceReviewsIpc(ctx)
     const { reviewId } = seedReview(db)
     const { result: unknownReview } = await invoke(handlers, IPC.getEvidenceSourceContext, 'nope', 'S1')
@@ -599,6 +595,7 @@ describe('IPC surface (new P4 channels + real overlay)', () => {
     expect(malformed).toBeNull()
     // The REVIEW id does reach SQL: `true` cannot be bound, so only `safeId` keeps this from throwing.
     expect((await invoke(handlers, IPC.getEvidenceSourceContext, true, 'S1')).result).toBeNull()
+    expect(runtimeTouched).toEqual([]) // #839 F6
   })
 })
 
@@ -725,6 +722,29 @@ describe('source-in-context (D-5) — stored extraction only', () => {
     expect(ctx.located).toBe(false)
     expect(ctx.before).toBeNull()
     expect(ctx.match).toBeNull()
+  })
+
+  // #839 F4b: a citation may carry no excerpt (`snippet` is optional). There is nothing to look for, so the source is
+  // never "located": without the empty-needle guard, `text.includes(null)` searches for the word "null", accepts a
+  // cited chunk that contains it, and the context read throws.
+  it('a citation with no excerpt is never located, whatever its cited chunk says', () => {
+    const { db } = freshWorkspaceDb('epfresh')
+    const docId = seedSourceDocument(db, { title: 'contract.pdf', sha256: 'aa'.repeat(32) })
+    const chunkId = seedEvidenceChunk(db, { documentId: docId, index: 0, text: 'Any other clause is null and void.', page: 1 })
+    const { messageId } = seedAssistantAnswer(db, {
+      content: 'Claim. [S1]',
+      citations: [{ label: 'S1', sourceTitle: 'contract.pdf', documentId: docId, chunkId }],
+      coverage: { mode: 'relevance', chunksCovered: 1, chunksTotal: 1 }
+    })
+    const detail = seedEvidenceReview(db, { messageId })
+    expect(getEvidenceSourceContext(db, detail.id, 'S1')).toMatchObject({
+      availability: 'available',
+      snippet: null,
+      located: false,
+      before: null,
+      match: null,
+      after: null
+    })
   })
 
   it('a truncated (…-terminated) snippet still locates by its prefix', () => {

@@ -53,6 +53,7 @@ import type {
 } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { VaultBusyError } from '../../src/main/services/workspace-vault'
 import { testCipher } from '../helpers/test-cipher'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
 import { hangPolls, until } from '../helpers/hang-budget'
@@ -486,6 +487,24 @@ describe('registerImagesIpc — history persistence', () => {
     expect(terminal).toMatchObject({ state: 'failed', error: 'emptyResponse' })
     expect(event.sender.send).not.toHaveBeenCalledWith(STREAM.imgDone(job.jobId), expect.anything())
 
+    expect((await invoke(handlers, IPC.imageListSessions)).result).toEqual([])
+    expect(existsSync(imagesPath) ? readdirSync(imagesPath) : []).toEqual([])
+  })
+
+  // #241 through the handler (#860 L9): the save takes the vault's document-work lease, so a save during a password
+  // change is refused (`VaultBusyError`) — the answer still reaches the user, and nothing lands in images/ or the list.
+  it('a save refused by the document-work lease (a password change running) still delivers the answer and stores nothing', async () => {
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('ans') })
+    const { ctx, imagesPath } = ctxWithDb()
+    ;(ctx.workspace as unknown as { beginDocumentWork: () => () => void }).beginDocumentWork = () => {
+      throw new VaultBusyError('A password change is running.')
+    }
+    registerImagesIpc(ctx, service)
+
+    const { event, result } = await invoke(handlers, IPC.imageAnalyze, histReq())
+    const job = result as ImageJob
+    const done = await waitForImgSend(event, job.jobId)
+    expect(done).toMatchObject({ state: 'done', answer: 'ans', sessionId: null })
     expect((await invoke(handlers, IPC.imageListSessions)).result).toEqual([])
     expect(existsSync(imagesPath) ? readdirSync(imagesPath) : []).toEqual([])
   })

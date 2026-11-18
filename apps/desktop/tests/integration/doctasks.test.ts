@@ -163,13 +163,18 @@ describe('map-reduce path + the hard ceiling', () => {
 })
 
 describe('state machine guards (D26)', () => {
-  it('refuses to start while a chat answer is streaming', async () => {
+  // The lock row is the manager's OWN AUD-02 latch (#860 L5): its tree and extract chains and the skills
+  // categorize run call `startDocTask` directly, so the IPC guard never stands in front of them.
+  it.each([
+    ['while a chat answer is streaming', { isChatStreaming: () => true }, TASK_REFUSED_CHAT_STREAMING_MESSAGE],
+    ['while a workspace lock is under way (AUD-02)', { isWorkspaceLocking: () => true }, t('en', 'main.task.workspaceLocked')]
+  ])('refuses to start %s', async (_label, guard, message) => {
     const docId = await importWords(w, 50)
     const runtime = docTaskRuntime()
-    const manager = docTaskManager(w, { getRuntime: () => runtime, isChatStreaming: () => true })
-    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(
-      TASK_REFUSED_CHAT_STREAMING_MESSAGE
-    )
+    const manager = docTaskManager(w, { getRuntime: () => runtime, ...guard })
+    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(message)
+    expect(manager.hasActiveTask()).toBe(false) // nothing queued
+    expect(runtime.calls).toHaveLength(0)
   })
 
   it.each([

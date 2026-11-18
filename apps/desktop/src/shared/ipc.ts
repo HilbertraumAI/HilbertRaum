@@ -409,8 +409,6 @@ export const IPC = {
   createEvidenceReview: 'evidence:create',
   /** The full review read-model (`EvidenceReviewDetail`), or null on an unknown id. */
   getEvidenceReview: 'evidence:get',
-  /** The message's review as a light `EvidenceReviewSummary` (entry-point state), or null. */
-  getEvidenceReviewForMessage: 'evidence:getForMessage',
   /** EVERY review in one conversation as light `EvidenceReviewSummary[]` — the transcript's
    *  whole chip state in ONE round trip (AUD-12). Asking per message made opening a
    *  conversation cost one serial invoke (plus a full item load and a freshness recompute)
@@ -458,8 +456,6 @@ export const IPC = {
    *  unknown review/key and on unresolved-identity sources. Reads the `chunks` table —
    *  never the source file. */
   getEvidenceSourceContext: 'evidence:sourceContext',
-  /** Delete a review (items/links/exports CASCADE). */
-  deleteEvidenceReview: 'evidence:delete',
   /** How many reviews a conversation's messages carry — the D-2 delete-confirm warning
    *  count (spec §25.4). Added in Phase 2 (plan §7.6): the P0 service function existed
    *  without a channel; the renderer confirm needs the number. Count only — no content. */

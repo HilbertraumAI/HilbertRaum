@@ -46,6 +46,12 @@ export function openRawDb(path: string, options?: DatabaseSyncOptions): Database
   return options === undefined ? new Raw(path) : new Raw(path, options)
 }
 
+/** The workspace's table names, sorted: what a migration created (moved here from `db.ts`, which no product code read, #840). */
+export function listTables(db: Db): string[] {
+  const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as Array<{ name: string }>
+  return rows.map((r) => r.name)
+}
+
 /**
  * The STORED value of setting `key`: its `value_json` row parsed, `undefined` when there is no row. Read straight from
  * the table, past `getSettings`, which re-normalizes what it reads: a row about what the WRITE path persisted must look

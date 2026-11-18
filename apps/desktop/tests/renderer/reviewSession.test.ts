@@ -30,6 +30,7 @@ import {
   reopenReview,
   retryBlockedSwitch,
   retryReviewSave,
+  unlinkEvidence,
   type ReviewExportOutcome,
   type ReviewHandoffTarget
 } from '../../src/renderer/lib/reviewSession'
@@ -49,8 +50,8 @@ import {
 // Pins the contract the plan demands: debounce batches related writes (spec §26), the
 // flush is loss-free under rapid edits (edits landing mid-flight are never dropped and a
 // failed write re-merges UNDER newer values), a hard flush runs on demand (screen exit /
-// pre-lock). The D-7 gate mirror's equivalence with main's deriveReadyGate is pinned in
-// tests/unit/evidence-review-gate.test.ts (FIX-4).
+// pre-lock). The D-7 gate itself (one shared function since #839) is
+// tests/unit/evidence-review-gate.test.ts's.
 
 async function openWith(detail: EvidenceReviewDetail): Promise<void> {
   await openReviewSession({ reviewId: detail.id })
@@ -1368,6 +1369,34 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     release!()
     await pending
     expect(getReviewSessionSnapshot().detail).toBeNull()
+  })
+})
+
+// #839 U2d: unlink is immediate (structural, no debounce), like link. Main's answer decides what the screen shows: the link
+// leaves once main removed it, and a failed removal keeps it and says so instead of looking done.
+describe('reviewSession — unlink', () => {
+  it.each([
+    ['takes the link off the item once main removed it', async (): Promise<boolean> => true, ['s1'], []],
+    [
+      'keeps the link and shows a save error when main fails',
+      async (): Promise<boolean> => {
+        throw new Error('database or disk is full')
+      },
+      ['s1'],
+      ['s1']
+    ]
+  ] as const)('%s', async (_label, removeEvidenceLink, before, after) => {
+    const detail = makeDetail({
+      items: [makeItem({ id: 'i1', links: [{ evidenceKey: 's1', origin: 'reviewer', relation: null }] })]
+    })
+    stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), removeEvidenceLink: vi.fn(removeEvidenceLink) })
+    await openWith(detail)
+    const keys = (): string[] => getReviewSessionSnapshot().detail!.items[0]!.links.map((l) => l.evidenceKey)
+    expect(keys()).toEqual(before)
+
+    await unlinkEvidence('i1', 's1')
+    expect(keys()).toEqual(after)
+    expect(getReviewSessionSnapshot().saveState).toBe(after.length > 0 ? 'error' : 'idle')
   })
 })
 

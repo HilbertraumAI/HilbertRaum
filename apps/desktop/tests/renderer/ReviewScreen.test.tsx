@@ -4,8 +4,14 @@ import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { flushReviewSession, purgeReviewSession } from '../../src/renderer/lib/reviewSession'
-import { t } from '../../src/shared/i18n'
-import type { EvidenceReviewFreshness, EvidenceReviewItemPatch } from '../../src/shared/types'
+import { t, type MessageKey } from '../../src/shared/i18n'
+import type {
+  EvidenceLinkInput,
+  EvidenceReviewFreshness,
+  EvidenceReviewItemPatch,
+  EvidenceReviewPatch,
+  EvidenceSourceContext
+} from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { deferred } from '../helpers/deferred'
 import {
@@ -137,6 +143,33 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
     assertNoUnexpectedApiCalls()
   })
 
+  // #839 U1f (D-6): a rename edits the stored title through the debounced head patch; Escape drops the draft.
+  it('rename: Enter saves the trimmed title through the head patch, Escape drops the draft', async () => {
+    const updateEvidenceReview = vi.fn(async (id: string, patch: EvidenceReviewPatch) => makeReviewHead({ id, ...patch }))
+    await renderReview({ api: { updateEvidenceReview } })
+    await screen.findByText('Beta')
+
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.rename') }))
+    const input = screen.getByRole('textbox', { name: t('en', 'review.rename.label') })
+    fireEvent.change(input, { target: { value: '  Lease terms  ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByRole('heading', { name: 'Lease terms' })).toBeInTheDocument()
+    await act(async () => {
+      await flushReviewSession()
+    })
+    expect(updateEvidenceReview).toHaveBeenCalledWith('r1', { title: 'Lease terms' })
+
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.rename') }))
+    const again = screen.getByRole('textbox', { name: t('en', 'review.rename.label') })
+    fireEvent.change(again, { target: { value: 'Not this one' } })
+    fireEvent.keyDown(again, { key: 'Escape' })
+    expect(screen.getByRole('heading', { name: 'Lease terms' })).toBeInTheDocument()
+    await act(async () => {
+      await flushReviewSession()
+    })
+    expect(updateEvidenceReview).toHaveBeenCalledTimes(1)
+  })
+
   it('a deleted/unknown reviewId lands on the friendly not-found state, never a crash', async () => {
     // Mounted directly: renderReview waits for a loaded review's footer, which the not-found state never renders.
     stubReviewApi({ getEvidenceReview: vi.fn(async () => null) })
@@ -209,10 +242,10 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
     expect(document.querySelector('.review-evidence .cite-label')).toBeNull()
   })
 
-  it('a reviewer-made link is labeled "Reviewer linked", never "Cited by the answer"', async () => {
+  it('a reviewer-made link is labeled "Reviewer linked", never "Cited by the answer"; its relation choice is saved', async () => {
     const detail = wholeDocDetail()
-    const setEvidenceLink = vi.fn(async (itemId: string, key: string) =>
-      makeItem({ id: itemId, links: [{ evidenceKey: key, origin: 'reviewer' as const, relation: null }] })
+    const setEvidenceLink = vi.fn(async (itemId: string, key: string, input: EvidenceLinkInput) =>
+      makeItem({ id: itemId, links: [{ evidenceKey: key, origin: 'reviewer' as const, relation: input.relation ?? null }] })
     )
     await renderReview({ detail, api: { setEvidenceLink } })
     await screen.findByText('Beta')
@@ -232,6 +265,52 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
       expect(screen.getAllByText(new RegExp(t('en', 'review.link.reviewer'))).length).toBeGreaterThan(0)
     )
     expect(screen.queryByText(t('en', 'review.link.cited'))).toBeNull()
+    // #839 U1h: the item's link chip carries no [S1] marker either: a provenance source has no citation label.
+    const chip = document.querySelector('.review-item-link')
+    expect(chip?.textContent).toContain('contract.pdf')
+    expect(chip?.textContent).not.toContain('[S1]')
+
+    // #839 U1d: the relation the reviewer picks is what main stores (the pack's relation register reads it).
+    fireEvent.change(screen.getByLabelText(t('en', 'review.relation.label')), { target: { value: 'contradicts' } })
+    await waitFor(() =>
+      expect(setEvidenceLink).toHaveBeenLastCalledWith('i1', 'p1', { origin: 'reviewer', relation: 'contradicts' })
+    )
+  })
+
+  // #839 U1i: an extract answer's evidence is structured records; the pane must not caption it as a whole-document read.
+  it('an extract answer captions its evidence as structured records, never as a whole-document read', async () => {
+    const detail = wholeDocDetail()
+    detail.coverageSnapshot = { mode: 'extract', chunksCovered: 40, chunksTotal: 40 }
+    detail.sources[0]!.kind = 'structured_record'
+    await renderReview({ detail })
+    await screen.findByText('Beta')
+    expect(screen.getByText(t('en', 'review.evidence.captionStructured'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'review.evidence.captionWholeDoc'))).toBeNull()
+  })
+})
+
+// #839 U1b/U1c: the generation facts the journey never reaches. A missing record reads "Unavailable", and an answer
+// that did not finish says why on the screen's footer, not only in the pack.
+describe('ReviewScreen — generation honesty (#839)', () => {
+  it('a review with no generation record shows "Unavailable" for every generation fact', async () => {
+    await renderReview({ detail: makeDetail({ generationSnapshot: null }) })
+    const dialog = await openSummary()
+    for (const label of ['review.summary.model', 'review.summary.generatedAt', 'review.summary.appVersion'] as const) {
+      expect(within(dialog).getByText(t('en', label)).nextElementSibling?.textContent).toBe(
+        t('en', 'review.summary.unavailable')
+      )
+    }
+  })
+
+  it.each([
+    ['was cut off (truncated)', { answerTruncated: true }, 'review.summary.truncated'],
+    ['was stopped by the user', { answerEndedEarly: 'user' as const }, 'review.summary.stopped.user']
+  ] as const)('an answer that %s says so on the footer', async (_what, gen, shown) => {
+    const detail = makeDetail()
+    Object.assign(detail.generationSnapshot!, gen)
+    await renderReview({ detail })
+    await screen.findByText('Beta')
+    expect(document.querySelector('.review-screen footer')?.textContent).toContain(t('en', shown))
   })
 })
 
@@ -423,6 +502,18 @@ describe('ReviewScreen — conservative bulk actions (spec §14.4)', () => {
           name: new RegExp(t('en', 'review.decision.not_reviewed'))
         })
       ).toHaveAttribute('aria-checked', 'true')
+    })
+
+    // undecided→follow-up marks every paragraph still undecided, through its own sweep (#839 U1g).
+    openBulkMenu()
+    fireEvent.click(await screen.findByText(t('en', 'review.bulk.followUp')))
+    await waitFor(() => expect(bulk.spy).toHaveBeenLastCalledWith('r1', 'undecided_follow_up'))
+    await waitFor(() => {
+      for (const row of screen.getAllByRole('listitem').slice(1)) {
+        expect(
+          within(row).getByRole('radio', { name: new RegExp(t('en', 'review.decision.follow_up')) })
+        ).toHaveAttribute('aria-checked', 'true')
+      }
     })
 
     // Clear-all asks for confirmation first (destructive breadth), then resets.
@@ -815,6 +906,41 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
     const mark = dialog.querySelector('mark')
     expect(mark?.textContent).toBe('Either party may terminate…')
     expect(within(dialog).getByText(t('en', 'review.sourceContext.storedNote'))).toBeInTheDocument()
+    assertNoUnexpectedApiCalls()
+  })
+
+  // #839 U1a: the modal's other three states. Each says what is true: a moved excerpt is not shown as context, a
+  // changed file is not "unchanged", and a failed read is not an empty context.
+  const located: EvidenceSourceContext = {
+    reviewId: 'r1',
+    key: 's1',
+    documentTitle: 'contract.pdf',
+    availability: 'available',
+    hashState: 'match',
+    snippet: 'Either party may terminate…',
+    located: true,
+    before: 'Clause 4 ends here. ',
+    match: 'Either party may terminate…',
+    after: ' Clause 6 begins.',
+    pageNumber: 12,
+    sectionLabel: null
+  }
+  it.each<[string, EvidenceSourceContext | null, MessageKey, MessageKey]>([
+    [
+      'the excerpt is no longer in the stored text',
+      { ...located, located: false, before: null, match: null, after: null },
+      'review.sourceContext.notLocated',
+      'review.sourceContext.storedNote'
+    ],
+    ['the file changed since the answer', { ...located, hashState: 'mismatch' }, 'review.sourceContext.hashMismatch', 'review.sourceContext.hashMatch'],
+    ['main could not read the context', null, 'review.sourceContext.failed', 'review.sourceContext.storedNote']
+  ])('source-in-context when %s says so', async (_state, answer, shown, absent) => {
+    const getEvidenceSourceContext = vi.fn(async () => answer)
+    await renderReview({ detail: makeDetail(), api: { getEvidenceSourceContext } })
+    fireEvent.click(await screen.findByRole('button', { name: t('en', 'review.sourceContext.open') }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText(t('en', shown))).toBeInTheDocument()
+    expect(within(dialog).queryByText(t('en', absent))).toBeNull()
     assertNoUnexpectedApiCalls()
   })
 

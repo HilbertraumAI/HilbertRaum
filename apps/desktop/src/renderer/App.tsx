@@ -229,7 +229,7 @@ function AppShell(): JSX.Element {
   // visible. This is the end of the user-felt "launch to password prompt" span.
   const gateVisible = workspace !== null && !unlocked
   useEffect(() => {
-    if (gateVisible) window.api?.perfMark?.('gate_visible')
+    if (gateVisible) window.api?.perfMark('gate_visible')
   }, [gateVisible])
 
   // The rail indicator must never claim the opposite of reality (D1), and the two events

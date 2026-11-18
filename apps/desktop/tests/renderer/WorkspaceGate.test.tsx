@@ -235,7 +235,8 @@ describe('WorkspaceGate — create (3-step first run)', () => {
   })
 
   // Every exit of the starter step is honest: it hands the open workspace to the shell exactly once, on its own
-  // screen (Skip ends on the teaching Chat empty state). A model listed but not installed still counts as none.
+  // screen (Skip ends on the teaching Chat empty state). A model listed but not installed still counts as none, and so
+  // does an installed embedder: every Kit ships E5, so "no chat model" usually reads like this list (#860 R4).
   it.each<[MessageKey, string]>([
     ['gate.starter.skip', 'chat'],
     ['gate.starter.addDocuments', 'documents'],
@@ -243,9 +244,10 @@ describe('WorkspaceGate — create (3-step first run)', () => {
   ])('shows the starter step when no chat model is installed; %s lands on %s', async (exit, landOn) => {
     const user = userEvent.setup()
     const onUnlocked = vi.fn()
+    const embedder = modelInfo({ id: 'multilingual-e5-small-q8', role: 'embeddings', state: 'installed' })
     stubCreate({
       createWorkspace: okCreate(),
-      listModels: vi.fn(async (): Promise<ModelInfo[]> => [chatModel('missing')])
+      listModels: vi.fn(async (): Promise<ModelInfo[]> => [chatModel('missing'), embedder])
     })
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={onUnlocked} />)
     await toPasswordStep(user)
@@ -422,10 +424,14 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
 
   afterEach(() => window.localStorage.clear())
 
-  /** Render the gate in German, submit once, have main answer with `failure`, and expect `shown` on a gate that stayed up. */
-  async function failIn(call: 'unlock' | 'create', failure: Failure, shown: string): Promise<void> {
+  /** Render the gate in German, submit once, have main answer with `failure` (or the call reject with it), and expect
+   *  `shown` on a gate that stayed up. */
+  async function failIn(call: 'unlock' | 'create', failure: Failure | Error, shown: string): Promise<void> {
     const user = userEvent.setup()
-    const answer = vi.fn(async (): Promise<WorkspaceActionResult> => failure)
+    const answer = vi.fn(async (): Promise<WorkspaceActionResult> => {
+      if (failure instanceof Error) throw failure
+      return failure
+    })
     const onUnlocked = vi.fn()
     stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
     renderInLanguage(
@@ -447,7 +453,7 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     }
     expect(await screen.findByText(shown)).toBeInTheDocument()
     expect(onUnlocked).not.toHaveBeenCalled()
-    if (call === 'create') {
+    if (call === 'create' && !(failure instanceof Error)) {
       expect(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder'))).toHaveValue('')
       expect(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder'))).toHaveValue('')
     }
@@ -475,5 +481,11 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     ['unlock', 'toString' as string as Failure['reason'], 'Something else went wrong.']
   ] as const)('%s %s shows main’s own message', async (call, reason, message) => {
     await failIn(call, { ok: false, reason, message }, message)
+  })
+
+  // #860 R1: a call that REJECTS (an IPC or main-side fault, not an answer) has no reason to map; the gate still says
+  // something, in its own language, instead of leaving the user on a silent gate.
+  it.each(['unlock', 'create'] as const)('%s: a call that rejects shows the generic failure in German', async (call) => {
+    await failIn(call, new Error('ipc broke'), t('de', 'gate.error.generic'))
   })
 })

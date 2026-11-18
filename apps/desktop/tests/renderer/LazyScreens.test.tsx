@@ -98,7 +98,6 @@ describe('lazy screens — suspense fallback → content (PF-6)', () => {
         listConversations: vi.fn(async () => [conversation]),
         listMessages: vi.fn(async () => messages),
         getRuntimeStatus: vi.fn(async () => runtimeStatus({ warmedUp: undefined })),
-        getEvidenceReviewForMessage: vi.fn(async () => null),
         createEvidenceReview: vi.fn(async () => makeDetail({ messageId: 'm2' }))
       })
     })

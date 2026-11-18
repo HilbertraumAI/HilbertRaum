@@ -1742,11 +1742,3 @@ function applyPragmasAndMigrations(db: Db): void {
   // nothing here, so a second open is a no-op.
   if (found < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
 }
-
-/** List of table names — used by tests/diagnostics to confirm migration ran. */
-export function listTables(db: Db): string[] {
-  const rows = db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-    .all() as Array<{ name: string }>
-  return rows.map((r) => r.name)
-}

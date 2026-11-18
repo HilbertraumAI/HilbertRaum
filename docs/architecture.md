@@ -11816,10 +11816,10 @@ fail-open guard hardened into a `script-drift` teeth check; the `forceRestart` G
 closed at the composition seam during the P2 loop). The remainder are **deferred-with-registration**,
 by area:
 - **EP-1 review/pack follow-ups:** no in-app review-delete affordance (the AUD-01 copy names the
-  alternative because of it); "Try again" has no renderer review gate (unreachable today); a dead
-  `evidence:getForMessage` channel + preload method after AUD-12; the batch channel still recomputes
-  freshness per review; ordinary review edits still fan out non-atomically (the AUD-13 shape one level
-  down); the AUD-01 refusal logs at ERROR (content-free).
+  alternative because of it); "Try again" has no renderer review gate (unreachable today); the
+  batch channel still recomputes freshness per review; ordinary review edits still fan out
+  non-atomically (the AUD-13 shape one level down); the AUD-01 refusal logs at ERROR
+  (content-free).
 - **Provisioning / packaging:** `build-commercial-drive.ps1` still carries the `Write-Error` hazard
   and bare-`&` child calls (out of the audit's stated scope); the archive-download path has AUD-24's
   416 trap; four manifests carry no `download.size_bytes` so AUD-24 stays open there; the manifest
@@ -11840,6 +11840,10 @@ by area:
 - **Owner decisions (open):** whether `user-guide.md` §7 should carry a "packaged OCR currently
   crashes" caveat or wait for the fix bundle to land first (**B-30**), and whether the
   `architecture.md` TEST-N1 ledger row should get a superseding note for the CI Node change (**B-40**).
+
+**Closed since registration:** the dead `evidence:getForMessage` channel and preload method
+(registered under EP-1 above), together with the equally caller-less `evidence:delete`, were removed
+by #840.
 
 **§-anchor legend.** Commits, code comments, tests, and BUILD_STATE cite this audit as
 `AUD-nn` / `DV-n` (or the bare id beside a qualified cite); all 26 finding ids, the four design
@@ -14507,9 +14511,10 @@ N.
   the chips appeared at the speed of the slowest one. The batch channel
   (`evidence:summariesForConversation` → `listEvidenceReviewSummariesForConversation`) answers
   for the whole conversation in TWO statements at any length: one indexed head read, one join
-  for the item rows the gates derive from. The per-message channel stays — a freshly created
-  review still reads through it, and the two are pinned element-for-element identical by
-  test. Beyond latency the single commit shrinks a real window: while a reviewed turn's chip
+  for the item rows the gates derive from. The per-message channel had no caller left (a fresh
+  review takes its detail from `evidence:create`; the transcript re-reads the batch) and was
+  removed (#840), together with the equally caller-less `evidence:delete`. Beyond latency the
+  single commit shrinks a real window: while a reviewed turn's chip
   state is unknown the transcript renders the "Answer without it" undo as enabled, so the
   fewer render passes spent in that state the better (main refuses the destructive action
   outright regardless — the AUD-01 amendment above).

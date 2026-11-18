@@ -167,7 +167,9 @@ const MODULES: Array<{
   {
     name: 'registerEvidenceReviewsIpc',
     register: registerEvidenceReviewsIpc,
-    exempt: new Set<string>()
+    exempt: new Set<string>(),
+    // #839 F5: every evidence channel, not only the one the IPC suite drives, says the module's own sentence.
+    lockedCopy: t('en', 'main.evidenceReviews.locked')
   },
   // local-api wave P4: all three channels read or write the access-key table in the
   // workspace DB (mint / copy / rotate) — none may answer a locked vault.
@@ -236,7 +238,7 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerWorkspaceIpc:
     'workspace-ipc.test.ts — IS the lock/unlock/create gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design). The password change answers a result, not a throw: its refusal during a lock teardown (the AUD-02 latch) is lock-admission-race.test.ts "refuses changeWorkspacePassword while the lock teardown is parked"',
   registerDictationIpc:
-    'dictation-ipc.test.ts (locked-vault rejection; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
+    'dictation-ipc.test.ts (locked-vault and mid-lock (AUD-02 latch) rejection, #860 L6; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
   registerDownloadIpc:
     'pre-unlock by design — model downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()',
   registerEngineIpc:

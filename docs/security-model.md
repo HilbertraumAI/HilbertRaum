@@ -1751,10 +1751,11 @@ now reads the single shared predicate `workspaceAdmitsWork(workspace)` = `isUnlo
 !isLocking()` instead of a bare `isUnlocked()` — fail-closed, because during the teardown "the
 workspace is locked" is the honest answer and the renderer is about to swap to the lock gate
 anyway. Each site keeps its **own** localized copy (`main.task.workspaceLocked`,
-`main.chat.locked`, `main.docs.locked`, …); only the predicate is shared. The guards live in the
-**services** too (`DocTaskManager.startDocTask`, `TranslateJobService.start`,
-`VisionService.analyze` — via an injected `isWorkspaceLocking` seam), not only in the IPC
-handlers, so non-IPC callers inherit them.
+`main.chat.locked`, `main.docs.locked`, …); only the predicate is shared. Three **services** carry
+the guard too, as defence in depth (`DocTaskManager.startDocTask`, `TranslateJobService.start`,
+`VisionService.analyze` — via an injected `isWorkspaceLocking` dependency). Only
+`DocTaskManager.startDocTask` has callers outside IPC today: its own tree and extract chains, and
+the skills categorize run.
 
 How it is proved: `ipc-lock-coverage.test.ts` drives every registrar in its `MODULES` list in two
 postures, locked and mid-lock (`isUnlocked()` still true, `isLocking()` set), and every handler
@@ -1762,12 +1763,14 @@ that is not exempt must refuse with its module's copy, so a first guard that goe
 `isUnlocked()` turns that module's row red. `lock-admission-race.test.ts` drives a real lock parked
 mid-teardown and refuses the work that would respawn a sidecar or write: a translation doc task, a
 Translate-view start, an image analyze, an import, and the password change (which answers a
-refusal instead of throwing; the descriptor is untouched). Three guards have no row of their own:
-dictation's (its suite checks a locked workspace only), `DocTaskManager.startDocTask`'s and
-`VisionService.analyze`'s (`vision/index.ts`; non-IPC callers rely on both service guards, but every
-row reaches them through the IPC guard, which refuses first). The third service guard,
-`TranslateJobService.start`'s, has its own row: `translate-ipc.test.ts` "#163 (T-1): the
-SERVICE-level isWorkspaceLocking refusal (the non-IPC callers' guard)".
+refusal instead of throwing; the descriptor is untouched). Dictation's guard, which `ipc-lock-coverage`
+does not drive, has its own row in both postures: `dictation-ipc.test.ts` "refuses while a lock is
+under way (AUD-02 latch) and writes NO file under documents/ (S3)". Two service guards have their own
+row: `DocTaskManager.startDocTask`'s, the one its non-IPC callers rely on (`doctasks.test.ts`
+"refuses to start while a workspace lock is under way (AUD-02)"), and `TranslateJobService.start`'s
+(`translate-ipc.test.ts` "#163 (T-1): the SERVICE-level isWorkspaceLocking refusal (the non-IPC
+callers' guard)"). One guard has no row of its own: `VisionService.analyze`'s (`vision/index.ts`).
+Only the images IPC calls it, and every row reaches it through that IPC guard, which refuses first.
 
 Clearing rules: **cleared** whenever the handler leaves the teardown by a throw *while the
 workspace is still open* (the failed re-encrypt — realistically ENOSPC — restores the controller

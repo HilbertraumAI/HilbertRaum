@@ -8,6 +8,7 @@ import {
   SHUTDOWN_OVERALL_DEADLINE_MS
 } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
+import { workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 
 // REL-4 (full-audit-2026-06-29 follow-up): the QUIT teardown must abort in-flight chat/RAG streams
@@ -88,8 +89,10 @@ function fakeCtx(order: string[]): AppContext {
       size: () => 0
     },
     // Issue #51: quit calls workspace.shutdown() (lock + plaintext checkpoint/close). The
-    // ordering event keeps its historical 'lock' label — every assertion below pins it.
-    workspace: { shutdown: () => order.push('lock') }
+    // ordering event keeps its historical 'lock' label — every assertion below pins it. The AUD-02
+    // latch (`beginLock`) is a member of the real controller; a stand-in without it would throw
+    // into the best-effort catch on every row. Quit's arm is lock-admission-race.test.ts's.
+    workspace: { beginLock: () => undefined, shutdown: () => order.push('lock') }
   } as unknown as AppContext
 }
 
@@ -553,6 +556,7 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     const ctx = {
       localApi: { stop: async () => Promise.reject(new Error('already stopped')) },
       workspace: {
+        beginLock: () => undefined,
         shutdown: () => {
           order.push('lock(throws)')
           throw new Error('ENOSPC')
@@ -571,6 +575,36 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     expect(() =>
       emergencyLock(null, { detachVaultKey: () => undefined, killSidecarChildren: () => undefined, log: quietLog })
     ).not.toThrow()
+  })
+
+  // AUD-02 on the session-end / crash path: emergencyLock arms the lock latch before anything else, so work that arrives
+  // after it is refused even when the lock itself failed (a full drive) and the workspace is still open. Nothing on this
+  // path clears the latch: the process ends.
+  it('emergencyLock arms the lock latch first, so a job arriving after a failed lock is still refused', () => {
+    const order: string[] = []
+    let locking = false
+    const workspace = {
+      isUnlocked: () => true, // the failed lock below leaves the workspace open
+      isLocking: () => locking,
+      beginLock: () => {
+        order.push('beginLock')
+        locking = true
+      },
+      shutdown: () => {
+        order.push('lock(throws)')
+        throw new Error('ENOSPC')
+      }
+    }
+    const ctx = { localApi: { stop: async () => void order.push('localApi.stop') }, workspace } as unknown as AppContext
+    expect(workspaceAdmitsWork(workspace)).toBe(true)
+
+    emergencyLock(ctx, {
+      detachVaultKey: () => order.push('detach'),
+      killSidecarChildren: () => order.push('reap'),
+      log: quietLog
+    })
+    expect(order).toEqual(['beginLock', 'localApi.stop', 'detach', 'lock(throws)', 'reap'])
+    expect(workspaceAdmitsWork(workspace)).toBe(false) // a late doc task, import or analyze: refused
   })
 
   it('index.ts wires the handler: session-end on the main window (win32), powerMonitor shutdown (darwin), the crash path', () => {

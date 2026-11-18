@@ -3,6 +3,8 @@ import type {
   CoverageInfo,
   EvidencePackLanguage,
   EvidencePackOptions,
+  EvidenceReadyGate,
+  EvidenceReviewItem,
   Message
 } from './types'
 import type { MessageKey, UiLanguageInfo } from './i18n'
@@ -10,7 +12,8 @@ import type { MessageKey, UiLanguageInfo } from './i18n'
 // Evidence Pack / Review Mode — the entry-point eligibility rule (spec §9.1), as ONE pure
 // shared predicate so the renderer action row, the sources-disclosure footer (Phase 2) and
 // any main-side guard can never disagree about which answers offer a review. Phase 3 adds
-// the shared honesty-mode mapping and the pack-export option defaults (plan §8).
+// the shared honesty-mode mapping and the pack-export option defaults (plan §8). The D-7 ready
+// gate lives here too, one implementation for main and the renderer (#839).
 
 /**
  * Whether an answer can offer "Review evidence" (spec §9.1): it must be an ASSISTANT
@@ -43,6 +46,32 @@ export function hasLabelledExcerpts(
   coverage: Pick<CoverageInfo, 'mode' | 'labelledExcerpts'> | null | undefined
 ): boolean {
   return coverage?.mode === 'capped' && coverage.labelledExcerpts === true
+}
+
+/**
+ * The D-7 ready gate over a review's items: required = block items that are not headings
+ * (`blockKind === 'heading'` exempt; null/unknown counts as REQUIRED — an unclassified block
+ * never silently skips review); selections never gate. Decided = any decision other than
+ * 'not_reviewed' ('not_applicable' COUNTS as decided — headings arrive defaulted to it, spec
+ * §12.2). `eligible` = every required item decided (vacuously true for an item-less review —
+ * there is nothing to review).
+ *
+ * Main derives the AUTHORITATIVE gate from persisted rows (every detail read, and
+ * `markEvidenceReviewReady`); the renderer's review store runs the same function over its
+ * optimistic items for live progress while edits are still unsaved. One function, so the two
+ * cannot drift (it was two byte-identical copies under an equivalence matrix until #839).
+ */
+export function deriveReadyGate(
+  items: ReadonlyArray<Pick<EvidenceReviewItem, 'kind' | 'blockKind' | 'decision'>>
+): EvidenceReadyGate {
+  let requiredTotal = 0
+  let decidedTotal = 0
+  for (const item of items) {
+    if (item.kind !== 'block' || item.blockKind === 'heading') continue
+    requiredTotal += 1
+    if (item.decision !== 'not_reviewed') decidedTotal += 1
+  }
+  return { eligible: decidedTotal === requiredTotal, requiredTotal, decidedTotal }
 }
 
 /** The three honesty-caption classes an answer's evidence presents as (spec §11.4/§24.3). */

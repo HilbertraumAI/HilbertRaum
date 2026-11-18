@@ -188,7 +188,8 @@ every unfiled one (failed or importing) into `RetrievalScope.documentIds`. No sh
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
 foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `createRequire`
-(see Decision log). Helpers: `openDatabase(path)`, `listTables(db)`. **#571** added one additive
+(see Decision log). Helper: `openDatabase(path)` (tests list the tables with
+`tests/helpers/db-fixtures.ts` `listTables`, #840). **#571** added one additive
 partial index, `idx_documents_pending_dest ON documents(id) WHERE pending_destination_json IS NOT
 NULL` (created after `ensureColumn`, like the other migrated-column indexes) — no column, no
 migration. **#581** added connection-local TEMP objects, created on every open after the
@@ -1668,16 +1669,19 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   byte-identical), `createEvidenceSelection` (refuses out-of-range AND surrogate-splitting
   offsets — never clamps; F-15), `deleteEvidenceSelection` (selections only — block items are
   structural), `setEvidenceLink` (upsert per (item, key); refuses unknown source keys),
-  `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`, and the pure
+  `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`. The pure
   `deriveReadyGate` (D-7: required = non-heading block items, NULL `blockKind` counts as
-  required; 'not_applicable' counts as decided; selections never gate).
+  required; 'not_applicable' counts as decided; selections never gate) lives in
+  `shared/evidence-review.ts` since #839: the renderer's review store runs the same function
+  for live progress (it was a byte-identical renderer copy, `computeReadyGate`, under an
+  equivalence matrix; that name is still exported from `reviewSession.ts` for PR #511).
 ✅ **Audit literals (types only — no emitter until Phase 1):** `evidence_review_created`,
   `evidence_review_ready`, `evidence_review_deleted`, `evidence_pack_exported`. Metadata
   contract: ids/counts ONLY — never titles, notes, reviewer labels, snippets, or paths.
   (The exhaustive Diagnostics label record forced the matching `diag.audit.*` EN/DE keys to
   land now; behaviorally inert until an event exists.)
-✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix, the FIX-4 renderer-mirror
-  equivalence, the pure snapshot parsers, and the spec-§9.1 `isReviewEligible` rule) +
+✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix, the pure snapshot parsers,
+  and the spec-§9.1 `isReviewEligible` rule) +
   `tests/integration/evidence-reviews.test.ts` (schema on fresh/reopened DBs via `listTables`;
   decided items, notes and the reviewer label surviving a reopen (the restart leg, moved from
   `evidence-reviews-ipc.test.ts`); a pre-P4 workspace gaining `freshness_ack_json`;
@@ -1741,20 +1745,20 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
   `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
   gate (a streaming reply has no row yet) — Phase 2 wires it.
-✅ **IPC surface (19 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+✅ **IPC surface (`evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
   same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added
   in Phase 2 for the D-2 delete confirm, `evidence:export` added in Phase 3 with its
   pipeline, `evidence:acknowledgeFreshness` + `evidence:sourceContext` added in Phase 4,
   `evidence:summariesForConversation` + `evidence:bulkAction` added by the AUD-12/AUD-13
   remediation as the BATCH forms of two surfaces that previously fanned out per message /
-  per item):**
+  per item; #840 removed `evidence:getForMessage` and `evidence:delete`, which no screen
+  called, so 17 remain):**
   | preload method | channel | shape |
   |---|---|---|
   | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
   | `getEvidenceReview(reviewId)` | `evidence:get` | → `EvidenceReviewDetail \| null` |
-  | `getEvidenceReviewForMessage(messageId)` | `evidence:getForMessage` | → `EvidenceReviewSummary \| null` (entry-point state for ONE message; the transcript uses the conversation-scoped batch below) |
-  | `getEvidenceReviewSummariesForConversation(conversationId)` | `evidence:summariesForConversation` | → `EvidenceReviewSummary[]` — **AUD-12**: the chat transcript's whole chip state in ONE round trip, keyed by `messageId` renderer-side. Same per-summary shape (gate + derived `outdated` overlay) as `evidence:getForMessage`, element-for-element. Service side it is TWO statements for any conversation length — one indexed head read on `conversation_id`, one join for the item rows the gates derive from. `[]` for an unknown/malformed id |
+  | `getEvidenceReviewSummariesForConversation(conversationId)` | `evidence:summariesForConversation` | → `EvidenceReviewSummary[]` — **AUD-12**: the chat transcript's whole chip state in ONE round trip, keyed by `messageId` renderer-side. Each element is a review's head + its gate (the `EvidenceReviewSummary` shape; main's per-message `getEvidenceReviewForMessage` builds the same shape, and its one product caller is `evidence:create`'s idempotency check) with the derived `outdated` overlay. Service side it is TWO statements for any conversation length — one indexed head read on `conversation_id`, one join for the item rows the gates derive from. `[]` for an unknown/malformed id |
   | `updateEvidenceReview(reviewId, patch)` | `evidence:update` | → `EvidenceReview \| null`; malformed patch fields DROPPED, never coerced |
   | `updateEvidenceReviewItem(itemId, patch)` | `evidence:updateItem` | → `EvidenceReviewItem \| null`; unknown decision literals dropped (stored decision untouched) |
   | `applyEvidenceReviewBulkAction(reviewId, action)` | `evidence:bulkAction` | → `EvidenceReviewItem[] \| null` — **AUD-13**: one of the three sanctioned conservative sweeps (`EvidenceReviewBulkAction` = `'headings_not_applicable' \| 'clear_decisions' \| 'undecided_follow_up'`) applied to the whole review in ONE transaction, returning the refreshed items. Null on an unknown id, an UNRECOGNIZED action name (never mapped onto a nearby one), and on a READY review (the same write guard the per-item patch enforces). The head activity stamp moves only when the sweep matched something. The forbidden blanket "mark all supported" has no literal in the union, so it cannot be requested |
@@ -1767,7 +1771,6 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **REAL since Phase 4** (spec §21.2): snapshot vs workspace from STORED facts only — document existence by snapshotted id, stored `documents.sha256` vs snapshot hash (**never re-hashed**), `messages.content` vs `answer_snapshot` (exact), coverage semantic-fields compare. Unresolved identities report `'unverifiable'`, NEVER `'changed'`. No model, no network, no file I/O |
   | `acknowledgeEvidenceReviewFreshness(reviewId)` | `evidence:acknowledgeFreshness` | → `EvidenceReviewFreshness \| null` — Phase 4 (spec §15.5/§28.6): persists `{acknowledgedAt, fingerprint}` into `freshness_ack_json`; the fingerprint canonicalizes the CURRENT drift so a LATER change lapses the acknowledge. NO-OP on a non-outdated review (nothing written). Writes ONLY its own column — status/completed_at/updated_at untouched (§18.4), NOT subject to the ready-state write-guard (lifecycle metadata, not a decision edit). No audit event (not a spec-§22 type) |
   | `getEvidenceSourceContext(reviewId, sourceKey)` | `evidence:sourceContext` | → `EvidenceSourceContext \| null` — Phase 4 (D-5, spec §10.2.4): the STORED extracted text (`chunks` table — never a source-file read) around one source's persisted excerpt, resolved from the review's OWN snapshot (`documentId` never crosses the wire from the renderer). Ladder: snapshotted `sourceChunkId` (verified to belong to the snapshotted document — a foreign chunk id never leaks another document's text) → stored-text containment search (`instr`) → honest `located:false`. Context = located chunk ± one neighbor, ≤1200 chars/side, surrogate-safe boundaries. Null on unknown review/key and on unresolved-identity sources |
-  | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
   | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
   | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: EvidencePackExportRequest` (= `Partial<EvidencePackOptions> & {format?}`) resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED option set persists to `options_json` (the format NEVER does — `evidence_exports.format` is its column). **P6 (plan §11): PDF over the SAME channel** — `format: 'pdf'` (literal only; anything else reads 'html') prints the SAME rendered HTML through the hidden-window harness AFTER the dialog; the save dialog OFFERS both filters (requested first) and the chosen extension has the final word (`packFormatForDestination`: `.pdf`⇒pdf, `.html`/`.htm`⇒html, else the request — file content, extension and recorded format always agree). A failed/killed print = a pre-rename failure: no file, no row |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
@@ -1782,11 +1785,14 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   ADDITIVELY in P4 (all new fields optional on the wire — see the Phase-4 block).
 ✅ **Audit emitters:** `evidence_review_created` (`{reviewId, messageId,
   conversationId, itemCount, sourceCount, autoLinkCount}`), `evidence_review_ready`
-  (`{reviewId, requiredTotal, decidedTotal}`), `evidence_review_deleted` (`{reviewId}`),
-  and — Phase 3 — `evidence_pack_exported` (`{reviewId, format}` **only**: the destination
-  path, the bare file name and the review title, which seeds the suggested name, are content
-  and never audited) — ids/counts ONLY; review titles/labels/notes/answer text/source titles
-  AND the export path are sentinel-swept through the REAL handlers in `audit-ipc.test.ts`.
+  (`{reviewId, requiredTotal, decidedTotal}`), and — Phase 3 — `evidence_pack_exported`
+  (`{reviewId, format}` **only**: the destination path, the bare file name and the review
+  title, which seeds the suggested name, are content and never audited) — ids/counts ONLY;
+  review titles/labels/notes/answer text/source titles AND the export path are sentinel-swept
+  through the REAL handlers in `audit-ipc.test.ts`. `evidence_review_deleted` (`{reviewId}`)
+  had one emitter, the `evidence:delete` channel, which no screen called (the app has no
+  review delete, B-03); #840 removed the channel, so no build emits it now. The literal and its
+  `diag.audit.*` label stay, so rows an older build wrote still read.
 ✅ **i18n:** `main.evidenceReviews.locked` + `main.evidenceReviews.invalidRequest` (emission
   set) and persist-canonical `main.evidenceReviews.defaultTitle` ('Evidence review' — the
   fallback written to `evidence_reviews.title` when a conversation title trims empty; in
@@ -1800,7 +1806,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   display-parity links, and the FIX-2 atomicity leg: an injected SQLite-trigger failure
   mid-build rolls back the three tables the build writes (head, items, links) and surfaces
   the original error) + `tests/integration/evidence-reviews-ipc.test.ts` (the full
-  create→read→update→decide→select→link→ready→reopen→refresh→delete round trip over the
+  create→read→update→decide→select→link→ready→reopen→refresh round trip over the
   mocked-electron harness incl. a documentId-resolved source and a real selection deletion —
   the four answer classes are the builder's, pinned in `evidence-snapshot.test.ts` — payload
   guards, reviewer-origin forcing, the real freshness verdict over the wire, idempotent
@@ -1896,7 +1902,8 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
   `<meta charset>` is the contract; recorded hash = on-disk bytes).
   `suggestedPackFileName(title, format)` slugs the review title (content — which is why
-  path/name never reach audit) + the format's extension.
+  path/name never reach audit), capped at 60 code points (never half an astral letter, #839),
+  + the format's extension.
 ✅ **PDF print harness (P6, `main/services/evidence-pack/print-pdf.ts` — plan §11/D-1):**
   `printEvidencePackHtmlToPdf(html, {packId})` → PDF `Buffer`. Dedicated
   hidden `BrowserWindow` per print — `SECURE_WINDOW_WEB_PREFERENCES` spread (sandboxed),
@@ -2009,7 +2016,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   answer edit, changed→recovered→changed-again (no stale-ack resurrection), and a NEW
   deletion (adds a fact). Hashes only, inside the encrypted row. Also exports
   `compareStoredHashes` (the ack parser is module-private).
-✅ **Read overlay (IPC boundary):** `evidence:get` + `evidence:getForMessage` responses
+✅ **Read overlay (IPC boundary):** `evidence:get` + `evidence:summariesForConversation` responses
   carry the REAL computed `outdated` (the chat chip + a fresh open render truthfully);
   SERVICE-level reads and every write-path return (`update`/`markReady`/`reopen`/`create`)
   keep the constant-false overlay — the renderer's freshness UI reads the store's refresh

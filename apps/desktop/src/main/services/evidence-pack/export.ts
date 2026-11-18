@@ -10,6 +10,7 @@ import type { EvidenceExportFormat, EvidenceExportRecord } from '../../../shared
 import { sha256Of } from '../assets'
 import { getEvidenceReview, recordEvidenceExport } from '../evidence-reviews'
 import type { Db } from '../db'
+import { codePointSlice } from '../text'
 import { computeEvidenceReviewFreshness } from './freshness'
 import {
   buildEvidencePackModel,
@@ -142,14 +143,13 @@ export function packFormatForDestination(
 }
 
 /** Filename-safe slug from the review title (the exportConversation idiom): letters,
- *  numbers, space, `_`, `-`; empty → the neutral fallback. The extension follows the
- *  requested format (P6). The title is CONTENT — it may end up in the user-chosen file
- *  name, which is exactly why the path/name never reaches audit or logs. */
+ *  numbers, space, `_`, `-`; empty → the neutral fallback; at most 60 code points, so the cut
+ *  never splits an astral letter (`\p{L}` includes CJK Ext-B) into a lone surrogate, and trimmed
+ *  again after the cut so no space is left before the extension (#839). The
+ *  extension follows the requested format (P6). The title is CONTENT — it may end up in the
+ *  user-chosen file name, which is exactly why the path/name never reaches audit or logs. */
 export function suggestedPackFileName(title: string, format: EvidenceExportFormat): string {
-  const safe = title
-    .replace(/[^\p{L}\p{N} _-]/gu, '')
-    .trim()
-    .slice(0, 60)
+  const safe = codePointSlice(title.replace(/[^\p{L}\p{N} _-]/gu, '').trim(), 60).trimEnd()
   return `${safe.length > 0 ? safe : 'evidence-pack'}${PACK_FILE_EXTENSION[format]}`
 }
 

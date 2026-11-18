@@ -584,7 +584,6 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     )
     expect(packExportEvent?.message).toBe('Evidence pack exported')
     expect(packExportEvent?.metadata).toEqual({ reviewId: review.id, format: 'html' })
-    await invoke(handlers, IPC.deleteEvidenceReview, review.id)
 
     // -- models + runtime: select, verify, start (mock fallback), stop.
     await invoke(handlers, IPC.selectModel, 'test-model-q4')
@@ -625,10 +624,10 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'documents_added_to_collection',
       'documents_removed_from_collection',
       'document_lifecycle_changed',
-      // EP-1 lifecycle events (Phase 1) + the pack-export event (Phase 3).
+      // EP-1 lifecycle events (Phase 1) + the pack-export event (Phase 3). `evidence_review_deleted` has no emitter
+      // since #840 removed the `evidence:delete` channel (no review-delete in the app, B-03); its label stays for old rows.
       'evidence_review_created',
       'evidence_review_ready',
-      'evidence_review_deleted',
       'evidence_pack_exported',
       'code_block_exported'
     ]) {

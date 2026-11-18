@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // EP-1 Phase 1 (plan §6.4) — the evidence-review IPC surface through the mocked-electron
-// harness: the full create→read→update→delete round trip (the four answer classes are the
+// harness: the full create→read→update round trip (the four answer classes are the
 // builder's, pinned in evidence-snapshot.test.ts), payload guards, the reviewer-origin forcing
 // rule, the real freshness verdict over the wire, the idempotent create — and the phase's
 // MANDATORY no-model/no-network assertions: the runtime is a tripwire that fails the suite if
@@ -74,6 +74,7 @@ import {
   useOfflineGuard
 } from '../helpers/evidence-fixtures'
 import type { FakePrintElectronState, FakePrintWindow } from '../helpers/fake-print-window'
+import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers
@@ -99,7 +100,7 @@ beforeEach(() => {
 })
 
 /** One workspace + the real registrar on H's tripwired context. */
-function harness(o: { unlocked?: () => boolean } = {}) {
+function harness(o: { unlocked?: () => boolean; manifestsDir?: string } = {}) {
   const { db, root } = freshWorkspaceDb('epipc')
   const c = evidenceIpcContext(db, root, o)
   registerEvidenceReviewsIpc(c.ctx)
@@ -107,12 +108,12 @@ function harness(o: { unlocked?: () => boolean } = {}) {
 }
 
 describe('evidence-review IPC round trips (mocked-electron harness)', () => {
-  it('create→read→update→decide→select→link→ready→reopen→refresh→delete, model never touched, offline guard silent', async () => {
+  it('create→read→update→decide→select→link→ready→reopen→refresh, model never touched, offline guard silent', async () => {
     const { db, runtimeTouched } = harness()
     // FIX-4c: one citation WITH a documentId (the byId resolution branch) and one without
     // (title-unmatched → unresolved) — both resolved under the tripwire-asserted flow.
     const docId = seedSourceDocument(db, { title: 'A.pdf', sha256: 'aa'.repeat(32) })
-    const { messageId } = seedAssistantAnswer(db, {
+    const { conversationId, messageId } = seedAssistantAnswer(db, {
       content: RELEVANCE.content,
       citations: [
         { label: 'S1', sourceTitle: 'A.pdf', documentId: docId, chunkId: 'c1' },
@@ -149,11 +150,11 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect((againRaw as EvidenceReviewDetail).id).toBe(created.id)
     expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'evidence_review_created')).toHaveLength(1)
 
-    // -- entry-point read
-    const { result: summaryRaw } = await invoke(handlers, IPC.getEvidenceReviewForMessage, messageId)
-    const summary = summaryRaw as EvidenceReviewSummary
+    // -- entry-point read (the transcript's chip state: the conversation batch, AUD-12)
+    const { result: summariesRaw } = await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, conversationId)
+    const [summary] = summariesRaw as EvidenceReviewSummary[]
     expect(summary).toMatchObject({ id: created.id, messageId, status: 'draft', outdated: false })
-    expect(summary.gate).toEqual({ eligible: false, requiredTotal: 2, decidedTotal: 0 })
+    expect(summary!.gate).toEqual({ eligible: false, requiredTotal: 2, decidedTotal: 0 })
 
     // -- head patch
     const { result: patchedRaw } = await invoke(handlers, IPC.updateEvidenceReview, created.id, {
@@ -251,18 +252,25 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     const { result: freshMissing } = await invoke(handlers, IPC.refreshEvidenceReviewState, 'nope')
     expect(freshMissing).toBeNull()
 
-    // -- delete
-    const { result: deleted } = await invoke(handlers, IPC.deleteEvidenceReview, created.id)
-    expect(deleted).toBe(true)
-    const { result: goneRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
-    expect(goneRaw).toBeNull()
     const types = listAuditEvents(db, { limit: 100 }).map((e) => e.type)
     expect(types).toContain('evidence_review_created')
     expect(types).toContain('evidence_review_ready')
-    expect(types).toContain('evidence_review_deleted')
 
     // -- the phase's hard rule, asserted over the WHOLE flow (the offline guard: after every test):
     expect(runtimeTouched).toEqual([]) // model runtime never consulted, never started
+  })
+
+  // #839 F2: every other row runs with no manifests dir (display name honestly null). With the drive's catalog, create
+  // stamps the model's catalog name once, main-side; the renderer never supplies it.
+  it('create stamps the catalog display name of the conversation model into the generation snapshot', async () => {
+    const { db, runtimeTouched } = harness({ manifestsDir: manifestsDirWith(rawManifest()) })
+    const { messageId } = seedAssistantAnswer(db, { ...RELEVANCE, modelId: 'qwen3-4b-instruct-q4' })
+    const created = (await invoke(handlers, IPC.createEvidenceReview, messageId)).result as EvidenceReviewDetail
+    expect(created.generationSnapshot).toMatchObject({
+      modelId: 'qwen3-4b-instruct-q4',
+      modelDisplayName: 'Qwen3 4B Instruct Q4'
+    })
+    expect(runtimeTouched).toEqual([])
   })
 
   it('payload guards: malformed ids and shapes read as unknown; create refuses garbage loudly', async () => {
@@ -273,14 +281,11 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
 
     // Non-string / empty ids → unknown (null/false), never a throw or a cast.
     expect((await invoke(handlers, IPC.getEvidenceReview, 42)).result).toBeNull()
-    expect((await invoke(handlers, IPC.getEvidenceReviewForMessage, '')).result).toBeNull()
     expect((await invoke(handlers, IPC.updateEvidenceReview, {}, { title: 'x' })).result).toBeNull()
     expect((await invoke(handlers, IPC.deleteEvidenceSelection, null)).result).toBe(false)
     expect((await invoke(handlers, IPC.removeEvidenceLink, created.items[0]!.id, 7)).result).toBe(false)
-    expect((await invoke(handlers, IPC.deleteEvidenceReview, undefined)).result).toBe(false)
-    // The legs above bind and match no row (null contract; {} is read as an empty named-parameter bag). `true` cannot be bound by node:sqlite: only safeId keeps these from throwing (undefined, above, already reaches that guard).
+    // The legs above bind and match no row (null contract; {} is read as an empty named-parameter bag). `true` cannot be bound by node:sqlite: only safeId keeps these from throwing.
     expect((await invoke(handlers, IPC.getEvidenceReview, true)).result).toBeNull()
-    expect((await invoke(handlers, IPC.getEvidenceReviewForMessage, true)).result).toBeNull()
     expect((await invoke(handlers, IPC.updateEvidenceReview, true, { title: 'x' })).result).toBeNull()
     expect((await invoke(handlers, IPC.deleteEvidenceSelection, true)).result).toBe(false)
     expect((await invoke(handlers, IPC.removeEvidenceLink, created.items[0]!.id, true)).result).toBe(false)
@@ -599,6 +604,8 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
       { name: 'PDF', extensions: ['pdf'] }
     ])
     expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
+    // §24.3 (#839 F3): the pack leaves the encrypted workspace; the dialog says so (the macOS sheet shows `message`).
+    expect(ipcState.saveDialog.lastOptions?.message).toBe(tShared('en', 'review.export.encryptionWarning'))
     expect(h.runtimeTouched).toEqual([])
   })
 })

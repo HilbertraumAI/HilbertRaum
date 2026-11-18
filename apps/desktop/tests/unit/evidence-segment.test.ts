@@ -21,6 +21,15 @@ describe('segmentAnswerBlocks — the markdown zoo (plan §6 tests)', () => {
     expect(texts(blocks)).toEqual(['First line\nstill first paragraph.', 'Second paragraph.'])
   })
 
+  // #839 S3: models often write "Intro:" straight above a list; the paragraph ends there, no blank line needed.
+  it.each([
+    ['a list', 'Intro:\n- a\n- b', ['paragraph', 'list_item', 'list_item']],
+    ['a heading', 'Intro:\n## Next', ['paragraph', 'heading']],
+    ['a fence', 'Intro:\n```\ncode\n```', ['paragraph', 'fence']]
+  ])('a paragraph ends where %s starts on the next line, without a blank line', (_label, md, expected) => {
+    expect(kinds(segmentAnswerBlocks(md))).toEqual(expected)
+  })
+
   it('classifies ATX headings as single-line heading blocks', () => {
     const blocks = segmentAnswerBlocks('# Title\n\nBody text.\n\n### Sub\nMore body.')
     expect(kinds(blocks)).toEqual(['heading', 'paragraph', 'heading', 'paragraph'])

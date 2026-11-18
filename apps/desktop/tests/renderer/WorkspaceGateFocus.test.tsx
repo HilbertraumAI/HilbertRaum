@@ -86,7 +86,8 @@ describe('WorkspaceGate — F20 phase-change focus management (WCAG 2.4.3)', () 
 // disables the submit button focus was sitting on — the retry path must steer focus back to
 // the field, and the error must live in an ALWAYS-mounted alert region so the FIRST failure
 // is announced (a freshly inserted role="alert" element is missed by many screen readers).
-describe('WorkspaceGate — failed unlock: focus + announcement (SH-2/SH-12)', () => {
+// A failed CREATE is the same keyboard dead end on the password step (#860 R2).
+describe('WorkspaceGate — failed unlock or create: focus + announcement (SH-2/SH-12)', () => {
   const LOCKED: WorkspaceStateInfo = {
     state: 'locked',
     mode: 'encrypted',
@@ -94,33 +95,40 @@ describe('WorkspaceGate — failed unlock: focus + announcement (SH-2/SH-12)', (
     encryptionRequired: true
   }
 
-  it('re-focuses the password field after a wrong password (SH-12), the error in the always-mounted alert region (SH-2)', async () => {
-    const user = userEvent.setup()
-    const unlockWorkspace = vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({
-        ok: false,
-        reason: 'wrong_password',
-        message: 'Wrong password.'
-      })
-    )
-    stubApi({ unlockWorkspace })
-    render(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />)
+  it.each([
+    ['unlock', 'wrong_password', 'main.workspace.wrongPassword'],
+    ['create', 'error', 'main.workspace.createFailed']
+  ] as const)(
+    're-focuses the password field after a failed %s (SH-12), the error in the always-mounted alert region (SH-2)',
+    async (call, reason, shown) => {
+      const user = userEvent.setup()
+      const answer = vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: false, reason, message: 'It failed.' }))
+      stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
+      render(<WorkspaceGate state={call === 'unlock' ? LOCKED : UNINITIALIZED} onUnlocked={vi.fn()} />)
+      if (call === 'create') await user.click(screen.getByRole('button', { name: /get started/i }))
 
-    const pw = await screen.findByPlaceholderText('Password')
-    // The alert region is there, empty, BEFORE any failure: that makes the first message a text swap inside a live
-    // region (announced) instead of a freshly inserted, pre-filled alert (missed by many screen readers).
-    const region = screen.getByRole('alert')
-    expect(region).toBeEmptyDOMElement()
-    await user.type(pw, 'nope')
-    await user.click(screen.getByRole('button', { name: /unlock/i }))
+      const pw = await screen.findByPlaceholderText('Password')
+      // The alert region is there, empty, BEFORE any failure: that makes the first message a text swap inside a live
+      // region (announced) instead of a freshly inserted, pre-filled alert (missed by many screen readers).
+      const region = screen.getByRole('alert')
+      expect(region).toBeEmptyDOMElement()
+      if (call === 'unlock') {
+        await user.type(pw, 'nope')
+        await user.click(screen.getByRole('button', { name: /unlock/i }))
+      } else {
+        await user.type(pw, 'longenough')
+        await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+        await user.click(screen.getByRole('button', { name: /create workspace/i }))
+      }
 
-    // The field emptied, the error shows in that same region, and focus is back ON the field for the retry
-    // (pre-fix it stayed on the now-disabled submit button — a keyboard dead end).
-    // The gate shows its own copy for the reason, not main's `message` (UI-languages owner call D-17 (a)).
-    await screen.findByText(t('en', 'main.workspace.wrongPassword'))
-    expect(screen.getByRole('alert')).toBe(region)
-    expect(region).toHaveTextContent(t('en', 'main.workspace.wrongPassword'))
-    expect((pw as HTMLInputElement).value).toBe('')
-    await waitFor(() => expect(document.activeElement).toBe(pw))
-  })
+      // The field emptied, the error shows in that same region, and focus is back ON the field for the retry
+      // (pre-fix it stayed on the now-disabled submit button — a keyboard dead end).
+      // The gate shows its own copy for the reason, not main's `message` (UI-languages owner call D-17 (a)).
+      await screen.findByText(t('en', shown))
+      expect(screen.getByRole('alert')).toBe(region)
+      expect(region).toHaveTextContent(t('en', shown))
+      expect((pw as HTMLInputElement).value).toBe('')
+      await waitFor(() => expect(document.activeElement).toBe(pw))
+    }
+  )
 })

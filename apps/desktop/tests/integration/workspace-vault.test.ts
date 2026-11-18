@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync, utimesSync } from 'node:fs'
+import { mkdirSync, existsSync, linkSync, readFileSync, writeFileSync, renameSync, rmSync, utimesSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -21,6 +21,7 @@ import {
   decryptFileAsync,
   FILE_CHUNK_BYTES,
   shredFile,
+  shredFileAsync,
   applyPendingRekey,
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
@@ -330,6 +331,30 @@ describe('streaming file crypto (M5)', () => {
     await expect(decryptFileAsync(enc, out, randomBytes(32))).rejects.toThrow(/unrecognised header/)
     expect(existsSync(out)).toBe(false)
     expect(existsSync(`${out}.tmp`)).toBe(false)
+  })
+})
+
+// #860 V6: the secure delete overwrites in FILE_CHUNK_BYTES chunks, and every other row shreds a file smaller than one
+// chunk, so a loop that stopped after the first chunk passed. A hard link keeps the overwritten bytes readable after
+// the unlink: every chunk, the last partial one included, must differ from the plaintext.
+describe('secure delete past one chunk (shredFile / shredFileAsync)', () => {
+  it.each([
+    ['shredFile', async (p: string) => shredFile(p)],
+    ['shredFileAsync', shredFileAsync]
+  ])('%s overwrites every chunk of a file larger than FILE_CHUNK_BYTES, then unlinks it', async (_name, shred) => {
+    const dir = tempRoot('shred')
+    const path = join(dir, 'plain.bin')
+    const plain = Buffer.alloc(2 * FILE_CHUNK_BYTES + 1024 * 1024, 0xa5)
+    writeFileSync(path, plain)
+    linkSync(path, join(dir, 'view.bin'))
+    await shred(path)
+    expect(existsSync(path)).toBe(false)
+    const after = readFileSync(join(dir, 'view.bin'))
+    expect(after.length).toBe(plain.length)
+    for (const start of [0, FILE_CHUNK_BYTES, 2 * FILE_CHUNK_BYTES]) {
+      const end = Math.min(start + FILE_CHUNK_BYTES, plain.length)
+      expect(after.subarray(start, end).equals(plain.subarray(start, end))).toBe(false)
+    }
   })
 })
 

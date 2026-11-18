@@ -5,7 +5,7 @@ import {
   createEvidenceReviewFromMessage,
   sourceKindForMode
 } from '../../src/main/services/evidence-pack/snapshot'
-import { deleteEvidenceReview } from '../../src/main/services/evidence-reviews'
+import { deleteEvidenceReview, getEvidenceReview } from '../../src/main/services/evidence-reviews'
 import type { CoverageInfo, EndedEarly } from '../../src/shared/types'
 import { freshWorkspaceDb } from '../helpers/db-fixtures'
 import { seedAssistantAnswer, seedSourceDocument } from '../helpers/evidence-fixtures'
@@ -349,6 +349,24 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
       answerMode: 'unknown'
     })
     expect(detail.coverageSnapshot).toBeNull()
+  })
+
+  // #839 S1: the pack names the skill that produced the answer. The message stores the skill's INSTALL id
+  // (`<source>:<id>`), which the builder resolves to the title once, at creation; a later rename stays out.
+  it("a skill answer freezes the skill's install id and title; a later rename does not reach the review", () => {
+    const db = freshWorkspaceDb('epsnap').db
+    const now = '2026-11-18T09:00:00.000Z'
+    db.prepare(
+      `INSERT INTO skills (install_id, id, title, version, kind, source, path, enabled, warning_ack, trusted_level,
+                           manifest_json, installed_at, updated_at)
+       VALUES ('app:redact', 'redact', 'Redact personal data', '1.0.0', 'tool', 'app', 'redact', 1, 1, 'app', '{}', ?, ?)`
+    ).run(now, now)
+    const { messageId } = seedAssistantAnswer(db, { content: 'Done.', skillId: 'app:redact' })
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+    expect(detail.generationSnapshot).toMatchObject({ skillId: 'app:redact', skillDisplayName: 'Redact personal data' })
+
+    db.prepare("UPDATE skills SET title = 'Renamed' WHERE install_id = 'app:redact'").run()
+    expect(getEvidenceReview(db, detail.id)?.generationSnapshot).toMatchObject({ skillDisplayName: 'Redact personal data' })
   })
 
   it('legacy title-resolution: a unique title match resolves; zero or multiple matches stay unresolved', () => {

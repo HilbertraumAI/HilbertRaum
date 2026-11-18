@@ -34,6 +34,7 @@ import { EngineCannotRunError } from '../../src/main/services/runtime/engine-loa
 import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
+import type { WorkspaceAdmission } from '../../src/main/services/workspace-vault'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { until, within } from '../helpers/hang-budget'
 
@@ -177,7 +178,12 @@ describe('registerDictationIpc', () => {
   // locked (where it should hold only `.enc` sidecars) — an F16 lock-guard parity gap. With a
   // transcriber PRESENT (so the refusal is the lock gate, not the unavailable backstop) and a
   // LOCKED workspace, it must refuse with the friendly locked copy and write nothing.
-  it('refuses on a locked vault and writes NO file under documents/ (S3)', async () => {
+  // AUD-02 (#860 L6): the second posture is an open workspace mid-lock — `isUnlocked()` is still true for the whole
+  // teardown, so only the latch (`workspaceAdmitsWork`) keeps the plaintext WAV out of documents/ then.
+  it.each<[string, WorkspaceAdmission]>([
+    ['on a locked vault', { isUnlocked: () => false }],
+    ['while a lock is under way (AUD-02 latch)', { isUnlocked: () => true, isLocking: () => true }]
+  ])('refuses %s and writes NO file under documents/ (S3)', async (_posture, workspace) => {
     const workspacePath = freshWorkspacePath()
     const { transcriber, seen } = fakeTranscriber()
     const lockedCtx = {
@@ -185,13 +191,13 @@ describe('registerDictationIpc', () => {
       paths: { workspacePath },
       transcriber,
       audit: vi.fn(),
-      workspace: { isUnlocked: () => false }
+      workspace
     } as unknown as AppContext
     registerDictationIpc(lockedCtx)
 
     await expect(
       invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
-    ).rejects.toThrow(/Workspace is locked\./)
+    ).rejects.toThrow(t('en', 'main.dictation.locked'))
     // The refusal precedes any disk write AND the transcriber dispatch.
     expect(seen).toHaveLength(0)
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
