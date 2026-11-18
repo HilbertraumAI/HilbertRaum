@@ -1099,7 +1099,10 @@ explicitly:
   nothing). So does an unlock that has to shred such a `.recovery` copy (newer than `.enc`)
   instead of rolling it forward; it records the loss at once (no notice: the workspace is already
   open), and shreds the copy only once the unlock has succeeded, so a failed unlock keeps the
-  evidence for the next. The log line and
+  evidence for the next. Until then an older build (0.1.65 or earlier) can still roll that kept
+  copy forward over `.enc` on a Kit started from more than one OS with builds of different ages:
+  like every build before #876, it checks only the header, and such a copy keeps its header. The
+  log line and
   the audit metadata name which of the three it was (`cause`: `lock`, `startup`, `recovery`). A
   workspace created where a wiped one left its marker removes it. The marker reveals only that a
   lock or a start fell back to the last snapshot, and when.
