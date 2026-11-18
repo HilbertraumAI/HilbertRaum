@@ -209,7 +209,8 @@ win:
   # signtoolOptions are read from env on the build machine:
   #   WIN_CSC_LINK              path/URL to the OV/EV .pfx (or base64) — NEVER in the repo
   #   WIN_CSC_KEY_PASSWORD      the .pfx password
-  # An EV cert (hardware token / cloud HSM) builds SmartScreen reputation fastest. The
+  # Signing lets SmartScreen build reputation for the publisher; Microsoft treats certificate
+  # types alike for this (docs/packaging.md "Code signing & notarization", #850). The
   # launcher (Start HilbertRaum.cmd) is a script and is not itself signed; the portable
   # .exe it spawns IS signed, which is what SmartScreen evaluates.
   signtoolOptions:

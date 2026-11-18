@@ -70,7 +70,7 @@ from its first public `1.0.0` release onward.
   format a newer version of the app wrote, for example on a drive where only one computer's copy
   was updated, this version no longer reads them as its own: the unlock screen says "This
   workspace was written by a newer HilbertRaum — update the app to open it. Nothing was changed.",
-  whatever password you type, and nothing on the drive is changed. A password change no longer
+  whatever password you type, and nothing of the workspace is changed. A password change no longer
   rewrites a newer version's `config/workspace.json` in the older format. And when your password is right
   but the encrypted data itself was damaged (its bytes changed, for example by a copy that was cut
   short), the unlock screen now says the data is damaged and to restore it from a backup, instead
@@ -104,7 +104,8 @@ from its first public `1.0.0` release onward.
   was lost.** If something outside HilbertRaum deleted or overwrote the open working copy of an
   encrypted workspace, the lock was refused and the workspace stayed half open until you quit:
   every screen failed with "database is not open", Lock now kept failing with advice to free
-  space, and the workspace key stayed in memory. Now the workspace locks as it was the last time
+  space, and the workspace key stayed in memory; on macOS and Linux, trying again or quitting
+  could even save an empty workspace over your encrypted one (#853). Now the workspace locks as it was the last time
   it was locked or the app was closed, the lock screen says that the changes since then are lost,
   and you can unlock again right away (#855). The lock now also recognises a working copy that was
   overwritten but whose beginning still looked like a database: before, it could save that
@@ -153,13 +154,6 @@ from its first public `1.0.0` release onward.
   endpoint moved to another port. A request waiting in the queue got 429 `busy` with a
   `Retry-After`, and a new request arriving during the stop was told the workspace was locked, or
   was let in only to be cut off. All of these now get `server_stopped` (#859).
-- **On macOS and Linux, a lock that fails because the workspace's working file disappeared no
-  longer empties your workspace.** If something outside HilbertRaum deleted the open working
-  copy of an encrypted workspace, the lock was refused correctly, but trying again, or quitting
-  the app, then saved an empty workspace over your encrypted one. Now every further lock is
-  refused, and the next start opens your workspace as it was at its last successful lock.
-  Changes made after that lock are lost, because the file that held them is gone. Windows was
-  not affected (#853).
 - **Unlock and setup errors now appear in the language the lock screen shows.** If the language
   you chose in Settings differs from your operating system's, the lock screen was already in your
   language, but a wrong password or a problem opening or creating the workspace was reported in
@@ -313,6 +307,9 @@ from its first public `1.0.0` release onward.
   have taken over from the current one, depending only on which file was copied first. Every
   document would then have needed indexing again. The app now always uses the one marked as the
   default, and otherwise reads the model list in a fixed order on every computer (#848).
+- **The suggested file name of an evidence pack no longer ends in a broken character.** A long
+  review title was cut to 60 text units, which could split an emoji or a rare character in two
+  and leave a space before the extension. It is now cut at 60 whole characters and trimmed (#839).
 
 ## [0.1.65] — 2026-11-11
 
