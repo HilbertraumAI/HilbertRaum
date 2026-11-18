@@ -13792,8 +13792,10 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
 - **`shared/manifest.ts`** — `vision` role; an optional **`mmproj` projector sub-block** (`MmprojSpec`,
   required iff `role: vision`); the top-level `download` + `mmproj.download` validation share one
   `validateDownloadSubBlock` (https-only, a real download hash equals the real file hash); optional
-  informational `input_modalities`. Unknown keys ignored ⇒ older builds treat a vision manifest as
-  `unsupported` (forward-compatible).
+  informational `input_modalities`. Unknown keys are ignored, but an unknown ROLE was not: the builds that
+  predate `vision` reject a vision manifest, so it vanishes there (the "shown as `unsupported`" claim was
+  never true). Since #847 a role a build does not know is listed as needing a newer HilbertRaum instead
+  (model-policy.md "A manifest for a newer HilbertRaum").
 - **`services/models.ts`** — vision install state = **every declared file present + verified**:
   `mmprojPath` + `manifestFiles` thread through `computeInstallState` (precedence `unsupported →
   missing → checksum_failed → installed`), the lazy `skipHash` path, and the `(path,size,mtime)`

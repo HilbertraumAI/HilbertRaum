@@ -4,10 +4,14 @@ import { totalmem } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
+  declaresUnknownRole,
   isRealSha256,
+  manifestNeedsNewerApp,
+  parseUnsupportedManifest,
   validateManifest,
   type ModelManifest,
-  type ModelRole
+  type ModelRole,
+  type UnsupportedManifest
 } from '../../shared/manifest'
 import type {
   GpuDevice,
@@ -66,10 +70,36 @@ export interface DiscoveredManifest {
   sourceFile: string
 }
 
+/** #847: a manifest for a newer HilbertRaum found on the drive (display only; see `UnsupportedManifest`). */
+export interface DiscoveredUnsupported {
+  manifest: UnsupportedManifest
+  sourceFile: string
+}
+
 export interface DiscoveryResult {
   manifests: DiscoveredManifest[]
+  /**
+   * #847: manifests for a newer HilbertRaum, listed instead of dropped. Never in `manifests`, so nothing that
+   * selects, starts, verifies or downloads a model can reach one; the Models screen lists them, the sell gate
+   * counts them as a defect. One id space with `manifests`, where a usable manifest always keeps its id
+   * (F-847-4): a same-id entry here is reported in `errors` as a duplicate instead.
+   */
+  unsupported: DiscoveredUnsupported[]
   /** One human-readable line per file that failed to parse/validate. */
   errors: string[]
+}
+
+/**
+ * #847 (a+): the app version a manifest's `min_app_version` is compared with. ONE module-level value, set
+ * once at startup from `app.getVersion()` (main/index.ts) and by the sell gate from its `--app-version`,
+ * instead of a parameter on 13 call sites, where one forgotten caller would treat a too-new manifest as
+ * usable. Until it is set the version is unknown, and a manifest naming a `min_app_version` is listed as
+ * needing a newer HilbertRaum (`manifestNeedsNewerApp` is fail-safe).
+ */
+let manifestAppVersion = ''
+
+export function setManifestAppVersion(version: string): void {
+  manifestAppVersion = version
 }
 
 /**
@@ -157,8 +187,10 @@ function extname(name: string): string {
  */
 export function discoverManifests(manifestsDir: string): DiscoveryResult {
   const manifests: DiscoveredManifest[] = []
+  const unsupported: DiscoveredUnsupported[] = []
   const errors: string[] = []
-  const seenIds = new Map<string, string>()
+  const seenIds = new Map<string, string>() // the manifests this app can use
+  const seenNewer = new Map<string, string>() // #847: the entries for a newer HilbertRaum
   const timed = perfEnabled()
   const startedAt = timed ? performance.now() : 0
   let readMs = 0
@@ -181,6 +213,25 @@ export function discoverManifests(manifestsDir: string): DiscoveryResult {
       raw = parseYaml(text)
     } catch (err) {
       errors.push(`${file}: YAML parse error — ${String(err)}`)
+      continue
+    }
+    // #847: a manifest for a newer HilbertRaum is listed, not validated (this build cannot know the rules a
+    // later release applies) and not dropped. The (a+) `min_app_version` is read first: it overrides whatever
+    // else the manifest says. Among these the first file in walk order wins; against a usable manifest of the
+    // same id it always loses (F-847-4, after the loop).
+    if (manifestNeedsNewerApp(raw, manifestAppVersion) || declaresUnknownRole(raw)) {
+      const parsed = parseUnsupportedManifest(raw)
+      if (!parsed.ok || !parsed.entry) {
+        errors.push(`${file}: ${parsed.errors.join('; ')}`)
+        continue
+      }
+      const dupOf = seenNewer.get(parsed.entry.id)
+      if (dupOf) {
+        errors.push(`${file}: duplicate id "${parsed.entry.id}" (also in ${dupOf})`)
+        continue
+      }
+      seenNewer.set(parsed.entry.id, file)
+      unsupported.push({ manifest: parsed.entry, sourceFile: file })
       continue
     }
     const result = validateManifest(raw)
@@ -206,7 +257,16 @@ export function discoverManifests(manifestsDir: string): DiscoveryResult {
       readMs: Math.round(readMs)
     })
   }
-  return { manifests, errors }
+  // #847 (F-847-4, frozen): a manifest this app can use ALWAYS keeps its id, whatever the walk order. A same-id
+  // entry for a newer HilbertRaum (e.g. a later release's file for the same model) is the duplicate, never the
+  // model's replacement: otherwise an earlier-sorting newer file would leave no usable manifest of that id (no
+  // embedder: the mock fallback) where builds up to v0.1.65 keep the model. One id space: every loser is an error.
+  const listed = unsupported.filter(({ manifest: entry, sourceFile }) => {
+    const usable = seenIds.get(entry.id)
+    if (usable) errors.push(`${sourceFile}: duplicate id "${entry.id}" (also in ${usable}, which this app can use)`)
+    return !usable
+  })
+  return { manifests, unsupported: listed, errors }
 }
 
 /**
@@ -1543,9 +1603,51 @@ export interface ModelListResult {
   manifestErrors: string[]
 }
 
+/** #847: the ids of the manifests for a newer HilbertRaum already logged this session (one line per new id). */
+const newerAppIdsLogged = new Set<string>()
+
+/**
+ * #847: the display-only `ModelInfo` of a manifest for a newer HilbertRaum. `role: 'unknown'` keeps it out of
+ * every role branch of the screen (never a fake known role: `'chat'` would make it a chat-model candidate),
+ * `state: 'unsupported'`, never recommended, no `download` (no Download button, no size to confirm), and
+ * `filesPresent` = every file it declares exists (existence only, no hash; the presence contract of the
+ * "On this drive" view, design-guidelines §15).
+ */
+function newerAppModelInfo(entry: UnsupportedManifest, rootPath: string): ModelInfo {
+  let filesPresent = entry.localPaths.length > 0
+  try {
+    for (const rel of entry.localPaths) {
+      if (!statSync(safeDrivePath(rootPath, rel), { throwIfNoEntry: false })?.isFile()) filesPresent = false
+    }
+  } catch {
+    filesPresent = false // an unreadable path reads as absent, never as a broken list
+  }
+  return {
+    id: entry.id,
+    displayName: entry.displayName,
+    family: entry.family ?? '',
+    role: 'unknown',
+    format: '',
+    runtime: '',
+    license: '',
+    sizeOnDiskGb: entry.sizeOnDiskGb ?? 0,
+    recommendedMinRamGb: 0,
+    recommendedRamGb: 0,
+    recommendedContextTokens: 0,
+    localPath: entry.localPaths[0] ?? '',
+    state: 'unsupported',
+    recommended: false,
+    startableAsMock: false,
+    insufficientRam: false,
+    needsNewerApp: true,
+    ...(entry.role ? { declaredRole: entry.role } : {}),
+    filesPresent
+  }
+}
+
 /** Discover manifests and compute the full ModelInfo[] for the Models screen. */
 export async function buildModelList(opts: BuildModelListOptions): Promise<ModelListResult> {
-  const { manifests, errors } = discoverManifests(opts.manifestsDir)
+  const { manifests, unsupported, errors } = discoverManifests(opts.manifestsDir)
   const all = manifests.map((m) => m.manifest)
   const ram = opts.machineRamGb
   // RAM-best-fit recommendation (it can never point at a RAM-gated model); the §6.5 speed
@@ -1665,6 +1767,15 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
       state === 'missing' && manifest.role === 'chat' && opts.developerMode
     const insufficientRam = manifest.recommendedMinRamGb > ram
     models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
+  }
+  // #847: the manifests for a newer HilbertRaum, after every model this build can use. Logged apart from the
+  // invalid ones (they are not broken), once per id per session rather than on every Models-screen refresh; the
+  // count only, never a name or a path.
+  for (const { manifest: entry } of unsupported) models.push(newerAppModelInfo(entry, opts.rootPath))
+  const firstSeen = unsupported.filter(({ manifest: entry }) => !newerAppIdsLogged.has(entry.id))
+  for (const { manifest: entry } of firstSeen) newerAppIdsLogged.add(entry.id)
+  if (firstSeen.length > 0) {
+    log.info('Model manifests for a newer HilbertRaum listed', { count: firstSeen.length })
   }
   // Terminal event so the bar settles to 100% even if the last throttled callback landed
   // a chunk short of the total.

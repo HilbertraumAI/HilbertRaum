@@ -5,6 +5,7 @@ import {
   matchesLibraryView,
   matchesModelSearch,
   modelVariantName,
+  newerAppRows,
   variantGroupFace,
   variantGroupOrder,
   type ModelVariantGroup
@@ -250,6 +251,34 @@ describe('matchesLibraryView (#313)', () => {
   it('"On this drive" lists a damaged model, which is repairable, and no absent one', () => {
     expect(matchesLibraryView(model('Damaged', { state: 'checksum_failed' }), 'installed')).toBe(true)
     expect(matchesLibraryView(model('Absent', { state: 'missing' }), 'installed')).toBe(false)
+  })
+})
+
+// #847: a model for a newer HilbertRaum (role 'unknown') is never a library row, a task or a family option: it is
+// listed apart, on "On this drive" only when the main process found its files (`filesPresent`).
+describe('newerAppRows — models for a newer HilbertRaum (#847)', () => {
+  const NEWER: Partial<ModelInfo> = { role: 'unknown', needsNewerApp: true, state: 'unsupported', family: 'holo' }
+  const present = model('Holo present', { ...NEWER, filesPresent: true })
+  const absent = model('Holo absent', { ...NEWER, filesPresent: false })
+  const chat = model('Plain chat', { state: 'installed', family: 'qwen3' })
+  const all = { task: 'all' as const, family: 'all', query: '' }
+
+  it('are never library rows or family options, in either view', () => {
+    for (const view of ['installed', 'browse'] as const) {
+      expect(matchesLibraryView(present, view)).toBe(false)
+      expect(availableFamilies([present, absent, chat], { activeChat: null, view, task: 'all' })).toEqual(['qwen3'])
+    }
+  })
+
+  it('"On this drive" lists the one whose files are present; Browse lists both', () => {
+    expect(newerAppRows([chat, present, absent], { view: 'installed', ...all })).toEqual([present])
+    expect(newerAppRows([chat, present, absent], { view: 'browse', ...all })).toEqual([present, absent])
+  })
+
+  it('a task or family filter hides them (they have neither); search applies as to every row', () => {
+    expect(newerAppRows([present], { view: 'browse', ...all, task: 'chat' })).toEqual([])
+    expect(newerAppRows([present], { view: 'browse', ...all, family: 'holo' })).toEqual([])
+    expect(newerAppRows([present, absent], { view: 'browse', ...all, query: 'ABSENT' })).toEqual([absent])
   })
 })
 

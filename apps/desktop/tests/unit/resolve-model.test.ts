@@ -18,6 +18,7 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 })
 
 import { resolveModelByRole } from '../../src/main/services/resolve-model'
+import { setManifestAppVersion } from '../../src/main/services/models'
 
 const ROOT = 'C:/drive'
 const onDrive = (rel: string): string => join(ROOT, rel)
@@ -89,6 +90,21 @@ describe('resolveModelByRole (M-A3)', () => {
 
   it('returns null when no manifest matches the role', () => {
     expect(resolveModelByRole(manifestsDirWith(roleManifest('qwen3-chat', 'chat')), ROOT, 'reranker')).toBeNull()
+  })
+
+  // #847 (a+): a manifest for a newer HilbertRaum is display-only. A known role whose `min_app_version` this app
+  // does not meet must never become the role's model: this build would start a model it cannot run.
+  it('never resolves a manifest for a newer HilbertRaum (#847)', () => {
+    setManifestAppVersion('1.0.0')
+    try {
+      const dir = manifestsDirWith(
+        { ...roleManifest('next-embed', 'embeddings', 512), min_app_version: '2.0.0' },
+        roleManifest('holo', 'hologram')
+      )
+      expect(resolveModelByRole(dir, ROOT, 'embeddings')).toBeNull()
+    } finally {
+      setManifestAppVersion('')
+    }
   })
 
   // PF-4 (full-audit 2026-07-10): composeServices discovers once per composition pass and

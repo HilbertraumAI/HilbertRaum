@@ -12,7 +12,7 @@
 getAppStatus(): Promise<AppStatus>
 getDriveStatus(): Promise<DriveStatus>
 runBenchmark(): Promise<BenchmarkResult>
-listModels(): Promise<ModelInfo[]>
+listModels(): Promise<ModelInfo[]>   // incl. display-only entries for a newer HilbertRaum (role 'unknown', #847)
 selectModel(modelId: string): Promise<{ activeModelId; activeEmbeddingModelId }>
 startRuntime(modelId: string): Promise<RuntimeStatus>
 stopRuntime(): Promise<void>
@@ -321,6 +321,21 @@ profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
 `shared/types.ts`. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
 resolved against the **drive root**.
+✅ **A manifest for a newer HilbertRaum (#847)** — `DiscoveryResult { manifests, unsupported, errors }`:
+a `role` this build does not know, or a `min_app_version` above the app (`setManifestAppVersion`, set once
+at startup from `app.getVersion()` and by the sell gate from `--app-version`; unset = unknown, which is
+fail-safe), routes a file to `unsupported: { manifest: UnsupportedManifest, sourceFile }[]`
+(`shared/manifest.ts`: `id`, `displayName`, `role | null`, `family | null`, `sizeOnDiskGb | null`,
+`minAppVersion | null`, `localPaths`), never to `manifests`, so no consumer of a `ModelManifest` can
+select, start, verify or download one. One id space with `manifests`, in which a usable manifest ALWAYS keeps its
+id whatever the walk order (F-847-4): a same-id newer entry is a duplicate in `errors`, not listed; among
+newer entries the first in walk order wins. `min_app_version` is exactly `MAJOR.MINOR.PATCH` (anything else
+is newer; a pre-release app is older than its release; `manifestNeedsNewerApp`).
+`buildModelList` appends one display-only `ModelInfo` per entry, after the models: `role: 'unknown'`
+(the union's one non-role member), `declaredRole?`, `needsNewerApp: true`, `state: 'unsupported'`,
+`recommended: false`, no `download`, `filesPresent` (every declared file exists; existence only). The
+sell gate reports each entry as a problem. Frozen for every later release to meet: the app-update plan's
+Appendix B.
 ✅ **`ModelManifest.files?: RequiredFileSpec[]`** (#310) — the ADDITIONAL required files of a
 weight beyond `local_path`/`sha256` (the primary — a shard set's shard 1), each
 `{ localPath, sha256, download? }`. Emitted after `local_path`/`sha256`/`download`/`mmproj` in the

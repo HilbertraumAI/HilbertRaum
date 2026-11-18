@@ -1058,6 +1058,11 @@ export const tr: UiCatalog<'tr'> = {
   'models.library.translation': 'Çeviri',
   'models.library.images': 'Görseller',
   'models.library.voice': 'Ses',
+  'models.newerApp.heading': 'Daha yeni bir HilbertRaum sürümü gerekli',
+  'models.newerApp.badge': 'Yeni sürüm gerekli',
+  'models.newerApp.hint':
+    'Bu model HilbertRaum’un daha yeni bir sürümü için. Kullanmak için bu bilgisayardaki uygulamayı ' +
+    'güncelleyin.',
   'models.library.memory': 'Gereken bellek: en az {size}',
   'models.library.clear': 'Filtreleri temizle',
   'models.library.showVariants': 'Tüm varyantları göster ({count})',

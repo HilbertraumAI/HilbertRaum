@@ -297,6 +297,13 @@ from its first public `1.0.0` release onward.
   looked like a skill you had switched off yourself. The app now records why a skill is off. A
   built-in skill that was off only because the app was too old comes back on; a skill you switched
   off stays off, and so does one you imported (#846).
+- **A model meant for a newer HilbertRaum is now listed on the AI Model screen instead of
+  disappearing.** When the drive holds a model this version of the app can't use, for example
+  after the app on another computer was updated, the model used to vanish from the list without a
+  word, even when its files were on the drive. It now shows at the end of the list under "Needs a
+  newer HilbertRaum", with a note to update the app on this computer. It can't be downloaded,
+  started or checked from here. It also shows under "On this drive" when its files are there
+  (#847).
 
 ## [0.1.65] — 2026-11-11
 

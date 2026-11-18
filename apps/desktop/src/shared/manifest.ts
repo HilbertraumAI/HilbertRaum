@@ -74,9 +74,9 @@ export interface DownloadSpec {
  * The multimodal projector sub-block for a `role: vision` model (image-understanding plan
  * §8.1). A vision model is TWO files: the language GGUF (the top-level `local_path`/`sha256`/
  * `download`) plus this CLIP/`mmproj` projector that `llama-server --mmproj` loads. Validated
- * only when present, and REQUIRED when `role: vision` (so an older build that doesn't know
- * `vision` simply treats the manifest as `unsupported` — forward-compatible, like
- * `supports_tools`). Its own `download` block lets the two-job downloader (DIST-1) fetch the
+ * only when present, and REQUIRED when `role: vision`. The builds that predate `vision` reject such a
+ * manifest, so it vanishes there; since #847 a role a build does not know is listed as needing a newer
+ * HilbertRaum instead (`parseUnsupportedManifest`). Its own `download` block lets the two-job downloader (DIST-1) fetch the
  * projector with the same atomic single-file machinery as the GGUF.
  */
 export interface MmprojSpec {
@@ -220,6 +220,38 @@ export interface ValidationResult {
   errors: string[]
 }
 
+/**
+ * #847: a manifest for a NEWER HilbertRaum, read for display only. Two ways in, both decided by
+ * `discoverManifests` before any validation: a `role` this build does not know
+ * ({@link declaresUnknownRole}), or a `min_app_version` newer than this app ({@link manifestNeedsNewerApp},
+ * the (a+) lever every later release has over this one). Only the display subset below is read — a
+ * release cannot know which of its own rules a future role or field follows, so applying them would make
+ * the file vanish — and nothing in it is ever hashed, downloaded, started or selected: discovery keeps these
+ * out of `manifests`, so every `ModelManifest` consumer stays unable to pick one by construction.
+ */
+export interface UnsupportedManifest {
+  id: string
+  displayName: string
+  /** The declared role as written (trimmed); null when it names none (possible only via `min_app_version`). */
+  role: string | null
+  family: string | null
+  sizeOnDiskGb: number | null
+  /** `min_app_version` as written, when it is a string. */
+  minAppVersion: string | null
+  /**
+   * Every drive-relative file path the manifest declares in the slots this build knows (`local_path`,
+   * `mmproj.local_path`, `files[].local_path`), each through the same escape check as a real manifest's:
+   * their existence is checked (the "On this drive" listing), so a hostile path must not reach the disk.
+   */
+  localPaths: string[]
+}
+
+export interface UnsupportedParseResult {
+  ok: boolean
+  entry?: UnsupportedManifest
+  errors: string[]
+}
+
 const ROLES: ModelRole[] = ['chat', 'embeddings', 'reranker', 'transcriber', 'vision', 'translation']
 const PROFILES: HardwareProfile[] = ['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN']
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const
@@ -351,6 +383,103 @@ function isUnsafeManifestPath(p: string): boolean {
   if (norm.startsWith('/')) return true // POSIX-absolute or a UNC `\\server\share` root
   if (/^[A-Za-z]:/.test(norm)) return true // Windows drive-letter absolute (`C:/…`)
   return norm.split('/').some((seg) => seg === '..')
+}
+
+/**
+ * #847: does this parsed manifest name a role this build does not know? Only a NON-EMPTY string outside the
+ * known roles counts; a missing, blank or non-string role stays an error in `validateManifest`, exactly as
+ * before (a typo of the field is not a newer manifest).
+ */
+export function declaresUnknownRole(raw: unknown): boolean {
+  if (!isObject(raw)) return false
+  const role = raw['role']
+  return typeof role === 'string' && role.trim() !== '' && !ROLES.includes(role.trim() as ModelRole)
+}
+
+/** A `min_app_version`: EXACTLY `MAJOR.MINOR.PATCH`, semver numbers (no leading zero), nothing before or after. */
+const MIN_APP_VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+/** The app's own version: `MAJOR.MINOR.PATCH`, an optional `-pre.release` (group 4) and an optional `+build`. */
+const APP_VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/
+
+/**
+ * #847 (a+): is this manifest for a newer HilbertRaum by its optional `min_app_version`? Read BEFORE
+ * validation, so a later release can mark ANY manifest (a new field rule, a new enum value, a model its
+ * pinned engine cannot load) as not for this build, and this build lists it instead of rejecting it.
+ * Absent (or null): false, the manifest is validated as usual. Fail-safe, unlike the skills courtesy gate,
+ * because this build cannot vouch for a manifest that names a version it cannot read: a `min_app_version`
+ * that is not exactly `MAJOR.MINOR.PATCH` (a pre-release minimum, a fourth part, a leading zero, a `v`, a
+ * number), or an app version it does not know (`''` before startup set it, a tool that passed none), counts
+ * as newer. Parts compare as numbers; a pre-release app is OLDER than its own release (`0.1.66-beta.1` does
+ * not meet `0.1.66`, semver); build metadata is ignored. FROZEN: every later release's manifests meet this.
+ */
+export function manifestNeedsNewerApp(raw: unknown, appVersion: string): boolean {
+  if (!isObject(raw)) return false
+  const min = raw['min_app_version']
+  if (min === undefined || min === null) return false
+  const need = typeof min === 'string' ? MIN_APP_VERSION_RE.exec(min) : null
+  const have = typeof appVersion === 'string' ? APP_VERSION_RE.exec(appVersion) : null
+  if (!need || !have) return true
+  for (let i = 1; i <= 3; i++) {
+    const h = Number(have[i])
+    const n = Number(need[i])
+    if (h !== n) return h < n
+  }
+  return have[4] !== undefined // the same release: a pre-release of it does not meet it
+}
+
+/**
+ * #847: read the display subset of a manifest for a newer HilbertRaum (see {@link UnsupportedManifest}).
+ * Requires `id` and `display_name` (non-empty strings, trimmed, as `validateManifest` reads them) and refuses
+ * any declared file path that is not drive-relative; every other field is ignored, whatever its value.
+ */
+export function parseUnsupportedManifest(raw: unknown): UnsupportedParseResult {
+  if (!isObject(raw)) {
+    return { ok: false, errors: ['manifest must be a YAML mapping (key: value pairs)'] }
+  }
+  const errors: string[] = []
+  const text = (snake: string): string | null => {
+    const v = raw[snake]
+    return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+  }
+  const id = text('id')
+  if (id === null) errors.push('"id" is required and must be a non-empty string')
+  const displayName = text('display_name')
+  if (displayName === null) errors.push('"display_name" is required and must be a non-empty string')
+  const localPaths: string[] = []
+  const path = (value: unknown, label: string): void => {
+    if (typeof value !== 'string' || value.trim() === '') return
+    const p = value.trim()
+    if (isUnsafeManifestPath(p)) {
+      errors.push(`"${label}" must be a drive-relative path (no leading "/", drive letter, or ".." segment)`)
+    } else {
+      localPaths.push(p)
+    }
+  }
+  path(raw['local_path'], 'local_path')
+  const mp = raw['mmproj']
+  if (isObject(mp)) path(mp['local_path'], 'mmproj.local_path')
+  const files = raw['files']
+  if (Array.isArray(files)) {
+    files.forEach((f: unknown, i: number) => {
+      if (isObject(f)) path(f['local_path'], `files[${i}].local_path`)
+    })
+  }
+  if (errors.length > 0 || id === null || displayName === null) return { ok: false, errors }
+  const size = raw['size_on_disk_gb']
+  const min = raw['min_app_version']
+  return {
+    ok: true,
+    errors: [],
+    entry: {
+      id,
+      displayName,
+      role: text('role'),
+      family: text('family'),
+      sizeOnDiskGb: typeof size === 'number' && Number.isFinite(size) && size >= 0 ? size : null,
+      minAppVersion: typeof min === 'string' ? min.trim() : null,
+      localPaths
+    }
+  }
 }
 
 export function validateManifest(raw: unknown): ValidationResult {
@@ -540,8 +669,8 @@ export function validateManifest(raw: unknown): ValidationResult {
   }
 
   // Optional multimodal projector block (image-understanding plan §8.1). Validated only when
-  // present, and REQUIRED when `role: vision`. Unknown to older builds → those treat the
-  // manifest as `unsupported` (forward-compatible), exactly like a new role.
+  // present, and REQUIRED when `role: vision`. A build that does not know the role never gets here: discovery
+  // lists such a manifest as needing a newer HilbertRaum (#847, `parseUnsupportedManifest`).
   let mmproj: MmprojSpec | undefined
   const mp = raw['mmproj']
   if (mp !== undefined) {

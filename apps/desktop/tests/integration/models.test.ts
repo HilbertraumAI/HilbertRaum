@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, utimesSync } from '
 import { join, parse } from 'node:path'
 import type { Db } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
+import { log } from '../../src/main/services/logging'
 import {
   MIN_READ_SAMPLE_MS,
   latestEffectiveRead,
@@ -38,6 +39,7 @@ import {
   selectModel,
   resolveManifestsDir,
   resolveBundledManifestsDir,
+  setManifestAppVersion,
   weightPath
 } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
@@ -1630,6 +1632,206 @@ describe('discoverManifests', () => {
     expect(on.errors).toEqual(off.errors)
     expect(off.manifests.length).toBe(2)
     expect(off.errors.length).toBe(1)
+  })
+})
+
+/** `raw` without `keys` (a manifest that omits a field, which `rawManifest`'s overrides cannot express). */
+function without(raw: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
+  const out = { ...raw }
+  for (const k of keys) delete out[k]
+  return out
+}
+
+// #847: an older app meeting a newer drive. A manifest whose role this build does not know, or (a+) whose
+// `min_app_version` is newer than this app, is listed for display in `unsupported` instead of vanishing, and never
+// reaches `manifests`, so no consumer can pick it. Frozen old-reader contract: the app-update plan's Appendix B.
+describe('discoverManifests — a manifest for a newer HilbertRaum (#847)', () => {
+  afterEach(() => setManifestAppVersion(''))
+
+  it('lists an unknown role for display only: in unsupported, never in manifests or errors', () => {
+    const dir = manifestsDirWith(
+      rawManifest({
+        id: 'holo',
+        display_name: 'Holo Model',
+        role: 'hologram',
+        family: 'holo',
+        size_on_disk_gb: 3.5,
+        local_path: 'models/holo/holo.gguf',
+        mmproj: { local_path: 'models/holo/holo-proj.gguf', sha256: 'REPLACE_WITH_REAL_HASH' }
+      })
+    )
+    const res = discoverManifests(dir)
+    expect(res.manifests).toEqual([])
+    expect(res.errors).toEqual([])
+    expect(res.unsupported.map((u) => u.manifest)).toEqual([
+      {
+        id: 'holo',
+        displayName: 'Holo Model',
+        role: 'hologram',
+        family: 'holo',
+        sizeOnDiskGb: 3.5,
+        minAppVersion: null,
+        localPaths: ['models/holo/holo.gguf', 'models/holo/holo-proj.gguf']
+      }
+    ])
+    expect(res.unsupported[0].sourceFile).toBe(join(dir, 'm0.yaml'))
+  })
+
+  // The forward tolerance release 1 freezes: a later role may use fields under rules this build applies to its own.
+  it('reads only the display fields of an unknown role: the rules for known roles do not apply to it', () => {
+    const raw = without(
+      rawManifest({
+        id: 'future-gen',
+        role: 'video',
+        speculative_decoding: 'mtp',
+        disable_prompt_cache: true,
+        recommended_profiles: ['ULTRA'],
+        license_review: { status: 'someday' }
+      }),
+      'recommended_context_tokens',
+      'format'
+    )
+    const res = discoverManifests(manifestsDirWith(raw))
+    expect(res.errors).toEqual([])
+    expect(res.unsupported.map((u) => [u.manifest.id, u.manifest.role])).toEqual([['future-gen', 'video']])
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['an unknown role with no id', without(rawManifest({ role: 'hologram' }), 'id')],
+    ['an unknown role with a blank display name', rawManifest({ role: 'hologram', display_name: '  ' })],
+    ['an unknown role whose weight path escapes the drive', rawManifest({ role: 'hologram', local_path: '../outside.gguf' })],
+    [
+      'an unknown role whose projector path is absolute',
+      rawManifest({ role: 'hologram', mmproj: { local_path: 'C:/x.gguf', sha256: 'x' } })
+    ],
+    ['no role', without(rawManifest(), 'role')],
+    ['a blank role', rawManifest({ role: '  ' })],
+    ['a role that is not a string', rawManifest({ role: 7 })],
+    ['a known role with a field its rules refuse', rawManifest({ role: 'embeddings', speculative_decoding: 'mtp' })]
+  ])('still reports %s as an error, never as unsupported', (_title, raw) => {
+    const res = discoverManifests(manifestsDirWith(raw))
+    expect(res.unsupported).toEqual([])
+    expect(res.manifests).toEqual([])
+    expect(res.errors).toHaveLength(1)
+  })
+
+  // F-847-4 (orchestrator decision, round 1): one id space, and a manifest this app can use ALWAYS keeps its id, whatever
+  // the walk order. Otherwise `a-newer.yaml` (a later release's file for the same model) beside `b-current.yaml` would
+  // leave no usable manifest: no embedder, the mock fallback, where master and v0.1.65 keep the model. Among files of one
+  // kind the first in walk order wins; every loser is a duplicate-id error, never a second entry.
+  it.each<[string, Array<[string, Record<string, unknown>]>, { manifests: string[]; unsupported: string[]; loser: string }]>([
+    ['a usable file, then a newer one', [['a.yaml', {}], ['b.yaml', { min_app_version: '9.0.0' }]], { manifests: ['a.yaml'], unsupported: [], loser: 'b.yaml' }],
+    ['a newer file, then a usable one', [['a.yaml', { min_app_version: '9.0.0' }], ['b.yaml', {}]], { manifests: ['b.yaml'], unsupported: [], loser: 'a.yaml' }],
+    ['an unknown role, then a usable file', [['a.yaml', { role: 'hologram' }], ['b.yaml', {}]], { manifests: ['b.yaml'], unsupported: [], loser: 'a.yaml' }],
+    ['two newer files', [['a.yaml', { role: 'hologram' }], ['b.yaml', { min_app_version: '9.0.0' }]], { manifests: [], unsupported: ['a.yaml'], loser: 'b.yaml' }]
+  ])('shares one id space with the models, and a usable manifest keeps its id: %s', (_title, files, expected) => {
+    setManifestAppVersion('1.0.0')
+    const dir = tempRoot('manifests')
+    for (const [name, over] of files) writeManifest(dir, name, rawManifest({ id: 'same', role: 'embeddings', ...over }))
+    const res = discoverManifests(dir)
+    expect(res.manifests.map((m) => parse(m.sourceFile).base)).toEqual(expected.manifests)
+    expect(res.unsupported.map((u) => parse(u.sourceFile).base)).toEqual(expected.unsupported)
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]).toContain(expected.loser)
+    expect(res.errors[0]).toContain('duplicate id "same"')
+  })
+
+  it('(a+) a min_app_version newer than this app lists the manifest whatever else fails; a met one is validated as usual', () => {
+    setManifestAppVersion('1.4.0')
+    const dir = manifestsDirWith(
+      without(rawManifest({ id: 'next', role: 'embeddings', min_app_version: '1.5.0', recommended_profiles: ['ULTRA'] }), 'sha256'),
+      rawManifest({ id: 'now', role: 'embeddings', min_app_version: '1.4.0' }),
+      without(rawManifest({ id: 'met-but-broken', min_app_version: '1.0.0' }), 'sha256'),
+      rawManifest({ id: 'unreadable', min_app_version: 'next year' })
+    )
+    const res = discoverManifests(dir)
+    expect(res.unsupported.map((u) => [u.manifest.id, u.manifest.role, u.manifest.minAppVersion])).toEqual([
+      ['next', 'embeddings', '1.5.0'],
+      ['unreadable', 'chat', 'next year'] // a version this build cannot read is one it cannot vouch for
+    ])
+    expect(res.manifests.map((m) => m.manifest.id)).toEqual(['now'])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]).toContain('m2.yaml')
+  })
+
+  it('(a+) a build that does not know its own version cannot vouch for a manifest that names one', () => {
+    const res = discoverManifests(manifestsDirWith(rawManifest({ id: 'next', min_app_version: '0.0.1' }), rawManifest({ id: 'plain' })))
+    expect(res.unsupported.map((u) => u.manifest.id)).toEqual(['next'])
+    expect(res.manifests.map((m) => m.manifest.id)).toEqual(['plain'])
+  })
+})
+
+describe('buildModelList — a manifest for a newer HilbertRaum (#847)', () => {
+  it('appends a display-only entry: unsupported, never recommended, nothing to download, presence by file existence', async () => {
+    const root = tempRoot('root')
+    writeDriveFile(root, 'models/holo/present.gguf', 'weight')
+    writeDriveFile(root, 'models/holo/half.gguf', 'weight')
+    const dir = manifestsDirWith(
+      rawManifest({ id: 'chat-a' }),
+      rawManifest({
+        id: 'holo-present',
+        display_name: 'Holo Present',
+        role: 'hologram',
+        family: 'holo',
+        recommendation_rank: 1000,
+        local_path: 'models/holo/present.gguf',
+        download: { url: 'https://example.test/holo.gguf', sha256: 'REPLACE_WITH_REAL_HASH', size_bytes: 6 }
+      }),
+      rawManifest({
+        id: 'holo-half',
+        role: 'hologram',
+        local_path: 'models/holo/half.gguf',
+        files: [{ local_path: 'models/holo/half-2.gguf', sha256: 'x' }]
+      }),
+      rawManifest({ id: 'holo-absent', role: 'hologram', local_path: 'models/holo/absent.gguf' }),
+      without(rawManifest({ id: 'holo-no-file', role: 'hologram' }), 'local_path')
+    )
+    const { models, manifestErrors } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      developerMode: true,
+      machineRamGb: PINNED_RAM_GB
+    })
+    expect(manifestErrors).toEqual([])
+    expect(models.map((m) => m.id)).toEqual(['chat-a', 'holo-present', 'holo-half', 'holo-absent', 'holo-no-file'])
+    expect(models[1]).toMatchObject({
+      displayName: 'Holo Present',
+      family: 'holo',
+      role: 'unknown',
+      declaredRole: 'hologram',
+      needsNewerApp: true,
+      state: 'unsupported',
+      recommended: false,
+      insufficientRam: false,
+      filesPresent: true
+    })
+    expect(models[1].download).toBeUndefined()
+    expect(models[1].startableAsMock).not.toBe(true)
+    expect(models[2].filesPresent).toBe(false) // one of its two files is missing
+    expect(models[3].filesPresent).toBe(false)
+    expect(models[4].filesPresent).toBe(false) // it declares no file: nothing is on this drive
+  })
+
+  // Round 1 (N7): one content-free line per NEWLY seen id in the session, not one per Models-screen refresh.
+  it('logs the count of entries for a newer HilbertRaum once per id per session', async () => {
+    const root = tempRoot('root')
+    const dir = manifestsDirWith(rawManifest({ id: 'log-once-a', role: 'hologram' }))
+    const info = vi.spyOn(log, 'info')
+    const lines = (): unknown[][] => info.mock.calls.filter((c) => /newer HilbertRaum/.test(String(c[0])))
+    try {
+      const list = (): Promise<unknown> => buildModelList({ manifestsDir: dir, rootPath: root, developerMode: true, machineRamGb: PINNED_RAM_GB })
+      await list()
+      await list()
+      expect(lines()).toEqual([[expect.any(String), { count: 1 }]])
+      writeManifest(dir, 'm1.yaml', rawManifest({ id: 'log-once-b', role: 'hologram' }))
+      await list()
+      expect(lines()).toEqual([
+        [expect.any(String), { count: 1 }],
+        [expect.any(String), { count: 1 }]
+      ])
+    } finally {
+      info.mockRestore()
+    }
   })
 })
 

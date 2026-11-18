@@ -94,7 +94,7 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import { resolveBundledManifestsDir, resolveManifestsDir } from './services/models'
+import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import {
@@ -302,6 +302,8 @@ function initBackend(): void {
   const audit = createAuditRecorder(() => workspace.requireDb())
   for (const warning of policyWarnings) audit('policy_warning', warning)
 
+  // #847 (a+): every manifest discovery compares `min_app_version` with this one value; set before the first.
+  setManifestAppVersion(app.getVersion())
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
   // #842: the app's own copy, never the launcher's override — the engine pins, and the OCR installer's
   // second list (per file, #841).

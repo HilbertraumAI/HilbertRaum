@@ -1235,6 +1235,10 @@ export const en = {
   'models.library.translation': 'Translation',
   'models.library.images': 'Images',
   'models.library.voice': 'Voice',
+  'models.newerApp.heading': 'Needs a newer HilbertRaum',
+  'models.newerApp.badge': 'Needs newer app',
+  'models.newerApp.hint':
+    'This model is for a newer version of HilbertRaum. Update the app on this computer to use it.',
   'models.library.memory': 'Minimum memory: {size}',
   'models.library.clear': 'Clear filters',
   'models.library.showVariants': 'Show all variants ({count})',

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse as parseYaml, stringify } from 'yaml'
 
 // Phase 18 IPC-layer tests: the downloadModel gates are enforced in the MAIN process
 // (policy ceiling ∧ allowNetwork setting ∧ license acknowledgement), the offline
@@ -23,6 +23,7 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
 import { tMain } from '../../src/main/services/i18n'
 import { DownloadManager } from '../../src/main/services/downloads'
+import { setManifestAppVersion } from '../../src/main/services/models'
 import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -169,6 +170,36 @@ describe('downloadModel gates (offline guarantee — closed gates never reach th
     await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(
       /Unknown model id/
     )
+  })
+
+  // #847: a manifest for a newer HilbertRaum is listed for display only. Its `download` block is never offered, and
+  // the main process refuses it as an unknown id: the renderer cannot ask its way past the missing button. Each
+  // manifest is otherwise complete, so only its routing keeps it out of the downloader.
+  it.each<[string, Record<string, unknown>]>([
+    ['a role this build does not know', { role: 'hologram' }],
+    ['a known role whose min_app_version this app does not meet', { role: 'chat', min_app_version: '2.0.0' }]
+  ])('refuses a model for a newer HilbertRaum as an unknown id: %s — fetch never called (#847)', async (_title, over) => {
+    const fetchSpy = vi.fn(bodyFetch(BODY))
+    const { ctx } = makeCtx({ allowNetwork: true })
+    writeFileSync(
+      join(ctx.manifestsDir as string, 'future.yaml'),
+      stringify({
+        ...parseYaml(readFileSync(join(ctx.manifestsDir as string, 'test-model.yaml'), 'utf8')),
+        id: 'future-model',
+        local_path: 'models/chat/future.gguf',
+        ...over
+      })
+    )
+    setManifestAppVersion('1.0.0')
+    try {
+      registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: fetchSpy }))
+      await expect(invoke(handlers, IPC.downloadModel, 'future-model', { licenseAccepted: true })).rejects.toThrow(
+        /Unknown model id/
+      )
+    } finally {
+      setManifestAppVersion('')
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('a manifest awaiting license review needs licenseAccepted to be exactly true', async () => {
