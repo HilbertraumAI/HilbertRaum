@@ -1013,9 +1013,13 @@ implemented in the Phase-6 docs-only close-out (see architecture.md §26).
 
 ### AEAD (encryption at rest)
 - **AES-256-GCM.** Every encryption uses a fresh random 12-byte IV; the 16-byte auth tag is stored
-  alongside the ciphertext. A wrong key or any tampering fails the GCM tag → `decrypt` throws, which
-  upstream is treated as "wrong password" (the DB is never opened with a bad key).
-- The encrypted DB file is framed as `MAGIC(8) | iv(12) | tag(16) | ciphertext` (`hilbertraum.sqlite.enc`).
+  alongside the ciphertext. A wrong key or any tampering fails the GCM tag and `decrypt` throws (the
+  DB is never opened with a bad key). Only the password check's failure reads as a wrong password. A
+  `.enc` that fails its tag after the password verified is reported as damage (`vault_damaged`,
+  #860 V5b: only changed bytes can fail it then), a decrypted file that is not a database as
+  `vault_damaged` too (#208), and an open that could not finish as `vault_open_failed` (#844).
+- The encrypted DB file is framed as `MAGIC(8) | iv(12) | tag(16) | ciphertext` (`hilbertraum.sqlite.enc`);
+  `MAGIC` is the family `HRAUMEN` plus a one-byte frame version, `1` (see "Vault format versions").
 
 ### Whole-file encryption-at-rest (no SQLCipher under `node:sqlite`)
 `node:sqlite` has no SQLCipher, so the **whole database file** is encrypted at rest, not
@@ -1198,7 +1202,10 @@ password. Four guards close this:
 - **"Vault damaged" is not "wrong password".** An unlock that passes the descriptor
   verifier and authenticates the `.enc` GCM tag but cannot `openDatabase` the decrypted
   bytes throws a typed `VaultDamagedError`, surfaced as its own
-  `{ reason: 'vault_damaged' }` result with backup/recovery copy. Structurally it cannot
+  `{ reason: 'vault_damaged' }` result with backup/recovery copy. So does a `.enc` whose tag
+  fails after the verifier passed (#860 V5b, owner decision G-3): the lock writes `.enc` by
+  temp + rename, so only bit rot, a cut-short copy or tampering can fail it then, and "Could
+  not open the workspace" gave no next step. Structurally it cannot
   be a password problem, and telling the user to retype the password (or worse, follow
   the forgotten-password advice to create a fresh workspace) destroys the evidence and
   any recovery option. Since #844 "damaged" is SQLite's own verdict on the decrypted file
@@ -1216,6 +1223,41 @@ password. Four guards close this:
   The damaged-vault unlock path now shreds the working file + sidecars before throwing
   (`openDatabase` also closes its native handle when the open fails, so the shred's
   unlink is not blocked by the app's own leaked fd).
+
+### Vault format versions (#845)
+
+The schema stamp above protects the database; the vault's own format needed the same floor,
+because builds cannot be changed after they ship and a Kit can meet a newer workspace (a
+multi-OS Kit where one OS's app was updated, a rollback). Before #845 a descriptor of a higher
+`version` that kept `dataKey` passed for v2 — it unlocked, and a password change rewrote it as
+v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer build's files.
+
+- **One verdict before any write.** A read-only check runs at startup and at the head of every
+  unlock, independent of the password: any numeric descriptor `version` above 2 (integer or not,
+  or a numeric string), an unknown `kdf.algo`, an `.enc` or any staged `*.enc.new` a recovery
+  would swap in framed `HRAUMEN` + an ASCII digit `2`–`9`, or any numeric rekey
+  journal `version` above 1 → `VaultNewerError`, reported as `workspace_newer` with the
+  same "written by a newer HilbertRaum — update the app. Nothing was changed." copy. Nothing is
+  written, shredded or renamed, the workspace stays locked, and the create flow is refused. A
+  stale verdict does not outlive its cause: while it stands, an unlock or create re-reads the disk,
+  so once the newer artifact is gone the skipped salvage runs before anything is decrypted.
+- **No downgrade.** A password change re-reads the descriptor on disk first and refuses a newer
+  (or replaced) one; the diagnostics log never persists over a newer-framed `app.log.enc` and
+  never rotates onto a newer-framed `app.1.log.enc`.
+- **No false "newer".** A foreign magic of another family (`PAIDENC1`), and `HRAUMEN` followed by
+  anything but a digit `2`–`9` (a damaged version byte), stays an "unrecognised header"; a
+  descriptor that lost its `version` but kept `dataKey` reads as unreadable (restore the
+  descriptor), not as damaged data; and every descriptor a published release wrote reads as
+  current (golden descriptors written by the v0.1.50 and v0.1.65 code,
+  `apps/desktop/tests/fixtures/vault-golden/`).
+- **Residual.** A newer verdict also skips the startup crash sweep, so a newer build's own crash
+  leftovers (its plaintext working database and `-wal`/`-shm`, its transient decrypted copies)
+  stay on the drive until a newer build starts and sweeps them. Shredding them could destroy
+  that build's unsaved data, and its formats are not this build's to judge, so the rule stays
+  "nothing written, shredded or renamed".
+- **Residual.** Builds released before this fix keep the old reading, so a future format must
+  still be designed for them; the frozen constraints are in `data-contracts.md` "Vault format
+  versions".
 
 ### Encrypted document cache (spec §3.5: "database AND document cache")
 Imports copy each file into `workspace/documents/` so the drive is self-contained. In an encrypted

@@ -7,6 +7,7 @@ import {
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
   WrongPasswordError,
+  isVaultNewerError,
   workspaceAdmitsWork
 } from '../services/workspace-vault'
 import { prepareFirstBenchmark, scheduleFirstBenchmark } from './registerBenchmarkIpc'
@@ -244,13 +245,17 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.wrongPassword')
         }
       }
-      // #208: the password VERIFIED but `.enc` did not decrypt to an openable database.
+      // #208: the password VERIFIED but `.enc` did not decrypt to an openable database (or, #860 V5b,
+      // failed its GCM tag: only changed bytes can, once the password verified).
       // This must never wear the wrong-password/openFailed copy: the reporter's vault was
       // destroyed and three releases' worth of "check your password" pointed them at the
       // troubleshooting step (create a new workspace) that would have erased the evidence.
       // instanceof PLUS the name — same bundle-duplication quirk as WrongPasswordError.
       if (err instanceof VaultDamagedError || (err instanceof Error && err.name === 'VaultDamagedError')) {
-        log.error('Workspace unlock failed: vault damaged (password verified, data unreadable)')
+        // Which damage (#860 V5b: a failed authentication, or #208: not a database) goes to the log only.
+        log.error('Workspace unlock failed: vault damaged (password verified, data unreadable)', {
+          damage: (err as VaultDamagedError).damage
+        })
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (vault damaged)')
         return {
           ok: false,
@@ -292,6 +297,18 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           reason: 'vault_recovery_blocked',
           message: tMain('main.workspace.recoveryBlocked')
         }
+      }
+      // #845: the vault's own format (its descriptor, KDF, `.enc` frame or rekey journal) was written
+      // by a NEWER build: refused before the password was checked and before anything was written. The
+      // same reason + copy as #247 (update the app; nothing was changed), with a log line naming the
+      // artifact and the version found. Name-based like the arms above (bundle-duplication quirk).
+      if (isVaultNewerError(err)) {
+        log.warn('Workspace unlock refused: the vault format was written by a newer build', {
+          what: err.what,
+          found: err.found
+        })
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
+        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
       }
       // #247: the password verified but the database was written by a NEWER build. Its own
       // reason + copy (update the app); the vault is untouched and nothing was written.
@@ -439,6 +456,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         if (err instanceof VaultBusyError || (err instanceof Error && err.name === 'VaultBusyError')) {
           return { ok: false, reason: 'refused', message: err.message }
         }
+        // Everything else, including the #845 refusals (the descriptor on disk is a newer build's, or no
+        // longer the one this session unlocked; nothing was written), reads "change failed, your current
+        // password still works": true, and the gate's "update the app to open it" would be wrong on an
+        // open workspace. The log line carries the error's own content-free message.
         log.error('Workspace password change failed', String(err))
         return {
           ok: false,

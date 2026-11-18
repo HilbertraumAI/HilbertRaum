@@ -16,6 +16,7 @@ import {
 import { open as openFileAsync, rename as renameAsync, rm as rmAsync, stat as statAsync } from 'node:fs/promises'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { tMain } from './i18n'
 import { canonicalLeafFor } from './ingestion/stored-copy-leaf'
 import { perfMark, perfMs } from './perf'
@@ -34,10 +35,19 @@ import {
   generateSalt,
   makeVerifier,
   verifyKey,
+  classifyFrameMagic,
+  isKnownKdfAlgo,
+  newerFrameError,
+  VaultNewerError,
+  type VaultNewerWhat,
   BLOB_MAGIC,
   BLOB_IV_BYTES,
   BLOB_TAG_BYTES
 } from './security/crypto'
+
+// The vault-format refusal (#845) lives beside the frame reader in security/crypto.ts (deserializeBlob throws it);
+// the vault's callers import it from here, with the other vault errors.
+export { VaultNewerError, isVaultNewerError, type VaultNewerWhat } from './security/crypto'
 
 // Workspace vault: the lock/unlock lifecycle for the encrypted workspace (spec §7.9).
 //
@@ -128,8 +138,10 @@ export class VaultLockError extends Error {
 }
 
 /**
- * Thrown by `unlockEncryptedVault` when the password is CORRECT (verifier passed, GCM tag
- * on `.enc` authenticated) but SQLite finds the decrypted bytes are not a database, or a
+ * Thrown by `unlockEncryptedVault` when the password is CORRECT (verifier passed) but `.enc`
+ * fails its GCM tag (#860 V5b: only changed bytes can fail it then — bit rot, a cut-short
+ * copy, tampering; the lock writes `.enc` by temp + rename, so it is never torn by us), or
+ * when its tag authenticated but SQLite finds the decrypted bytes are not a database, or a
  * corrupt one (#844: any other open failure is `VaultOpenFailedError`) —
  * the vault ciphertext itself is damaged (issue #208: the app had re-encrypted a
  * shred-survivor of random noise over the good `.enc`, so every layer of crypto verified
@@ -142,9 +154,18 @@ export class VaultLockError extends Error {
  * plaintext user data — stayed on disk while the workspace reported locked).
  */
 export class VaultDamagedError extends Error {
-  constructor() {
-    super('The workspace decrypted but is not a database — the vault is damaged')
+  /** Which damage (content-free, for the log; the user copy is `vault_damaged`'s either way): `.enc` failed its
+   *  authentication after the password verified (#860 V5b), or it decrypted to something SQLite calls not a database
+   *  or corrupt (#208). */
+  readonly damage: 'failed-authentication' | 'not-a-database'
+  constructor(damage: 'failed-authentication' | 'not-a-database' = 'not-a-database') {
+    super(
+      damage === 'failed-authentication'
+        ? 'The workspace data failed its authentication check after the password verified — the vault is damaged'
+        : 'The workspace decrypted but is not a database — the vault is damaged'
+    )
     this.name = 'VaultDamagedError'
+    this.damage = damage
   }
 }
 
@@ -277,28 +298,149 @@ function blobFromJson(s: SerializedBlob): EncryptedBlob {
   }
 }
 
-/** Read the descriptor, or null if there is no encrypted vault yet. */
-export function readVaultDescriptor(descriptorPath: string): VaultDescriptor | null {
-  if (!existsSync(descriptorPath)) return null
+/**
+ * The value of a `version` field as a number (#845): a finite number, or a string holding a decimal number (`"3"`,
+ * `"2.5"`); null for anything else. Shipped builds compare `version` with `>=`, which JavaScript applies to such a
+ * string and to a fraction alike, so every numeric value above a known version must count as newer, integer or not.
+ */
+function numericVersion(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string' && /^\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?\s*$/.test(v)) return Number(v)
+  return null
+}
+
+/**
+ * What `config/workspace.json` holds (#845): no file (`absent`), a file that does not parse or lacks a field this
+ * build needs (`unreadable`, e.g. a v2 without its wrapped data key), a format a NEWER build wrote (`newer`), or a
+ * descriptor this build reads (`ok`).
+ */
+export type VaultDescriptorRead =
+  | { kind: 'absent' }
+  | { kind: 'unreadable' }
+  | { kind: 'newer'; what: Extract<VaultNewerWhat, 'descriptor' | 'kdf'>; found: string | number }
+  | { kind: 'ok'; descriptor: VaultDescriptor }
+
+/**
+ * Read and classify the descriptor (#845). A numeric `version` above the highest this build knows (a number, integer
+ * or not, or a numeric string) is `newer` BEFORE any shape check: shipped builds read a v3 without `dataKey` as
+ * unreadable and one with `dataKey` as v2, and a password change then rewrote it as v2. A `version` that is a string
+ * holding no number (`"3.0.0"`) is `unreadable`: no build wrote one, and read as v1 it had a staged password change
+ * discarded. A descriptor of a known version naming a KDF this build does not know is `newer` too (its derive would
+ * fail). Anything else keeps the shape rules every shipped build applied, so a descriptor a published release wrote
+ * reads `ok` exactly as before (tests/fixtures/vault-golden).
+ */
+export function readVaultDescriptorChecked(descriptorPath: string): VaultDescriptorRead {
+  if (!existsSync(descriptorPath)) return { kind: 'absent' }
+  let raw: unknown
   try {
-    const raw = JSON.parse(readFileSync(descriptorPath, 'utf8')) as VaultDescriptor
-    if (!raw || raw.mode !== 'encrypted' || !raw.kdf || !raw.saltB64 || !raw.verifier) return null
-    // A v2 (envelope) descriptor without its wrapped data key is corrupt, not unlockable.
-    if (raw.version >= VAULT_VERSION_ENVELOPE && !raw.dataKey) return null
-    return raw
+    raw = JSON.parse(readFileSync(descriptorPath, 'utf8'))
   } catch {
-    return null
+    return { kind: 'unreadable' }
   }
+  if (!raw || typeof raw !== 'object') return { kind: 'unreadable' }
+  const d = raw as VaultDescriptor
+  const rawVersion: unknown = d.version
+  const version = numericVersion(rawVersion)
+  if (version !== null && version > VAULT_VERSION_ENVELOPE) {
+    return { kind: 'newer', what: 'descriptor', found: typeof rawVersion === 'string' ? rawVersion.slice(0, 40) : version }
+  }
+  if (typeof rawVersion === 'string' && version === null) return { kind: 'unreadable' }
+  if (d.mode !== 'encrypted' || !d.kdf || !d.saltB64 || !d.verifier) return { kind: 'unreadable' }
+  // A v2 (envelope) descriptor without its wrapped data key is corrupt, not unlockable.
+  if (d.version >= VAULT_VERSION_ENVELOPE && !d.dataKey) return { kind: 'unreadable' }
+  // So is a wrapped data key under a version that is not a v2's (missing, null, 0, 1): no build ever wrote a v1 with
+  // `dataKey`, and read as v1 the password's key opens no data, so the unlock would call the DATA damaged when only
+  // this file needs restoring (W2 review 2).
+  if (d.dataKey && !(version !== null && version >= VAULT_VERSION_ENVELOPE)) return { kind: 'unreadable' }
+  // Any `kdf.algo` this build cannot derive with (`KDF_ALGOS`) was written by a newer build.
+  const algo: unknown = d.kdf.algo
+  if (typeof algo === 'string' && !isKnownKdfAlgo(algo)) {
+    return { kind: 'newer', what: 'kdf', found: algo.slice(0, 40) }
+  }
+  return { kind: 'ok', descriptor: d }
+}
+
+/** Read the descriptor, or null if there is none this build can unlock (absent, unreadable or newer). The
+ *  back-compat face of `readVaultDescriptorChecked` for callers that only need the descriptor. */
+export function readVaultDescriptor(descriptorPath: string): VaultDescriptor | null {
+  const read = readVaultDescriptorChecked(descriptorPath)
+  return read.kind === 'ok' ? read.descriptor : null
 }
 
 /**
  * True when a descriptor FILE exists but cannot be parsed/validated. This must be kept
  * distinct from "no vault yet": a corrupt 200-byte JSON file must NOT make the app
  * report `uninitialized` and offer the create flow, which would overwrite the intact
- * `.enc` (all user data) with a fresh empty vault.
+ * `.enc` (all user data) with a fresh empty vault. A descriptor a NEWER build wrote (#845)
+ * counts too: it is a vault, just not one this build can open.
  */
 export function isDescriptorUnreadable(descriptorPath: string): boolean {
   return existsSync(descriptorPath) && readVaultDescriptor(descriptorPath) === null
+}
+
+/** The rekey journal version every shipped build writes (`RekeyJournal.version`). */
+const REKEY_JOURNAL_VERSION = 1
+
+/**
+ * The version digit of the frame at `path` when its first 8 bytes are a frame a newer build wrote (#845), else null
+ * (another frame, absent, or unreadable: then it is not judged newer, and whatever reads it next fails on it as it
+ * always did). Reads 8 bytes. Shared by the vault format verdict and the diagnostics log (`logging.ts`); the frame
+ * rules themselves live in security/crypto.ts, which stays free of file I/O.
+ */
+export function newerFrameAt(path: string): string | null {
+  if (!existsSync(path)) return null
+  try {
+    const head = Buffer.alloc(BLOB_MAGIC.length)
+    const fd = openSync(path, 'r')
+    try {
+      const got = head.subarray(0, readSync(fd, head, 0, head.length, 0))
+      return classifyFrameMagic(got) === 'newer' ? String(newerFrameError(got).found) : null
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return null
+  }
+}
+
+/** The rekey journal's `version` field as written, or undefined (no journal, or one that does not parse). */
+function rekeyJournalVersion(vaultPaths: VaultPaths): unknown {
+  const path = rekeyJournalPath(vaultPaths)
+  if (!existsSync(path)) return undefined
+  try {
+    return (JSON.parse(readFileSync(path, 'utf8')) as { version?: unknown } | null)?.version
+  } catch {
+    return undefined
+  }
+}
+
+/** The vault format verdict (#845): `ok`, or the first artifact a newer build wrote. */
+export type VaultFormatVerdict = { kind: 'ok' } | { kind: 'newer'; what: VaultNewerWhat; found: string | number }
+
+/**
+ * Is any vault artifact in a format a NEWER build wrote (#845)? Read-only, and independent of the password: the
+ * descriptor (a numeric `version` above 2, or an unknown `kdf.algo`), the rekey journal (a numeric `version` above 1,
+ * whatever the descriptor says: shipped builds roll staged files forward under any v2 descriptor, so a newer build's
+ * uncommitted stage would be swapped in under a key that exists nowhere), and the frames of `.enc` and of every staged
+ * file a recovery would swap in (`stagedRekeyFiles`: `.enc.new`, `documents/` and `images/` `*.enc.new` by scan, and
+ * the journal's entries; `HRAUMEN` + a digit 2–9, read from the first 8 bytes of each: a staged
+ * file is swapped in before any decrypt would notice). A foreign magic of another family (`PAIDENC1`) is not newer.
+ * Runs before ANY write: at the head of `WorkspaceController.init()` (the startup salvage, sweep and rekey recovery)
+ * and of `unlockEncryptedVault`.
+ */
+export function vaultFormatVerdict(vaultPaths: VaultPaths): VaultFormatVerdict {
+  const descriptor = readVaultDescriptorChecked(vaultPaths.descriptorPath)
+  if (descriptor.kind === 'newer') return { kind: 'newer', what: descriptor.what, found: descriptor.found }
+  const journal = rekeyJournalVersion(vaultPaths)
+  const journalVersion = numericVersion(journal)
+  if (journalVersion !== null && journalVersion > REKEY_JOURNAL_VERSION) {
+    return { kind: 'newer', what: 'journal', found: typeof journal === 'string' ? journal.slice(0, 40) : journalVersion }
+  }
+  for (const path of [vaultPaths.encPath, ...stagedRekeyFiles(vaultPaths)]) {
+    const found = newerFrameAt(path)
+    if (found !== null) return { kind: 'newer', what: 'frame', found }
+  }
+  return { kind: 'ok' }
 }
 
 /** Persist the descriptor atomically (write temp + fsync + rename). The rename is the
@@ -419,10 +561,28 @@ export function encryptFile(srcPath: string, destPath: string, key: Buffer): voi
 }
 
 /**
+ * Thrown by {@link decryptFile} when the frame's GCM tag does not verify under the key: a wrong key,
+ * or bytes that changed after the frame was written. The unlock decrypts `.enc` only after the
+ * password verified, so there it means damage (#860 V5b).
+ */
+export class FrameAuthError extends Error {
+  constructor(cause: unknown) {
+    super('The encrypted file failed its authentication check (wrong key, or its bytes changed)', { cause })
+    this.name = 'FrameAuthError'
+  }
+}
+
+/** instanceof PLUS the name — the production bundle can hold a second copy of this module. */
+function isFrameAuthError(err: unknown): boolean {
+  return err instanceof FrameAuthError || (err instanceof Error && err.name === 'FrameAuthError')
+}
+
+/**
  * Decrypt `srcPath` → `destPath` (atomic) with `key`. Streams; constant memory. Throws
- * on a wrong key/tamper (GCM auth failure in `final()`); on failure the partial output
+ * `FrameAuthError` on a wrong key/tamper (GCM auth failure in `final()`); on failure the partial output
  * is shredded — note that callers verify the password against the descriptor verifier
- * BEFORE decrypting, so a wrong-key decrypt of the DB never happens in normal flow.
+ * BEFORE decrypting, so a wrong-key decrypt of the DB never happens in normal flow. A frame
+ * a newer build wrote throws `VaultNewerError` before the output is opened (#845).
  */
 export function decryptFile(srcPath: string, destPath: string, key: Buffer): void {
   const tmp = `${destPath}.tmp`
@@ -432,8 +592,10 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
     const headerLen = BLOB_MAGIC.length + BLOB_IV_BYTES + BLOB_TAG_BYTES
     const header = Buffer.alloc(headerLen)
     const got = readSync(src, header, 0, headerLen, null)
+    const magic = classifyFrameMagic(header.subarray(0, got))
+    if (magic === 'newer') throw newerFrameError(header)
     if (got < headerLen) throw new Error('Encrypted blob is too short or corrupt')
-    if (!header.subarray(0, BLOB_MAGIC.length).equals(BLOB_MAGIC)) {
+    if (magic !== 'current') {
       throw new Error('Encrypted blob has an unrecognised header')
     }
     const iv = header.subarray(BLOB_MAGIC.length, BLOB_MAGIC.length + BLOB_IV_BYTES)
@@ -448,7 +610,12 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
       const pt = decipher.update(buf.subarray(0, bytes))
       if (pt.length > 0) writeSync(out, pt)
     }
-    const fin = decipher.final() // throws here on wrong key / tampered ciphertext
+    let fin: Buffer
+    try {
+      fin = decipher.final() // throws here on wrong key / tampered ciphertext
+    } catch (err) {
+      throw new FrameAuthError(err)
+    }
     if (fin.length > 0) writeSync(out, fin)
     closeSync(out)
     out = null
@@ -532,7 +699,9 @@ export async function encryptFileAsync(srcPath: string, destPath: string, key: B
  * FileHandles, yielding between chunks. Throws on a wrong key/tamper (GCM auth failure in
  * `final()`); on failure the partial output is shredded — note callers verify the password
  * against the descriptor verifier BEFORE decrypting, so a wrong-key decrypt never happens in
- * normal flow. Reads the byte-identical frame the sync path writes (and vice versa).
+ * normal flow. Reads the byte-identical frame the sync path writes (and vice versa), and
+ * throws `VaultNewerError` on a newer build's frame before the output is opened (#845). Its
+ * tag failure stays Node's own error: no caller of this twin tells it apart.
  */
 export async function decryptFileAsync(srcPath: string, destPath: string, key: Buffer): Promise<void> {
   const tmp = `${destPath}.tmp`
@@ -542,8 +711,10 @@ export async function decryptFileAsync(srcPath: string, destPath: string, key: B
     const headerLen = BLOB_MAGIC.length + BLOB_IV_BYTES + BLOB_TAG_BYTES
     const header = Buffer.alloc(headerLen)
     const { bytesRead: got } = await src.read(header, 0, headerLen, null)
+    const magic = classifyFrameMagic(header.subarray(0, got))
+    if (magic === 'newer') throw newerFrameError(header)
     if (got < headerLen) throw new Error('Encrypted blob is too short or corrupt')
-    if (!header.subarray(0, BLOB_MAGIC.length).equals(BLOB_MAGIC)) {
+    if (magic !== 'current') {
       throw new Error('Encrypted blob has an unrecognised header')
     }
     const iv = header.subarray(BLOB_MAGIC.length, BLOB_MAGIC.length + BLOB_IV_BYTES)
@@ -840,7 +1011,7 @@ export interface VaultKeyCiphertext {
 }
 
 interface RekeyJournal {
-  version: 1
+  version: typeof REKEY_JOURNAL_VERSION
   /** Absolute `<file>.new` paths the stage writes (in-store and out-of-store). */
   staged: string[]
   /** Absolute paths deleted after the commit point. */
@@ -940,9 +1111,11 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
-    if (parsed.version !== 1) return { version: 1, staged: [], remove: [], corrupt: true }
+    if (parsed.version !== REKEY_JOURNAL_VERSION) {
+      return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
+    }
     return {
-      version: 1,
+      version: REKEY_JOURNAL_VERSION,
       // Only `<file>.new` entries can be swapped; anything else would be shredded by name.
       staged: strings(parsed.staged).filter((s) => s.endsWith(REKEY_SUFFIX)),
       remove: strings(parsed.remove),
@@ -951,7 +1124,7 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
   } catch {
     // Unreadable: the directory scans still resolve the in-store classes; the file itself is
     // quarantined (never deleted) by clearRekeyJournal so its out-of-store entries are not lost.
-    return { version: 1, staged: [], remove: [], corrupt: true }
+    return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
   }
 }
 
@@ -1047,7 +1220,7 @@ export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataK
   const targets = listVaultKeyCiphertexts(vaultPaths, db)
   const stagedDb = `${vaultPaths.encPath}${REKEY_SUFFIX}`
   writeRekeyJournal(vaultPaths, {
-    version: 1,
+    version: REKEY_JOURNAL_VERSION,
     staged: [stagedDb, ...targets.filter((t) => t.action === 'rekey').map((t) => `${t.path}${REKEY_SUFFIX}`)],
     remove: targets.filter((t) => t.action === 'delete').map((t) => t.path)
   })
@@ -1311,11 +1484,18 @@ export interface UnlockedVault {
  * Unlock an encrypted vault: derive the key, verify the password against the descriptor
  * (no DB access), unwrap the data key on a v2 descriptor, decrypt `.enc` → working file,
  * and open the database. Throws `WrongPasswordError` on a bad password (the GCM verifier
- * fails, the DB is never touched). After the password verified: `VaultRecoveryBlockedError`
- * (#242), `WorkspaceNewerError` (#247), `VaultDamagedError` when SQLite finds no database or a
- * corrupt one (#208), and `VaultOpenFailedError` when the open could not finish otherwise (#844).
+ * fails, the DB is never touched). Before the password is even checked: `VaultNewerError` when a
+ * vault artifact is in a format a newer build wrote (#845). After the password verified:
+ * `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247), `VaultDamagedError` when `.enc`
+ * fails its tag (#860 V5b) or SQLite finds no database or a corrupt one (#208), and
+ * `VaultOpenFailedError` when the open could not finish otherwise (#844).
  */
 export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): UnlockedVault {
+  // #845: FIRST, before the rekey recovery, the `.recovery` roll-forward, the sidecar clean or the decrypt can write
+  // anything, and independent of the password (a newer format's verifier may differ): a vault a newer build wrote is
+  // refused as it is.
+  const verdict = vaultFormatVerdict(vaultPaths)
+  if (verdict.kind === 'newer') throw new VaultNewerError(verdict.what, verdict.found)
   const descriptor = readVaultDescriptor(vaultPaths.descriptorPath)
   if (!descriptor) {
     if (existsSync(vaultPaths.encPath)) {
@@ -1418,7 +1598,15 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
     cleanSidecars(vaultPaths.dbPath)
     const decryptT0 = performance.now()
-    decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
+    try {
+      decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
+    } catch (err) {
+      // #860 V5b: the password verified (and a v2 data key unwrapped under its own tag), so a tag failure here means
+      // the `.enc` bytes changed: damage, with the restore-from-a-backup copy, never "Could not open". (A descriptor
+      // that lost its `version` but kept `dataKey` never gets here: it reads unreadable.) Anything else (a header of
+      // another format, an I/O error) goes on as it was.
+      throw isFrameAuthError(err) ? new VaultDamagedError('failed-authentication') : err
+    }
     plaintextOnDisk = true
     perfMark('vault_unlocked', {
       kdfMs,
@@ -1623,6 +1811,9 @@ export class WorkspaceController {
    */
   private _recoveryBlocked = false
   private _newerWorkspace = false
+  /** #845: what {@link init} found a newer build wrote (the vault format verdict), or null. While set, `init()` has
+   *  written nothing, the workspace reports locked, and every unlock refuses with `VaultNewerError`. */
+  private _vaultNewer: { what: VaultNewerWhat; found: string | number } | null = null
   /**
    * AUD-02 — armed by {@link beginLock} as the FIRST act of the interactive lock path, before
    * any await, and read by {@link workspaceAdmitsWork}. See that function for why `isUnlocked()`
@@ -1721,7 +1912,8 @@ export class WorkspaceController {
 
   /**
    * A vault exists on disk when there is a valid encrypted descriptor, OR the encrypted
-   * database itself is present, OR a descriptor file exists but is unreadable (corrupt).
+   * database itself is present, OR a descriptor file exists but is unreadable (corrupt, or
+   * a newer build's), OR startup found any other artifact a newer build wrote (#845).
    * In every one of those cases the create flow must be refused — it would overwrite
    * the user's data with an empty vault.
    */
@@ -1729,7 +1921,8 @@ export class WorkspaceController {
     return (
       this.descriptor?.mode === 'encrypted' ||
       existsSync(this.vaultPaths.encPath) ||
-      isDescriptorUnreadable(this.vaultPaths.descriptorPath)
+      isDescriptorUnreadable(this.vaultPaths.descriptorPath) ||
+      this._vaultNewer !== null
     )
   }
 
@@ -1747,6 +1940,14 @@ export class WorkspaceController {
    * descriptor → open plaintext if permitted (dev), else UNINITIALIZED (await onboarding).
    */
   init(): void {
+    // #845: FIRST, before anything below can rename, shred or roll forward a file: a vault artifact in a format a
+    // NEWER build wrote (the descriptor, its KDF, the `.enc` and staged frames, the rekey journal) leaves the whole
+    // workspace as it is. It stays locked, the create flow is refused, and every unlock answers "update the app".
+    // Every per-start flag is re-decided from the disk first: unlock() re-runs init(), and a flag a previous run set
+    // (a blocked salvage, #242) must not outlive it, or it would answer instead of the newer format (W2 review 2).
+    this._recoveryBlocked = false
+    this._newerWorkspace = false
+    if (this.readFormat()) return
     if (this.descriptor?.mode === 'encrypted') {
       // Crash recovery: an encrypted vault must have NO plaintext working file at rest.
       // If a previous run was killed before lock-on-quit ran, shred the leftover so the
@@ -1792,6 +1993,24 @@ export class WorkspaceController {
     return this._newerWorkspace
   }
 
+  /**
+   * #845: (re-)read the descriptor and judge the vault format: true while an artifact a newer build wrote is on disk.
+   * Startup runs it first; `unlock()` and `create()` run it again while a newer verdict stands, because the newer
+   * artifact may be gone by then (the newer copy rolled back, a backup restored) and a stale verdict would skip
+   * startup's salvage on an unlock, or keep refusing a create.
+   */
+  private readFormat(): boolean {
+    this.descriptor = readVaultDescriptor(this.vaultPaths.descriptorPath)
+    const verdict = vaultFormatVerdict(this.vaultPaths)
+    this._vaultNewer = verdict.kind === 'newer' ? { what: verdict.what, found: verdict.found } : null
+    return this._vaultNewer !== null
+  }
+
+  /** #845: what startup found a newer build wrote in the vault's own format (left untouched), or null. */
+  newerVaultFormat(): { what: VaultNewerWhat; found: string | number } | null {
+    return this._vaultNewer
+  }
+
   getState(): WorkspaceStateInfo {
     const state = this.isUnlocked() ? 'unlocked' : this.vaultExistsOnDisk() ? 'locked' : 'uninitialized'
     return {
@@ -1812,7 +2031,10 @@ export class WorkspaceController {
     if (this.isUnlocked()) return this.getState()
     // #242: a blocked salvage is retried here — the hold may have cleared since init(). Still
     // blocked → refuse: unlockEncryptedVault would decrypt the stale `.enc` over the fresh file.
-    if (this._recoveryBlocked) {
+    // #845: likewise a newer-format verdict: startup skipped the salvage, sweep and rekey recovery
+    // for it, so when the newer artifact is gone they run now, before anything is decrypted (still
+    // newer → init() writes nothing and unlockEncryptedVault refuses).
+    if (this._recoveryBlocked || this._vaultNewer) {
       this.init()
       if (this._recoveryBlocked) throw new VaultRecoveryBlockedError()
     }
@@ -1832,6 +2054,7 @@ export class WorkspaceController {
   /** First-run create. `encrypted` builds a vault; `plaintext_dev` is gated by policy. */
   create(password: string, mode: WorkspaceMode): WorkspaceStateInfo {
     if (this.isUnlocked()) throw new Error('Workspace is already initialized.')
+    if (this._vaultNewer) this.readFormat() // #845: re-judge a newer verdict startup left (see readFormat)
     if (this.vaultExistsOnDisk()) {
       // Reachable when a caller invokes createWorkspace while state is `locked`, or when
       // the descriptor is corrupt. Creating would wipe the existing `.enc` — refuse.
@@ -1901,6 +2124,24 @@ export class WorkspaceController {
       throw new VaultBusyError(
         'Documents are still being imported or re-indexed. Wait for that to finish, then try again.'
       )
+    }
+    // #845 belt: the unlock refused any newer format, so the descriptor in memory is one this build knows. The one on
+    // disk is re-read before anything is derived or written: a newer build (another OS's app on a shared Kit) may
+    // have rewritten it since, and a re-wrap would replace it with a v2 and drop whatever its format added. One that
+    // is not the descriptor this session unlocked is refused too: re-wrapping the data key over it would leave the
+    // vault under a descriptor nobody chose.
+    const onDisk = readVaultDescriptorChecked(this.vaultPaths.descriptorPath)
+    if (onDisk.kind === 'newer') throw new VaultNewerError(onDisk.what, onDisk.found)
+    if (onDisk.kind !== 'ok' || !isDeepStrictEqual(onDisk.descriptor, JSON.parse(JSON.stringify(this.descriptor)))) {
+      throw new Error(
+        'Refusing to change the password: the workspace descriptor on disk is not the one this session unlocked.'
+      )
+    }
+    if ((numericVersion(this.descriptor.version) ?? 0) > VAULT_VERSION_ENVELOPE) {
+      // Unreachable today: the descriptor in memory equals the one just re-read, which would have been refused as
+      // newer above. Kept as the last check before a re-wrap writes a v2, in case either check changes. No test can
+      // reach it without reaching into the controller.
+      throw new VaultNewerError('descriptor', this.descriptor.version)
     }
     // Verify the CURRENT password against the existing verifier before touching anything.
     const salt = Buffer.from(this.descriptor.saltB64, 'base64')

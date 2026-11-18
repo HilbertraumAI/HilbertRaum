@@ -21,7 +21,15 @@ import { argon2id } from '@noble/hashes/argon2.js'
 // earlier default unlocks unchanged: the descriptor records the `algo` + params, and
 // `deriveKey` dispatches on them. No on-disk format change.
 
-export type KdfAlgo = 'scrypt' | 'argon2id'
+/** The KDF algorithms `deriveKey` can derive with: the one list the type, the dispatch and the vault's format check
+ *  (a descriptor naming any other `kdf.algo` was written by a newer build, #845) all come from. */
+export const KDF_ALGOS = ['scrypt', 'argon2id'] as const
+export type KdfAlgo = (typeof KDF_ALGOS)[number]
+
+/** True when `algo` is one of {@link KDF_ALGOS}. */
+export function isKnownKdfAlgo(algo: unknown): algo is KdfAlgo {
+  return (KDF_ALGOS as readonly unknown[]).includes(algo)
+}
 
 /**
  * Recorded KDF parameters — persisted in the vault descriptor so unlock matches encrypt.
@@ -123,6 +131,7 @@ function validateKdfBounds(params: KdfParams): void {
  * same password + salt + params always yield the same key (so unlock matches encrypt).
  */
 export function deriveKey(password: string, salt: Buffer, params: KdfParams = DEFAULT_KDF): Buffer {
+  if (!isKnownKdfAlgo(params.algo)) throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)
   if (params.algo === 'scrypt') {
     if (params.N == null || params.r == null || params.p == null) {
       throw new Error('scrypt parameters (N, r, p) are required')
@@ -154,6 +163,7 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
     })
     return Buffer.from(out)
   }
+  // Unreachable: the check at the top admits only KDF_ALGOS, and each has its branch above.
   throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)
 }
 
@@ -175,7 +185,8 @@ export function encrypt(key: Buffer, plaintext: Buffer): EncryptedBlob {
 
 /**
  * AES-256-GCM decrypt. Throws if the key is wrong or the ciphertext/tag was tampered
- * with (GCM authentication failure) — callers treat that as "wrong password".
+ * with (GCM authentication failure). Only the password check (`verifyKey`) reads that as a
+ * wrong password; past it, the unlock reads a tag failure as damage (#860 V5b).
  */
 export function decrypt(key: Buffer, blob: EncryptedBlob): Buffer {
   const decipher = createDecipheriv('aes-256-gcm', key, blob.iv)
@@ -183,15 +194,67 @@ export function decrypt(key: Buffer, blob: EncryptedBlob): Buffer {
   return Buffer.concat([decipher.update(blob.ciphertext), decipher.final()])
 }
 
+// ---- Vault format versions (#845) -------------------------------------------------
+
+/** Which vault artifact a newer build wrote: the descriptor's `version`, its KDF, an encrypted frame, or the
+ *  password-change journal. */
+export type VaultNewerWhat = 'descriptor' | 'kdf' | 'frame' | 'journal'
+
+/**
+ * Thrown when a vault artifact was written by a NEWER build than this one (#845): a descriptor `version` above the
+ * highest this build knows, a KDF it does not know, an encrypted frame of this family with a higher version byte, or
+ * a password-change journal of a higher version. Thrown BEFORE anything is written, so nothing was changed.
+ * Content-free (an artifact name and a version, never a path): the IPC layer maps it to the `workspace_newer` reason
+ * and copy, and logs `what` and `found`.
+ */
+export class VaultNewerError extends Error {
+  constructor(
+    readonly what: VaultNewerWhat,
+    readonly found: string | number
+  ) {
+    super(`The workspace ${what} was written by a newer HilbertRaum (found ${String(found)}); nothing was changed`)
+    this.name = 'VaultNewerError'
+  }
+}
+
+/** instanceof PLUS the name — the production bundle can hold a second copy of this module. */
+export function isVaultNewerError(err: unknown): err is VaultNewerError {
+  return err instanceof VaultNewerError || (err instanceof Error && err.name === 'VaultNewerError')
+}
+
 // ---- Framed serialization (for the encrypted DB file on disk) -------------------
 
-const MAGIC = Buffer.from('HRAUMEN1') // 8 bytes: format magic + version
+// 8 bytes: the 7-byte format family `HRAUMEN` and a 1-byte frame version, the ASCII digit `1` (later versions:
+// `2`–`9`). Every shipped build writes and reads only `HRAUMEN1`; builds before #845 compare all 8 bytes, so they
+// read any other version as an unrecognised header.
+const MAGIC = Buffer.from('HRAUMEN1')
+const MAGIC_FAMILY_BYTES = 7
 
 /** Frame layout constants, exported for the STREAMING file crypto in workspace-vault.ts
  *  (which must read/write the exact same `MAGIC | iv | tag | ciphertext` format). */
 export const BLOB_MAGIC: Buffer = MAGIC
 export const BLOB_IV_BYTES = IV_BYTES
 export const BLOB_TAG_BYTES = TAG_BYTES
+
+/**
+ * What the first bytes of an encrypted frame say (#845): `current` (`HRAUMEN1`, the frame this build reads), `newer`
+ * (`HRAUMEN` + an ASCII digit 2–9: written by a newer build), or `foreign` (anything else, including fewer than 8
+ * bytes, `HRAUMEN` + any other byte, `PAIDENC1` from before the 0.1.10 rebrand, or no format at all).
+ */
+export function classifyFrameMagic(head: Buffer): 'current' | 'newer' | 'foreign' {
+  if (head.length < MAGIC.length) return 'foreign'
+  if (head.subarray(0, MAGIC.length).equals(MAGIC)) return 'current'
+  if (!head.subarray(0, MAGIC_FAMILY_BYTES).equals(MAGIC.subarray(0, MAGIC_FAMILY_BYTES))) return 'foreign'
+  // Only the ASCII digits 2–9 are later frame versions. Any other byte here (`0`, a letter, a control byte) is one
+  // flipped bit or so away from `1`: damage, which must not read as "update the app" forever (W2 review 2).
+  const v = head[MAGIC_FAMILY_BYTES]
+  return v >= 0x32 && v <= 0x39 ? 'newer' : 'foreign'
+}
+
+/** The `VaultNewerError` for a frame `classifyFrameMagic` called `newer`: `found` is its version digit (`'2'`). */
+export function newerFrameError(head: Buffer): VaultNewerError {
+  return new VaultNewerError('frame', String.fromCharCode(head[MAGIC_FAMILY_BYTES]))
+}
 
 /**
  * Serialize an encrypted blob to a single self-describing buffer:
@@ -201,13 +264,16 @@ export function serializeBlob(blob: EncryptedBlob): Buffer {
   return Buffer.concat([MAGIC, blob.iv, blob.tag, blob.ciphertext])
 }
 
-/** Parse a buffer produced by `serializeBlob`. Throws on a bad/short/foreign header. */
+/** Parse a buffer produced by `serializeBlob`. Throws on a bad/short/foreign header, and `VaultNewerError` on a
+ *  frame a newer build wrote (checked first: a newer layout need not be as long as this build's header). */
 export function deserializeBlob(buf: Buffer): EncryptedBlob {
   const headerLen = MAGIC.length + IV_BYTES + TAG_BYTES
+  const magic = classifyFrameMagic(buf)
+  if (magic === 'newer') throw newerFrameError(buf)
   if (buf.length < headerLen) {
     throw new Error('Encrypted blob is too short or corrupt')
   }
-  if (!buf.subarray(0, MAGIC.length).equals(MAGIC)) {
+  if (magic !== 'current') {
     throw new Error('Encrypted blob has an unrecognised header')
   }
   const iv = buf.subarray(MAGIC.length, MAGIC.length + IV_BYTES)

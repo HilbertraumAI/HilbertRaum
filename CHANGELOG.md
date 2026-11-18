@@ -65,6 +65,16 @@ from its first public `1.0.0` release onward.
   Copy report on the Performance screen copy the report in your language, then a line "--- English ---", then
   the same report in English, so the people helping you can read it. In English and German you
   get one report, as before (#812).
+- **An encrypted workspace written by a newer HilbertRaum is left untouched.** If the workspace's
+  own files (`config/workspace.json`, the encrypted data, an interrupted password change) are in a
+  format a newer version of the app wrote, for example on a drive where only one computer's copy
+  was updated, this version no longer reads them as its own: the unlock screen says "This
+  workspace was written by a newer HilbertRaum — update the app to open it. Nothing was changed.",
+  whatever password you type, and nothing on the drive is changed. A password change no longer
+  rewrites a newer version's `config/workspace.json` in the older format. And when your password is right
+  but the encrypted data itself was damaged (its bytes changed, for example by a copy that was cut
+  short), the unlock screen now says the data is damaged and to restore it from a backup, instead
+  of "Could not open the workspace" (#845).
 
 ### Fixed
 

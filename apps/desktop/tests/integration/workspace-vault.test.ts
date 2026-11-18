@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, utimesSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync, utimesSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -37,10 +37,14 @@ import {
   ENCRYPTION_REQUIRED,
   FAST_KDF,
   backdate,
+  damagedVault,
   failedLockState,
   freshVaultPaths,
   lockedVault,
-  unlockedController
+  tagFailingVault,
+  thrownBy,
+  unlockedController,
+  type FreshVaultPaths
 } from '../helpers/vault-fixtures'
 
 afterEach(() => {
@@ -221,6 +225,27 @@ describe('encrypted vault lifecycle', () => {
     opened.db.close()
   })
 
+  // #860 V5b: past the verifier, a tag failure is damage too, and the error says which damage it is (its message
+  // reaches only the log; the user copy is `vault_damaged`'s either way), never that the data decrypted. (A descriptor
+  // that lost its `version` but kept `dataKey` reads as unreadable instead, workspace-vault-format-guard.test.ts:
+  // only the descriptor needs restoring.)
+  it.each<[string, (vp: FreshVaultPaths) => void, RegExp]>([
+    ['an .enc that fails its tag', (vp) => void tagFailingVault(vp), /failed its authentication check/],
+    ['an .enc that decrypts to noise (#208)', (vp) => void damagedVault(vp, 'pw', 64 * 1024), /not a database/]
+  ])('a verified password over damaged data throws VaultDamagedError naming the damage: %s', (_case, damage, message) => {
+    const vp = lockedVault('vault', 'pw')
+    damage(vp)
+    let thrown: unknown
+    try {
+      unlockEncryptedVault(vp, 'pw')
+    } catch (err) {
+      thrown = err
+    }
+    expect((thrown as Error | undefined)?.name).toBe('VaultDamagedError')
+    expect((thrown as Error).message).toMatch(message)
+    expect(existsSync(vp.dbPath)).toBe(false)
+  })
+
   it('a corrupt descriptor with an intact .enc gives a restore hint, not "no workspace"', () => {
     const vp = lockedVault('vault', 'pw')
     writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
@@ -273,13 +298,32 @@ describe('streaming file crypto (M5)', () => {
     expect(existsSync(`${out}.tmp`)).toBe(false) // the partial output was shredded
   })
 
-  // A frame of a format this build does not write (a future version, #845) is refused by name
-  // before any decrypt, by both readers. Past the magic check its next 28 bytes would be taken as
-  // `iv | tag`, and only the GCM tag failure would stop it, under a misleading message.
-  it('a frame with a foreign magic (a future format) is refused by name before any decrypt, by the sync and the async reader', async () => {
+  // A frame of a format this build does not write is refused by name before any decrypt, by both
+  // readers. Past the magic check its next 28 bytes would be taken as `iv | tag`, and only the GCM
+  // tag failure would stop it, under a misleading message. A frame a NEWER build wrote (`HRAUMEN` +
+  // a higher version byte) is refused as newer (#845); any other magic stays "unrecognised".
+  it('a frame a newer build wrote (HRAUMEN2) is refused as newer before any decrypt, by the sync and the async reader (#845)', async () => {
     const enc = tmpFile('future.enc', Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(12 + 16 + 64)]))
     const out = `${enc}.plain`
+    expect(thrownBy(() => decryptFile(enc, out, randomBytes(32)))).toEqual({
+      name: 'VaultNewerError',
+      what: 'frame',
+      found: '2'
+    })
+    await expect(decryptFileAsync(enc, out, randomBytes(32))).rejects.toMatchObject({
+      name: 'VaultNewerError',
+      what: 'frame',
+      found: '2'
+    })
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(`${out}.tmp`)).toBe(false)
+  })
+
+  it('a frame of another format (PAIDENC1, before 0.1.10) is refused as unrecognised, not newer, by the sync and the async reader', async () => {
+    const enc = tmpFile('older.enc', Buffer.concat([Buffer.from('PAIDENC1'), randomBytes(12 + 16 + 64)]))
+    const out = `${enc}.plain`
     expect(() => decryptFile(enc, out, randomBytes(32))).toThrow(/unrecognised header/)
+    expect(thrownBy(() => decryptFile(enc, out, randomBytes(32))).name).toBe('Error')
     await expect(decryptFileAsync(enc, out, randomBytes(32))).rejects.toThrow(/unrecognised header/)
     expect(existsSync(out)).toBe(false)
     expect(existsSync(`${out}.tmp`)).toBe(false)
@@ -380,6 +424,33 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
     // front of the user — one click away from wiping the intact .enc.
     expect(ctl.getState().state).toBe('locked')
     // init() must not have opened a plaintext DB over the vault either (dev policy).
+    expect(ctl.isUnlocked()).toBe(false)
+  })
+
+  // #860 V4: the row above has `.enc` on disk, which alone keeps the create flow away. Without it the corrupt
+  // descriptor is the only sign of a vault, and the stored documents need the wrapped data key only it holds: a
+  // create would replace it with a fresh vault's.
+  it.each<[string, (vp: FreshVaultPaths) => void]>([
+    ['.enc present', () => {}],
+    [
+      '.enc gone, an encrypted document left in documents/',
+      (vp) => {
+        rmSync(vp.encPath)
+        const docs = join(dirname(vp.dbPath), 'documents')
+        mkdirSync(docs, { recursive: true })
+        writeFileSync(join(docs, 'doc.txt.enc'), randomBytes(64))
+      }
+    ]
+  ])('a corrupt descriptor keeps the create flow away (%s)', (_case, arrange) => {
+    const vp = lockedVault('vault', 'pw')
+    arrange(vp)
+    writeFileSync(vp.descriptorPath, '{ corrupted-not-json', 'utf8')
+    const descriptor = readFileSync(vp.descriptorPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.getState().state).toBe('locked')
+    expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+    expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
     expect(ctl.isUnlocked()).toBe(false)
   })
 
