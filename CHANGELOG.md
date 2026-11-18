@@ -292,6 +292,11 @@ from its first public `1.0.0` release onward.
   retrieval settings that no screen shows are kept within fixed limits as well: a negative or
   huge number of excerpts is brought into range, and NaN or infinity, which used to be stored as
   an empty value, is no longer stored (#868).
+- **A built-in skill that needed a newer HilbertRaum switches itself on once you update.** The
+  app kept such a skill off, as it should, but nothing turned it back on after the update, so it
+  looked like a skill you had switched off yourself. The app now records why a skill is off. A
+  built-in skill that was off only because the app was too old comes back on; a skill you switched
+  off stays off, and so does one you imported (#846).
 
 ## [0.1.65] — 2026-11-11
 

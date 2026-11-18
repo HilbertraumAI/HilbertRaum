@@ -16,6 +16,7 @@
 import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Db } from '../db'
+import { log } from '../logging'
 import {
   SKILL_ID_RE,
   skillNeedsNewerApp,
@@ -50,6 +51,18 @@ export interface SkillRecord {
   updatedAt: string
 }
 
+/**
+ * Why a skill row is disabled (`skills.disabled_reason`, #846). Main-side only: never in `SkillRecord` /
+ * `SkillInfo`. The reconcile ACTS on `'min_app_version'` alone (an app skill comes back on once this build
+ * satisfies it); every other value, including one only a newer build knows, means "leave it alone". The value
+ * is meaningful only while `enabled = 0`: an older build's writes can leave it stale on an enabled row.
+ *   'user'            the user switched it off (the Settings toggle).
+ *   'min_app_version' the app was too old for it (the reconcile insert of an app skill, the import gate).
+ *   'duplicate'       DS12: a same-id sibling is the active one.
+ *   'unconfirmed'     DS19: a user drop-in, which had no import confirmation.
+ */
+export type SkillDisabledReason = 'user' | 'min_app_version' | 'duplicate' | 'unconfirmed'
+
 /** One validated skill found on disk during discovery (pre-reconcile). */
 export interface DiscoveredSkill {
   source: SkillSource
@@ -78,6 +91,8 @@ export interface ReconcileResult {
   inserted: number
   updated: number
   markedUnavailable: number
+  /** #846: app skills switched back on because this build now satisfies their `minAppVersion`. */
+  reenabled: number
   /** Total skills present on disk after reconcile. */
   present: number
   errors: string[]
@@ -115,6 +130,8 @@ interface SkillRow {
   unavailable_at: string | null
   installed_at: string
   updated_at: string
+  /** #846. A plain string: a newer build may write a value this one does not know. */
+  disabled_reason: string | null
 }
 
 function rowToRecord(r: SkillRow): SkillRecord {
@@ -232,8 +249,11 @@ export function discoverSkillsInDir(
  * EXISTING row's derived fields while PRESERVING its user state (enabled, warning_ack) and
  * clearing any stale unavailable flag. Any DB row whose folder is gone is MARKED UNAVAILABLE — the
  * row is left in place (a transiently-unmounted drive must not lose the user's enable choice or
- * the conversations/messages references), never blind-deleted. Idempotent: a second run over the
- * same disk changes nothing observable.
+ * the conversations/messages references), never blind-deleted. The one exception to "preserve
+ * enabled" (#846): an app skill the §6.5 version gate kept off is switched back on once this build
+ * satisfies it (`disabled_reason = 'min_app_version'`, or inferred for a row an older build wrote);
+ * a skill off for any other reason stays off. Idempotent: a second run over the same disk changes
+ * nothing observable.
  */
 export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult {
   const now = (opts.now ?? (() => new Date().toISOString()))()
@@ -260,6 +280,9 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
   const present = new Set<string>()
   let inserted = 0
   let updated = 0
+  let reenabled = 0
+  const appVersion = opts.appVersion ?? ''
+  const knownAppVersion = SKILL_SEMVER_CORE_RE.test(appVersion.trim())
 
   const selectStmt = db.prepare('SELECT * FROM skills WHERE install_id = ?')
   for (const d of discovered) {
@@ -272,14 +295,19 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
       // New discovery. A drop-in had no import-time permission confirmation, so user skills
       // install DISABLED (DS19); app skills are trusted product content and install enabled —
       // UNLESS the skill declares a newer minAppVersion than this app (§6.5), in which case it is
-      // listed but kept DISABLED until the app is updated.
-      const needsNewerApp = skillNeedsNewerApp(d.manifest.compatibility.minAppVersion, opts.appVersion ?? '')
+      // listed but kept DISABLED until the app is updated (the re-enable below, #846).
+      // #846: the reason is recorded with the decision, so the re-enable below can tell the gate's "off"
+      // from the user's. A drop-in is 'unconfirmed' first: even once the app is new enough it still needs
+      // the user's confirmation.
+      const needsNewerApp = skillNeedsNewerApp(d.manifest.compatibility.minAppVersion, appVersion)
       const enabled = d.source === 'app' && !needsNewerApp ? 1 : 0
+      const disabledReason: SkillDisabledReason | null =
+        d.source === 'user' ? 'unconfirmed' : needsNewerApp ? 'min_app_version' : null
       const warningAck = d.source === 'app' ? 1 : 0
       db.prepare(
         `INSERT INTO skills (install_id, id, title, version, kind, source, path, enabled,
-           warning_ack, trusted_level, manifest_json, unavailable_at, installed_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+           warning_ack, trusted_level, manifest_json, unavailable_at, installed_at, updated_at, disabled_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`
       ).run(
         installId,
         d.manifest.id,
@@ -293,15 +321,18 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
         d.source,
         manifestJson,
         now,
-        now
+        now,
+        disabledReason
       )
       inserted++
       continue
     }
 
     // Existing row: re-derive cached fields from disk, but PRESERVE user state (enabled,
-    // warning_ack, installed_at). Only write — and bump updated_at — when something actually
-    // changed (incl. clearing a stale unavailable flag), so reconcile stays idempotent.
+    // warning_ack, installed_at, disabled_reason). Only write — and bump updated_at — when something
+    // actually changed (incl. clearing a stale unavailable flag), so reconcile stays idempotent.
+    // #846: the version-gate verdict is read BEFORE that write moves updated_at (the inference reads it).
+    const gateReason = versionGateReason(existing, d.source)
     const changed =
       existing.title !== d.manifest.title ||
       existing.version !== d.manifest.version ||
@@ -329,6 +360,18 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
       )
       updated++
     }
+
+    // #846: an app skill the version gate kept off comes back on once this build satisfies it. Only on a
+    // KNOWN app version: `skillNeedsNewerApp` reads '' (or junk) as compatible, which must not count here.
+    if (gateReason !== null) {
+      if (knownAppVersion && !skillNeedsNewerApp(d.manifest.compatibility.minAppVersion, appVersion)) {
+        if (setSkillEnabled(db, installId, true, now)) reenabled++
+      } else if (gateReason === 'inferred') {
+        // Record what was inferred while its evidence (installed_at = updated_at) still holds: the next
+        // manifest change moves updated_at. No updated_at bump: nothing the user can see changed.
+        db.prepare("UPDATE skills SET disabled_reason = 'min_app_version' WHERE install_id = ?").run(installId)
+      }
+    }
   }
 
   // Anything in the DB that disk no longer has → mark unavailable (never delete).
@@ -344,7 +387,33 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
   // could leave two AVAILABLE rows of one declared id enabled at once. Collapse to one here.
   enforceOneActivePerId(db, now)
 
-  return { inserted, updated, markedUnavailable, present: present.size, errors, errorCodes }
+  // #846 (G-13): a log line with the count, no audit event (reconcile inserts are not audited either).
+  // Content-free: the count only, never an id or a title.
+  if (reenabled > 0) {
+    log.info('Skills re-enabled: this app now meets their minimum version', { count: reenabled })
+  }
+
+  return { inserted, updated, markedUnavailable, reenabled, present: present.size, errors, errorCodes }
+}
+
+/** The leading MAJOR.MINOR.PATCH the §6.5 gate compares (`skillNeedsNewerApp`); anything else is an unknown version. */
+const SKILL_SEMVER_CORE_RE = /^\d+\.\d+\.\d+/
+
+/**
+ * #846: is this existing row one the version gate switched off? `'recorded'` when its reason says so;
+ * `'inferred'` for a row a build without the column wrote: an app row is inserted disabled ONLY by the gate,
+ * the insert sets `installed_at = updated_at` from one clock, and every later write moves `updated_at`. The one
+ * writer that reuses the reconcile's clock, the DS12 safety net, never disables an app row (there is one
+ * available app row per id, and it wins); every other disable (the toggle, the enable IPC's sibling disable)
+ * takes a fresh clock. So "app, off, no reason, never touched since" can only be the gate's insert. A row an
+ * older build touched again (updated or marked unavailable) is not inferred and stays off: fail-safe. null
+ * otherwise, including any reason this build does not know.
+ */
+function versionGateReason(row: SkillRow, source: SkillSource): 'recorded' | 'inferred' | null {
+  if (source !== 'app' || row.source !== 'app' || row.enabled !== 0) return null
+  if (row.disabled_reason === 'min_app_version') return 'recorded'
+  if (row.disabled_reason === null && row.installed_at === row.updated_at) return 'inferred'
+  return null
 }
 
 /** Age gate for the SKA-36 temp-dir sweep: only dirs this stale are certainly not a live import. */
@@ -434,7 +503,7 @@ function enforceOneActivePerId(db: Db, now: string): number {
         (a.install_id < b.install_id ? -1 : 1)
     )
     for (const loser of list.slice(1)) {
-      if (setSkillEnabled(db, loser.install_id, false, now)) disabled++
+      if (setSkillEnabled(db, loser.install_id, false, now, 'duplicate')) disabled++
     }
   }
   return disabled
@@ -476,11 +545,21 @@ export function getSkillsByDeclaredId(db: Db, id: string): SkillRecord[] {
   return rows.map(rowToRecord)
 }
 
-/** Flip a skill's enabled flag (persisted). Returns false if the install id is unknown. */
-export function setSkillEnabled(db: Db, installId: string, enabled: boolean, now = new Date().toISOString()): boolean {
+/**
+ * Flip a skill's enabled flag (persisted). Returns false if the install id is unknown. Enabling clears the
+ * #846 `disabled_reason`; disabling records the caller's `reason`, `'user'` unless the caller says otherwise,
+ * so the Settings toggle and every existing call keep their meaning.
+ */
+export function setSkillEnabled(
+  db: Db,
+  installId: string,
+  enabled: boolean,
+  now = new Date().toISOString(),
+  reason: SkillDisabledReason = 'user'
+): boolean {
   const res = db
-    .prepare('UPDATE skills SET enabled = ?, updated_at = ? WHERE install_id = ?')
-    .run(enabled ? 1 : 0, now, installId)
+    .prepare('UPDATE skills SET enabled = ?, disabled_reason = ?, updated_at = ? WHERE install_id = ?')
+    .run(enabled ? 1 : 0, enabled ? null : reason, now, installId)
   return Number(res.changes) > 0
 }
 

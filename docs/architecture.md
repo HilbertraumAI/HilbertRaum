@@ -7461,6 +7461,27 @@ conversation/message references. A DB rebuild re-derives every row from disk (no
 cleared by an app-level sweep on delete, §4). `services/skills/loader.ts` has one mode — read the
 folder — for both sources (no decrypt/transient/shred).
 
+**#846 amendment — why a row is off (`skills.disabled_reason`).** A nullable column (one `ensureColumn`,
+no `SCHEMA_VERSION` bump) records the reason with every "off": `'user'` (the Settings toggle),
+`'min_app_version'` (the §6.5 gate: the reconcile insert of an app skill, the import gate), `'duplicate'`
+(DS12: the enable IPC's sibling disable, the import's coexist and sibling disables, the reconcile safety
+net) or `'unconfirmed'` (a DS19 drop-in); enabling clears it, and the reconcile's update branch never touches
+it. The reconcile ACTS on `'min_app_version'` alone: an app skill the gate kept off is switched back on once
+this build's version is known and satisfies the skill (`ReconcileResult.reenabled`, one content-free log
+line with the count, no audit event, like every reconcile insert); the DS12 safety net then runs as before,
+so the built-in wins over an enabled user copy of the same id (today's arrival rule). Every other value,
+including one only a newer build knows, means "leave it alone", and the reason is read only while
+`enabled = 0`. User imports are never switched on by themselves. A row an older build wrote has no reason:
+"app, off, no reason, `installed_at = updated_at`" can only be the gate's insert (the insert stamps both
+from one clock; every later write moves `updated_at`; the one writer sharing the reconcile's clock, the DS12
+safety net, never disables an app row, and every other disable takes a fresh clock), so it is treated as
+`'min_app_version'` and, while the app is still too old, recorded as such. A gate-disabled row an older build
+touched again (updated by a later drive refresh, or marked unavailable and back) has a moved `updated_at`, is
+not inferred and stays off: fail-safe, the user can switch it on. Builds up to v0.1.65 read the
+table with `SELECT *` and write it with explicit column lists (verified at v0.1.50, v0.1.60 and v0.1.65), so
+they ignore the column. A DB rebuild re-derives the gate's reason from disk; a `'user'` reason on an app
+skill does not survive a rebuild, exactly as the `enabled` choice itself never did.
+
 ### §4 Import / export / delete lifecycle (S4)
 
 `services/skills/installer.ts` owns the lifecycle behind IPC. Import **validates** a `.skill.zip` or
@@ -8307,7 +8328,8 @@ unchanged §7 ceiling (no new capability, still offline, audit still ids/counts-
   `app.getVersion()` through the registry + installer deps + IPC. (Originally a residual remained: a skill
   edited on disk to need a newer app *while already enabled* stayed effective, because reconcile preserves
   the `enabled` flag and the use-sites gated only on `enabled`. **§15 closed it** — the gate is now airtight:
-  the use-sites gate on *compatibility*, not just `enabled`.)
+  the use-sites gate on *compatibility*, not just `enabled`.) **#846** built the other half: an app skill
+  the gate kept off now comes back on by itself once the app is updated (`skills.disabled_reason`, §3).
 - **M2 — the Tier-2 "active tools" note is domain-free.** `skills.tool.note.active` no longer enumerates
   bank tools (it had shown bank copy for the invoice + redaction skills too); it now reads "run approved
   local tools on a document you choose…", true for every `kind:'tool'` skill.
