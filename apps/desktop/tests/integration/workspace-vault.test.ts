@@ -226,20 +226,11 @@ describe('encrypted vault lifecycle', () => {
   })
 
   // #860 V5b: past the verifier, a tag failure is damage too, and the error says which damage it is (its message
-  // reaches only the log; the user copy is `vault_damaged`'s either way). A descriptor whose `version` is missing
-  // while it keeps `dataKey` lands here as well (read as v1, the password's key opens no data): the message must not
-  // claim the data decrypted (W2 review finding 5).
+  // reaches only the log; the user copy is `vault_damaged`'s either way), never that the data decrypted. (A descriptor
+  // that lost its `version` but kept `dataKey` reads as unreadable instead, workspace-vault-format-guard.test.ts:
+  // only the descriptor needs restoring.)
   it.each<[string, (vp: FreshVaultPaths) => void, RegExp]>([
     ['an .enc that fails its tag', (vp) => void tagFailingVault(vp), /failed its authentication check/],
-    [
-      'a descriptor without a version that keeps its dataKey',
-      (vp) => {
-        const d = JSON.parse(readFileSync(vp.descriptorPath, 'utf8'))
-        delete d.version
-        writeFileSync(vp.descriptorPath, JSON.stringify(d))
-      },
-      /failed its authentication check/
-    ],
     ['an .enc that decrypts to noise (#208)', (vp) => void damagedVault(vp, 'pw', 64 * 1024), /not a database/]
   ])('a verified password over damaged data throws VaultDamagedError naming the damage: %s', (_case, damage, message) => {
     const vp = lockedVault('vault', 'pw')

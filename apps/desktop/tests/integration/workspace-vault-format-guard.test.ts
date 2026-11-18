@@ -322,6 +322,27 @@ describe('a newer verdict is re-checked once the newer artifact is gone (#845)',
     }
   })
 
+  // W2 review 2: a startup whose failed-lock salvage was BLOCKED (a held `.recovery`, #242), then a newer descriptor:
+  // the unlock re-runs init(), which must re-decide every per-start flag, so the answer is "newer", not the stale
+  // "recovery blocked". A non-empty directory on the `.recovery` name makes the salvage fail on every OS.
+  it('a blocked salvage followed by a newer descriptor answers newer at unlock, and touches nothing', () => {
+    const vp = lockedVault('fmtguard', PW)
+    failedLockState(vp, 7171, PW)
+    plant(join(`${vp.dbPath}${RECOVERY_SUFFIX}`, 'held.bin'), 'a hold')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.isRecoveryBlocked()).toBe(true)
+      editDescriptor(vp, version3(true))
+      const before = snapshot(vp.root)
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual({ name: 'VaultNewerError', what: 'descriptor', found: 3 })
+      expect(ctl.isRecoveryBlocked()).toBe(false)
+      expect(snapshot(vp.root)).toEqual(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
   it('the create flow opens again once a newer build’s lone leftovers are gone', () => {
     const vp = freshVaultPaths('fmtguard')
     const staged = stagedFrame(vp)
@@ -406,13 +427,28 @@ describe('what is not newer (#845)', () => {
     }
   })
 
-  // A `version` that is a string but no number ("3.0.0") is not newer (nothing says so) but no longer passes for v1
-  // either: shipped descriptors carry a number. It reads unreadable, so startup sweeps and recovers nothing over it
-  // (before, as a "v1" it had any staged password change discarded) and the unlock asks for the descriptor's backup.
-  it('a descriptor whose version is a non-numeric string reads as unreadable: startup touches nothing', () => {
-    const vp = editDescriptor(lockedVault('fmtguard', PW), (d) => {
-      d.version = '3.0.0'
-    })
+  // A descriptor no build wrote reads as unreadable, not as v1: a `version` string holding no number ("3.0.0", W2
+  // review 1), or a wrapped data key under a version that is not a v2's (missing, null, 0, 1; review 2: no v1 ever had
+  // `dataKey`). Read as v1, startup discarded any staged password change, and the unlock's tag failure told the user
+  // to restore the DATA from a backup, when only `config/workspace.json` needs restoring. Unreadable: startup sweeps
+  // and recovers nothing over it, the unlock asks for the descriptor's backup, and create stays refused.
+  it.each<[string, (d: Record<string, unknown>) => void, boolean]>([
+    ['a version string holding no number ("3.0.0"), beside its dataKey', (d) => void (d.version = '3.0.0'), true],
+    [
+      'a version string holding no number ("3.0.0"), without a dataKey',
+      (d) => {
+        d.version = '3.0.0'
+        delete d.dataKey
+      },
+      false
+    ],
+    ['no version, beside its dataKey', (d) => void delete d.version, true],
+    ['version null, beside its dataKey', (d) => void (d.version = null), true],
+    ['version 0, beside its dataKey', (d) => void (d.version = 0), true],
+    ['version 1, beside its dataKey', (d) => void (d.version = 1), true]
+  ])('a descriptor with %s reads as unreadable: startup touches nothing', (_case, edit, hasDataKey) => {
+    const vp = editDescriptor(lockedVault('fmtguard', PW), edit)
+    expect(Boolean(JSON.parse(readFileSync(vp.descriptorPath, 'utf8')).dataKey)).toBe(hasDataKey)
     const planted = [
       plant(join(dirname(vp.dbPath), 'documents', 'x.parse.pdf'), '%PDF-1.7'),
       stagedFrame(vp)
@@ -427,6 +463,27 @@ describe('what is not newer (#845)', () => {
       expect(() => ctl.unlock(PW)).toThrow(/missing or unreadable/)
       expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
       expect(snapshot(vp.root)).toEqual(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Only an ASCII digit 2–9 after `HRAUMEN` is a newer frame (W2 review 2): one flipped bit in the version byte (`1` →
+  // `0`, or to a letter) is damage, and reading it as "newer" would tell the user to update the app forever.
+  it.each([
+    ['HRAUMEN0', 'the digit 0'],
+    ['HRAUMENq', 'a letter']
+  ])('an .enc framed %s (%s after the family) is not newer: startup still sweeps, unlock names the header', (magic) => {
+    const vp = lockedVault('fmtguard', PW)
+    setFrameMagic(vp.encPath, magic)
+    const transient = plant(join(dirname(vp.dbPath), 'documents', 'x.parse.pdf'), '%PDF-1.7')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(transient)).toBe(false)
+      expect(ctl.newerVaultFormat()).toBeNull()
+      expect(thrownBy(() => ctl.unlock(PW)).name).toBe('Error')
+      expect(() => ctl.unlock(PW)).toThrow(/unrecognised header/)
     } finally {
       ctl.shutdown()
     }

@@ -6,23 +6,14 @@ import {
   existsSync,
   readFileSync,
   openSync,
-  readSync,
   writeSync,
   fsyncSync,
   closeSync,
   rmSync
 } from 'node:fs'
 import { join } from 'node:path'
-import {
-  encrypt,
-  decrypt,
-  serializeBlob,
-  deserializeBlob,
-  classifyFrameMagic,
-  newerFrameError,
-  isVaultNewerError
-} from './security/crypto'
-import { ROTATED_ENCRYPTED_LOG_NAME, shredFile } from './workspace-vault'
+import { encrypt, decrypt, serializeBlob, deserializeBlob, isVaultNewerError } from './security/crypto'
+import { ROTATED_ENCRYPTED_LOG_NAME, newerFrameAt, shredFile } from './workspace-vault'
 
 // Local-only rotating logger (spec §7.11 — diagnostics logs stay on device, never uploaded).
 //
@@ -87,38 +78,19 @@ let vaultKey: Buffer | null = null
 let buffer = ''
 
 /**
- * #845: `app.log.enc`, or the rotated `app.1.log.enc`, is in a frame a NEWER build wrote. This build cannot read it and
- * must not replace it, so for the rest of the session nothing persists or rotates over either: the session's lines
- * stay in the in-memory buffer only (readable on Diagnostics, gone at lock or quit, like a session spent at the unlock
- * gate).
+ * #845: `app.log.enc` is in a frame a NEWER build wrote. This build cannot read it and must not replace it, so for the
+ * rest of the session nothing persists or rotates over it: the session's lines stay in the in-memory buffer only
+ * (readable on Diagnostics, gone at lock or quit, like a session spent at the unlock gate).
  */
 let encLogNewer = false
 
-/** Enter the #845 buffer-only mode, with one line saying why (it stays in the buffer like every other). */
-function keepLogInMemory(file: string, found: string | number): void {
-  encLogNewer = true
-  write('warn', 'Diagnostics log: a log file was written by a newer build; this session keeps its log in memory', {
-    file,
-    found
-  })
-}
-
-/** The frame version byte of `path` when its first 8 bytes name a frame a newer build wrote (#845); null when they
- *  do not, or the file is absent or unreadable. */
-function newerFrameVersion(path: string): string | number | null {
-  try {
-    const head = Buffer.alloc(8)
-    const fd = openSync(path, 'r')
-    try {
-      const got = head.subarray(0, readSync(fd, head, 0, head.length, 0))
-      return classifyFrameMagic(got) === 'newer' ? newerFrameError(got).found : null
-    } finally {
-      closeSync(fd)
-    }
-  } catch {
-    return null
-  }
-}
+/**
+ * #845: the rotated `app.1.log.enc` is in a frame a newer build wrote. Only a rotation would overwrite it, so only the
+ * rotation is skipped: `app.log.enc` (this build's own) keeps persisting, and without the rotation it holds up to the
+ * buffer's cap (`BUFFER_MAX_BYTES`, oldest lines dropped first) instead of `MAX_BYTES`. The simpler of the two honest
+ * options: the live log goes on working, and the newer generation stays as it is.
+ */
+let rotatedLogNewer = false
 
 export function initLogging(directory: string): void {
   mkdirSync(directory, { recursive: true })
@@ -129,6 +101,7 @@ export function initLogging(directory: string): void {
   vaultKey = null
   buffer = ''
   encLogNewer = false
+  rotatedLogNewer = false
 }
 
 /** Drop whole lines from the FRONT of `text` until it is within `maxBytes` UTF-8 bytes, so the
@@ -200,7 +173,12 @@ function loadEncrypted(): void {
   } catch (err) {
     // A corrupt/foreign-key log is not recoverable — start fresh rather than throw. A newer build's frame is not
     // ours to replace (#845): keep this session's log in memory only.
-    if (isVaultNewerError(err)) keepLogInMemory('app.log.enc', err.found)
+    if (isVaultNewerError(err)) {
+      encLogNewer = true
+      write('warn', 'Diagnostics log: app.log.enc was written by a newer build; this session keeps its log in memory', {
+        found: err.found
+      })
+    }
   }
 }
 
@@ -214,10 +192,15 @@ export function attachVaultKey(key: Buffer): void {
   vaultKey = key
   mode = 'encrypted'
   loadEncrypted()
-  // #845: the rotated generation counts too. With no live `app.log.enc` beside it (a newer build rotated last), a
-  // rotation this session would otherwise overwrite it.
-  const rotatedNewer = encLogNewer || !logDir ? null : newerFrameVersion(join(logDir, ROTATED_ENCRYPTED_LOG_NAME))
-  if (rotatedNewer !== null) keepLogInMemory(ROTATED_ENCRYPTED_LOG_NAME, rotatedNewer)
+  // #845: a rotation would overwrite the previous generation; when a newer build wrote that one, it is skipped (see
+  // `rotatedLogNewer`). Checked once per attach: the newer build cannot run beside this one (single instance).
+  const rotatedNewer = logDir && !rotatedLogNewer ? newerFrameAt(join(logDir, ROTATED_ENCRYPTED_LOG_NAME)) : null
+  if (rotatedNewer !== null) {
+    rotatedLogNewer = true
+    write('warn', 'Diagnostics log: app.1.log.enc was written by a newer build; this session does not rotate onto it', {
+      found: rotatedNewer
+    })
+  }
   persistEncrypted()
   // Migration: an OLDER build (or a crash before this build's first lock) may have left a
   // plaintext `app.log`/`app.1.log` on an encrypted drive. Shred it now that the log is
@@ -295,7 +278,7 @@ function rotatePlainIfNeeded(): void {
 
 /** Rotate the encrypted log: re-encrypt the current buffer to `app.1.log.enc`, then reset. */
 function rotateEncryptedIfNeeded(): void {
-  if (!encLogFile || !logDir || !vaultKey || vaultKeyZeroed() || encLogNewer) return
+  if (!encLogFile || !logDir || !vaultKey || vaultKeyZeroed() || encLogNewer || rotatedLogNewer) return
   if (Buffer.byteLength(buffer, 'utf8') <= MAX_BYTES) return
   try {
     const blob = serializeBlob(encrypt(vaultKey, Buffer.from(buffer, 'utf8')))

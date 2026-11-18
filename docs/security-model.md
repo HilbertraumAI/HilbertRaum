@@ -1235,18 +1235,26 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
 - **One verdict before any write.** A read-only check runs at startup and at the head of every
   unlock, independent of the password: any numeric descriptor `version` above 2 (integer or not,
   or a numeric string), an unknown `kdf.algo`, an `.enc` or any staged `*.enc.new` a recovery
-  would swap in framed `HRAUMEN` with a version byte other than `1`, or any numeric rekey
+  would swap in framed `HRAUMEN` + an ASCII digit `2`–`9`, or any numeric rekey
   journal `version` above 1 → `VaultNewerError`, reported as `workspace_newer` with the
   same "written by a newer HilbertRaum — update the app. Nothing was changed." copy. Nothing is
   written, shredded or renamed, the workspace stays locked, and the create flow is refused. A
   stale verdict does not outlive its cause: while it stands, an unlock or create re-reads the disk,
   so once the newer artifact is gone the skipped salvage runs before anything is decrypted.
 - **No downgrade.** A password change re-reads the descriptor on disk first and refuses a newer
-  (or replaced) one; the diagnostics log keeps a newer-framed `app.log.enc` or `app.1.log.enc`
-  as it is.
-- **No false "newer".** A foreign magic of another family (`PAIDENC1`) stays an "unrecognised
-  header", and every descriptor a published release wrote reads as current (golden descriptors
-  written by the v0.1.50 and v0.1.65 code, `apps/desktop/tests/fixtures/vault-golden/`).
+  (or replaced) one; the diagnostics log never persists over a newer-framed `app.log.enc` and
+  never rotates onto a newer-framed `app.1.log.enc`.
+- **No false "newer".** A foreign magic of another family (`PAIDENC1`), and `HRAUMEN` followed by
+  anything but a digit `2`–`9` (a damaged version byte), stays an "unrecognised header"; a
+  descriptor that lost its `version` but kept `dataKey` reads as unreadable (restore the
+  descriptor), not as damaged data; and every descriptor a published release wrote reads as
+  current (golden descriptors written by the v0.1.50 and v0.1.65 code,
+  `apps/desktop/tests/fixtures/vault-golden/`).
+- **Residual.** A newer verdict also skips the startup crash sweep, so a newer build's own crash
+  leftovers (its plaintext working database and `-wal`/`-shm`, its transient decrypted copies)
+  stay on the drive until a newer build starts and sweeps them. Shredding them could destroy
+  that build's unsaved data, and its formats are not this build's to judge, so the rule stays
+  "nothing written, shredded or renamed".
 - **Residual.** Builds released before this fix keep the old reading, so a future format must
   still be designed for them; the frozen constraints are in `data-contracts.md` "Vault format
   versions".

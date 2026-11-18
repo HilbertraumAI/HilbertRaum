@@ -1065,7 +1065,8 @@ head's own weights + KV.
 
 ### Encrypted workspace (Phase 9 live)
 ✅ **`services/security/crypto.ts`** (spec §3.5) — pure KDF + AEAD, no I/O.
-- **KDF:** `deriveKey(password, salt, params)` → 32-byte key. `KdfParams` is per-algo
+- **KDF:** `deriveKey(password, salt, params)` → 32-byte key; it derives only with `KDF_ALGOS`
+  (`isKnownKdfAlgo`), the list the vault's format check (#845) reads too. `KdfParams` is per-algo
   (`argon2id: m/t/p` · `scrypt: N/r/p`); `DEFAULT_KDF = { argon2id, m=19456, t=2, p=1, keyLen=32 }`
   for NEW vaults. A legacy vault unlocks from the params its descriptor recorded (the unlock derives
   with `descriptor.kdf`, scrypt or Argon2id); `SCRYPT_KDF = { scrypt, N=32768, r=8, p=1 }` is an
@@ -1136,10 +1137,15 @@ head's own weights + KV.
 
   | Artifact | Read as `newer` (`what`) | Not newer: as before |
   |---|---|---|
-  | `config/workspace.json` | any numeric `version` above 2 (3, 2.5, `"3"`), checked before any shape check (`descriptor`); a v1/v2 descriptor whose `kdf.algo` is a string other than `scrypt`/`argon2id` (`kdf`) | unparseable, a field missing, a v2 without `dataKey`, a `version` string holding no number (`"3.0.0"`): `unreadable` ("restore a backup"); out-of-bounds KDF params: refused at derive (tamper); a `version` that is missing or not a number or string, beside `dataKey`: read as v1, and the unlock's tag failure reports `vault_damaged` |
-  | `workspace/hilbertraum.sqlite.enc` and every staged file a recovery would swap in (`.enc.new`, `documents/` and `images/` `*.enc.new`, the journal's entries) | first 8 bytes `HRAUMEN` + a version byte other than `1` (`frame`) | any other magic (`PAIDENC1`, written before 0.1.10, or noise): "unrecognised header", the generic unlock error |
+  | `config/workspace.json` | any numeric `version` above 2 (3, 2.5, `"3"`), checked before any shape check (`descriptor`); a v1/v2 descriptor whose `kdf.algo` is a string other than `scrypt`/`argon2id` (`kdf`) | unparseable, a field missing, a v2 without `dataKey`, a `version` string holding no number (`"3.0.0"`): `unreadable` ("restore a backup"); out-of-bounds KDF params: refused at derive (tamper); a `dataKey` under a version that is not a v2's (missing, null, 0, 1; no v1 ever had one): `unreadable`, so only the descriptor needs restoring |
+  | `workspace/hilbertraum.sqlite.enc` and every staged file a recovery would swap in (`.enc.new`, `documents/` and `images/` `*.enc.new`, the journal's entries) | first 8 bytes `HRAUMEN` + an ASCII digit `2`–`9` (`frame`) | any other magic (`HRAUMEN` + `0`, a letter or another byte, i.e. a damaged version byte; `PAIDENC1`, written before 0.1.10; noise): "unrecognised header", the generic unlock error |
   | `workspace/rekey-journal.json` | any numeric `version` above 1 (2, 2.5), whatever the descriptor says (`journal`) | unparseable or another `version`: quarantined as `.corrupt` |
-  | `logs/app.log.enc`, `logs/app.1.log.enc` | a `newer` frame in either: `logging.ts` keeps the session's log in memory and never persists or rotates over them | a corrupt or foreign-key log: started fresh (overwritten), as before |
+  | `logs/app.log.enc`, `logs/app.1.log.enc` | a `newer` `app.log.enc`: `logging.ts` keeps the session's log in memory and never persists or rotates over it; a `newer` `app.1.log.enc`: only the rotation onto it is skipped (the live `app.log.enc` keeps persisting, up to the 2 MB buffer cap) | a corrupt or foreign-key log: started fresh (overwritten), as before |
+
+  **Residual:** a `newer` verdict also skips startup's crash sweep, so a newer build's own crash leftovers (its
+  plaintext working database and `-wal`/`-shm`, its transient decrypted copies) stay on the drive until a newer
+  build starts and sweeps them. Deliberate: they may hold that build's unsaved data, and the verdict's rule is that
+  nothing is written, shredded or renamed.
 
   `changePassword` re-reads the descriptor on disk first and refuses (nothing derived or written) when it
   is newer or no longer the one the session unlocked; the IPC answers `error` +
@@ -1152,7 +1158,8 @@ head's own weights + KV.
   before the commit point — every shipped build rolls a staged file forward under a v2 descriptor and
   quarantines a journal it cannot read, so a newer build's uncommitted stage would end up under a key
   that exists nowhere; `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
-  unrecognised header).
+  unrecognised header), and a later frame version is one ASCII digit `2`–`9` after `HRAUMEN` (any other byte
+  there reads as damage from #845 on).
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
   first, then plaintext opens immediately, encrypted stays locked, else uninitialized),
   `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup), `getState() → WorkspaceStateInfo`,

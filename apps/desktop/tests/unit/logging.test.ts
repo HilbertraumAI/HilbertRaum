@@ -349,6 +349,25 @@ describe('logging service (L17)', () => {
       expect(readFileSync(rotated).equals(newer)).toBe(true)
     })
 
+    // W2 review 2: the newer generation blocks only the rotation onto it, not this build's own live log. A rotation
+    // that would overwrite it is skipped; the live log keeps persisting, capped like the buffer.
+    it('keeps persisting app.log.enc beside an app.1.log.enc a newer build framed, and skips the rotation (#845)', () => {
+      const key = randomBytes(32)
+      const rotated = join(dir, 'app.1.log.enc')
+      const newer = Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(200)])
+      writeFileSync(rotated, newer)
+      initLogging(dir)
+      attachVaultKey(key)
+      log.error('a failure worth keeping')
+      const live = join(dir, 'app.log.enc')
+      expect(decrypt(key, deserializeBlob(readFileSync(live))).toString('utf8')).toContain('a failure worth keeping')
+      log.info('x'.repeat(1_100_000))
+      log.error('after the threshold')
+      detachVaultKey()
+      expect(readFileSync(rotated).equals(newer)).toBe(true)
+      expect(decrypt(key, deserializeBlob(readFileSync(live))).toString('utf8')).toContain('after the threshold')
+    })
+
     it('trims the buffer on a line boundary by UTF-8 byte length (multibyte content)', () => {
       const key = randomBytes(32)
       initLogging(dir)

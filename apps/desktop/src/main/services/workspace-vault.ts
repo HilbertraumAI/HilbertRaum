@@ -36,6 +36,7 @@ import {
   makeVerifier,
   verifyKey,
   classifyFrameMagic,
+  isKnownKdfAlgo,
   newerFrameError,
   VaultNewerError,
   type VaultNewerWhat,
@@ -297,9 +298,6 @@ function blobFromJson(s: SerializedBlob): EncryptedBlob {
   }
 }
 
-/** The KDF algorithms this build can derive with (`deriveKey`). Any other `kdf.algo` was written by a newer build. */
-const KNOWN_KDF_ALGOS: ReadonlySet<string> = new Set(['scrypt', 'argon2id'])
-
 /**
  * The value of a `version` field as a number (#845): a finite number, or a string holding a decimal number (`"3"`,
  * `"2.5"`); null for anything else. Shipped builds compare `version` with `>=`, which JavaScript applies to such a
@@ -350,8 +348,13 @@ export function readVaultDescriptorChecked(descriptorPath: string): VaultDescrip
   if (d.mode !== 'encrypted' || !d.kdf || !d.saltB64 || !d.verifier) return { kind: 'unreadable' }
   // A v2 (envelope) descriptor without its wrapped data key is corrupt, not unlockable.
   if (d.version >= VAULT_VERSION_ENVELOPE && !d.dataKey) return { kind: 'unreadable' }
+  // So is a wrapped data key under a version that is not a v2's (missing, null, 0, 1): no build ever wrote a v1 with
+  // `dataKey`, and read as v1 the password's key opens no data, so the unlock would call the DATA damaged when only
+  // this file needs restoring (W2 review 2).
+  if (d.dataKey && !(version !== null && version >= VAULT_VERSION_ENVELOPE)) return { kind: 'unreadable' }
+  // Any `kdf.algo` this build cannot derive with (`KDF_ALGOS`) was written by a newer build.
   const algo: unknown = d.kdf.algo
-  if (typeof algo === 'string' && !KNOWN_KDF_ALGOS.has(algo)) {
+  if (typeof algo === 'string' && !isKnownKdfAlgo(algo)) {
     return { kind: 'newer', what: 'kdf', found: algo.slice(0, 40) }
   }
   return { kind: 'ok', descriptor: d }
@@ -378,15 +381,20 @@ export function isDescriptorUnreadable(descriptorPath: string): boolean {
 /** The rekey journal version every shipped build writes (`RekeyJournal.version`). */
 const REKEY_JOURNAL_VERSION = 1
 
-/** The first 8 bytes of `path`, or null when it is absent or cannot be read (then it is not judged newer: the
- *  paths after this check fail on it as they always did). */
-function readFrameHead(path: string): Buffer | null {
+/**
+ * The version digit of the frame at `path` when its first 8 bytes are a frame a newer build wrote (#845), else null
+ * (another frame, absent, or unreadable: then it is not judged newer, and whatever reads it next fails on it as it
+ * always did). Reads 8 bytes. Shared by the vault format verdict and the diagnostics log (`logging.ts`); the frame
+ * rules themselves live in security/crypto.ts, which stays free of file I/O.
+ */
+export function newerFrameAt(path: string): string | null {
   if (!existsSync(path)) return null
   try {
     const head = Buffer.alloc(BLOB_MAGIC.length)
     const fd = openSync(path, 'r')
     try {
-      return head.subarray(0, readSync(fd, head, 0, head.length, 0))
+      const got = head.subarray(0, readSync(fd, head, 0, head.length, 0))
+      return classifyFrameMagic(got) === 'newer' ? String(newerFrameError(got).found) : null
     } finally {
       closeSync(fd)
     }
@@ -415,7 +423,7 @@ export type VaultFormatVerdict = { kind: 'ok' } | { kind: 'newer'; what: VaultNe
  * whatever the descriptor says: shipped builds roll staged files forward under any v2 descriptor, so a newer build's
  * uncommitted stage would be swapped in under a key that exists nowhere), and the frames of `.enc` and of every staged
  * file a recovery would swap in (`stagedRekeyFiles`: `.enc.new`, `documents/` and `images/` `*.enc.new` by scan, and
- * the journal's entries; `HRAUMEN` with a version byte other than `1`, read from the first 8 bytes of each: a staged
+ * the journal's entries; `HRAUMEN` + a digit 2–9, read from the first 8 bytes of each: a staged
  * file is swapped in before any decrypt would notice). A foreign magic of another family (`PAIDENC1`) is not newer.
  * Runs before ANY write: at the head of `WorkspaceController.init()` (the startup salvage, sweep and rekey recovery)
  * and of `unlockEncryptedVault`.
@@ -429,11 +437,8 @@ export function vaultFormatVerdict(vaultPaths: VaultPaths): VaultFormatVerdict {
     return { kind: 'newer', what: 'journal', found: typeof journal === 'string' ? journal.slice(0, 40) : journalVersion }
   }
   for (const path of [vaultPaths.encPath, ...stagedRekeyFiles(vaultPaths)]) {
-    const head = readFrameHead(path)
-    if (head && classifyFrameMagic(head) === 'newer') {
-      const err = newerFrameError(head)
-      return { kind: 'newer', what: err.what, found: err.found }
-    }
+    const found = newerFrameAt(path)
+    if (found !== null) return { kind: 'newer', what: 'frame', found }
   }
   return { kind: 'ok' }
 }
@@ -1006,7 +1011,7 @@ export interface VaultKeyCiphertext {
 }
 
 interface RekeyJournal {
-  version: 1
+  version: typeof REKEY_JOURNAL_VERSION
   /** Absolute `<file>.new` paths the stage writes (in-store and out-of-store). */
   staged: string[]
   /** Absolute paths deleted after the commit point. */
@@ -1106,9 +1111,11 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
-    if (parsed.version !== 1) return { version: 1, staged: [], remove: [], corrupt: true }
+    if (parsed.version !== REKEY_JOURNAL_VERSION) {
+      return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
+    }
     return {
-      version: 1,
+      version: REKEY_JOURNAL_VERSION,
       // Only `<file>.new` entries can be swapped; anything else would be shredded by name.
       staged: strings(parsed.staged).filter((s) => s.endsWith(REKEY_SUFFIX)),
       remove: strings(parsed.remove),
@@ -1117,7 +1124,7 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
   } catch {
     // Unreadable: the directory scans still resolve the in-store classes; the file itself is
     // quarantined (never deleted) by clearRekeyJournal so its out-of-store entries are not lost.
-    return { version: 1, staged: [], remove: [], corrupt: true }
+    return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
   }
 }
 
@@ -1213,7 +1220,7 @@ export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataK
   const targets = listVaultKeyCiphertexts(vaultPaths, db)
   const stagedDb = `${vaultPaths.encPath}${REKEY_SUFFIX}`
   writeRekeyJournal(vaultPaths, {
-    version: 1,
+    version: REKEY_JOURNAL_VERSION,
     staged: [stagedDb, ...targets.filter((t) => t.action === 'rekey').map((t) => `${t.path}${REKEY_SUFFIX}`)],
     remove: targets.filter((t) => t.action === 'delete').map((t) => t.path)
   })
@@ -1595,9 +1602,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
       decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
     } catch (err) {
       // #860 V5b: the password verified (and a v2 data key unwrapped under its own tag), so a tag failure here means
-      // the vault's files no longer match: the `.enc` bytes changed, or a descriptor that lost its `version` but kept
-      // `dataKey` read as v1, whose password key opens no data. Damage either way, with the restore-from-a-backup
-      // copy, never "Could not open". Anything else (a header of another format, an I/O error) goes on as it was.
+      // the `.enc` bytes changed: damage, with the restore-from-a-backup copy, never "Could not open". (A descriptor
+      // that lost its `version` but kept `dataKey` never gets here: it reads unreadable.) Anything else (a header of
+      // another format, an I/O error) goes on as it was.
       throw isFrameAuthError(err) ? new VaultDamagedError('failed-authentication') : err
     }
     plaintextOnDisk = true
@@ -1936,6 +1943,10 @@ export class WorkspaceController {
     // #845: FIRST, before anything below can rename, shred or roll forward a file: a vault artifact in a format a
     // NEWER build wrote (the descriptor, its KDF, the `.enc` and staged frames, the rekey journal) leaves the whole
     // workspace as it is. It stays locked, the create flow is refused, and every unlock answers "update the app".
+    // Every per-start flag is re-decided from the disk first: unlock() re-runs init(), and a flag a previous run set
+    // (a blocked salvage, #242) must not outlive it, or it would answer instead of the newer format (W2 review 2).
+    this._recoveryBlocked = false
+    this._newerWorkspace = false
     if (this.readFormat()) return
     if (this.descriptor?.mode === 'encrypted') {
       // Crash recovery: an encrypted vault must have NO plaintext working file at rest.

@@ -168,9 +168,13 @@ describe('serializeBlob / deserializeBlob', () => {
     }
   })
 
+  // Only a digit 2–9 after the family is a newer version (W2 review 2): `HRAUMEN0` or a letter there is one flipped bit
+  // away from `HRAUMEN1`, damage that must not read as "update the app".
   it.each([
     ['PAIDENC1, the pre-0.1.10 format', Buffer.from('PAIDENC1')],
-    ['bytes of no format', Buffer.from('0011223344556677', 'hex')]
+    ['bytes of no format', Buffer.from('0011223344556677', 'hex')],
+    ['HRAUMEN0, the family with the digit 0', Buffer.from('HRAUMEN0')],
+    ['HRAUMENq, the family with a letter', Buffer.from('HRAUMENq')]
   ])('rejects a header-sized frame with a foreign magic as unrecognised, not newer: %s', (_case, magic) => {
     const foreign = Buffer.concat([magic, randomBytes(12 + 16)])
     expect(() => deserializeBlob(foreign)).toThrow(/unrecognised header/)

@@ -21,7 +21,15 @@ import { argon2id } from '@noble/hashes/argon2.js'
 // earlier default unlocks unchanged: the descriptor records the `algo` + params, and
 // `deriveKey` dispatches on them. No on-disk format change.
 
-export type KdfAlgo = 'scrypt' | 'argon2id'
+/** The KDF algorithms `deriveKey` can derive with: the one list the type, the dispatch and the vault's format check
+ *  (a descriptor naming any other `kdf.algo` was written by a newer build, #845) all come from. */
+export const KDF_ALGOS = ['scrypt', 'argon2id'] as const
+export type KdfAlgo = (typeof KDF_ALGOS)[number]
+
+/** True when `algo` is one of {@link KDF_ALGOS}. */
+export function isKnownKdfAlgo(algo: unknown): algo is KdfAlgo {
+  return (KDF_ALGOS as readonly unknown[]).includes(algo)
+}
 
 /**
  * Recorded KDF parameters — persisted in the vault descriptor so unlock matches encrypt.
@@ -123,6 +131,7 @@ function validateKdfBounds(params: KdfParams): void {
  * same password + salt + params always yield the same key (so unlock matches encrypt).
  */
 export function deriveKey(password: string, salt: Buffer, params: KdfParams = DEFAULT_KDF): Buffer {
+  if (!isKnownKdfAlgo(params.algo)) throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)
   if (params.algo === 'scrypt') {
     if (params.N == null || params.r == null || params.p == null) {
       throw new Error('scrypt parameters (N, r, p) are required')
@@ -154,6 +163,7 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
     })
     return Buffer.from(out)
   }
+  // Unreachable: the check at the top admits only KDF_ALGOS, and each has its branch above.
   throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)
 }
 
@@ -214,8 +224,9 @@ export function isVaultNewerError(err: unknown): err is VaultNewerError {
 
 // ---- Framed serialization (for the encrypted DB file on disk) -------------------
 
-// 8 bytes: the 7-byte format family `HRAUMEN` and a 1-byte frame version, `1`. Every shipped build writes and reads
-// only `HRAUMEN1`; builds before #845 compare all 8 bytes, so they read any other version as an unrecognised header.
+// 8 bytes: the 7-byte format family `HRAUMEN` and a 1-byte frame version, the ASCII digit `1` (later versions:
+// `2`–`9`). Every shipped build writes and reads only `HRAUMEN1`; builds before #845 compare all 8 bytes, so they
+// read any other version as an unrecognised header.
 const MAGIC = Buffer.from('HRAUMEN1')
 const MAGIC_FAMILY_BYTES = 7
 
@@ -227,20 +238,22 @@ export const BLOB_TAG_BYTES = TAG_BYTES
 
 /**
  * What the first bytes of an encrypted frame say (#845): `current` (`HRAUMEN1`, the frame this build reads), `newer`
- * (`HRAUMEN` with another version byte: written by a newer build), or `foreign` (anything else, including fewer than
- * 8 bytes: `PAIDENC1` from before the 0.1.10 rebrand, or no format at all).
+ * (`HRAUMEN` + an ASCII digit 2–9: written by a newer build), or `foreign` (anything else, including fewer than 8
+ * bytes, `HRAUMEN` + any other byte, `PAIDENC1` from before the 0.1.10 rebrand, or no format at all).
  */
 export function classifyFrameMagic(head: Buffer): 'current' | 'newer' | 'foreign' {
   if (head.length < MAGIC.length) return 'foreign'
   if (head.subarray(0, MAGIC.length).equals(MAGIC)) return 'current'
-  return head.subarray(0, MAGIC_FAMILY_BYTES).equals(MAGIC.subarray(0, MAGIC_FAMILY_BYTES)) ? 'newer' : 'foreign'
+  if (!head.subarray(0, MAGIC_FAMILY_BYTES).equals(MAGIC.subarray(0, MAGIC_FAMILY_BYTES))) return 'foreign'
+  // Only the ASCII digits 2–9 are later frame versions. Any other byte here (`0`, a letter, a control byte) is one
+  // flipped bit or so away from `1`: damage, which must not read as "update the app" forever (W2 review 2).
+  const v = head[MAGIC_FAMILY_BYTES]
+  return v >= 0x32 && v <= 0x39 ? 'newer' : 'foreign'
 }
 
-/** The `VaultNewerError` for a frame `classifyFrameMagic` called `newer`: `found` is its version byte, as the
- *  character when printable (`'2'`), else as hex. */
+/** The `VaultNewerError` for a frame `classifyFrameMagic` called `newer`: `found` is its version digit (`'2'`). */
 export function newerFrameError(head: Buffer): VaultNewerError {
-  const v = head[MAGIC_FAMILY_BYTES]
-  return new VaultNewerError('frame', v >= 0x21 && v <= 0x7e ? String.fromCharCode(v) : `0x${v.toString(16).padStart(2, '0')}`)
+  return new VaultNewerError('frame', String.fromCharCode(head[MAGIC_FAMILY_BYTES]))
 }
 
 /**
