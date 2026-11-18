@@ -680,6 +680,17 @@ function SaveStateLine({
   error: string | null
   t: I18n['t']
 }): JSX.Element {
+  // #837 (review round 6): Try again is disabled while its retry runs, so a double click
+  // cannot start a second retry over the first one's write (the store waits it out as well).
+  const [retrying, setRetrying] = useState(false)
+  async function retry(): Promise<void> {
+    setRetrying(true)
+    try {
+      await retryReviewSave()
+    } finally {
+      setRetrying(false)
+    }
+  }
   return (
     <span className="review-save-state">
       <span role="status">
@@ -695,7 +706,12 @@ function SaveStateLine({
             {error != null ? localizeServerCopy(t, error) : t('review.autosave.error')}{' '}
             {/* FIX-2d: retry re-flushes pending edits; with nothing pending (stale handle)
                 it reconciles with the DB instead of no-oping forever. */}
-            <button type="button" className="msg-action" onClick={() => void retryReviewSave()}>
+            <button
+              type="button"
+              className="msg-action"
+              disabled={retrying}
+              onClick={() => void retry()}
+            >
               {t('review.autosave.retry')}
             </button>
           </>

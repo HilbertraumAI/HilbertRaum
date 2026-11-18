@@ -1602,6 +1602,37 @@ describe('reviewSession — race hardening (FIX-2)', () => {
     expect(getReviewSessionSnapshot().detail?.items[0]?.decision).toBe('not_reviewed')
   })
 
+  // #837 review round 6 (verified, fixed-order repro): a double-click on Try again while the write still fails. The
+  // second retry's flush drained the queue into a write still in flight when the first retry looked; the first then
+  // saw "nothing pending", took the stale-handle branch, re-read the database over the queued edit and set idle — the
+  // next save then wrote `supported` and said "Saved" over a screen showing `not_reviewed`.
+  it('a double-click on Try again while the write still fails keeps the edit on screen and never re-reads over it', async () => {
+    const detail = makeDetail()
+    let fail = true
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (fail) throw new Error('disk I/O error')
+      return makeItem({ id, ...patch })
+    })
+    const getEvidenceReview = vi.fn(async () => detail)
+    stubReviewApi({ getEvidenceReview, updateEvidenceReviewItem })
+    await openWith(detail)
+    editReviewItem('i1', { decision: 'supported' })
+    await flushReviewSession()
+    expect(getReviewSessionSnapshot().saveState).toBe('error')
+
+    await Promise.all([retryReviewSave(), retryReviewSave()]) // the double click, the disk still failing
+    const s = getReviewSessionSnapshot()
+    expect(s).toMatchObject({ saveState: 'error', saveError: 'disk I/O error' })
+    expect(s.detail?.items[0]?.decision).toBe('supported')
+    expect(getEvidenceReview).toHaveBeenCalledTimes(1) // the open only: no re-read over a queued edit
+
+    fail = false
+    await retryReviewSave()
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
+    expect(getReviewSessionSnapshot().saveState).toBe('saved')
+    expect(getReviewSessionSnapshot().detail?.items[0]?.decision).toBe('supported')
+  })
+
   it('retryReviewSave on a VANISHED review lands on the friendly not-found state (2d)', async () => {
     const detail = makeDetail()
     let present = true

@@ -145,6 +145,8 @@ function orPurge<T>(work: Promise<T>): Promise<T | undefined> {
  * How long `App.lockNow` lets the pre-lock flush run (review round 5): enough for one write that
  * waits out the database's 5 s busy timeout. The flush waits for a running sweep (the one write
  * lane), so a hung call must not hold the lock — the user's security action always wins.
+ * If a flush the lock gave up on still writes (a hung sweep answering while `lockWorkspace`
+ * runs), main's AUD-02 locking latch refuses evidence writes while locking: nothing lands.
  */
 export const REVIEW_LOCK_FLUSH_BOUND_MS = 6_000
 
@@ -480,6 +482,11 @@ async function doFlush(): Promise<void> {
  */
 export async function retryReviewSave(): Promise<void> {
   await flushReviewSession()
+  // #837 (review round 6): another flush or a sweep (a second Try again, the debounce, the
+  // screen's exit flush) may have drained the queue into a write still in flight — wait it out,
+  // so "nothing pending" below means nothing unsaved, not "being written right now". Otherwise
+  // the stale-handle branch re-read the database over a queued edit.
+  while (flushInFlight || sweepLane) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
   if (state.saveState !== 'error') return
   if (pendingItems.size > 0 || pendingHead != null) return // flush failed again — error stands
   const reviewId = state.detail?.id

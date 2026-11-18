@@ -926,6 +926,28 @@ describe('ReviewScreen — a failed save is never dropped silently (#837)', () =
     expect(screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })).toBeEnabled()
   })
 
+  // Review round 6: the save line's Try again is disabled while its retry runs, so a double click cannot start a second
+  // retry over the first one's write (the store waits out a write in flight too).
+  it('the save line’s Try again is disabled while its retry writes, and comes back when the write fails again', async () => {
+    const hold: { gate?: Promise<void> } = {}
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (hold.gate) await hold.gate
+      throw new Error(DISK_FULL)
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const retry = await decideFirstItemAndWaitForFailure()
+    const write = deferred()
+    hold.gate = write.promise
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toBeDisabled())
+    fireEvent.click(retry) // the second click of a double click: ignored
+    write.resolve() // the retry's write goes ahead, and fails again
+    await waitFor(() => expect(retry).toBeEnabled())
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(2) // the debounce write + ONE retry
+    expect(screen.getByText(/database or disk is full/)).toBeInTheDocument()
+  })
+
   it('while a save error shows, the Bulk actions trigger is disabled, and it comes back once the edit is saved', async () => {
     let fail = true
     const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
