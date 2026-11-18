@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
+import { flushReviewSession, purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { t } from '../../src/shared/i18n'
 import type { EvidenceReviewFreshness, EvidenceReviewItemPatch } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
@@ -51,6 +51,11 @@ afterEach(() => {
 })
 
 function noop(): void {}
+
+/** `text` as a literal regular-expression source. */
+function escapeRe(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
 /** Radix DropdownMenu triggers open on POINTERDOWN, not click — drive it the way Radix
  *  listens (a bare fireEvent.click never opens the menu in jsdom). */
@@ -878,6 +883,21 @@ describe('ReviewScreen — a failed save is never dropped silently (#837)', () =
     expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
   })
 
+  // Review round 2: only an edit a failed write left unsaved disables the trigger (the store's own refusal condition).
+  it('after a failed acknowledge (nothing queued), the Bulk actions trigger stays enabled', async () => {
+    await renderReview({
+      api: {
+        acknowledgeEvidenceReviewFreshness: vi.fn(async () => {
+          throw new Error("Error invoking remote method 'evidence:acknowledgeFreshness': Error: db gone")
+        })
+      },
+      fresh: makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    })
+    fireEvent.click(await screen.findByRole('button', { name: t('en', 'review.outdated.acknowledge') }))
+    expect(await screen.findByText(/db gone/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })).toBeEnabled()
+  })
+
   it('while a save error shows, the Bulk actions trigger is disabled, and it comes back once the edit is saved', async () => {
     let fail = true
     const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
@@ -962,7 +982,34 @@ describe('ReviewScreen — a failed save is never dropped silently (#837)', () =
     await switchAfterFailedEdit({ on: true })
     const retry = screen.getByRole('button', { name: t('en', 'review.autosave.retry') })
     await waitFor(() => expect(retry).toHaveFocus())
-    expect(retry).toHaveAccessibleDescription(t('en', 'review.unsaved.body', { title: 'Lease check' }))
+    expect(retry).toHaveAccessibleDescription(
+      new RegExp(`^${escapeRe(t('en', 'review.unsaved.body', { title: 'Lease check' }))}`)
+    )
+  })
+
+  // Review round 2: a Try again that fails again must not look like nothing happened — the card shows the save error
+  // (the text of the review's own error line), and it is part of Try again's description.
+  it('the card shows the save error, and Try again’s description carries it', async () => {
+    await switchAfterFailedEdit({ on: true })
+    const card = document.querySelector('.review-screen .card') as HTMLElement
+    expect(within(card).getByText('database or disk is full')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('en', 'review.autosave.retry') })).toHaveAccessibleDescription(
+      `${t('en', 'review.unsaved.body', { title: 'Lease check' })} database or disk is full`
+    )
+  })
+
+  // Review round 2: the card names a failure. If a later save succeeds while it shows (the old screen's exit flush, a
+  // timer), that failure is gone, so the card goes ahead with the switch it was shown for instead of claiming it.
+  it('if a later save succeeds while the card shows, the card goes ahead and opens the other review', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview, updateEvidenceReviewItem } = await switchAfterFailedEdit(fail)
+    fail.on = false
+    await act(async () => {
+      await flushReviewSession() // a save from elsewhere succeeds
+    })
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
+    expect(getEvidenceReview).toHaveBeenCalledWith('r2')
   })
 
   it('Try again and Discard are disabled while the retry writes, and focus returns to Try again when it fails again', async () => {

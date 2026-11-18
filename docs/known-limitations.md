@@ -893,6 +893,23 @@ password recovery — are documented in
     `activity-log.json` action. The event still records the `documentId` + `status` + `chunkCount`,
     so the row is fully resolvable from inside the app; only the human-readable name is withheld
     from the log, matching the chat (conversation title) and collections (project name) channels.
+- **Saving an export REPLACES the chosen file; it never writes into it.** Every export written
+  through the shared atomic writers — the audit-log, diagnostic-log, transcript, result-table,
+  code-block and document-original exports, and since #838 every skills export (the
+  transactions and invoice CSV, invoice JSON and XML, the redacted and edited copies, the DOCX
+  copy) — goes to a temporary sibling file, is flushed to disk, then renamed over the
+  destination, so a failure leaves no partial file and the file being replaced intact. The
+  trade (the evidence pack's AUD-17 posture, see "Evidence review & evidence packs"): (1) the
+  temporary name is the destination plus a ~37-character token, so on a default Windows setup
+  (`LongPathsEnabled` off) a destination within that margin of the 260-character path limit
+  fails cleanly at the temporary file's creation (recovery: a shorter path); (2) the result is
+  a NEW file: a destination that was a hard link is no longer linked (its other names keep the
+  old content), a symbolic link is replaced by a plain file (its target is untouched), and the
+  old file's ACLs and macOS extended attributes do not carry over; (3) the folder must allow
+  creating a file — one that allows overwriting existing files but not creating new ones
+  refuses the export, and on macOS/Linux a read-only destination in a writable folder is
+  replaced; (4) on Windows a destination held open without delete sharing (Excel keeps a CSV
+  open that way) refuses the rename, and the old file stays.
 
 ## Retrieval quality ([`rag-design.md`](rag-design.md) §11)
 

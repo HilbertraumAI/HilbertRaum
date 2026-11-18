@@ -10,6 +10,7 @@ import type {
 } from '../../src/shared/types'
 import {
   REVIEW_SAVE_DEBOUNCE_MS,
+  acknowledgeReviewFreshness,
   addReviewSelection,
   bulkClearDecisions,
   bulkMarkHeadingsNotApplicable,
@@ -191,8 +192,12 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
   }
 
   it('a switch to another review is refused: r1 stays open with its edit and its error, r2 is not read', async () => {
-    const { getEvidenceReview } = await failedEditOnR1()
+    const { getEvidenceReview, updateEvidenceReviewItem } = await failedEditOnR1()
+    const writes = updateEvidenceReviewItem.mock.calls.length
     await openReviewSession({ reviewId: 'r2' })
+    // ONE retry by the switch's flush, then the failure stands until the user acts: the further flush passes are only
+    // for edits that landed mid-write (each failed write can hold the app for the database's 5 s busy wait).
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(writes + 1)
     const s = getReviewSessionSnapshot()
     expect(s.openError).toEqual({ kind: 'unsaved', title: 'Lease check', target: { reviewId: 'r2' } })
     expect(s.detail?.id).toBe('r1')
@@ -398,6 +403,43 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
     firstWrite.resolve()
     await switching
     expect(order).toEqual(['item:i1', 'item:i2', 'get:r2'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ detail: second, openError: null })
+  })
+
+  // Review round 2: the switch refuses only when a write FAILED. Edits that keep landing while its flushes write are
+  // written by further passes and the switch goes ahead — never the "could not be saved" card when nothing failed.
+  it('edits landing through two flush passes are all written, then the switch goes ahead with no refusal', async () => {
+    const first = makeDetail()
+    const second = makeDetail({ id: 'r2', messageId: 'm2' })
+    const order: string[] = []
+    const held: Array<Deferred<void>> = []
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      order.push(`item:${id}`)
+      if (held.length < 2) {
+        const write = deferred()
+        held.push(write)
+        await write.promise
+      }
+      return makeItem({ id, ...patch })
+    })
+    const getEvidenceReview = vi.fn(async (id: string) => {
+      order.push(`get:${id}`)
+      return id === 'r2' ? second : first
+    })
+    stubReviewApi({ getEvidenceReview, updateEvidenceReviewItem })
+    await openWith(first)
+    order.length = 0
+
+    editReviewItem('i1', { decision: 'supported' })
+    const switching = openReviewSession({ reviewId: 'r2' })
+    await vi.waitFor(() => expect(held).toHaveLength(1)) // pass 1 writes i1…
+    editReviewItem('i2', { decision: 'not_supported' }) // …while i2 is decided
+    held[0]!.resolve()
+    await vi.waitFor(() => expect(held).toHaveLength(2)) // pass 2 writes i2…
+    editReviewItem('i1', { reviewerNote: 'late note' }) // …while a note lands
+    held[1]!.resolve()
+    await switching
+    expect(order).toEqual(['item:i1', 'item:i2', 'item:i1', 'get:r2'])
     expect(getReviewSessionSnapshot()).toMatchObject({ detail: second, openError: null })
   })
 
@@ -748,9 +790,11 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     }
   })
 
-  // #837 (B §1.1 finding 4): a decision made while the pre-sweep flush is still writing re-arms the debounce; the sweep
-  // must not run ahead of it, or that timer writes the decision AFTER the sweep with nothing failing at all.
-  it('a decision made while the pre-sweep flush is writing is saved BEFORE the sweep, never after it (#837)', async () => {
+  // #837 (B §1.1 finding 4; review round 2): a decision made while the pre-sweep flush is still writing re-arms the
+  // debounce. The rule: what was queued when the sweep was asked for is written FIRST and swept; a decision made after
+  // that is newer than the sweep, so it is neither swept on screen nor refused silently — the sweep runs, the decision
+  // stays on screen, and its queued write is the last word (screen and database agree).
+  it('a decision made while the pre-sweep flush is writing does not stop the sweep: it stays on screen and is written after it', async () => {
     vi.useFakeTimers()
     const items = bulkItems()
     const detail = makeDetail({ items })
@@ -779,8 +823,69 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     editReviewItem('p2', { decision: 'not_supported' }) // lands mid-write
     firstWrite.resolve()
     await sweeping
-    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // any write the debounce still holds
-    expect(order).toEqual(['item:p1', 'item:p2', 'bulk:clear_decisions'])
+    expect(order).toEqual(['item:p1', 'bulk:clear_decisions']) // the sweep ran
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p2')!.decision).toBe('not_supported')
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // the debounced write of p2
+    expect(order).toEqual(['item:p1', 'bulk:clear_decisions', 'item:p2'])
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('p2', { decision: 'not_supported' })
+    const decisions = Object.fromEntries(getReviewSessionSnapshot().detail!.items.map((i) => [i.id, i.decision]))
+    expect(decisions).toEqual({ h1: 'not_reviewed', p1: 'not_reviewed', p2: 'not_supported' })
+  })
+
+  // Review round 2: the sweep, like the switch, waits out a flush another caller has in flight before it decides — that
+  // write holds its patch off the queue, so without the wait a failure landing after it would be swept over.
+  it('a second flush running when the sweep decides still holds the failed edit: the sweep waits for it and refuses', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const backend = bulkBackend(items)
+    const held: Array<Deferred<EvidenceReviewItem>> = []
+    const updateEvidenceReviewItem = vi.fn(() => {
+      const write = deferred<EvidenceReviewItem>()
+      held.push(write)
+      return write.promise
+    })
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      updateEvidenceReviewItem,
+      applyEvidenceReviewBulkAction: backend.spy
+    })
+    await openWith(detail)
+    editReviewItem('p1', { decision: 'not_supported' })
+
+    const exitFlush = flushReviewSession() // write 1
+    const sweeping = bulkClearDecisions() // waits for write 1
+    const secondFlush = flushReviewSession() // another flush caller, also waiting
+    held[0]!.reject(new Error('disk I/O error'))
+    await vi.waitFor(() => expect(held).toHaveLength(2)) // the sweep's own flush
+    held[1]!.reject(new Error('disk I/O error'))
+    await vi.waitFor(() => expect(held).toHaveLength(3)) // the other caller's retry, in flight as the sweep decides
+    held[2]!.reject(new Error('disk I/O error'))
+    await Promise.all([exitFlush, sweeping, secondFlush])
+
+    expect(backend.spy).not.toHaveBeenCalled()
+    expect(getReviewSessionSnapshot().saveState).toBe('error')
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p1')!.decision).toBe('not_supported')
+  })
+
+  // Review round 2: only an edit a failed write left unsaved blocks a sweep — not any error (a failed acknowledge,
+  // link, selection or an earlier sweep leaves nothing queued).
+  it('a failed acknowledge with nothing queued does not block a bulk action', async () => {
+    const items = bulkItems()
+    const detail = makeDetail({ items })
+    const backend = bulkBackend(items)
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => detail),
+      acknowledgeEvidenceReviewFreshness: vi.fn(async () => {
+        throw new Error('db gone')
+      }),
+      applyEvidenceReviewBulkAction: backend.spy
+    })
+    await openWith(detail)
+    expect(await acknowledgeReviewFreshness()).toBe(false)
+    expect(getReviewSessionSnapshot().saveState).toBe('error')
+
+    await bulkClearDecisions()
+    expect(backend.spy).toHaveBeenCalledTimes(1)
     for (const i of getReviewSessionSnapshot().detail!.items) {
       expect(i.decision).toBe('not_reviewed')
     }

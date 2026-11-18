@@ -14,7 +14,7 @@ import type {
   StartSkillRunResult
 } from '../../shared/types'
 import { buildDocumentSegmentReader, buildOriginalDocumentReader } from './documentSegments'
-import { saveBinaryExport, saveTextExport } from './save-export'
+import { saveBinaryExport, saveTextExport, type SaveExportDialogOptions } from './save-export'
 import { getLatestUserMessage } from '../services/chat'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -98,21 +98,18 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // mandates for plain text; JSON/XML stay BOM-free), and the atomic tmp → fsync → rename tail. This export used
   // to `writeFile` straight onto the chosen file, so a failure part-way through left a partial file and, when
   // replacing a file, destroyed the old one — while the run said "Nothing was changed." Same bytes on success.
+  // One dialog for both skills writers below (title, default name, filter), resolved from the
+  // content-free i18n keys the dispatch passes.
+  const exportDialog = (defaultFileName: string, dialogMeta: SaveFileDialogMeta): SaveExportDialogOptions => ({
+    title: tMain(dialogMeta.titleKey),
+    defaultPath: defaultFileName,
+    filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
+  })
   const saveTextFile = async (
     defaultFileName: string,
     content: string,
     dialogMeta: SaveFileDialogMeta = SAVE_DIALOG_CSV
-  ): Promise<boolean> => {
-    const filePath = await saveTextExport(
-      {
-        title: tMain(dialogMeta.titleKey),
-        defaultPath: defaultFileName,
-        filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
-      },
-      content
-    )
-    return filePath != null
-  }
+  ): Promise<boolean> => (await saveTextExport(exportDialog(defaultFileName, dialogMeta), content)) != null
 
   // Phase 9 (D77): the MAIN-side BINARY write for the same-format DOCX export — the `.docx` sibling of
   // `saveTextFile` (a `.docx` source → a `.docx` copy). Identical save-dialog + privacy posture (the path +
@@ -123,17 +120,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     defaultFileName: string,
     content: Uint8Array,
     dialogMeta: SaveFileDialogMeta = SAVE_DIALOG_CSV
-  ): Promise<boolean> => {
-    const filePath = await saveBinaryExport(
-      {
-        title: tMain(dialogMeta.titleKey),
-        defaultPath: defaultFileName,
-        filters: [{ name: tMain(dialogMeta.filterNameKey), extensions: dialogMeta.extensions }]
-      },
-      content
-    )
-    return filePath != null
-  }
+  ): Promise<boolean> => (await saveBinaryExport(exportDialog(defaultFileName, dialogMeta), content)) != null
 
   // Phase 9 (D77): probe a document's stored SOURCE format + read its original bytes for the DOCX writer.
   // The seam holds the FS/cipher reach via this injected closure (the §14 ceiling); the tool never does.

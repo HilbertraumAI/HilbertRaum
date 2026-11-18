@@ -18,6 +18,7 @@ import {
   editReviewItem,
   flushReviewSession,
   getReviewSessionSnapshot,
+  hasEditsAfterFailedSave,
   linkEvidence,
   markReviewReady,
   openReviewSession,
@@ -189,6 +190,14 @@ export function ReviewScreen({
           {blocked ? (
             <BlockedSwitchCard
               title={localizeServerCopy(t, blocked.title)}
+              error={
+                session.saveState === 'error'
+                  ? session.saveError != null
+                    ? localizeServerCopy(t, session.saveError)
+                    : t('review.autosave.error')
+                  : null
+              }
+              resolved={session.saveState === 'saved' && sameTarget(blocked.target, handoff)}
               onBack={() => onNavigate('chat')}
               t={t}
             />
@@ -379,10 +388,11 @@ export function ReviewScreen({
           <div className="review-bulk-row">
             {/* Conservative bulk actions ONLY (spec §14.4) — there is deliberately no
                 "mark all supported" anywhere on this screen (tested). Disabled, not hidden, while
-                a save error shows (#837): the store refuses a sweep over a failed save, and the
-                visible error line with its Try again is the explanation. */}
+                an edit a failed write left unsaved is waiting (#837 — the store's own refusal
+                condition, `hasEditsAfterFailedSave`); the visible error line with its Try again
+                is the explanation. Other errors leave nothing queued and block nothing. */}
             <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild disabled={session.saveState === 'error'}>
+              <DropdownMenu.Trigger asChild disabled={hasEditsAfterFailedSave()}>
                 <Button size="sm">{t('review.bulk.menu')} ▾</Button>
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -541,22 +551,36 @@ export function ReviewScreen({
  * description, so a screen reader reads both — and again when a retry that failed ends (a
  * browser moves focus off a button while it is disabled). Both actions are disabled while one
  * runs: a retry can wait out a busy database for seconds; Back stays live.
+ *
+ * Review round 2: the card shows the save error (`error`: the text of the review's own error
+ * line), so a Try again that fails again is visibly and audibly a failure — it is part of Try
+ * again's description. And the card never outlives its cause: when a later save succeeds
+ * while it shows (`resolved`: the old screen's exit flush, a timer; only for the switch this
+ * screen was opened for), nothing is left unsaved, so the card goes ahead with that switch.
  */
 function BlockedSwitchCard({
   title,
+  error,
+  resolved,
   onBack,
   t
 }: {
   title: string
+  error: string | null
+  resolved: boolean
   onBack: () => void
   t: I18n['t']
 }): JSX.Element {
   const bodyId = useId()
+  const errorId = useId()
   const retryRef = useRef<HTMLButtonElement>(null)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (!busy) retryRef.current?.focus()
   }, [busy])
+  useEffect(() => {
+    if (resolved && !busy) void run(retryBlockedSwitch)
+  }, [resolved, busy])
 
   async function run(action: () => Promise<void>): Promise<void> {
     setBusy(true)
@@ -570,12 +594,17 @@ function BlockedSwitchCard({
   return (
     <>
       <p id={bodyId}>{t('review.unsaved.body', { title })}</p>
+      {error != null && (
+        <p className="hint error" id={errorId}>
+          {error}
+        </p>
+      )}
       <div className="actions">
         <Button
           ref={retryRef}
           variant="primary"
           disabled={busy}
-          aria-describedby={bodyId}
+          aria-describedby={error != null ? `${bodyId} ${errorId}` : bodyId}
           onClick={() => void run(retryBlockedSwitch)}
         >
           {t('review.autosave.retry')}
@@ -589,6 +618,12 @@ function BlockedSwitchCard({
       </div>
     </>
   )
+}
+
+/** Do two handoff targets name the same review request? */
+function sameTarget(a: ReviewHandoffTarget, b: ReviewHandoffTarget): boolean {
+  if ('reviewId' in a) return 'reviewId' in b && a.reviewId === b.reviewId
+  return 'messageId' in b && a.messageId === b.messageId
 }
 
 /** NEWLY-missing sources in a freshness verdict: state 'missing' minus the ones already

@@ -142,11 +142,24 @@ function hasUnsavedEdits(): boolean {
   return pendingItems.size > 0 || pendingHead != null
 }
 
-/** True while a queued item edit carries a DECISION (what a bulk sweep would overwrite). */
-function hasPendingDecision(): boolean {
-  for (const patch of pendingItems.values()) if (patch.decision !== undefined) return true
-  return false
+/** True while item `itemId` has a queued DECISION edit (newer than anything main returns). */
+function hasQueuedDecision(itemId: string): boolean {
+  return pendingItems.get(itemId)?.decision !== undefined
 }
+
+/**
+ * #837: an edit a FAILED write left unsaved is waiting for the user's Try again — the one
+ * state a switch to another review or a bulk sweep must not run over. (Any other error —
+ * a failed acknowledge, link or selection, an earlier sweep — leaves nothing queued and
+ * blocks neither; edits that are merely pending are flushed first.) The screen disables
+ * Bulk actions on the same condition.
+ */
+export function hasEditsAfterFailedSave(): boolean {
+  return state.saveState === 'error' && hasUnsavedEdits()
+}
+
+/** Flush passes a switch runs before it decides (the first + up to three more). */
+const SWITCH_FLUSH_PASSES = 4
 
 /** Does `target` name the review already in the store? */
 function isOpenReview(target: ReviewHandoffTarget): boolean {
@@ -158,18 +171,21 @@ function isOpenReview(target: ReviewHandoffTarget): boolean {
 /** Open (or create — the idempotent Phase-1 create) a review for the handoff target. */
 export async function openReviewSession(target: ReviewHandoffTarget): Promise<void> {
   // A previous review's unsaved edits are flushed first so switching reviews loses nothing.
-  await flushReviewSession().catch(() => {})
   // A pass that ends with edits which landed WHILE it was writing re-arms the debounce and
-  // returns: one more (bounded) pass writes those too. A FAILED write is not retried here —
-  // the failure stands, with its error line, until the user's Try again.
-  if (hasUnsavedEdits() && state.saveState !== 'error') await flushReviewSession().catch(() => {})
-  // A flush ANOTHER caller started meanwhile (a screen's exit flush; React StrictMode runs that
-  // cleanup once more on mount) holds its patches OFF the queue while it writes. Wait it out, so
-  // the check below sees every unsaved edit: a failed write puts its patch back, and the reset
-  // would otherwise leave that failure to land under the new token and be dropped.
-  while (flushInFlight) await flushInFlight
-  // #837: edits still queued now are ones a write FAILED to save (or, rarely, ones that landed
-  // during the second pass). The reset below used to drop them without a word.
+  // returns: the next pass writes those too, until nothing is queued or a write FAILS (a
+  // failure is not retried here — it stands, with its error line, until the user's Try again).
+  // After each pass, a flush ANOTHER caller started meanwhile (a screen's exit flush; React
+  // StrictMode runs that cleanup once more on mount) is waited out: it holds its patches OFF
+  // the queue while it writes, a failed write puts its patch back, and the reset below would
+  // otherwise leave that failure to land under the new token and be dropped. The pass count is
+  // only a safety valve against edits that never stop arriving.
+  for (let pass = 0; pass < SWITCH_FLUSH_PASSES; pass++) {
+    await flushReviewSession().catch(() => {})
+    while (flushInFlight) await flushInFlight
+    if (!hasUnsavedEdits() || state.saveState === 'error') break
+  }
+  // #837: edits still queued now are ones a write FAILED to save (or, past the safety valve,
+  // ones still arriving). The reset below used to drop them without a word.
   if (hasUnsavedEdits() && state.detail) {
     if (isOpenReview(target)) {
       // The same review: no reset and no re-read over the edit — it stays on screen with its
@@ -699,9 +715,10 @@ export async function deleteReviewSelection(itemId: string): Promise<void> {
 // transaction. It used to walk the item list and queue a per-item patch, which flushed as N
 // individual writes — N redundant ready-guard re-reads, N head stamps, N item re-reads, and
 // (the user-visible half) a crash or failure part-way through leaving the review HALF-swept:
-// a state no user action can produce and none can explain. Pending per-item edits are
-// flushed FIRST (the markReviewReady idiom) so the sweep is unambiguously the LAST write —
-// a queued decision can never land after it and silently undo part of it.
+// a state no user action can produce and none can explain. Per-item edits queued when the
+// sweep is asked for are flushed FIRST (the markReviewReady idiom), so the sweep overrides
+// them; a decision made after that is newer than the sweep, stays on screen and is written
+// after it (#837 — `applyBulkAction`), so the screen never shows a sweep the database undid.
 
 /** Which items a bulk action targets locally — the mirror of main's SQL predicates, used
  *  for the optimistic apply only (main re-derives from persisted rows and its returned
@@ -752,27 +769,27 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
   if (!opened || opened.status === 'ready') return
   const reviewId = opened.id
   const token = openToken
-  // Land any debounced per-item edits BEFORE the sweep, so the sweep is the last word.
+  // The rule (#837): what was queued when the sweep was asked for is written FIRST, so the
+  // sweep overrides it; a decision made AFTER that (while this flush writes, or while the
+  // sweep's own call is in flight) is newer than the sweep — it stays on screen, the optimistic
+  // apply and the merge below leave it alone, and its queued write is the last word, so the
+  // screen and the database agree. A flush another caller has in flight is waited out too.
   await flushReviewSession()
+  while (flushInFlight) await flushInFlight
   if (token !== openToken) return
-  // #837: a decision made WHILE that flush was writing re-armed the debounce, and its timer
-  // would write it AFTER the sweep: one more (bounded) pass lands it first.
-  if (hasPendingDecision() && state.saveState !== 'error') {
-    await flushReviewSession()
-    if (token !== openToken) return
-  }
-  // #837: never sweep over a failed save (the markReviewReady / exportReviewPack / reopenReview
-  // idiom). The optimistic apply below would clear the error line, and the failed patch, still
-  // queued, would be written AFTER the sweep: the database gets back a decision the screen shows
-  // swept. A DECISION still queued after the second pass (made during it) is refused for the
-  // same reason; a queued note is fine (the merge below keeps notes).
-  if (state.saveState === 'error' || hasPendingDecision()) return
+  // #837: never sweep over an edit a FAILED write left unsaved (the markReviewReady /
+  // exportReviewPack / reopenReview idiom, narrowed to what actually conflicts): the optimistic
+  // apply would clear its error line and the failed patch would be written after the sweep.
+  // Any other error (nothing queued) does not block it.
+  if (hasEditsAfterFailedSave()) return
   const detail = state.detail
   if (!detail || detail.id !== reviewId || detail.status === 'ready') return
   const { ids, decision } = bulkTargets(detail.items, action)
   if (ids.size === 0) return
   // Optimistic apply — ONE state commit for the whole sweep, never one per item.
-  const optimistic = detail.items.map((i) => (ids.has(i.id) ? { ...i, decision } : i))
+  const optimistic = detail.items.map((i) =>
+    ids.has(i.id) && !hasQueuedDecision(i.id) ? { ...i, decision } : i
+  )
   setState({
     detail: { ...detail, items: optimistic, gate: computeReadyGate(optimistic) },
     saveState: 'pending',
@@ -797,7 +814,7 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
     const byId = new Map(updated.map((i) => [i.id, i]))
     const items = current.items.map((i) => {
       const fresh = byId.get(i.id)
-      if (!fresh || pendingItems.get(i.id)?.decision !== undefined) return i
+      if (!fresh || hasQueuedDecision(i.id)) return i
       return { ...i, decision: fresh.decision }
     })
     setState({
