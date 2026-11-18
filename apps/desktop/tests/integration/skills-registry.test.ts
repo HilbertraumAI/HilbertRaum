@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { existsSync, mkdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { listTables, type Db } from '../../src/main/services/db'
+import { log } from '../../src/main/services/logging'
 import { tempRoot, openFreshDb } from '../helpers/db-fixtures'
 import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 import {
@@ -34,6 +35,7 @@ interface SkillFields {
   version?: string
   kind?: string
   keywords?: string[]
+  minAppVersion?: string
   body?: string
   extraFrontmatter?: string
 }
@@ -49,6 +51,7 @@ function writeSkill(parentDir: string, folderName: string, fields: SkillFields =
       description: `A test skill named ${id}`,
       version: fields.version,
       kind: fields.kind,
+      minAppVersion: fields.minAppVersion,
       triggers: fields.keywords ? { keywords: fields.keywords } : undefined,
       extraFrontmatter: fields.extraFrontmatter,
       body: fields.body
@@ -390,6 +393,195 @@ describe('skills registry — reconcile', () => {
     const res = reconcileSkills(db2, opts(dirs))
     expect(res.inserted).toBe(2)
     expect(listSkills(db2).map((s) => s.installId).sort()).toEqual(['app:built-in', 'user:mine'])
+  })
+})
+
+// #846: `skills.disabled_reason` records why a row is off. Only `min_app_version` is ever acted on: an app skill the
+// version gate kept off switches on once this build satisfies it, and every other reason (the user's, DS12's, DS19's,
+// one only a newer build knows) is left alone. Frozen old-reader contract: the app-update plan's Appendix B lists these.
+describe('skills registry — disabled reason (#846)', () => {
+  const T1 = '2026-11-18T10:00:00.000Z'
+  const T2 = '2026-11-18T11:00:00.000Z'
+  const T3 = '2026-11-18T12:00:00.000Z'
+  const at = (dirs: SkillDirs, appVersion: string | undefined, now: string): ReconcileOptions => ({
+    ...dirs,
+    appVersion,
+    now: () => now
+  })
+  const reasonOf = (db: Db, installId: string): string | null =>
+    (db.prepare('SELECT disabled_reason FROM skills WHERE install_id = ?').get(installId) as {
+      disabled_reason: string | null
+    }).disabled_reason
+  const enabledOf = (db: Db, installId: string): boolean => getSkill(db, installId)!.enabled
+
+  it('an app skill the version gate kept off switches on once the app satisfies it, with a counted log line', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'future', { minAppVersion: '2.0.0' })
+    reconcileSkills(db, at(dirs, '1.0.0', T1))
+    expect(enabledOf(db, 'app:future')).toBe(false)
+    expect(reasonOf(db, 'app:future')).toBe('min_app_version')
+
+    // Still too old, then a run that does not know its own version: nothing moves.
+    expect(reconcileSkills(db, at(dirs, '1.9.9', T2)).reenabled).toBe(0)
+    expect(reconcileSkills(db, at(dirs, undefined, T2)).reenabled).toBe(0)
+    expect(enabledOf(db, 'app:future')).toBe(false)
+
+    const info = vi.spyOn(log, 'info')
+    try {
+      const res = reconcileSkills(db, at(dirs, '2.0.0', T3))
+      expect(res.reenabled).toBe(1)
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('re-enabled'), { count: 1 })
+    } finally {
+      info.mockRestore()
+    }
+    expect(enabledOf(db, 'app:future')).toBe(true)
+    expect(reasonOf(db, 'app:future')).toBeNull()
+    expect(getSkill(db, 'app:future')!.updatedAt).toBe(T3)
+  })
+
+  it('leaves every other reason alone: the user, a DS12 loser, an unconfirmed drop-in, a reason from a newer build', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'switched-off')
+    writeSkill(dirs.appSkillsDir, 'shared')
+    writeSkill(dirs.userSkillsDir, 'shared')
+    writeSkill(dirs.appSkillsDir, 'policy-off')
+    writeSkill(dirs.userSkillsDir, 'drop-in')
+    reconcileSkills(db, at(dirs, '1.0.0', T1))
+    expect(reasonOf(db, 'user:drop-in')).toBe('unconfirmed') // DS19: no import confirmation
+    expect(reasonOf(db, 'app:switched-off')).toBeNull() // enabled rows carry no reason
+
+    setSkillEnabled(db, 'app:switched-off', false, T2) // the Settings toggle (default reason)
+    expect(reasonOf(db, 'app:switched-off')).toBe('user')
+    // The user chose their own copy of `shared` over the built-in (the enable IPC's sibling disable).
+    setSkillEnabled(db, 'user:shared', true, T2)
+    setSkillEnabled(db, 'app:shared', false, T2, 'duplicate')
+    db.prepare("UPDATE skills SET enabled = 0, disabled_reason = 'policy' WHERE install_id = 'app:policy-off'").run()
+
+    const res = reconcileSkills(db, at(dirs, '9.0.0', T3))
+    expect(res.reenabled).toBe(0)
+    expect(enabledOf(db, 'app:switched-off')).toBe(false)
+    expect(enabledOf(db, 'app:shared')).toBe(false)
+    expect(enabledOf(db, 'user:shared')).toBe(true)
+    expect(enabledOf(db, 'app:policy-off')).toBe(false)
+    expect(reasonOf(db, 'app:policy-off')).toBe('policy')
+    expect(enabledOf(db, 'user:drop-in')).toBe(false)
+  })
+
+  // F-846-3: only an APP skill comes back on. A user import the import gate left off records 'min_app_version' too
+  // (installer.ts), and a drop-in row an older build wrote has no reason with installed_at = updated_at; neither is ever
+  // switched on by a reconcile, whatever the app version.
+  it('never switches on a user skill, whatever its reason says', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.userSkillsDir, 'imported', { minAppVersion: '2.0.0' })
+    writeSkill(dirs.userSkillsDir, 'legacy-drop-in', { minAppVersion: '2.0.0' })
+    reconcileSkills(db, at(dirs, '1.0.0', T1))
+    setSkillEnabled(db, 'user:imported', false, T2, 'min_app_version') // what the import gate writes
+    db.prepare("UPDATE skills SET disabled_reason = NULL WHERE install_id = 'user:legacy-drop-in'").run()
+
+    const res = reconcileSkills(db, at(dirs, '2.0.0', T3))
+    expect(res.reenabled).toBe(0)
+    expect(enabledOf(db, 'user:imported')).toBe(false)
+    expect(enabledOf(db, 'user:legacy-drop-in')).toBe(false)
+    expect(reasonOf(db, 'user:imported')).toBe('min_app_version')
+  })
+
+  it('keeps the reason through a manifest change while the app is still too old', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'future', { minAppVersion: '2.0.0' })
+    reconcileSkills(db, at(dirs, '1.0.0', T1))
+    writeSkill(dirs.appSkillsDir, 'future', { minAppVersion: '2.0.0', version: '1.1.0' })
+    expect(reconcileSkills(db, at(dirs, '1.0.0', T2)).updated).toBe(1)
+    expect(reasonOf(db, 'app:future')).toBe('min_app_version')
+    expect(enabledOf(db, 'app:future')).toBe(false)
+
+    reconcileSkills(db, at(dirs, '2.0.0', T3))
+    expect(enabledOf(db, 'app:future')).toBe(true)
+  })
+
+  it('infers the reason for a row an older build inserted (no reason, never touched since), and only for that row', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'legacy', { minAppVersion: '2.0.0' })
+    writeSkill(dirs.appSkillsDir, 'touched', { minAppVersion: '2.0.0' })
+    writeSkill(dirs.appSkillsDir, 'later', { minAppVersion: '3.0.0' })
+    reconcileSkills(db, at(dirs, '1.0.0', T1))
+    // What a build without the column leaves: the gate's insert (installed_at = updated_at), no reason.
+    db.prepare('UPDATE skills SET disabled_reason = NULL').run()
+    // A later write moved updated_at: the row could be anything now, so it stays off.
+    db.prepare("UPDATE skills SET updated_at = ? WHERE install_id = 'app:touched'").run(T2)
+
+    reconcileSkills(db, at(dirs, '2.0.0', T3))
+    expect(enabledOf(db, 'app:legacy')).toBe(true)
+    expect(enabledOf(db, 'app:touched')).toBe(false)
+    expect(reasonOf(db, 'app:touched')).toBeNull()
+
+    // Still too old for `later`: the inferred reason is recorded, so a later manifest change cannot erase it.
+    expect(enabledOf(db, 'app:later')).toBe(false)
+    expect(reasonOf(db, 'app:later')).toBe('min_app_version')
+    writeSkill(dirs.appSkillsDir, 'later', { minAppVersion: '3.0.0', version: '1.1.0' })
+    reconcileSkills(db, at(dirs, '2.0.0', '2026-11-18T13:00:00.000Z'))
+    reconcileSkills(db, at(dirs, '3.0.0', '2026-11-18T14:00:00.000Z'))
+    expect(enabledOf(db, 'app:later')).toBe(true)
+  })
+
+  it('the built-in wins over an enabled user copy of the same id when it switches on (DS12, the arrival rule)', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'shared', { minAppVersion: '2.0.0' })
+    writeSkill(dirs.userSkillsDir, 'shared')
+    reconcileSkills(db, at(dirs, '1.0.0', T1))
+    setSkillEnabled(db, 'user:shared', true, T2)
+
+    reconcileSkills(db, at(dirs, '2.0.0', T3))
+    expect(enabledOf(db, 'app:shared')).toBe(true)
+    expect(enabledOf(db, 'user:shared')).toBe(false)
+    expect(reasonOf(db, 'user:shared')).toBe('duplicate')
+  })
+
+  // Builds up to v0.1.65 read `skills` with `SELECT *` and write it with explicit column lists (verified at v0.1.50,
+  // v0.1.60 and v0.1.65). Their exact statements, against the migrated table: the new column must not break them,
+  // and a reason they leave stale on an ENABLED row means nothing.
+  it('an older build reads and writes the migrated table unchanged', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'kept', { minAppVersion: '2.0.0' })
+    reconcileSkills(db, at(dirs, '1.0.0', T1))
+    const manifestJson = (db.prepare("SELECT manifest_json FROM skills WHERE install_id = 'app:kept'").get() as {
+      manifest_json: string
+    }).manifest_json
+
+    db.prepare(
+      `INSERT INTO skills (install_id, id, title, version, kind, source, path, enabled,
+           warning_ack, trusted_level, manifest_json, unavailable_at, installed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+    ).run('user:old', 'old', 'Old', '1.0.0', 'instruction', 'user', 'old', 0, 0, 'user', manifestJson, T1, T1)
+    db.prepare(
+      `UPDATE skills SET title = ?, version = ?, kind = ?, source = ?, path = ?,
+           trusted_level = ?, manifest_json = ?, unavailable_at = NULL, updated_at = ?
+         WHERE install_id = ?`
+    ).run('Kept', '1.0.0', 'instruction', 'app', 'kept', 'app', manifestJson, T2, 'app:kept')
+    db.prepare('UPDATE skills SET enabled = ?, updated_at = ? WHERE install_id = ?').run(1, T2, 'app:kept')
+    db.prepare('UPDATE skills SET unavailable_at = ?, updated_at = ? WHERE install_id = ? AND unavailable_at IS NULL').run(
+      T2,
+      T2,
+      'user:old'
+    )
+    const rows = db.prepare('SELECT * FROM skills WHERE install_id IN (?, ?)').all('app:kept', 'user:old') as Array<{
+      install_id: string
+      enabled: number
+      disabled_reason: string | null
+    }>
+    expect(rows.map((r) => [r.install_id, r.enabled, r.disabled_reason]).sort()).toEqual([
+      ['app:kept', 1, 'min_app_version'], // stale, but the row is on: the reason is read only while enabled = 0
+      ['user:old', 0, null]
+    ])
+
+    reconcileSkills(db, at(dirs, '1.0.0', T3))
+    expect(enabledOf(db, 'app:kept')).toBe(true) // never switched off by a stale reason
   })
 })
 

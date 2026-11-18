@@ -18,6 +18,7 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 })
 
 import { resolveModelByRole } from '../../src/main/services/resolve-model'
+import { setManifestAppVersion } from '../../src/main/services/models'
 
 const ROOT = 'C:/drive'
 const onDrive = (rel: string): string => join(ROOT, rel)
@@ -89,6 +90,62 @@ describe('resolveModelByRole (M-A3)', () => {
 
   it('returns null when no manifest matches the role', () => {
     expect(resolveModelByRole(manifestsDirWith(roleManifest('qwen3-chat', 'chat')), ROOT, 'reranker')).toBeNull()
+  })
+
+  // #848: which embeddings manifest is the embedder must not depend on the order a drive lists its files in (FAT/exFAT
+  // and ext4 do not sort). The one flagged `default_for_role` wins in either order; without a flag, the first in walk
+  // order (discovery sorts the walk, `manifest-discovery-order.test.ts`). Generic: every role resolved here.
+  it('takes the manifest flagged default_for_role in either order, else the first in walk order (#848)', () => {
+    const plain = validManifest({ id: 'a-embed', role: 'embeddings', local_path: 'models/embeddings/a.gguf' })
+    const other = validManifest({ id: 'b-embed', role: 'embeddings', local_path: 'models/embeddings/b.gguf' })
+    const flagged = validManifest({
+      id: 'z-embed',
+      role: 'embeddings',
+      local_path: 'models/embeddings/z.gguf',
+      default_for_role: true
+    })
+    const flaggedRerank = validManifest({ id: 'r', role: 'reranker', local_path: 'models/reranker/r.gguf', default_for_role: true })
+    for (const list of [[plain, flagged, other], [flagged, other, plain], [other, plain, flagged]]) {
+      const ids = list.map((m) => m.id).join(',')
+      expect(resolveModelByRole('C:/m', ROOT, 'embeddings', { discovered: list.map((m) => discovered(m)) })?.id, ids).toBe('z-embed')
+    }
+    // A flag on another role decides nothing for this one.
+    expect(
+      resolveModelByRole('C:/m', ROOT, 'embeddings', { discovered: [flaggedRerank, plain, other].map((m) => discovered(m)) })?.id
+    ).toBe('a-embed')
+  })
+
+  // #848 review (frozen constraint, model-policy `default_for_role`): the flag decides among the USABLE manifests. When
+  // no usable manifest of the role is flagged (the flagged one is invalid, or a later release moved it to "needs a newer
+  // HilbertRaum"), the first usable manifest of the role in walk order is the model, the rule of an unflagged set. So a
+  // release must never make the flagged manifest unusable for an older build without flagging a replacement.
+  it('falls back to the first usable manifest of the role when the flagged one is not usable (#848)', () => {
+    setManifestAppVersion('1.0.0')
+    try {
+      const dir = manifestsDirWith(roleManifest('a-other', 'embeddings', 512), {
+        ...roleManifest('z-default', 'embeddings', 512),
+        default_for_role: true,
+        min_app_version: '2.0.0'
+      })
+      expect(resolveModelByRole(dir, ROOT, 'embeddings')?.id).toBe('a-other')
+    } finally {
+      setManifestAppVersion('')
+    }
+  })
+
+  // #847 (a+): a manifest for a newer HilbertRaum is display-only. A known role whose `min_app_version` this app
+  // does not meet must never become the role's model: this build would start a model it cannot run.
+  it('never resolves a manifest for a newer HilbertRaum (#847)', () => {
+    setManifestAppVersion('1.0.0')
+    try {
+      const dir = manifestsDirWith(
+        { ...roleManifest('next-embed', 'embeddings', 512), min_app_version: '2.0.0' },
+        roleManifest('holo', 'hologram')
+      )
+      expect(resolveModelByRole(dir, ROOT, 'embeddings')).toBeNull()
+    } finally {
+      setManifestAppVersion('')
+    }
   })
 
   // PF-4 (full-audit 2026-07-10): composeServices discovers once per composition pass and

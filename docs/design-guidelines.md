@@ -2691,6 +2691,22 @@ screen now keeps the active chat model pinned above a compact library of alterna
   (`isModelInstalled`), so a damaged-only drive opens in Browse; a completed download does not
   change the user's view. Browse includes installed and missing entries. Existing
   installed/recommended/memory-fit ordering and all main-process gates remain intact.
+- **#847 amendment — "Needs a newer HilbertRaum", and the one presence contract.** A model for a newer
+  HilbertRaum (a role this build does not know, or a manifest `min_app_version` above the app;
+  `ModelInfo.role: 'unknown'`, `needsNewerApp`) is never a library row, a task or a family option
+  (`matchesLibraryView` refuses it, so `visibleModels`, `availableFamilies` and the family empty-state
+  count never see it). It renders in ONE trailing section after the five task sections, shown only when
+  non-empty, under the heading "Needs a newer HilbertRaum" (`newerAppRows`, `lib/modelLibrary.ts`): a
+  compact card with the name, a NEUTRAL "Needs newer app" badge (never the error-tone "Unsupported" state
+  badge: it must not look like a broken download) and one hint line ("…Update the app on this computer to
+  use it."). It has no Use/Start, no Download and no technical-details disclosure (its "Verify checksum"
+  would answer "Unknown model id"). The view rule is the PRESENCE CONTRACT this section adds:
+  `filesPresent`, computed in the main process from the existence (not the hash) of every file the
+  manifest declares. "On this drive" lists an entry only when it is true — the user's "my downloaded model
+  vanished" case — and Browse lists every entry. `isModelOnDrive` is unchanged and still infers nothing.
+  The entries serve no task and offer no family, so a task or family filter hides the section; search
+  applies as to every row, and the results count includes the section's rows (so does the empty-state
+  decision: a list holding only such entries shows them, not "no models").
 - **Search + task + family filters:** search display name, exact id and family, case-insensitively,
   matching every whitespace-separated term. Filter before grouping so a collapsed variant is
   directly discoverable. Tasks are Chat, Document search (embeddings + reranker), Translation,
@@ -2778,7 +2794,7 @@ screen now keeps the active chat model pinned above a compact library of alterna
   need the user — adopting the live job, else the most recent unresolved result — and **Dismiss**
   tells the main process too, so a dismissal made before the reload stays dismissed.
 
-Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `lib/modelAvailability.ts`
+Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face, the #847 trailing rows), `lib/modelAvailability.ts`
 (the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split
 out of the screen so `modelLibrary` can share them without importing it back), `styles.css`, EN/DE
 catalogs. Behavioral coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`, the real-catalog

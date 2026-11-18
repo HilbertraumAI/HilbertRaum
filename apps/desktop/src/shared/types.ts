@@ -674,7 +674,11 @@ export interface ModelInfo {
   id: string
   displayName: string
   family: string
-  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision' | 'translation'
+  /**
+   * `'unknown'` (#847): a model for a newer HilbertRaum (`needsNewerApp`), listed for display only. Never a
+   * known role, so no role branch (the active chat model, a task section, Use / Start) can take it.
+   */
+  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision' | 'translation' | 'unknown'
   format: string
   runtime: string
   license: string
@@ -703,6 +707,19 @@ export interface ModelInfo {
    * per-download confirmation (size, license link, URL, license acknowledgement).
    */
   download?: ModelDownloadInfo
+  /**
+   * #847: this entry is a manifest for a newer HilbertRaum (a role this build does not know, or a
+   * `min_app_version` above this app): `role: 'unknown'`, `state: 'unsupported'`, never recommended, never a
+   * `download`. The main process refuses it on every path (an unknown id), whatever the renderer asks.
+   */
+  needsNewerApp?: true
+  /** #847: the role a `needsNewerApp` manifest declares, as written (absent when it names none). */
+  declaredRole?: string
+  /**
+   * #847: for a `needsNewerApp` entry only — every file it declares exists on the drive (existence only, no
+   * hash). The presence contract the "On this drive" view reads for these entries (design-guidelines §15).
+   */
+  filesPresent?: boolean
 }
 
 /**

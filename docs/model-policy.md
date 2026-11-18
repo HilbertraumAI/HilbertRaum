@@ -258,8 +258,71 @@ manifest's YAML comment carrying its arithmetic; `model-benchmarks.md` §6.6),
 `host_mapped_weights_mib` (number ≥ 0, #321; the weights that stay host-mapped on a full offload,
 which the same estimate subtracts — absent charges the whole file to the card), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
-vision role + mmproj projector" below), and an optional **`files:` list** (below, #310). Unknown
-extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
+vision role + mmproj projector" below), an optional **`files:` list** (below, #310),
+`min_app_version` (below, #847) and `default_for_role` (below, #848). Unknown extra keys (e.g.
+`supports_tools`, `dimensions`) are ignored by the validator.
+
+- **`default_for_role`** (optional boolean, default `false`, #848) makes THIS manifest its role's model.
+  `resolveModelByRole` (the embedder, the reranker, the transcriber, the translator) takes the first
+  manifest of the role that sets it, else the first of the role in walk order. Discovery walks
+  `model-manifests/` depth first, each folder's entry names in code-unit order, on every OS (FAT/exFAT,
+  ext4 and APFS do not list a folder sorted, NTFS does), so the order no longer depends on the drive. The
+  committed embedder, `multilingual-e5-small-q8`, sets it, so an embeddings manifest a later release or a
+  user adds never re-points the embedder; that would ask the user to re-index the whole library. The flag
+  decides whether or not the flagged model's file is present: with the E5 weight missing the app runs on the
+  mock embedder even when another embeddings model is installed, deliberately (its vectors would not match
+  the index; rag-design "Embedding during ingestion"). To move the default, move the flag. At most one
+  manifest per role sets it (`committed-catalog.test.ts`). It is accepted on chat, where nothing reads it
+  (the active chat model is the user's pick). The workspace's `activeEmbeddingModelId` setting does not
+  choose the embedder (known-limitations.md). The flag decides among the USABLE manifests only: when no
+  usable manifest of the role is flagged (none ever was, or the flagged one is invalid or, for an older app,
+  for a newer HilbertRaum), the first usable manifest of the role in walk order is the model, another
+  embedder included. **Frozen constraint:** a release must never make the `default_for_role` manifest
+  unusable for an older build (no `min_app_version` on it, no field change that build rejects) without
+  flagging a usable replacement in the same release. One function, `pickManifestForRole`
+  (`shared/manifest.ts`), is this rule for what the app composes (`resolveModelByRole`), the Performance
+  screen's role rows and the AI Model screen's ★ on an embeddings card. That ★ marks the composed model when
+  it fits this machine's RAM, and no embeddings card otherwise (the ★ is runnable by construction).
+- **Fields an older app reads are ignored where they are inert, never rejected (#848, D848-3).** A
+  manifest field this release reads must not make a later release's manifest vanish from it: a field that
+  does nothing for a role is accepted there (`default_for_role` on chat). The older rule that rejects
+  `speculative_decoding` and `disable_prompt_cache` outside chat predates this principle and stays as
+  shipped. A later release that needs either on another role uses `min_app_version` (below).
+
+- **A manifest for a newer HilbertRaum (#847)** is not invalid. A `role` this build does not know (a
+  non-empty string outside the six roles) or a `min_app_version` above the running app routes the file,
+  before any validation, to a separate `unsupported` list in `discoverManifests`. Only its display fields
+  are read: `id` and `display_name` (required), and when present `role`, `family`, `size_on_disk_gb` and
+  the drive-relative `local_path` / `mmproj.local_path` / `files[].local_path` (each under the same
+  containment rule, because their existence is checked). Everything else is ignored, since this build
+  cannot know which of its own rules a later role or field follows. The entry never joins the model list
+  anything selects from, so it is never recommended, verified, downloaded or started (the main process
+  answers "Unknown model id"). The Models screen lists it, with nothing to act on, in a trailing "Needs a
+  newer HilbertRaum" section, and on "On this drive" when every declared file exists (design-guidelines
+  §15). A missing, blank or non-string `role`, or a missing `id` / `display_name`, is still invalid. Such
+  entries share the models' id space, and a manifest this app can use ALWAYS keeps its id, whatever the walk
+  order (F-847-4): a same-id entry for a newer HilbertRaum is reported as a duplicate and not listed (among
+  entries for a newer HilbertRaum, the first in walk order wins). A role this build does not know includes a
+  typo in a hand-written manifest (`role: Chat`): it reads "Needs a newer HilbertRaum" too, since the two
+  cannot be told apart. The sell gate counts every such manifest as a problem: a Kit ships its own app.
+  Builds up to v0.1.65 reject these manifests, so there they still vanish.
+- **`min_app_version`** (optional, exactly `MAJOR.MINOR.PATCH`, #847) names the oldest HilbertRaum a
+  manifest is for. It is read BEFORE validation, so a later release can mark ANY manifest as not for older
+  apps: a new field rule, a new enum value, or a model its pinned engine cannot load. An older app (from the
+  release that added this field on) then lists it as above instead of validating it. Parts compare as
+  numbers (`0.1.100` is newer than `0.1.65`). It is fail-safe: a value that is not exactly
+  `MAJOR.MINOR.PATCH` (a pre-release minimum such as `0.2.0-beta`, a fourth part, a leading zero, a `v`,
+  a YAML number), or an app that does not know its own version, counts as newer. An app version with a
+  pre-release suffix is older than its release (`0.1.66-beta.1` does not meet `0.1.66`); build metadata
+  (`+…`) is ignored. On the ONLY manifest of an id the field hides that model from every older app (an
+  embedder hidden that way means the mock embedder there), so never add it to an id older apps run.
+  Shipping it in a SECOND file with the same id, beside the manifest older apps can use, is safe for them:
+  a usable manifest always keeps its id (above). Builds up to v0.1.65 ignore the field and use the
+  manifest. No committed manifest sets it. The app compares it with `app.getVersion()`, the sell gate
+  with its `--app-version`. The skills gate (a skill's `compatibility.minAppVersion`, `skillNeedsNewerApp`)
+  is an older courtesy gate and differs: it reads a version by its leading `MAJOR.MINOR.PATCH`, is fail-open,
+  and lets a pre-release app meet its own release, so on a pre-release build a skill and a model with the same
+  minimum can disagree (a follow-up candidate).
 
 - **`files`** (optional, #310) declares the ADDITIONAL required files of this model's weight
   beyond `local_path`/`sha256`, which stay mandatory and PRIMARY — shard 1, the file
@@ -295,7 +358,8 @@ extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
     shards`). Non-shard files in `files:` are unaffected — the field is generic, not
     shard-specific.
   An invalid manifest (any of the above) is logged and skipped by `discoverManifests` — never
-  listed, never installed, never startable. `manifestFiles()` appends every `files[]` entry as
+  listed, never installed, never startable. (A manifest for a newer HilbertRaum is not invalid: it is
+  listed for display only, see above.) `manifestFiles()` appends every `files[]` entry as
   `kind: 'extra'`, so install state, the verify/download-progress byte totals, the drive verifier,
   `checksums.json`, and the download planner all account for the whole weight with no further
   change (see "The in-app downloader" and `docs/data-contracts.md`). **Not done in this wave**: no
@@ -379,7 +443,10 @@ Computed by `services/models.ts` with this precedence:
 `unsupported` → `missing` (any required file absent) → `checksum_failed` (a hash mismatch on any
 required file, or a placeholder hash outside developer mode) → `installed`. "Required files" is
 every entry `manifestFiles()` enumerates — the weight, a vision model's mmproj, and any #310
-`files:` entries — not just the primary. The active running model is shown as `running`.
+`files:` entries — not just the primary. The active running model is shown as `running`. A manifest for
+a newer HilbertRaum (#847, above) is listed as `unsupported` too, display-only: `ModelInfo.role` is
+`'unknown'` (its declared role rides `declaredRole`), `needsNewerApp: true`, never recommended, no
+`download`, and `filesPresent` says whether every file it declares exists (existence only, no hash).
 
 ## License review gate
 ```yaml
@@ -1146,8 +1213,10 @@ line, so a hand-made manifest that relies on a hand-placed projector leaves out 
 `BLOCK  <id>: <the validator's message>`, fetch no file of that model whatever is on disk and whatever
 `--accept-license` says, carry on with the next model and exit 1. Install state
 (`services/models.ts`) requires **every** declared file — the GGUF, the mmproj, and any `files:`
-entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
-treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)
+entries — present + SHA-256-verified. The builds that predate the `vision` role reject such a
+manifest, so it vanishes there (the claim that they show it as `unsupported` was never true); since
+#847 a role a build does not know is listed as needing a newer HilbertRaum instead ("A manifest for a
+newer HilbertRaum" above). The shard-completeness rule (#310)
 applies to `local_path`, not to `mmproj.local_path` — a sharded projector is not (yet) a case the
 validator enforces (the committed-catalog row "declares no shard-pattern path whose sibling series is
 incomplete" covers it, and a control shows it firing).
@@ -1207,8 +1276,9 @@ download:
 Everything else rides the existing schema. Install state (`services/models.ts`) is role-agnostic
 (present + SHA-256-verified ⇒ `installed`); `selectModel` **refuses** it ("used automatically") — it
 activates by **presence** via `resolveModelByRole('translation')` once the weight is verified, exactly
-like reranker/vision. An older build that predates the role treats the manifest as `unsupported`
-(forward-compatible, the same rollout as vision/transcriber). On the Models screen it renders as an
+like reranker/vision. The builds that predate the role reject such a manifest, so it vanishes there;
+since #847 a role a build does not know is listed as needing a newer HilbertRaum instead. On the Models
+screen it renders as an
 automatic-role card (no Select/Start), downloadable behind the license-acknowledgement gate below.
 
 **Architecture facts this rests on (verified 2026-07-05).** TranslateGemma is **plain Gemma 3**

@@ -1186,6 +1186,11 @@ export const uk: UiCatalog<'uk'> = {
   'models.library.translation': 'Переклад',
   'models.library.images': 'Зображення',
   'models.library.voice': 'Мовлення',
+  'models.newerApp.heading': 'Потрібна новіша версія HilbertRaum',
+  'models.newerApp.badge': 'Потрібне оновлення',
+  'models.newerApp.hint':
+    'Ця модель призначена для новішої версії HilbertRaum. Оновіть застосунок на цьому компʼютері, ' +
+    'щоб нею користуватися.',
   'models.library.memory': 'Мінімальний обсяг памʼяті: {size}',
   'models.library.clear': 'Очистити фільтри',
   'models.library.showVariants': 'Показати всі варіанти ({count})',

@@ -1179,7 +1179,8 @@ or **Delete** your own.
 - Built-in skills can be turned on or off but **not deleted**.
 - A skill may show a **"Needs newer app"** badge with its toggle greyed out — it was built for a newer
   version of HilbertRaum than the one you're running. Update the app to use it; until then it stays
-  listed but inactive (it can't be switched on, suggested, or run).
+  listed but inactive (it can't be switched on, suggested, or run). A built-in skill switches itself
+  on once you update; one you switched off yourself stays off.
 
 You choose when a skill is active; while it is, its **read-only** tools may run automatically to answer
 a question you ask, and anything that **writes or exports a file** always asks you to confirm first. As

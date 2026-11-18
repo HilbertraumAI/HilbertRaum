@@ -344,6 +344,36 @@ describe.skipIf(!toolBuilt)('assert-commercial-drive command line', () => {
     expect(r.stderr).toBe('')
   })
 
+  // #847: a Kit is built with its own app version, so a manifest for a newer HilbertRaum on it is always a defect, and
+  // discovery no longer reports one as invalid (it is listed, not dropped): the gate counts it on its own, by name.
+  it.each<[string, (yaml: string) => string, string]>([
+    ['a role the app does not know', (y) => y.replace('role: chat', 'role: hologram'), 'role "hologram"'],
+    ['a min_app_version above the app the Kit ships', (y) => `${y}min_app_version: 99.0.0\n`, 'min_app_version 99.0.0']
+  ])('a manifest for a newer HilbertRaum makes the drive NOT SELLABLE: %s (#847)', (_title, edit, named) => {
+    const root = sellableDrive()
+    writeDriveFile(
+      root,
+      'model-manifests/future.yaml',
+      edit(manifestYaml({ id: 'future', localPath: 'models/chat/future.gguf', sha256: REAL_SHA }))
+    )
+    const r = gate(declared(root))
+    expect(r.status, outputOf(r)).toBe(1)
+    expect(r.stdout).toContain('NOT SELLABLE')
+    expect(r.stdout).toContain(named)
+  })
+
+  it('a min_app_version the Kit app meets is judged against --app-version: still SELLABLE (#847)', () => {
+    const root = sellableDrive()
+    writeDriveFile(
+      root,
+      'model-manifests/future.yaml',
+      `${manifestYaml({ id: 'future', localPath: 'models/chat/future.gguf', sha256: REAL_SHA })}min_app_version: ${APP_VERSION}\n`
+    )
+    const r = gate(declared(root))
+    expect(r.status, outputOf(r)).toBe(0)
+    expect(r.stdout).toContain('SELLABLE')
+  })
+
   // #767: verifying a weight logs a line through console.log, and it landed on stdout ahead of the object.
   it('--json keeps stdout to the one verdict object while a weight is hashed', async () => {
     const root = sellableDrive()

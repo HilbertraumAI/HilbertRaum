@@ -6,6 +6,7 @@ import {
   matchesLibraryView,
   matchesModelSearch,
   modelTask,
+  newerAppRows,
   variantGroupOrder,
   type ModelTask,
   type ModelVariantGroup
@@ -837,6 +838,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     (family === 'all' || m.family === family) &&
     matchesModelSearch(m, query)
   const visibleModels = orderPickerModels(models.filter((m) => matchesLibraryRow(m, currentView)))
+  // #847 — the trailing "Needs a newer HilbertRaum" rows (never library rows, never a family option).
+  const newerRows = newerAppRows(models, { view: currentView, task, family, query })
   const families = availableFamilies(models, { activeChat, view: currentView, task })
   // #313 — a selected family the current view/task cannot yield: kept visible (never silently
   // dropped) with a marker option, and the trigger for the family-specific empty state below.
@@ -1079,6 +1082,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     // A start in flight (server truth, survives a revisit): this model's own, or any.
     const thisStarting = runtime?.startingModelId === m.id
     const anyStarting = runtime?.startingModelId != null
+    const taskLabel = TASKS.find((entry) => entry.value === modelTask(m))?.label ?? null
     return (
       // #35: not-yet-downloaded cards render visually quieter (`.model-card-missing`) so
       // the models that are usable right now stand out when scanning the list.
@@ -1087,8 +1091,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           <div>
             <div className="model-title">{m.displayName}</div>
             <div className="model-sub">
-              {t(TASKS.find((entry) => entry.value === modelTask(m))!.label)}
-              {' · '}{t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
+              {/* #847 review: no task label (and no crash) for a model with no task; only the trailing
+                  newer-app section holds one today, and it has its own card. */}
+              {taskLabel && <>{t(taskLabel)}{' · '}</>}
+              {t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
               {' · '}{t('models.library.memory', { size: fmtGbNum(m.recommendedMinRamGb, lang) })}
             </div>
             {automatic && <p className="hint hint-tight">{t(automaticUsageKey(m, installed))}</p>}
@@ -1280,6 +1286,27 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             </Button>
           </div>
         </details>
+      </div>
+    )
+  }
+
+  // #847: a model for a newer HilbertRaum. Display only (the main process refuses it on every path), so there is
+  // nothing to select, start, download or verify, and it must not look like a broken download: a neutral badge
+  // instead of the error-tone "Unsupported" state, and no technical-details disclosure with its Verify button.
+  function newerAppCard(m: ModelInfo): JSX.Element {
+    return (
+      <div className="card model-card model-card-missing" key={m.id}>
+        <div className="model-head">
+          <div>
+            <div className="model-title">{m.displayName}</div>
+            <p className="hint hint-tight">{t('models.newerApp.hint')}</p>
+          </div>
+          <div className="badges">
+            <Badge tone="neutral" icon="↑">
+              {t('models.newerApp.badge')}
+            </Badge>
+          </div>
+        </div>
       </div>
     )
   }
@@ -1848,8 +1875,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             </>
           )}
         </div>}
-        <p className="hint" role="status">{tCount('models.library.results', visibleModels.length)}</p>
-        {visibleModels.length === 0 ? (
+        <p className="hint" role="status">{tCount('models.library.results', visibleModels.length + newerRows.length)}</p>
+        {visibleModels.length === 0 && newerRows.length === 0 ? (
           <div className="model-library-empty">
             {/* #313 — a selected family the view/task combo can never satisfy gets its own
                 explanation instead of the generic "no models match" copy, naming the family and
@@ -1876,12 +1903,23 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
               </>
             )}
           </div>
-        ) : sections.map(({ entry, groups }) => {
-          return groups.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
-            <h3 className="model-task-heading">{t(entry.label)}</h3>
-            {libraryRows(groups)}
-          </section>
-        })}
+        ) : (
+          <>
+            {sections.map(({ entry, groups }) => {
+              return groups.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
+                <h3 className="model-task-heading">{t(entry.label)}</h3>
+                {libraryRows(groups)}
+              </section>
+            })}
+            {/* #847: after the five task sections, only when non-empty (design-guidelines §15). */}
+            {newerRows.length > 0 && (
+              <section key="newer-app" aria-label={t('models.newerApp.heading')}>
+                <h3 className="model-task-heading">{t('models.newerApp.heading')}</h3>
+                {newerRows.map(newerAppCard)}
+              </section>
+            )}
+          </>
+        )}
       </section>
 
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}

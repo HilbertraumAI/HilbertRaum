@@ -309,9 +309,10 @@ export function registerSkillsIpc(ctx: AppContext): void {
     if (skillNeedsNewerApp(record.manifest.compatibility.minAppVersion, appVersion)) {
       throw new Error(tMain('main.skills.incompatible'))
     }
+    // #846: enabling clears the disabled reason; the sibling it displaces is off as a 'duplicate'.
     setSkillEnabled(ctx.db, installId, true)
     for (const sib of getSkillsByDeclaredId(ctx.db, record.id)) {
-      if (sib.installId !== installId && sib.enabled) setSkillEnabled(ctx.db, sib.installId, false)
+      if (sib.installId !== installId && sib.enabled) setSkillEnabled(ctx.db, sib.installId, false, undefined, 'duplicate')
     }
     ctx.audit?.('skill_enabled', 'Skill enabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
@@ -322,7 +323,8 @@ export function registerSkillsIpc(ctx: AppContext): void {
     requireUnlocked()
     const record = getSkill(ctx.db, installId)
     if (!record) throw new Error(SKILL_IMPORT_ERRORS.notFound)
-    setSkillEnabled(ctx.db, installId, false)
+    // #846: the user's "off" — the reconcile never switches it back on.
+    setSkillEnabled(ctx.db, installId, false, undefined, 'user')
     ctx.audit?.('skill_disabled', 'Skill disabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
     return skillInfo(ctx.db, updated, appVersion)

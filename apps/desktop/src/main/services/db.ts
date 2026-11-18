@@ -335,6 +335,8 @@ CREATE TABLE IF NOT EXISTS skills (
   updated_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(id);   -- duplicate-id lookups across sources (the DS12 warning)
+-- + disabled_reason TEXT (added by ensureColumn in applyPragmasAndMigrations, #846): why enabled = 0 —
+--   'user' | 'min_app_version' | 'duplicate' | 'unconfirmed', NULL = none recorded. Read only while enabled = 0.
 
 -- Skill tool-run history (architecture.md "Skills — design record" §10, S11a). One row PER
 -- app-orchestrated tool run (DS4), bracketed started → done|failed|cancelled. IDS/REFS ONLY —
@@ -1516,6 +1518,13 @@ function applyPragmasAndMigrations(db: Db): void {
   //   messages.skill_id             — the skill that shaped THIS turn; powers the per-message glyph (DS16/DS18).
   ensureColumn(db, 'conversations', 'active_skill_id', 'active_skill_id TEXT')
   ensureColumn(db, 'messages', 'skill_id', 'skill_id TEXT')
+  // #846 — WHY a skill row is disabled: 'user' (the Settings toggle), 'min_app_version' (the app was too
+  // old for the skill), 'duplicate' (DS12: a same-id sibling is the active one) or 'unconfirmed' (a DS19
+  // drop-in), NULL when none is recorded (an enabled row, or one an older build wrote). The reconcile acts on
+  // 'min_app_version' alone: it switches an app skill back on once this build satisfies it. Additive +
+  // nullable, no `SCHEMA_VERSION` bump: builds up to v0.1.65 read `skills` with `SELECT *` and write it with
+  // explicit column lists, so they ignore the column (and may leave it stale; it means nothing while enabled).
+  ensureColumn(db, 'skills', 'disabled_reason', 'disabled_reason TEXT')
   // S13c — auto-fire provenance (skills-s13-plan.md §5/D3). Additive + nullable (NULL/0 = the skill
   // was an explicit pick or there was none; 1 = the app AUTO-FIRED it). Stamped on the assistant row
   // only when the auto-fire path placed the skill, so the per-turn "answer without it" undo shows ONLY

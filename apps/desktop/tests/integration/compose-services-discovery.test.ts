@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -22,7 +22,8 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 })
 
 import { composeServices, composeTranslator, refreshTranscriberSlot } from '../../src/main/services/compose-services'
-import { rawManifest, writeManifest } from '../helpers/manifest-fixtures'
+import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
+import { rawManifest, writeDriveFile, writeManifest } from '../helpers/manifest-fixtures'
 
 /** A minimal VALID manifest per role. */
 const roleManifest = (id: string, role: string, runtime = 'llama_cpp', format = 'gguf'): Record<string, unknown> =>
@@ -99,5 +100,40 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     expect(services.reranker).toBeNull()
     expect(services.transcriber).toBeNull()
     expect(services.translator).toBeNull()
+  })
+})
+
+// #848 (round 1, S5): the manifest flagged `default_for_role` is THE embedder even when its file is missing and another
+// embeddings model is installed. The app then composes the mock embedder (search finds nothing until the default is
+// back; the AI Model screen offers its download) instead of silently switching to another model, whose vectors are a
+// different space from the index the default built (rag-design "Embedding during ingestion", "Which manifest is the
+// embedder"). Installed-first was the declined option D of research D §3.2 (G-12 chose the flag).
+describe('composeServices — the flagged embedder is the embedder, present or not (#848)', () => {
+  function drive(defaultPresent: boolean): { root: string; manifestsDir: string } {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-default-'))
+    const manifestsDir = join(root, 'model-manifests')
+    mkdirSync(manifestsDir, { recursive: true })
+    mkdirSync(llamaServerDir(root), { recursive: true })
+    writeFileSync(join(llamaServerDir(root), llamaServerBinaryName()), '') // never spawned: the embedder starts lazily
+    const embed = (id: string, flagged: boolean): Record<string, unknown> =>
+      rawManifest({ id, role: 'embeddings', local_path: `models/embeddings/${id}.gguf`, ...(flagged ? { default_for_role: true } : {}) })
+    writeManifest(manifestsDir, 'a-installed.yaml', embed('a-installed', false))
+    writeManifest(manifestsDir, 'z-default.yaml', embed('z-default', true))
+    writeDriveFile(root, 'models/embeddings/a-installed.gguf', 'weight')
+    if (defaultPresent) writeDriveFile(root, 'models/embeddings/z-default.gguf', 'weight')
+    return { root, manifestsDir }
+  }
+  const embedderId = (d: { root: string; manifestsDir: string }): string =>
+    composeServices({
+      rootPath: d.root,
+      manifestsDir: d.manifestsDir,
+      bundledManifestsDir: null,
+      rerankerDevicePosture: () => 'cpu',
+      rerankerRequestCeiling: () => Infinity
+    }).embedder.id
+
+  it('a missing default file composes the mock embedder, never the other installed embedder', () => {
+    expect(embedderId(drive(true))).toBe('z-default')
+    expect(embedderId(drive(false))).toBe('mock-embedder')
   })
 })
