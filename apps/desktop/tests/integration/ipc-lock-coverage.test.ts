@@ -236,7 +236,7 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerWorkspaceIpc:
     'workspace-ipc.test.ts — IS the lock/unlock/create gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design). The password change answers a result, not a throw: its refusal during a lock teardown (the AUD-02 latch) is lock-admission-race.test.ts "refuses changeWorkspacePassword while the lock teardown is parked"',
   registerDictationIpc:
-    'dictation-ipc.test.ts (locked-vault rejection; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
+    'dictation-ipc.test.ts (locked-vault and mid-lock (AUD-02 latch) rejection, #860 L6; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
   registerDownloadIpc:
     'pre-unlock by design — model downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()',
   registerEngineIpc:

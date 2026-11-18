@@ -161,5 +161,11 @@ describe('workspace initialization', () => {
     expect(status.writable).toBe(true)
     expect(status.platform).toBe(process.platform)
     expect(status.isPreparedDrive).toBe(false)
+    // #122 (#860 W1): no saved image history yet reads 0, not "unknown"; then it is the sum of the stored files.
+    expect(status.imagesBytes).toBe(0)
+    mkdirSync(join(paths.workspacePath, 'images'))
+    writeFileSync(join(paths.workspacePath, 'images', 'a.png.enc'), Buffer.alloc(300))
+    writeFileSync(join(paths.workspacePath, 'images', 'b.jpg.enc'), Buffer.alloc(45))
+    expect((await buildDriveStatus(paths)).imagesBytes).toBe(345)
   })
 })

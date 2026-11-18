@@ -1955,8 +1955,9 @@ export function plaintextAllowed(policy: PrivacyPolicy, opts: { isDev: boolean }
 
 /**
  * The narrow shape {@link workspaceAdmitsWork} reads. Structural (not the class) so partial
- * test contexts and non-main callers can supply a stand-in, and so a stand-in that predates
- * the lock latch still type-checks — `isLocking`/`unlockEpoch` are optional.
+ * test contexts can supply a stand-in (every product caller passes the controller), and so a
+ * stand-in that predates the lock latch still type-checks — `isLocking`/`unlockEpoch` are
+ * optional.
  */
 export interface WorkspaceAdmission {
   isUnlocked(): boolean

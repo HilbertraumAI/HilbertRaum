@@ -778,8 +778,6 @@ export function ChatScreen({
   }, [activeId])
   useEffect(() => {
     if (!activeId || messages.length === 0) return
-    // Older preload bridges (mixed-version dev drives) may lack the method — hide quietly.
-    if (typeof window.api.getEvidenceReviewSummariesForConversation !== 'function') return
     const conv = conversations.find((c) => c.id === activeId)
     const scope = conv ? { mode: conv.mode } : null
     const unknown = messages.filter(
@@ -1335,7 +1333,7 @@ export function ChatScreen({
         setSkillInfoFor(installId)
         const nextSeen = [...skillInfoSeen, picked.id]
         setSkillInfoSeen(nextSeen)
-        void Promise.resolve(window.api.updateSettings?.({ skillInfoSeen: nextSeen })).catch(() => undefined)
+        void Promise.resolve(window.api.updateSettings({ skillInfoSeen: nextSeen })).catch(() => undefined)
       } else {
         setSkillInfoFor(null)
       }

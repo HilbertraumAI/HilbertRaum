@@ -151,7 +151,8 @@ export class VisionService {
     // AUD-02 — refuse for the WHOLE workspace lock teardown, not just this service's own
     // `stop()` window (see `isWorkspaceLocking`). `cancelled` is the same terminal `run()` uses
     // when the `tearingDown` latch bars it, so the renderer path is unchanged; the IPC handler
-    // refuses earlier with the localized locked copy, and this covers non-IPC callers.
+    // refuses earlier with the localized locked copy. The images IPC is the only caller today, so
+    // this is defence in depth for a future caller outside IPC.
     if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
     const bytes = req?.imageBytes
     const code = validateAnalyzeRequest(bytes, req?.mimeType, req?.question)

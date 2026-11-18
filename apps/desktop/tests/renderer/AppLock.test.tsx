@@ -178,4 +178,23 @@ describe('the gate at start (#875)', () => {
     expect(screen.getByRole('status')).toHaveTextContent(t('en', 'gate.unlock.workingCopyLost'))
     expect(lockWorkspace).not.toHaveBeenCalled()
   })
+
+  // #860 A1: with no workspace state there is neither a gate nor a shell to show. The start says the app could not
+  // start, with main's reason, instead of a blank window.
+  it('shows the fatal screen with the reason when the workspace state cannot be read at start', async () => {
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => {
+          throw new Error('workspace config unreadable')
+        })
+      })
+    )
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: t('en', 'app.fatal.title') })).toBeInTheDocument()
+    expect(screen.getByText('workspace config unreadable')).toBeInTheDocument()
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Password')).not.toBeInTheDocument()
+  })
 })
