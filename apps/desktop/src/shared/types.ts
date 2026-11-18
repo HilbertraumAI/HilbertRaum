@@ -3520,8 +3520,10 @@ export type AuditEventType =
   // (full-audit 2026-07-11 CODE-1a). Content-free, like the other workspace events.
   | 'workspace_lock_failed'
   | 'workspace_password_changed'
-  // #875: the previous lock finished at the last saved state (the working file was gone or no longer a database),
-  // recorded by the unlock after it. Content-free; metadata { lostAt } (when the marker was written) at most.
+  // #875: the changes since the last saved state were lost, recorded by the unlock after the loss: the previous lock
+  // finished at the last saved state (the working file gone or no longer a database), the start swept the working file,
+  // or this unlock discarded a broken recovery copy. Content-free; metadata { cause: 'lock' | 'startup' | 'recovery',
+  // lostAt? } (lostAt: when the marker was written; none for 'recovery', the event's own time).
   | 'workspace_working_copy_lost'
   | 'settings_changed'
   // The local API master switch flipped. Metadata is BOOLEANS ONLY ({ enabled }) — the

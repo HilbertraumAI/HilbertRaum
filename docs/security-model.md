@@ -1096,8 +1096,10 @@ explicitly:
   version is left alone. The startup salvage raises the same notice when it has to shred a newer
   working file whose header reads but whose structure does not (#876): that was the last
   session's only fresh copy (a header-less one is a successful lock's shred survivor, and says
-  nothing). So does an unlock that has to shred such a `.recovery` copy instead of rolling it
-  forward; it records the loss at once (no notice: the workspace is already open). The log line and
+  nothing). So does an unlock that has to shred such a `.recovery` copy (newer than `.enc`)
+  instead of rolling it forward; it records the loss at once (no notice: the workspace is already
+  open), and shreds the copy only once the unlock has succeeded, so a failed unlock keeps the
+  evidence for the next. The log line and
   the audit metadata name which of the three it was (`cause`: `lock`, `startup`, `recovery`). A
   workspace created where a wiped one left its marker removes it. The marker reveals only that a
   lock or a start fell back to the last snapshot, and when.

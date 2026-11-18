@@ -1706,7 +1706,10 @@ export function unlockEncryptedVault(
       }
       if (fresher !== null) {
         if (fresher) encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
-        shredFile(recoveryPath)
+        // #875 review round 2: a broken copy that held the failed lock's session is the evidence of
+        // that loss, so it is shredded only once this unlock has succeeded (below): an unlock that
+        // fails after this point keeps it, and the one that succeeds records the loss.
+        if (!recoveryDiscarded) shredFile(recoveryPath)
       }
     }
     // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
@@ -1754,6 +1757,7 @@ export function unlockEncryptedVault(
       // open does not rewrite `.enc`: not "restore a backup".
       throw openFailure(err)
     }
+    if (recoveryDiscarded) shredFile(recoveryPath)
     return { db, key: fileKey, descriptor, recoveryDiscarded }
   } catch (err) {
     if (openedDb) {
@@ -2350,7 +2354,10 @@ export class WorkspaceController {
     }
     // #875: no vault is here, so a marker a wiped one left names no snapshot of the workspace about to be created.
     // Startup reads the marker only beside a vault, so nothing else would remove it, and a reset drive would carry it.
+    // The record in memory goes with it (review round 2), so the new workspace's first lock shows no notice of the old.
     removeWorkingCopyLostMarker(this.vaultPaths)
+    this._workingCopyLost = null
+    this._lostAtPreviousLock = null
     if (mode === 'plaintext_dev') {
       if (!this.allowPlaintext()) {
         throw new Error('Plaintext workspace is not permitted by policy.')

@@ -893,11 +893,12 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
   // The audit metadata goes verbatim into the plaintext activity-log export, so it is pinned whole: the cause, and for a
   // loss a marker recorded, when that was (the marker's mtime). A recovery copy is discarded at this unlock, so the
   // event's own time is when.
-  it.each<[string, (vp: VaultPaths) => void, 'lock' | 'startup' | 'recovery', boolean]>([
-    ['a lock at quit that finished at the last snapshot', lostAtQuit, 'lock', true],
-    ['a start that swept the last session’s broken working file', discardedAtStart, 'startup', true],
-    ['an unlock that discarded a damaged recovery copy', damagedRecovery, 'recovery', false]
-  ])('after %s, the unlock records workspace_working_copy_lost and one log line, once', async (_what, lose, cause, noticeAtStart) => {
+  // The log line names what was lost: the working file (a lock, a start) or the recovery copy a failed lock left.
+  it.each<[string, (vp: VaultPaths) => void, 'lock' | 'startup' | 'recovery', boolean, string]>([
+    ['a lock at quit that finished at the last snapshot', lostAtQuit, 'lock', true, 'the working file was gone or no longer a database'],
+    ['a start that swept the last session’s broken working file', discardedAtStart, 'startup', true, 'the working file was no longer a database'],
+    ['an unlock that discarded a damaged recovery copy', damagedRecovery, 'recovery', false, 'the recovery copy a failed lock left was no longer a database']
+  ])('after %s, the unlock records workspace_working_copy_lost and one log line, once', async (_what, lose, cause, noticeAtStart, what) => {
     const vp = lockedVault('wsipc', PW)
     lose(vp)
 
@@ -923,6 +924,7 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
       expect(lostEvents()).toEqual([noticeAtStart ? { cause, lostAt } : { cause }])
       expect(logged()).toHaveLength(1)
       expect(logged()[0]).toContain(`"cause":"${cause}"`)
+      expect(logged()[0]).toContain(`were lost: ${what}`)
 
       await invoke(handlers, IPC.lockWorkspace)
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })

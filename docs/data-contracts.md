@@ -1223,9 +1223,11 @@ head's own weights + KV.
   audit (`workspace_working_copy_lost`, metadata `{ cause, lostAt }`, `cause` = `lock` | `startup` |
   `recovery`). `recovery` is a loss the unlock itself makes: `unlockEncryptedVault` shreds a
   `.recovery` newer than `.enc` whose structure is `damaged` (`UnlockedVault.recoveryDiscarded`),
-  recorded with no `lostAt` (the event's own time is when). `create()` removes a v1 marker a wiped
-  vault left (with no vault, startup never reads one); the commercial sell gate does not list the
-  file. Older builds ignore the file; the descriptor is untouched.
+  recorded with no `lostAt` (the event's own time is when); that copy is shredded only once the
+  unlock has succeeded, so a failed unlock keeps the evidence and the next one records it (review
+  round 2; an older damaged copy is a spent leftover: shredded, nothing recorded). `create()` removes
+  a v1 marker a wiped vault left (with no vault, startup never reads one) and clears the record in
+  memory; the commercial sell gate does not list the file. Older builds ignore the file; the descriptor is untouched.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|

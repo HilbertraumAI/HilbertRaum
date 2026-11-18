@@ -933,6 +933,52 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
+  // #875 review round 2: a broken `.recovery` the unlock has to discard is the evidence of a lost session. It is shredded
+  // only once the unlock has succeeded: an unlock that fails after it (a full drive at the open) keeps it, and the
+  // unlock that finally succeeds records the loss.
+  it('a broken .recovery the unlock discards stays until an unlock succeeds, and that unlock records the loss (#875)', () => {
+    const vp = lockedVault('vault', 'pw')
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    updateSettings(db, { contextTokens: 6161 })
+    lockEncryptedVault(vp, db, key)
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    decryptFile(vp.encPath, recoveryPath, key)
+    noisePastPageOne(recoveryPath)
+    backdate(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    vi.spyOn(settingsModule, 'seedSettings').mockImplementationOnce(() => {
+      throw Object.assign(new Error('database or disk is full'), { code: 'ERR_SQLITE_ERROR', errcode: 13 })
+    })
+
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultOpenFailedError')
+    expect(existsSync(recoveryPath)).toBe(true)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161)
+    expect(existsSync(recoveryPath)).toBe(false)
+    expect(ctl.takeWorkingCopyLost()).toEqual({ cause: 'recovery', lostAt: null })
+    ctl.lock()
+  })
+
+  // …but one OLDER than `.enc` is a spent leftover that later went bad: nothing of the last session is in it, so it is
+  // shredded and no loss is recorded (a false `workspace_working_copy_lost` would reach the audit log otherwise).
+  it('a broken .recovery older than .enc is shredded as a spent leftover, and no loss is recorded (#875)', () => {
+    const vp = lockedVault('vault', 'pw')
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    updateSettings(db, { contextTokens: 6161 })
+    lockEncryptedVault(vp, db, key)
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    decryptFile(vp.encPath, recoveryPath, key)
+    noisePastPageOne(recoveryPath)
+    backdate(recoveryPath, 120_000)
+
+    const ctl = unlockedController(vp, 'pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161)
+    expect(existsSync(recoveryPath)).toBe(false)
+    expect(ctl.takeWorkingCopyLost()).toBeNull()
+    ctl.lock()
+  })
+
   // CODE-1 review follow-up F1: shredFile is best-effort, so a CONSUMED `.recovery` can
   // outlive its unlink (Windows: AV/search indexer holding the file without
   // FILE_SHARE_DELETE). The unlock-side roll-forward must apply the same freshness +

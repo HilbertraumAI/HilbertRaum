@@ -221,8 +221,14 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       const lost = ctx.workspace.takeWorkingCopyLost?.() ?? null
       if (lost) {
         const meta = { cause: lost.cause, ...(lost.lostAt ? { lostAt: lost.lostAt } : {}) }
-        log.warn('The changes since the last saved state were lost: the working file was gone or no longer a database', meta)
-        ctx.audit?.('workspace_working_copy_lost', 'Changes since the last saved state were lost (working file gone or damaged)', meta)
+        const what =
+          lost.cause === 'recovery'
+            ? 'the recovery copy a failed lock left was no longer a database'
+            : lost.cause === 'startup'
+              ? 'the working file was no longer a database'
+              : 'the working file was gone or no longer a database'
+        log.warn(`The changes since the last saved state were lost: ${what}`, meta)
+        ctx.audit?.('workspace_working_copy_lost', 'Changes since the last saved state were lost', meta)
       }
       // Settings are readable now — main-side emissions follow the user's language.
       refreshUiLanguage(ctx)
