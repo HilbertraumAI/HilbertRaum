@@ -311,7 +311,10 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   Shipping it in a SECOND file with the same id, beside the manifest older apps can use, is safe for them:
   a usable manifest always keeps its id (above). Builds up to v0.1.65 ignore the field and use the
   manifest. No committed manifest sets it. The app compares it with `app.getVersion()`, the sell gate
-  with its `--app-version`.
+  with its `--app-version`. The skills gate (a skill's `compatibility.minAppVersion`, `skillNeedsNewerApp`)
+  is an older courtesy gate and differs: it reads a version by its leading `MAJOR.MINOR.PATCH`, is fail-open,
+  and lets a pre-release app meet its own release, so on a pre-release build a skill and a model with the same
+  minimum can disagree (a follow-up candidate).
 
 - **`files`** (optional, #310) declares the ADDITIONAL required files of this model's weight
   beyond `local_path`/`sha256`, which stay mandatory and PRIMARY — shard 1, the file

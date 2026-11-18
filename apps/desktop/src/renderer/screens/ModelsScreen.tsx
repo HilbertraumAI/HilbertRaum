@@ -1082,6 +1082,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     // A start in flight (server truth, survives a revisit): this model's own, or any.
     const thisStarting = runtime?.startingModelId === m.id
     const anyStarting = runtime?.startingModelId != null
+    const taskLabel = TASKS.find((entry) => entry.value === modelTask(m))?.label ?? null
     return (
       // #35: not-yet-downloaded cards render visually quieter (`.model-card-missing`) so
       // the models that are usable right now stand out when scanning the list.
@@ -1090,8 +1091,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           <div>
             <div className="model-title">{m.displayName}</div>
             <div className="model-sub">
-              {t(TASKS.find((entry) => entry.value === modelTask(m))!.label)}
-              {' · '}{t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
+              {/* #847 review: no task label (and no crash) for a model with no task; only the trailing
+                  newer-app section holds one today, and it has its own card. */}
+              {taskLabel && <>{t(taskLabel)}{' · '}</>}
+              {t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
               {' · '}{t('models.library.memory', { size: fmtGbNum(m.recommendedMinRamGb, lang) })}
             </div>
             {automatic && <p className="hint hint-tight">{t(automaticUsageKey(m, installed))}</p>}

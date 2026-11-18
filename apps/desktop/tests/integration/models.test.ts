@@ -1812,8 +1812,10 @@ describe('buildModelList — a manifest for a newer HilbertRaum (#847)', () => {
     expect(models[4].filesPresent).toBe(false) // it declares no file: nothing is on this drive
   })
 
-  // Round 1 (N7): one content-free line per NEWLY seen id in the session, not one per Models-screen refresh.
-  it('logs the count of entries for a newer HilbertRaum once per id per session', async () => {
+  // Round 1 (N7) + review: one line per NEWLY seen id in the session (not one per Models-screen refresh), naming the file
+  // and the role as written. A role TYPO lands here too ("embedding", "Chat" read as a newer role), and it no longer
+  // reaches the invalid-manifest warning, so this line is where app.log makes it findable.
+  it('logs each entry for a newer HilbertRaum once per session, naming its file and its role as written', async () => {
     const root = tempRoot('root')
     const dir = manifestsDirWith(rawManifest({ id: 'log-once-a', role: 'hologram' }))
     const info = vi.spyOn(log, 'info')
@@ -1822,12 +1824,12 @@ describe('buildModelList — a manifest for a newer HilbertRaum (#847)', () => {
       const list = (): Promise<unknown> => buildModelList({ manifestsDir: dir, rootPath: root, developerMode: true, machineRamGb: PINNED_RAM_GB })
       await list()
       await list()
-      expect(lines()).toEqual([[expect.any(String), { count: 1 }]])
-      writeManifest(dir, 'm1.yaml', rawManifest({ id: 'log-once-b', role: 'hologram' }))
+      expect(lines()).toEqual([[expect.any(String), { file: join(dir, 'm0.yaml'), role: 'hologram' }]])
+      writeManifest(dir, 'm1.yaml', rawManifest({ id: 'log-once-b', role: 'embedding' })) // a typo of "embeddings"
       await list()
       expect(lines()).toEqual([
-        [expect.any(String), { count: 1 }],
-        [expect.any(String), { count: 1 }]
+        [expect.any(String), { file: join(dir, 'm0.yaml'), role: 'hologram' }],
+        [expect.any(String), { file: join(dir, 'm1.yaml'), role: 'embedding' }]
       ])
     } finally {
       info.mockRestore()

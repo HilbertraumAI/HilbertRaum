@@ -1777,13 +1777,18 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
   }
   // #847: the manifests for a newer HilbertRaum, after every model this build can use. Logged apart from the
-  // invalid ones (they are not broken), once per id per session rather than on every Models-screen refresh; the
-  // count only, never a name or a path.
+  // invalid ones (they are not broken), once per id per session rather than on every Models-screen refresh. Each
+  // line names the manifest file and the role as written (local app.log; the invalid-manifest warning names files
+  // too): a role TYPO ("embedding", "Chat") lands here, not in that warning, and must stay findable.
   for (const { manifest: entry } of unsupported) models.push(newerAppModelInfo(entry, opts.rootPath))
-  const firstSeen = unsupported.filter(({ manifest: entry }) => !newerAppIdsLogged.has(entry.id))
-  for (const { manifest: entry } of firstSeen) newerAppIdsLogged.add(entry.id)
-  if (firstSeen.length > 0) {
-    log.info('Model manifests for a newer HilbertRaum listed', { count: firstSeen.length })
+  for (const { manifest: entry, sourceFile } of unsupported) {
+    if (newerAppIdsLogged.has(entry.id)) continue
+    newerAppIdsLogged.add(entry.id)
+    log.info('Model manifest for a newer HilbertRaum listed', {
+      file: sourceFile,
+      role: entry.role === null ? null : entry.role.slice(0, 64),
+      ...(entry.minAppVersion !== null ? { minAppVersion: entry.minAppVersion.slice(0, 32) } : {})
+    })
   }
   // Terminal event so the bar settles to 100% even if the last throttled callback landed
   // a chunk short of the total.

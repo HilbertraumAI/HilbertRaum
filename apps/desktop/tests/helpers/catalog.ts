@@ -10,8 +10,13 @@ import { REPO_ROOT, repoText } from './repo-files'
 export function committedManifests(): ModelManifest[] {
   // A committed manifest's `min_app_version` is judged against the app this checkout builds, as the shipped app does.
   setManifestAppVersion((JSON.parse(repoText('apps', 'desktop', 'package.json')) as { version: string }).version)
-  const { manifests, unsupported, errors } = discoverManifests(join(REPO_ROOT, 'model-manifests'))
-  setManifestAppVersion('')
+  let found: ReturnType<typeof discoverManifests>
+  try {
+    found = discoverManifests(join(REPO_ROOT, 'model-manifests'))
+  } finally {
+    setManifestAppVersion('') // the module default again, even when the walk throws
+  }
+  const { manifests, unsupported, errors } = found
   if (errors.length > 0) throw new Error(`invalid committed manifests:\n${errors.join('\n')}`)
   // #847: discovery LISTS a manifest with an unknown role (or a `min_app_version` this app does not meet) rather than
   // reporting it invalid, so a role typo in a committed manifest would otherwise drop out of every catalog row silently.
