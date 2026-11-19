@@ -98,8 +98,12 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
     // The 600 ms autosave debounce is taken out of the picture for this row only: its timer is armed but never runs, so
     // no amount of load can fire it before the click. Every other timer (RTL's waits, React) stays real.
     const realSetTimeout = globalThis.setTimeout
-    const autosave = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) =>
-      args[1] === REVIEW_SAVE_DEBOUNCE_MS ? realSetTimeout(() => {}, 0) : realSetTimeout(...args)) as typeof setTimeout)
+    const held: unknown[] = []
+    const autosave = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+      if (args[1] !== REVIEW_SAVE_DEBOUNCE_MS) return realSetTimeout(...args)
+      held.push(args[0])
+      return realSetTimeout(() => {}, 0)
+    }) as typeof setTimeout)
     onTestFinished(() => autosave.mockRestore())
 
     // Decide both items via the radio chips.
@@ -127,7 +131,9 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
       name: t('en', 'review.summary.markReady')
     })
     expect(readyBtn).toBeEnabled()
-    // Guard: the autosave the edits armed never ran (its timer is held above), so the write below can only come from markReviewReady's own flush.
+    // The hold above really caught the autosave the edits armed (so it cannot silently stop holding it) ...
+    expect(held.length).toBeGreaterThan(0)
+    // ... and that autosave never ran, so the write below can only come from markReviewReady's own flush.
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
     fireEvent.click(readyBtn)
     // markReviewReady flushes before its first await (reviewSession.ts:401 → :264-289): the first pending patch (i1: decision + note,

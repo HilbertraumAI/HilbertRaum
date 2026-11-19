@@ -22,7 +22,8 @@
 // The two LIBRARY defaults are the same trap, and they are handled here too (#915). `vi.waitFor` and
 // testing-library's `waitFor` / `find*` default to 1 s, and neither follows `testTimeout`. testing-library's is
 // raised once for every jsdom file, in `tests/setup.ts`: `configure({ asyncUtilTimeout: hangBudgetMs(5_000) })`.
-// Vitest has no such config key, so every `vi.waitFor` passes `{ timeout: hangBudgetMs(5000) }` itself. A literal
+// Vitest has no such config key, so every `vi.waitFor` passes `{ timeout: hangBudgetMs(n) }` itself (5000 is the usual n); a testing-library wait
+// passes one only to go above its 5000 default, never below it. A literal
 // `timeout:` on any wait never widens on CI, so it is not allowed. The repo-hygiene row "every wait takes its
 // ceiling from hang-budget" enforces those source rules; `tests/unit/hang-budget.dom.test.ts` asserts the setup
 // default itself. A HEAVY row (real hashing, process spawns) takes
