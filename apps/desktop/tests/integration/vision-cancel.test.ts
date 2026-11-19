@@ -133,4 +133,21 @@ describe('VisionService.analyze refuses while a workspace lock is under way (AUD
     expect(emit.error).not.toHaveBeenCalled()
     expect(service.hasActiveJob()).toBe(false)
   })
+
+  // Its twin with the dependency present and answering "not locking", as production always injects it: the guard reads
+  // the answer, not the dependency's presence, so the same request is admitted and runs to its answer.
+  it('admits the same request when the latch answers "not locking"', async () => {
+    const getStatus = vi.fn(async () => AVAILABLE)
+    const service = new VisionService({
+      getStatus,
+      createRuntime: () => ({ analyze: async () => 'a picture of a cat' }),
+      isWorkspaceLocking: () => false
+    })
+    const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
+
+    expect(service.analyze(req(), emit).state).toBe('queued')
+    await until(() => (emit.done as ReturnType<typeof vi.fn>).mock.calls.length > 0, 'the admitted analyze finishing')
+    expect(getStatus).toHaveBeenCalled()
+    expect(emit.error).not.toHaveBeenCalled()
+  })
 })

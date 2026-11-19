@@ -33,13 +33,16 @@ export type WorkspaceStandIn = Pick<
 }
 
 const read = <T>(v: T | (() => T)): T => (typeof v === 'function' ? (v as () => T)() : v)
+/** A state move: a fixed flag takes the new value; a function-valued one stays the caller's (it owns that state). */
+const move = <T>(v: T | (() => T), next: T): T | (() => T) => (typeof v === 'function' ? v : next)
 
 /**
  * The real controller's state machine over three flags. `beginLock` arms the latch (the DB stays open: the mid-teardown
  * state), `cancelLock` disarms it, `shutdown` closes the DB and leaves the latch as its caller armed it (the quit
  * paths arm it first, as on the controller), `beginDocumentWork` hands out a no-op release. `overrides` are spread
  * last (a spy, a counter, a throwing `shutdown`) and replace the default outright: an overridden `isUnlocked` no
- * longer follows `completeLock`. Every member is an own property, so a row may also reassign one on a built context.
+ * longer follows `completeLock`. An option given as a function is the caller's state: the moves above leave it alone,
+ * so `locking: () => rowLocking` keeps reading the row's variable after a `cancelLock()`. Every member is an own property, so a row may also reassign one on a built context.
  */
 export function workspaceStandIn(
   o: WorkspaceStandInOptions = {},
@@ -53,24 +56,24 @@ export function workspaceStandIn(
     isLocking: () => read(locking),
     unlockEpoch: () => read(epoch),
     beginLock: () => {
-      locking = true
+      locking = move(locking, true)
     },
     cancelLock: () => {
-      locking = false
+      locking = move(locking, false)
     },
     shutdown: () => {
-      unlocked = false
+      unlocked = move(unlocked, false)
     },
     documentCipher: () => o.documentCipher ?? null,
     beginDocumentWork: () => () => {},
     completeLock: () => {
-      locking = true
-      unlocked = false
+      locking = move(locking, true)
+      unlocked = move(unlocked, false)
     },
     completeUnlock: () => {
-      locking = false
-      unlocked = true
-      epoch = read(epoch) + 1
+      locking = move(locking, false)
+      unlocked = move(unlocked, true)
+      epoch = move(epoch, read(epoch) + 1)
     },
     ...overrides
   }
