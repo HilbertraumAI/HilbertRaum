@@ -22,43 +22,57 @@ export const BEFORE_CLOSE_SAVE_BOUND_MS = 6_500
 /** Saves what the registrant holds; `unsaved: true` when something is still not written. */
 export type BeforeCloseSave = () => Promise<SaveBeforeCloseResult> | SaveBeforeCloseResult
 
-const registrants = new Set<BeforeCloseSave>()
+export interface BeforeCloseOptions {
+  /**
+   * Waited for (up to the bound) but never a reason to ask: a throw, a rejection, no answer or the
+   * bound count as saved, and only an explicit `unsaved: true` counts as unsaved. For a registrant
+   * whose loss the close-time dialog does not speak of (the language pick: the dialog names review
+   * changes). A registrant without it counts as unsaved in all of those cases (code review round 3).
+   */
+  bestEffort?: boolean
+}
+
+const registrants = new Set<{ save: BeforeCloseSave; bestEffort: boolean }>()
 
 /** Run `save` before the window closes, until the returned fn unregisters it. */
-export function registerBeforeClose(save: BeforeCloseSave): () => void {
-  registrants.add(save)
+export function registerBeforeClose(save: BeforeCloseSave, options: BeforeCloseOptions = {}): () => void {
+  const entry = { save, bestEffort: options.bestEffort === true }
+  registrants.add(entry)
   return () => {
-    registrants.delete(save)
+    registrants.delete(entry)
   }
 }
 
 /**
  * Run every registrant at once (they write different things) and wait for all of them, each at
  * most `BEFORE_CLOSE_SAVE_BOUND_MS`. Unsaved when any registrant says so, throws, or has not
- * settled by then: main then asks the user, never closes over them. Without the bound, one
+ * settled by then (a best-effort one only when it says so): main then asks the user, never
+ * closes over them. Without the bound, one
  * registrant that never settles would hold back the whole answer past main's bound, and main
  * would close without asking over another registrant's unsaved change (review round 2).
  */
 export async function saveAllBeforeClose(): Promise<SaveBeforeCloseResult> {
   let timer: ReturnType<typeof setTimeout> | null = null
-  const bound = new Promise<true>((resolve) => {
-    timer = setTimeout(() => resolve(true), BEFORE_CLOSE_SAVE_BOUND_MS)
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, BEFORE_CLOSE_SAVE_BOUND_MS)
   })
   try {
     const unsaved = await Promise.all(
-      [...registrants].map((save) => {
+      [...registrants].map(({ save, bestEffort }) => {
         let saving: Promise<SaveBeforeCloseResult>
         try {
           saving = Promise.resolve(save())
         } catch (err) {
           saving = Promise.reject(err)
         }
+        // What a throw, a rejection or the bound count as.
+        const failed = !bestEffort
         return Promise.race([
           saving.then(
-            (result) => result?.unsaved !== false,
-            () => true
+            (result) => (bestEffort ? result?.unsaved === true : result?.unsaved !== false),
+            () => failed
           ),
-          bound
+          bound.then(() => failed)
         ])
       })
     )

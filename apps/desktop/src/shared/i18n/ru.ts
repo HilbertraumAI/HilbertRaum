@@ -2612,7 +2612,8 @@ export const ru: UiCatalog<'ru'> = {
   'main.dialog.unsavedReview.title': 'Некоторые изменения в проверке не удалось сохранить.',
   'main.dialog.unsavedReview.message': 'Некоторые изменения в проверке не удалось сохранить.',
   'main.dialog.unsavedReview.detail':
-    'Если закрыть сейчас, они будут потеряны. Освободите место на диске и попробуйте еще раз.',
+    'Если закрыть сейчас, они будут потеряны. Убедитесь, что диск по-прежнему подключен и на нем ' +
+    'есть свободное место, и попробуйте еще раз.',
   'main.dialog.unsavedReview.tryAgain': 'Повторить',
   'main.dialog.unsavedReview.keepOpen': 'Не закрывать',
   'main.dialog.unsavedReview.closeAnyway': 'Все равно закрыть',

@@ -2594,7 +2594,8 @@ export const es: UiCatalog<'es'> = {
   'main.dialog.unsavedReview.title': 'Algunos cambios de la revisión no se pudieron guardar.',
   'main.dialog.unsavedReview.message': 'Algunos cambios de la revisión no se pudieron guardar.',
   'main.dialog.unsavedReview.detail':
-    'Si cierras ahora, se perderán. Libera algo de espacio en la unidad y vuelve a intentarlo.',
+    'Si cierras ahora, se perderán. Comprueba que la unidad siga conectada y tenga espacio libre, y ' +
+    'vuelve a intentarlo.',
   'main.dialog.unsavedReview.tryAgain': 'Volver a intentarlo',
   'main.dialog.unsavedReview.keepOpen': 'No cerrar',
   'main.dialog.unsavedReview.closeAnyway': 'Cerrar de todos modos',

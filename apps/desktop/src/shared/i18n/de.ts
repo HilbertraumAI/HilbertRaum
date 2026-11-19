@@ -2627,8 +2627,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.unsavedReview.message':
     'Einige Änderungen an der Prüfung konnten nicht gespeichert werden.',
   'main.dialog.unsavedReview.detail':
-    'Wenn du jetzt schließt, gehen sie verloren. Gib etwas Speicherplatz auf dem Laufwerk frei und ' +
-    'versuch es noch einmal.',
+    'Wenn du jetzt schließt, gehen sie verloren. Prüfe, ob das Laufwerk noch angeschlossen ist und ' +
+    'freien Speicherplatz hat, und versuch es dann erneut.',
   'main.dialog.unsavedReview.tryAgain': 'Erneut versuchen',
   'main.dialog.unsavedReview.keepOpen': 'Offen lassen',
   'main.dialog.unsavedReview.closeAnyway': 'Trotzdem schließen',

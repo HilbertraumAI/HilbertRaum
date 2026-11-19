@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { ToastProvider } from '../../src/renderer/components'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
-import { saveAllBeforeClose } from '../../src/renderer/lib/beforeClose'
+import { BEFORE_CLOSE_SAVE_BOUND_MS, saveAllBeforeClose } from '../../src/renderer/lib/beforeClose'
 import {
   I18nProvider,
   UI_LANGUAGE_STORAGE_KEY,
@@ -397,6 +397,19 @@ describe('Settings → General language picker', () => {
     expect(answer).toEqual({ unsaved: false })
     await elapse(PAST_THE_PAUSE_MS)
     expect(updateSettings).toHaveBeenCalledTimes(1)
+  })
+
+  // Code review round 3 (item 3): the language pick is best effort. A save of it that never answers is waited for
+  // up to the bridge's bound, and then does not make the window answer unsaved.
+  it('a language save that never answers does not make the close-time save answer unsaved (#888)', async () => {
+    stubSettings({ ...DEFAULT_SETTINGS }, { hold: true }) // never released
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    let answer: SaveBeforeCloseResult | undefined
+    void saveAllBeforeClose().then((a) => (answer = a))
+    await elapse(BEFORE_CLOSE_SAVE_BOUND_MS)
+    expect(answer).toEqual({ unsaved: false })
   })
 
   // #808, audit PA-4: the provider outlives the tab, so a choice saved by the unmount still switches

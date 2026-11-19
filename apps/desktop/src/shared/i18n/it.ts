@@ -2642,7 +2642,8 @@ export const it: UiCatalog<'it'> = {
   'main.dialog.unsavedReview.title': 'Non è stato possibile salvare alcune modifiche alla verifica.',
   'main.dialog.unsavedReview.message': 'Non è stato possibile salvare alcune modifiche alla verifica.',
   'main.dialog.unsavedReview.detail':
-    'Se chiudi ora, andranno perse. Libera un po’ di spazio sull’unità e riprova.',
+    'Se chiudi ora, andranno perse. Controlla che l’unità sia ancora collegata e abbia spazio ' +
+    'libero, poi riprova.',
   'main.dialog.unsavedReview.tryAgain': 'Riprova',
   'main.dialog.unsavedReview.keepOpen': 'Non chiudere',
   'main.dialog.unsavedReview.closeAnyway': 'Chiudi comunque',

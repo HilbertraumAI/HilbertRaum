@@ -247,12 +247,13 @@ function hasUnsavedEdits(): boolean {
 }
 
 /**
- * #888: is any review edit not yet known to be written — queued, or in a write still out (a
- * write the close-time save's bound gave up on counts: it may yet fail)? What the window answers
- * main before it closes.
+ * #888: is any review change not yet known to be written — queued, in a write still out on the
+ * lane (an item flush, or a holder's call: a bulk sweep, a delete, a link or unlink, Mark ready or
+ * Reopen; one the close-time save's bound gave up on may yet fail), or a bulk sweep that failed
+ * (it persisted nothing)? What the window answers main before it closes.
  */
 export function hasUnsavedReviewEdits(): boolean {
-  return hasUnsavedEdits() || flushInFlight != null
+  return hasUnsavedEdits() || laneBusy() || sweepFailed
 }
 
 // #888: closing or quitting the app saves first — the same bounded drain Lock now runs, then the

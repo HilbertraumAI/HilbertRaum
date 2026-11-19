@@ -2672,7 +2672,8 @@ export const en = {
   'main.dialog.unsavedReview.title': 'Some review changes could not be saved.',
   'main.dialog.unsavedReview.message': 'Some review changes could not be saved.',
   'main.dialog.unsavedReview.detail':
-    'If you close now, they are lost. Free some space on the drive, then try again.',
+    'If you close now, they are lost. Check that the drive is still connected and has free space, ' +
+    'then try again.',
   'main.dialog.unsavedReview.tryAgain': 'Try again',
   'main.dialog.unsavedReview.keepOpen': 'Keep open',
   'main.dialog.unsavedReview.closeAnyway': 'Close anyway',

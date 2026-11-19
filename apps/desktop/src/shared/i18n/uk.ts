@@ -2627,7 +2627,8 @@ export const uk: UiCatalog<'uk'> = {
   'main.dialog.unsavedReview.title': 'Деякі зміни в перевірці не вдалося зберегти.',
   'main.dialog.unsavedReview.message': 'Деякі зміни в перевірці не вдалося зберегти.',
   'main.dialog.unsavedReview.detail':
-    'Якщо закрити зараз, їх буде втрачено. Звільніть трохи місця на диску й спробуйте ще раз.',
+    'Якщо закрити зараз, їх буде втрачено. Переконайтеся, що диск досі підключено й на ньому є ' +
+    'вільне місце, а потім спробуйте ще раз.',
   'main.dialog.unsavedReview.tryAgain': 'Спробувати ще раз',
   'main.dialog.unsavedReview.keepOpen': 'Не закривати',
   'main.dialog.unsavedReview.closeAnyway': 'Усе одно закрити',

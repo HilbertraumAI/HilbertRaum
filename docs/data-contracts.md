@@ -307,23 +307,25 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 ✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in
 `src/main/ipc/registerCoreIpc.ts`, invoked from `initBackend()` in `main/index.ts`.
 
-**#888 — save before the window closes** ([`security-model.md`](security-model.md) "App-shell gate
-& lifecycle"): the main→renderer event `EVENTS.saveBeforeClose` (`app:saveBeforeClose`, payload
+**#888 — save before the window closes** ([`security-model.md`](security-model.md) "App-shell gate &
+lifecycle"): the main→renderer event `EVENTS.saveBeforeClose` (`app:saveBeforeClose`, payload
 `requestId: number`), its one-way answer `IPC.saveBeforeCloseDone` (`app:saveBeforeCloseDone`, a
 renderer→main `send` of `{ requestId, unsaved: boolean }`), the preload method
 `onSaveBeforeClose(cb: () => Promise<SaveBeforeCloseResult>): () => void`, and the type
 `SaveBeforeCloseResult = { unsaved: boolean }` (`shared/types.ts`). Main sends the event to the
 closing main window once per close attempt and waits up to `CLOSE_SAVE_BOUND_MS` (8 s,
 `main/close-guard.ts`), longer than the window's own bounds (the review store's 6 s inside the
-bridge's `BEFORE_CLOSE_SAVE_BOUND_MS`, 6.5 s). The preload runs `cb` and sends the answer itself once
-`cb` settles; a rejection, a throw or any answer but `unsaved: false` is sent as `unsaved: true`, and
-main then asks the user before closing. The bridge answers `unsaved: true` too for a registrant that
-throws or has not settled by its bound. The answer is received by an `ipcMain.on` listener per
-request, like `perf:mark` (not a `guardedHandle`, so outside `ipc-lock-coverage`): it accepts only
-the window's own `webContents` and the current request id, and it answers while the workspace is
-locked too. Renderer side: `renderer/lib/beforeClose.ts` (`registerBeforeClose`,
-`saveAllBeforeClose`, `installBeforeCloseBridge`, installed from `main.tsx`); the registrants are the review store and the Settings language pick. Nothing is
-persisted; no schema change.
+bridge's `BEFORE_CLOSE_SAVE_BOUND_MS`, 6.5 s). The preload runs `cb` and sends the answer itself
+once `cb` settles; a rejection, a throw or any answer but `unsaved: false` is sent as
+`unsaved: true`, and main then asks the user before closing. The bridge answers `unsaved: true` too
+for a registrant that throws or has not settled by its bound, unless it was registered best effort
+(`registerBeforeClose(save, { bestEffort: true })`, the language pick): such a one counts only when
+it answers `unsaved: true` itself. The answer is received by an `ipcMain.on` listener per request,
+like `perf:mark` (not a `guardedHandle`, so outside `ipc-lock-coverage`): it accepts only the
+window's own `webContents` and the current request id, and it answers while the workspace is locked
+too. Renderer side: `renderer/lib/beforeClose.ts` (`registerBeforeClose`, `saveAllBeforeClose`,
+`installBeforeCloseBridge`, installed from `main.tsx`); the registrants are the review store and the
+Settings language pick. Nothing is persisted; no schema change.
 
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,

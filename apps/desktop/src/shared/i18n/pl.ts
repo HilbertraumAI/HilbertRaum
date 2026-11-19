@@ -2629,7 +2629,8 @@ export const pl: UiCatalog<'pl'> = {
   'main.dialog.unsavedReview.title': 'Nie udało się zapisać części zmian w weryfikacji.',
   'main.dialog.unsavedReview.message': 'Nie udało się zapisać części zmian w weryfikacji.',
   'main.dialog.unsavedReview.detail':
-    'Jeśli zamkniesz teraz, zostaną utracone. Zwolnij trochę miejsca na dysku i spróbuj ponownie.',
+    'Jeśli zamkniesz teraz, zostaną utracone. Sprawdź, czy dysk jest nadal podłączony i ma wolne ' +
+    'miejsce, i spróbuj ponownie.',
   'main.dialog.unsavedReview.tryAgain': 'Spróbuj ponownie',
   'main.dialog.unsavedReview.keepOpen': 'Nie zamykaj',
   'main.dialog.unsavedReview.closeAnyway': 'Zamknij mimo to',

@@ -12,6 +12,7 @@ import {
 import {
   REVIEW_LOCK_FLUSH_BOUND_MS,
   REVIEW_SAVE_DEBOUNCE_MS,
+  bulkMarkUndecidedFollowUp,
   editReviewItem,
   getReviewSessionSnapshot,
   openReviewSession,
@@ -20,6 +21,7 @@ import {
 import type { PreloadApi } from '../../src/preload/index'
 import type { SaveBeforeCloseResult } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { deferred } from '../helpers/deferred'
 import { makeDetail, makeItem, reviewMain, stubReviewApi } from '../helpers/evidenceReview'
 
 // #888: closing the window saves the review edits first. Main's real save request
@@ -86,10 +88,11 @@ afterEach(() => {
   }
 })
 
-async function openReview(): Promise<ReturnType<typeof reviewMain>> {
+/** One open review over the `reviewMain` stand-in; `extra` replaces some of its bridge calls. */
+async function openReview(extra: Partial<PreloadApi> = {}): Promise<ReturnType<typeof reviewMain>> {
   const detail = makeDetail({ items: [makeItem({ id: 'p1', ordinal: 0 })] })
   const main = reviewMain(detail)
-  stubReviewApi(main.api)
+  stubReviewApi({ ...main.api, ...extra })
   await openReviewSession({ reviewId: detail.id })
   main.order.length = 0
   return main
@@ -177,6 +180,46 @@ describe('saving before the window closes (#888)', () => {
       expect(main.db().items[0]!.reviewerNote).toBe('saved meanwhile')
       await vi.advanceTimersByTimeAsync(1)
       expect(answer).toEqual({ unsaved: true }) // an answer, not main's null: the user is asked
+    } finally {
+      unregister()
+    }
+  })
+
+  // Code review round 3 (item 1): a write a lane holder still has out (here a bulk sweep: nothing queued, no item
+  // flush) is not known to be written, and a sweep that failed persisted nothing: both are review changes the close
+  // would lose, so the window answers unsaved and main asks.
+  it.each<[string, (held: Promise<never>) => Promise<never>]>([
+    ['is still out when the save gives up', (held) => held],
+    ['has failed', () => Promise.reject(new Error('disk I/O error'))]
+  ])('a bulk sweep that %s answers unsaved', async (what, call) => {
+    vi.useFakeTimers()
+    const held = deferred<never>()
+    await openReview({ applyEvidenceReviewBulkAction: vi.fn(() => call(held.promise)) })
+    const ask = mainSide()
+    void bulkMarkUndecidedFollowUp()
+    await vi.advanceTimersByTimeAsync(0)
+    if (what === 'has failed') expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error' })
+    let answer: SaveBeforeCloseResult | null | undefined
+    void ask().then((a) => (answer = a))
+    await vi.advanceTimersByTimeAsync(BEFORE_CLOSE_SAVE_BOUND_MS)
+    expect(answer).toEqual({ unsaved: true })
+  })
+
+  // Code review round 3 (item 3): a best-effort registrant (the language pick) is waited for, but one that throws
+  // or never settles does not make the window answer unsaved: the dialog speaks of review changes only.
+  it.each<[string, () => Promise<SaveBeforeCloseResult>]>([
+    ['throws', () => Promise.reject(new Error('a store bug'))],
+    ['never settles', () => new Promise<never>(() => undefined)]
+  ])('a best-effort registrant that %s leaves the answer saved', async (_what, save) => {
+    vi.useFakeTimers()
+    await openReview()
+    const ask = mainSide()
+    const unregister = registerBeforeClose(save, { bestEffort: true })
+    try {
+      let answer: SaveBeforeCloseResult | null | undefined
+      void ask().then((a) => (answer = a))
+      await vi.advanceTimersByTimeAsync(BEFORE_CLOSE_SAVE_BOUND_MS)
+      expect(answer).toEqual({ unsaved: false })
     } finally {
       unregister()
     }

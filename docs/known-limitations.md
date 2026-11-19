@@ -2772,12 +2772,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   A change it cannot save asks first: Try again, Keep open, or Close anyway, which drops it. Three
   exits still cannot wait for the window: a Windows shutdown, restart or log-off with the app open
   (Windows ends the app; it locks at once, and a change not yet saved is lost), a crash, and a
-  reload of the window (View → Reload or Ctrl+R in the default window menu), which closes
-  nothing and so saves nothing first. A quit the app holds back to ask (File → Exit or ⌘Q, then
-  Keep open, or a slow Try again) has already closed the hidden helper windows: an OCR run or an
-  evidence-pack PDF print in progress fails (the OCR run possibly only after its 60-second step
-  timeout) and can be started again. The macOS legs (the red button, ⌘Q, a logout) have not been
-  checked on a Mac yet.
+  reload of the window (View → Reload or Ctrl+R in the default window menu), which closes nothing
+  and so saves nothing first. A quit the app holds back to ask (File → Exit or ⌘Q, then Keep open,
+  or a slow Try again) has already closed the hidden helper windows, so an OCR run in progress fails
+  (possibly only after its 60-second step timeout); and an evidence-pack PDF export in progress is
+  stopped by File → Exit or ⌘Q itself (the print's own `before-quit` hook), even when you then pick
+  Keep open. Both can be started again. On macOS, a log-out or shutdown with the app open may be
+  interrupted once while the window saves: the order of the system's quit and its shutdown event is
+  unverified (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF export), and a
+  log-out or shutdown with the app open.
 
 ## Local API ([`local-api.md`](local-api.md) · [`architecture.md`](architecture.md) "Local API endpoint — design record")
 

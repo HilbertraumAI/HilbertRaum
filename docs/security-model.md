@@ -1654,33 +1654,36 @@ re-encrypts (the bullet below).
   electron-free); the window is asked to save (`app:saveBeforeClose` → `app:saveBeforeCloseDone`,
   data-contracts "Core IPC") and closes exactly once on its answer or at `CLOSE_SAVE_BOUND_MS` (8 s,
   longer than the window's own bounds: the review store's 6 s inside the bridge's 6.5 s, which
-  answers "unsaved" for any registrant that throws or has not settled; so a write that hangs is
-  reported by the window, not guessed by main, with more than a second to spare for a minimized
-  window's throttled timers). A close during the save is prevented and ignored. A close that came
-  from a quit (`before-quit` fired first; the app-level `trackQuitRequests(app)` in `main/index.ts`)
-  quits again after the save: the prevented close cancelled that quit, and on macOS the app would
-  otherwise stay running with no window. A change that could not be saved brings a native dialog
-  (owner call G-2): **Try again** (the default, Enter), **Keep open** (Esc, `cancelId`; it also
-  leaves a pending quit cancelled) and **Close anyway** (never the default), `noLink`, a minimized
-  window restored and focused first. A window that gives no answer (gone, crashed, still loading,
-  hung JavaScript) is closed and the close logged. A lock that began while the save was out or the
-  dialog was up (a session end; `isShuttingDown()` is read again after every answer and after the
-  dialog) closes without asking: the write was refused and Try again cannot succeed. *Ordering:*
-  every quit closes the window before `will-quit`, and `will-quit` is where the lock starts
-  (`beginLock` first), so a save the guard waited for always lands before the lock; a write the
-  bound gave up on that reaches main after `beginLock` is refused by `workspaceAdmitsWork`, so
-  nothing half-lands. Once a lock has begun (`isShuttingDown()`: a quit teardown or a session end) a
-  close is not held. The answer is an `ipcMain.on` listener per request that checks the sender (the
-  window's own `webContents`, the rasterizer's identity check) and the request id itself, not a
-  `guardedHandle`: it must answer while locked too, when there is nothing to save. The session-end,
-  macOS `shutdown` and `uncaughtException` paths below stay synchronous and unchanged. A `closed`
-  handler now also drops the window's id from `trustedSenders` and resets `mainWindow`, so a
-  `second-instance` no longer calls a destroyed window: on macOS after the red button, and on every
-  OS during the quit teardown (up to 30 s after the window closed), where it threw into
-  `uncaughtException` → `emergencyLock` beside the running teardown → exit 1. Pinned by
-  `tests/unit/close-guard.test.ts` and, where the Electron binary is present (not CI),
-  `tests/integration/close-guard-electron-smoke.test.ts` on real Electron. Not yet checked on a Mac
-  (the red button, ⌘Q, a logout).
+  answers "unsaved" for any registrant that throws or has not settled, except a best-effort one (the
+  language pick); the review store counts a write still out on its lane and a failed bulk sweep too;
+  so a write that hangs is reported by the window, not guessed by main, with more than a second to
+  spare for a minimized window's throttled timers). A close during the save is prevented and
+  ignored. A close that came from a quit (`before-quit` fired first; the app-level
+  `trackQuitRequests(app)` in `main/index.ts`) quits again after the save: the prevented close
+  cancelled that quit, and on macOS the app would otherwise stay running with no window. A change
+  that could not be saved brings a native dialog (owner call G-2): **Try again** (the default,
+  Enter), **Keep open** (Esc, `cancelId`; it also leaves a pending quit cancelled) and **Close
+  anyway** (never the default), `noLink`, a minimized window restored and focused first. Every
+  outcome (the dialog, the close, the quit) runs in a later task than the answer, never inside the
+  `close` event (Electron drains microtasks before it reads the event's preventDefault). A window
+  that gives no answer (gone, crashed, still loading, hung JavaScript) is closed and the close
+  logged. A lock that began while the save was out or the dialog was up (a session end;
+  `isShuttingDown()` is read again after every answer and after the dialog) closes without asking:
+  the write was refused and Try again cannot succeed. *Ordering:* every quit closes the window
+  before `will-quit`, and `will-quit` is where the lock starts (`beginLock` first), so a save the
+  guard waited for always lands before the lock; a write the bound gave up on that reaches main
+  after `beginLock` is refused by `workspaceAdmitsWork`, so nothing half-lands. Once a lock has
+  begun (`isShuttingDown()`: a quit teardown or a session end) a close is not held. The answer is an
+  `ipcMain.on` listener per request that checks the sender (the window's own `webContents`, the
+  rasterizer's identity check) and the request id itself, not a `guardedHandle`: it must answer
+  while locked too, when there is nothing to save. The session-end, macOS `shutdown` and
+  `uncaughtException` paths below stay synchronous and unchanged. A `closed` handler now also drops
+  the window's id from `trustedSenders` and resets `mainWindow`, so a `second-instance` no longer
+  calls a destroyed window: on macOS after the red button, and on every OS during the quit teardown
+  (up to 30 s after the window closed), where it threw into `uncaughtException` → `emergencyLock`
+  beside the running teardown → exit 1. Pinned by `tests/unit/close-guard.test.ts` and, where the
+  Electron binary is present (not CI), `tests/integration/close-guard-electron-smoke.test.ts` on
+  real Electron. Not yet checked on a Mac (the red button, ⌘Q, a logout).
 - **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
   owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above

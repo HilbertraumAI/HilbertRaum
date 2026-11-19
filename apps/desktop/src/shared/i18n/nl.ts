@@ -2551,7 +2551,8 @@ export const nl: UiCatalog<'nl'> = {
   'main.dialog.unsavedReview.message':
     'Sommige wijzigingen in de beoordeling konden niet worden opgeslagen.',
   'main.dialog.unsavedReview.detail':
-    'Als je nu sluit, gaan ze verloren. Maak wat ruimte vrij op de schijf en probeer het dan opnieuw.',
+    'Als je nu sluit, gaan ze verloren. Controleer of de schijf nog is aangesloten en vrije ruimte ' +
+    'heeft, en probeer het dan opnieuw.',
   'main.dialog.unsavedReview.tryAgain': 'Opnieuw proberen',
   'main.dialog.unsavedReview.keepOpen': 'Open laten',
   'main.dialog.unsavedReview.closeAnyway': 'Toch sluiten',

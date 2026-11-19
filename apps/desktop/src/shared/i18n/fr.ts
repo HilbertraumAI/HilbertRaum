@@ -2741,8 +2741,8 @@ export const fr: UiCatalog<'fr'> = {
   'main.dialog.unsavedReview.message':
     'Certaines modifications de la vérification n’ont pas pu être enregistrées.',
   'main.dialog.unsavedReview.detail':
-    'Si vous fermez maintenant, elles seront perdues. Libérez de l’espace sur le disque, puis ' +
-    'réessayez.',
+    'Si vous fermez maintenant, elles seront perdues. Vérifiez que le disque est toujours branché et ' +
+    'qu’il reste de l’espace libre, puis réessayez.',
   'main.dialog.unsavedReview.tryAgain': 'Réessayer',
   'main.dialog.unsavedReview.keepOpen': 'Ne pas fermer',
   'main.dialog.unsavedReview.closeAnyway': 'Fermer quand même',

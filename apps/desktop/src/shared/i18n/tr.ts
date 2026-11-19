@@ -2449,7 +2449,8 @@ export const tr: UiCatalog<'tr'> = {
   'main.dialog.unsavedReview.title': 'İncelemedeki bazı değişiklikler kaydedilemedi.',
   'main.dialog.unsavedReview.message': 'İncelemedeki bazı değişiklikler kaydedilemedi.',
   'main.dialog.unsavedReview.detail':
-    'Şimdi kapatırsanız bu değişiklikler kaybolur. Sürücüde biraz yer açın, sonra yeniden deneyin.',
+    'Şimdi kapatırsanız bu değişiklikler kaybolur. Sürücünün hâlâ takılı olduğunu ve boş alanı ' +
+    'bulunduğunu kontrol edin, ardından yeniden deneyin.',
   'main.dialog.unsavedReview.tryAgain': 'Yeniden dene',
   'main.dialog.unsavedReview.keepOpen': 'Açık bırak',
   'main.dialog.unsavedReview.closeAnyway': 'Yine de kapat',

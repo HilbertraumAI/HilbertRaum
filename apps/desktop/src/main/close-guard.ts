@@ -68,6 +68,9 @@ export interface CloseGuard {
   onClose(event: CloseEventLike): void
 }
 
+/** Resolves in a later macrotask (after the current event and every microtask it queued). */
+const nextTask = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
 /**
  * One guard per window (a macOS `activate` window gets a fresh one). `open` → the first close is
  * prevented and the save starts (`saving`); any close during it is prevented and ignored, so a
@@ -76,8 +79,7 @@ export interface CloseGuard {
  */
 export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
   let phase: 'open' | 'saving' | 'closing' = 'open'
-  /** The answer, or null for a request that throws or rejects. Always settles in a later task, so the
-   *  guard never closes the window inside the `close` event it is handling (review round 2). */
+  /** The answer, or null for a request that throws or rejects (review round 2). */
   const askSafely = (): Promise<SaveBeforeCloseResult | null> => {
     try {
       return deps.askWindowToSave().catch(() => null)
@@ -99,6 +101,11 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
         try {
           for (;;) {
             const answer = await askSafely()
+            // Every outcome (the dialog, the close, a quit) waits for a later task (code review round
+            // 3). An answer can be there at once (a window gone, crashed or still loading, a request
+            // that throws), and Electron drains the microtask queue before it reads this `close`
+            // event's preventDefault: a close started in a microtask would run inside that event.
+            await nextTask()
             if (answer === null) {
               deps.log.warn('close: the window gave no answer to the save request; closing')
               break

@@ -29,8 +29,17 @@ import { deferred, type Deferred } from '../helpers/deferred'
 
 const quiet = { info: () => undefined, warn: () => undefined }
 
-/** Lets every pending promise reaction run (real timers). */
-const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+/** One macrotask turn (real timers): every promise reaction queued before it has run. */
+const nextTask = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+/** Lets the guard run to its next wait: its reactions, then the task it defers its close to. */
+const settle = async (): Promise<void> => {
+  await nextTask()
+  await nextTask()
+}
+/** Runs every queued promise reaction (and the ones they queue), without letting a macrotask run. */
+async function drainMicrotasks(): Promise<void> {
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+}
 
 afterEach(() => {
   vi.useRealTimers()
@@ -150,6 +159,22 @@ describe('close guard — the window saves before it closes (#888)', () => {
     const h = guardHarness({ shuttingDown: true })
     expect(h.close()).toBe(false)
     expect(h.steps).toEqual(['close:through'])
+  })
+
+  // Code review round 3 (item 2): Electron drains the microtask queue before it reads the `close` event's
+  // preventDefault, so a close the guard starts in a microtask still runs inside that event (a re-entrant
+  // `win.close()`). Every outcome, the fast ones included, waits for a later task.
+  it.each<[string, GuardHarnessOptions]>([
+    ['the save request throws', { askThrows: true }],
+    ['the window answers null at once (gone, crashed, loading)', { ask: () => Promise.resolve(null) }],
+    ['the window answers saved at once', { ask: () => Promise.resolve({ unsaved: false }) }]
+  ])('when %s, the window is closed in a later task, never inside the close event', async (_what, opts) => {
+    const h = guardHarness(opts)
+    h.close()
+    await drainMicrotasks()
+    expect(h.steps).toEqual(['ask', 'close:held'])
+    await nextTask()
+    expect(h.steps).toEqual(['ask', 'close:held', 'closeWindow', 'close:through'])
   })
 
   describe('a change that could not be saved asks first (owner call G-2)', () => {
@@ -283,6 +308,8 @@ describe('close guard — the window saves before it closes (#888)', () => {
     await vi.advanceTimersByTimeAsync(CLOSE_SAVE_BOUND_MS - 1)
     expect(h.steps).toEqual(['ask', 'close:held'])
     await vi.advanceTimersByTimeAsync(1)
+    await drainMicrotasks() // the guard reaches its wait for a later task (code review round 3)…
+    await vi.runOnlyPendingTimersAsync() // …and closes in it (a zero-millisecond advance does not run that task)
     expect(h.steps).toEqual(['ask', 'close:held', 'closeWindow', 'close:through'])
     expect(w.ipc.listenerCount(IPC.saveBeforeCloseDone)).toBe(0)
   })

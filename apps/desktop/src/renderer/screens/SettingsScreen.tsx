@@ -164,14 +164,17 @@ function GeneralTab(): JSX.Element {
   })
   useEffect(() => () => void flushLanguageRef.current(), [])
   // #888: closing the window saves a choice still inside its pause (PR #823 left that to the
-  // unmount, which a window close never runs). Best effort: a refused save keeps the stored
-  // language and says nothing to main — the close-time dialog speaks of review changes only.
+  // unmount, which a window close never runs). Best effort: a refused or unanswered save keeps the
+  // stored language and never makes main ask — the close-time dialog speaks of review changes only.
   useEffect(
     () =>
-      registerBeforeClose(async () => {
-        await flushLanguageRef.current()
-        return { unsaved: false }
-      }),
+      registerBeforeClose(
+        async () => {
+          await flushLanguageRef.current()
+          return { unsaved: false }
+        },
+        { bestEffort: true }
+      ),
     []
   )
 
