@@ -795,6 +795,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const gb = (mb: number | null | undefined): string => (mb == null ? '' : fmt1(mb / 1024, lang))
     const pill = PLACE_PILL[p.model ? p.verdict.kind : 'unknown']
     const v = p.verdict
+    // #914 code review: an active model that is not here (its files are not on this drive and it is not resident;
+    // main decides, `placement.model.onDrive`) gets no size on disk and no fit claim: the line leaves the size out,
+    // no verdict, note or "Choose a smaller model" is shown, and the pill says what its row says.
+    const here = p.model?.onDrive === true
     let need = ''
     let text = ''
     if (!p.model) {
@@ -848,17 +852,13 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     // one per model, and is read back only on the machine that wrote it — so a start elsewhere
     // sends this row back to the estimate (PR #303 audit L8). The mismatch note below says
     // something more specific about the same fact, so the two never both appear.
-    const showPerDrive = p.model != null && v.estimated && !p.observedMismatch
+    const showPerDrive = here && v.estimated && !p.observedMismatch
     const runningOnCard =
       p.model != null && runtimeOnGpu && runtimeModelId === p.model.id && (p.observed ?? p.observedMismatch)?.backend === 'gpu'
-    // #914: the line says "{size} GB on disk" only for a model whose files ARE on this drive. A model outside the
-    // catalog has no size (null; it printed "0.0 GB on disk"), and one whose files are gone would contradict its
-    // own row, which reads "not on this drive" (the size stays there, beside that badge). A snapshot without a
-    // chat row keeps the size.
-    const sizeOnDrive =
-      p.model?.sizeOnDiskGb != null && p.models.find((r) => r.role === 'chat')?.onDrive !== false
-        ? p.model.sizeOnDiskGb
-        : null
+    // #914: the line says "{size} GB on disk" only for a model that is here. A model outside the catalog has no size
+    // (null; it printed "0.0 GB on disk"), and one whose files are gone would contradict its own row, which reads "not
+    // on this drive" (the size stays there, beside that badge).
+    const sizeOnDrive = here && p.model?.sizeOnDiskGb != null ? p.model.sizeOnDiskGb : null
     return (
       <div className="perf-model">
         <div className="perf-model-title">{t('perf.model.title')}</div>
@@ -876,12 +876,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 })
             : t('perf.model.none')}
         </div>
-        {p.model && <div className="perf-model-verdict">{[need, text].filter(Boolean).join(' ')}</div>}
+        {here && <div className="perf-model-verdict">{[need, text].filter(Boolean).join(' ')}</div>}
         {/* An earlier measurement that does not describe the current configuration (a different
             context size, or a GPU start now forced onto the processor): the verdict above is the
             estimate for the settings as they stand, and this says what was measured and when, so
             the two never read as one contradicting claim. */}
-        {p.model && p.observedMismatch && (
+        {here && p.observedMismatch && (
           <div className="perf-model-note hint">
             {tCount('perf.model.measuredOther', p.observedMismatch.contextTokens, {
               context: p.observedMismatch.contextTokens.toLocaleString(lang),
@@ -897,8 +897,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             itself is untouched. */}
         {runningOnCard && <div className="perf-model-note hint">{t('perf.model.runningOnCard')}</div>}
         <div className="perf-model-side">
-          <Badge tone={pill.tone}>{t(pill.key)}</Badge>
-          {p.model && v.kind === 'too_large' && (
+          {p.model && !here ? (
+            <Badge tone="neutral">{t('perf.models.notOnDrive')}</Badge>
+          ) : (
+            <Badge tone={pill.tone}>{t(pill.key)}</Badge>
+          )}
+          {here && v.kind === 'too_large' && (
             <Button size="sm" onClick={() => onNavigate('models')}>
               {t('perf.model.choose')}
             </Button>
@@ -928,12 +932,14 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     // effect: it could render the chat/translation line for a chat+translation pair that were
     // both actually on the processor, whenever the reranker's own headroom check resolved 'gpu'.
     const anyOnCard = chatRow?.device === 'gpu' || trRow?.device === 'gpu'
-    // #914 (S-914-1): the chat/translation line adds two sizes against the card, so both models must be on this drive
-    // with a size. Before, no selected chat model printed "Graphics card: chat  GB + …", and a translation model named
-    // from the catalog only was counted on a card it never reaches. The size check is a belt under main's contract (a
-    // row on the drive has a manifest, and every manifest has a size); it also narrows the type for `gbOf`.
-    const onDriveSized = (r: ResidentModelRow | undefined): r is ResidentModelRow =>
-      r != null && r.onDrive && r.sizeOnDiskGb != null
+    // #914 (S-914-1): the chat/translation line adds two sizes against the card, so both models must be here (on this
+    // drive, or resident: loaded beats `onDrive`) with a size. Before, no selected chat model printed "Graphics card:
+    // chat  GB + …", and a translation model named from the catalog only was counted on a card it never reaches. With
+    // the chat model here and on the card but no translation model here, the chat-only line keeps its card figure
+    // (code review). The size check is a belt under main's contract (a row on the drive has a manifest, and every
+    // manifest has a size); it also narrows the type for `gbOf`.
+    const hereSized = (r: ResidentModelRow | undefined): r is ResidentModelRow =>
+      r != null && (r.onDrive || r.loaded) && r.sizeOnDiskGb != null
     const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null
     const unifiedPool = p.memoryClass === 'unified'
     const againstMb = unifiedPool ? (p.verdict.budgetMb ?? p.ramMb) : p.ramMb
@@ -981,12 +987,13 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               </div>
               <div className="perf-row-side">
                 {/* #914: a model whose files are not on this drive cannot be loaded here: say that
-                    instead of "not loaded". */}
+                    instead of "not loaded". A resident model says "loaded now" whatever `onDrive`
+                    says (code review: loaded beats `onDrive` — a weight deleted while held open). */}
                 {r.modelId &&
-                  (r.onDrive ? (
-                    <Badge tone={r.loaded ? 'success' : 'neutral'}>
-                      {r.loaded ? t('perf.models.loaded') : t('perf.models.notLoaded')}
-                    </Badge>
+                  (r.loaded ? (
+                    <Badge tone="success">{t('perf.models.loaded')}</Badge>
+                  ) : r.onDrive ? (
+                    <Badge tone="neutral">{t('perf.models.notLoaded')}</Badge>
                   ) : (
                     <Badge tone="neutral">{t('perf.models.notOnDrive')}</Badge>
                   ))}
@@ -997,7 +1004,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         <div className="perf-models-summary">
           {/* Both card lines need a card: `discrete`, never the Metal pool, whose device also fills
               `vramMb` (#746) and whose memory the line below counts once, as one pool (#332). */}
-          {p.memoryClass === 'discrete' && vram && onDriveSized(chatRow) && onDriveSized(trRow) && anyOnCard && (
+          {p.memoryClass === 'discrete' && vram && hereSized(chatRow) && hereSized(trRow) && anyOnCard && (
             <div className="perf-models-summary-line">
               <span>
                 {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}
@@ -1010,6 +1017,14 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               </span>
               {/* The warning badge stays on `bothOnCard` (any two-or-more-of-three contention) on
                   BOTH summary lines — only the pair-naming SENTENCE above is narrowed. */}
+              {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
+            </div>
+          )}
+          {/* #914 code review: a drive with the chat model but no translation model keeps the chat model's own card
+              line: its size against the card, and the same contention badge (chat + a resident reranker). */}
+          {p.memoryClass === 'discrete' && vram && hereSized(chatRow) && chatRow.device === 'gpu' && !hereSized(trRow) && (
+            <div className="perf-models-summary-line">
+              <span>{t('perf.models.cardChat', { chat: gbOf(chatRow.sizeOnDiskGb), vram })}</span>
               {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
             </div>
           )}

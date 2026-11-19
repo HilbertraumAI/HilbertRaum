@@ -2953,8 +2953,9 @@ export interface ResidentModelRow {
   /**
    * #914: every file of the row's model is on this drive (`manifestFilesPresent`: presence only,
    * no hash). False for a catalog model that is not downloaded, and for a row with no manifest
-   * (no model, or an active model outside the catalog). The screen shows "not on this drive"
-   * instead of loaded / not loaded, and `totals.ramAllMb` leaves the row out.
+   * (no model, or an active model outside the catalog). Unless the row is `loaded` (loaded beats
+   * `onDrive`, #914 code review: a weight deleted while the runtime holds it open), the screen
+   * shows "not on this drive" instead of "not loaded", and `totals.ramAllMb` leaves the row out.
    */
   onDrive: boolean
   /**
@@ -3075,9 +3076,12 @@ export interface PerformanceSnapshot {
      * decimal figure converted to GiB (1024³), the unit every other figure on the screen uses
      * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing; null
      * for a model outside the catalog, whose size the app does not know (#914: it used to be 0,
-     * shown as "0.0 GB").
+     * shown as "0.0 GB"). `onDrive` (#914 code review): its files are on this drive
+     * (`manifestFilesPresent`) or it is resident right now (loaded beats `onDrive`, as on the
+     * rows). False → "Your model" claims no size on disk and no fit: the line leaves the size out,
+     * no verdict is stated, and the pill says "not on this drive".
      */
-    model: { id: string; sizeOnDiskGb: number | null; contextTokens: number } | null
+    model: { id: string; sizeOnDiskGb: number | null; onDrive: boolean; contextTokens: number } | null
     /**
      * The context the LIVE recommended model (`recommendation.modelId`, PR #308 decision 8) would
      * launch with, resolved main-side by the SAME `launchContextTokens` the start path uses; null
@@ -3116,7 +3120,8 @@ export interface PerformanceSnapshot {
        * split is tracked for it); on `unified` the full sum (one pool — the copy says "memory",
        * not "RAM", and the pill compares against the unified budget). On every class only the
        * rows on this drive count (`onDrive`, #914): a row named from the catalog whose files are
-       * not here adds nothing. null when nothing is installed (no row on the drive has a size).
+       * not here adds nothing, unless it is loaded (its memory is in use). null when nothing is
+       * installed (no row that is on the drive or loaded has a size).
        */
       ramAllMb: number | null
       /**

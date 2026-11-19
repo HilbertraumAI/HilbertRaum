@@ -2333,6 +2333,7 @@ export const fr: UiCatalog<'fr'> = {
   'perf.models.card':
     'Carte graphique\u00A0: Chat {chat}\u00A0GB + traduction {translation}\u00A0GB, sur ' +
     '{vram}\u00A0GB.',
+  'perf.models.cardChat': 'Carte graphique\u00A0: Chat {chat}\u00A0GB, sur {vram}\u00A0GB.',
   'perf.models.cardReranker':
     'Carte graphique\u00A0: classement {reranker}\u00A0GB, sur {vram}\u00A0GB.',
   'perf.models.cardBoth':

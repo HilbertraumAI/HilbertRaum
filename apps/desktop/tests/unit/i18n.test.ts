@@ -2097,6 +2097,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'perf.model.tooLarge',
       'perf.models.row',
       'perf.models.card',
+      'perf.models.cardChat',
       'perf.models.cardReranker',
       'perf.models.ram',
       'perf.models.memory',

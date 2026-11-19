@@ -2249,6 +2249,7 @@ export const pl: UiCatalog<'pl'> = {
   'perf.models.split': 'warstwy na karcie: {gpuLayers} z {layers}',
   'perf.models.card':
     'Karta graficzna: czat {chat}\u00A0GB + tłumaczenie {translation}\u00A0GB, z {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Karta graficzna: czat {chat}\u00A0GB, z {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Karta graficzna: ocena trafności {reranker}\u00A0GB, z {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Oba modele są teraz na karcie. Model uruchomiony jako drugi dostał pozostałą pamięć i ' +

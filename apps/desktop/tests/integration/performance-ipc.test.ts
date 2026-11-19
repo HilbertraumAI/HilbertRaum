@@ -184,7 +184,7 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.placement.model?.id).toBe('some-model')
     // Not in the catalog: no size (#914: it was 0, which the screen printed as "0.0 GB"), context from settings. The
     // chat row agrees, and a model with no manifest names no files on this drive.
-    expect(snap.placement.model?.sizeOnDiskGb).toBeNull()
+    expect(snap.placement.model).toMatchObject({ sizeOnDiskGb: null, onDrive: false })
     expect(snap.placement.models[0]).toMatchObject({ role: 'chat', modelId: 'some-model', sizeOnDiskGb: null, onDrive: false })
     expect(snap.placement.observed?.cpuModelMb).toBe(3000)
     expect(snap.placement.verdict).toMatchObject({ kind: 'cpu', needMb: 3200, estimated: false })
@@ -244,8 +244,8 @@ describe('buildPerformanceSnapshot', () => {
   // #914 (owner decision G-5 (c)): every role keeps its row, named from the catalog (the planning view the docs
   // promise), but a model whose files are not on this drive is marked so and left out of "Everything loaded at once":
   // nothing will load it. Before, a drive that held only the 9B counted every catalog model in the total, 17.2 GB
-  // against the 9B's 5.6 GB. The chat row follows the same rule: with the active model's files gone a start is refused
-  // (the developer fallback runs the mock runtime, which holds no weights), so nothing is left to count.
+  // against the 9B's 5.6 GB. The chat row follows the same rule: with the active model's files gone a start is refused,
+  // so nothing is left to count. `placement.model.onDrive` (#914 code review) says the same for "Your model".
   it('#914: a model whose files are not on this drive keeps its row, marked so, and is left out of the total', () => {
     const placementOn = (files: 'chat' | 'none') => {
       const root = freshRoot()
@@ -256,6 +256,7 @@ describe('buildPerformanceSnapshot', () => {
     }
     const chatOnly = placementOn('chat')
     expect(chatOnly.memoryClass).toBe('cpu')
+    expect(chatOnly.model).toMatchObject({ id: 'qwen3.5-9b-ud-q4kxl', onDrive: true })
     expect(chatOnly.models.map((r) => [r.role, r.modelId != null, r.onDrive])).toEqual([
       ['chat', true, true],
       ['translation', true, false],
@@ -267,9 +268,28 @@ describe('buildPerformanceSnapshot', () => {
     expect(chatOnly.totals.ramAllMb).toBe(Math.round((chatOnly.models[0].sizeOnDiskGb ?? 0) * 1024))
 
     const nothing = placementOn('none')
+    expect(nothing.model).toMatchObject({ id: 'qwen3.5-9b-ud-q4kxl', onDrive: false })
     expect(nothing.models[0]).toMatchObject({ role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', onDrive: false })
     expect(nothing.models.every((r) => !r.onDrive)).toBe(true)
     expect(nothing.totals.ramAllMb).toBeNull()
+  })
+
+  // #914 code review: loaded beats `onDrive`. The runtime holds the 9B (a weight deleted while held open), so its memory
+  // is in use: the chat row stays `onDrive: false` (the presence fact) but is loaded and counts in the total, and
+  // "Your model" treats it as here (`placement.model.onDrive`), so the screen keeps its size and verdict.
+  it('#914: a resident chat model counts and stays "here" even when its files are not on this drive', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
+    const p = buildPerformanceSnapshot(
+      ctxWith(root, db, {
+        manifestsDir: CATALOG_MANIFESTS,
+        runtime: stubChatRuntime({ modelId: 'qwen3.5-9b-ud-q4kxl', status: () => runningStatus('qwen3.5-9b-ud-q4kxl') })
+      })
+    ).placement
+    expect(p.models[0]).toMatchObject({ role: 'chat', onDrive: false, loaded: true })
+    expect(p.model).toMatchObject({ id: 'qwen3.5-9b-ud-q4kxl', onDrive: true })
+    expect(p.totals.ramAllMb).toBe(Math.round((p.models[0].sizeOnDiskGb ?? 0) * 1024))
   })
 
   // #848 review: the Performance screen names a role's model by the SAME pick the app composes with (the flagged

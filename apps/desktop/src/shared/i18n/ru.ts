@@ -2235,6 +2235,7 @@ export const ru: UiCatalog<'ru'> = {
   'perf.models.split': 'слоев на видеокарте: {gpuLayers} из {layers}',
   'perf.models.card':
     'Видеокарта: чат {chat}\u00A0GB + перевод {translation}\u00A0GB, из {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Видеокарта: чат {chat}\u00A0GB, из {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Видеокарта: ранжирование {reranker}\u00A0GB из {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Сейчас на видеокарте обе модели. Та, что запустилась второй, получила оставшуюся память и ' +

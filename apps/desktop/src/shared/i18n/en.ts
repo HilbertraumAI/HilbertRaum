@@ -2225,6 +2225,7 @@ export const en = {
   'perf.models.lifetime.per-use': 'runs only while working',
   'perf.models.split': '{gpuLayers} of {layers} layers on the card',
   'perf.models.card': 'Graphics card: chat {chat} GB + translation {translation} GB, of {vram} GB.',
+  'perf.models.cardChat': 'Graphics card: chat {chat} GB, of {vram} GB.',
   // #476: a separate line for the reranker — it may share the card with either, both, or neither
   // of chat/translation, so it is not folded into perf.models.card's fixed two-slot template.
   // #495 follow-up: "ranking", not "reranker" — the row label above is "Document search

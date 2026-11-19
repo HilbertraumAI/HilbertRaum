@@ -995,6 +995,16 @@ function buildPlacement(
   // model — the screen no longer recomputes either.
   const contextFor = (modelId: string | null): number | null =>
     modelId == null ? null : launchContextTokens(settings, manifests.find((m) => m.id === modelId) ?? null)
+  // #914: a row still names the catalog's model when its files are not here (the planning view the docs promise), and
+  // says so: `onDrive` is `manifestFilesPresent`, presence only (1–3 `existsSync` per row, never a hash: the rows are
+  // display-only). The screen then shows "not on this drive" instead of "not loaded", and `loadedAtOnceMb` leaves the
+  // row out of the processor total, because nothing will load it. A RESIDENT model is never either (#914 code review:
+  // loaded beats `onDrive` — a weight deleted while the runtime holds it open, a manifest removed under a running
+  // model): the screen and the total check `loaded` first. The chat row asks the same of the active model: with its
+  // files gone a start is refused. An active model outside the catalog names no files, so it is not on the drive.
+  const onDrive = (m: ModelManifest | null | undefined): boolean =>
+    m != null && manifestFilesPresent(ctx.paths.rootPath, m)
+  const chatResident = chatModelResident(ctx, activeId)
   let model: PerformanceSnapshot['placement']['model'] = null
   const activeManifest = activeId ? manifests.find((m) => m.id === activeId) ?? null : null
   if (activeId) {
@@ -1002,6 +1012,9 @@ function buildPlacement(
       id: activeId,
       // #914: a model outside the catalog has no size the app knows. Null says so; the old `0` printed "0.0 GB".
       sizeOnDiskGb: gib(activeManifest ?? undefined),
+      // #914 code review: computed once here, for "Your model" — its files are on this drive, or it is resident
+      // right now (loaded beats `onDrive`, as on the rows). The screen then claims no size on disk and no fit.
+      onDrive: onDrive(activeManifest) || chatResident,
       contextTokens: contextFor(activeId) ?? settings.contextTokens
     }
   }
@@ -1065,14 +1078,7 @@ function buildPlacement(
   const transcriberManifest = byRole('transcriber')
   // With no vision model on the drive the row still names the catalog's (every model the app can hold).
   const visionManifest = pickVisionManifest(manifests, ctx.paths.rootPath) ?? byRole('vision')
-  // #914: a row still names the catalog's model when its files are not here (the planning view the docs promise), and
-  // says so: `onDrive` is `manifestFilesPresent`, presence only (1–3 `existsSync` per row, never a hash: the rows are
-  // display-only). The screen then shows "not on this drive" instead of loaded / not loaded, and `loadedAtOnceMb`
-  // leaves the row out of the processor total, because nothing will load it. The chat row asks the same of the
-  // active model: with its files gone a start is refused, and the developer fallback runs the mock runtime, which
-  // holds no weights. An active model outside the catalog names no files, so it is not on the drive either.
-  const onDrive = (m: ModelManifest | null | undefined): boolean =>
-    m != null && manifestFilesPresent(ctx.paths.rootPath, m)
+  // Each row's `onDrive` is the presence rule defined with `model` above (#914).
   const cardEligible = nextStartUsesGpu(memory)
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
@@ -1080,7 +1086,6 @@ function buildPlacement(
   // its `N/N layers` split is no evidence: a forced-CPU start and a PC with no usable card print it.
   const translationDevice: ResidentModelRow['device'] =
     cardEligible && !(translation != null && translationRanOnProcessor(translation)) ? 'gpu' : 'cpu'
-  const chatResident = chatModelResident(ctx, activeId)
   // #476: Wave 8 ruling (d)'s resident posture (`Reranker.devicePosture()`, the `isLoaded?`
   // pattern) — the SAME two reads the 'reranker' row below uses, hoisted so `rerankerOnCard` can
   // share them without re-deriving.

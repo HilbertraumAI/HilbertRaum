@@ -463,17 +463,35 @@ describe('loadedAtOnceMb', () => {
   })
 
   // #914 (owner decision G-5 (c)): a row still names the catalog's model when its files are not on this drive, but
-  // nothing will load it, so it adds nothing on any class. Here the vision (3.0 GiB = 3,072 MiB) and translation rows:
-  // on cpu and unified the translation row's whole 6.8 GiB (6,963.2 MiB) goes too, on discrete (on the card) only its
-  // live spill, 4,121.1 MiB. That discrete row is artificial: a translation sidecar live with 20 of 49 layers while
-  // its files are not on the drive cannot happen, but only a live split makes the skip visible there (a row that is
-  // not live adds 0 either way).
-  const missing = rows.map((r) => (r.role === 'vision' || r.role === 'translation' ? { ...r, onDrive: false } : r))
+  // nothing will load it, so it adds nothing on any class. Here the vision (3.0 GiB = 3,072 MiB) and translation rows,
+  // neither loaded: on cpu and unified the translation row's whole 6.8 GiB (6,963.2 MiB) goes too; on discrete a
+  // translation that is not live adds 0 anyway, so the vision row carries the proof there (4,915.2 − 3,072 MiB).
+  const missing = rows.map((r) =>
+    r.role === 'vision' || r.role === 'translation'
+      ? { ...r, onDrive: false, loaded: false, gpuLayers: null, totalLayers: null }
+      : r
+  )
   it.each([
     ['cpu', missing.map((r) => ({ ...r, device: 'cpu' as const })), { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408 - 3072 - 6963],
-    ['discrete', missing, estimate, 9036 - 3072 - 4121],
+    ['discrete', missing, estimate, 4915 - 3072],
     ['unified', missing, { ...estimate, budgetMb: 36_864 }, 17408 - 3072 - 6963]
   ] as const)('#914 %s: a row whose files are not on this drive adds nothing', (memoryClass, classRows, verdict, expected) => {
+    expect(loadedAtOnceMb({ memoryClass, rows: classRows, verdict })).toBe(expected)
+  })
+
+  // #914 code review: loaded beats `onDrive`. A resident model's memory is in use whatever the drive says now (a weight
+  // deleted while the runtime holds it open, a manifest removed under a running model), so it counts as if on the
+  // drive: the live translation spill on discrete (the 9,036 MiB of the all-on-drive case), the vision row's 3.0 GiB
+  // on cpu.
+  it.each([
+    ['discrete', 'translation' as const, estimate, 9036],
+    ['cpu', 'vision' as const, { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408]
+  ] as const)('#914 %s: a loaded %s row counts even when its files are not on this drive', (memoryClass, role, verdict, expected) => {
+    const classRows = rows.map((r) => ({
+      ...r,
+      ...(memoryClass === 'cpu' ? { device: 'cpu' as const } : {}),
+      ...(r.role === role ? { onDrive: false, loaded: true } : {})
+    }))
     expect(loadedAtOnceMb({ memoryClass, rows: classRows, verdict })).toBe(expected)
   })
 

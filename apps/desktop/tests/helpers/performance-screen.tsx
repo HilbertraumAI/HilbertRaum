@@ -93,7 +93,7 @@ export function placement(over: Partial<PerformanceSnapshot['placement']> = {}):
     memoryClass: 'discrete',
     ramMb: 16_077,
     vramMb: 24_822,
-    model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, contextTokens: 8192 },
+    model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, onDrive: true, contextTokens: 8192 },
     // Resolved MAIN-side by `launchContextTokens` since the PR #303 audit M5 residual fix: the
     // screen reads it off the snapshot instead of recomputing it from the catalog entry.
     recommendedContextTokens: 8192,

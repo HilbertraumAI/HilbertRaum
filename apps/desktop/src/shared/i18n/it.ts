@@ -2245,6 +2245,7 @@ export const it: UiCatalog<'it'> = {
   'perf.models.split': 'livelli sulla scheda: {gpuLayers} su {layers}',
   'perf.models.card':
     'Scheda grafica: chat {chat}\u00A0GB + traduzione {translation}\u00A0GB, su {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Scheda grafica: chat {chat}\u00A0GB, su {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Scheda grafica: riordinamento {reranker}\u00A0GB, su {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'In questo momento entrambi i modelli sono sulla scheda. Quello avviato per secondo ha ' +

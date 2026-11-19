@@ -995,15 +995,23 @@ head's own weights + KV.
   model outside the catalog); every non-chat row still names the catalog's model for its role
   (`pickManifestForRole`; images: the pick among the vision models on the drive, else the
   catalog's) whether or not it is on the drive, and the screen shows "not on this drive"
-  (`perf.models.notOnDrive`) in place of loaded / not loaded. `placement.model.sizeOnDiskGb` and
-  the chat row's `sizeOnDiskGb` are `number | null`: null for a model outside the catalog (it was
-  `0`, shown as "0.0 GB"; "Your model" then uses `perf.model.lineNoSize`, as it does when the chat
-  row is not on the drive).
+  (`perf.models.notOnDrive`) in place of "not loaded". **Loaded beats `onDrive`** (#914 code
+  review): a row that is `loaded` (a weight deleted while the runtime holds it open, a manifest
+  removed under a running model) says "loaded now" and counts in the total, whatever `onDrive`
+  says. `placement.model.sizeOnDiskGb` and the chat row's `sizeOnDiskGb` are `number | null`: null
+  for a model outside the catalog (it was `0`, shown as "0.0 GB"). `placement.model.onDrive:
+  boolean` (#914 code review) is computed once in `buildPlacement`: the active model's files are on
+  this drive, or the chat runtime holds it right now. When it is false, "Your model" uses
+  `perf.model.lineNoSize` (no size on disk), states no verdict, note or "Choose a smaller model",
+  and its pill says "not on this drive"; the renderer reads this field, never the chat row. On a
+  `discrete` card the chat/translation line (`perf.models.card`) needs both models here (on the
+  drive or loaded) with a size; with the chat model here and on the card but no translation model
+  here, the chat-only line `perf.models.cardChat` keeps the card figure.
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget), on every class over the `onDrive` rows only (null when no row on the drive has
-  a size), and `totals.bothOnCard` is true when two or more of chat, translation and the
+  unified budget), on every class over the rows that are `onDrive` or `loaded` only (null when no
+  such row has a size), and `totals.bothOnCard` is true when two or more of chat, translation and the
   reranker are genuinely resident on the card — chat with an observed GPU start and at least one
   layer offloaded, translation live with layers on the card, the reranker `'gpu'`-postured and
   loaded.

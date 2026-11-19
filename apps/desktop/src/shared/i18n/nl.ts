@@ -2157,6 +2157,7 @@ export const nl: UiCatalog<'nl'> = {
   'perf.models.split': 'lagen op de kaart: {gpuLayers} van {layers}',
   'perf.models.card':
     'Grafische kaart: chat {chat}\u00A0GB + vertaling {translation}\u00A0GB, van {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Grafische kaart: chat {chat}\u00A0GB, van {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Grafische kaart: rangschikking {reranker}\u00A0GB, van {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Beide staan op dit moment op de kaart. Het model dat als tweede startte, kreeg wat er over ' +

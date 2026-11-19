@@ -331,7 +331,8 @@ model is one click. **Copy report** puts everything above into your clipboard fo
 message, and always says which computer it describes, so a report copied on a different laptop
 is never mistaken for this one's.
 
-**Your model.** A row under the tiles about the model you actually have selected. Before its
+**Your model.** A row under the tiles about the model you actually have selected. If that model's
+files are not on this drive, the row says **not on this drive** and makes no estimate. Before its
 first start on this computer it is an estimate from the file size alone, and the note says the
 context cache is measured once the model starts. After a start, with the context size and
 graphics setting you currently have, the row switches to what actually happened: on the graphics
@@ -355,12 +356,13 @@ only once that service is actually running and ready, not while it is still star
 that is not on this drive keeps its row, so you can see what it would take before you download
 it, and reads **not on this drive** instead. Below the rows: a card line for chat and translation
 (what each is resident on the graphics card for, against its memory, shown only when both models
-are on this drive), a second card line whenever the ranking model is also resident there, and a
-processor total (what loading everything on this drive at once would take from RAM; a model that
-is not on this drive is not counted). Whenever two or more of chat, translation and the ranking
-model share the card at once, both lines carry a warning badge; the chat-and-translation line also
-spells out that whichever of the two loaded second got what was left over and runs slower, but
-only when chat and translation are themselves both on the card.
+are on this drive; with only the chat model here, the line names chat alone), a second card line
+whenever the ranking model is also resident there, and a processor total (what loading everything
+on this drive at once would take from RAM; a model that is not on this drive is not counted).
+Whenever two or more of chat, translation and the ranking model share the card at once, both lines
+carry a warning badge; the chat-and-translation line also spells out that whichever of the two
+loaded second got what was left over and runs slower, but only when chat and translation are
+themselves both on the card.
 
 **Observed while you worked.** Three rows fill in from ordinary use, with no separate check: your
 last finished chat answer, your last model start, and your last full file check. These are

@@ -732,8 +732,10 @@ source for all three.
 **Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
 is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
 size on disk (left out for a model outside the catalog, whose size the app does not know — it
-read "0.0 GB" before #914 — and for one whose files are not on this drive, whose row says so) and
-the context it launches with, then gives one verdict against this computer's
+read "0.0 GB" before #914 — and for one that is not here, whose row says so) and the context it
+launches with, then, for a model that is here (`placement.model.onDrive`, computed in
+`buildPlacement`: on this drive or resident now; one that is not gets no verdict and the pill "not
+on this drive", #914 code review), gives one verdict against this computer's
 **memory class** (`nextStartMemory` in `services/performance.ts`; its test-only flags-at-default
 wrapper `memoryClassOf` was removed in #656): `discrete` = a usable graphics card whose VRAM is the budget;
 `unified` = Apple Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
@@ -930,11 +932,13 @@ vision model when none is on the drive. **A row whose files are not on this driv
 left out of the processor total** (#914, owner decision G-5 (c); `ResidentModelRow.onDrive` =
 `manifestFilesPresent`, presence only, never a hash): it keeps naming its model and size, so the
 screen still shows what that model would take before it is downloaded, but it reads "not on this
-drive" in place of loaded / not loaded, and `loadedAtOnceMb` adds nothing for it, because nothing
-will load it. The chat row asks the same of the active model (with its files gone a start is
-refused, and the developer fallback runs the mock runtime, which holds no weights); an active model
-outside the catalog has no size (`sizeOnDiskGb: null`, never `0`) and names no files, so it is not
-on the drive either. Chat and translation auto-fit onto the card (`device: 'gpu'`) —
+drive" in place of "not loaded", and `loadedAtOnceMb` adds nothing for it, because nothing will
+load it. **Loaded beats `onDrive`** (#914 code review): a row whose model is resident (a weight
+deleted while the runtime holds it open, a manifest removed under a running model) reads "loaded
+now" and counts, whatever its files say. The chat row asks the same of the active model (with its
+files gone a start is refused); an active model outside the catalog has no size
+(`sizeOnDiskGb: null`, never `0`) and names no files, so it is not on the drive either.
+Chat and translation auto-fit onto the card (`device: 'gpu'`) —
 under the CURRENT configuration
 (PR #303 audit DR1; the memory class alone used to decide): the row says `'cpu'` on a machine
 without a usable card, when the GPU is switched off (`gpuMode: 'off'`) or auto-disabled, when the
@@ -961,9 +965,11 @@ row carries its observed layer split when live, and only while the row itself sa
 `--device none` and a start with no usable graphics device both print `offloaded 49/49 layers to
 GPU`, so before #671 a processor row read "processor · 49 of 49 layers on the card". Three contributors can each show a summary line
 (the chat+translation pair counts as one line): the chat+translation card line (sizes against
-VRAM, shown only while a row actually goes to the card and both models are on this drive with a
-size — #914: with no chat model selected it read "chat  GB", and a translation model named from
-the catalog only was counted on a card it never reaches — with the START-ORDER warning when both
+VRAM, shown only while a row actually goes to the card and both models are here — on this drive or
+loaded — with a size; #914: with no chat model selected it read "chat  GB", and a translation model
+named from the catalog only was counted on a card it never reaches; with the chat model here and on
+the card but no translation model here, the chat-only line `perf.models.cardChat` keeps the card
+figure — with the START-ORDER warning when both
 are resident on it — `chatAndTranslationOnCard` needs both rows to say `'gpu'`, the active chat
 model resident with its observed start on the GPU and at least one layer offloaded (or no
 observation under a GPU-eligible configuration), and the translation sidecar live with layers on

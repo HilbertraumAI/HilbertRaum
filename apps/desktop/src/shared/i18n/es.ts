@@ -2203,6 +2203,7 @@ export const es: UiCatalog<'es'> = {
   'perf.models.split': 'capas en la tarjeta: {gpuLayers} de {layers}',
   'perf.models.card':
     'Tarjeta gráfica: chat {chat}\u00A0GB + traducción {translation}\u00A0GB, de {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Tarjeta gráfica: chat {chat}\u00A0GB, de {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Tarjeta gráfica: reordenación {reranker}\u00A0GB, de {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Ahora mismo los dos están en la tarjeta. El que se inició en segundo lugar recibió lo que ' +

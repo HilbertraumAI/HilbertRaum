@@ -377,9 +377,11 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
  *    and the pill compares against the unified budget, not RAM.
  *
  * On every class, a row whose files are not on this drive (`onDrive: false`, #914) adds nothing:
- * the row still names the catalog's model, but nothing will load it.
+ * the row still names the catalog's model, but nothing will load it. A row that is LOADED counts
+ * whatever `onDrive` says (#914 code review: a weight deleted while the runtime holds it open, a
+ * manifest removed under a running model): its memory is in use.
  *
- * null when no row on the drive has a size (nothing installed).
+ * null when no row that is on the drive or loaded has a size (nothing installed).
  */
 export function loadedAtOnceMb(input: {
   memoryClass: MemoryClass
@@ -389,7 +391,7 @@ export function loadedAtOnceMb(input: {
   const { memoryClass, rows, verdict } = input
   let total: number | null = null
   for (const row of rows) {
-    if (!row.onDrive || row.sizeOnDiskGb == null) continue
+    if ((!row.onDrive && !row.loaded) || row.sizeOnDiskGb == null) continue
     const sizeMb = row.sizeOnDiskGb * 1024
     let mb: number
     if (memoryClass === 'unified' || row.device === 'cpu') {

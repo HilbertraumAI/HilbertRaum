@@ -2083,6 +2083,7 @@ export const tr: UiCatalog<'tr'> = {
   'perf.models.split': 'kartta {gpuLayers} / {layers} katman',
   'perf.models.card':
     'Ekran kartı: sohbet {chat}\u00A0GB + çeviri {translation}\u00A0GB; kart belleği {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Ekran kartı: sohbet {chat}\u00A0GB; kart belleği {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Ekran kartı: sıralama {reranker}\u00A0GB; kart belleği {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'İkisi de şu anda kartta. İkinci başlayan, kalan belleği aldı ve daha yavaş çalışıyor; ' +

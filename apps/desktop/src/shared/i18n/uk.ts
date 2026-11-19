@@ -2248,6 +2248,7 @@ export const uk: UiCatalog<'uk'> = {
   'perf.models.split': 'шарів на відеокарті: {gpuLayers} з {layers}',
   'perf.models.card':
     'Відеокарта ({vram}\u00A0GB): чат {chat}\u00A0GB + переклад {translation}\u00A0GB.',
+  'perf.models.cardChat': 'Відеокарта ({vram}\u00A0GB): чат {chat}\u00A0GB.',
   'perf.models.cardReranker': 'Відеокарта ({vram}\u00A0GB): переранжування {reranker}\u00A0GB.',
   'perf.models.cardBoth':
     'Зараз обидві моделі на відеокарті. Та, що запустилася другою, отримала залишок памʼяті й ' +
