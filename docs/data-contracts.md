@@ -1975,8 +1975,9 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   selector, its base being a number; a stripped emoji's variation selector goes with it); format
   characters go, ZWJ and ZWNJ included; whole characters (graphemes) up to 60 code points
   (never half an astral letter, #839, nor a letter without its vowel sign; a character carrying
-  more marks than the whole cap keeps only its letter); composed again (NFC) once built; no
-  leading space, `_` or `-`, no trailing one or opening `(`; the fallback (`evidence-pack`
+  more marks than the whole cap keeps only its letter, one holding more letters than the cap is
+  left out); composed again (NFC) once built; no leading space or `-`, no trailing space, `-` or
+  opening `(` (`_` stays at both ends); the fallback (`evidence-pack`
   here) when no letter or number is left; `_` appended to a Windows device name (`CON`, `NUL`,
   `COM1`, …). The chat transcript export (fallback `chat`) and the three document exports
   (`documentFileName` in `registerDocsIpc.ts`: the title's extension is cut only when it is one, a
