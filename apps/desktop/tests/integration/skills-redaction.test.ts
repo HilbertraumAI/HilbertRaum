@@ -306,7 +306,7 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
   it('a cancel landing as the tool finishes opens no save dialog and records cancelled, not a write', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, PII_TEXT)
-    const { audit } = capturingAudit()
+    const { audit, events } = capturingAudit()
     const controller = new AbortController()
     let saveCalled = false
     let ticks = 0
@@ -324,6 +324,8 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
       }
     })
     expect(ticks).toBe(1) // the tool's own tick, nothing else
+    // The tool itself finished (its audit is `skill_run_done`): the abort landed after it, inside its tick, not in the locate step.
+    expect((events as Array<{ type: string }>).map((e) => e.type)).toContain('skill_run_done')
     expect(res).toMatchObject({ ok: false, cancelled: true })
     expect(saveCalled).toBe(false)
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }

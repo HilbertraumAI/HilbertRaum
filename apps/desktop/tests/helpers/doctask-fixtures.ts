@@ -90,8 +90,9 @@ export function docTaskManager(w: DocTaskWorld, overrides: Partial<DocTaskDeps> 
     getStoreDir: () => w.storeDir,
     getIngestionDeps: () => ({}),
     beginDocumentWork: () => () => {},
-    isWorkspaceLocking: () => false,
-    ...overrides
+    ...overrides,
+    // After the spread: an override carrying `isWorkspaceLocking: undefined` (which `Partial` allows) keeps the default.
+    isWorkspaceLocking: overrides.isWorkspaceLocking ?? (() => false)
   })
 }
 
