@@ -78,8 +78,28 @@ describe('fileNameStem (#899)', () => {
     expect(chat('doc (Deutsch)')).toBe('doc Deutsch')
   })
 
-  it('stays bounded on a letter carrying more marks than the cap (one character of 81 code points)', () => {
-    expect(chat(`a${'\u0301'.repeat(80)}`)).toBe('chat')
+  it('keeps only the letter of a character that carries more marks than the whole cap, so the rest still counts', () => {
+    // One character of 81 code points; NFC composes the letter with its first mark before the cut.
+    expect(chat(`a${'\u0301'.repeat(80)}`)).toBe('\u00e1')
+    expect(chat(`Z${'\u0301'.repeat(70)}algo report`)).toBe('\u0179algo report')
+  })
+
+  it('turns any space, tab, line break or no-break space into a plain space, so words never run together', () => {
+    expect(chat('Hello\u00a0World')).toBe('Hello World')
+    expect(chat('Line1\nLine2\tend')).toBe('Line1 Line2 end')
+  })
+
+  it('never starts with "-" or "_", and never ends with one or with an opening "(" the cut left', () => {
+    expect(chat('-rf')).toBe('rf')
+    expect(chat('__init')).toBe('init')
+    expect(doc('(draft) notes')).toBe('(draft) notes') // an opening ( may start a name
+    expect(chat('notes_')).toBe('notes')
+    expect(chat(`${A59}-x`)).toBe(A59)
+    expect(doc(`${'a'.repeat(58)} (Deutsch)`)).toBe('a'.repeat(58))
+  })
+
+  it('cuts at maxCodePoints when a caller gives a smaller cap', () => {
+    expect(fileNameStem('abcdef', { fallback: 'x', maxCodePoints: 3 })).toBe('abc')
   })
 
   it('appends _ to a Windows device name, and leaves a longer name alone', () => {

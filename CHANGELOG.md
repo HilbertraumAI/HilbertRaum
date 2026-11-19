@@ -316,7 +316,9 @@ from its first public `1.0.0` release onward.
   of report.pdf was suggested as "report (हनद).md". A file name whose accents arrived as separate
   marks, as on a Mac, lost them too ("Prüfung" became "Prufung"). The name now keeps them. A long
   chat or document title is now cut between whole characters as well, so the name no longer ends in
-  a broken character or a space. A title with no letter or number left gets the plain default name,
+  a broken character or a space, and a long translation's name keeps its whole language, so two
+  translations of one document no longer get the same name. Words separated by a line break or a
+  no-break space no longer run together. A title with no letter or number left gets the plain default name,
   and a name Windows keeps for itself, such as CON or NUL, gets an `_` added (#899).
 
 ## [0.1.65] — 2026-11-11

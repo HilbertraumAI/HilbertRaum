@@ -57,7 +57,7 @@ import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { saveBinaryExport, saveTextExport } from './save-export'
-import { fileNameStem } from '../services/text'
+import { FILE_NAME_STEM_MAX_CODE_POINTS, fileNameStem } from '../services/text'
 
 // Process-start watermark (captured once at module load ≈ app boot). `skill_runs` rows created before
 // this belong to a PREVIOUS, killed session; current-session rows are protected regardless of status.
@@ -134,6 +134,38 @@ function filterDocuments(docs: DocumentInfo[], filter?: DocumentListFilter): Doc
     out = out.filter((d) => (d.collections ?? []).some((c) => c.id === filter.collectionId))
   }
   return out
+}
+
+/** A document title's extension, when it is one: a dot, then 1-10 ASCII letters or digits (the imported file's
+ *  `.pdf`, a translation's `.md`). Anything else after the last dot ("Report v1.2 final") is part of the name. */
+const DOCUMENT_EXTENSION = /^\.[a-z0-9]{1,10}$/
+/** A trailing "(…)" group, as a translation's "(Deutsch)": kept whole, the name before it is cut instead. */
+const TRAILING_GROUP = /^(.*\S)\s*(\([^()]*\))$/su
+/** The longest trailing group kept whole; a longer one is cut with the rest of the name. */
+const MAX_KEPT_GROUP_CODE_POINTS = 30
+
+/**
+ * The suggested file name of a document export (#899), split as the three exports need it: the stem through the
+ * shared file-name rule (`fileNameStem`, with `(` `)`), and the title's own extension, lower-cased, when it is
+ * one (`docs:exportOriginal` keeps it; the text and summary exports write `.md`). A trailing "(…)" group such as
+ * a translation's "(Deutsch)" is kept whole and the name before it is cut, so two translations of one long-named
+ * document never get the same name.
+ */
+export function documentFileName(title: string): { stem: string; ext: string } {
+  const rawExt = extname(title)
+  const ext = DOCUMENT_EXTENSION.test(rawExt.toLowerCase()) ? rawExt.toLowerCase() : ''
+  const name = ext ? title.slice(0, title.length - rawExt.length) : title
+  const group = TRAILING_GROUP.exec(name)
+  if (group) {
+    const suffix = fileNameStem(group[2]!, { fallback: '', keepParens: true })
+    const suffixLength = [...suffix].length
+    if (suffix.startsWith('(') && suffix.endsWith(')') && suffixLength <= MAX_KEPT_GROUP_CODE_POINTS) {
+      const maxCodePoints = FILE_NAME_STEM_MAX_CODE_POINTS - 1 - suffixLength
+      const base = fileNameStem(group[1]!, { fallback: 'document', keepParens: true, maxCodePoints })
+      return { stem: `${base} ${suffix}`, ext }
+    }
+  }
+  return { stem: fileNameStem(name, { fallback: 'document', keepParens: true }), ext }
 }
 
 export function registerDocsIpc(ctx: AppContext): void {
@@ -764,14 +796,6 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   )
 
-  // The suggested-name stem of the three document exports below: the title up to its last dot
-  // (the imported file's extension, or a translation's `.md`), through the shared file-name rule
-  // (`fileNameStem`, #899). `(` `)` are kept, so a translation keeps its "(<language>)".
-  const documentFileStem = (title: string): string => {
-    const dot = title.lastIndexOf('.')
-    return fileNameStem(dot > 0 ? title.slice(0, dot) : title, { fallback: 'document', keepParens: true })
-  }
-
   // Save a TEXT document's stored content to a user-chosen file (the
   // exportConversation pattern: dialog + fs in MAIN, never the renderer). Built for
   // materialized translations (always Markdown); any plain-text document qualifies.
@@ -786,7 +810,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     const filePath = await saveTextExport(
       {
         title: tMain('main.dialog.exportDocument'),
-        defaultPath: `${documentFileStem(title)}.md`,
+        defaultPath: `${documentFileName(title).stem}.md`,
         filters: [
           { name: 'Markdown', extensions: ['md'] },
           { name: 'Text', extensions: ['txt'] }
@@ -836,15 +860,14 @@ export function registerDocsIpc(ctx: AppContext): void {
       } finally {
         releaseDocWork()
       }
-      // Suggested name through `documentFileStem` (above); the ORIGINAL extension
+      // Suggested name through `documentFileName` (above); the ORIGINAL extension
       // survives sanitization so the OS file association and the dialog filter match
       // the format.
-      const rawExt = extname(title).toLowerCase()
-      const ext = /^\.[a-z0-9]{1,10}$/.test(rawExt) ? rawExt : ''
+      const { stem, ext } = documentFileName(title)
       const filePath = await saveBinaryExport(
         {
           title: tMain('main.dialog.exportOriginal'),
-          defaultPath: `${documentFileStem(title)}${ext}`,
+          defaultPath: `${stem}${ext}`,
           filters: ext
             ? [
                 { name: ext.slice(1).toUpperCase(), extensions: [ext.slice(1)] },
@@ -877,7 +900,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     const filePath = await saveTextExport(
       {
         title: tMain('main.dialog.exportSummary'),
-        defaultPath: `${documentFileStem(title)}-summary.md`,
+        defaultPath: `${documentFileName(title).stem}-summary.md`,
         filters: [
           { name: 'Markdown', extensions: ['md'] },
           { name: 'Text', extensions: ['txt'] }

@@ -1778,7 +1778,11 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     { what: 'a translation keeps its language name and parentheses', title: 'report (हिन्दी).md', want: 'report (हिन्दी).md' },
     { what: 'an astral letter at the cut stays whole', title: `${'a'.repeat(59)}\u{20000}x.txt`, want: `${'a'.repeat(59)}\u{20000}.md` },
     { what: 'a cut on a space leaves none before the extension', title: `${'a'.repeat(59)} Clause 7.txt`, want: `${'a'.repeat(59)}.md` },
-    { what: 'a title with no letter or number falls back to "document"', title: '?.txt', want: 'document.md' }
+    { what: 'a title with no letter or number falls back to "document"', title: '?.txt', want: 'document.md' },
+    // A long translated title keeps its whole language name: the name before it is cut instead, so two
+    // translations of one document never get the same name.
+    { what: 'a long German translation keeps "(Deutsch)" whole', title: `${'a'.repeat(55)} (Deutsch).md`, want: `${'a'.repeat(50)} (Deutsch).md` },
+    { what: 'a long French translation keeps "(Français)" whole', title: `${'a'.repeat(55)} (Fran\u00e7ais).md`, want: `${'a'.repeat(49)} (Fran\u00e7ais).md` },
   ])('docs:export suggests a whole name: $what (#899)', async ({ title, want }) => {
     const { db, workspacePath } = freshWorkspace()
     registerDocsIpc(ctxWith(db, workspacePath))
@@ -1786,6 +1790,22 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(title, id) // the row a translation or a long name leaves
 
     expect((await invoke(handlers, IPC.exportDocument, id)).result).toBeNull() // the default: cancelled
+    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe(want)
+  })
+
+  // #899: only an extension is cut (a dot, then 1-10 letters or digits). A title whose last dot starts anything
+  // else keeps the words after it, and the original export then suggests no extension at all.
+  it.each([
+    { channel: IPC.exportSummary, want: 'Report v12 final-summary.md' },
+    { channel: IPC.exportDocumentOriginal, want: 'Report v12 final' }
+  ])('$channel keeps the words after a dot that starts no extension (#899)', async ({ channel, want }) => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath))
+    const id = await importNotes(workspacePath)
+    db.prepare('UPDATE documents SET title = ? WHERE id = ?').run('Report v1.2 final', id)
+    setDocumentSummary(db, id, { text: 'Summary.', modelId: 'm', createdAt: new Date().toISOString(), truncated: false })
+
+    expect((await invoke(handlers, channel, id)).result).toBeNull() // the default: cancelled
     expect(String(saveDialogState.lastOptions?.defaultPath)).toBe(want)
   })
 
