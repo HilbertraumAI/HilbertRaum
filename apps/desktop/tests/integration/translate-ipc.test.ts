@@ -252,6 +252,21 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(calls).toBe(1)
   })
 
+  it('#913: a start the file check refused surfaces the modelDamaged code, not startFailed', async () => {
+    let calls = 0
+    const translator = translatorWith(async () => {
+      calls += 1
+      throw new TranslationStartError(new Error('The translation model file failed its check'), { modelDamaged: true })
+    })
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('modelDamaged') // "download it again", not "free memory / restart"
+    expect(calls).toBe(1) // latched: no retry
+  })
+
   it('a retry after a transiently-failed attempt does NOT duplicate the streamed text (F-1)', async () => {
     // Attempt 1 streams a partial delta then THROWS (a server-side close / IncompleteStreamError);
     // attempt 2 succeeds. The failed attempt's deltas were already appended to job.text AND

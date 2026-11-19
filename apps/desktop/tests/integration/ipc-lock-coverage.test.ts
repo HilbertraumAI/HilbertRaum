@@ -189,6 +189,7 @@ const MODULES: Array<{
         ctx,
         new VisionService({
           isWorkspaceLocking: () => false,
+          checkModel: async () => 'ok',
           getStatus: async () => ({ available: false, reason: 'no-model' }),
           createRuntime: () => {
             throw new Error('a locked workspace builds no vision runtime')

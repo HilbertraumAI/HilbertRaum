@@ -576,7 +576,10 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   the awaited IPC. `buildModelList` gains an additive **`onlyVerifyModelId`**: when present, only that
   model is hashed on a cold cache; other present weights are reported `installed` **without** hashing
   (display-only) — a live cached hash is still served for free, so a known `checksum_failed` still
-  surfaces. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
+  surfaces. A cached mismatch on any one file of a multi-file model is enough (#913): a full check
+  stops at the first damaged file, and before, the lazy answer trusted the cache only when every file
+  had an entry, so a vision GGUF the check had just found damaged read `installed` again on the next
+  visit. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
   (chat path) passes `true` with the active model id. **The §7.4 gate is intact** —
   `startModelRuntime` re-verifies the model it actually launches, and `verify-models --strict` /
   `assertCommercialDrive` still hash fully.
@@ -1058,7 +1061,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     reports the model it was on — and every model after it — **without hashing**, which is exactly
     what RT-3 lazy verification reports for a present weight. The returned list stays complete and
     honest: what finished is verified from the cache, the rest is simply unchecked, the §7.4 gate
-    still re-verifies whatever the user launches, and no error banner is shown. Nothing is
+    still re-verifies the chat model the user launches (the other roles refuse a file a check found
+    damaged, #913), and no error banner is shown. Nothing is
     half-written: `checksumCacheStats.computed`, the L1/L2 cache entry, the #108 read sample and
     #392's `checksumWarmedPaths` mark are all written only by a hash that **completed**.
   - **Navigating away.** The pass runs in main and still survives leaving the screen — but the
@@ -13819,7 +13823,9 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
 - **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible →
   available; cheap, lazy, lock-safe; since #890 it tries `visionCandidates` in order: `pickManifestForRole`
   over the vision manifests whose files are all on the drive first (`pickVisionManifest`, which the
-  Performance screen's images row names), then the rest when that one fails verification), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
+  Performance screen's images row names), then the rest when that one fails verification; since #913 a candidate that
+  fails its check makes the reason `damaged` when none is available, and `VisionService` checks the named model
+  against the cache again before a cold start), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
   guards + the D4 header pixel-bomb cap + `validateAnalyzeRequest` — the SEC-3 main-side re-validation
   `importDocuments` lacks). **SEC-6 (backend-audit-2026-06-27):** `validateAnalyzeRequest` now rejects
   a **claimed** png/jpeg whose header won't parse (`decodedPixelCount` → `null`) as `decodeFailed`

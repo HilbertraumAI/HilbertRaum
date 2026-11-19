@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AppContext } from '../context'
 import type { ImageAnalyzeRequest, ImageJob, VisionErrorCode, VisionStatus } from '../../../shared/types'
-import { discoverManifests, mmprojPath, weightPath } from '../models'
+import { discoverManifests, mmprojPath, weightPath, type ModelStartVerdict } from '../models'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 import { isEngineCannotRunError } from '../runtime/engine-load'
 import { log } from '../logging'
@@ -65,6 +65,14 @@ export interface VisionServiceDeps {
    * `workspace.isLocking()`; a test that is not about the lock passes `() => false`.
    */
   isWorkspaceLocking: () => boolean
+  /**
+   * #913: the start check for the model `getStatus` named, run before a cold start (no resident
+   * sidecar) builds or starts the runtime. The composition root passes the cache-only check
+   * (`hash: false`, about 1 ms): `damaged` fails the job `modelDamaged` and arms the failed-start
+   * cooldown. Required (#913 review S3, the `isWorkspaceLocking` rule): a test that is not about it
+   * passes `async () => 'ok'`.
+   */
+  checkModel: (modelId: string, signal?: AbortSignal) => Promise<ModelStartVerdict>
 }
 
 export class VisionService {
@@ -74,6 +82,8 @@ export class VisionService {
   private activeJobId: string | null = null
   /** Lazily built once a model is available; reused across analyses. */
   private runtime: VisionAnalyzer | null = null
+  /** The model `runtime` was built for (`status.modelId` at the build): what its next cold start loads. */
+  private runtimeModelId: string | null = null
 
   /** Is the vision sidecar resident right now? (Performance screen.) */
   isLoaded(): boolean {
@@ -137,6 +147,7 @@ export class VisionService {
   /** Build the runtime through the injected factory and forward its residency flips. */
   private attachRuntime(status: VisionStatus): VisionAnalyzer {
     const runtime = this.deps.createRuntime(status)
+    this.runtimeModelId = status.modelId ?? null
     runtime.onResidencyChange?.(() => this.emitResidencyChange())
     return runtime
   }
@@ -192,7 +203,8 @@ export class VisionService {
       }
       const status = await this.deps.getStatus()
       if (!status.available) {
-        this.fail(jobId, 'runtimeFailed', emit)
+        // #913: the screen shows the `damaged` status copy; a job sent meanwhile says the same.
+        this.fail(jobId, status.reason === 'damaged' ? 'modelDamaged' : 'runtimeFailed', emit)
         return
       }
       if (signal.aborted) {
@@ -217,6 +229,39 @@ export class VisionService {
           return
         }
         this.startFailedAt = null
+      }
+
+      const cold = !(this.runtime?.isLoaded?.() ?? false)
+      // #913 code review: a cold start loads the model the status names. An instance kept across an
+      // idle teardown is bound to the model it was built for, which a check may since have found
+      // damaged (the status then names the next model on the drive), so it is let go here, its
+      // idle teardown awaited (never two sidecars at once), and the start below builds a fresh one.
+      if (cold && this.runtime && this.runtimeModelId !== (status.modelId ?? null)) {
+        const stale = this.runtime
+        this.runtime = null
+        await stale.stop?.()
+        if (signal.aborted || this.tearingDown) {
+          this.cancel(jobId)
+          return
+        }
+      }
+      // #913: a cold start (no resident sidecar) first checks the model's files against the cache,
+      // so a file a check found damaged is never started, even when the status was read before
+      // that check landed. Only a cold start: a resident sidecar already holds its model.
+      if (status.modelId && cold) {
+        const verdict = await this.deps.checkModel(status.modelId, signal)
+        if (signal.aborted || this.tearingDown) {
+          this.cancel(jobId)
+          return
+        }
+        if (verdict === 'damaged') {
+          // The #117 cooldown repeats the verdict for its window; past it, the next analyze checks
+          // again (a re-download primes the cache with a good digest).
+          this.startFailedAt = Date.now()
+          this.startFailedCode = 'modelDamaged'
+          this.fail(jobId, 'modelDamaged', emit)
+          return
+        }
       }
 
       this.set(jobId, { jobId, state: 'starting' })

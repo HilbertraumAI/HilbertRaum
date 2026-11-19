@@ -819,16 +819,25 @@ async function sha256FileCached(
  * (honest state) and only SKIPS the multi-GB hash for genuinely un-cached weights.
  */
 function cachedHashFor(filePath: string, store?: HashStore): boolean {
+  return cachedHashOf(filePath, store) !== null
+}
+
+/**
+ * The LIVE cached digest of this file (L1 memory, then the L2 store, matching its current size+mtime), or null when
+ * there is none. Hashes nothing. #913 (S-913-1): the lazy path reads it to honour a cached MISMATCH on any one file of
+ * a model, which a full check that stopped at that file left as the only cached entry.
+ */
+function cachedHashOf(filePath: string, store?: HashStore): string | null {
   let st: ReturnType<typeof statSync>
   try {
     st = statSync(filePath)
   } catch {
-    return false
+    return null
   }
   const hit = hashCache.get(filePath)
-  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return true
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
   const persisted = store?.get(filePath)
-  return !!persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs
+  return persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs ? persisted.actual : null
 }
 
 /** Verify a weight file against its expected SHA-256 (cached by size+mtime). `label`
@@ -958,7 +967,7 @@ export interface InstallStateOptions {
    * NOT relaxed: `startModelRuntime` re-verifies the model it actually launches, and the
    * Models screen's explicit "Check all model files" action (#382) + the ship-time gates
    * (verify-models --strict / assertCommercialDrive) still hash fully. A cached hash is
-   * still used when present.
+   * still used when present: a cached mismatch on any one file reports `checksum_failed` (#913).
    */
   skipHash?: boolean
   /**
@@ -1020,10 +1029,15 @@ export async function computeInstallState(
   }
 
   // RT-3: on the lazy (chat) path, report a present weight as installed without hashing —
-  // unless a live cache hit can answer for ALL files for free. The start gate re-verifies the
-  // launched model, so an unhashed-but-present non-active model is display-only here.
-  if (opts.skipHash && !files.every((f) => cachedHashFor(f.path, opts.hashStore))) {
-    return 'installed'
+  // unless the cache can answer for free. A live cached MISMATCH on ANY file decides
+  // `checksum_failed` (#913, S-913-1): a full check stops at the first damaged file, so a damaged
+  // vision GGUF leaves its projector unhashed, and the lazy pass right after "Check all model
+  // files" must not flip it back to installed. A cached MATCH decides nothing until EVERY file
+  // has one. The chat start gate re-verifies the model it launches.
+  if (opts.skipHash) {
+    const cached = files.map((f) => cachedHashOf(f.path, opts.hashStore))
+    if (cached.some((actual, i) => actual !== null && actual !== files[i].sha)) return 'checksum_failed'
+    if (cached.some((actual) => actual === null)) return 'installed'
   }
 
   // Verify each file, accumulating the progress byte offset across files so the first-run
@@ -1051,6 +1065,63 @@ export async function computeInstallState(
     }
   }
   return 'installed'
+}
+
+/** #913: what the start check says about a model's files. `damaged` refuses the start; `ok` keeps today's start. */
+export type ModelStartVerdict = 'ok' | 'damaged'
+
+/**
+ * #913: the start check of one model by its manifest id, as the composition root builds it (`main/index.ts`): the
+ * manifest, the policy-aware developer leniency and the workspace hash store. `hash: false` reads the cache only;
+ * `hash: true` hashes a file the cache does not know. `signal` aborts a hash in progress.
+ */
+export type ModelStartCheck = (
+  modelId: string,
+  /** `manifest`: the one the service was composed with, when the caller holds it (no folder read). */
+  opts: { hash: boolean; signal?: AbortSignal; manifest?: ModelManifest }
+) => Promise<ModelStartVerdict>
+
+/** #913: one service's start check, bound to its model and its hashing choice (`compose-services.ts`). */
+export type BoundModelStartCheck = (signal?: AbortSignal) => Promise<ModelStartVerdict>
+
+/**
+ * #913 (C §913.3): the check every non-chat role runs at its cold start, inside its single-flight start and before it
+ * spawns, so a file a check found damaged never starts in any role (the chat start gate does its own full hash). Over
+ * `computeInstallState` with the same leniency as chat: `hash: false` is the `skipHash` read (a cached mismatch on any
+ * file, or a placeholder hash outside developer mode, is `damaged`; nothing is hashed), `hash: true` is the full check
+ * (the search and voice models, whose bad output is stored in the index: G-4 (d2), seconds once per workspace).
+ *
+ * Only a proven case refuses (the #876 rule): a missing or unsupported file is `ok` here, and so is a check that could
+ * not finish (a read error), which is logged; the start then fails or runs as it always did. An abort rejects with
+ * the hash's own `HashAbortedError`, so a lock or quit during the hash ends the start at once.
+ */
+export async function checkModelBeforeStart(
+  manifest: ModelManifest,
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStore; hash: boolean; signal?: AbortSignal }
+): Promise<ModelStartVerdict> {
+  let state: ModelState
+  try {
+    state = await computeInstallState(manifest, rootPath, {
+      developerMode: opts.developerMode,
+      hashStore: opts.hashStore,
+      skipHash: !opts.hash,
+      signal: opts.signal
+    })
+  } catch (err) {
+    if (isHashAborted(err) || opts.signal?.aborted) throw err
+    log.warn('Model start check could not finish; starting as before', {
+      modelId: manifest.id,
+      // The code or the name only: a file system error's message names the weight file by its path.
+      error: err instanceof Error ? ((err as NodeJS.ErrnoException).code ?? err.name) : 'unknown'
+    })
+    return 'ok'
+  }
+  if (state === 'checksum_failed') {
+    log.warn('Model start refused: a file of the model failed its check', { modelId: manifest.id })
+    return 'damaged'
+  }
+  return 'ok'
 }
 
 /**
@@ -1725,7 +1796,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // the one that was mid-hash — is reported WITHOUT hashing, which is exactly what RT-3
   // lazy verification reports for a present weight. Nothing is lost and nothing is faked:
   // what finished before the cancel is in the checksum cache, the rest is simply unchecked
-  // and the §7.4 start gate still re-verifies whatever the user launches.
+  // and the §7.4 start gate still re-verifies the chat model the user launches (the other roles
+  // refuse a file a check found damaged, #913).
   let cancelled = false
   for (let i = 0; i < manifests.length; i++) {
     const { manifest } = manifests[i]

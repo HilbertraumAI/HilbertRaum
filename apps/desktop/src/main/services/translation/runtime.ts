@@ -11,6 +11,7 @@ import { RuntimeUnresponsiveError, isRuntimeUnresponsiveError } from '../runtime
 import { createPlacementParser } from '../runtime/placement'
 import { translationRanOnProcessor } from '../../../shared/runtime-status'
 import { log } from '../logging'
+import type { BoundModelStartCheck } from '../models'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
 import type { TranslationCpuCause, TranslationDeviceStatus } from '../../../shared/types'
@@ -297,6 +298,14 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
    * throw.
    */
   beforeGpuStart?: () => Promise<void>
+  /**
+   * #913: checks the translation model's file before each cold start, at the head of the start ladder (before the
+   * reranker yields the card and before any rung spawns). The composition passes the cache-only check: a file a check
+   * found damaged latches a `TranslationStartError` with `modelDamaged`, which the consumers show as their own copy;
+   * the translator-slot refresh replaces the latched instance after a re-download or a clean check
+   * (`rearmCheckedModels`). Absent ⇒ no check.
+   */
+  checkModel?: BoundModelStartCheck
 }
 
 export interface TranslateOptions {
@@ -351,10 +360,16 @@ export class TranslationStartError extends Error {
    * engine copy instead of the "free memory / restart" one, which would send the user the wrong way.
    */
   readonly engineCannotRun: boolean
-  constructor(cause: Error) {
+  /**
+   * #913: the start check found the model's file damaged, so nothing was started — the consumers show the
+   * "download it again" copy, not the memory one.
+   */
+  readonly modelDamaged: boolean
+  constructor(cause: Error, opts: { modelDamaged?: boolean } = {}) {
     super(cause.message)
     this.name = 'TranslationStartError'
     this.engineCannotRun = isEngineCannotRunError(cause)
+    this.modelDamaged = opts.modelDamaged === true
   }
 }
 
@@ -718,6 +733,36 @@ export class TranslationRuntime {
     const abort = new AbortController()
     this.startAbort = abort
     try {
+      // #913: a file a check found damaged never starts, on either rung. Before the device ladder
+      // (the reranker's order, #913 code review), so nothing the check does is read as a device
+      // fault: the reranker keeps the card, and a check that throws arms no GPU fallback and walks
+      // no CPU rung (its error goes to the caller as it is, unlatched). A teardown that begins
+      // during the check aborts `abort`: the start ends as the abort it is.
+      if (this.opts.checkModel) {
+        const verdict = await this.opts.checkModel(abort.signal)
+        if (abort.signal.aborted) throw new DOMException('The translation start was aborted', 'AbortError')
+        if (verdict === 'damaged') {
+          const startError = new TranslationStartError(new Error('The translation model file failed its check'), {
+            modelDamaged: true
+          })
+          this.startFailed = startError
+          throw startError
+        }
+      }
+      await this.deviceLadder(device, cause, abort)
+    } finally {
+      if (this.startAbort === abort) this.startAbort = null
+      this.startingDevice = null
+    }
+  }
+
+  /** The device ladder proper (`startLadder`): the resolved posture, then the CPU rung on a GPU fault. */
+  private async deviceLadder(
+    device: TranslationDevice,
+    cause: TranslationCpuCause | null,
+    abort: AbortController
+  ): Promise<void> {
+    try {
       // #473: let the reranker leave the card first. Inside the try so a lock that begins while
       // this waits has aborted `abort` by the time `startAttempt` runs, which then never spawns.
       if (device === 'auto') await this.opts.beforeGpuStart?.().catch(() => undefined)
@@ -774,9 +819,6 @@ export class TranslationRuntime {
       const startError = new TranslationStartError(error)
       this.startFailed = startError
       throw startError
-    } finally {
-      if (this.startAbort === abort) this.startAbort = null
-      this.startingDevice = null
     }
   }
 

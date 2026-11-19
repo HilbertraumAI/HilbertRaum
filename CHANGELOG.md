@@ -370,6 +370,20 @@ from its first public `1.0.0` release onward.
   newer HilbertRaum", with a note to update the app on this computer. It can't be downloaded,
   started or checked from here. It also shows under "On this drive" when its files are there
   (#847).
+- **"Check all model files" now keeps showing a damaged image or voice model.** These models
+  have more than one file. When the check found the first file damaged, it stopped there, and the
+  screen's refresh right after it showed the model as installed again; "Verify checksum" did the
+  same. Images then went on using the damaged image model. The model now stays marked as damaged
+  until you download it again (#913).
+- **A model that a check found damaged is no longer started.** Only the chat model was checked
+  when it started. The image, translation, voice and both document-search models started from
+  whatever file was on the drive, even one that "Check all model files" had just found damaged.
+  Now each of them refuses such a file, and Images and Translate say so and point to the AI Model
+  screen, where you can download it again. The voice model and the document-search model that
+  indexes your documents are also checked once before their first use in a workspace, which takes
+  a few seconds, because a damaged one would put wrong results into the index. A model from your
+  own manifest that has no real checksum now needs developer mode in every role, as the chat model
+  already did; for the document-search model, imports fail without it (#913).
 - **The document-search model no longer depends on the order a drive lists its files in.** On a
   drive formatted like most USB sticks, a second document-search model added to the drive could
   have taken over from the current one, depending only on which file was copied first. Every

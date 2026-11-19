@@ -560,6 +560,27 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
       expect(calls).toBe(1)
     })
 
+  // #913: the start check found the translation model's file damaged — the Translate screen's "download it again"
+  // copy, not the memory one, which would send the user the wrong way.
+  it('a start the file check refused fails the task with the download-again copy, after one attempt (#913)', async () => {
+    const docId = await importWords(w, 60)
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'scripted-translator',
+      contextWindow: () => 4096,
+      stop: async () => {},
+      async translate() {
+        calls += 1
+        throw new TranslationStartError(new Error('The translation model file failed its check'), { modelDamaged: true })
+      }
+    }
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const status = await waitTerminal(manager, manager.startDocTask(translateReq(docId)).jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(t('en', 'translate.err.modelDamaged'))
+    expect(calls).toBe(1)
+  })
+
   it('fails the whole task (and persists nothing) when EVERY window fails', async () => {
     const docId = await importWords(w, 100)
     const translator = scriptedTranslator({

@@ -1463,3 +1463,65 @@ describe('TranslationRuntime — OS loader refusal (#530)', () => {
     await rt.stop()
   })
 })
+
+// #913: the translation model's start check, first in the start ladder. A file a check found damaged never spawns, on
+// either rung, and never takes the reranker off the card; the refusal latches with `modelDamaged`, which the Translate
+// view shows as its own "download it again" copy (the BE-7 refresh replaces the latched instance after a re-download).
+describe('TranslationRuntime — the start check (#913)', () => {
+  it('a file the check finds damaged starts nothing: a latched modelDamaged start failure, no rung, no fallback', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const fallbacks: string[] = []
+    let yields = 0
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => 'damaged' as const)
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      onDeviceFallback: (reason) => fallbacks.push(reason),
+      beforeGpuStart: async () => void (yields += 1),
+      checkModel
+    })
+    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err)).toBe(true)
+    expect((err as { modelDamaged?: boolean }).modelDamaged).toBe(true)
+    expect((err as { engineCannotRun?: boolean }).engineCannotRun).toBe(false)
+    expect(calls).toHaveLength(0)
+    expect(yields).toBe(0) // the reranker keeps the card: nothing was going to load
+    expect(fallbacks).toEqual([]) // not a device fault
+    expect(rt.isStartFailed()).toBe(true)
+    expect(await rt.translate(translateOpts).catch((e: unknown) => e)).toBe(err) // latched
+    expect(checkModel).toHaveBeenCalledTimes(1)
+    expect(checkModel.mock.calls[0][0]).toBeInstanceOf(AbortSignal) // the ladder's abort signal goes in
+    await rt.stop()
+  })
+
+  // #913 code review: the check runs before the device ladder, so a check that throws (not an abort) is not read as a
+  // failed GPU start. Before, it armed the session GPU fallback and walked the CPU rung.
+  it('a check that throws arms no GPU fallback and walks no CPU rung; the next start keeps the card', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const fallbacks: string[] = []
+    let fails = true
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => {
+      if (fails) {
+        fails = false
+        throw new Error('the check could not run')
+      }
+      return 'ok' as const
+    })
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      onDeviceFallback: (reason) => fallbacks.push(reason),
+      checkModel
+    })
+    await expect(rt.translate(translateOpts)).rejects.toThrow('the check could not run')
+    expect(calls).toHaveLength(0)
+    expect(fallbacks).toEqual([])
+    expect(rt.isStartFailed()).toBe(false) // not latched: the next start checks again
+    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].args.join(' ')).not.toContain('--device') // the 'auto' posture: the card, not the processor
+    await rt.stop()
+  })
+})

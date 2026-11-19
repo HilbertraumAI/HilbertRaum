@@ -356,6 +356,19 @@ describe('TranslateScreen — translate → stream → copy', () => {
     expect(screen.queryByText(t('en', 'translate.err.docTaskBusy'))).not.toBeInTheDocument()
   })
 
+  // #913: the start check refused a translation model a check found damaged — its own copy, which points back to the
+  // AI Model screen, not the "low on memory" one of a failed start.
+  it('a modelDamaged job shows the download-again banner, not the start-failed one (#913)', async () => {
+    const s = streamStubs({ jobId: 'x', state: 'failed', error: 'modelDamaged' })
+    stubApi(s.api)
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
+    expect(await screen.findByText(t('en', 'translate.err.modelDamaged'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'translate.err.startFailed'))).not.toBeInTheDocument()
+  })
+
   it('a dismissed error banner clears the store state (does not stick / reappear on remount)', async () => {
     const s = streamStubs({ jobId: 'x', state: 'failed', error: 'runtimeFailed' })
     stubApi(s.api)

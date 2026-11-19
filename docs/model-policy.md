@@ -4,8 +4,11 @@
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
 - Every model is described by a **manifest** (YAML) under `model-manifests/`, so models can change
   without code changes (spec §3.3).
-- Models are verified by **SHA-256** before use (spec §7.4). Unverified models are rejected unless
-  developer mode is on.
+- Models are verified by **SHA-256** (spec §7.4). The chat model is hashed at its start (a cached
+  hash counts). The search and voice models are hashed before their first start in a workspace; the
+  image, translation and re-ranking models are not hashed at their start, but none of them starts a
+  file a check found damaged (#913). Unverified models (a placeholder hash) are rejected unless
+  developer mode is on and the drive policy allows it, for every role.
 
 ## Default model family
 **Qwen3 dense instruct**, quantized **GGUF**, run via `llama.cpp`. Apache-2.0 for many variants.
@@ -1284,8 +1287,9 @@ download:
 
 Everything else rides the existing schema. Install state (`services/models.ts`) is role-agnostic
 (present + SHA-256-verified ⇒ `installed`); `selectModel` **refuses** it ("used automatically") — it
-activates by **presence** via `resolveModelByRole('translation')` once the weight is verified, exactly
-like reranker/vision. The builds that predate the role reject such a manifest, so it vanishes there;
+activates by **presence** via `resolveModelByRole('translation')` once the weight is on the drive,
+exactly like reranker/vision. Nothing hashes it at its start; a weight a check found damaged is refused
+there with its own message (#913). The builds that predate the role reject such a manifest, so it vanishes there;
 since #847 a role a build does not know is listed as needing a newer HilbertRaum instead. On the Models
 screen it renders as an
 automatic-role card (no Select/Start), downloadable behind the license-acknowledgement gate below.

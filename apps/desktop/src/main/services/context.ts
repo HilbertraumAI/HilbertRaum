@@ -20,6 +20,7 @@ import type { LocalApiServer } from './local-api/server'
 import type { PlaintextOpsRegistry } from './ingestion/plaintext-ops'
 import type { PendingModelSwitchCounter } from './rag/device-posture'
 import type { TranscriberMissing } from '../../shared/types'
+import type { ModelStartCheck } from './models'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -256,6 +257,13 @@ export interface AppContext {
    * test contexts stay valid; never throws.
    */
   refreshTranslatorSlot?: () => void
+  /**
+   * #913: the start check every non-chat role runs before it spawns its model (`checkModelBeforeStart` over this
+   * workspace's hash store, with the policy-aware leniency). Built in `main/index.ts` by `createModelStartCheck`;
+   * held here so the mid-session re-compositions (`refreshTranscriberSlot` from both install hooks) give a refreshed
+   * service the same check. Required (#913 review S3): a context built without it does not compile.
+   */
+  checkModel: ModelStartCheck
   /**
    * Wave 8 ruling (a): the per-call counter of `startModelRuntime` calls presently awaiting the
    * reranker's single-flight suspend after committing to a REAL model switch — shared between

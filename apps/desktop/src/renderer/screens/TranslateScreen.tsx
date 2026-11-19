@@ -63,6 +63,8 @@ const ERR_KEY: Partial<Record<ClientTranslateError, MessageKey>> = {
   startFailed: 'translate.err.startFailed',
   // #530: the OS refused to start the engine program — not a memory problem.
   engineCannotRun: 'translate.err.engineCannotRun',
+  // #913: a check found the model's file damaged — download it again, not a memory problem either.
+  modelDamaged: 'translate.err.modelDamaged',
   empty: 'translate.err.empty',
   sameLang: 'translate.err.sameLang',
   tooLong: 'translate.err.tooLong'

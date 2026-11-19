@@ -5,6 +5,11 @@ import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { getVisionStatus, pickVisionManifest, visionCandidates } from '../../src/main/services/vision/status'
 import { computeInstallState, manifestFilesPresent } from '../../src/main/services/models'
+import { createModelStartCheck } from '../../src/main/services/model-start-check'
+import { VisionService, type VisionAnalyzer, type VisionStreamEmitter } from '../../src/main/services/vision'
+import type { ImageJob } from '../../src/shared/types'
+import { until } from '../helpers/hang-budget'
+import { pngHeader } from '../helpers/image-fixtures'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import type { AppContext } from '../../src/main/services/context'
 import { sha256, validManifest } from '../helpers/manifest-fixtures'
@@ -70,7 +75,8 @@ function writeVisionManifest(
 
 function ctxFor(rootPath: string, manifestsDir: string | null): AppContext {
   return {
-    paths: { rootPath },
+    // #913: the developer leniency reads the drive policy from configPath (none there: the dev defaults).
+    paths: { rootPath, configPath: join(rootPath, 'config') },
     manifestsDir,
     isDev: true,
     // Locked → status stays workspace-agnostic and never touches the DB (PROD-2).
@@ -166,13 +172,131 @@ describe('getVisionStatus', () => {
     const ctx = { ...ctxFor(rootPath, manifestsDir), isDev: false } as AppContext // developer mode off
 
     expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'a-vision' })
-    // With a-vision's projector gone, the flagged z-vision is the only candidate and fails: no model.
+    // With a-vision's projector gone, the flagged z-vision is the only candidate and fails its check: damaged (#913;
+    // before, no-model, whose copy asks for a model the drive already has).
     rmSync(join(rootPath, 'models/vision/a-mmproj.gguf'))
-    expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'no-model' })
+    expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'damaged' })
     writeDriveFile(rootPath, 'models/vision/a-mmproj.gguf', 'a projector')
     // The same drive with the flag taken off z-vision: a-vision is the pick, and it is available.
     writeVisionManifest(manifestsDir, zVision, 'z-vision.yaml')
     expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'a-vision' })
+  })
+
+  // #913 (S-913-1): "Check all model files" found the GGUF damaged and stopped there, so the projector has no cache
+  // entry. Images must not run that model; on master the status said available and the next image question used it.
+  it('is not available once a full check found the GGUF damaged, though the projector was never hashed (#913)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    writeBinary(rootPath)
+    writeVisionManifest(manifestsDir, {
+      sha256: sha256('the real weights'),
+      mmproj: { local_path: 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf', sha256: sha256('the projector') }
+    })
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-instruct-q4.gguf', 'the real weightz') // a bit flip
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf', 'the projector')
+    const ctx = ctxFor(rootPath, manifestsDir)
+    const manifest = validManifest({
+      id: 'qwen2.5-vl-3b-instruct-q4',
+      role: 'vision',
+      local_path: 'models/vision/qwen2.5-vl-3b-instruct-q4.gguf',
+      sha256: sha256('the real weights'),
+      mmproj: { local_path: 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf', sha256: sha256('the projector') }
+    })
+    // The full check (what "Check all model files" runs): it hashes the GGUF, finds it damaged and stops.
+    expect(await computeInstallState(manifest, rootPath, { developerMode: false })).toBe('checksum_failed')
+    const status = await getVisionStatus(ctx)
+    expect(status.available).toBe(false)
+    expect(status.modelId).toBeUndefined()
+    // #913 (d): the reason whose copy sends the user back to the AI Model screen to download it again.
+    expect(status.reason).toBe('damaged')
+  })
+
+  // #913 (S-913-4): the images status takes the developer leniency every role uses, so the drive policy outranks a
+  // dev build or the developer toggle, as it does for the chat start. Before, a placeholder-hash vision model counted
+  // as installed on a commercial drive whenever developer mode was on.
+  it('lets the drive policy refuse a placeholder-hash vision model even in developer mode (#913)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    writeBinary(rootPath)
+    writeVisionManifest(manifestsDir) // placeholder hashes for both files
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-instruct-q4.gguf')
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf')
+    const ctx = ctxFor(rootPath, manifestsDir) // a dev build: developer mode on
+    expect(await getVisionStatus(ctx)).toMatchObject({ available: true })
+    mkdirSync(join(rootPath, 'config'), { recursive: true })
+    writeFileSync(
+      join(rootPath, 'config', 'policy.json'),
+      JSON.stringify({ models: { allow_unverified_models: false, require_sha256_match: true } })
+    )
+    expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'damaged' })
+  })
+})
+
+// #913 code review: the images service runs the model the status names at every cold start. Two vision models, A (the
+// pick) and B. A answers, then its sidecar idles out: the service keeps the instance, which is bound to A. "Check all
+// model files" finds A damaged, so the status now names B, and B passes its check. Before, the next analyze reused the
+// kept instance and cold-started the damaged A.
+describe('VisionService on a drive with two vision models (#913 code review)', () => {
+  it('a cold start after a check found the pick damaged loads the next model, not the instance kept for the pick', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    writeBinary(rootPath)
+    const vision = (id: string, flagged: boolean): Record<string, unknown> => ({
+      id,
+      local_path: `models/vision/${id}.gguf`,
+      sha256: sha256(`${id} weights`),
+      mmproj: { local_path: `models/vision/${id}-mmproj.gguf`, sha256: sha256(`${id} projector`) },
+      ...(flagged ? { default_for_role: true } : {})
+    })
+    writeVisionManifest(manifestsDir, vision('a-vision', true), 'a-vision.yaml')
+    writeVisionManifest(manifestsDir, vision('b-vision', false), 'b-vision.yaml')
+    writeDriveFile(rootPath, 'models/vision/a-vision.gguf', 'a-vision weightz') // damaged; no check has seen it yet
+    writeDriveFile(rootPath, 'models/vision/a-vision-mmproj.gguf', 'a-vision projector')
+    writeDriveFile(rootPath, 'models/vision/b-vision.gguf', 'b-vision weights')
+    writeDriveFile(rootPath, 'models/vision/b-vision-mmproj.gguf', 'b-vision projector')
+    const ctx = ctxFor(rootPath, manifestsDir)
+    const checkModel = createModelStartCheck({
+      manifestsDir,
+      paths: ctx.paths,
+      isDev: false,
+      getSettings: () => null,
+      getDb: () => {
+        throw new Error('locked') // the store degrades to the in-memory cache
+      }
+    })
+    const built: string[] = []
+    const idleOut: Array<() => void> = []
+    const service = new VisionService({
+      getStatus: () => getVisionStatus(ctx),
+      createRuntime: (status): VisionAnalyzer => {
+        const id = status.modelId ?? '?'
+        built.push(id)
+        let loaded = false
+        idleOut.push(() => (loaded = false))
+        return {
+          analyze: async () => {
+            loaded = true // a cold start of this instance loads `id`
+            return `answer from ${id}`
+          },
+          isLoaded: () => loaded,
+          stop: async () => void (loaded = false)
+        }
+      },
+      isWorkspaceLocking: () => false,
+      checkModel: (modelId, signal) => checkModel(modelId, { hash: false, signal })
+    })
+    const analyze = async (): Promise<ImageJob> => {
+      const emit: VisionStreamEmitter = { token: () => {}, done: () => {}, error: () => {} }
+      const { jobId } = service.analyze({ imageBytes: pngHeader(2, 2), mimeType: 'image/png', question: 'what is it' }, emit)
+      await until(() => ['done', 'failed', 'cancelled'].includes(service.getJob(jobId).state), 'the vision job ending')
+      return service.getJob(jobId)
+    }
+
+    expect(await analyze()).toMatchObject({ state: 'done', answer: 'answer from a-vision' })
+    idleOut[0]() // the idle teardown: the sidecar goes, the instance stays
+    const a = validManifest({ role: 'vision', ...vision('a-vision', true) })
+    expect(await computeInstallState(a, rootPath, { developerMode: false })).toBe('checksum_failed') // Check all
+    expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'b-vision' })
+    expect(await analyze()).toMatchObject({ state: 'done', answer: 'answer from b-vision' })
+    expect(built).toEqual(['a-vision', 'b-vision'])
+    await service.stop()
   })
 })
 

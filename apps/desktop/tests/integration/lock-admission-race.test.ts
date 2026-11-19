@@ -333,7 +333,8 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   ctx.vision = new VisionService({
     getStatus: async () => ({ available: true, modelId: 'fake-vision', modelDisplayName: 'Fake' }),
     createRuntime,
-    isWorkspaceLocking: () => ctrl.isLocking()
+    isWorkspaceLocking: () => ctrl.isLocking(),
+    checkModel: async () => 'ok'
   })
 
   registerWorkspaceIpc(ctx)

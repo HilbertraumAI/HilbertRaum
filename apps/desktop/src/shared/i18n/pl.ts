@@ -3381,6 +3381,9 @@ export const pl: UiCatalog<'pl'> = {
   'images.avail.noModel': 'Analiza obrazów wymaga lokalnego modelu wizyjnego na tym dysku.',
   'images.avail.noRuntime': 'Analiza obrazów wymaga najpierw zainstalowania silnika AI.',
   'images.avail.incompatible': 'Model wizyjny na tym dysku wymaga nowszego silnika AI.',
+  'images.avail.damaged':
+    'Model wizyjny na tym dysku nie przeszedł sprawdzenia plików. Pobierz go ponownie na ekranie ' +
+    'Model AI.',
   'images.avail.cta': 'Otwórz Model AI',
   'images.avail.ocrPointer':
     'Zeskanowane dokumenty? Na ekranie Dokumenty użyj przycisku „Umożliw wyszukiwanie (OCR)”.',
@@ -3441,6 +3444,9 @@ export const pl: UiCatalog<'pl'> = {
     'Nie udało się uruchomić modelu wizyjnego. Spróbuj ponownie albo wybierz inny model.',
   'images.err.engineCannotRun':
     'Silnik AI nie może działać na tym komputerze. Na ekranie Model AI widać, czego brakuje.',
+  'images.err.modelDamaged':
+    'Model wizyjny nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +
+    'ponownie na ekranie Model AI.',
   'images.err.emptyResponse':
     'Nie otrzymano odpowiedzi dotyczącej tego obrazu. Spróbuj inaczej sformułować pytanie.',
   'images.err.emptyQuestion': 'Najpierw wpisz pytanie o obraz.',
@@ -3544,6 +3550,9 @@ export const pl: UiCatalog<'pl'> = {
     'inne aplikacje lub uruchom ponownie aplikację HilbertRaum, a następnie spróbuj ponownie.',
   'translate.err.engineCannotRun':
     'Silnik AI nie może działać na tym komputerze. Na ekranie Model AI widać, czego brakuje.',
+  'translate.err.modelDamaged':
+    'Model tłumaczenia nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +
+    'ponownie na ekranie Model AI.',
   'translate.err.empty': 'Nie otrzymano tłumaczenia. Spróbuj ponownie albo przeformułuj tekst.',
   'translate.err.sameLang': 'Wybierz dwa różne języki.',
   'translate.err.tooLong':

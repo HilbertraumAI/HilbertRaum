@@ -13,6 +13,7 @@ import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
 import { GPU_RERANK_SCOPE, type RerankerDevice } from '../rag/rerank-profile'
 import { isEngineCannotRunError } from '../runtime/engine-load'
 import { log } from '../logging'
+import type { BoundModelStartCheck } from '../models'
 
 // Real on-device reranker (rag-design §11). The THIRD `LlamaServer`
 // composition (after the chat runtime and the E5 embedder): the SAME shipped b9585
@@ -120,6 +121,13 @@ export interface LlamaRerankerOptions extends LlamaRerankerDeps {
    * crash of a GPU-composed sidecar). Observability only; must never throw.
    */
   onDeviceFallback?: (reason: string) => void
+  /**
+   * #913: checks the reranker's file before each cold start spawns, at the head of the start ladder. The
+   * composition passes the cache-only check: a file a check found damaged latches `startFailed` (rerank() then
+   * fails fast and retrieval keeps the fused order, as for a load fault); a clean check of the file, a download of
+   * it (`rearmCheckedModels`), an engine re-check or a restart re-arms it. Absent ⇒ no check.
+   */
+  checkModel?: BoundModelStartCheck
 }
 
 interface RerankResponse {
@@ -570,6 +578,18 @@ export class LlamaReranker implements Reranker {
    * disables reranking" safety net for a genuinely broken GPU setup where CPU might also fail.
    */
   private async startLadder(posture: RerankerDevice, abort: AbortController): Promise<void> {
+    // #913: a file a check found damaged never starts, on either rung. Before the ladder, so the
+    // verdict is no device fault (no GPU fallback) and no rung spawns. A teardown that began during
+    // the check ends the start as the abort it is (never latched).
+    if (this.opts.checkModel) {
+      const verdict = await this.opts.checkModel(abort.signal)
+      if (abort.signal.aborted) throw new DOMException('The reranker start was aborted', 'AbortError')
+      if (verdict === 'damaged') {
+        const error = new Error('The reranker model file failed its check')
+        this.startFailed = error
+        throw error
+      }
+    }
     try {
       this.server = await this.attemptStart(posture, abort.signal)
       this.emitResidencyChange()

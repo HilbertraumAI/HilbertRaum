@@ -3320,6 +3320,9 @@ export const nl: UiCatalog<'nl'> = {
   'images.avail.noRuntime':
     'Voor het begrijpen van afbeeldingen moet eerst de AI-engine zijn geïnstalleerd.',
   'images.avail.incompatible': 'Het beeldmodel op deze schijf heeft een nieuwere AI-engine nodig.',
+  'images.avail.damaged':
+    'Het beeldmodel op deze schijf is niet door de bestandscontrole gekomen. Download het opnieuw op ' +
+    'het scherm AI-model.',
   'images.avail.cta': 'Naar AI-model',
   'images.avail.ocrPointer':
     'Gescande documenten? Gebruik “Doorzoekbaar maken (OCR)” in Documenten.',
@@ -3382,6 +3385,9 @@ export const nl: UiCatalog<'nl'> = {
   'images.err.engineCannotRun':
     'De AI-engine kan op deze computer niet draaien. Op het scherm AI-model staat wat er ' +
     'ontbreekt.',
+  'images.err.modelDamaged':
+    'Het beeldmodel is niet door de bestandscontrole gekomen en is daarom niet gestart. Download het ' +
+    'opnieuw op het scherm AI-model.',
   'images.err.emptyResponse':
     'Er is geen antwoord over deze afbeelding teruggekomen. Probeer je vraag anders te ' +
     'formuleren.',
@@ -3487,6 +3493,9 @@ export const nl: UiCatalog<'nl'> = {
   'translate.err.engineCannotRun':
     'De AI-engine kan op deze computer niet draaien. Op het scherm AI-model staat wat er ' +
     'ontbreekt.',
+  'translate.err.modelDamaged':
+    'Het vertaalmodel is niet door de bestandscontrole gekomen en is daarom niet gestart. Download ' +
+    'het opnieuw op het scherm AI-model.',
   'translate.err.empty':
     'Er is geen vertaling teruggekomen. Probeer het opnieuw, of formuleer de tekst anders.',
   'translate.err.sameLang': 'Kies twee verschillende talen.',

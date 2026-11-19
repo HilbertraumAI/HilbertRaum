@@ -2,6 +2,7 @@ import type { Translator } from './index'
 import { TranslationRuntime, type TranslationGpuDeps, type TranslationStartInfo } from './runtime'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
+import type { BoundModelStartCheck } from '../models'
 
 // Availability-aware translation selector (TG wave, plan §2 D1), mirroring the reranker factory —
 // with NO mock fallback. A real `TranslationRuntime` is chosen only when BOTH the platform
@@ -11,7 +12,8 @@ import { resolveSidecarSelection } from '../select-sidecar-backed'
 //
 // Availability-driven activation (plan §2 D1): NO settings slot, no picker recommendation. The
 // caller resolves the role's default model via `resolveModelByRole('translation')`; the sidecar
-// activates by PRESENCE once the weight is installed + verified.
+// activates by PRESENCE once the weight is installed: nothing is hashed here, and the runtime's start
+// check (#913) refuses a weight a check found damaged.
 
 /** The translation model resolved from its manifest (id + GGUF weight path + launch context). */
 export interface TranslationModelInfo {
@@ -44,6 +46,8 @@ export interface TranslatorSelectionDeps {
   onStarted?: (info: TranslationStartInfo) => void
   /** Awaited before a GPU-posture cold start (#473) — see `TranslationRuntimeOptions`. */
   beforeGpuStart?: () => Promise<void>
+  /** #913: the start check (`TranslationRuntimeOptions.checkModel`). Absent ⇒ no check. */
+  checkModel?: BoundModelStartCheck
 }
 
 /**
@@ -60,7 +64,8 @@ export function createSelectedTranslator(deps: TranslatorSelectionDeps): Transla
       gpu: deps.gpu,
       onDeviceFallback: deps.onDeviceFallback,
       onStarted: deps.onStarted,
-      beforeGpuStart: deps.beforeGpuStart
+      beforeGpuStart: deps.beforeGpuStart,
+      checkModel: deps.checkModel
     })
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — unavailable means null (plan O2).

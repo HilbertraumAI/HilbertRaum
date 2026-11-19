@@ -3,6 +3,7 @@ import type { Transcriber } from './index'
 import type { TranscriberMissing } from '../../../shared/types'
 import { createWhisperCliTranscriber, resolveWhisperCliPath } from './cli'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
+import type { BoundModelStartCheck } from '../models'
 
 // Availability-aware transcriber selector, the reranker pattern verbatim:
 // NO mock fallback. A real `WhisperCliTranscriber` is chosen only when BOTH the
@@ -46,6 +47,8 @@ export interface TranscriberSelectionDeps {
   /** Dev build — gates the dev-only `HILBERTRAUM_WHISPER_BIN` override (M-5). Default false. */
   isDev?: boolean
   onSelect?: (kind: 'whisper' | 'none', reason: string) => void
+  /** #913: the voice model's start check (`WhisperCliOptions.checkModel`). Absent ⇒ no check. */
+  checkModel?: BoundModelStartCheck
 }
 
 /**
@@ -58,7 +61,8 @@ export function createSelectedTranscriber(deps: TranscriberSelectionDeps): Trans
       id: model.id,
       binPath,
       modelPath: model.modelPath,
-      vadModelPath: vadModelPathOf(model)
+      vadModelPath: vadModelPathOf(model),
+      checkModel: deps.checkModel
     })
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — a mock transcript would

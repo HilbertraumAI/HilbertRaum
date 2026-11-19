@@ -85,7 +85,6 @@ import { createAuditRecorder } from './services/audit'
 import { RuntimeManager, type RuntimeStartOptions } from './services/runtime'
 import { occupiedLaneForDocTask } from './services/runtime/occupancy'
 import {
-  clearModelLoadLatch,
   createGpuCrashAutoFallback,
   createSelectingRuntimeFactory,
   createSpeculativeCrashAutoFallback,
@@ -98,13 +97,14 @@ import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
+import { createModelStartCheck } from './services/model-start-check'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import {
+  afterModelInstalled,
   composeServices,
   composeTranslator,
   probeOcrEngine,
-  refreshTranscriberSlot,
   shouldReplaceTranslator
 } from './services/compose-services'
 import {
@@ -579,6 +579,19 @@ function initBackend(): void {
       manifestsDir
     })
   }
+  // #913 (C §913.3): the start check every non-chat role runs at its cold start, before it spawns its
+  // model — the chat start gate's rule for the other roles: a file a check found damaged never
+  // starts. Built by the exported factory (`services/model-start-check.ts`), so its row reads what
+  // production gets: the manifest by id, the policy-aware leniency chat uses (a locked workspace
+  // reads the developer toggle as off), and this workspace's hash store. The composers bind it to
+  // each role's model and hashing choice (required there, #913 review S3); vision binds it below.
+  const checkModel = createModelStartCheck({
+    manifestsDir,
+    paths,
+    isDev,
+    getSettings: readSettingsOrNull,
+    getDb: () => workspace.requireDb()
+  })
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
@@ -594,7 +607,8 @@ function initBackend(): void {
     // Wave 8 rulings (a)/(b)(Q)/(b)(G): consulted by `rerank()` on every call, never once per
     // cold start any more (see `createRerankerCallbacks`'s doc comment above).
     rerankerDevicePosture,
-    rerankerRequestCeiling
+    rerankerRequestCeiling,
+    checkModel
   })
   // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
@@ -722,7 +736,9 @@ function initBackend(): void {
     pendingModelSwitches,
     // #782: the IPC layer's notices (a download stopped because internet access was switched off)
     // go out the way the runtime factories' do.
-    runtimeNotice: notifyRenderer
+    runtimeNotice: notifyRenderer,
+    // #913: so a transcriber refreshed after an install gets the same start check.
+    checkModel
   }
   // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
   // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the
@@ -752,7 +768,9 @@ function initBackend(): void {
     createRuntime: (status) => createVisionRuntimeFromContext(ctx as AppContext, status),
     // AUD-02: refuse for the whole lock teardown, not just this service's own stop() window —
     // an analyze admitted after that window would build a fresh vision sidecar that outlives it.
-    isWorkspaceLocking: () => workspace.isLocking()
+    isWorkspaceLocking: () => workspace.isLocking(),
+    // #913: the cache-only check (about 1 ms): vision is never hashed before its first start (G-4).
+    checkModel: (modelId, signal) => checkModel(modelId, { hash: false, signal })
   })
   // The Translate-view job orchestrator (TG-4). Built here — not inside registerTranslateIpc — so
   // the lock/quit teardown paths can reach it via `ctx.translateJobs` and abort an in-flight text
@@ -799,7 +817,8 @@ function initBackend(): void {
         rootPath: paths.rootPath,
         manifestsDir,
         isDev,
-        gpu: translationGpu
+        gpu: translationGpu,
+        checkModel
       },
       ctx.reranker
     )
@@ -811,21 +830,10 @@ function initBackend(): void {
   // above) and brings a model the demo runtime stands in for back on the engine, without a
   // lock/unlock, a restart or "Check again".
   rearmWhenChatEngineHeals(ctx)
-  ctx.onModelInstalled = (modelId) => {
-    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model FIRST —
-    // before any statement below can return early or throw (the download manager swallows the
-    // whole hook).
-    clearModelLoadLatch(modelId)
-    if (!ctx) return
-    // #634: the search model downloaded again (the repair "Check all model files" offers for a
-    // damaged file) — re-arm its failed-start latch, so the row's "then try again" works without a
-    // lock/unlock. Same id: the embedder is built from this manifest; a mock embedder never matches.
-    if (modelId === ctx.embedder.id) ctx.embedder.resetStartFailure?.()
-    // #497: BEFORE the translator refresh (a different slot), and never throwing — the
-    // download manager swallows the whole hook, so a throw here would skip the refresh below.
-    refreshTranscriberSlot(ctx)
-    ctx.refreshTranslatorSlot?.()
-  }
+  // #372 / #497 / #634 / #913 review S1: the chat ladder for this model, an empty transcriber slot, and
+  // every role that refused (the search model and the reranker by their id, the images cooldown, the
+  // translator slot). One hook body, shared with the rows (`afterModelInstalled`).
+  ctx.onModelInstalled = (modelId) => afterModelInstalled(ctx as AppContext, modelId)
   // The Performance screen's push (PR #303 P3, G6): every transition of the chat runtime
   // (starting / ready / stopped) and every resident sidecar loading or unloading (the
   // "Models on this computer" rows) tells every window to re-read `performance:get`. The

@@ -149,6 +149,7 @@ describe('vision security sentinel', () => {
     const audit = vi.fn()
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       createRuntime: () =>
         new VisionRuntime({
@@ -196,6 +197,7 @@ describe('vision security sentinel', () => {
     const audit = vi.fn()
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       createRuntime: () =>
         new VisionRuntime({
@@ -228,6 +230,7 @@ describe('vision security sentinel', () => {
     const audit = vi.fn()
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       // Allowed test seam: the answer really flows through onToken, then a content-free throw.
       createRuntime: () => ({
@@ -266,6 +269,7 @@ describe('vision security sentinel', () => {
     const audit = vi.fn()
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({
         analyze: async (o: { onToken?: (d: string) => void }) => {
@@ -305,6 +309,7 @@ describe('vision security sentinel', () => {
     const audit = vi.fn()
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({
         analyze: async (o: { onToken?: (d: string) => void }) => {
@@ -333,6 +338,7 @@ describe('vision security sentinel', () => {
     const audit = vi.fn()
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({ analyze: async () => 'ok' })
     })
@@ -359,6 +365,7 @@ describe('vision security sentinel', () => {
     const audit = vi.fn()
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({
         analyze: async (o: { onToken?: (d: string) => void }) => {

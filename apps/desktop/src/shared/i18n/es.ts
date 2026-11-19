@@ -3371,6 +3371,9 @@ export const es: UiCatalog<'es'> = {
   'images.avail.noRuntime': 'Para entender imágenes, primero hay que instalar el motor de IA.',
   'images.avail.incompatible':
     'El modelo para imágenes de esta unidad necesita un motor de IA más reciente.',
+  'images.avail.damaged':
+    'El modelo para imágenes de esta unidad no ha superado la comprobación de sus archivos. Vuelve a ' +
+    'descargarlo en la pantalla Modelo de IA.',
   'images.avail.cta': 'Ir a Modelo de IA',
   'images.avail.ocrPointer':
     '¿Documentos escaneados? Usa «Habilitar búsqueda (OCR)» en Documentos.',
@@ -3433,6 +3436,9 @@ export const es: UiCatalog<'es'> = {
   'images.err.engineCannotRun':
     'El motor de IA no puede funcionar en este equipo. En la pantalla Modelo de IA se indica qué ' +
     'falta.',
+  'images.err.modelDamaged':
+    'El modelo para imágenes no ha superado la comprobación de sus archivos, así que no se ha ' +
+    'iniciado. Vuelve a descargarlo en la pantalla Modelo de IA.',
   'images.err.emptyResponse':
     'No se recibió ninguna respuesta sobre esa imagen. Prueba a formular la pregunta de otra ' +
     'manera.',
@@ -3542,6 +3548,9 @@ export const es: UiCatalog<'es'> = {
   'translate.err.engineCannotRun':
     'El motor de IA no puede funcionar en este equipo. En la pantalla Modelo de IA se indica qué ' +
     'falta.',
+  'translate.err.modelDamaged':
+    'El modelo de traducción no ha superado la comprobación de sus archivos, así que no se ha ' +
+    'iniciado. Vuelve a descargarlo en la pantalla Modelo de IA.',
   'translate.err.empty':
     'No se recibió ninguna traducción. Vuelve a intentarlo o formula el texto de otra manera.',
   'translate.err.sameLang': 'Elige dos idiomas distintos.',

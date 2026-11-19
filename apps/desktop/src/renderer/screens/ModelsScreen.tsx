@@ -703,6 +703,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
    * is the full-verify mode `buildModelList` already has, so this needs no new channel; the
    * hashes it computes land in the (size, mtime) checksum store, so the `refresh()` that
    * `run` fires afterwards reports every state — `checksum_failed` included — from the cache.
+   * The pass stops at a model's first damaged file and leaves its other files unhashed; the
+   * lazy refresh still reads that one cached mismatch as `checksum_failed` (#913).
    *
    * #420: the run id is minted HERE, before the call, and handed to main — so Cancel has a
    * handle from the first instant, not from the first progress event (which can be seconds

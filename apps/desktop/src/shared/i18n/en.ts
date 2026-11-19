@@ -3450,6 +3450,8 @@ export const en = {
   'images.avail.noModel': 'Image understanding needs a local vision model on this drive.',
   'images.avail.noRuntime': 'Image understanding needs the AI engine installed first.',
   'images.avail.incompatible': "This drive's vision model needs a newer AI engine.",
+  'images.avail.damaged':
+    'This drive\'s vision model failed its file check. Download it again on the AI Model screen.',
   'images.avail.cta': 'Go to AI Model',
   'images.avail.ocrPointer': 'Scanned documents? Use Make searchable (OCR) under Documents.',
   // Drop zone (§5.2) — a large, focusable target; the "choose" button is the non-drag path.
@@ -3511,6 +3513,9 @@ export const en = {
   'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
   // #530: another model would not help — the OS refused the engine program.
   'images.err.engineCannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
+  'images.err.modelDamaged':
+    'The vision model failed its file check, so it wasn\'t started. Download it again on the AI ' +
+    'Model screen.',
   'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
   // #120 item 1: a BLANK question is an input problem, not an empty model answer.
   'images.err.emptyQuestion': 'Type a question about the image first.',
@@ -3632,6 +3637,9 @@ export const en = {
     "The translation model couldn't start — the device may be low on memory. Close other apps or restart HilbertRaum, then try again.",
   // #530: not a memory problem — the OS refused the engine program.
   'translate.err.engineCannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
+  'translate.err.modelDamaged':
+    'The translation model failed its file check, so it wasn\'t started. Download it again on the AI ' +
+    'Model screen.',
   'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
   'translate.err.sameLang': 'Pick two different languages.',
   // #160 (BE-3): the finite paste bound (TRANSLATE_MAX_TEXT_CHARS — keep the number in sync).

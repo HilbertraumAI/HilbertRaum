@@ -58,6 +58,7 @@ describe('AnswerThread — a failed turn names what went wrong', () => {
     ['emptyQuestion', 'images.err.emptyQuestion'],
     ['timedOut', 'images.err.timedOut'],
     ['contextExceeded', 'images.err.contextExceeded'],
+    ['modelDamaged', 'images.err.modelDamaged'], // #913: download it again, a retry would not help
     [FROM_A_NEWER_MAIN, 'images.err.runtimeFailed']
   ])('a failed turn with code %s shows %s (unknown codes fall back, #123)', (code, key) => {
     renderThread('', 'failed', code)

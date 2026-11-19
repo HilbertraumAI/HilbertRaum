@@ -3409,6 +3409,9 @@ export const it: UiCatalog<'it'> = {
   'images.avail.noRuntime': 'Per analizzare le immagini bisogna prima installare il motore IA.',
   'images.avail.incompatible':
     'Il modello per le immagini di questa unità richiede un motore IA più recente.',
+  'images.avail.damaged':
+    'Il modello per le immagini di questa unità non ha superato il controllo dei file. Scaricalo di ' +
+    'nuovo nella schermata Modello IA.',
   'images.avail.cta': 'Vai a Modello IA',
   'images.avail.ocrPointer': 'Documenti scansionati? Usa «Rendi ricercabile (OCR)» in Documenti.',
   'images.drop.title': 'Trascina qui un’immagine',
@@ -3472,6 +3475,9 @@ export const it: UiCatalog<'it'> = {
   'images.err.engineCannotRun':
     'Il motore IA non può funzionare su questo computer. La schermata Modello IA indica cosa ' +
     'manca.',
+  'images.err.modelDamaged':
+    'Il modello per le immagini non ha superato il controllo dei file, quindi non è stato avviato. ' +
+    'Scaricalo di nuovo nella schermata Modello IA.',
   'images.err.emptyResponse':
     'Per questa immagine non è arrivata nessuna risposta. Prova a riformulare la domanda.',
   'images.err.emptyQuestion': 'Prima scrivi una domanda sull’immagine.',
@@ -3581,6 +3587,9 @@ export const it: UiCatalog<'it'> = {
   'translate.err.engineCannotRun':
     'Il motore IA non può funzionare su questo computer. La schermata Modello IA indica cosa ' +
     'manca.',
+  'translate.err.modelDamaged':
+    'Il modello di traduzione non ha superato il controllo dei file, quindi non è stato avviato. ' +
+    'Scaricalo di nuovo nella schermata Modello IA.',
   'translate.err.empty': 'Non è arrivata nessuna traduzione. Riprova oppure riformula il testo.',
   'translate.err.sameLang': 'Scegli due lingue diverse.',
   'translate.err.tooLong':

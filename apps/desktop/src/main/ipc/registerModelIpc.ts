@@ -50,7 +50,8 @@ import { detectSystem } from '../services/benchmark'
 import { machineKey } from '../services/performance'
 import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchmark-persistence'
 import type { Db } from '../services/db'
-import { loadPolicy } from '../services/policy'
+import { developerLeniency } from '../services/policy'
+import { rearmStartRefusals } from '../services/model-start-check'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
@@ -61,12 +62,6 @@ import { isChatStreaming } from './inflight'
 // The hardware profile comes from the persisted benchmark (`lastBenchmark`),
 // falling back to UNKNOWN until the user runs the benchmark for the first time.
 
-/**
- * Effective checksum leniency: "developer" is the user toggle OR a dev build —
- * but the drive POLICY is authoritative and can only restrict. On a commercial drive
- * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
- * are rejected no matter what the toggle says; this also disables the mock fallback.
- */
 /**
  * The memory inputs the chat ★ pick goes by (§6.6; PR #308 audit decisions 6 and 9): the class
  * and the BUDGET device for the NEXT start, read through `nextStartMemoryFor` from the
@@ -147,12 +142,6 @@ export function liveChatRecommendation(s: AppSettings, manifests: ModelManifest[
   return { modelId, basis }
 }
 
-function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
-  const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
-  const developer = s.developerMode || ctx.isDev
-  return developer && policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
-}
-
 /**
  * Start the runtime for a chat model, enforcing the spec §7.4 install gate (shared by
  * the `startRuntime` IPC handler and the startup auto-start). Throws on any refusal.
@@ -193,7 +182,7 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // first-run journey alive — for a developer (toggle or dev build, when the drive
   // policy permits unverified models) a MISSING model may start, because the selecting
   // runtime factory then falls back to the built-in mock runtime.
-  const lenient = developerLeniency(ctx, s)
+  const lenient = developerLeniency(ctx, s.developerMode)
   // The multi-GB weight hash below is the dominant cold-start cost on slow media and is
   // otherwise invisible in the logs; `computed` moving distinguishes a real hash from a
   // (size+mtime) cache hit.
@@ -567,7 +556,7 @@ export function registerModelIpc(ctx: AppContext): void {
         const { models, manifestErrors } = await buildModelList({
           manifestsDir: ctx.manifestsDir,
           rootPath: ctx.paths.rootPath,
-          developerMode: developerLeniency(ctx, s),
+          developerMode: developerLeniency(ctx, s.developerMode),
           runningModelId: ctx.runtime.activeModelId(),
           hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
           machineRamGb: machineRamGb(),
@@ -603,12 +592,16 @@ export function registerModelIpc(ctx: AppContext): void {
         // A CANCELLED pass reaches here too: whatever finished hashing is a genuine sample.
         persistEffectiveRead(ctx)
         // #634: the search model's start-failure copy says "choose Check all model files — then try
-        // again". A completed full check that did not find its file damaged re-arms its failed-start
-        // latch, so "then try again" is a real attempt (a health timeout on a slow drive, or a memory
-        // shortage, may pass now). A damaged file is re-armed by its re-download (`onModelInstalled`).
+        // again". A completed full check re-arms every role whose model it did not find damaged
+        // (#913 review S1: the search model, the reranker, the images cooldown, the translator slot),
+        // so "then try again" is a real attempt (a file put right by hand, a health timeout on a slow
+        // drive, or a memory shortage, may pass now). A damaged file is re-armed by its re-download
+        // (`onModelInstalled`) or a clean "Verify checksum".
         if (!lazyVerify && !controller?.signal.aborted) {
-          const searchModel = models.find((m) => m.id === ctx.embedder?.id)
-          if (searchModel && searchModel.state !== 'checksum_failed') ctx.embedder.resetStartFailure?.()
+          rearmStartRefusals(
+            ctx,
+            models.filter((m) => m.state !== 'checksum_failed').map((m) => ({ id: m.id, role: m.role }))
+          )
         }
         return models
       } finally {
@@ -665,11 +658,14 @@ export function registerModelIpc(ctx: AppContext): void {
     // straight to the session's "cannot be loaded" verdict.
     clearModelLoadLatch(modelId)
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
-      developerMode: developerLeniency(ctx, getSettings(ctx.db)),
+      developerMode: developerLeniency(ctx, getSettings(ctx.db).developerMode),
       hashStore: store
     })
     log.info('Model re-verified', { modelId, state })
     ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
+    // #913 review S1: the forced re-hash is the one action that clears a stale mismatch (a file put
+    // back from a backup keeps its size and mtime), so a clean answer re-arms every role that refused.
+    if (state !== 'checksum_failed') rearmStartRefusals(ctx, [{ id: modelId, role: found.manifest.role }])
     // #108: the forced re-hash is a real full-file read — persist any fresh sample.
     persistEffectiveRead(ctx)
     return state

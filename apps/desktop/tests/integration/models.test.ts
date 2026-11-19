@@ -15,6 +15,7 @@ import {
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   beginChecksumInstrumentation,
+  checkModelBeforeStart,
   sha256File,
   verifyChecksum,
   computeInstallState,
@@ -652,6 +653,53 @@ describe('computeInstallState — vision (both files verified)', () => {
     })
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
   })
+
+  // #913 (S-913-1): a full check stops at the first damaged file, so one file of the pair can hold a cached mismatch
+  // while the other has no cache entry at all. The lazy answer must honour that mismatch; master said `installed`
+  // because it trusted the cache only when every file had an entry.
+  it.each([
+    ['the GGUF', 'models/vision/vl.gguf'],
+    ['the projector', 'models/vision/mmproj.gguf']
+  ])('skipHash reports checksum_failed when only %s has a cached mismatch (#913)', async (_file, damaged) => {
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytes')
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = visionManifest({
+      sha256: sha256('lm-bytes'),
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+    })
+    primeChecksum(join(root, ...damaged.split('/')), sha256('bytes a check found damaged'))
+    const before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, skipHash: true })).toBe('checksum_failed')
+    expect(checksumCacheStats.computed).toBe(before) // answered from the cache: nothing hashed
+  })
+
+  // #913 (S-913-1): what "Check all model files" does on the AI Model screen — the full pass, then the lazy refresh
+  // the screen fires right after it. On master the refresh flipped a damaged vision GGUF back to installed, and Images
+  // kept running it.
+  it('the lazy refresh after a full check keeps a damaged vision GGUF checksum_failed (#913)', async () => {
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytez') // same length as the real bytes: a bit flip
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const manifestsDir = manifestsDirWith(
+      rawManifest({
+        id: 'qwen2.5-vl-3b-instruct-q4',
+        role: 'vision',
+        family: 'qwen2.5-vl',
+        local_path: 'models/vision/vl.gguf',
+        sha256: sha256('lm-bytes'),
+        mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+      })
+    )
+    const opts = { manifestsDir, rootPath: root, developerMode: false, machineRamGb: PINNED_RAM_GB }
+    const before = checksumCacheStats.computed
+    const full = await buildModelList(opts)
+    expect(full.models[0].state).toBe('checksum_failed')
+    expect(checksumCacheStats.computed - before).toBe(1) // it stopped at the GGUF: the projector was never hashed
+    const lazy = await buildModelList({ ...opts, onlyVerifyModelId: null })
+    expect(lazy.models[0].state).toBe('checksum_failed')
+    expect(checksumCacheStats.computed - before).toBe(1)
+  })
 })
 
 // #310: a weight that ships as a `-00001-of-00004` shard set is FOUR files. The manifest's
@@ -772,6 +820,77 @@ describe('#310 multi-file install state (shard set)', () => {
     const m = shardManifest([shas[0], 'REPLACE_WITH_REAL_HASH', shas[2], shas[3]])
     expect(await computeInstallState(m, root, { developerMode: true })).toBe('installed')
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
+  })
+})
+
+// #913: the start check the non-chat roles run before they spawn. Only a proven case refuses (the #876 rule): a file a
+// check found damaged, or a placeholder hash outside developer mode, as for chat. `hash: false` reads the cache only;
+// `hash: true` (the search and voice models, G-4 d2) hashes an uncached file. The service rows fake this verdict.
+describe('checkModelBeforeStart (#913)', () => {
+  const REL = 'models/transcriber/voice.bin'
+  type Case = [string, { body?: string; sha?: string; primeBad?: boolean; developerMode?: boolean; hash: boolean }, string, number]
+  it.each<Case>([
+    ['a cached mismatch, cache only', { primeBad: true, hash: false }, 'damaged', 0],
+    ['no cache entry, cache only: nothing is hashed', { hash: false }, 'ok', 0],
+    ['no cache entry, hashed: a match', { hash: true }, 'ok', 1],
+    ['no cache entry, hashed: damaged', { body: 'voice bytez', hash: true }, 'damaged', 1],
+    ['a placeholder hash outside developer mode', { sha: 'REPLACE_WITH_REAL_HASH', hash: false }, 'damaged', 0],
+    ['a placeholder hash in developer mode', { sha: 'REPLACE_WITH_REAL_HASH', developerMode: true, hash: true }, 'ok', 0]
+  ])('%s', async (_label, c, verdict, hashed) => {
+    const root = tempRoot('start-check')
+    const path = join(root, ...REL.split('/'))
+    writeDriveFile(root, REL, c.body ?? 'voice bytes')
+    if (c.primeBad) primeChecksum(path, sha256('bytes a check found damaged'))
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: c.sha ?? sha256('voice bytes') })
+    const before = checksumCacheStats.computed
+    expect(await checkModelBeforeStart(m, root, { developerMode: c.developerMode ?? false, hash: c.hash })).toBe(verdict)
+    expect(checksumCacheStats.computed - before).toBe(hashed)
+  })
+
+  it('a missing file, or a check that cannot read the file, is no proof: the start goes on as before', async () => {
+    const root = tempRoot('start-check')
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: sha256('voice bytes') })
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hash: true })).toBe('ok') // missing
+    mkdirSync(join(root, ...REL.split('/')), { recursive: true }) // a folder where the file should be: the read fails
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hash: true })).toBe('ok')
+  })
+
+  // #913 review S2: "check today, start tomorrow". After an app restart the in-memory cache is empty, so the workspace
+  // store is all that holds a "Check all model files" verdict. A mismatch found there must still refuse.
+  it('a mismatch only the workspace store remembers (the in-memory entry gone) still refuses, nothing hashed', async () => {
+    const root = tempRoot('start-check')
+    const db = seededFreshDb('start-check')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytez') // a bit flip
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = validManifest({
+      id: 'vl',
+      role: 'vision',
+      local_path: 'models/vision/vl.gguf',
+      sha256: sha256('lm-bytes'),
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+    })
+    // Today: the full check finds the GGUF damaged and writes it to both caches (the projector is never hashed).
+    const today = createSettingsHashStore(() => db, root)
+    expect(await computeInstallState(m, root, { developerMode: false, hashStore: today })).toBe('checksum_failed')
+    // Tomorrow: a new process. Drop the in-memory entry only (no store passed); read through a fresh store.
+    invalidateChecksum(join(root, 'models', 'vision', 'vl.gguf'))
+    const tomorrow = createSettingsHashStore(() => db, root)
+    const before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, hashStore: tomorrow, skipHash: true })).toBe(
+      'checksum_failed'
+    )
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hashStore: tomorrow, hash: false })).toBe('damaged')
+    expect(checksumCacheStats.computed).toBe(before)
+  })
+
+  it('an aborted check rejects with the abort, never ok: a lock or quit ends the start', async () => {
+    const root = tempRoot('start-check')
+    writeDriveFile(root, REL, 'voice bytes')
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: sha256('voice bytes') })
+    const controller = new AbortController()
+    const check = checkModelBeforeStart(m, root, { developerMode: false, hash: true, signal: controller.signal })
+    controller.abort() // the read is open: the hash is under way
+    await expect(check).rejects.toThrow(/cancelled/i)
   })
 })
 

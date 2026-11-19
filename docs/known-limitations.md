@@ -236,12 +236,17 @@ password recovery — are documented in
   is attacker-forgeable anyway). **Since #382 (2026-09-08) routine checks are also LAZY** — every
   screen asks for `lazyVerify`, so on a cold cache only the ACTIVE model is hashed and a present
   but un-started weight is reported `installed` without being read at all. Damage in such a file
-  is therefore found when the model is started, not before. Mitigations: the AI Model screen's
+  is therefore found when the chat model is started, not before; the other models are not hashed
+  at their start, except the search and voice models before their first start in a workspace
+  (#913: their bad output would be stored in the index; a first hash cut short by a lock or quit
+  caches nothing, so the next start hashes again), so damage in the image, translation or
+  re-ranking model is found only by a check. Mitigations: the AI Model screen's
   per-model **Verify checksum** forces a real re-hash, its screen-level **Check all model files**
   walks every present weight (**since #420, 2026-09-08 the screen-level pass can be stopped** with
   the Stop checking button beside its progress bar — what finished stays verified, the rest is simply
   unchecked; the per-model Verify checksum button is still uncancellable, one file), the §7.4 start
-  gate re-verifies whatever it launches, and the
+  gate re-verifies the chat model it launches, every other role refuses to start a file a check
+  found damaged (#913: the cache is read at each start, about 1 ms), and the
   ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
   full-audit 2026-07-16), closing the post-completion power-cut/unplug window that could otherwise
   persist the rename + `(size,mtime)` cache entry over a torn weight the cache then reports verified.
@@ -2164,10 +2169,13 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   Honouring a workspace choice belongs to the deferred embedder swap. The **images model** is picked by
   the same rule among the vision models whose files are all on the drive (#890); when that model's files
   fail their check, Images runs the next vision model on the drive while the Performance row still names
-  the first (the AI Model screen shows the damaged file). The running analyzer keeps the model it was
-  built with until a failed start, an engine update, a lock or quit: a vision model installed
-  mid-session that becomes the pick (a flagged one, or one earlier in walk order) moves the Performance
-  row and the Images status at their next update, and the analysis only at that rebuild.
+  the first (the AI Model screen shows the damaged file). One damaged file is enough: "Check all model
+  files" stops at it and leaves the model's other file unhashed, and since #913 the screen and Images
+  keep reading it as damaged after that. The running analyzer keeps the model it was
+  built with until a failed start, an engine update, a lock or quit, or (since #913) its next cold
+  start after the idle teardown, which loads the model the Images status names: a vision model
+  installed mid-session that becomes the pick (a flagged one, or one earlier in walk order) moves the
+  Performance row and the Images status at their next update, and the analysis at that rebuild.
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start
@@ -2179,7 +2187,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   finish". Freeing memory and restarting the app clears the latch; since full-audit 2026-07-10
   BE-7 a completed in-app re-download of the translation model ALSO clears it (`onModelInstalled`
   replaces a `startFailed`-latched instance with a fresh selection — the delete-and-re-download
-  repair for a genuinely corrupt GGUF no longer needs a restart; a live sidecar is never replaced). We deliberately do NOT
+  repair for a genuinely corrupt GGUF no longer needs a restart; a live sidecar is never replaced). Since #913
+  a clean "Verify checksum" or "Check all model files" re-arms it the same way, and the same three
+  actions re-arm the re-ranking model, which before stayed off until a restart. We deliberately do NOT
   auto-retry the latched start: no reliable transient/OOM signature exists across OSes to tell
   memory pressure from a genuinely permanent fault (on Windows the OOM exit code collides with the
   known template-validation crash; a Linux OOM-kill is indistinguishable from our own shutdown), so
