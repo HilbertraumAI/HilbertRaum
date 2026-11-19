@@ -997,7 +997,8 @@ head's own weights + KV.
   catalog's) whether or not it is on the drive, and the screen shows "not on this drive"
   (`perf.models.notOnDrive`) in place of loaded / not loaded. `placement.model.sizeOnDiskGb` and
   the chat row's `sizeOnDiskGb` are `number | null`: null for a model outside the catalog (it was
-  `0`, shown as "0.0 GB"; "Your model" then uses `perf.model.lineNoSize`).
+  `0`, shown as "0.0 GB"; "Your model" then uses `perf.model.lineNoSize`, as it does when the chat
+  row is not on the drive).
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
@@ -1042,7 +1043,9 @@ head's own weights + KV.
   backfill / GPU-probe writes (every `probeAndPersistGpu` write, the empty probe of a probe that
   could not run or threw included), chat-runtime transitions (`RuntimeManager.onChange`),
   resident-sidecar transitions (`onResidencyChange` on the embedder, reranker, translation and
-  vision runtimes), and the snapshot's settings keys (`PERFORMANCE_SETTINGS_KEYS`) — and never
+  vision runtimes), a model download reaching `done` (#914, after the `onModelInstalled`
+  selectors; the rows read which model files are on the drive), and the snapshot's settings keys
+  (`PERFORMANCE_SETTINGS_KEYS`) — and never
   from a getter. The read stays gated; the event carries nothing to gate. Preload:
   `onPerformanceChanged(cb: () => void): () => void` (returns the unsubscribe). No polling.
 

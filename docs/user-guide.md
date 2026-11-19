@@ -357,11 +357,10 @@ it, and reads **not on this drive** instead. Below the rows: a card line for cha
 (what each is resident on the graphics card for, against its memory, shown only when both models
 are on this drive), a second card line whenever the ranking model is also resident there, and a
 processor total (what loading everything on this drive at once would take from RAM; a model that
-is not on this drive is not counted). Whenever two or more of
-chat, translation and the ranking model share the card at once, both lines carry a warning badge;
-the chat-and-translation line also spells out that whichever of the two loaded second got what
-was left over and runs slower, but only when chat and translation are themselves both on the
-card.
+is not on this drive is not counted). Whenever two or more of chat, translation and the ranking
+model share the card at once, both lines carry a warning badge; the chat-and-translation line also
+spells out that whichever of the two loaded second got what was left over and runs slower, but
+only when chat and translation are themselves both on the card.
 
 **Observed while you worked.** Three rows fill in from ordinary use, with no separate check: your
 last finished chat answer, your last model start, and your last full file check. These are

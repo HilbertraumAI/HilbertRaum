@@ -465,7 +465,9 @@ describe('loadedAtOnceMb', () => {
   // #914 (owner decision G-5 (c)): a row still names the catalog's model when its files are not on this drive, but
   // nothing will load it, so it adds nothing on any class. Here the vision (3.0 GiB = 3,072 MiB) and translation rows:
   // on cpu and unified the translation row's whole 6.8 GiB (6,963.2 MiB) goes too, on discrete (on the card) only its
-  // live spill, 4,121.1 MiB.
+  // live spill, 4,121.1 MiB. That discrete row is artificial: a translation sidecar live with 20 of 49 layers while
+  // its files are not on the drive cannot happen, but only a live split makes the skip visible there (a row that is
+  // not live adds 0 either way).
   const missing = rows.map((r) => (r.role === 'vision' || r.role === 'translation' ? { ...r, onDrive: false } : r))
   it.each([
     ['cpu', missing.map((r) => ({ ...r, device: 'cpu' as const })), { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408 - 3072 - 6963],

@@ -819,20 +819,24 @@ describe('everything loaded at once (DR5)', () => {
     expect(off.totals.ramAllMb).toBe(Math.round(off.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
   })
 
-  // #914 (owner decision G-5 (c)): no TranslateGemma and no image model on the drive. Their rows still name the
-  // catalog's models (what translation would take on the card, before downloading it), marked not on this drive, and
-  // the total leaves them out. The images model runs on the processor by design, so on the drive it counts in full on
-  // a card machine too. Nothing composes a translator here (`translation: null`), as on a real drive without one.
+  // #914 (owner decision G-5 (c)): no TranslateGemma, no image model and no ranking model on the drive; the index
+  // model and voice are there. The missing rows still name the catalog's models (what translation would take on the
+  // card, before downloading it), marked not on this drive, and the total leaves them out. The images and ranking
+  // models run on the processor here (pinned by design; no reranker posture composed), so on the drive they count in
+  // full on a card machine too. Nothing composes a translator or reranker, as on a real drive without them. The
+  // ranking and index rows differ on purpose: each row reads its own model's files (#914 review N-1).
   it('#914: models not on this drive keep their rows, marked so, and add nothing to the total', () => {
     const full = cardMachine({ translation: null }).placement
-    const { placement: p } = cardMachine({ translation: null, missing: ['translation', 'vision'] })
+    const { placement: p } = cardMachine({ translation: null, missing: ['translation', 'vision', 'reranker'] })
     expect(p.memoryClass).toBe('discrete')
     expect(rowOf(p, 'translation')).toMatchObject({ modelId: 'translategemma-12b-it-q4', onDrive: false })
     expect(rowOf(p, 'vision')).toMatchObject({ modelId: 'qwen2.5-vl-3b-instruct-q4', onDrive: false, device: 'cpu' })
-    expect(p.models.filter((r) => !r.onDrive).map((r) => r.role)).toEqual(['translation', 'vision'])
-    const visionMb = (rowOf(full, 'vision').sizeOnDiskGb ?? 0) * 1024
-    expect(visionMb).toBeGreaterThan(0)
-    expect(Math.abs((full.totals.ramAllMb ?? 0) - (p.totals.ramAllMb ?? 0) - visionMb)).toBeLessThanOrEqual(1)
+    expect(rowOf(p, 'reranker')).toMatchObject({ modelId: 'bge-reranker-v2-m3-f16', onDrive: false, device: 'cpu' })
+    expect(p.models.filter((r) => !r.onDrive).map((r) => r.role)).toEqual(['translation', 'vision', 'reranker'])
+    const pinnedMb = ((rowOf(full, 'vision').sizeOnDiskGb ?? 0) + (rowOf(full, 'reranker').sizeOnDiskGb ?? 0)) * 1024
+    expect(rowOf(full, 'reranker').device).toBe('cpu')
+    expect(pinnedMb).toBeGreaterThan(0)
+    expect(Math.abs((full.totals.ramAllMb ?? 0) - (p.totals.ramAllMb ?? 0) - pinnedMb)).toBeLessThanOrEqual(1)
   })
 })
 

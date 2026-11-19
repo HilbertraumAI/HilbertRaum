@@ -851,17 +851,23 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const showPerDrive = p.model != null && v.estimated && !p.observedMismatch
     const runningOnCard =
       p.model != null && runtimeOnGpu && runtimeModelId === p.model.id && (p.observed ?? p.observedMismatch)?.backend === 'gpu'
+    // #914: the line says "{size} GB on disk" only for a model whose files ARE on this drive. A model outside the
+    // catalog has no size (null; it printed "0.0 GB on disk"), and one whose files are gone would contradict its
+    // own row, which reads "not on this drive" (the size stays there, beside that badge). A snapshot without a
+    // chat row keeps the size.
+    const sizeOnDrive =
+      p.model?.sizeOnDiskGb != null && p.models.find((r) => r.role === 'chat')?.onDrive !== false
+        ? p.model.sizeOnDiskGb
+        : null
     return (
       <div className="perf-model">
         <div className="perf-model-title">{t('perf.model.title')}</div>
         <div className="perf-model-line">
-          {/* #914: a model outside the catalog has no size (null), so the line leaves the size out
-              instead of printing "0.0 GB on disk". */}
           {p.model
-            ? p.model.sizeOnDiskGb != null
+            ? sizeOnDrive != null
               ? tCount('perf.model.line', p.model.contextTokens, {
                   model: modelName(p.model.id, models, i18n),
-                  size: fmt1(p.model.sizeOnDiskGb, lang),
+                  size: fmt1(sizeOnDrive, lang),
                   context: p.model.contextTokens.toLocaleString(lang)
                 })
               : tCount('perf.model.lineNoSize', p.model.contextTokens, {
@@ -924,7 +930,8 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const anyOnCard = chatRow?.device === 'gpu' || trRow?.device === 'gpu'
     // #914 (S-914-1): the chat/translation line adds two sizes against the card, so both models must be on this drive
     // with a size. Before, no selected chat model printed "Graphics card: chat  GB + …", and a translation model named
-    // from the catalog only was counted on a card it never reaches.
+    // from the catalog only was counted on a card it never reaches. The size check is a belt under main's contract (a
+    // row on the drive has a manifest, and every manifest has a size); it also narrows the type for `gbOf`.
     const onDriveSized = (r: ResidentModelRow | undefined): r is ResidentModelRow =>
       r != null && r.onDrive && r.sizeOnDiskGb != null
     const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null

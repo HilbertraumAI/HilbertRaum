@@ -731,8 +731,9 @@ cannot support one. `speedIsApprox` / `speedBasisNote` in `PerformanceScreen.tsx
 source for all three.
 **Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
 is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
-size on disk (left out for a model outside the catalog, whose size the app does not know; it read
-"0.0 GB" before #914) and the context it launches with, then gives one verdict against this computer's
+size on disk (left out for a model outside the catalog, whose size the app does not know — it
+read "0.0 GB" before #914 — and for one whose files are not on this drive, whose row says so) and
+the context it launches with, then gives one verdict against this computer's
 **memory class** (`nextStartMemory` in `services/performance.ts`; its test-only flags-at-default
 wrapper `memoryClassOf` was removed in #656): `discrete` = a usable graphics card whose VRAM is the budget;
 `unified` = Apple Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
@@ -1066,9 +1067,11 @@ runtime's transitions
 resident-sidecar transitions for the "Models on this computer" rows (`onResidencyChange` on
 `E5Embedder`, `LlamaReranker`, `TranslationRuntime`, `VisionRuntime` forwarded by
 `VisionService`: lazy start landed, idle teardown, suspend/stop, unexpected exit — the services
-stay Electron-free, the subscriptions live in `initBackend`); and the settings keys the snapshot
-reads when they change: the active slots through `models:select` / `runtime:use`, and
-`contextTokens`, `contextTokensOverride` and `gpuMode` through `settings:update`
+stay Electron-free, the subscriptions live in `initBackend`); a model download that reaches `done`
+(#914: the rows say which models are on this drive; `registerDownloadIpc` pushes after the
+`onModelInstalled` selectors re-ran, and a failed or cancelled download pushes nothing); and the
+settings keys the snapshot reads when they change: the active slots through `models:select` /
+`runtime:use`, and `contextTokens`, `contextTokensOverride` and `gpuMode` through `settings:update`
 (`PERFORMANCE_SETTINGS_KEYS` — not every settings write; since #868 that channel drops the
 active slots, which are main-owned). No coalescing main-side; the renderer serialises its
 refetches.

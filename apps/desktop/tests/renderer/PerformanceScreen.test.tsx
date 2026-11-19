@@ -722,7 +722,7 @@ describe('PerformanceScreen: models on this computer', () => {
 
   it('a role with no model says so without a loaded pill, one with no size names the model alone, a live split is stated', async () => {
     const rows = placement().models.map((r) => {
-      if (r.role === 'vision') return { ...r, modelId: null, sizeOnDiskGb: null }
+      if (r.role === 'vision') return { ...r, modelId: null, sizeOnDiskGb: null, onDrive: false }
       if (r.role === 'reranker') return { ...r, sizeOnDiskGb: null }
       if (r.role === 'translation') return { ...r, loaded: true, gpuLayers: 20, totalLayers: 49 }
       return r
@@ -733,6 +733,8 @@ describe('PerformanceScreen: models on this computer', () => {
     const images = otherRow(/^Images$/)
     expect(within(images).getByText(/No model installed for this\./)).toBeInTheDocument()
     expect(within(images).queryByText(/loaded/)).not.toBeInTheDocument()
+    // #914 review N-2: main sends a row with no model as not on the drive (no manifest); it gets no badge at all.
+    expect(within(images).queryByText('not on this drive')).not.toBeInTheDocument()
     const ranking = otherRow(/^Document search \(ranking\)$/)
     expect(within(ranking).getByText(/bge-reranker-v2-m3-f16/)).toBeInTheDocument()
     expect(within(ranking).queryByText(/ GB/)).not.toBeInTheDocument()
@@ -766,6 +768,19 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.getByText('my-own-gguf · 8,192-token context')).toBeInTheDocument()
     expect(within(otherRow(/^Chat$/)).queryByText(/ GB/)).not.toBeInTheDocument()
     expect(screen.queryByText(/0\.0 GB/)).not.toBeInTheDocument()
+  })
+
+  // #914 review SF-1: an active catalog model whose files are gone keeps its size on its row, beside "not on this
+  // drive". "Your model" leaves the size out: it said "5.8 GB on disk" two cards above that badge.
+  it('#914: "Your model" claims no size on disk when the chat row is not on this drive', async () => {
+    install(snapshot({ placement: placement({ models: withRow('chat', { onDrive: false, loaded: false }) }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.getByText('Qwen3.5 9B (UD-Q4_K_XL) · 8,192-token context')).toBeInTheDocument()
+    expect(screen.queryByText(/GB on disk/)).not.toBeInTheDocument()
+    const chat = otherRow(/^Chat$/)
+    expect(within(chat).getByText(/Qwen3\.5 9B \(UD-Q4_K_XL\) · 5\.4 GB/)).toBeInTheDocument()
+    expect(within(chat).getByText('not on this drive')).toBeInTheDocument()
   })
 
   // #914 (S-914-1): the chat/translation card line adds the two sizes against the card, so it needs both models on this
