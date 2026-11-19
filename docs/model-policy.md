@@ -264,7 +264,10 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
 
 - **`default_for_role`** (optional boolean, default `false`, #848) makes THIS manifest its role's model.
   `resolveModelByRole` (the embedder, the reranker, the transcriber, the translator) takes the first
-  manifest of the role that sets it, else the first of the role in walk order. Discovery walks
+  manifest of the role that sets it, else the first of the role in walk order. The images model applies
+  the same rule to the vision manifests whose files are ALL on the drive (`pickVisionManifest`, #890): the
+  flagged one when it is there, else the first one there; a pick that is there but fails verification is
+  not replaced by another vision model. Discovery walks
   `model-manifests/` depth first, each folder's entry names in code-unit order, on every OS (FAT/exFAT,
   ext4 and APFS do not list a folder sorted, NTFS does), so the order no longer depends on the drive. The
   committed embedder, `multilingual-e5-small-q8`, sets it, so an embeddings manifest a later release or a
@@ -280,8 +283,9 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   embedder included. **Frozen constraint:** a release must never make the `default_for_role` manifest
   unusable for an older build (no `min_app_version` on it, no field change that build rejects) without
   flagging a usable replacement in the same release. One function, `pickManifestForRole`
-  (`shared/manifest.ts`), is this rule for what the app composes (`resolveModelByRole`), the Performance
-  screen's role rows and the AI Model screen's ★ on an embeddings card. That ★ marks the composed model when
+  (`shared/manifest.ts`), is this rule for what the app composes (`resolveModelByRole`), the images model
+  (`getVisionStatus`, over the vision manifests on the drive), the Performance screen's role rows and the
+  AI Model screen's ★ on an embeddings card. That ★ marks the composed model when
   it fits this machine's RAM, and no embeddings card otherwise (the ★ is runnable by construction).
 - **Fields an older app reads are ignored where they are inert, never rejected (#848, D848-3).** A
   manifest field this release reads must not make a later release's manifest vanish from it: a field that

@@ -33,11 +33,13 @@ import {
   result,
   seededDb,
   stoppedStatus,
-  stubChatRuntime
+  stubChatRuntime,
+  withLlamaBinary
 } from '../helpers/performance-fixture'
 import { runtimeStatus } from '../helpers/status'
-import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
+import { manifestsDirWith, rawManifest, writeDriveFile } from '../helpers/manifest-fixtures'
 import { resolveModelByRole } from '../../src/main/services/resolve-model'
+import { getVisionStatus } from '../../src/main/services/vision/status'
 
 // The snapshot's memory class reads the platform, and no CI leg runs tests on macOS, so
 // these rows state it. Apple Silicon has its own rows in unit/performance and performance-gpu.
@@ -224,6 +226,7 @@ describe('buildPerformanceSnapshot', () => {
     const tr = rows.find((r) => r.role === 'translation')
     expect(tr).toMatchObject({ loaded: true, lifetime: 'idle' })
     expect(tr?.modelId).toBe('translategemma-12b-it-q4')
+    // No vision file on this root: the row still names the catalog's model (#890's `?? byRole('vision')` fallback).
     expect(rows.find((r) => r.role === 'vision')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'idle' })
     // A fake without the optional `devicePosture` member reports 'cpu' (Wave 8 ruling (d), the
     // `isLoaded?` pattern's own default) -- unchanged from before this step.
@@ -234,11 +237,12 @@ describe('buildPerformanceSnapshot', () => {
 
   // #848 review: the Performance screen names a role's model by the SAME pick the app composes with (the flagged
   // default first, `pickManifestForRole` behind `resolveModelByRole`), never simply the first file of the role, so the
-  // embedder row cannot name a model the app does not run. (The `activeEmbeddingModelId` read is a separate follow-up.)
+  // embedder row cannot name a model the app does not run. #890: nor does the `activeEmbeddingModelId` setting move
+  // it; no composer reads that setting, so here it names the other manifest and the row still names `z-default`.
   it('names the embedder the app composes: the flagged default, even when another embeddings manifest sorts first (#848)', () => {
     const root = freshRoot()
     const db = seededDb(root)
-    updateSettings(db, { lastBenchmark: hereResult() })
+    updateSettings(db, { lastBenchmark: hereResult(), activeEmbeddingModelId: 'a-second' })
     const dir = manifestsDirWith(
       rawManifest({ id: 'a-second', role: 'embeddings', local_path: 'models/embeddings/a-second.gguf' }),
       rawManifest({ id: 'z-default', role: 'embeddings', local_path: 'models/embeddings/z-default.gguf', default_for_role: true })
@@ -247,6 +251,43 @@ describe('buildPerformanceSnapshot', () => {
     const row = rows.find((r) => r.role === 'embeddings')
     expect(row?.modelId).toBe('z-default')
     expect(row?.modelId).toBe(resolveModelByRole(dir, root, 'embeddings')?.id)
+  })
+
+  // #890 (G-8 (ii-a)): the vision row names the model the images service runs. Both take one pick, the flagged vision
+  // model among those whose files are all on the drive, else the first of them in walk order. Before, the row named the
+  // flagged or first manifest whether its files were there or not, and the service ran the first installed one.
+  it.each<[string, Array<{ id: string; present: boolean; flagged?: boolean }>, string]>([
+    ['the first is not downloaded', [{ id: 'a-vision', present: false }, { id: 'b-vision', present: true }], 'b-vision'],
+    ['the flagged one sorts last', [{ id: 'a-vision', present: true }, { id: 'z-vision', present: true, flagged: true }], 'z-vision'],
+    ['the flagged one is not downloaded', [{ id: 'a-vision', present: true }, { id: 'z-vision', present: false, flagged: true }], 'a-vision']
+  ])('names the vision model the images service runs: %s (#890)', async (_case, models, expected) => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult() })
+    withLlamaBinary(root)
+    const dir = manifestsDirWith(
+      ...models.map((m) => {
+        const local = `models/vision/${m.id}.gguf`
+        const projector = `models/vision/${m.id}-mmproj.gguf`
+        if (m.present) {
+          writeDriveFile(root, local, 'weights')
+          writeDriveFile(root, projector, 'projector')
+        }
+        return rawManifest({
+          id: m.id,
+          role: 'vision',
+          input_modalities: ['text', 'image'],
+          local_path: local,
+          mmproj: { local_path: projector, sha256: 'REPLACE_WITH_REAL_HASH' },
+          ...(m.flagged ? { default_for_role: true } : {})
+        })
+      })
+    )
+    const ctx = ctxWith(root, db, { manifestsDir: dir, vision: { isLoaded: () => false } })
+    const row = buildPerformanceSnapshot(ctx).placement.models.find((r) => r.role === 'vision')
+    const status = await getVisionStatus(ctx)
+    expect(status.modelId).toBe(expected)
+    expect(row?.modelId).toBe(status.modelId)
   })
 
   it('the chat row is "loaded" only once the ACTIVE model is running and ready (DR6)', () => {

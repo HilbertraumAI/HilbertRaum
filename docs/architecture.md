@@ -13810,7 +13810,9 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   two-tier checksum cache. Since #310, `manifestFiles` appends the same treatment to every file a
   manifest's `files:` list declares (kind `'extra'`) — GGUF, mmproj, and `files:` alike.
 - **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible →
-  available; cheap, lazy, lock-safe), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
+  available; cheap, lazy, lock-safe; since #890 it judges ONE pick, `pickVisionManifest`: `pickManifestForRole`
+  over the vision manifests whose files are all on the drive, which the Performance screen's images row
+  names too), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
   guards + the D4 header pixel-bomb cap + `validateAnalyzeRequest` — the SEC-3 main-side re-validation
   `importDocuments` lacks). **SEC-6 (backend-audit-2026-06-27):** `validateAnalyzeRequest` now rejects
   a **claimed** png/jpeg whose header won't parse (`decodedPixelCount` → `null`) as `decodeFailed`
