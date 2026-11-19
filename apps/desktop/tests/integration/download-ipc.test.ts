@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
 
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
+import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { tMain } from '../../src/main/services/i18n'
 import { DownloadManager } from '../../src/main/services/downloads'
 import { setManifestAppVersion } from '../../src/main/services/models'
@@ -466,7 +467,31 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
 })
 
 describe('the default manager main/index.ts registers (no injected manager)', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    setPerformanceChangedSink(null)
+  })
+
+  // #914 review SF-2: the Performance rows say which models are on this drive, and an open screen re-reads only on
+  // `performance:changed`. A download that puts the model's files in place pushes it once, after the availability
+  // selectors re-ran; one that fails puts nothing in place and pushes nothing.
+  it.each<[string, FetchFn, string[]]>([
+    ['done', bodyFetch(BODY), ['selectors re-ran', 'performance:changed']],
+    ['failed', (async () => Promise.reject(new Error('connection reset'))) as unknown as FetchFn, []]
+  ])(
+    '#914: a download that ends %s tells an open Performance screen exactly when its files are in place',
+    async (status, fetchImpl, expected) => {
+      vi.stubGlobal('fetch', vi.fn(fetchImpl))
+      const { ctx } = makeCtx({ allowNetwork: true })
+      const events: string[] = []
+      ctx.onModelInstalled = () => events.push('selectors re-ran')
+      setPerformanceChangedSink(() => events.push('performance:changed'))
+      registerDownloadIpc(ctx)
+      const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
+      expect((await waitForTerminal((result as DownloadJob).jobId)).status).toBe(status)
+      expect(events).toEqual(expected)
+    }
+  )
 
   it('the default manager main/index.ts registers fetches globally and reports to the context', async () => {
     const fetchSpy = vi.fn(bodyFetch(BODY))

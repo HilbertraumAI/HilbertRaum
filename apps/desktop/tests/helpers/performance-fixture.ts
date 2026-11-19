@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, vi, type Mock } from 'vitest'
 import { detectSystem } from '../../src/main/services/benchmark'
 import { setAnswerSpeedObserver } from '../../src/main/ipc/chat-stream'
@@ -10,6 +10,7 @@ import {
   type FirstBenchmarkOutcome
 } from '../../src/main/ipc/registerBenchmarkIpc'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { discoverManifests, manifestFiles } from '../../src/main/services/models'
 import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
 import { recordModelLoadRead, resetEffectiveReadForTests, setEffectiveReadObserver } from '../../src/main/services/read-speed'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
@@ -20,9 +21,11 @@ import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
-import type { BenchmarkResult, GpuDevice } from '../../src/shared/types'
+import { pickManifestForRole } from '../../src/shared/manifest'
+import type { BenchmarkResult, GpuDevice, ResidentModelRow } from '../../src/shared/types'
 import { benchmarkResult } from './benchmark-records'
 import { START_READS, stoppedStatus } from './chat-runtime-stub'
+import { CATALOG_MANIFESTS } from './gpu-fixtures'
 import { ANY_SENDER } from './ipc'
 import { rawManifest, writeManifest } from './manifest-fixtures'
 import { workspaceStandIn } from './workspace-stand-in'
@@ -210,6 +213,37 @@ export function withLlamaBinary(root: string): void {
   const dir = llamaServerDir(root)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, llamaServerBinaryName()), 'fake-binary')
+}
+
+/** A non-chat role of the "Models on this computer" rows. */
+export type CatalogRole = Exclude<ResidentModelRow['role'], 'chat'>
+
+/**
+ * #914: presence-only stand-ins under `root` (a few bytes per file) for the real catalog models the Performance rows
+ * name: the chat model `chat` (a catalog id) and, for each role in `roles`, the app's pick for it
+ * (`pickManifestForRole`, the rule the rows use). Every file of a model is written (`manifestFiles`: the weight, a
+ * vision projector, a voice model's extra file), so its row reads `onDrive: true`; the rows check presence, never a
+ * hash. An id or role with no catalog model throws, so a renamed catalog entry fails loudly instead of quietly
+ * turning a row "not on this drive".
+ */
+export function withCatalogFiles(root: string, models: { chat?: string; roles?: readonly CatalogRole[] }): void {
+  const manifests = discoverManifests(CATALOG_MANIFESTS).manifests.map((d) => d.manifest)
+  const picks = (models.roles ?? []).map((role) => {
+    const pick = pickManifestForRole(manifests, role)
+    if (!pick) throw new Error(`withCatalogFiles: the catalog has no ${role} model`)
+    return pick
+  })
+  if (models.chat != null) {
+    const chat = manifests.find((m) => m.id === models.chat && m.role === 'chat')
+    if (!chat) throw new Error(`withCatalogFiles: the catalog has no chat model ${models.chat}`)
+    picks.push(chat)
+  }
+  for (const manifest of picks) {
+    for (const file of manifestFiles(root, manifest)) {
+      mkdirSync(dirname(file.path), { recursive: true })
+      writeFileSync(file.path, 'stand-in')
+    }
+  }
 }
 
 type GpuProbeCall = (binPath: string) => Promise<GpuDevice[] | null>

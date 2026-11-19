@@ -1389,8 +1389,8 @@ export const it: UiCatalog<'it'> = {
     'Su questo sistema operativo l’app non può ancora installare il motore vocale, quindi qui ' +
     'questo modello non attiva la dettatura vocale né l’importazione audio.',
   'models.vision.installed':
-    'Installato – viene usato automaticamente nella schermata Immagini. Qui non c’è nulla da ' +
-    'avviare.',
+    'Installato – la schermata Immagini sceglie automaticamente quale modello usare. Qui non c’è ' +
+    'nulla da avviare.',
   'models.vision.notInstalled':
     'Viene usato automaticamente nella schermata Immagini una volta installato: non serve alcuna ' +
     'configurazione.',
@@ -2160,6 +2160,9 @@ export const it: UiCatalog<'it'> = {
   'perf.model.line.one': '{model} · {size}\u00A0GB sull’unità · contesto di {context} token',
   'perf.model.line.many': '{model} · {size}\u00A0GB sull’unità · contesto di {context} di token',
   'perf.model.line.other': '{model} · {size}\u00A0GB sull’unità · contesto di {context} token',
+  'perf.model.lineNoSize.one': '{model} · contesto di {context} token',
+  'perf.model.lineNoSize.many': '{model} · contesto di {context} di token',
+  'perf.model.lineNoSize.other': '{model} · contesto di {context} token',
   'perf.model.none': 'Ancora nessun modello selezionato. Scegline uno nella schermata Modello IA.',
   'perf.model.need': 'Occupa {need}\u00A0GB con questo contesto.',
   'perf.model.needEstimate':
@@ -2235,12 +2238,14 @@ export const it: UiCatalog<'it'> = {
   'perf.models.device.processor': 'processore',
   'perf.models.loaded': 'caricato ora',
   'perf.models.notLoaded': 'non caricato',
+  'perf.models.notOnDrive': 'non è su questa unità',
   'perf.models.lifetime.session': 'resta caricato',
   'perf.models.lifetime.idle': 'libera la memoria quando è inattivo',
   'perf.models.lifetime.per-use': 'attivo solo mentre lavora',
   'perf.models.split': 'livelli sulla scheda: {gpuLayers} su {layers}',
   'perf.models.card':
     'Scheda grafica: chat {chat}\u00A0GB + traduzione {translation}\u00A0GB, su {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Scheda grafica: chat {chat}\u00A0GB, su {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Scheda grafica: riordinamento {reranker}\u00A0GB, su {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'In questo momento entrambi i modelli sono sulla scheda. Quello avviato per secondo ha ' +

@@ -2933,14 +2933,31 @@ export interface PlacementVerdict {
 
 /**
  * One model the app can hold in memory (benchmark.md "Models on this computer"): what it is,
- * where it runs under the CURRENT configuration, and whether it is resident right now.
+ * whether its files are on this drive, where it runs under the CURRENT configuration, and
+ * whether it is resident right now.
  */
 export interface ResidentModelRow {
   role: 'chat' | 'translation' | 'vision' | 'embeddings' | 'reranker' | 'transcriber'
-  /** The model id for the role, or null when none is installed/selected. */
+  /**
+   * The model id for the role, or null when there is none: chat names the active model (null when
+   * none is selected); every other role names the catalog's model for it (the one the app composes,
+   * `pickManifestForRole`; for images the pick among the vision models on the drive, else the
+   * catalog's), whether or not its files are on this drive (`onDrive` says which, #914).
+   */
   modelId: string | null
-  /** GiB (the manifest's decimal figure converted), or null when unknown. */
+  /**
+   * GiB (the manifest's decimal figure converted), or null when unknown (no manifest: e.g. an
+   * active model outside the catalog).
+   */
   sizeOnDiskGb: number | null
+  /**
+   * #914: every file of the row's model is on this drive (`manifestFilesPresent`: presence only,
+   * no hash). False for a catalog model that is not downloaded, and for a row with no manifest
+   * (no model, or an active model outside the catalog). Unless the row is `loaded` (loaded beats
+   * `onDrive`, #914 code review: a weight deleted while the runtime holds it open), the screen
+   * shows "not on this drive" instead of "not loaded", and `totals.ramAllMb` leaves the row out.
+   */
+  onDrive: boolean
   /**
    * 'gpu' = would auto-fit onto the graphics card as things stand: chat and translation on a
    * machine with a usable card, GPU acceleration not switched off or auto-disabled, and no
@@ -3057,9 +3074,14 @@ export interface PerformanceSnapshot {
     /**
      * The active model, or null when none is selected. `sizeOnDiskGb` is the manifest's
      * decimal figure converted to GiB (1024³), the unit every other figure on the screen uses
-     * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing.
+     * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing; null
+     * for a model outside the catalog, whose size the app does not know (#914: it used to be 0,
+     * shown as "0.0 GB"). `onDrive` (#914 code review): its files are on this drive
+     * (`manifestFilesPresent`) or it is resident right now (loaded beats `onDrive`, as on the
+     * rows). False → "Your model" claims no size on disk and no fit: the line leaves the size out,
+     * no verdict is stated, and the pill says "not on this drive".
      */
-    model: { id: string; sizeOnDiskGb: number; contextTokens: number } | null
+    model: { id: string; sizeOnDiskGb: number | null; onDrive: boolean; contextTokens: number } | null
     /**
      * The context the LIVE recommended model (`recommendation.modelId`, PR #308 decision 8) would
      * launch with, resolved main-side by the SAME `launchContextTokens` the start path uses; null
@@ -3081,7 +3103,10 @@ export interface PerformanceSnapshot {
      */
     observedMismatch: { contextTokens: number; backend: 'gpu' | 'cpu'; at: string } | null
     verdict: PlacementVerdict
-    /** Every model the app can hold, chat first (benchmark.md "Models on this computer"). */
+    /**
+     * Every model the app can hold, chat first (benchmark.md "Models on this computer"), each
+     * marked with whether its files are on this drive (`ResidentModelRow.onDrive`, #914).
+     */
     models: ResidentModelRow[]
     totals: {
       /**
@@ -3093,8 +3118,10 @@ export interface PerformanceSnapshot {
        * translation contributes 0), and a `'gpu'`-posture reranker row (contributes 0: its own
        * headroom gate only resolves `'gpu'` when the whole placement fits, and no partial-offload
        * split is tracked for it); on `unified` the full sum (one pool — the copy says "memory",
-       * not "RAM", and the pill compares against the unified budget). null when nothing is
-       * installed.
+       * not "RAM", and the pill compares against the unified budget). On every class only the
+       * rows on this drive count (`onDrive`, #914): a row named from the catalog whose files are
+       * not here adds nothing, unless it is loaded (its memory is in use). null when nothing is
+       * installed (no row that is on the drive or loaded has a size).
        */
       ramAllMb: number | null
       /**

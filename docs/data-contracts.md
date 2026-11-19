@@ -989,10 +989,29 @@ head's own weights + KV.
   backend, or the translation sidecar's posture is `--device none`; **Wave 8 ruling (a)**: for
   the reranker role, `'gpu'`/`'cpu'` follows its own headroom gate against the RUNTIME's
   committed chat model, never `settings.activeModelId` — see `rag/device-posture.ts`);
+  **#914 (owner decision G-5 (c))**: `ResidentModelRow.onDrive: boolean` is whether every file of
+  the row's model is on this drive (`manifestFilesPresent`, presence only, no hash) — false for a
+  catalog model that is not downloaded and for a row with no manifest (no model, or an active
+  model outside the catalog); every non-chat row still names the catalog's model for its role
+  (`pickManifestForRole`; images: the pick among the vision models on the drive, else the
+  catalog's) whether or not it is on the drive, and the screen shows "not on this drive"
+  (`perf.models.notOnDrive`) in place of "not loaded". **Loaded beats `onDrive`** (#914 code
+  review): a row that is `loaded` (a weight deleted while the runtime holds it open, a manifest
+  removed under a running model) says "loaded now" and counts in the total, whatever `onDrive`
+  says. `placement.model.sizeOnDiskGb` and the chat row's `sizeOnDiskGb` are `number | null`: null
+  for a model outside the catalog (it was `0`, shown as "0.0 GB"). `placement.model.onDrive:
+  boolean` (#914 code review) is computed once in `buildPlacement`: the active model's files are on
+  this drive, or the chat runtime holds it right now. When it is false, "Your model" uses
+  `perf.model.lineNoSize` (no size on disk), states no verdict, note or "Choose a smaller model",
+  and its pill says "not on this drive"; the renderer reads this field, never the chat row. On a
+  `discrete` card the chat/translation line (`perf.models.card`) needs both models here (on the
+  drive or loaded) with a size; with the chat model here and on the card but no translation model
+  here, the chat-only line `perf.models.cardChat` keeps the card figure.
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget) and `totals.bothOnCard` is true when two or more of chat, translation and the
+  unified budget), on every class over the rows that are `onDrive` or `loaded` only (null when no
+  such row has a size), and `totals.bothOnCard` is true when two or more of chat, translation and the
   reranker are genuinely resident on the card — chat with an observed GPU start and at least one
   layer offloaded, translation live with layers on the card, the reranker `'gpu'`-postured and
   loaded.
@@ -1032,7 +1051,9 @@ head's own weights + KV.
   backfill / GPU-probe writes (every `probeAndPersistGpu` write, the empty probe of a probe that
   could not run or threw included), chat-runtime transitions (`RuntimeManager.onChange`),
   resident-sidecar transitions (`onResidencyChange` on the embedder, reranker, translation and
-  vision runtimes), and the snapshot's settings keys (`PERFORMANCE_SETTINGS_KEYS`) — and never
+  vision runtimes), a model download reaching `done` (#914, after the `onModelInstalled`
+  selectors; the rows read which model files are on the drive), and the snapshot's settings keys
+  (`PERFORMANCE_SETTINGS_KEYS`) — and never
   from a getter. The read stays gated; the event carries nothing to gate. Preload:
   `onPerformanceChanged(cb: () => void): () => void` (returns the unsubscribe). No polling.
 

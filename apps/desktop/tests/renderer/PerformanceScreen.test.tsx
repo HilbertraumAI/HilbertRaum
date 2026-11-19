@@ -11,6 +11,7 @@ import {
   type BenchmarkResult,
   type ModelInfo,
   type PerformanceSnapshot,
+  type ResidentModelRow,
   type RuntimeStatus
 } from '../../src/shared/types'
 import { t, tCount, UI_LANGUAGE_CODES, type UiLanguage } from '../../src/shared/i18n'
@@ -459,7 +460,7 @@ describe('PerformanceScreen: the Your-model row', () => {
 
   it('explains a spill on a card that would hold the model: what was free at start, plus the margin', async () => {
     install(snapshot({ placement: placement({
-      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, onDrive: true, contextTokens: 8192 },
       observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_600, cpuModelMb: 1750, gpuKvMb: 512, gpuFreeAtStartMb: 20_300 },
       verdict: { kind: 'partial', needMb: 19_862, estimated: false, budgetMb: 24_822, freeAtStartMb: 20_300, workingMb: 2860, spillMb: 1750, gpuLayers: 62, totalLayers: 66 }
     }) }))
@@ -469,7 +470,7 @@ describe('PerformanceScreen: the Your-model row', () => {
 
   it('explains a spill on a card that WAS free: the working buffers and the fixed margin', async () => {
     install(snapshot({ placement: placement({
-      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, onDrive: true, contextTokens: 8192 },
       observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66, gpuModelMb: 17_134, cpuModelMb: 1711, gpuKvMb: 512, gpuFreeAtStartMb: 23_615, gpuComputeMb: 2860 },
       verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: 2860, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
     }) }))
@@ -481,7 +482,7 @@ describe('PerformanceScreen: the Your-model row', () => {
   it('DR4: all three partial copies state the runtime margin from the shared constant, never a literal', async () => {
     // Rows above pin the rendered "1 GB" on the free and margin copies; this is the third branch.
     install(snapshot({ placement: placement({
-      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, contextTokens: 8192 },
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 18.4, onDrive: true, contextTokens: 8192 },
       observed: { ...OBSERVED_FULL, modelId: 'qwen3.8-27b-ud-q4km', gpuLayers: 62, totalLayers: 66 },
       verdict: { kind: 'partial', needMb: 19_389, estimated: false, budgetMb: 24_822, freeAtStartMb: 23_615, workingMb: null, spillMb: 1743, gpuLayers: 62, totalLayers: 66 }
     }) }))
@@ -518,7 +519,7 @@ describe('PerformanceScreen: the Your-model row', () => {
       memoryClass: 'cpu',
       vramMb: null,
       ramMb: 8192,
-      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 16.5, contextTokens: 8192 },
+      model: { id: 'qwen3.8-27b-ud-q4km', sizeOnDiskGb: 16.5, onDrive: true, contextTokens: 8192 },
       verdict: { kind: 'too_large', needMb: 16_896, estimated: true, budgetMb: 8192, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null }
     }) }))
     const { onNavigate } = renderPerformanceScreen()
@@ -561,6 +562,8 @@ describe('PerformanceScreen: models on this computer', () => {
     install(snapshot({ placement: placement({ ramMb: 16_077, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false } }) }))
     renderPerformanceScreen()
     expect(await screen.findByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
+    // #914 code review: with both models here the chat-only line does not show as well.
+    expect(screen.queryByText(/Graphics card: chat 5\.4 GB, of/)).not.toBeInTheDocument()
     expect(screen.getByText(/Everything loaded at once needs about 17\.0 GB of 15\.7 GB RAM\./)).toBeInTheDocument()
     expect(screen.getByText('Too much at once')).toBeInTheDocument()
   })
@@ -721,7 +724,7 @@ describe('PerformanceScreen: models on this computer', () => {
 
   it('a role with no model says so without a loaded pill, one with no size names the model alone, a live split is stated', async () => {
     const rows = placement().models.map((r) => {
-      if (r.role === 'vision') return { ...r, modelId: null, sizeOnDiskGb: null }
+      if (r.role === 'vision') return { ...r, modelId: null, sizeOnDiskGb: null, onDrive: false }
       if (r.role === 'reranker') return { ...r, sizeOnDiskGb: null }
       if (r.role === 'translation') return { ...r, loaded: true, gpuLayers: 20, totalLayers: 49 }
       return r
@@ -732,10 +735,120 @@ describe('PerformanceScreen: models on this computer', () => {
     const images = otherRow(/^Images$/)
     expect(within(images).getByText(/No model installed for this\./)).toBeInTheDocument()
     expect(within(images).queryByText(/loaded/)).not.toBeInTheDocument()
+    // #914 review N-2: main sends a row with no model as not on the drive (no manifest); it gets no badge at all.
+    expect(within(images).queryByText('not on this drive')).not.toBeInTheDocument()
     const ranking = otherRow(/^Document search \(ranking\)$/)
     expect(within(ranking).getByText(/bge-reranker-v2-m3-f16/)).toBeInTheDocument()
     expect(within(ranking).queryByText(/ GB/)).not.toBeInTheDocument()
     expect(within(otherRow(/^Translation$/)).getByText(/20 of 49 layers on the card/)).toBeInTheDocument()
+  })
+
+  /** The default rows with one role's row changed. */
+  const withRow = (role: ResidentModelRow['role'], over: Partial<ResidentModelRow>): ResidentModelRow[] =>
+    placement().models.map((r) => (r.role === role ? { ...r, ...over } : r))
+
+  // #914 (owner decision G-5 (c)): a model whose files are not on this drive keeps its row, named and sized from the
+  // catalog (the planning view), and says "not on this drive" where the other rows say loaded / not loaded.
+  it('#914: a model that is not on this drive says so in place of its loaded pill', async () => {
+    install(snapshot({ placement: placement({ models: withRow('vision', { onDrive: false }) }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const images = otherRow(/^Images$/)
+    expect(within(images).getByText(/qwen2\.5-vl-3b-instruct-q4 · 3\.0 GB/)).toBeInTheDocument()
+    expect(within(images).getByText('not on this drive')).toBeInTheDocument()
+    expect(within(images).queryByText(/loaded/)).not.toBeInTheDocument()
+    expect(screen.getAllByText('not on this drive')).toHaveLength(1)
+  })
+
+  // #914: a chat model outside the catalog has no size (null from main; it was 0). The row names it alone and
+  // "Your model" leaves the size out, where both used to print "0.0 GB".
+  it('#914: a chat model with no known size prints no "0.0 GB", on its row or on Your model', async () => {
+    const rows = withRow('chat', { modelId: 'my-own-gguf', sizeOnDiskGb: null, onDrive: false })
+    install(snapshot({ placement: placement({ model: { id: 'my-own-gguf', sizeOnDiskGb: null, onDrive: false, contextTokens: 8192 }, models: rows }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.getByText('my-own-gguf · 8,192-token context')).toBeInTheDocument()
+    expect(within(otherRow(/^Chat$/)).queryByText(/ GB/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/0\.0 GB/)).not.toBeInTheDocument()
+  })
+
+  /** The active 9B with its files gone: `placement.model.onDrive` (main, #914 code review) and its row agree. */
+  const chatNotHere = (): Partial<PerformanceSnapshot['placement']> => ({
+    model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, onDrive: false, contextTokens: 8192 },
+    models: withRow('chat', { onDrive: false, loaded: false })
+  })
+
+  // #914 review SF-1: an active catalog model whose files are gone keeps its size on its row, beside "not on this
+  // drive". "Your model" leaves the size out: it said "5.8 GB on disk" two cards above that badge.
+  it('#914: "Your model" claims no size on disk when the chat row is not on this drive', async () => {
+    install(snapshot({ placement: placement(chatNotHere()) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.getByText('Qwen3.5 9B (UD-Q4_K_XL) · 8,192-token context')).toBeInTheDocument()
+    expect(screen.queryByText(/GB on disk/)).not.toBeInTheDocument()
+    const chat = otherRow(/^Chat$/)
+    expect(within(chat).getByText(/Qwen3\.5 9B \(UD-Q4_K_XL\) · 5\.4 GB/)).toBeInTheDocument()
+    expect(within(chat).getByText('not on this drive')).toBeInTheDocument()
+  })
+
+  // #914 code review: with the active model not here, "Your model" states no fit at all. The default verdict is the
+  // card estimate ("Needs at least 5.8 GB… Should fit in graphics memory", pill "On GPU"): a claim about files the
+  // drive does not hold. The block keeps the model's name and context and says "not on this drive", like its row.
+  it('#914: "Your model" states no fit for a model that is not on this drive', async () => {
+    install(snapshot({ placement: placement(chatNotHere()) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const block = screen.getByText('Your model').closest<HTMLElement>('.perf-model')
+    if (!block) throw new Error('the Your model block has no .perf-model container')
+    expect(within(block).getByText('not on this drive')).toBeInTheDocument()
+    expect(within(block).queryByText(/Should fit|Needs at least|Takes /)).not.toBeInTheDocument()
+    expect(within(block).queryByText(t('en', 'perf.place.gpu'))).not.toBeInTheDocument()
+  })
+
+  // #914 code review: loaded beats `onDrive`. A model the runtime holds is in memory, whatever the drive says now (a
+  // weight deleted while held open): its row says "loaded now", never "not on this drive".
+  it('#914: a resident model says "loaded now" even when its files are not on this drive', async () => {
+    install(snapshot({ placement: placement({ models: withRow('reranker', { onDrive: false, loaded: true }) }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const ranking = otherRow(/^Document search \(ranking\)$/)
+    expect(within(ranking).getByText('loaded now')).toBeInTheDocument()
+    expect(within(ranking).queryByText('not on this drive')).not.toBeInTheDocument()
+  })
+
+  // #914 (S-914-1): the chat/translation card line adds the two sizes against the card, so it needs both models here
+  // with a size. With no chat model selected it read "Graphics card: chat  GB + translation 6.8 GB"; with
+  // TranslateGemma named from the catalog only, it counted a model that never reaches the card. `absent` is the line
+  // that must not show: with no chat model none at all; without TranslateGemma the pair line (the chat-only line
+  // stays, the next row).
+  it.each<[string, Partial<PerformanceSnapshot['placement']>, RegExp]>([
+    ['no chat model is selected', { model: null, models: withRow('chat', { modelId: null, sizeOnDiskGb: null, onDrive: false, loaded: false }) }, /Graphics card: chat/],
+    ['the translation model is not on this drive', { models: withRow('translation', { onDrive: false }) }, /\+ translation/],
+    [
+      'neither a chat model nor the translation model is here',
+      {
+        model: null,
+        models: withRow('chat', { modelId: null, sizeOnDiskGb: null, onDrive: false, loaded: false }).map((r) =>
+          r.role === 'translation' ? { ...r, onDrive: false } : r
+        )
+      },
+      /Graphics card: chat/
+    ]
+  ])('#914: no chat/translation card line when %s', async (_case, over, absent) => {
+    install(snapshot({ placement: placement(over) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(absent)).not.toBeInTheDocument()
+    // The processor line stays.
+    expect(screen.getByText(/Everything loaded at once needs about/)).toBeInTheDocument()
+  })
+
+  // #914 code review (Fable N-5): a card machine whose drive holds the chat model but no translation model keeps the
+  // chat model's own card line, so the VRAM comparison does not vanish with TranslateGemma.
+  it('#914: the chat model on the card keeps its own card line when no translation model is on this drive', async () => {
+    install(snapshot({ placement: placement({ models: withRow('translation', { onDrive: false }) }) }))
+    renderPerformanceScreen()
+    expect(await screen.findByText('Graphics card: chat 5.4 GB, of 24.2 GB.')).toBeInTheDocument()
   })
 })
 
@@ -1423,7 +1536,7 @@ describe('PerformanceScreen: in Russian, each context figure picks its own plura
     install(
       snapshot({
         placement: placement({
-          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, contextTokens: shown },
+          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, onDrive: true, contextTokens: shown },
           recommendedContextTokens: other
         })
       })
@@ -1437,7 +1550,7 @@ describe('PerformanceScreen: in Russian, each context figure picks its own plura
     install(
       snapshot({
         placement: placement({
-          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, contextTokens: other },
+          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, onDrive: true, contextTokens: other },
           observed: null,
           observedMismatch: { contextTokens: shown, backend: 'gpu', at: '2026-09-01T00:00:00Z' }
         })
@@ -1455,7 +1568,7 @@ describe('PerformanceScreen: in Russian, each context figure picks its own plura
     install(
       snapshot({
         placement: placement({
-          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, contextTokens: other },
+          model: { id: MODELS[0].id, sizeOnDiskGb: 5.8, onDrive: true, contextTokens: other },
           recommendedContextTokens: shown
         })
       })

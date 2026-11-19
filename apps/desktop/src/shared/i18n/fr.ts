@@ -1439,7 +1439,8 @@ export const fr: UiCatalog<'fr'> = {
     'Sur ce système d’exploitation, l’application ne peut pas encore installer le moteur ' +
     'vocal\u00A0: ce modèle ne permet donc ni la dictée vocale ni l’importation audio ici.',
   'models.vision.installed':
-    'Installé\u00A0: utilisé automatiquement sur l’écran Images. Rien à démarrer ici.',
+    'Installé\u00A0: l’écran Images choisit automatiquement le modèle à utiliser. Rien à démarrer ' +
+    'ici.',
   'models.vision.notInstalled':
     'Utilisé automatiquement sur l’écran Images une fois installé\u00A0: aucune configuration ' +
     'nécessaire.',
@@ -2238,6 +2239,9 @@ export const fr: UiCatalog<'fr'> = {
     '{model} · {size}\u00A0GB sur le disque · contexte\u00A0: {context} tokens',
   'perf.model.line.other':
     '{model} · {size}\u00A0GB sur le disque · contexte\u00A0: {context} tokens',
+  'perf.model.lineNoSize.one': '{model} · contexte\u00A0: {context} token',
+  'perf.model.lineNoSize.many': '{model} · contexte\u00A0: {context} tokens',
+  'perf.model.lineNoSize.other': '{model} · contexte\u00A0: {context} tokens',
   'perf.model.none':
     'Aucun modèle sélectionné pour l’instant. Choisissez-en un sur l’écran Modèle d’IA.',
   'perf.model.need': 'Occupe {need}\u00A0GB avec ce contexte.',
@@ -2321,6 +2325,7 @@ export const fr: UiCatalog<'fr'> = {
   'perf.models.device.processor': 'processeur',
   'perf.models.loaded': 'chargé',
   'perf.models.notLoaded': 'non chargé',
+  'perf.models.notOnDrive': 'pas sur ce disque',
   'perf.models.lifetime.session': 'reste chargé',
   'perf.models.lifetime.idle': 'se décharge en cas d’inactivité',
   'perf.models.lifetime.per-use': 'ne fonctionne que pendant une tâche',
@@ -2328,6 +2333,7 @@ export const fr: UiCatalog<'fr'> = {
   'perf.models.card':
     'Carte graphique\u00A0: Chat {chat}\u00A0GB + traduction {translation}\u00A0GB, sur ' +
     '{vram}\u00A0GB.',
+  'perf.models.cardChat': 'Carte graphique\u00A0: Chat {chat}\u00A0GB, sur {vram}\u00A0GB.',
   'perf.models.cardReranker':
     'Carte graphique\u00A0: classement {reranker}\u00A0GB, sur {vram}\u00A0GB.',
   'perf.models.cardBoth':

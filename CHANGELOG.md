@@ -215,6 +215,13 @@ from its first public `1.0.0` release onward.
   leaving "(12" at the end of a line. It now stays together, and the line breaks before it when
   it must. The same line in Settings → Diagnostics is kept together too. The reports the Copy
   buttons make are unchanged (#805).
+- **The Performance screen no longer counts models that are not on the drive.** "Models on this
+  computer" still lists a model for every task, so you can see what it would take before you
+  download it. A model whose files are not on this drive now says "not on this drive" instead of
+  "not loaded", and "Everything loaded at once" leaves it out: on a drive with only the chat model,
+  it counted every other model too. A chat model the app has no size for no longer shows
+  "0.0 GB", and with no chat model selected the graphics-card line no longer reads "chat  GB".
+  On the AI Model screen, an installed image model no longer says Images always uses it (#914).
 - **Sizes, percentages and labels now follow each language's typography.** In Spanish, French,
   Italian, Dutch, Polish, Turkish, Russian and Ukrainian a size such as "23 GB" no longer breaks
   across two lines between the figure and the unit. The chat's context meter and an audio file's

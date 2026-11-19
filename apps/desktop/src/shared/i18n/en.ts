@@ -1442,7 +1442,8 @@ export const en = {
   'models.transcriber.engineUnsupported':
     'On this operating system the app cannot install the voice engine yet, so this model does not enable voice dictation or audio import here.',
   // #539: these "where it is used" lines show on the card itself, not in Technical details.
-  'models.vision.installed': 'Installed — used automatically on the Images screen. Nothing to start here.',
+  'models.vision.installed':
+    'Installed — the Images screen picks its vision model automatically. Nothing to start here.',
   'models.vision.notInstalled': 'Used automatically on the Images screen once installed — no setup needed.',
   'models.vision.goToImages': 'Go to Images',
   'models.translation.installed': 'Installed — used automatically for translation. Nothing to start here.',
@@ -2145,6 +2146,8 @@ export const en = {
   // stays `{context}` (the forms read the same in English).
   'perf.model.line.one': '{model} · {size} GB on disk · {context}-token context',
   'perf.model.line.other': '{model} · {size} GB on disk · {context}-token context',
+  'perf.model.lineNoSize.one': '{model} · {context}-token context',
+  'perf.model.lineNoSize.other': '{model} · {context}-token context',
   'perf.model.none': 'No model selected yet. Pick one on the AI Model screen.',
   'perf.model.need': 'Takes {need} GB with this context.',
   'perf.model.needEstimate':
@@ -2216,11 +2219,13 @@ export const en = {
   'perf.models.device.processor': 'processor',
   'perf.models.loaded': 'loaded now',
   'perf.models.notLoaded': 'not loaded',
+  'perf.models.notOnDrive': 'not on this drive',
   'perf.models.lifetime.session': 'stays loaded',
   'perf.models.lifetime.idle': 'unloads when idle',
   'perf.models.lifetime.per-use': 'runs only while working',
   'perf.models.split': '{gpuLayers} of {layers} layers on the card',
   'perf.models.card': 'Graphics card: chat {chat} GB + translation {translation} GB, of {vram} GB.',
+  'perf.models.cardChat': 'Graphics card: chat {chat} GB, of {vram} GB.',
   // #476: a separate line for the reranker — it may share the card with either, both, or neither
   // of chat/translation, so it is not folded into perf.models.card's fixed two-slot template.
   // #495 follow-up: "ranking", not "reranker" — the row label above is "Document search

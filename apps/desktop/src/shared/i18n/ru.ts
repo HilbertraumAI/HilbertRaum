@@ -1388,8 +1388,8 @@ export const ru: UiCatalog<'ru'> = {
     'В этой операционной системе приложение пока не может установить голосовой движок, поэтому ' +
     'здесь эта модель не включает голосовой ввод и импорт аудио.',
   'models.vision.installed':
-    'Установлена — используется автоматически на экране «Картинки». Здесь запускать ничего не ' +
-    'нужно.',
+    'Установлена — экран «Картинки» сам выбирает, какую модель для изображений использовать. Здесь ' +
+    'запускать ничего не нужно.',
   'models.vision.notInstalled':
     'После установки используется автоматически на экране «Картинки» — настраивать ничего не ' +
     'нужно.',
@@ -2146,6 +2146,10 @@ export const ru: UiCatalog<'ru'> = {
   'perf.model.line.few': '{model} · {size}\u00A0GB на диске · контекст: {context} токена',
   'perf.model.line.many': '{model} · {size}\u00A0GB на диске · контекст: {context} токенов',
   'perf.model.line.other': '{model} · {size}\u00A0GB на диске · контекст: {context} токена',
+  'perf.model.lineNoSize.one': '{model} · контекст: {context} токен',
+  'perf.model.lineNoSize.few': '{model} · контекст: {context} токена',
+  'perf.model.lineNoSize.many': '{model} · контекст: {context} токенов',
+  'perf.model.lineNoSize.other': '{model} · контекст: {context} токена',
   'perf.model.none': 'Модель еще не выбрана. Выберите ее на экране «ИИ-модель».',
   'perf.model.need': 'С этим размером контекста модель занимает {need}\u00A0GB.',
   'perf.model.needEstimate':
@@ -2224,12 +2228,14 @@ export const ru: UiCatalog<'ru'> = {
   'perf.models.device.processor': 'процессор',
   'perf.models.loaded': 'сейчас в памяти',
   'perf.models.notLoaded': 'не в памяти',
+  'perf.models.notOnDrive': 'нет на этом диске',
   'perf.models.lifetime.session': 'не выгружается',
   'perf.models.lifetime.idle': 'выгружается при простое',
   'perf.models.lifetime.per-use': 'работает только во время задачи',
   'perf.models.split': 'слоев на видеокарте: {gpuLayers} из {layers}',
   'perf.models.card':
     'Видеокарта: чат {chat}\u00A0GB + перевод {translation}\u00A0GB, из {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Видеокарта: чат {chat}\u00A0GB, из {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Видеокарта: ранжирование {reranker}\u00A0GB из {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Сейчас на видеокарте обе модели. Та, что запустилась второй, получила оставшуюся память и ' +

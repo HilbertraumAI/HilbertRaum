@@ -1456,7 +1456,8 @@ export const de: Record<keyof typeof en, string> = {
     'Auf diesem Betriebssystem kann die App die Sprach-Engine noch nicht installieren — dieses ' +
     'Modell ermöglicht hier deshalb weder Spracheingabe noch Audio-Import.',
   'models.vision.installed':
-    'Installiert — wird automatisch im Bereich „Bilder“ verwendet. Hier gibt es nichts zu starten.',
+    'Installiert — der Bereich „Bilder“ wählt sein KI-Bildmodell automatisch aus. Hier gibt es ' +
+    'nichts zu starten.',
   'models.vision.notInstalled':
     'Wird nach der Installation automatisch im Bereich „Bilder“ verwendet — keine Einrichtung nötig.',
   'models.vision.goToImages': 'Zu den Bildern',
@@ -2153,6 +2154,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.model.title': 'Dein Modell',
   'perf.model.line.one': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
   'perf.model.line.other': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
+  'perf.model.lineNoSize.one': '{model} · Kontext von {context} Token',
+  'perf.model.lineNoSize.other': '{model} · Kontext von {context} Token',
   'perf.model.none': 'Noch kein Modell ausgewählt. Wähle eines auf dem KI-Modell-Bildschirm.',
   'perf.model.need': 'Belegt {need} GB mit diesem Kontext.',
   'perf.model.needEstimate':
@@ -2206,11 +2209,13 @@ export const de: Record<keyof typeof en, string> = {
   'perf.models.device.processor': 'Prozessor',
   'perf.models.loaded': 'jetzt geladen',
   'perf.models.notLoaded': 'nicht geladen',
+  'perf.models.notOnDrive': 'nicht auf diesem Laufwerk',
   'perf.models.lifetime.session': 'bleibt geladen',
   'perf.models.lifetime.idle': 'wird bei Leerlauf entladen',
   'perf.models.lifetime.per-use': 'läuft nur während der Arbeit',
   'perf.models.split': '{gpuLayers} von {layers} Schichten auf der Karte',
   'perf.models.card': 'Grafikkarte: Chat {chat} GB + Übersetzung {translation} GB, von {vram} GB.',
+  'perf.models.cardChat': 'Grafikkarte: Chat {chat} GB, von {vram} GB.',
   'perf.models.cardReranker': 'Grafikkarte: Ranking {reranker} GB, von {vram} GB.',
   'perf.models.cardBoth':
     'Beide sind gerade auf der Karte. Das später gestartete bekam den Rest und läuft langsamer; stoppe und starte es, sobald das andere entladen ist.',
