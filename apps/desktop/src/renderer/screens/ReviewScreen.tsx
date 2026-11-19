@@ -222,8 +222,11 @@ export function ReviewScreen({
   // and bulk actions disable (main refuses their writes too); head edits (rename, reviewer
   // label, general note) and the summary's Reopen stay live. Also while Mark ready's call is
   // with main (#889 G-4, `finishing`): the store refuses item edits then, and the screen shows
-  // it. The "Marked ready" hint below waits for the real status.
-  const readOnly = detail.status === 'ready' || session.finishing
+  // it. The "Marked ready" hint below waits for the real status. Only READY hides the selection
+  // composer and the Bulk actions row; during the call they stay mounted, disabled (review
+  // round 3), so an open composer keeps its range and nothing moves when main says "not yet".
+  const ready = detail.status === 'ready'
+  const readOnly = ready || session.finishing
   // P4: the freshness UI renders EXCLUSIVELY from the store's refresh result (write-path
   // returns carry a constant-false overlay and must never hide a real warning).
   const freshness = session.freshness
@@ -387,8 +390,9 @@ export function ReviewScreen({
           )}
 
           {/* Bulk actions hide entirely while ready (FIX-1) — every one of them is an
-              item-level write the main side now refuses. */}
-          {!readOnly && (
+              item-level write the main side now refuses — and are disabled while Mark ready's
+              call is with main. */}
+          {!ready && (
           <div className="review-bulk-row">
             {/* Conservative bulk actions ONLY (spec §14.4) — there is deliberately no
                 "mark all supported" anywhere on this screen (tested). Disabled, not hidden, while
@@ -403,7 +407,7 @@ export function ReviewScreen({
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
                 asChild
-                disabled={session.bulkRunning || hasEditsAfterFailedSave()}
+                disabled={readOnly || session.bulkRunning || hasEditsAfterFailedSave()}
               >
                 <Button size="sm">{t('review.bulk.menu')} ▾</Button>
               </DropdownMenu.Trigger>
@@ -444,6 +448,7 @@ export function ReviewScreen({
                 selected={selectedItemId === item.id}
                 onSelect={onSelectItem}
                 narrow={narrow}
+                ready={ready}
                 readOnly={readOnly}
                 onOpenDrawer={onOpenDrawerFor}
                 t={t}
@@ -744,6 +749,7 @@ const ReviewItemRow = memo(function ReviewItemRow({
   selected,
   onSelect,
   narrow,
+  ready,
   readOnly,
   onOpenDrawer,
   t
@@ -755,7 +761,9 @@ const ReviewItemRow = memo(function ReviewItemRow({
   selected: boolean
   onSelect: (itemId: string) => void
   narrow: boolean
-  /** Ready review (FIX-1): decision/note/unlink controls disable until reopened. */
+  /** Ready review (FIX-1): the selection composer is hidden until reopened. */
+  ready: boolean
+  /** Ready, or Mark ready's call is with main (G-4): decision/note/unlink/selection controls disable. */
   readOnly: boolean
   onOpenDrawer: (itemId: string) => void
   t: I18n['t']
@@ -819,8 +827,11 @@ const ReviewItemRow = memo(function ReviewItemRow({
       {note && <p className="hint review-item-note">{note}</p>}
       {/* P5: carve a passage out of this block as its own review item. Hidden while READY
           (the P4 handoff rule: the ready-guard refuses selection creation) and for
-          selection items (selections don't nest). */}
-      {!isSelection && !readOnly && <SelectionComposer item={item} index={index} t={t} />}
+          selection items (selections don't nest); disabled, still mounted, while Mark
+          ready's call is with main (an open composer keeps its range). */}
+      {!isSelection && !ready && (
+        <SelectionComposer item={item} index={index} disabled={readOnly} t={t} />
+      )}
       {item.links.length > 0 && (
         <div className="review-item-links">
           {item.links.map((link) => {
@@ -898,10 +909,13 @@ const ReviewItemRow = memo(function ReviewItemRow({
 function SelectionComposer({
   item,
   index,
+  disabled,
   t
 }: {
   item: EvidenceReviewItem
   index: number
+  /** Mark ready's call is with main (G-4): opening and Add are disabled; range and open state are kept. */
+  disabled: boolean
   t: I18n['t']
 }): JSX.Element {
   const [open, setOpen] = useState(false)
@@ -918,7 +932,7 @@ function SelectionComposer({
   }
 
   async function handleAdd(): Promise<void> {
-    if (!range || busy) return
+    if (!range || busy || disabled) return
     setBusy(true)
     setRefused(false)
     try {
@@ -941,7 +955,7 @@ function SelectionComposer({
   if (!open) {
     return (
       <div className="review-selection-actions">
-        <button type="button" className="msg-action" onClick={() => setOpen(true)}>
+        <button type="button" className="msg-action" disabled={disabled} onClick={() => setOpen(true)}>
           {t('review.selection.start')}
         </button>
       </div>
@@ -962,7 +976,7 @@ function SelectionComposer({
         onSelect={(e) => readRange(e.currentTarget)}
       />
       <div className="review-selection-actions">
-        <Button size="sm" disabled={range == null || busy} onClick={() => void handleAdd()}>
+        <Button size="sm" disabled={range == null || busy || disabled} onClick={() => void handleAdd()}>
           {t('review.selection.add')}
         </Button>
         <Button

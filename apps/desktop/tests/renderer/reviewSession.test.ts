@@ -1894,22 +1894,41 @@ describe('reviewSession — Mark ready, Export and Reopen wait until every edit 
     }
   )
 
-  it('a user who keeps typing while Mark ready saves: the save goes on for a bounded number of passes, then main runs it once', async () => {
-    const main = await setup('markReady')
-    let n = 0
-    main.onArrival = (kind) => {
-      // Another keystroke lands while each write is out (`n < 40` only ends the typing for the row's own sake).
-      if (kind === 'item' && n < 40) queueMicrotask(() => editReviewItem('p1', { reviewerNote: `n${++n}` }))
+  // Review round 3: a drain ends after a bounded number of passes, so a user who never stops typing can leave an edit
+  // queued when it ends. Mark ready used to go ahead (decided without the edit, then main refused its write once ready)
+  // and Export too (the pack missed it). Both now refuse, as after a failed save, but with no error: the save line still
+  // says "Saving…", the timer writes the edit once the typing stops, and a second click goes through.
+  it.each<['markReady' | 'export']>([['markReady'], ['export']])(
+    '%s while the user keeps typing past the save’s passes refuses with no error; once the typing stops the edit is saved and a second click goes through',
+    async (a) => {
+      const main = await setup(a)
+      editReviewItem('p1', { decision: 'supported' })
+      editReviewItem('p2', { decision: 'supported' })
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+      main.order.length = 0
+      let typing = true
+      let n = 0
+      main.onArrival = (kind) => {
+        // Another keystroke lands while each write is out.
+        if (kind === 'item' && typing) queueMicrotask(() => editReviewItem('p1', { reviewerNote: `n${++n}` }))
+      }
+      editReviewItem('p1', { reviewerNote: 'n0' })
+      expect((await run(a)) as { outcome: string }).toMatchObject({ outcome: 'failed' })
+      expect(main.atCall).toEqual([]) // nothing marked, nothing exported
+      expect(main.order.length).toBeGreaterThan(1) // it kept saving what arrived…
+      expect(main.order.length).toBeLessThanOrEqual(4) // …a bounded number of times
+      expect(main.order.every((step) => step === 'item:p1')).toBe(true)
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'pending', saveError: null, finishing: false })
+      typing = false
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+      expect(main.db().items.find((i) => i.id === 'p1')!.reviewerNote).toBe(`n${n}`)
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+      expect(await run(a)).toEqual(a === 'markReady' ? { outcome: 'ready' } : { outcome: 'exported' })
+      expect(main.atCall.map((c) => c.call)).toEqual([a])
+      expect(main.atCall[0]!.saved.items.find((i) => i.id === 'p1')!.reviewerNote).toBe(`n${n}`)
+      expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
     }
-    editReviewItem('p1', { reviewerNote: 'n0' })
-    await markReviewReady()
-    const writesBeforeCall = main.order.indexOf('markReady')
-    expect(writesBeforeCall).toBeGreaterThan(1) // it kept saving what arrived…
-    expect(writesBeforeCall).toBeLessThanOrEqual(4) // …a bounded number of times
-    n = 1000
-    await vi.advanceTimersByTimeAsync(5_000)
-    expect(main.order.filter((step) => step === 'markReady')).toHaveLength(1)
-  })
+  )
 
   // G-4 (follow-ups wave 2): from the end of Mark ready's save until main answers, the review is read-only (the screen
   // disables item editing on `finishing`): main decides from the rows saved now, and an item write sent meanwhile

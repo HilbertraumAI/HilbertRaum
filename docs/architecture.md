@@ -14301,12 +14301,17 @@ later save succeeds while it shows). Only the lock still drops a failed patch �
 or a write fails (at most four, the valve against typing that never stops), and resolves still
 holding the lane, so its verdict is read after the last write and no waiting timer write can
 take the queue first or fail after the caller went ahead. Mark ready, export, reopen, a review
-switch, Try again and the pre-lock save share it. Mark ready and reopen hold the lane through
+switch, Try again and the pre-lock save share it. When the passes run out with an edit still
+queued, Mark ready and export refuse as after a failed save but with no error (the line still
+says "Saving…" and the timer writes the edit); reopen goes ahead, since only head fields can be
+queued on a ready review and its merge keeps them. Mark ready and reopen hold the lane through
 their call and merge, and the merge keeps head fields still queued (typed during the call,
 written after it); while Mark ready's call is out, item editing is closed and the screen renders
 it read-only (`finishing`, G-4: main decides from the saved rows and refuses item writes once
-ready). Export releases the lane before its call, with no await between, so a save that comes
-due during its dialog or PDF print is not held behind it. Try again holds the lane through its
+ready; what only Ready hides — the selection composer, Bulk actions — stays mounted, disabled,
+so an open composer keeps its range). Export releases the lane before its call, with no await
+between, so a save that comes due during its dialog or PDF print is not held behind it. Try
+again holds the lane through its
 re-read and puts the edits still queued back over it. A selection delete takes the lane too and,
 once main deleted the row, drops its queued edit and ends "Saving…" when nothing else is queued
 (a later write to the deleted id read as a stale handle: a false save error). A link or unlink
@@ -14314,7 +14319,8 @@ takes the lane until its call is sent, so every write to an existing item (an ed
 delete, a link or unlink) is on it: a link waits for a delete of its row in flight and is
 dropped once that delete succeeded. Adding a selection does not take the lane: it creates a
 row, and nothing queued can target a row that does not exist yet. Every holder takes
-the lane at once when it is free, so its first IPC still goes out in the caller's own task. A
+the lane through one helper (`acquireLane`), at once when it is free, so its first IPC still
+goes out in the caller's own task; the drain and the one-pass flush share one flush pass. A
 link's answer contributes its links only, never the row's decision or note. A sweep keeps its
 single pre-sweep flush (a decision made during it is written after the sweep) and takes the lane
 through the same helper. Pinned by `reviewSession.test.ts` and a seeded random-order checker

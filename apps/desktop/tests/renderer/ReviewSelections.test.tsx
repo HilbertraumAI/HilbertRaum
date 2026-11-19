@@ -3,9 +3,10 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { t } from '../../src/shared/i18n'
-import type { EvidenceReviewItemPatch, EvidenceSelectionInput } from '../../src/shared/types'
+import type { EvidenceReadyGate, EvidenceReviewItemPatch, EvidenceSelectionInput } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
-import { makeDetail, makeItem } from '../helpers/evidenceReview'
+import { deferred } from '../helpers/deferred'
+import { makeDetail, makeItem, makeReviewHead } from '../helpers/evidenceReview'
 import { openSummary, renderReview } from '../helpers/review-screen'
 
 // EP-1 P5 (plan §10, spec §12.1) — the reviewer text-selection UI. Offset-mapping strategy
@@ -249,6 +250,62 @@ describe('ReviewScreen — reviewer text selections (P5, spec §12.1)', () => {
       screen.getByRole('button', { name: new RegExp(t('en', 'review.selection.remove')) })
     ).toBeDisabled()
     assertNoUnexpectedApiCalls()
+  })
+
+  // Review round 3 (#889 G-4): while Mark ready's call is with main the screen is read-only, but what only READY hides
+  // stays mounted, disabled: the composer and the Bulk actions menu used to unmount for the call, which lost a range the
+  // user had picked (and moved the layout) even when main then answered "not yet".
+  it('an open composer keeps its range across a Mark ready that main answers "not yet"; it and the bulk menu stay in place, disabled', async () => {
+    const detail = makeDetail({
+      items: [
+        makeItem({ id: 'i1', ordinal: 0, blockKey: 'b0-paragraph-abc', textSnapshot: RAW_BLOCK, decision: 'supported' }),
+        makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta', decision: 'supported' })
+      ]
+    })
+    const answer = deferred<{ review: ReturnType<typeof makeReviewHead>; gate: EvidenceReadyGate }>()
+    const markEvidenceReviewReady = vi.fn(() => answer.promise)
+    const created = makeItem({
+      id: 'sel1',
+      ordinal: 2,
+      kind: 'selection',
+      blockKey: 'b0-paragraph-abc',
+      startOffset: 0,
+      endOffset: 5,
+      textSnapshot: RAW_BLOCK.slice(0, 5)
+    })
+    const createEvidenceSelection = vi.fn(async (_reviewId: string, _input: EvidenceSelectionInput) => created)
+    await renderReview({ detail, api: { markEvidenceReviewReady, createEvidenceSelection } })
+    const surface = await openComposer(1)
+    selectRange(surface, 0, 5)
+    const add = (): HTMLElement => screen.getByRole('button', { name: t('en', 'review.selection.add'), hidden: true })
+    const bulk = (): HTMLElement =>
+      screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')), hidden: true })
+    expect(add()).toBeEnabled()
+
+    const dialog = await openSummary()
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.summary.markReady') }))
+    await waitFor(() => expect(markEvidenceReviewReady).toHaveBeenCalledWith('r1'))
+    expect(surface.isConnected).toBe(true) // still mounted while main decides…
+    expect(add()).toBeDisabled() // …and read-only
+    expect(bulk()).toBeDisabled()
+
+    answer.resolve({
+      review: makeReviewHead({ id: 'r1', status: 'draft', completedAt: null }),
+      gate: { eligible: false, requiredTotal: 2, decidedTotal: 1 }
+    })
+    await waitFor(() => expect(add()).toBeEnabled()) // the range is still there
+    expect(bulk()).toBeEnabled()
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'common.close') }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(surface.isConnected).toBe(true) // the same element throughout
+    fireEvent.click(add())
+    await waitFor(() =>
+      expect(createEvidenceSelection).toHaveBeenCalledWith('r1', {
+        blockKey: 'b0-paragraph-abc',
+        startOffset: 0,
+        endOffset: 5
+      })
+    )
   })
 
   it('selections never gate D-7: progress and Mark-ready stay driven by block items only', async () => {

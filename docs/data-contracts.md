@@ -1958,7 +1958,8 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   note and the user guide point the reader here, fix round FIX-2). Store
   (`reviewSession.ts`): `exportReviewPack(options)` DRAINS pending edits first (saves in
   passes until nothing is queued, #889 — an edit made while that save was writing is in the
-  pack too; the pack renders persisted data; a failed save REFUSES — pinned by test), then
+  pack too; the pack renders persisted data; a failed save REFUSES, and so does an edit still
+  queued when the drain's passes run out — pinned by test), then
   merges the returned record into `detail.exports` newest-first under the `openToken`
   staleness guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
   (+friendly copy, rendered inline in the panel). A token change (lock/switch) landing
