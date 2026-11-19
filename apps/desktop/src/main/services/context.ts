@@ -259,11 +259,11 @@ export interface AppContext {
   refreshTranslatorSlot?: () => void
   /**
    * #913: the start check every non-chat role runs before it spawns its model (`checkModelBeforeStart` over this
-   * workspace's hash store, with the policy-aware leniency). Built in `main/index.ts`; held here so the mid-session
-   * re-compositions (`refreshTranscriberSlot` from both install hooks) give a refreshed service the same check.
-   * Optional so partial test contexts stay valid (no check, today's starts).
+   * workspace's hash store, with the policy-aware leniency). Built in `main/index.ts` by `createModelStartCheck`;
+   * held here so the mid-session re-compositions (`refreshTranscriberSlot` from both install hooks) give a refreshed
+   * service the same check. Required (#913 review S3): a context built without it does not compile.
    */
-  checkModel?: ModelStartCheck
+  checkModel: ModelStartCheck
   /**
    * Wave 8 ruling (a): the per-call counter of `startModelRuntime` calls presently awaiting the
    * reranker's single-flight suspend after committing to a REAL model switch — shared between

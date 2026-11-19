@@ -23,7 +23,7 @@ import {
 } from './window-security'
 import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
-import { loadPolicy, currentPolicyStatus, developerLeniency, isCommercialPolicy } from './services/policy'
+import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
@@ -85,7 +85,6 @@ import { createAuditRecorder } from './services/audit'
 import { RuntimeManager, type RuntimeStartOptions } from './services/runtime'
 import { occupiedLaneForDocTask } from './services/runtime/occupancy'
 import {
-  clearModelLoadLatch,
   createGpuCrashAutoFallback,
   createSelectingRuntimeFactory,
   createSpeculativeCrashAutoFallback,
@@ -97,22 +96,15 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import {
-  checkModelBeforeStart,
-  createSettingsHashStore,
-  findManifestById,
-  resolveBundledManifestsDir,
-  resolveManifestsDir,
-  setManifestAppVersion,
-  type ModelStartCheck
-} from './services/models'
+import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
+import { createModelStartCheck } from './services/model-start-check'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import {
+  afterModelInstalled,
   composeServices,
   composeTranslator,
   probeOcrEngine,
-  refreshTranscriberSlot,
   shouldReplaceTranslator
 } from './services/compose-services'
 import {
@@ -589,20 +581,17 @@ function initBackend(): void {
   }
   // #913 (C §913.3): the start check every non-chat role runs at its cold start, before it spawns its
   // model — the chat start gate's rule for the other roles: a file a check found damaged never
-  // starts. The manifest by id (re-read per call: a download may have changed it), the
-  // policy-aware leniency chat uses (a locked workspace reads the developer toggle as off), and this
-  // workspace's hash store (lock-aware: a cache miss while locked). The composers bind it to each
-  // role's model and hashing choice; vision binds it below.
-  const checkModel: ModelStartCheck = async (modelId, { hash, signal }) => {
-    const manifest = findManifestById(manifestsDir, modelId)
-    if (!manifest) return 'ok' // nothing to check against: the start goes on as before
-    return checkModelBeforeStart(manifest, paths.rootPath, {
-      developerMode: developerLeniency({ paths, isDev }, readSettingsOrNull()?.developerMode ?? false),
-      hashStore: createSettingsHashStore(() => workspace.requireDb(), paths.rootPath),
-      hash,
-      signal
-    })
-  }
+  // starts. Built by the exported factory (`services/model-start-check.ts`), so its row reads what
+  // production gets: the manifest by id, the policy-aware leniency chat uses (a locked workspace
+  // reads the developer toggle as off), and this workspace's hash store. The composers bind it to
+  // each role's model and hashing choice (required there, #913 review S3); vision binds it below.
+  const checkModel = createModelStartCheck({
+    manifestsDir,
+    paths,
+    isDev,
+    getSettings: readSettingsOrNull,
+    getDb: () => workspace.requireDb()
+  })
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
@@ -841,21 +830,10 @@ function initBackend(): void {
   // above) and brings a model the demo runtime stands in for back on the engine, without a
   // lock/unlock, a restart or "Check again".
   rearmWhenChatEngineHeals(ctx)
-  ctx.onModelInstalled = (modelId) => {
-    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model FIRST —
-    // before any statement below can return early or throw (the download manager swallows the
-    // whole hook).
-    clearModelLoadLatch(modelId)
-    if (!ctx) return
-    // #634: the search model downloaded again (the repair "Check all model files" offers for a
-    // damaged file) — re-arm its failed-start latch, so the row's "then try again" works without a
-    // lock/unlock. Same id: the embedder is built from this manifest; a mock embedder never matches.
-    if (modelId === ctx.embedder.id) ctx.embedder.resetStartFailure?.()
-    // #497: BEFORE the translator refresh (a different slot), and never throwing — the
-    // download manager swallows the whole hook, so a throw here would skip the refresh below.
-    refreshTranscriberSlot(ctx)
-    ctx.refreshTranslatorSlot?.()
-  }
+  // #372 / #497 / #634 / #913 review S1: the chat ladder for this model, an empty transcriber slot, and
+  // every role that refused (the search model and the reranker by their id, the images cooldown, the
+  // translator slot). One hook body, shared with the rows (`afterModelInstalled`).
+  ctx.onModelInstalled = (modelId) => afterModelInstalled(ctx as AppContext, modelId)
   // The Performance screen's push (PR #303 P3, G6): every transition of the chat runtime
   // (starting / ready / stopped) and every resident sidecar loading or unloading (the
   // "Models on this computer" rows) tells every window to re-read `performance:get`. The

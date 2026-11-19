@@ -34,6 +34,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     let resolveAnalyze!: (answer: string) => void
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       // A runtime that streams a token, then hangs until the test resolves it — letting the test
       // inject a cancel() while run() is parked on the analyze await.
@@ -81,6 +82,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     const unwindGate = new Promise<void>((r) => (releaseUnwind = r))
     const service = new VisionService({
       isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => AVAILABLE,
       // A runtime whose in-flight request does NOT unwind at the abort instant: on abort it
       // waits for the test's gate, then rejects — modelling the sidecar draining the request.
@@ -123,7 +125,7 @@ describe('VisionService.analyze refuses while a workspace lock is under way (AUD
   it('answers a terminal cancelled job: no status read, no runtime built, nothing streamed, the slot stays free', async () => {
     const getStatus = vi.fn(async () => AVAILABLE)
     const createRuntime = vi.fn()
-    const service = new VisionService({ getStatus, createRuntime, isWorkspaceLocking: () => true })
+    const service = new VisionService({ getStatus, createRuntime, isWorkspaceLocking: () => true, checkModel: async () => 'ok' })
     const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
 
     expect(service.analyze(req(), emit)).toMatchObject({ state: 'failed', error: 'cancelled' })

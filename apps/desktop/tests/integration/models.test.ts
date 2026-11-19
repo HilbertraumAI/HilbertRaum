@@ -855,6 +855,34 @@ describe('checkModelBeforeStart (#913)', () => {
     expect(await checkModelBeforeStart(m, root, { developerMode: false, hash: true })).toBe('ok')
   })
 
+  // #913 review S2: "check today, start tomorrow". After an app restart the in-memory cache is empty, so the workspace
+  // store is all that holds a "Check all model files" verdict. A mismatch found there must still refuse.
+  it('a mismatch only the workspace store remembers (the in-memory entry gone) still refuses, nothing hashed', async () => {
+    const root = tempRoot('start-check')
+    const db = seededFreshDb('start-check')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytez') // a bit flip
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = validManifest({
+      id: 'vl',
+      role: 'vision',
+      local_path: 'models/vision/vl.gguf',
+      sha256: sha256('lm-bytes'),
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+    })
+    // Today: the full check finds the GGUF damaged and writes it to both caches (the projector is never hashed).
+    const today = createSettingsHashStore(() => db, root)
+    expect(await computeInstallState(m, root, { developerMode: false, hashStore: today })).toBe('checksum_failed')
+    // Tomorrow: a new process. Drop the in-memory entry only (no store passed); read through a fresh store.
+    invalidateChecksum(join(root, 'models', 'vision', 'vl.gguf'))
+    const tomorrow = createSettingsHashStore(() => db, root)
+    const before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, hashStore: tomorrow, skipHash: true })).toBe(
+      'checksum_failed'
+    )
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hashStore: tomorrow, hash: false })).toBe('damaged')
+    expect(checksumCacheStats.computed).toBe(before)
+  })
+
   it('an aborted check rejects with the abort, never ok: a lock or quit ends the start', async () => {
     const root = tempRoot('start-check')
     writeDriveFile(root, REL, 'voice bytes')

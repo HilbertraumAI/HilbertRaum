@@ -374,7 +374,9 @@ from its first public `1.0.0` release onward.
   Now each of them refuses such a file, and Images and Translate say so and point to the AI Model
   screen, where you can download it again. The voice model and the document-search model that
   indexes your documents are also checked once before their first use in a workspace, which takes
-  a few seconds, because a damaged one would put wrong results into the index (#913).
+  a few seconds, because a damaged one would put wrong results into the index. A model from your
+  own manifest that has no real checksum now needs developer mode in every role, as the chat model
+  already did; for the document-search model, imports fail without it (#913).
 - **The document-search model no longer depends on the order a drive lists its files in.** On a
   drive formatted like most USB sticks, a second document-search model added to the drive could
   have taken over from the current one, depending only on which file was copied first. Every

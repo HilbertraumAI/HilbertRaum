@@ -9,6 +9,8 @@ import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
 import { discoverManifests, type BoundModelStartCheck, type DiscoveredManifest, type ModelStartCheck } from './models'
 import { engineFamilyHasHostBuild } from './runtime-download'
+import { clearModelLoadLatch } from './runtime/factory'
+import { rearmCheckedModels, type RearmTargets } from './model-start-check'
 import { log } from './logging'
 import { perfMark } from './perf'
 import type { Embedder } from './embeddings'
@@ -92,8 +94,9 @@ export interface ComposeServicesDeps {
   /**
    * #913: the start check every non-chat role runs before it spawns its model (`main/index.ts` builds it from the
    * workspace: the manifest by id, the policy-aware developer leniency, the hash store). Each composer binds it to its
-   * role's model and hashing choice (`HASH_BEFORE_FIRST_START`). Optional so a composition test or harness that does
-   * not pass it keeps today's starts; the one production caller passes it to every composer.
+   * role's model and hashing choice (`HASH_BEFORE_FIRST_START`). Optional on this shared base only (the
+   * transcriber's own composition reads it off the context); `composeServices` and `composeTranslator` require it,
+   * so a composition root that forgets it does not compile (the NF-1 rule below, #913 review S3).
    */
   checkModel?: ModelStartCheck
 }
@@ -132,7 +135,10 @@ function startCheckFor(
  */
 export type ComposeServicesArgs = ComposeServicesDeps &
   EnginePinsDeps &
-  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling'>>
+  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling' | 'checkModel'>>
+
+/** The translator's composition: the drive layout plus the start check, required (#913 review S3). */
+export type ComposeTranslatorDeps = ComposeServicesDeps & Required<Pick<ComposeServicesDeps, 'checkModel'>>
 
 /**
  * #842: where the engine pins live, for the transcriber's composition and `composeServices`. Never on
@@ -158,7 +164,7 @@ export type ComposeTranscriberDeps = ComposeServicesDeps & EnginePinsDeps
  * both call sites stay byte-identical in their deps. Cheap + synchronous by design (the sidecar is
  * lazy; construction spawns nothing).
  */
-export function composeTranslator(deps: ComposeServicesDeps, reranker?: Reranker | null): Translator | null {
+export function composeTranslator(deps: ComposeTranslatorDeps, reranker?: Reranker | null): Translator | null {
   const model = resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
     discovered: deps.discovered
   })
@@ -316,6 +322,20 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
     log.warn('Transcriber refresh after an install failed', { error: String(err) })
     return false
   }
+}
+
+/**
+ * `AppContext.onModelInstalled`, the hook a completed in-app download runs. Never throws: the download manager
+ * swallows the whole hook, so a throw would skip what follows it.
+ * - #372: a freshly downloaded weight is a new file — re-arm the chat ladder for this model first.
+ * - #497: fill an empty transcriber slot, before the translator refresh (a different slot).
+ * - #634 / #913 review S1: re-arm every role that refused (`rearmCheckedModels`: the search model and the
+ *   reranker by their id, the images cooldown, and the translator slot, issue #40's refresh).
+ */
+export function afterModelInstalled(ctx: TranscriberSlot & RearmTargets, modelId: string): void {
+  clearModelLoadLatch(modelId)
+  refreshTranscriberSlot(ctx)
+  rearmCheckedModels(ctx, [modelId])
 }
 
 export interface ComposeOcrEngineDeps {

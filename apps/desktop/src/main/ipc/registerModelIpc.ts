@@ -51,6 +51,7 @@ import { machineKey } from '../services/performance'
 import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchmark-persistence'
 import type { Db } from '../services/db'
 import { developerLeniency } from '../services/policy'
+import { rearmCheckedModels } from '../services/model-start-check'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
@@ -591,12 +592,16 @@ export function registerModelIpc(ctx: AppContext): void {
         // A CANCELLED pass reaches here too: whatever finished hashing is a genuine sample.
         persistEffectiveRead(ctx)
         // #634: the search model's start-failure copy says "choose Check all model files — then try
-        // again". A completed full check that did not find its file damaged re-arms its failed-start
-        // latch, so "then try again" is a real attempt (a health timeout on a slow drive, or a memory
-        // shortage, may pass now). A damaged file is re-armed by its re-download (`onModelInstalled`).
+        // again". A completed full check re-arms every role whose model it did not find damaged
+        // (#913 review S1: the search model, the reranker, the images cooldown, the translator slot),
+        // so "then try again" is a real attempt (a file put right by hand, a health timeout on a slow
+        // drive, or a memory shortage, may pass now). A damaged file is re-armed by its re-download
+        // (`onModelInstalled`) or a clean "Verify checksum".
         if (!lazyVerify && !controller?.signal.aborted) {
-          const searchModel = models.find((m) => m.id === ctx.embedder?.id)
-          if (searchModel && searchModel.state !== 'checksum_failed') ctx.embedder.resetStartFailure?.()
+          rearmCheckedModels(
+            ctx,
+            models.filter((m) => m.state !== 'checksum_failed').map((m) => m.id)
+          )
         }
         return models
       } finally {
@@ -658,6 +663,9 @@ export function registerModelIpc(ctx: AppContext): void {
     })
     log.info('Model re-verified', { modelId, state })
     ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
+    // #913 review S1: the forced re-hash is the one action that clears a stale mismatch (a file put
+    // back from a backup keeps its size and mtime), so a clean answer re-arms every role that refused.
+    if (state !== 'checksum_failed') rearmCheckedModels(ctx, [modelId])
     // #108: the forced re-hash is a real full-file read — persist any fresh sample.
     persistEffectiveRead(ctx)
     return state

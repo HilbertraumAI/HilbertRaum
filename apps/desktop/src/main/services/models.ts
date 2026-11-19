@@ -1795,7 +1795,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // the one that was mid-hash — is reported WITHOUT hashing, which is exactly what RT-3
   // lazy verification reports for a present weight. Nothing is lost and nothing is faked:
   // what finished before the cancel is in the checksum cache, the rest is simply unchecked
-  // and the §7.4 start gate still re-verifies whatever the user launches.
+  // and the §7.4 start gate still re-verifies the chat model the user launches (the other roles
+  // refuse a file a check found damaged, #913).
   let cancelled = false
   for (let i = 0; i < manifests.length; i++) {
     const { manifest } = manifests[i]

@@ -311,7 +311,8 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
       manifestsDir,
       bundledManifestsDir: appDir,
       rerankerDevicePosture: () => 'cpu',
-      rerankerRequestCeiling: () => Infinity
+      rerankerRequestCeiling: () => Infinity,
+      checkModel: async () => 'ok'
     })
     expect(services.transcriber).toBeNull()
     expect(services.transcriberMissing).toBe('engine')

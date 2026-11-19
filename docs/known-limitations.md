@@ -238,7 +238,8 @@ password recovery — are documented in
   but un-started weight is reported `installed` without being read at all. Damage in such a file
   is therefore found when the chat model is started, not before; the other models are not hashed
   at their start, except the search and voice models before their first start in a workspace
-  (#913: their bad output would be stored in the index), so damage in the image, translation or
+  (#913: their bad output would be stored in the index; a first hash cut short by a lock or quit
+  caches nothing, so the next start hashes again), so damage in the image, translation or
   re-ranking model is found only by a check. Mitigations: the AI Model screen's
   per-model **Verify checksum** forces a real re-hash, its screen-level **Check all model files**
   walks every present weight (**since #420, 2026-09-08 the screen-level pass can be stopped** with
@@ -2185,7 +2186,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   finish". Freeing memory and restarting the app clears the latch; since full-audit 2026-07-10
   BE-7 a completed in-app re-download of the translation model ALSO clears it (`onModelInstalled`
   replaces a `startFailed`-latched instance with a fresh selection — the delete-and-re-download
-  repair for a genuinely corrupt GGUF no longer needs a restart; a live sidecar is never replaced). We deliberately do NOT
+  repair for a genuinely corrupt GGUF no longer needs a restart; a live sidecar is never replaced). Since #913
+  a clean "Verify checksum" or "Check all model files" re-arms it the same way, and the same three
+  actions re-arm the re-ranking model, which before stayed off until a restart. We deliberately do NOT
   auto-retry the latched start: no reliable transient/OOM signature exists across OSes to tell
   memory pressure from a genuinely permanent fault (on Windows the OOM exit code collides with the
   known template-validation crash; a Linux OOM-kill is indistinguishable from our own shutdown), so

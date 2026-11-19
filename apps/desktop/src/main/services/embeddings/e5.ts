@@ -374,7 +374,7 @@ export class E5Embedder implements Embedder {
           }
           // #913: the check found the file damaged — already the path-free `start` failure (the copy
           // sends the user to "Check all model files"). Latched like a load fault; a re-download
-          // (`onModelInstalled`), a clean full check or a lock re-arms it.
+          // (`onModelInstalled`), a clean check of the file (`rearmCheckedModels`) or a lock re-arms it.
           if (isEmbedderError(err)) {
             this.startFailed = err
             throw err

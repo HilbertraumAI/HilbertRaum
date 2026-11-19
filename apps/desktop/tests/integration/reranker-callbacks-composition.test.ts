@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { composeServices } from '../../src/main/services/compose-services'
+import { composeServices, composeTranslator } from '../../src/main/services/compose-services'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import {
@@ -36,20 +36,44 @@ describe('Wave 8 NF-1: the required-wiring type-level proof', () => {
     // @ts-expect-error — rerankerDevicePosture/rerankerRequestCeiling are REQUIRED on composeServices's
     // own signature (ComposeServicesArgs), even though the shared ComposeServicesDeps base (also used
     // by composeTranslator) keeps them optional. An omission here must be a compile error.
-    composeServices({ rootPath, manifestsDir: null, bundledManifestsDir: null, rerankerRequestCeiling: () => 48 })
+    composeServices({ rootPath, manifestsDir: null, bundledManifestsDir: null, rerankerRequestCeiling: () => 48, checkModel })
   })
 
   it('composeServices refuses a call missing ONLY rerankerRequestCeiling', () => {
     const rootPath = mktemp()
     // @ts-expect-error — rerankerRequestCeiling alone omitted.
-    composeServices({ rootPath, manifestsDir: null, bundledManifestsDir: null, rerankerDevicePosture: () => 'cpu' as const })
+    composeServices({ rootPath, manifestsDir: null, bundledManifestsDir: null, rerankerDevicePosture: () => 'cpu' as const, checkModel })
   })
 
   it('composeServices refuses a call missing ONLY bundledManifestsDir (#842)', () => {
     const rootPath = mktemp()
     // @ts-expect-error — the engine pins' source is required too: left out, the voice engine would read
     // as "no build for this system" with no compile error.
-    composeServices({ rootPath, manifestsDir: null, rerankerDevicePosture: () => 'cpu' as const, rerankerRequestCeiling: () => 48 })
+    composeServices({
+      rootPath,
+      manifestsDir: null,
+      rerankerDevicePosture: () => 'cpu' as const,
+      rerankerRequestCeiling: () => 48,
+      checkModel
+    })
+  })
+
+  // #913 review S3: the start check is required on composeServices's own signature, and on composeTranslator's
+  // (the issue-#40 refresh in main/index.ts), so a composition root that leaves it out does not compile.
+  it('composeServices and composeTranslator refuse a call missing ONLY checkModel (#913)', () => {
+    const rootPath = mktemp()
+    composeServices({
+      rootPath,
+      manifestsDir: null,
+      bundledManifestsDir: null,
+      rerankerDevicePosture: () => 'cpu' as const,
+      rerankerRequestCeiling: () => 48,
+      checkModel
+    }) // the complete call compiles
+    // @ts-expect-error — checkModel alone omitted: every non-chat role would start unchecked.
+    composeServices({ rootPath, manifestsDir: null, bundledManifestsDir: null, rerankerDevicePosture: () => 'cpu' as const, rerankerRequestCeiling: () => 48 })
+    // @ts-expect-error — the same for the translator a download re-composes.
+    composeTranslator({ rootPath, manifestsDir: null })
   })
 
   it('createRerankerCallbacks refuses a call missing any of its four required dependencies', () => {
@@ -106,6 +130,9 @@ describe('Wave 8 NF-1: the required-wiring type-level proof', () => {
   })
 })
 
+/** A start check that passes everything: these rows are about the reranker wires, not the check. */
+const checkModel = async (): Promise<'ok'> => 'ok'
+
 function mktemp(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-reranker-callbacks-composition-'))
 }
@@ -149,7 +176,8 @@ describe('Wave 8: the wired callbacks actually reach the sidecar (functional, no
         postureCalls++
         return posture
       },
-      rerankerRequestCeiling: () => 1
+      rerankerRequestCeiling: () => 1,
+      checkModel: async () => 'ok'
     })
     expect(reranker).toBeInstanceOf(LlamaReranker)
     expect(reranker?.id).toBe('rerank-test') // the manifest id

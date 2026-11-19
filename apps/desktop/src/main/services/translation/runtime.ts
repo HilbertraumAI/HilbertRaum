@@ -302,7 +302,8 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
    * #913: checks the translation model's file before each cold start, at the head of the start ladder (before the
    * reranker yields the card and before any rung spawns). The composition passes the cache-only check: a file a check
    * found damaged latches a `TranslationStartError` with `modelDamaged`, which the consumers show as their own copy;
-   * the `onModelInstalled` refresh replaces the latched instance after a re-download. Absent ⇒ no check.
+   * the translator-slot refresh replaces the latched instance after a re-download or a clean check
+   * (`rearmCheckedModels`). Absent ⇒ no check.
    */
   checkModel?: BoundModelStartCheck
 }

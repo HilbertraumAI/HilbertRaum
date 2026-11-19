@@ -69,9 +69,10 @@ export interface VisionServiceDeps {
    * #913: the start check for the model `getStatus` named, run before a cold start (no resident
    * sidecar) builds or starts the runtime. The composition root passes the cache-only check
    * (`hash: false`, about 1 ms): `damaged` fails the job `modelDamaged` and arms the failed-start
-   * cooldown. Absent ⇒ no check (today's behaviour; what keeps the test harnesses inert).
+   * cooldown. Required (#913 review S3, the `isWorkspaceLocking` rule): a test that is not about it
+   * passes `async () => 'ok'`.
    */
-  checkModel?: (modelId: string, signal?: AbortSignal) => Promise<ModelStartVerdict>
+  checkModel: (modelId: string, signal?: AbortSignal) => Promise<ModelStartVerdict>
 }
 
 export class VisionService {
@@ -230,7 +231,7 @@ export class VisionService {
       // #913: a cold start (no resident sidecar) first checks the model's files against the cache,
       // so a file a check found damaged is never started, even when the status was read before
       // that check landed. Only a cold start: a resident sidecar already holds its model.
-      if (this.deps.checkModel && status.modelId && !(this.runtime?.isLoaded?.() ?? false)) {
+      if (status.modelId && !(this.runtime?.isLoaded?.() ?? false)) {
         const verdict = await this.deps.checkModel(status.modelId, signal)
         if (signal.aborted || this.tearingDown) {
           this.cancel(jobId)

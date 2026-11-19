@@ -63,7 +63,8 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
       manifestsDir,
       bundledManifestsDir: null,
       rerankerDevicePosture: () => 'cpu',
-      rerankerRequestCeiling: () => Infinity
+      rerankerRequestCeiling: () => Infinity,
+      checkModel: async () => 'ok'
     })
     expect(discoverCalls).toHaveBeenCalledTimes(1)
     expect(discoverCalls).toHaveBeenCalledWith(manifestsDir)
@@ -78,7 +79,7 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
   it('the per-action composeTranslator call site (issue #40) still re-discovers', () => {
     const { root, manifestsDir } = tempDrive()
     discoverCalls.mockClear()
-    composeTranslator({ rootPath: root, manifestsDir }) // no `discovered` — a download just landed
+    composeTranslator({ rootPath: root, manifestsDir, checkModel: async () => 'ok' }) // no `discovered` — a download just landed
     expect(discoverCalls).toHaveBeenCalledTimes(1)
   })
 
@@ -99,7 +100,8 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
       manifestsDir: null,
       bundledManifestsDir: null,
       rerankerDevicePosture: () => 'cpu',
-      rerankerRequestCeiling: () => Infinity
+      rerankerRequestCeiling: () => Infinity,
+      checkModel: async () => 'ok'
     })
     expect(discoverCalls).not.toHaveBeenCalled()
     expect(services.embedder).toBeTruthy()
@@ -135,7 +137,8 @@ describe('composeServices — the flagged embedder is the embedder, present or n
       manifestsDir: d.manifestsDir,
       bundledManifestsDir: null,
       rerankerDevicePosture: () => 'cpu',
-      rerankerRequestCeiling: () => Infinity
+      rerankerRequestCeiling: () => Infinity,
+      checkModel: async () => 'ok'
     }).embedder.id
 
   it('a missing default file composes the mock embedder, never the other installed embedder', () => {

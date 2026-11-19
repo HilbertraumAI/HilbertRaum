@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 
 import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -67,6 +67,10 @@ import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from
 import { CARDS, CATALOG_MANIFESTS, committingRuntime, START_READS, writeChatManifest } from '../helpers/performance-fixture'
 import { seededFreshDb } from '../helpers/seeded-db'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
+import { TranslationRuntime, isTranslationStartError } from '../../src/main/services/translation/runtime'
+import { afterModelInstalled, shouldReplaceTranslator } from '../../src/main/services/compose-services'
+import { createModelStartCheck } from '../../src/main/services/model-start-check'
+import { fakeSpawn, sseBody } from '../helpers/fake-sidecar'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import {
   resolveRerankerDevicePosture,
@@ -856,6 +860,157 @@ describe('registerModelIpc', () => {
         expect((result as ModelInfo[]).find((m) => m.id === 'e5-test')?.state).toBe(damaged ? 'checksum_failed' : 'installed')
       }
       expect(resetStartFailure).toHaveBeenCalledTimes(rearmed)
+    })
+  })
+
+  // #913 review S1: a translation or re-ranking model that refused its start (a check found its file damaged) must
+  // start again once the file is put right and a check says so: a clean "Verify checksum", a clean "Check all model
+  // files", or a download. Before, only the chat ladder and the search model were re-armed, so Translate kept saying
+  // "failed its file check" and document search kept the fused order until a restart. The services run their real
+  // start checks (`createModelStartCheck` over the workspace store) against real files; only the spawn is fake.
+  describe('a model put right is started again: every role re-armed (#913 review S1)', () => {
+    const GOOD = 'the good weights'
+    const BAD = 'the bad weightz!' // same length: a bit flip, the size the cache keys on
+    const COMPLETION = 'data: {"content":"Good day.","stop":true,"stopping_word":"<end_of_turn>"}\n\n'
+    const serve = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/completion')) return { ok: true, status: 200, body: sseBody(COMPLETION) } as unknown as Response
+      if (u.endsWith('/v1/rerank')) {
+        const results = [
+          { index: 0, relevance_score: 0.9 },
+          { index: 1, relevance_score: 0.1 }
+        ]
+        return { ok: true, status: 200, json: async () => ({ results }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
+    function drive(): { root: string; manifestsDir: string; file: (id: string) => string } {
+      const root = mkdtempSync(join(tmpdir(), 'hilbertraum-rearm-913-'))
+      const manifestsDir = join(root, 'model-manifests')
+      mkdirSync(manifestsDir, { recursive: true })
+      for (const [id, role] of [
+        ['tg-test', 'translation'],
+        ['rr-test', 'reranker']
+      ]) {
+        mkdirSync(join(root, 'models', role), { recursive: true })
+        writeFileSync(join(root, 'models', role, `${id}.gguf`), BAD)
+        writeFileSync(
+          join(manifestsDir, `${id}.yaml`),
+          stringify({
+            id,
+            display_name: id,
+            family: 'test',
+            role,
+            format: 'gguf',
+            runtime: 'llama_cpp',
+            license: 'apache-2.0',
+            size_on_disk_gb: 0.1,
+            recommended_min_ram_gb: 1,
+            recommended_ram_gb: 1,
+            recommended_context_tokens: 4096,
+            local_path: `models/${role}/${id}.gguf`,
+            sha256: createHash('sha256').update(GOOD).digest('hex'),
+            license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-11-19', notes: '' }
+          })
+        )
+      }
+      const file = (id: string): string => join(root, 'models', id === 'tg-test' ? 'translation' : 'reranker', `${id}.gguf`)
+      return { root, manifestsDir, file }
+    }
+
+    function refusingCtx() {
+      const d = drive()
+      const db = seededDb()
+      const paths = { rootPath: d.root, configPath: bogusConfigDir() }
+      const checkModel = createModelStartCheck({
+        manifestsDir: d.manifestsDir,
+        paths,
+        isDev: false,
+        getSettings: () => getSettings(db),
+        getDb: () => db
+      })
+      const translatorSpawn = fakeSpawn()
+      const makeTranslator = (): TranslationRuntime =>
+        new TranslationRuntime({
+          modelId: 'tg-test',
+          binPath: '/bin/llama-server',
+          modelPath: d.file('tg-test'),
+          findPort: async () => 51200,
+          healthIntervalMs: 1,
+          idleClock: { set: () => ({ clear: () => undefined }) },
+          gpu: { getGpuMode: () => 'off' },
+          spawn: translatorSpawn.spawn,
+          fetchImpl: serve,
+          checkModel: (signal) => checkModel('tg-test', { hash: false, signal })
+        })
+      const rerankerSpawn = fakeSpawn()
+      const ctx = {
+        db,
+        manifestsDir: d.manifestsDir,
+        paths,
+        isDev: false,
+        runtime: { activeModelId: () => null },
+        checkModel,
+        translator: makeTranslator() as TranslationRuntime,
+        reranker: new LlamaReranker({
+          id: 'rr-test',
+          binPath: '/bin/llama-server',
+          modelPath: d.file('rr-test'),
+          findPort: async () => 53000,
+          healthIntervalMs: 1,
+          spawn: rerankerSpawn.spawn,
+          fetchImpl: serve,
+          checkModel: (signal) => checkModel('rr-test', { hash: false, signal })
+        }),
+        // What main/index.ts wires: the BE-7 rule, a latched instance is replaced by a fresh one.
+        refreshTranslatorSlot: () => {
+          if (shouldReplaceTranslator(ctx.translator)) ctx.translator = makeTranslator()
+        }
+      }
+      return { ctx, d, spawned: () => translatorSpawn.calls.length + rerankerSpawn.calls.length }
+    }
+
+    const translate = (ctx: { translator: TranslationRuntime }): Promise<string> =>
+      ctx.translator.translate({ sourceLang: 'de', targetLang: 'en', text: 'Guten Tag.' })
+
+    /** The file put right: the good bytes, with the old mtime (a copy from a backup) or a new one. */
+    function putRight(path: string, keepMtime: boolean): void {
+      const st = statSync(path)
+      writeFileSync(path, GOOD)
+      const mtime = keepMtime ? st.mtime : new Date(st.mtimeMs + 5_000)
+      utimesSync(path, st.atime, mtime)
+    }
+
+    it.each([
+      ['a clean Verify checksum (the file back from a backup, old mtime)', true],
+      ['a clean Check all model files (the file copied anew)', false],
+      ['a download of the model (afterModelInstalled)', false]
+    ] as const)('both refuse while damaged and start after %s', async (site, keepMtime) => {
+      const { ctx, d, spawned } = refusingCtx()
+      reg(ctx as unknown as AppContext)
+      // "Check all model files" finds both files damaged; each role then refuses and latches.
+      await invoke(handlers, IPC.listModels, undefined, 'run-913')
+      expect(await translate(ctx).catch((e: unknown) => isTranslationStartError(e) && e.modelDamaged)).toBe(true)
+      await expect(ctx.reranker.rerank('q', ['a', 'b'])).rejects.toThrow(/failed its check/)
+      expect(spawned()).toBe(0)
+
+      for (const id of ['tg-test', 'rr-test']) {
+        putRight(d.file(id), keepMtime)
+        if (site.startsWith('a clean Verify')) {
+          expect((await invoke(handlers, IPC.verifyModel, id)).result).toBe('installed')
+        } else if (site.startsWith('a download')) {
+          primeChecksum(d.file(id), createHash('sha256').update(GOOD).digest('hex')) // what the downloader does
+          afterModelInstalled(ctx as unknown as AppContext, id)
+        }
+      }
+      if (site.startsWith('a clean Check all')) await invoke(handlers, IPC.listModels, undefined, 'run-913b')
+
+      expect(await translate(ctx)).toBe('Good day.')
+      expect(await ctx.reranker.rerank('q', ['a', 'b'])).toHaveLength(2)
+      expect(spawned()).toBe(2)
+      await Promise.all([ctx.translator.stop(), ctx.reranker.stop()])
     })
   })
 
