@@ -379,7 +379,6 @@ describe('will-quit re-entry during a parked teardown (#238, B1 inverted)', () =
       mainWindowCount: () => 0,
       platform: 'darwin',
       quit: () => order.push('quit'),
-      quitRequested: () => false,
       killSidecarChildren: () => order.push('reap'),
       log: quietLog
     })
@@ -442,7 +441,6 @@ describe('activate during a parked teardown (#238)', () => {
       mainWindowCount: () => windows,
       platform: 'darwin',
       quit: () => undefined,
-      quitRequested: () => false,
       killSidecarChildren: () => undefined,
       log: quietLog
     })
@@ -470,8 +468,8 @@ describe('the main window’s last close quits on Windows and Linux (#910)', () 
     ['darwin', false, ['createWindow']],
     ['darwin', true, []]
   ])(
-    'the main window closed on %s (through a quit: %s), then a Dock click or a second launch: %j',
-    (platform, quitAsked, expected) => {
+    'the main window closed on %s (its guard closed it for a quit: %s), then a Dock click or a second launch: %j',
+    (platform, closedForQuit, expected) => {
       const order: string[] = []
       const handlers = createAppLifecycleHandlers({
         performShutdown: async () => undefined,
@@ -481,16 +479,15 @@ describe('the main window’s last close quits on Windows and Linux (#910)', () 
         mainWindowCount: () => 0, // a hidden OCR or print window may be open: it does not count
         platform,
         quit: () => order.push('quit'),
-        quitRequested: () => quitAsked,
         killSidecarChildren: () => undefined,
         log: quietLog
       })
-      handlers.onMainWindowClosed()
+      handlers.onMainWindowClosed(closedForQuit)
       // Windows and Linux: the close quits, and a second launch while that quit still closes the helper windows
       // (before its `will-quit`) opens nothing into it. macOS keeps the app open with no window after the red
       // button, and the Dock click (or a second launch, which index.ts sends the same way) brings the window back;
-      // after ⌘Q or Dock Quit the window closed through the quit, which runs on to `will-quit`, so nothing opens
-      // into it (review N-9).
+      // after ⌘Q or Dock Quit the guard closed the window for the quit, which runs on to `will-quit`, so nothing
+      // opens into it (review N-9; the guard's own answer for this close, code review).
       handlers.onActivate()
       expect(order).toEqual(expected)
     }
@@ -500,12 +497,11 @@ describe('the main window’s last close quits on Windows and Linux (#910)', () 
     // Source-text pin (the idiom above): index.ts cannot be imported under vitest.
     const src = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
     expect(src).toMatch(
-      /win\.on\('closed', \(\) => \{\n\s*trustedSenders\.delete\(senderId\)\n\s*if \(mainWindow === win\) mainWindow = null\n\s*lifecycle\.onMainWindowClosed\(\)\n\s*\}\)/
+      /win\.on\('closed', \(\) => \{\n\s*trustedSenders\.delete\(senderId\)\n\s*if \(mainWindow === win\) mainWindow = null\n\s*lifecycle\.onMainWindowClosed\(closeGuard\.closedForQuit\(\)\)\n\s*\}\)/
     )
     expect(src).toContain('mainWindowCount: () => (mainWindow === null ? 0 : 1),')
     expect(src).toContain('platform: process.platform,')
     expect(src).toContain('quit: () => app.quit(),')
-    expect(src).toContain('quitRequested: () => quitRequests.pending(),')
     // A hidden helper window must never count as the window a Dock click or a second launch brings back.
     expect(src).not.toMatch(/getAllWindows\(\)\.length/)
     // With no main window (macOS after the red button, or a quit teardown), a second launch takes the Dock
@@ -555,7 +551,6 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       mainWindowCount: () => windows,
       platform: 'win32',
       quit: () => order.push('quit'),
-      quitRequested: () => false,
       killSidecarChildren: () => order.push('reap'),
       log: quietLog
     })

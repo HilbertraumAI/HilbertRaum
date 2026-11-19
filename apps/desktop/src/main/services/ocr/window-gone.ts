@@ -12,6 +12,11 @@
 //   #910 (follow-ups wave 3 review, SF-1; measured with the real close guard).
 // - **Nothing asked to quit** (the window was closed some other way): the run fails at once, with its own message.
 //
+// The outcome is latched: it is what the run ends as, whatever step it was on when the window went. A page that was
+// waiting is failed with it; a step that starts later (the next page request, after a recognition that was still
+// running) and a step the window's end cut short (the page load) end as it too, through `outcomeIfGone()` (code
+// review: only a waiting page used to; the next request's send to the destroyed window threw a plain error).
+//
 // Either way the outcome waits one task: after an X the quit's `will-quit` runs between the window's `destroyed` and
 // that task (measured), so its cancel, which also empties the task queue, comes first, and the queue does not start its
 // next task into the quit. On a quit the guard holds the run ends before `will-quit`, so a task queued behind it can
@@ -48,22 +53,39 @@ export interface RunWindowGoneDeps {
 /** The message of a run whose window went away with no quit asked (raw: it reaches the local log only). */
 export const RASTER_WINDOW_GONE_MESSAGE = 'The rasterizer window closed while rendering the PDF'
 
-/** Watch one run's window; `dispose()` in the run's `finally`, before the run destroys the window itself. */
-export function watchRunWindowGone(deps: RunWindowGoneDeps): { dispose(): void } {
+export interface RunWindowGoneWatch {
+  /** Remove the listeners. In the run's `finally`, before the run destroys the window itself. */
+  dispose(): void
+  /**
+   * After a step of the run failed: the outcome when the window is gone (it resolves one task after the window's
+   * `destroyed`), or null when the window is still there and the failure is the step's own.
+   */
+  outcomeIfGone(): Promise<Error | null>
+}
+
+/** Watch one run's window. */
+export function watchRunWindowGone(deps: RunWindowGoneDeps): RunWindowGoneWatch {
   let quitAsked = false
+  /** The latched outcome, from the window's `destroyed` on (or from the first look that finds it destroyed). */
+  let outcome: Promise<Error> | null = null
   const onBeforeQuit = (): void => {
     quitAsked = true
   }
+  const gone = (): Promise<Error> => {
+    if (!outcome) {
+      outcome = new Promise<Error>((resolve) => {
+        setImmediate(() => {
+          const err = quitAsked ? deps.abortError() : new Error(RASTER_WINDOW_GONE_MESSAGE)
+          if (!quitAsked) deps.log.warn('OCR rasterizer window closed during the run')
+          deps.failPage(err)
+          resolve(err)
+        })
+      })
+    }
+    return outcome
+  }
   const onDestroyed = (): void => {
-    setImmediate(() => {
-      if (quitAsked) {
-        deps.failPage(deps.abortError())
-        return
-      }
-      if (deps.failPage(new Error(RASTER_WINDOW_GONE_MESSAGE))) {
-        deps.log.warn('OCR rasterizer window closed during the run')
-      }
-    })
+    void gone()
   }
   deps.app.on('before-quit', onBeforeQuit)
   deps.webContents.on('destroyed', onDestroyed)
@@ -71,6 +93,7 @@ export function watchRunWindowGone(deps: RunWindowGoneDeps): { dispose(): void }
     dispose: () => {
       deps.app.removeListener('before-quit', onBeforeQuit)
       if (!deps.isWindowDestroyed()) deps.webContents.removeListener('destroyed', onDestroyed)
-    }
+    },
+    outcomeIfGone: () => outcome ?? (deps.isWindowDestroyed() ? gone() : Promise.resolve(null))
   }
 }

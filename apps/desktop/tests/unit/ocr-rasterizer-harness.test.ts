@@ -83,6 +83,8 @@ vi.mock('electron', () => {
         },
         setWindowOpenHandler: vi.fn(),
         send: vi.fn((channel: string, payload: Record<string, unknown>) => {
+          // Electron: a send to a destroyed window's webContents throws.
+          if (self.destroyed) throw new TypeError('Object has been destroyed')
           state.onSend?.(self as unknown as FakeWin, channel, payload)
         })
       }
@@ -493,6 +495,67 @@ describe('rasterizePdfWithHiddenWindow — failure paths destroy the window', ()
     await expect(run).rejects.toMatchObject({ name: 'AbortError' })
     for (const ch of RASTER_CHANNELS) expect(fake.state.ipcListeners.get(ch) ?? [], ch).toHaveLength(0)
     expect(fake.state.appListeners.get('before-quit') ?? []).toHaveLength(0)
+  })
+
+  // #910 code review: the window can go while no page is waiting — page 2 already rendered (the 1-deep look-ahead) and
+  // page 1 still being recognized. The next request then finds the window destroyed (a send to it throws). That step
+  // must end as the window-gone outcome too: the quit's abort when a quit was asked, else the window-gone failure.
+  it.each<[string, boolean, Record<string, unknown>]>([
+    ['after a quit was asked: the run ends as an abort', true, { name: 'AbortError' }],
+    [
+      'with no quit asked: the run fails as a window gone',
+      false,
+      { message: 'The rasterizer window closed while rendering the PDF' }
+    ]
+  ])('a window destroyed between pages, with no page waiting, %s (#910 code review)', async (_case, quit, expected) => {
+    let releaseFirst: () => void = () => {}
+    const firstRecognized = new Promise<void>((resolve) => (releaseFirst = resolve))
+    let secondRendered: () => void = () => {}
+    const lookAheadDone = new Promise<void>((resolve) => (secondRendered = resolve))
+    fake.state.onSend = (win, channel, payload) => {
+      queueMicrotask(() => {
+        if (channel === OCR_RASTER.open) reply(win, OCR_RASTER.opened, { pageCount: 3 })
+        if (channel === OCR_RASTER.render) {
+          reply(win, OCR_RASTER.page, { pageNumber: payload.pageNumber, png: PNG })
+          if (payload.pageNumber === 2) secondRendered()
+        }
+      })
+    }
+    const run = rasterizePdfWithHiddenWindow(PDF, {
+      onPage: async (n) => {
+        if (n === 1) await firstRecognized // page 1 is still being recognized
+      }
+    })
+    void run.catch(() => {}) // asserted below
+    await lookAheadDone // page 2 rendered: nothing waits on the window now
+    const win = lastWin()
+    if (quit) for (const fn of fake.state.appListeners.get('before-quit') ?? []) fn()
+    destroyUnderTheRun(win)
+    releaseFirst() // recognition of page 1 ends; the walk goes on to page 3
+    await expect(run).rejects.toMatchObject(expected)
+    expect(renderRequests(win)).toEqual([1, 2]) // page 3 was never sent to the destroyed window
+    for (const ch of RASTER_CHANNELS) expect(fake.state.ipcListeners.get(ch) ?? [], ch).toHaveLength(0)
+  })
+
+  // #910 code review: the window can also go while its page is still loading; `loadURL` then rejects (Electron:
+  // ERR_ABORTED). On a held quit that is the quit's abort too, not a load failure.
+  it('a window destroyed while its page loads, after a quit was asked, ends the run as an abort (#910 code review)', async () => {
+    let failLoad: (err: Error) => void = () => {}
+    let loading: () => void = () => {}
+    const loadStarted = new Promise<void>((resolve) => (loading = resolve))
+    fake.state.load = () =>
+      new Promise<void>((_resolve, reject) => {
+        failLoad = reject
+        loading()
+      })
+    const run = rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} })
+    void run.catch(() => {}) // asserted below
+    await loadStarted
+    for (const fn of fake.state.appListeners.get('before-quit') ?? []) fn()
+    destroyUnderTheRun(lastWin())
+    failLoad(new Error('ERR_ABORTED (-3) loading hilbertraum://app/ocr.html'))
+    await expect(run).rejects.toMatchObject({ name: 'AbortError' })
+    expect(lastWin().webContents.send).not.toHaveBeenCalled()
   })
 
   // REL-4 (backend-audit 2026-06-27) / #687: an over-cap page PNG fails the run before it reaches recognition — the

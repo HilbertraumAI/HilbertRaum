@@ -198,8 +198,9 @@ export async function rasterizePdfWithHiddenWindow(
 
   // #910: the window going away mid-run (`window-gone.ts`). After a quit was asked the run ends as
   // an abort, so the OCR task ends `cancelled` on every quit path, the ones the close guard holds
-  // included; with no quit asked it fails at once. Never after the 60 s step timeout. Disposed in
-  // the `finally`, before the window is destroyed there.
+  // included; with no quit asked it fails at once. Never after the 60 s step timeout. The outcome
+  // holds for whatever step the run was on (the catch below). Disposed in the `finally`, before the
+  // window is destroyed there.
   const windowGone = watchRunWindowGone({
     app,
     webContents: win.webContents,
@@ -226,6 +227,21 @@ export async function rasterizePdfWithHiddenWindow(
     }
   }
 
+  /**
+   * One request on the shared channel: arm the reply, send, wait (bounded). A window already gone is not sent to
+   * (Electron throws "Object has been destroyed"); the run's catch turns either failure into the window-gone outcome.
+   */
+  const request = (reply: string, channel: string, payload: unknown): Promise<Record<string, unknown>> => {
+    if (win.isDestroyed()) return Promise.reject(new Error('The rasterizer window is gone'))
+    const replyP = slot.expect(reply)
+    try {
+      win.webContents.send(channel, payload)
+    } catch (err) {
+      slot.fail(err instanceof Error ? err : new Error(String(err)))
+    }
+    return withTimeout(replyP)
+  }
+
   try {
     // Load the window's page: dev server in dev, the app's own scheme otherwise (the main
     // window's pattern; #560 moved it off `file://` — app-protocol.ts). A packaged build
@@ -234,9 +250,7 @@ export async function rasterizePdfWithHiddenWindow(
     await win.loadURL(devUrl ? `${devUrl}/ocr.html` : appPageUrl('ocr'))
     if (opts.signal?.aborted) throw abortError()
 
-    const openedP = slot.expect(OCR_RASTER.opened)
-    win.webContents.send(OCR_RASTER.open, { pdf: new Uint8Array(pdf) })
-    const opened = await withTimeout(openedP)
+    const opened = await request(OCR_RASTER.opened, OCR_RASTER.open, { pdf: new Uint8Array(pdf) })
     const declaredPageCount = Number(opened.pageCount)
     if (!Number.isInteger(declaredPageCount) || declaredPageCount <= 0) {
       throw new Error('The PDF could not be opened for rendering')
@@ -261,9 +275,7 @@ export async function rasterizePdfWithHiddenWindow(
     await pipelinePages(
       declaredPageCount,
       async (pageNumber) => {
-        const pageP = slot.expect(OCR_RASTER.page)
-        win.webContents.send(OCR_RASTER.render, { pageNumber })
-        const msg = await withTimeout(pageP)
+        const msg = await request(OCR_RASTER.page, OCR_RASTER.render, { pageNumber })
         const png = msg.png
         if (!(png instanceof Uint8Array)) throw new Error('The rendered page was empty')
         // REL-4: reject an over-cap page before it is handed to recognition or held resident
@@ -276,6 +288,15 @@ export async function rasterizePdfWithHiddenWindow(
       { signal: opts.signal, abortError, maxPages, pages: opts.pages }
     )
     return { pageCount }
+  } catch (err) {
+    // #910 (code review): the window went away while the run was on any step (a page waiting, a recognition still
+    // running before the next request, the page load): the run ends as the window-gone outcome, one task after the
+    // window's `destroyed`. The task's own cancel keeps its abort.
+    if (!opts.signal?.aborted) {
+      const gone = await windowGone.outcomeIfGone()
+      if (gone) throw gone
+    }
+    throw err
   } finally {
     inUse = false
     opts.signal?.removeEventListener('abort', onAbort)

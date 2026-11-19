@@ -1730,8 +1730,10 @@ re-encrypts (the bullet below).
   (measured on Electron 43.8.6): an OCR run is cancelled there and persists nothing (GAP-7), and a
   print fails through its own `before-quit` hook. `window-all-closed` stays as a fallback; Electron
   does not emit it during a quit. When the rasterizer's window goes away mid-run
-  (`services/ocr/window-gone.ts`), the page in flight ends one task after the window's `destroyed`
-  event, not after its 60 s step timeout: as an abort when a quit was asked (`before-quit`), so the
+  (`services/ocr/window-gone.ts`), the run ends one task after the window's `destroyed` event, not
+  after its 60 s step timeout, whatever step it was on (a page waiting, a recognition still running
+  before the next page request, the page load; code review: only a waiting page used to): as an
+  abort when a quit was asked (`before-quit`), so the
   OCR task ends `cancelled` and persists nothing on every quit path, and as a failure when nothing
   asked to quit. The quits the close guard holds while the window saves (Ctrl+Q on Linux, ⌘Q or
   Dock Quit on macOS, File → Exit in a development build) close the helper window before their
@@ -1744,9 +1746,9 @@ re-encrypts (the bullet below).
   (`mainWindowCount`, no longer `getAllWindows()`, which counted the hidden helpers, so a Dock click
   during an OCR run opened nothing), and a `second-instance` with no main window takes the same
   path once the app is ready. That path opens nothing once the last close has started the quit
-  (Windows, Linux) or the window closed through one (⌘Q or Dock Quit, read from the app-level quit
-  flag, `trackQuitRequests(app).pending()`): until its `will-quit` that quit is still closing the
-  helper windows, and no window opens into it.
+  (Windows, Linux) or the window closed for one (⌘Q or Dock Quit: the close guard's own answer for
+  that close, `closedForQuit()`, never the app-level quit flag, which only a guard's consume clears):
+  until its `will-quit` that quit is still closing the helper windows, and no window opens into it.
   Pinned by `tests/unit/close-guard.test.ts`, `tests/unit/shutdown.test.ts`,
   `tests/unit/ocr-rasterizer-harness.test.ts`, `tests/integration/ocr-task.test.ts` and, where the
   Electron binary is present (not CI), `tests/integration/close-guard-electron-smoke.test.ts` on real

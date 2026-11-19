@@ -1042,7 +1042,7 @@ function createWindow(): void {
   win.on('closed', () => {
     trustedSenders.delete(senderId)
     if (mainWindow === win) mainWindow = null
-    lifecycle.onMainWindowClosed()
+    lifecycle.onMainWindowClosed(closeGuard.closedForQuit())
   })
 
   // Open external links in the OS browser, never inside the app window — policy in
@@ -1086,7 +1086,6 @@ const lifecycle = createAppLifecycleHandlers({
   mainWindowCount: () => (mainWindow === null ? 0 : 1),
   platform: process.platform,
   quit: () => app.quit(),
-  quitRequested: () => quitRequests.pending(),
   killSidecarChildren: killRegisteredSidecarChildren,
   log
 })

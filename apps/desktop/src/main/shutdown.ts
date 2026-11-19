@@ -373,11 +373,6 @@ export interface AppLifecycleDeps {
   /** `app.quit()`: the quit the main window's last close starts on Windows and Linux (#910). */
   quit: () => void
   /**
-   * Is a quit asked and not taken back (`trackQuitRequests(app).pending()`, read without clearing)? On macOS
-   * the main window closes through a quit (⌘Q, Dock Quit) only once its close guard let that quit go on (#910).
-   */
-  quitRequested: () => boolean
-  /**
    * `killRegisteredSidecarChildren` — reaps, synchronously and right before `exit`, whatever a
    * deadline-abandoned sidecar stop left behind (the CODE-11 crash-path reaper, reused). A no-op
    * after a teardown that completed: every stopped child unregistered itself on exit.
@@ -398,9 +393,11 @@ export interface AppLifecycleHandlers {
    * quit closes the helpers and goes through `before-quit` → `will-quit` like any other quit
    * (measured on Electron 43.8.6). On macOS the app stays open with no window (the platform
    * convention); a Dock click brings the window back (`onActivate`, `mainWindowCount`), except while
-   * a quit that closed the window is still closing the helper windows.
+   * a quit that closed the window is still closing the helper windows. `closedForQuit` is the close
+   * guard's own answer for this close (`CloseGuard.closedForQuit()`): it let the close go through as
+   * part of a quit (⌘Q, Dock Quit), after the save.
    */
-  onMainWindowClosed: () => void
+  onMainWindowClosed: (closedForQuit: boolean) => void
   /**
    * The OS is ending the session (#248): Windows `session-end` on the main window (a shutdown,
    * restart or log-off — cannot be prevented; the process is killed once the handler returns),
@@ -486,14 +483,15 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       // #910: main windows only — a hidden helper window is not a window the user can use.
       if (deps.mainWindowCount() === 0) deps.createWindow()
     },
-    onMainWindowClosed: () => {
+    onMainWindowClosed: (closedForQuit) => {
       // #910: Windows and Linux quit when the main window closes, whatever helper windows are
       // left; the quit closes them. During a quit that is already running the call adds nothing
       // (Electron ignores a nested `app.quit()`: one `before-quit`, one `will-quit`, measured).
       if (deps.platform === 'darwin') {
-        // macOS stays open after the red button. A window that closed through a quit (the guard let it go on)
-        // is not coming back: that quit runs to `will-quit`.
-        if (deps.quitRequested()) quitAfterLastClose = true
+        // macOS stays open after the red button. A window its guard closed for a quit is not coming back: that
+        // quit runs to `will-quit`. (The guard's answer for this close, never the app-level quit flag, which
+        // only a guard's consume() clears: a stale one would block every later Dock click.)
+        if (closedForQuit) quitAfterLastClose = true
         return
       }
       quitAfterLastClose = true

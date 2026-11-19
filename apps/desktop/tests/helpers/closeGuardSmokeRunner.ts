@@ -118,7 +118,6 @@ app.whenReady().then(async () => {
     mainWindowCount: () => (win.isDestroyed() ? 0 : 1),
     platform: process.platform,
     quit: () => app.quit(),
-    quitRequested: () => quitRequested,
     killSidecarChildren: () => undefined,
     log: console
   })
@@ -212,7 +211,7 @@ app.whenReady().then(async () => {
   })
   win.on('closed', () => {
     log('closed')
-    lifecycle.onMainWindowClosed()
+    lifecycle.onMainWindowClosed(guard.closedForQuit())
   })
 
   if (scenario === 'quit' || scenario === 'quit-helper') app.quit()

@@ -13,6 +13,7 @@ import {
   type ConfirmWindow,
   type UnsavedCloseChoice
 } from '../../src/main/close-guard'
+import { createAppLifecycleHandlers } from '../../src/main/shutdown'
 import { REVIEW_LOCK_FLUSH_BOUND_MS } from '../../src/renderer/lib/reviewSession'
 import { BEFORE_CLOSE_SAVE_BOUND_MS } from '../../src/renderer/lib/beforeClose'
 import { EVENTS, IPC } from '../../src/shared/ipc'
@@ -507,7 +508,7 @@ describe('close guard — the main window wiring (#888)', () => {
     }
     /** The window answers request `requestId`. */
     const answer = (requestId: number, unsaved: boolean): void => w.reply({ requestId, unsaved })
-    return { steps, app, close, answer, quitRequests }
+    return { steps, app, close, answer, quitRequests, guard }
   }
 
   it('a quit (File → Exit, Cmd+Q) that reached the close quits again through app.quit after the save', async () => {
@@ -541,7 +542,7 @@ describe('close guard — the main window wiring (#888)', () => {
 
   // #910 review N-9 (macOS): the app stays open after the red button but not after ⌘Q or Dock Quit, and a Dock click
   // between the window's `closed` and that quit's `will-quit` must open nothing. What tells the two apart at `closed`
-  // is the quit flag read without clearing: the guard's own quit after the save sets it, and nothing reads it after.
+  // is the guard's own answer for this close (code review: not the app-level quit flag, which only a consume clears).
   it.each<[string, boolean, number[], (h: ReturnType<typeof wiring>) => Promise<void>]>([
     ['a quit the guard let go on', true, [], async (h) => {
       h.app.emit('before-quit')
@@ -563,11 +564,37 @@ describe('close guard — the main window wiring (#888)', () => {
       h.answer(2, false)
       await settle()
     }]
-  ])('once the window closed through %s, a quit is still pending: %s', async (_what, pending, dialog, run) => {
+  ])('once the window closed through %s, its guard closed it for a quit: %s', async (_what, forQuit, dialog, run) => {
     const h = wiring(dialog)
     await run(h)
     expect(h.steps.at(-1)).toBe('close:through')
-    expect(h.quitRequests.pending()).toBe(pending)
+    expect(h.guard.closedForQuit()).toBe(forQuit)
+  })
+
+  // #910 code review: a `before-quit` that this window's guard never saw leaves the app-level flag set (only a guard's
+  // consume clears it). Read at `closed`, as round 2 did, it made a later red-button close block every Dock click.
+  it('a plain close with a stale app-level quit flag: on macOS a Dock click still opens the window (#910 code review)', async () => {
+    const h = wiring()
+    const order: string[] = []
+    const lifecycle = createAppLifecycleHandlers({
+      performShutdown: async () => undefined,
+      emergencyLock: () => undefined,
+      exit: () => undefined,
+      createWindow: () => order.push('createWindow'),
+      mainWindowCount: () => 0, // the window is gone
+      platform: 'darwin',
+      quit: () => order.push('quit'),
+      killSidecarChildren: () => undefined,
+      log: { ...quiet, error: () => undefined }
+    })
+    h.close() // the red button
+    h.answer(1, false)
+    await settle()
+    h.app.emit('before-quit') // a quit request no close of this window saw: the flag stays set
+    lifecycle.onMainWindowClosed(h.guard.closedForQuit()) // the window's `closed`, as index.ts wires it
+    lifecycle.onActivate() // a Dock click
+    expect(order).toEqual(['createWindow'])
+    expect(h.quitRequests.consume()).toBe(true) // the scenario: the stale flag really was set
   })
 
   it('index.ts gives every main window that guard and a `closed` reset, over one app-level quit flag', () => {
@@ -580,5 +607,7 @@ describe('close guard — the main window wiring (#888)', () => {
     expect(src).toContain("win.on('close', closeGuard.onClose)")
     // S-5: a closed window's sender id is dropped and `mainWindow` stops pointing at it.
     expect(src).toMatch(/win\.on\('closed', \(\) => \{\s*trustedSenders\.delete\(senderId\)\s*if \(mainWindow === win\) mainWindow = null/)
+    // #910 code review: the lifecycle hears this guard's own answer for the close.
+    expect(src).toContain('lifecycle.onMainWindowClosed(closeGuard.closedForQuit())')
   })
 })

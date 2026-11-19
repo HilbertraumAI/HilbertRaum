@@ -67,6 +67,11 @@ export interface CloseGuardDeps {
 export interface CloseGuard {
   /** The main window's `close` listener. */
   onClose(event: CloseEventLike): void
+  /**
+   * #910 (macOS): did this guard let the window's close go through as part of a quit (⌘Q, Dock Quit: a quit asked
+   * before or during the save, which the guard then re-ran)? Read at the window's `closed`; false for a plain close.
+   */
+  closedForQuit(): boolean
 }
 
 /** Resolves in a later macrotask (after the current event and every microtask it queued). */
@@ -80,6 +85,8 @@ const nextTask = (): Promise<void> => new Promise((resolve) => setImmediate(reso
  */
 export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
   let phase: 'open' | 'saving' | 'closing' = 'open'
+  /** The close the guard let through was for a quit (`closedForQuit`). */
+  let closingForQuit = false
   /** The answer, or null for a request that throws or rejects (review round 2). */
   const askSafely = (): Promise<SaveBeforeCloseResult | null> => {
     try {
@@ -136,6 +143,7 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
           return
         }
         phase = 'closing'
+        closingForQuit = fromQuit
         try {
           if (fromQuit) deps.quit()
           else deps.closeWindow()
@@ -143,7 +151,8 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
           deps.log.warn('close: closing the window failed', { error: String(err) })
         }
       })()
-    }
+    },
+    closedForQuit: () => closingForQuit
   }
 }
 
@@ -288,11 +297,6 @@ export function createUnsavedCloseConfirm(deps: UnsavedCloseConfirmDeps): () => 
 export interface QuitRequests {
   /** Was a quit asked since the last read? Reading clears it. */
   consume(): boolean
-  /**
-   * The same flag, read without clearing (#910, macOS): true at the main window's `closed` when the window closed
-   * through a quit (the guard's own quit after the save sets it again, and nothing reads it after that).
-   */
-  pending(): boolean
 }
 
 /**
@@ -311,8 +315,7 @@ export function trackQuitRequests(app: { on(event: 'before-quit', listener: () =
       const was = asked
       asked = false
       return was
-    },
-    pending: () => asked
+    }
   }
 }
 
