@@ -27,6 +27,14 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-19 — the 2026-11-18 follow-ups wave 2 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-19, when the wave closed (PR #909 merged as `54b8620a`, the last
+of PRs #902–#909); a short outcome entry with the open follow-ups (#910–#920) replaces it there. Its
+records are unchanged and listed in that entry. Citations of this entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-11-18 — **Follow-ups wave 2 (the follow-ups #887–#899 and #901 left by the follow-ups wave): open.** Eight PRs in this order: W1 #895 + #891 + #894, W2 #901 + #889, W4 #893 + #887, W6 #899, W7 #890 + #896, W3 #888, W5 #892 (before the next release tag: the #875 marker it extends is unreleased), W8 #898 + #897. Owner calls 2026-11-18, as recommended: a close-time review save that fails asks Try again / Keep open / Close anyway (#888); the next start says when an unclean end lost the session, and names a full drive (#892); a pre-release app does not meet its own release as a skill minimum, as already for models (#896). Open: all eight PRs; then the wave review and the close (retire this line)._
 ## 2026-11-18 — the closed 2026-10-14 DEP-7 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-18 (preamble budget, making room for the follow-ups wave 2 line). Its
