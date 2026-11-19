@@ -72,6 +72,7 @@ import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
 import type { WorkspaceAdmission } from '../../src/main/services/workspace-vault'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -79,7 +80,7 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
  *  read-only/in-memory channels to run. Every DB-touching handler must refuse at its
  *  requireUnlocked() preamble (the first statement) before any of this matters. `workspace` is the
  *  posture the guards read (see `POSTURES`). */
-function lockedCtx(tmp: string, workspace: WorkspaceAdmission = { isUnlocked: () => false }): AppContext {
+function lockedCtx(tmp: string, workspace: WorkspaceAdmission = workspaceStandIn({ unlocked: false })): AppContext {
   return {
     trustedSenders: ANY_SENDER,
     workspace,
@@ -252,8 +253,8 @@ const COVERED_ELSEWHERE: Record<string, string> = {
 // module's FIRST guard; that the real controller arms the latch before the teardown's first await is
 // lock-admission-race.test.ts's, over a parked real lock.
 const POSTURES: ReadonlyArray<readonly [string, WorkspaceAdmission]> = [
-  ['when locked', { isUnlocked: () => false }],
-  ['while a lock is under way (AUD-02 latch)', { isUnlocked: () => true, isLocking: () => true }]
+  ['when locked', workspaceStandIn({ unlocked: false })],
+  ['while a lock is under way (AUD-02 latch)', workspaceStandIn({ locking: true })]
 ]
 
 describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', () => {

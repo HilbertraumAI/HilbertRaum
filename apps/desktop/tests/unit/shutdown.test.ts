@@ -11,6 +11,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 import { until } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 // REL-4 (full-audit-2026-06-29 follow-up): the QUIT teardown must abort in-flight chat/RAG streams
 // BEFORE runtime.stop() — like the workspace-LOCK path — so a partial reply unwinds as an ABORT and
@@ -90,10 +91,10 @@ function fakeCtx(order: string[]): AppContext {
       size: () => 0
     },
     // Issue #51: quit calls workspace.shutdown() (lock + plaintext checkpoint/close). The
-    // ordering event keeps its historical 'lock' label — every assertion below pins it. The AUD-02
-    // latch (`beginLock`) is a member of the real controller; a stand-in without it would throw
+    // ordering event keeps its historical 'lock' label — every assertion below pins it. The stand-in
+    // carries the real controller's AUD-02 latch (`beginLock`); a stand-in without it would throw
     // into the best-effort catch on every row. Quit's arm is lock-admission-race.test.ts's.
-    workspace: { beginLock: () => undefined, shutdown: () => order.push('lock') }
+    workspace: workspaceStandIn({}, { shutdown: () => order.push('lock') })
   } as unknown as AppContext
 }
 
@@ -556,13 +557,15 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     const order: string[] = []
     const ctx = {
       localApi: { stop: async () => Promise.reject(new Error('already stopped')) },
-      workspace: {
-        beginLock: () => undefined,
-        shutdown: () => {
-          order.push('lock(throws)')
-          throw new Error('ENOSPC')
+      workspace: workspaceStandIn(
+        {},
+        {
+          shutdown: () => {
+            order.push('lock(throws)')
+            throw new Error('ENOSPC')
+          }
         }
-      }
+      )
     } as unknown as AppContext
     const errors: string[] = []
     emergencyLock(ctx, {
@@ -584,18 +587,20 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
   it('emergencyLock arms the lock latch first, so a job arriving after a failed lock is still refused', () => {
     const order: string[] = []
     let locking = false
-    const workspace = {
-      isUnlocked: () => true, // the failed lock below leaves the workspace open
-      isLocking: () => locking,
-      beginLock: () => {
-        order.push('beginLock')
-        locking = true
-      },
-      shutdown: () => {
-        order.push('lock(throws)')
-        throw new Error('ENOSPC')
+    // Open (the failed lock below leaves it so); the latch reads the row's own `locking`.
+    const workspace = workspaceStandIn(
+      { locking: () => locking },
+      {
+        beginLock: () => {
+          order.push('beginLock')
+          locking = true
+        },
+        shutdown: () => {
+          order.push('lock(throws)')
+          throw new Error('ENOSPC')
+        }
       }
-    }
+    )
     const ctx = { localApi: { stop: async () => void order.push('localApi.stop') }, workspace } as unknown as AppContext
     expect(workspaceAdmitsWork(workspace)).toBe(true)
 

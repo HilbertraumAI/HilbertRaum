@@ -25,6 +25,7 @@ import { benchmarkResult } from './benchmark-records'
 import { START_READS, stoppedStatus } from './chat-runtime-stub'
 import { ANY_SENDER } from './ipc'
 import { rawManifest, writeManifest } from './manifest-fixtures'
+import { workspaceStandIn } from './workspace-stand-in'
 
 export { committingRuntime, START_READS, stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
 export { CARDS, CATALOG_MANIFESTS } from './gpu-fixtures'
@@ -73,7 +74,7 @@ export function seededDb(root: string): Db {
  *
  * The first-benchmark attempt memo and moved-drive latch are NOT reset: both are keyed on the DB
  * handle + the unlock epoch, so a test's new `seededDb()` is already a new session. A row that needs
- * a second session on ONE handle says so with an epoch bump (`sessionWorkspace().completeUnlock()`).
+ * a second session on ONE handle says so with an epoch bump (`workspaceStandIn().completeUnlock()`).
  *
  * Root removal closes DBs FIRST: on Windows a still-open sqlite file makes `rmSync` fail. If it
  * still fails (a close that is asynchronously settling), retry ONCE after a real macrotask
@@ -113,7 +114,7 @@ export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}
   return {
     paths: { rootPath: root, workspacePath: join(root, 'workspace') },
     db,
-    workspace: { isUnlocked: () => true },
+    workspace: workspaceStandIn(),
     // The registrars go through `guardedHandle` (#252), which refuses a context without a
     // trusted-sender set; the permissive harness set keeps registration possible here.
     trustedSenders: { ...ANY_SENDER },
@@ -224,44 +225,6 @@ export function fakeGpuProbe(
 ): CachedGpuProbe & { calls: Mock<GpuProbeCall>; invalidate: Mock<() => void> } {
   const calls = vi.fn<GpuProbeCall>(typeof impl === 'function' ? impl : async () => impl)
   return Object.assign(calls, { calls, invalidate: vi.fn<() => void>() })
-}
-
-/**
- * A session-aware workspace stand-in: flags plus the epoch counter, in the real controller's shape.
- * A lock arms the latch first and closes the DB last; an unlock clears the latch and advances the
- * session epoch. No `requireDb`: a context whose `db` follows the session keeps its own getter.
- */
-export function sessionWorkspace(): {
-  isUnlocked: () => boolean
-  isLocking: () => boolean
-  unlockEpoch: () => number
-  beginLock: () => void
-  completeLock: () => void
-  completeUnlock: () => void
-} {
-  let unlocked = true
-  let locking = false
-  let epoch = 1
-  return {
-    isUnlocked: () => unlocked,
-    isLocking: () => locking,
-    unlockEpoch: () => epoch,
-    // The MID-TEARDOWN state, and the one the epoch cannot see: the latch is armed but the DB
-    // is still open, so `isUnlocked()` alone still says "go". This is the majority of the real
-    // lock window (seconds of awaited sidecar/stream/task teardown), not a transient.
-    beginLock: () => {
-      locking = true
-    },
-    completeLock: () => {
-      locking = true // armed as the lock handler's first act…
-      unlocked = false // …and the DB closes at the very end of its teardown
-    },
-    completeUnlock: () => {
-      locking = false
-      unlocked = true
-      epoch += 1
-    }
-  }
 }
 
 /**

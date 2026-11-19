@@ -14,6 +14,7 @@ import { getOrCreateToken } from '../../src/main/services/local-api/token'
 import type { AppContext } from '../../src/main/services/context'
 import { tempRoot } from '../helpers/db-fixtures'
 import { freePort } from '../helpers/local-api-harness'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 // Local-API lifecycle pins (local-api wave P3): DEFAULT OFF means a fresh workspace opens
 // ZERO listeners (the outbound-only test gap — the policy suite pins outbound calls, this
@@ -45,10 +46,7 @@ function makeCtx(opts?: { unlocked?: boolean; locking?: boolean; policyJson?: st
   const ctx = {
     db,
     runtime: mgr,
-    workspace: {
-      isUnlocked: () => unlocked,
-      isLocking: () => locking
-    },
+    workspace: workspaceStandIn({ unlocked, locking }),
     paths: { configPath: dir },
     isDev: opts?.isDev ?? true,
     docTasks: undefined

@@ -17,6 +17,7 @@ import { createSkillRegistry, type SkillRegistry } from '../../src/main/services
 import { runningManager } from './chat-runtime-stub'
 import { tempRoot } from './db-fixtures'
 import { ANY_SENDER } from './ipc'
+import { workspaceStandIn } from './workspace-stand-in'
 
 export interface SkillsWorld {
   root: string
@@ -80,7 +81,7 @@ export function makeSkillsIpcContext(
     trustedSenders: ANY_SENDER,
     db: w.db,
     paths: { workspacePath: w.root },
-    workspace: { isUnlocked: () => unlocked, documentCipher: () => null },
+    workspace: workspaceStandIn({ unlocked }),
     isDev: false,
     ...(o.audit === false ? {} : { audit: createAuditRecorder(() => w.db) }),
     skills: w.skills,
@@ -111,7 +112,7 @@ export function makeRagAskContext(
     get db() {
       return w.db
     },
-    workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
+    workspace: workspaceStandIn(),
     runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,

@@ -43,6 +43,7 @@ import {
   importWords,
   type DocRuntime
 } from '../helpers/doctask-fixtures'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -71,11 +72,7 @@ async function makeHarness(): Promise<Harness> {
     trustedSenders: ANY_SENDER,
     paths: { rootPath: w.root, workspacePath: join(w.root, 'workspace') },
     db: w.db,
-    workspace: {
-      isUnlocked: () => true,
-      documentCipher: () => null,
-      beginDocumentWork: () => () => {}
-    },
+    workspace: workspaceStandIn(),
     runtime: {
       active: () => runtime,
       activeModelId: () => runtime.modelId

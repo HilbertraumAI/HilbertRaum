@@ -44,6 +44,7 @@ import { makeSkillDirs, writeSkillPackage } from '../helpers/skill-fixtures'
 import { reconcileSkills } from '../../src/main/services/skills/registry'
 import { updateSettings } from '../../src/main/services/settings'
 import { t } from '../../src/shared/i18n'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -74,7 +75,7 @@ function makeCtx(db: Db, runtime: ModelRuntime | null): AppContext {
   return {
     trustedSenders: ANY_SENDER,
     db,
-    workspace: { isUnlocked: () => true },
+    workspace: workspaceStandIn(),
     runtime: { active: () => runtime, activeModelId: () => runtime?.modelId ?? null }
   } as unknown as AppContext
 }
@@ -85,7 +86,7 @@ function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn
   const ctx = {
     trustedSenders: ANY_SENDER,
     db,
-    workspace: { isUnlocked: () => true },
+    workspace: workspaceStandIn(),
     runtime: { active: () => null, activeModelId: () => null },
     audit
   } as unknown as AppContext
@@ -183,7 +184,7 @@ describe('registerChatIpc', () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
       db,
-      workspace: { isUnlocked: () => true },
+      workspace: workspaceStandIn(),
       embedder: createMockEmbedder(),
       runtime: { active: () => null, activeModelId: () => null }
     } as unknown as AppContext
@@ -213,7 +214,7 @@ describe('registerChatIpc', () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
       db,
-      workspace: { isUnlocked: () => true },
+      workspace: workspaceStandIn(),
       embedder: { id: 'active-model' },
       runtime: { active: () => null, activeModelId: () => null }
     } as unknown as AppContext

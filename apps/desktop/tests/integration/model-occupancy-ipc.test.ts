@@ -48,6 +48,7 @@ import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 import { killableRuntime } from '../helpers/killable-runtime'
 import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
 import { untilValue } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -253,7 +254,7 @@ describe('runAndPersistBenchmark — the re-entrancy and busy guard (#185)', () 
     const ctx = {
       db,
       paths: { workspacePath: root, rootPath: root },
-      workspace: { isUnlocked: () => true },
+      workspace: workspaceStandIn(),
       isDev: false,
       runtime,
       manifestsDir: null,

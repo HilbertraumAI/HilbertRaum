@@ -32,6 +32,7 @@ import {
 } from '../../src/main/services/runtime/sidecar'
 import { whisperCliBinaryName } from '../../src/main/services/transcriber/cli'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const LLAMA_PROBLEM: EngineProblem = {
   family: 'llama_cpp',
@@ -101,7 +102,7 @@ function makeCtx(root: string, probeBehavior: () => void, db: Db | null = null):
     refreshTranslatorSlot,
     runtime: { status: () => ({ backend: 'mock', modelId: 'm', running: true, healthy: true, port: null, message: '' }) },
     // Locked: probeAndPersistGpu and healEngineLoadState are admission-gated and skip entirely.
-    workspace: { isUnlocked: () => db != null },
+    workspace: workspaceStandIn({ unlocked: db != null }),
     db
   } as unknown as AppContext
   const restartChat = vi.fn(async () => undefined)

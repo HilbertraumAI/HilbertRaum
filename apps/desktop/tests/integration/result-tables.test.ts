@@ -29,6 +29,7 @@ import type { TableSpec } from '../../src/main/services/tables'
 import type { AppContext } from '../../src/main/services/context'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -36,7 +37,7 @@ function makeCtx(db: Db, audit?: (type: string, msg: string, meta?: Record<strin
   return {
     trustedSenders: ANY_SENDER,
     db,
-    workspace: { isUnlocked: () => true },
+    workspace: workspaceStandIn(),
     runtime: { active: () => null, activeModelId: () => null },
     audit
   } as unknown as AppContext

@@ -36,6 +36,7 @@ import { tempRoot } from '../helpers/db-fixtures'
 import { deferred } from '../helpers/deferred'
 import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { sha256 } from '../helpers/manifest-fixtures'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -116,7 +117,7 @@ function makeCtx(opts: {
     trustedSenders: ANY_SENDER,
     paths: { rootPath: drive.rootPath, configPath: drive.configPath },
     db,
-    workspace: { isUnlocked: () => opts.unlocked !== false },
+    workspace: workspaceStandIn({ unlocked: opts.unlocked !== false }),
     manifestsDir: drive.manifestsDir
   } as unknown as AppContext
   return { ctx, db, rootPath: drive.rootPath }

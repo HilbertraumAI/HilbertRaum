@@ -8,6 +8,7 @@ import { computeInstallState, manifestFilesPresent } from '../../src/main/servic
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import type { AppContext } from '../../src/main/services/context'
 import { sha256, validManifest } from '../helpers/manifest-fixtures'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 // Vision availability detection (image-understanding plan §10/§17). All cases run with ZERO
 // real weights (the green-gate posture): the binary + manifest + files are synthesized in a
@@ -73,7 +74,7 @@ function ctxFor(rootPath: string, manifestsDir: string | null): AppContext {
     manifestsDir,
     isDev: true,
     // Locked → status stays workspace-agnostic and never touches the DB (PROD-2).
-    workspace: { isUnlocked: () => false }
+    workspace: workspaceStandIn({ unlocked: false })
   } as unknown as AppContext
 }
 

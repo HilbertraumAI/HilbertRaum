@@ -37,6 +37,7 @@ import { hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs, until } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import type { OcrInstallJob, OcrInstallStatus, OcrRefreshOutcome } from '../../src/shared/types'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as IpcHandlers
 
@@ -915,7 +916,7 @@ describe('OCR install via IPC (#410)', () => {
       bundledManifestsDir: appManifests,
       isDev: true,
       ocrEngine: null,
-      workspace: { isUnlocked: () => opts.locked !== true }
+      workspace: workspaceStandIn({ unlocked: opts.locked !== true })
     })
     handlers.clear()
     registerEngineIpc(ctx, undefined, { ocrInstaller })

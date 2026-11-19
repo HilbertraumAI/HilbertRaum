@@ -70,6 +70,7 @@ import { START_READS } from '../helpers/chat-runtime-stub'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -198,11 +199,7 @@ function makeHarness(): Harness {
     trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath, configPath },
     db,
-    workspace: {
-      isUnlocked: () => true,
-      documentCipher: () => null,
-      beginDocumentWork: () => () => {}
-    },
+    workspace: workspaceStandIn(),
     runtime: {
       ...START_READS,
       active: () => runtime,

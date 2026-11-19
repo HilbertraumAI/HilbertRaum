@@ -113,3 +113,22 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     await service.stop() // aborts the (hanging) accepted job so nothing dangles past the test
   })
 })
+
+// AUD-02: `analyze()`'s OWN lock guard, with no IPC guard in front (every images-IPC row is refused by the handler's
+// `workspaceAdmitsWork` first, so none of them reaches this line, #897). The rows above are the unlocked control: the
+// same request with no lock under way is admitted (`queued`).
+describe('VisionService.analyze refuses while a workspace lock is under way (AUD-02)', () => {
+  it('answers a terminal cancelled job: no status read, no runtime built, nothing streamed, the slot stays free', async () => {
+    const getStatus = vi.fn(async () => AVAILABLE)
+    const createRuntime = vi.fn()
+    const service = new VisionService({ getStatus, createRuntime, isWorkspaceLocking: () => true })
+    const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
+
+    expect(service.analyze(req(), emit)).toMatchObject({ state: 'failed', error: 'cancelled' })
+    await tick()
+    expect(getStatus).not.toHaveBeenCalled()
+    expect(createRuntime).not.toHaveBeenCalled()
+    expect(emit.token).not.toHaveBeenCalled()
+    expect(service.hasActiveJob()).toBe(false)
+  })
+})

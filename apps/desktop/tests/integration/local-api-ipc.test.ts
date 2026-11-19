@@ -42,6 +42,7 @@ import { t } from '../../src/shared/i18n'
 import { tempRoot } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { localApiStatus } from '../helpers/status'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -71,10 +72,8 @@ function makeHarness(opts: { unlocked?: boolean; locking?: boolean; localApi?: b
     db,
     isDev: true,
     workspace: {
-      isUnlocked: () => unlocked,
-      isLocking: () => locking,
-      getState: () => ({ state: unlocked ? 'unlocked' : 'locked', mode: 'plaintext_dev' }),
-      documentCipher: () => null
+      ...workspaceStandIn({ unlocked, locking }),
+      getState: () => ({ state: unlocked ? 'unlocked' : 'locked', mode: 'plaintext_dev' })
     },
     runtime: { active: () => null, activeModelId: () => null, status: () => ({ running: false }) },
     localApi:

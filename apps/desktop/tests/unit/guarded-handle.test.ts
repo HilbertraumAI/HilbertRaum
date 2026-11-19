@@ -34,6 +34,7 @@ import { openDatabase } from '../../src/main/services/db'
 import type { AppContext } from '../../src/main/services/context'
 import { IPC } from '../../src/shared/ipc'
 import { ANY_SENDER, makeEvent } from '../helpers/ipc'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const SECRET_ARG = 'ARG_SENTINEL_never_logged'
 
@@ -140,7 +141,7 @@ describe('guardedHandle (#252)', () => {
     const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-guard-')), 'test.sqlite'))
     const ctx = {
       db,
-      workspace: { isUnlocked: () => true, isLocking: () => false },
+      workspace: workspaceStandIn(),
       trustedSenders
     } as unknown as AppContext
     registerAuditIpc(ctx)

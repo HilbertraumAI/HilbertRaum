@@ -146,6 +146,7 @@ import { tempRoot } from '../helpers/db-fixtures'
 import { documentIdsInCollection } from '../helpers/doc-fixtures'
 import { testCipher } from '../helpers/test-cipher'
 import { docTaskManager, docTaskRuntime, waitTerminal } from '../helpers/doctask-fixtures'
+import { workspaceStandIn, type WorkspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -173,8 +174,8 @@ interface CtxOverrides {
   skillRunActive?: AppContext['skillRunActive']
   /** The knowledge-pack article-save probe registerZimIpc assigns (a doc being saved into). */
   articleSaveActive?: AppContext['articleSaveActive']
-  /** Merged over the default workspace (unlocked, a no-op lease, the `cipher` above). */
-  workspace?: { isUnlocked?: () => boolean; unlockEpoch?: () => number; beginDocumentWork?: () => () => void }
+  /** Spread over the default stand-in (unlocked, a no-op lease, the `cipher` above). */
+  workspace?: Partial<WorkspaceStandIn>
 }
 
 function ctxWith(db: Db, workspacePath: string, o: CtxOverrides = {}): AppContext {
@@ -183,13 +184,8 @@ function ctxWith(db: Db, workspacePath: string, o: CtxOverrides = {}): AppContex
     db,
     paths: { workspacePath },
     embedder: o.embedder ?? createMockEmbedder(),
-    // A full-enough workspace for the background import loop (lease + null cipher by default).
-    workspace: {
-      isUnlocked: () => true,
-      beginDocumentWork: () => () => {},
-      documentCipher: () => o.cipher ?? null,
-      ...o.workspace
-    },
+    // The background import loop's workspace (lease + null cipher by default).
+    workspace: workspaceStandIn({ documentCipher: o.cipher ?? null }, o.workspace),
     docTasks: o.docTasks,
     audit: o.audit,
     skillRunActive: o.skillRunActive,
