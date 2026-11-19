@@ -1249,7 +1249,8 @@ head's own weights + KV.
   `changePassword(current, next, kdf?)`, `beginDocumentWork()` → release (refused with
   `VaultBusyError` during a password change), `beginLock()` / `isLocking()` / `cancelLock()` (the
   AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
-  locked or in plaintext), `takeWorkingCopyLost()` (#875, below), `takeRestoredMissingEnc()` (#911,
+  locked or in plaintext), `takeWorkingCopyLost()` (#875, below), `discardedOnlyCopy()` (#911),
+  `takeRestoredMissingEnc()` (#911,
   below).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
@@ -1312,7 +1313,9 @@ head's own weights + KV.
   (`checkpointLeftoverWal`), probes the file and moves a
   `database` (or `unchecked`, judged by its header) to `<db>.recovery`: outcome `'kept-only-copy'`,
   sweep-safe like `'preserved'`. A copy whose structure is `damaged`, a shred survivor or a file
-  gone meanwhile is `'not-needed'` (swept; no notice). The sidecars are left to the sweep that
+  gone meanwhile is `'not-needed'` (swept; no notice), except that a `damaged` one is
+  `'discarded-only-copy'`: swept the same way, and `discardedOnlyCopy()` is true for that start, for
+  `main/index.ts`'s content-free log line. The sidecars are left to the sweep that
   follows every path that does not block (named after the working file, they never pair with the
   `.recovery`). `'failed'` (blocked, every file kept, as
   #242): a stat of `.enc` that fails other than ENOENT, a `-wal` that still holds commits after the
@@ -1320,16 +1323,20 @@ head's own weights + KV.
   unchanged and now also carries this state: no start sweeps it, and the unlock rolls it forward
   over a missing `.enc` (every build since 0.1.47). **No marker** is written, and the marker format
   (`v`, `enc`, the `cause` set) is unchanged: the notice is derived from the disk at every start
-  (descriptor encrypted, `.enc` ENOENT, `.recovery` present), so `getState()` reports
+  (descriptor encrypted, `.enc` ENOENT, a `.recovery` that starts like a database: the #892 header
+  read; at `init()` and after a failed unlock only), so `getState()` reports
   `lockNotice: 'encrypted_file_missing'` while locked, across restarts and builds, until a
   successful unlock. That unlock sets `UnlockedVault.restoredMissingEnc` (the roll-forward
   encrypted over a missing `.enc`), and `takeRestoredMissingEnc() -> boolean` returns it once for
   the unlock IPC's content-free log line (no audit type). With no `.enc` and nothing rolled forward,
   `unlockEncryptedVault` throws `VaultMissingError` after the verifier (a wrong password is still
-  `WrongPasswordError` and touches nothing), having shredded a `.recovery` that was spent or
+  `WrongPasswordError` and touches nothing; `keptCopyDiscarded` tells the IPC's log line whether a
+  kept copy went), having shredded a `.recovery` that was spent or
   `damaged` (#875 keeps a damaged one until an unlock succeeds; with no `.enc` none can). `.enc` and
   the working file are not written. A failed unlock re-reads the notice from the disk, so it goes
-  once no copy is kept. **A returned `.enc`:** the start never replaces a snapshot, but the unlock
+  once no copy is kept. The unlock judges `.enc` once, by the start's ENOENT-only rule: a stat that fails
+  otherwise, with a `.recovery` there, throws `VaultRecoveryBlockedError` and rolls nothing forward.
+  **A returned `.enc`:** the start never replaces a snapshot, but the unlock
   applies the CODE-1b roll-forward rule to an `.enc` that came back after the start: the kept copy
   replaces it unless that `.enc` is newer by mtime. A newer one wins, the kept copy is shredded as a
   spent leftover, and nothing records the session it held.

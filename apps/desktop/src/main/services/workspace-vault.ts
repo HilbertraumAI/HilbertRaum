@@ -248,9 +248,12 @@ export class VaultRecoveryBlockedError extends Error {
  * decrypt, which read "Could not open the workspace." on every try.
  */
 export class VaultMissingError extends Error {
-  constructor() {
+  /** The unlock shredded a kept `.recovery` that could not be restored (its structure is damaged), for the log. */
+  readonly keptCopyDiscarded: boolean
+  constructor(keptCopyDiscarded = false) {
     super('The password verified, but the encrypted workspace file is missing')
     this.name = 'VaultMissingError'
+    this.keptCopyDiscarded = keptCopyDiscarded
   }
 }
 
@@ -915,12 +918,19 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
  *
  * #911: all of the above assumes an `.enc` to protect. With NO encrypted snapshot on the drive (`.enc` absent, no
  * staged `.enc.new`) the working file is the only copy of the workspace, and {@link keepOnlyCopy} decides instead: the
- * new outcome `'kept-only-copy'` (moved aside as `.recovery`, like `'preserved'`; sweep safe), `'not-needed'` (nothing
- * to keep, or a copy that is no database: the sweep shreds it, and with no snapshot to name there is no notice) or
- * `'failed'`. Only a stat that says ENOENT proves `.enc` is gone: any other stat failure is doubt, `'failed'`, where
+ * new outcome `'kept-only-copy'` (moved aside as `.recovery`, like `'preserved'`; sweep safe), `'discarded-only-copy'`
+ * (a copy whose structure is damaged: sweep safe like `'not-needed'`; with no snapshot to name there is no notice, only
+ * a log line), `'not-needed'` (nothing to keep) or `'failed'`. Only a stat that says ENOENT proves `.enc` is gone: any other stat failure is doubt, `'failed'`, where
  * `existsSync` used to read it as "no `.enc`" and the sweep ran.
  */
-export type PreserveOutcome = 'preserved' | 'kept-only-copy' | 'not-needed' | 'swept-unclean' | 'discarded' | 'failed'
+export type PreserveOutcome =
+  | 'preserved'
+  | 'kept-only-copy'
+  | 'discarded-only-copy'
+  | 'not-needed'
+  | 'swept-unclean'
+  | 'discarded'
+  | 'failed'
 
 export function preserveNewerPlaintext(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNote): PreserveOutcome {
   try {
@@ -1007,15 +1017,22 @@ function startsLikeDatabase(path: string): boolean {
   }
 }
 
-/** #911: what a stat of `.enc` says: `present`; `missing` (ENOENT, the one answer that proves no snapshot is there); or
- *  `unknown`, any other failure (a delete-pending file on Windows, a permission or I/O error), which proves neither. */
-function encryptedFileState(vaultPaths: VaultPaths): 'present' | 'missing' | 'unknown' {
+/** #911: what one stat of `.enc` says: `present` (with its mtime); `missing` (ENOENT, the one answer that proves no
+ *  snapshot is there); or `unknown`, any other failure (a delete-pending file on Windows, a permission or I/O error),
+ *  which proves neither. */
+type EncryptedFileStat = { state: 'present'; mtimeMs: number } | { state: 'missing' } | { state: 'unknown' }
+
+function statEncryptedFile(vaultPaths: VaultPaths): EncryptedFileStat {
   try {
-    statSync(vaultPaths.encPath)
-    return 'present'
+    return { state: 'present', mtimeMs: statSync(vaultPaths.encPath).mtimeMs }
   } catch (err) {
-    return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'missing' : 'unknown'
+    return { state: (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'missing' : 'unknown' } as EncryptedFileStat
   }
+}
+
+/** {@link statEncryptedFile}'s answer alone. */
+function encryptedFileState(vaultPaths: VaultPaths): EncryptedFileStat['state'] {
+  return statEncryptedFile(vaultPaths).state
 }
 
 /**
@@ -1033,8 +1050,9 @@ function encryptedFileState(vaultPaths: VaultPaths): 'present' | 'missing' | 'un
  *     #242). A database SQLite calls damaged goes on to the probe;
  *   - a file that reads as a database (`database`, or `unchecked` judged by its header) is moved to `<db>.recovery`,
  *     which the next unlock with the right password rolls forward over the missing `.enc` (every build since 0.1.47
- *     does): `'kept-only-copy'`. One whose structure is `damaged`, a shred survivor or a file gone meanwhile is
- *     nothing to keep (`'not-needed'`: the sweep shreds it, and the unlock then says the file is missing); one the
+ *     does): `'kept-only-copy'`. One whose structure is `damaged` (a real copy: its header reads) is
+ *     `'discarded-only-copy'`: the sweep shreds it, the start reports it for one log line, and the unlock then says
+ *     the file is missing. A shred survivor or a file gone meanwhile is nothing to keep (`'not-needed'`). One the
  *     probe cannot read blocks, with nothing removed.
  * The sidecars are left to the sweep that follows every path that does not block (review N-2): named after the
  * working file, they never pair with the `.recovery`, and a start that blocks must remove nothing.
@@ -1050,7 +1068,8 @@ function keepOnlyCopy(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNot
     if (replay.outcome !== 'damaged' && walAwaitsCheckpoint(vaultPaths.dbPath)) return 'failed'
   }
   const probe = probeDatabaseFile(vaultPaths.dbPath)
-  if (probe.verdict === 'not-database' || probe.verdict === 'damaged' || probe.verdict === 'gone') return 'not-needed'
+  if (probe.verdict === 'damaged') return 'discarded-only-copy'
+  if (probe.verdict === 'not-database' || probe.verdict === 'gone') return 'not-needed'
   if (!readsAsDatabase(probe, 'salvage', onProbeFallback)) return 'failed'
   const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
   // REL-1's pre-shred, as in preserveNewerPlaintext: any file at the `.recovery` name is replaced. Nothing in the app
@@ -1834,7 +1853,15 @@ export function unlockEncryptedVault(
     const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
     let recoveryDiscarded = false
     let restoredMissingEnc = false
+    // #911 (code review): `.enc` is judged ONCE, by the start's rule: only ENOENT is missing. `existsSync` read any other
+    // stat failure (a delete-pending file on Windows, EPERM, EBUSY) as "missing", so a spent `.recovery` could be
+    // encrypted over a good `.enc`.
+    const enc = statEncryptedFile(vaultPaths)
+    let encMissing = enc.state === 'missing'
     if (existsSync(recoveryPath)) {
+      // #911: an `.enc` that cannot be judged is doubt, as at the start (#242): never roll forward over it, and never
+      // shred a copy that may be the freshest data. Refuse; the next unlock retries.
+      if (enc.state === 'unknown') throw new VaultRecoveryBlockedError()
       // full-audit 2026-07-12 REL-2 — the freshness PROBE is exception-guarded: a Windows
       // AV/indexer hold without FILE_SHARE_READ (or the file vanishing between existsSync and
       // openSync) throws EBUSY/EPERM/ENOENT here, which used to fail the whole unlock raw
@@ -1850,7 +1877,7 @@ export function unlockEncryptedVault(
         }
         const newer =
           probe.verdict !== 'not-database' &&
-          (!existsSync(vaultPaths.encPath) || statSync(recoveryPath).mtimeMs > statSync(vaultPaths.encPath).mtimeMs)
+          (enc.state === 'missing' || statSync(recoveryPath).mtimeMs > enc.mtimeMs)
         // A structure SQLite cannot read for a reason that is not damage: judged by the header, as
         // before (#876 review round 2).
         fresher = readsAsDatabase(probe, 'recovery', onProbeFallback) && newer
@@ -1866,9 +1893,7 @@ export function unlockEncryptedVault(
         // is demonstrably newer (a spent leftover) is it safe to proceed and unlock normally.
         let encStrictlyNewer = false
         try {
-          encStrictlyNewer =
-            existsSync(vaultPaths.encPath) &&
-            statSync(vaultPaths.encPath).mtimeMs > statSync(recoveryPath).mtimeMs
+          encStrictlyNewer = enc.state === 'present' && enc.mtimeMs > statSync(recoveryPath).mtimeMs
         } catch {
           /* even the stat failed → treat as possibly fresh → refuse */
         }
@@ -1879,8 +1904,9 @@ export function unlockEncryptedVault(
         if (fresher) {
           // #911: over a missing `.enc` this is the only copy of the workspace (the start kept it, or a failed lock's
           // copy outlived the `.enc` it was newer than), for the IPC's log line.
-          restoredMissingEnc = encryptedFileState(vaultPaths) === 'missing'
+          restoredMissingEnc = encMissing
           encryptFile(recoveryPath, vaultPaths.encPath, fileKey)
+          encMissing = false
         }
         // #875 review round 2: a broken copy that held the failed lock's session is the evidence of
         // that loss, so it is shredded only once this unlock has succeeded (below): an unlock that
@@ -1893,9 +1919,9 @@ export function unlockEncryptedVault(
     // A copy the block above found damaged is shredded now (owner decision D3): #875 keeps such a copy as evidence
     // until an unlock succeeds, and with no `.enc` none can, so it would rest in plaintext for ever. Only the right
     // password gets here. `.enc` and the working file are not written; the catch below zeroes the key.
-    if (encryptedFileState(vaultPaths) === 'missing') {
+    if (encMissing) {
       if (recoveryDiscarded) shredFile(recoveryPath)
-      throw new VaultMissingError()
+      throw new VaultMissingError(recoveryDiscarded)
     }
     // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
     // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
@@ -2217,10 +2243,21 @@ export class WorkspaceController {
   /** #911: the last successful unlock encrypted the kept copy as the new `.enc`, for the IPC to log once
    *  ({@link takeRestoredMissingEnc}). */
   private _restoredMissingEnc = false
-  /** #911: the disk state behind {@link _encMissingKept}: `.enc` absent (ENOENT) and a `.recovery` copy waiting. */
+  /** #911: the disk state behind {@link _encMissingKept}: `.enc` absent (ENOENT) and a `.recovery` copy waiting that
+   *  starts like a database (the #892 header read, 100 bytes: cheap, and read only at {@link init} and after a failed
+   *  unlock, never per {@link getState}). One that does not is no copy to keep: the unlock shreds it and says the file
+   *  is missing, so no notice promises it; one whose header cannot be read shows none either (code review). */
   private encMissingKeptOnDisk(): boolean {
-    return encryptedFileState(this.vaultPaths) === 'missing' && existsSync(`${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+    if (encryptedFileState(this.vaultPaths) !== 'missing') return false
+    try {
+      return startsLikeDatabase(`${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+    } catch {
+      return false // absent, or unreadable
+    }
   }
+  /** #911: this start found the only copy with `.enc` missing and its structure damaged, and swept it
+   *  ({@link discardedOnlyCopy}). */
+  private _discardedOnlyCopy = false
   /** #875: what the last successful unlock consumed, for the IPC to record once ({@link takeWorkingCopyLost}). */
   private _lostAtPreviousLock: { cause: WorkingCopyLossCause; lostAt: string | null } | null = null
   /** #876 review round 2: sites that judged a file by its header because the probe could not read its structure (not
@@ -2376,6 +2413,7 @@ export class WorkspaceController {
     this._recoveryBlocked = false
     this._newerWorkspace = false
     this._encMissingKept = false
+    this._discardedOnlyCopy = false
     if (this.readFormat()) return
     if (this.descriptor?.mode === 'encrypted') {
       // Crash recovery: an encrypted vault must have NO plaintext working file at rest.
@@ -2393,6 +2431,7 @@ export class WorkspaceController {
       // (unlock runs it once admitted).
       const salvage = preserveNewerPlaintext(this.vaultPaths, this.noteProbeFallback)
       this._recoveryBlocked = salvage === 'failed'
+      this._discardedOnlyCopy = salvage === 'discarded-only-copy'
       if (this._recoveryBlocked) return // locked AND blocked; unlock() re-runs this salvage
       // #892: the app ended without locking, and the sweep below shreds that session. Was the drive too full for a
       // lock (the quit #876 refuses)? Read before the sweep frees the working copy's room, while the drive is as the
@@ -2450,6 +2489,13 @@ export class WorkspaceController {
   /** #247: startup found a database written by a newer build and left it closed. */
   isNewerWorkspace(): boolean {
     return this._newerWorkspace
+  }
+
+  /** #911 (code review): this start found `.enc` missing and the working file, the only copy, no longer read as a
+   *  workspace (its structure damaged), and swept it (owner decision D3). For `main/index.ts`'s one content-free log line;
+   *  no marker, no notice (there is no snapshot to name), and the unlock says the file is missing. */
+  discardedOnlyCopy(): boolean {
+    return this._discardedOnlyCopy
   }
 
   /**

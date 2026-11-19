@@ -333,6 +333,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // path. instanceof PLUS the name: the bundle-duplication quirk again.
       if (err instanceof VaultMissingError || (err instanceof Error && err.name === 'VaultMissingError')) {
         log.error('Workspace unlock failed: the encrypted workspace file is missing (password verified)')
+        // #911 (D3, SF-2): the unlock shredded a kept copy whose structure was damaged. Content-free, no path.
+        if ((err as VaultMissingError).keptCopyDiscarded) {
+          log.warn('Workspace unlock: a kept copy that could not be restored was removed')
+        }
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (encrypted file missing)')
         return {
           ok: false,

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { existsSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
+  decryptFile,
   WorkspaceController,
   RECOVERY_SUFFIX,
   VaultLockError,
@@ -664,5 +666,43 @@ describe('the start over an encrypted file that is missing or cannot be read (#9
     } finally {
       failures.encDeletePending = false
     }
+  })
+
+  // Code review: the unlock's roll-forward judged `.enc` with `existsSync`, which reads an EPERM (a delete-pending file
+  // on Windows) as "missing", so it encrypted a SPENT `.recovery` (an older snapshot that outlived its shred) over the
+  // good `.enc`: a silent rollback. It now judges `.enc` once by the start's rule: doubt refuses, nothing is written,
+  // and the retry once `.enc` reads again finds the leftover spent and shreds it.
+  it('a stat of .enc that fails with EPERM at the unlock never lets a .recovery be encrypted over it', () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    updateSettings(db, { contextTokens: 4242 })
+    lockEncryptedVault(vp, db, key)
+    const spentCopy = join(vp.root, 'spent.sqlite')
+    decryptFile(vp.encPath, spentCopy, key) // a database holding the older 4242
+    const later = unlockedController(vp, 'pw')
+    updateSettings(later.requireDb(), { contextTokens: 6161 })
+    later.lock() // `.enc` holds 6161
+    const recoveryPath = `${vp.dbPath}${RECOVERY_SUFFIX}`
+    writeFileSync(recoveryPath, readFileSync(spentCopy))
+    backdate(recoveryPath) // spent: older than `.enc`
+    const encBefore = readFileSync(vp.encPath)
+    const recoveryBefore = readFileSync(recoveryPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    failures.encDeletePending = true
+    try {
+      expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
+      expect(failures.hits.encStat).toBeGreaterThan(0)
+      expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+      expect(readFileSync(recoveryPath).equals(recoveryBefore)).toBe(true)
+      expect(ctl.isUnlocked()).toBe(false)
+    } finally {
+      failures.encDeletePending = false
+    }
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161)
+    expect(existsSync(recoveryPath)).toBe(false)
+    ctl.lock()
   })
 })

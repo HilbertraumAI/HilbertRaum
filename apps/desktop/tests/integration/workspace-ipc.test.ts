@@ -1007,6 +1007,35 @@ describe('the unlock that restores a missing encrypted file (#911)', () => {
   })
 })
 
+// #911 code review: the unlock that shreds a kept copy it cannot restore (damaged, with no `.enc`) logs that once,
+// content-free; an unlock with nothing kept says only that the file is missing.
+describe('the unlock that removes a kept copy it cannot restore (#911)', () => {
+  it.each<[string, boolean]>([
+    ['a kept copy damaged before the unlock', true],
+    ['no copy kept', false]
+  ])('%s: the vault_missing unlock logs the removed copy only when there was one', async (_what, damagedCopy) => {
+    const vp = lockedVault('wsipc', PW)
+    if (damagedCopy) failedLockState(vp, 7171, PW)
+    rmSync(vp.encPath)
+    const workspace = startedOn(vp)
+    if (damagedCopy) noisePastPageOne(`${vp.dbPath}${RECOVERY_SUFFIX}`)
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    const marker = `#911 removed-copy marker ${randomUUID()}`
+    log.info(marker)
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'vault_missing' })
+      const all = readLogTail(100_000)
+      const logged = all
+        .slice(all.findIndex((l) => l.includes(marker)) + 1)
+        .filter((l) => l.includes('a kept copy that could not be restored was removed'))
+      expect(logged).toHaveLength(damagedCopy ? 1 : 0)
+      if (damagedCopy) expect(logged[0]).not.toContain('hilbertraum.sqlite')
+    } finally {
+      workspace.shutdown()
+    }
+  })
+})
+
 // #876 review round 2: a site whose probe could not read the structure (not damage) judged the file by its header, as
 // before the probe existed. Support needs to know that happened: the lock handler logs which site and SQLite's code.
 describe('a lock whose probe fell back to the header (#876)', () => {

@@ -191,6 +191,8 @@ password recovery — are documented in
   - The probe reads only part of a large file, so a partly damaged copy can be kept and adopted,
     and the damage shows when the app reads those pages. With no snapshot left, that still beats
     losing everything.
+  - A `-wal` that SQLite cannot replay (it reports the database as corrupt) is dropped, so a copy
+    kept then lacks the session's last commits.
   - A copy that is damaged after the `-wal` replay is shredded, and the unlock then says the file is
     missing (owner decision D3). So is a kept copy that is damaged by the time of the unlock: the
     right password shreds it (a wrong one touches nothing), and the notice goes.

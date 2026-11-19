@@ -267,6 +267,11 @@ function initBackend(): void {
     // not empty (a full drive, another program reading the file): nothing was moved or shredded.
     log.warn('Workspace recovery blocked: a recovery file is held, or a workspace file could not be read or replayed')
   }
+  if (workspace.discardedOnlyCopy()) {
+    // #911 (owner decision D3): `.enc` was missing and the working copy, the only one, was damaged, so the start swept
+    // it. Content-free, no path; no marker and no audit type. The unlock then answers `vault_missing`.
+    log.warn('Workspace start: the working copy left with no encrypted file did not read as a workspace and was removed')
+  }
   if (workspace.isNewerWorkspace()) {
     // #247: the plaintext database on disk was written by a newer build — left closed and
     // untouched; the gate reports `workspace_newer` (update the app).

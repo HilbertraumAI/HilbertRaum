@@ -1174,22 +1174,28 @@ explicitly:
   snapshot of any kind is on the drive** (a stat of `.enc` says ENOENT, and no staged `.enc.new`
   waits), `preserveNewerPlaintext` keeps the copy: it replays the `-wal` into the main file (after
   an unclean end the session's last commits sit there), probes the file, and moves a database to
-  `<db>.recovery`. The next unlock with the right password rolls it forward over the missing `.enc`
+  `<db>.recovery`. A `-wal` that SQLite cannot replay (it reports the database as corrupt) is
+  dropped by the sweep, so a copy kept then lacks the session's last commits. The next unlock with
+  the right password rolls it forward over the missing `.enc`
   through the CODE-1b path above, which every build since 0.1.47 has. Until then the lock screen
   says so (`lockNotice: 'encrypted_file_missing'`), read from the disk at every start (descriptor
-  encrypted, `.enc` absent, `.recovery` present). No marker is written: the #875 marker names a
+  encrypted, `.enc` absent, a `.recovery` that starts like a database; re-read after a failed
+  unlock, never per state call). No marker is written: the #875 marker names a
   snapshot, and there is none. The password is checked against the descriptor's verifier, so a
   wrong one is still a wrong password. What the start cannot judge it leaves alone and refuses to
   open, as #242 does: a stat of `.enc` that fails other than ENOENT (a delete-pending file on
   Windows used to read as missing), a `-wal` the replay cannot empty (a full drive, another program
-  reading the file), a held `.recovery` name. A copy that is damaged after the replay is shredded
+  reading the file), a held `.recovery` name. The unlock judges `.enc` once by the same rule: a stat
+  that fails other than ENOENT, with a `.recovery` there, refuses (`vault_recovery_blocked`) instead
+  of rolling it forward over that `.enc`. A copy that is damaged after the replay is shredded
   (owner decision D3), and so is a kept copy found damaged at the unlock, by the right password only
   (#875 keeps such a copy until an unlock succeeds, and with no `.enc` none can; a failed unlock
   re-reads the notice, so it goes with the file). With nothing to roll forward the unlock answers
   `vault_missing`
   (`main.workspace.vaultMissing`: put the file back or restore the workspace folder from a backup,
   never create a new workspace) instead of a raw ENOENT. The unlock that restores the copy logs one
-  content-free line; there is no audit type (D5). **The boundary:** the *start* never replaces a
+  content-free line, and so do a start that removes a damaged only copy and an unlock that removes a
+  damaged kept copy; there is no audit type (D5). **The boundary:** the *start* never replaces a
   snapshot. Wherever an `.enc` or a staged `.enc.new` is there when the app starts, the rules above
   and below stand unchanged: a mid-session crash is still shredded (the accepted trade-off below),
   and the start never rolls a replayed session forward over an existing `.enc` (that full-drive

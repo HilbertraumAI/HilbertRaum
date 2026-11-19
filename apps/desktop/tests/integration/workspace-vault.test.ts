@@ -1421,6 +1421,22 @@ describe('the encrypted file missing from the drive (#911)', () => {
     expect(readdirSync(dirname(vp.dbPath))).toEqual([])
     expect(ctl.getState()).toEqual(LOCKED)
     expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+    expect(ctl.discardedOnlyCopy()).toBe(false) // nothing was there to discard
+  })
+
+  // Code review: the notice promises a copy to encrypt again, so it needs one that starts like a database (the #892
+  // header read). A `.recovery` that does not (here noise, as a failed shred leaves) is no copy: no notice, and the
+  // right password shreds it and says the file is missing.
+  it('#911: .enc removed and a .recovery that does not start like a database: no notice, and the unlock says the file is missing', () => {
+    const vp = lockedVault('vault-911', 'pw')
+    rmSync(vp.encPath)
+    writeFileSync(recoveryOf(vp), randomBytes(8192))
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.getState()).toEqual(LOCKED)
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultMissingError')
+    expect(existsSync(recoveryOf(vp))).toBe(false)
   })
 
   // Owner decision D3: a copy that is no database after the replay (torn past page one, its `-wal` intact: SQLite calls
@@ -1436,6 +1452,11 @@ describe('the encrypted file missing from the drive (#911)', () => {
     expect(ctl.isRecoveryBlocked()).toBe(false)
     for (const path of [vp.dbPath, ...sidecarsOf(vp), recoveryOf(vp)]) expect(existsSync(path), path).toBe(false)
     expect(ctl.getState()).toEqual(LOCKED)
+    // Code review: the one trace of it, for main/index.ts's content-free log line; this start's only (no marker).
+    expect(ctl.discardedOnlyCopy()).toBe(true)
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    expect(restarted.discardedOnlyCopy()).toBe(false)
     expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultMissingError')
   })
 
