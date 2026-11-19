@@ -1470,12 +1470,15 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
   one tab stop per group, arrows move focus+selection, Home/End jump, each chip = glyph +
   localized text. Selection recolors via border+weight, never color alone.
 - **Debounced auto-save with a labelled status line:** the repo's first auto-save
-  (`lib/reviewSession.ts`, 600 ms debounce, loss-free flush; flush on screen exit and BEFORE
-  vault lock). The UI voice is a quiet "Saving… / Saved" line in a `role="status"` region and
-  the failure + **Try again** in a `role="alert"` region beside it — no unlabeled spinner (§6),
-  no toast spam. Both regions (and the Outdated banner's `role="status"` region) are mounted
-  EMPTY with the review and only their text changes (#837, the §6 rule; the line used to be
-  inserted already filled, and to swap status for alert on one node).
+  (`lib/reviewSession.ts`, 600 ms debounce, loss-free flush; flush on screen exit, BEFORE vault
+  lock and before the window closes, #888). A change the close cannot save asks in a native dialog,
+  modal to the window: **Try again** is the default (Enter), **Keep open** answers Esc, **Close
+  anyway** is never the default (`main/close-guard.ts`; the `external-open.ts` dialog's posture: the
+  safe button is the default, plain buttons). The UI voice is a quiet "Saving… / Saved" line in a
+  `role="status"` region and the failure + **Try again** in a `role="alert"` region beside it — no
+  unlabeled spinner (§6), no toast spam. Both regions (and the Outdated banner's `role="status"`
+  region) are mounted EMPTY with the review and only their text changes (#837, the §6 rule; the line
+  used to be inserted already filled, and to swap status for alert on one node).
 - **A failed save is never run over (#837):** while an edit a failed write left unsaved is
   waiting, **Bulk actions** is disabled (not hidden — the error line beside the title is the
   explanation) and the store refuses the sweep; any other error (a failed acknowledge, link

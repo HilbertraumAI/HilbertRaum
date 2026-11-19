@@ -14282,7 +14282,10 @@ repo's first **debounced auto-save store** (`renderer/lib/reviewSession.ts`: 600
 drain-before-await, failed patches re-merge under newer values, every post-await write
 `openToken`-guarded; a one-pass flush on exit, the drain below in `App.lockNow` before `lockWorkspace()` —
 bounded by `REVIEW_LOCK_FLUSH_BOUND_MS` (6 s) so a hung call never holds the lock — and the
-store purged after, which also releases every wait on a call that never answered). **A switch or a sweep never runs over a failed save** (#837): a failed
+store purged after, which also releases every wait on a call that never answered; the same
+bounded drain also runs before the window closes (#888: the store registers it with
+`renderer/lib/beforeClose.ts`, and main waits for its answer, `security-model.md` "App-shell gate &
+lifecycle")). **A switch or a sweep never runs over a failed save** (#837): a failed
 write leaves its patch queued with the save-error line + Try again, and every action that
 runs after a save checks for it — mark ready, export and reopen refuse; a bulk sweep refuses
 (and its Bulk actions trigger is disabled) only while an edit a failed write left unsaved
@@ -14303,14 +14306,15 @@ re-opening the SAME review keeps the edit on screen with no re-read; a switch to
 review keeps the open one (detail + patches, no `openToken` bump) and records `openError:
 { kind: 'unsaved' }`, which the screen renders as a card naming that review, showing the save
 error, with Try again / Discard changes and open / Back (the card goes ahead on its own if a
-later save succeeds while it shows). Only the lock still drops a failed patch —
-`App.lockNow`'s flush is best-effort and the lock wins (`known-limitations.md`).
+later save succeeds while it shows). Only the lock still drops a failed patch without asking —
+`App.lockNow`'s flush is best-effort and the lock wins (`known-limitations.md`); closing the window
+with one asks first (#888: Try again / Keep open / Close anyway).
 **Every save settles before an action** (#889, #901, follow-ups wave 2): ONE drain
 (`drainReviewSaves`) takes the write lane and saves in passes inside it until nothing is queued
 or a write fails (at most four, the valve against typing that never stops), and resolves still
 holding the lane, so its verdict is read after the last write and no waiting timer write can
 take the queue first or fail after the caller went ahead. Mark ready, export, reopen, a review
-switch, Try again and the pre-lock save share it. When the passes run out with an edit still
+switch, Try again, the pre-lock save and the save before the window closes (#888) share it. When the passes run out with an edit still
 queued, Mark ready and export refuse as after a failed save but with no error (the line still
 says "Saving…" and the timer writes the edit); reopen goes ahead, since only head fields can be
 queued on a ready review and its merge keeps them. Mark ready and reopen hold the lane through

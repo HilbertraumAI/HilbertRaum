@@ -307,6 +307,24 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 ✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in
 `src/main/ipc/registerCoreIpc.ts`, invoked from `initBackend()` in `main/index.ts`.
 
+**#888 — save before the window closes** ([`security-model.md`](security-model.md) "App-shell gate
+& lifecycle"): the main→renderer event `EVENTS.saveBeforeClose` (`app:saveBeforeClose`, payload
+`requestId: number`), its one-way answer `IPC.saveBeforeCloseDone` (`app:saveBeforeCloseDone`, a
+renderer→main `send` of `{ requestId, unsaved: boolean }`), the preload method
+`onSaveBeforeClose(cb: () => Promise<SaveBeforeCloseResult>): () => void`, and the type
+`SaveBeforeCloseResult = { unsaved: boolean }` (`shared/types.ts`). Main sends the event to the
+closing main window once per close attempt and waits up to `CLOSE_SAVE_BOUND_MS` (8 s,
+`main/close-guard.ts`), longer than the window's own bounds (the review store's 6 s inside the
+bridge's `BEFORE_CLOSE_SAVE_BOUND_MS`, 6.5 s). The preload runs `cb` and sends the answer itself once
+`cb` settles; a rejection, a throw or any answer but `unsaved: false` is sent as `unsaved: true`, and
+main then asks the user before closing. The bridge answers `unsaved: true` too for a registrant that
+throws or has not settled by its bound. The answer is received by an `ipcMain.on` listener per
+request, like `perf:mark` (not a `guardedHandle`, so outside `ipc-lock-coverage`): it accepts only
+the window's own `webContents` and the current request id, and it answers while the workspace is
+locked too. Renderer side: `renderer/lib/beforeClose.ts` (`registerBeforeClose`,
+`saveAllBeforeClose`, `installBeforeCloseBridge`, installed from `main.tsx`); the registrants are the review store and the Settings language pick. Nothing is
+persisted; no schema change.
+
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
 `isRealSha256`). YAML files under `model-manifests/` (originally chat: Qwen3 4B/8B/14B Q4 + 30B-A3B
@@ -2402,9 +2420,9 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (157 channels since #530 added `engine:recheck`; 156 since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
+`shared/ipc.ts` (158 channels since #888 added `app:saveBeforeCloseDone`; 157 since #530 added `engine:recheck`; 156 since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
 sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
-(now 3, `packs:changed` added; #530 added `engine:problemsChanged` to `EVENTS`) are separate constants, #259) against this file then found **16** that
+(7 since #888 added `app:saveBeforeClose`; 3 at the sweep, `packs:changed` added; #530 added `engine:problemsChanged` to `EVENTS`) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented
 calls that arrived one at a time. Listed here so the declared source of truth is complete; each
 one's behaviour stays owned by the design record named beside it.

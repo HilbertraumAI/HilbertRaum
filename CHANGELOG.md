@@ -301,6 +301,12 @@ from its first public `1.0.0` release onward.
   review ready and Create evidence pack. Linking a source right after typing a note no longer
   blanks the note on screen, and a change typed while Try again reloads the review stays. While
   Mark review ready runs, the passages can briefly not be edited (#889, #901).
+- **Closing or quitting HilbertRaum right after a review change no longer loses it.** Closing
+  the window, File → Exit or Cmd+Q now saves the review changes and a language just picked in
+  Settings before the app closes. If a change cannot be saved, for example because the drive is
+  full, the app asks first: Try again, Keep open, or Close anyway. Before, a change made in the
+  last second, or one whose save had failed, was lost without a word. A Windows shutdown or
+  log-off with the app open still cannot wait for this (#888).
 - **A failed skill export no longer destroys the file you chose to replace.** The transactions
   and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
   straight onto the chosen file: a full drive or another failure part-way through left a
