@@ -1688,7 +1688,9 @@ re-encrypts (the bullet below).
   data-contracts "Core IPC") and closes exactly once on its answer or at `CLOSE_SAVE_BOUND_MS` (8 s,
   longer than the window's own bounds: the review store's 6 s inside the bridge's 6.5 s, which
   answers "unsaved" for any registrant that throws or has not settled, except a best-effort one (the
-  language pick); the review store counts a write still out on its lane and a failed bulk sweep too;
+  language pick); the review store counts a write still out on its lane too, but not a bulk sweep
+  that failed: main applies a sweep in one transaction, so a failed one persisted nothing and leaves
+  nothing to save, and asking about it made Try again ask for ever (#917);
   so a write that hangs is reported by the window, not guessed by main, with more than a second to
   spare for a minimized window's throttled timers). A close during the save is prevented and
   ignored. A close that came from a quit (`before-quit` fired first; the app-level

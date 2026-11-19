@@ -14313,7 +14313,11 @@ with one asks first (#888: Try again / Keep open / Close anyway).
 (`drainReviewSaves`) takes the write lane and saves in passes inside it until nothing is queued
 or a write fails (at most four, the valve against typing that never stops), and resolves still
 holding the lane, so its verdict is read after the last write and no waiting timer write can
-take the queue first or fail after the caller went ahead. Mark ready, export, reopen, a review
+take the queue first or fail after the caller went ahead — nor write after the caller refused:
+the debounce timer's flush stands down when a write failed while it waited for the lane (a
+`writeFailures` count read before and after the wait), so a refused Mark ready, Export or Reopen
+keeps its error line and Try again until the user acts (#917; before, the timer wrote the failed
+edit again and the line was gone a moment later). Mark ready, export, reopen, a review
 switch, Try again, the pre-lock save and the save before the window closes (#888) share it. When the passes run out with an edit still
 queued, Mark ready and export refuse as after a failed save but with no error (the line still
 says "Saving…" and the timer writes the edit); reopen goes ahead, since only head fields can be

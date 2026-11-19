@@ -465,22 +465,25 @@ describe('the main window’s last close quits on Windows and Linux (#910)', () 
   it.each<[NodeJS.Platform, string[]]>([
     ['win32', ['quit']],
     ['linux', ['quit']],
-    ['darwin', []]
-  ])('the main window closed on %s: quits %j', (platform, expected) => {
+    ['darwin', ['createWindow']]
+  ])('the main window closed on %s, then a Dock click or a second launch: %j', (platform, expected) => {
     const order: string[] = []
     const handlers = createAppLifecycleHandlers({
       performShutdown: async () => undefined,
       emergencyLock: () => undefined,
       exit: () => undefined,
       createWindow: () => order.push('createWindow'),
-      mainWindowCount: () => 0,
+      mainWindowCount: () => 0, // a hidden OCR or print window may be open: it does not count
       platform,
       quit: () => order.push('quit'),
       killSidecarChildren: () => undefined,
       log: quietLog
     })
     handlers.onMainWindowClosed()
-    // macOS keeps the app open with no window, as after the red button today; nothing else happens on the close.
+    // Windows and Linux: the close quits, and a second launch while that quit still closes the helper windows (before
+    // its `will-quit`) opens nothing into it. macOS keeps the app open with no window, and the Dock click (or a second
+    // launch, which index.ts sends the same way) brings the window back.
+    handlers.onActivate()
     expect(order).toEqual(expected)
   })
 
