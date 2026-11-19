@@ -385,8 +385,8 @@ export function registerDocsIpc(ctx: AppContext): void {
     // AUD-03: the session this import was admitted into. The walk below can take seconds (its
     // budget is 10 s); a lock AND a re-unlock can both complete inside that window, after which
     // `isUnlocked()` is true and `isLocking()` false again — only the epoch tells the stale import
-    // apart (the `startModelRuntime` precedent). Undefined on a stand-in workspace ⇒ skipped.
-    const startEpoch = ctx.workspace.unlockEpoch?.()
+    // apart (the `startModelRuntime` precedent).
+    const startEpoch = ctx.workspace.unlockEpoch()
     // M-S2 / D1: the renderer is the untrusted boundary. A PICKER import carries
     // `options.pickerToken`; main resolves it to the exact paths the OS dialog returned and
     // IGNORES the renderer-supplied `paths`, so a code-exec'd renderer can't forge a
@@ -411,7 +411,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     // a closing DB or into a session the import was not admitted to.
     const { files: walked, exhausted, hasDir } = await expandPathsWithSource(safePaths)
     requireUnlocked()
-    if (startEpoch !== undefined && ctx.workspace.unlockEpoch?.() !== startEpoch) {
+    if (ctx.workspace.unlockEpoch() !== startEpoch) {
       throw new Error(tMain('main.docs.locked'))
     }
     // Spend the token only now. A concurrent import that spent it first wins — this one imports

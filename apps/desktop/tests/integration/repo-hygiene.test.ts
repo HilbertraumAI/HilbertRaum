@@ -475,7 +475,7 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     // and a cache miss; it computes install state, it does not load a model.
     'src/main/services/vision/status.ts :: const unlocked = ctx.workspace.isUnlocked()',
     // The predicate itself — this is the one place the bare read is the definition.
-    'src/main/services/workspace-vault.ts :: return workspace.isUnlocked() && workspace.isLocking?.() !== true',
+    'src/main/services/workspace-vault.ts :: return workspace.isUnlocked() && !workspace.isLocking()',
     // `getState()` — the controller's own unlocked/locked/uninitialized report.
     "src/main/services/workspace-vault.ts :: const state = this.isUnlocked() ? 'unlocked' : this.vaultExistsOnDisk() ? 'locked' : 'uninitialized'",
     // `unlock()`'s already-open early return — deliberately BEFORE `beginSession()` so an unlock

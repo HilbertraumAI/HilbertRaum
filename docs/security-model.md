@@ -1504,7 +1504,7 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   passed `requireUnlocked()` (then just `isUnlocked()`) and could spawn a fresh sidecar that
   outlived the lock. Exactly the cross-cutting fix the acceptance called for — a workspace
   "locking-in-progress" latch observed by every spawn-capable admission guard — **shipped as
-  AUD-02**: `workspaceAdmitsWork` = `isUnlocked() && isLocking?.() !== true`, armed as the lock's
+  AUD-02**: `workspaceAdmitsWork` = `isUnlocked() && !isLocking()`, armed as the lock's
   FIRST act and wired into the translate IPC guard, `TranslateJobService.start`, the doc-task
   manager, imports, and the vision service (see the AUD-02/AUD-03 section below for the full
   mechanism). This bullet stays as the historical record only; there is no remaining accepted
@@ -1816,12 +1816,14 @@ mid-teardown and refuses the work that would respawn a sidecar or write: a trans
 Translate-view start, an image analyze, an import, and the password change (which answers a
 refusal instead of throwing; the descriptor is untouched). Dictation's guard, which `ipc-lock-coverage`
 does not drive, has its own row in both postures: `dictation-ipc.test.ts` "refuses while a lock is
-under way (AUD-02 latch) and writes NO file under documents/ (S3)". Two service guards have their own
+under way (AUD-02 latch) and writes NO file under documents/ (S3)". Each service guard has its own
 row: `DocTaskManager.startDocTask`'s, the one its non-IPC callers rely on (`doctasks.test.ts`
-"refuses to start while a workspace lock is under way (AUD-02)"), and `TranslateJobService.start`'s
-(`translate-ipc.test.ts` "#163 (T-1): the SERVICE-level isWorkspaceLocking refusal (the non-IPC
-callers' guard)"). One guard has no row of its own: `VisionService.analyze`'s (`vision/index.ts`).
-Only the images IPC calls it, and every row reaches it through that IPC guard, which refuses first.
+"refuses to start while a workspace lock is under way (AUD-02)"), `TranslateJobService.start`'s
+(`translate-ipc.test.ts` "#163 (T-1): the SERVICE-level isWorkspaceLocking refusal, the service's
+own guard (defence in depth; the IPC guard refuses first)") and `VisionService.analyze`'s
+(`vision-cancel.test.ts` "VisionService.analyze refuses while a workspace lock is under way
+(AUD-02)"). Only their IPC handlers call the last two, and those refuse first, so both rows drive
+the service directly.
 
 Clearing rules: **cleared** whenever the handler leaves the teardown by a throw *while the
 workspace is still open* (the failed re-encrypt — realistically ENOSPC — restores the controller

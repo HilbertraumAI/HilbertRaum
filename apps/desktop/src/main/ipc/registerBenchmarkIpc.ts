@@ -107,8 +107,8 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * foreign-machine case is covered by the stamp either way. The key and the session epoch are
  * captured BEFORE the await, and admission is re-checked after it, for every path: a probe that
  * outlives a lock, or a lock and a re-unlock, never writes into a session it was not admitted
- * to (the AUD-03 seam `startModelRuntime` uses; a stand-in workspace without the counter skips
- * the epoch half). The catch branch's own write must not escape either.
+ * to (the AUD-03 seam `startModelRuntime` uses). The catch branch's own write must not escape
+ * either.
  *
  * #380 AMENDS decision 6 with its one exception: a probe that hit its kill-timeout resolves
  * `null`, which is not an answer but the ABSENCE of one. It writes nothing and pushes nothing —
@@ -130,14 +130,14 @@ export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkI
   let gpuMode: AppSettings['gpuMode'] = 'auto'
   let gpuAutoDisabled = false
   const hereKey = machineKey(detectSystem())
-  const epoch = ctx.workspace?.unlockEpoch?.()
+  const epoch = ctx.workspace?.unlockEpoch()
   /** Persist `list` as this session's stamped probe if the session still admits it; says whether it did. */
   const persistProbe = (list: GpuDevice[]): boolean => {
     if (!workspaceAdmitsWork(ctx.workspace)) {
       log.info('GPU probe finished after the workspace locked; result not persisted')
       return false
     }
-    if (epoch !== undefined && ctx.workspace.unlockEpoch?.() !== epoch) {
+    if (epoch !== undefined && ctx.workspace.unlockEpoch() !== epoch) {
       log.info('GPU probe outlived its workspace session; result not persisted')
       return false
     }
@@ -291,8 +291,8 @@ async function runBenchmarkAndPersist(
   // seconds — minutes on a wedged probe — and a lock, or a lock AND a re-unlock, can complete
   // inside that window; the guard after the legs mirrors `startModelRuntime`'s post-hash check
   // and `probeAndPersistGpu`'s, so the result never persists into a session it was not admitted
-  // to. Undefined for a stand-in workspace without the counter ⇒ the epoch half is skipped.
-  const epoch = ctx.workspace?.unlockEpoch?.()
+  // to. Undefined only for a context with no workspace at all, which the admission check refuses.
+  const epoch = ctx.workspace?.unlockEpoch()
   const manifests = ctx.manifestsDir
     ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
     : []
@@ -362,7 +362,7 @@ async function runBenchmarkAndPersist(
     log.info('Benchmark finished after the workspace locked; result not persisted')
     throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
-  if (epoch !== undefined && ctx.workspace.unlockEpoch?.() !== epoch) {
+  if (epoch !== undefined && ctx.workspace.unlockEpoch() !== epoch) {
     log.info('Benchmark outlived its workspace session; result not persisted')
     throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
@@ -389,7 +389,7 @@ async function runBenchmarkAndPersist(
   // §5 item 22 (a): this computer now has a result measured just now, so the moved-drive notice
   // has nothing left to say — whichever of its states was standing. Covers the automatic run and
   // the "Check this computer" the notice itself points at. The caller's `finally` pushes.
-  setMovedDriveNotice(ctx.db, ctx.workspace.unlockEpoch?.(), null)
+  setMovedDriveNotice(ctx.db, ctx.workspace.unlockEpoch(), null)
   log.info('Benchmark complete', {
     profile: result.profile,
     recommendedModelId: result.recommendedModelId,
@@ -456,7 +456,10 @@ export interface FirstBenchmarkDecision {
   run: FirstBenchmarkRun | null
   /** True when `run` is null ONLY because this session's automatic attempt was already made (SD2). */
   attempted: boolean
-  /** The unlock session the decision was made in — `undefined` for a stand-in without the counter. */
+  /**
+   * The unlock session the decision was made in — `undefined` on the `nothing` decision (a
+   * workspace that admits no work, or settings it could not read).
+   */
   epoch: number | undefined
   /** This machine's fingerprint at decision time (null when detection failed). */
   hereKey: string | null
@@ -516,9 +519,8 @@ function armTimer(fn: () => void, ms: number): () => void {
 /**
  * SD2 — the one automatic attempt this session made, keyed like the persisted-sample memo in
  * registerModelIpc: the workspace DB handle AND the session epoch. A lock/unlock yields a new
- * `Db` and a new epoch, so the next session re-evaluates; a stand-in without the counter is
- * keyed on the handle alone. Set when a scheduling is ACCEPTED (the attempt), never on a
- * `run: null` decision — a session that owed nothing has attempted nothing.
+ * `Db` and a new epoch, so the next session re-evaluates. Set when a scheduling is ACCEPTED (the
+ * attempt), never on a `run: null` decision — a session that owed nothing has attempted nothing.
  */
 let attemptMemo: { db: Db; epoch: number | undefined } | null = null
 
@@ -583,7 +585,7 @@ export function movedDriveNotice(ctx: AppContext): MovedDriveNotice | null {
   } catch {
     return null // locked
   }
-  return movedDriveMemo.epoch === ctx.workspace.unlockEpoch?.() ? movedDriveMemo.notice : null
+  return movedDriveMemo.epoch === ctx.workspace.unlockEpoch() ? movedDriveMemo.notice : null
 }
 
 /**
@@ -628,7 +630,7 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
     // persists settings, and the DB stays open for that whole window.
     if (!workspaceAdmitsWork(ctx.workspace)) return nothing
     // AUD-03: the session this decision belongs to. The scheduler compares it at settlement.
-    const epoch = ctx.workspace.unlockEpoch?.()
+    const epoch = ctx.workspace.unlockEpoch()
     const db = ctx.db
     const settings = getSettings(db)
     const here = machineKey(detectSystem())
@@ -814,7 +816,7 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
       log.info(`${label} skipped: the workspace locked while the model start settled`)
       return 'skipped-admission'
     }
-    if (decision.epoch !== undefined && ctx.workspace.unlockEpoch?.() !== decision.epoch) {
+    if (decision.epoch !== undefined && ctx.workspace.unlockEpoch() !== decision.epoch) {
       log.info(`${label} skipped: the workspace was locked and re-opened meanwhile (the new session re-checks)`)
       return 'skipped-epoch'
     }

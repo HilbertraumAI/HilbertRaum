@@ -2038,15 +2038,13 @@ export function plaintextAllowed(policy: PrivacyPolicy, opts: { isDev: boolean }
 // ---- stateful controller (used by the main process) ------------------------------
 
 /**
- * The narrow shape {@link workspaceAdmitsWork} reads. Structural (not the class) so partial
- * test contexts can supply a stand-in (every product caller passes the controller), and so a
- * stand-in that predates the lock latch still type-checks — `isLocking`/`unlockEpoch` are
- * optional.
+ * The narrow shape {@link workspaceAdmitsWork} reads: exactly its two members. Structural (not the
+ * class) so a partial test context can supply a stand-in (every product caller passes the
+ * controller).
  */
 export interface WorkspaceAdmission {
   isUnlocked(): boolean
-  isLocking?(): boolean
-  unlockEpoch?(): number
+  isLocking(): boolean
 }
 
 /**
@@ -2065,12 +2063,11 @@ export interface WorkspaceAdmission {
  * window: during the teardown "the workspace is locked" is the honest answer, and the renderer
  * swaps to the lock gate the moment the handler resolves anyway.
  *
- * Fail-CLOSED on a missing controller. Tolerant of a stand-in without `isLocking` (⇒ never
- * locking), which keeps partial test contexts valid.
+ * Fail-CLOSED on a missing controller.
  */
 export function workspaceAdmitsWork(workspace: WorkspaceAdmission | null | undefined): boolean {
   if (!workspace) return false
-  return workspace.isUnlocked() && workspace.isLocking?.() !== true
+  return workspace.isUnlocked() && !workspace.isLocking()
 }
 
 /**

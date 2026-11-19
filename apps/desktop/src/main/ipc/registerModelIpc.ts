@@ -175,9 +175,8 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // and invalidates the size+mtime cache). A lock, or a lock AND a re-unlock, can complete inside
   // that window; the epoch is the only thing that can tell the resulting stale start apart from a
   // legitimate one, because after a re-unlock `isUnlocked()` is true and `isLocking()` false
-  // again. Undefined for a stand-in workspace without the counter ⇒ the epoch check is skipped
-  // and the unlocked/locking re-check below still applies.
-  const startEpoch = ctx.workspace.unlockEpoch?.()
+  // again.
+  const startEpoch = ctx.workspace.unlockEpoch()
   if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
   const { manifests } = discoverManifests(ctx.manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
@@ -289,7 +288,7 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // …and the residual micro-window: a lock AND a subsequent unlock both completing inside the
   // hash leave the two flags above looking exactly like "still unlocked". The session epoch does
   // not — this start was admitted into a session that no longer exists.
-  if (startEpoch !== undefined && ctx.workspace.unlockEpoch?.() !== startEpoch) {
+  if (ctx.workspace.unlockEpoch() !== startEpoch) {
     throw new Error('The workspace was locked and re-opened — the stale model start was abandoned')
   }
 
