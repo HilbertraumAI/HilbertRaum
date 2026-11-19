@@ -33,6 +33,7 @@ import {
 import { whisperCliBinaryName } from '../../src/main/services/transcriber/cli'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const LLAMA_PROBLEM: EngineProblem = {
   family: 'llama_cpp',
@@ -364,7 +365,7 @@ describe('rearmWhenChatEngineHeals — a healthy start of the refused engine (#6
       expect(f.refreshTranslatorSlot).toHaveBeenCalledTimes(1)
       expect(modelLoadLatchReason('m')).toBeNull()
       // The healthy start may be the embedder's while the chat model answers in demo mode (owner call).
-      await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
     } finally {
       await server.stop()
     }
@@ -378,7 +379,7 @@ describe('rearmWhenChatEngineHeals — a healthy start of the refused engine (#6
     reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     const f = makeCtx(driveRoot(), () => undefined, db)
     clearEngineProblemFor('llama_cpp', REFUSED_LLAMA) // a reporting program started healthy
-    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
     expect(f.probe.invalidate).toHaveBeenCalledTimes(1)
     expect(f.probe).toHaveBeenCalledTimes(1)
     expect(f.probe.mock.invocationCallOrder[0]).toBeLessThan(f.restartChat.mock.invocationCallOrder[0])
@@ -415,7 +416,7 @@ describe('rearmWhenChatEngineHeals — a healthy start of the refused engine (#6
     }
     const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn: healthyStartDuringCheck, verify: verified })
     expect(result.problems).toEqual([])
-    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(f.restartChat).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
     expect(f.embedderReset).toHaveBeenCalledTimes(1)
   })
 

@@ -1435,7 +1435,7 @@ describe('engine updates (#516)', () => {
     })
     const job = await runToEnd(mgr, started.jobId)
     // The terminal status lands before the cleanup; the manager stays busy until both are done (F-33).
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     // At the pause both archives were downloaded and verified, and both old installs untouched.
     expect(seenAtPause).toEqual({ archives: 2, mainMarker: 'b150', cpuMarker: 'b150', held: true })
     // …and a refused pause releases the gate like every other outcome.
@@ -1462,7 +1462,7 @@ describe('engine updates (#516)', () => {
     mgr.onInstalled((families) => installedFamilies.push(families))
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
     await runToEnd(mgr, started.jobId)
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     expect(mgr.get(started.jobId).status).toBe('failed')
     expect(markerVersion(llamaDir(rootPath))).toBe('b200')
     // The new main build is on the drive, so its consumers hear of it (re-arm, probe refresh).
@@ -1492,7 +1492,7 @@ describe('engine updates (#516)', () => {
       reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
     })
     await runToEnd(mgr, started.jobId)
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     expect(mgr.get(started.jobId).status).toBe('failed')
     expect(installed).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
   })
@@ -1516,6 +1516,6 @@ describe('engine updates (#516)', () => {
       }
     })
     await runToEnd(mgr, second.jobId)
-    await vi.waitFor(() => expect(settled).toEqual(['whisper_cpp:done', 'llama_cpp:failed']))
+    await vi.waitFor(() => expect(settled).toEqual(['whisper_cpp:done', 'llama_cpp:failed']), { timeout: hangBudgetMs(5000) })
   })
 })

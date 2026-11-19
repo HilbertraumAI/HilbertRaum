@@ -930,7 +930,7 @@ describe('fileTranslateSession — poll-failure tolerance (#157 / DT-4)', () => 
       await driveToTranslating(api)
 
       for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(400)
-      await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'))
+      await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
       expect(getFileTranslate().output).toBe('Hello world.')
       expect(api.cancelDocTask).not.toHaveBeenCalled()
     } finally {

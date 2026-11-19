@@ -33,7 +33,7 @@ import {
   type FakePrintElectronState,
   type FakePrintWindow
 } from '../helpers/fake-print-window'
-import { until } from '../helpers/hang-budget'
+import { hangBudgetMs, until } from '../helpers/hang-budget'
 
 const HTML = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>pack</body></html>'
 const PACK_ID = '00000000-0000-4000-8000-00000000e9a1'
@@ -209,7 +209,7 @@ describe('print flow (hidden window lifecycle, page served from memory — #563)
     // Let the flow reach the pending printToPDF, then quit the app.
     await vi.waitFor(() => {
       expect(lastWin().webContents.printToPDF).toHaveBeenCalled()
-    })
+    }, { timeout: hangBudgetMs(5000) })
     emitApp('before-quit')
     await expect(printing).rejects.toThrow('Object has been destroyed')
     expect(lastWin().destroyed).toBe(true)
@@ -250,7 +250,7 @@ describe('the print-page registry around the harness (#563)', () => {
     const running = Array.from({ length: PRINT_MAX_PENDING }, (_, i) =>
       printEvidencePackHtmlToPdf(`<p>${i}</p>`, { packId: String(i) })
     )
-    await vi.waitFor(() => expect(gates).toHaveLength(PRINT_MAX_PENDING))
+    await vi.waitFor(() => expect(gates).toHaveLength(PRINT_MAX_PENDING), { timeout: hangBudgetMs(5000) })
     expect(printPages.pending).toBe(PRINT_MAX_PENDING)
     await expect(printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })).rejects.toThrow(
       'too many prints at once'

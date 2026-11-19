@@ -1103,3 +1103,99 @@ describe(`repo hygiene — no stale ${STALE_USE_CHANNEL} channel name (#891)`, (
     expect(offenders).toEqual([])
   })
 })
+
+// #915: every wait in tests/ takes its ceiling from tests/helpers/hang-budget.ts. Three budgets sat outside it and never
+// widened on the starved CI runners: vitest's `vi.waitFor` default (1 s, and vitest has no config key for it),
+// testing-library's `asyncUtilTimeout` (1 s) and any literal `timeout:`. The setup file now raises the testing-library
+// default once (asserted by tests/unit/hang-budget.dom.test.ts), so what is left to enforce here is source-level:
+//   R1  every `vi.waitFor` / `vi.waitUntil` passes `{ timeout: hangBudgetMs(…) }` (or `hangBudgetMs(…)` itself, the
+//       numeric form vitest also takes);
+//   R2  no wait passes a LITERAL timeout: a numeric options argument, or `timeout: <number>`. That covers `vi.waitFor`,
+//       `vi.waitUntil`, testing-library `waitFor` / `waitForElementToBeRemoved` (second argument) and `find(All)By*`
+//       (third). Under the raised default a literal is narrower than passing nothing. An options expression this row
+//       cannot read (a variable, a spread, a computed key) fails closed.
+// A bare testing-library wait is fine. A bare `waitFor` counts as testing-library's only when the file imports it from
+// `@testing-library/*`, so a local helper of that name is not a wait. A timing PROOF is an explicit assertion, never a
+// wait budget (hang-budget.ts header), so no allowlist is needed.
+describe('repo hygiene — every wait takes its ceiling from hang-budget (#915)', () => {
+  const callsHangBudget = (node: ts.Node): boolean => {
+    let found = false
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'hangBudgetMs') found = true
+      ts.forEachChild(n, visit)
+    }
+    visit(node)
+    return found
+  }
+
+  /** Every offending wait as `file:line kind`, plus how many waits (and how many `vi.waitFor`) the walk saw. */
+  const scan = (): { violations: string[]; waits: number; viWaits: number } => {
+    const testsDir = join(DESKTOP_ROOT, 'tests')
+    const violations: string[] = []
+    let waits = 0
+    let viWaits = 0
+    for (const file of filesUnder(testsDir, /\.(ts|tsx|mts)$/)) {
+      const text = readFileSync(file, 'utf8')
+      if (!/waitFor|waitUntil|find(All)?By/.test(text)) continue // cheap prefilter: most files never wait
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      const rel = file.slice(DESKTOP_ROOT.length + 1).replace(/\\/g, '/')
+      const fromTestingLibrary = new Set<string>()
+      for (const st of source.statements) {
+        if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue
+        const bindings = st.importClause?.namedBindings
+        if (!bindings || !ts.isNamedImports(bindings)) continue
+        const mod = st.moduleSpecifier.text
+        for (const el of bindings.elements) {
+          if (mod.startsWith('@testing-library/')) fromTestingLibrary.add(el.name.text)
+        }
+      }
+      type Verdict = 'widening' | 'literal' | 'no-timeout' | 'unreadable'
+      const judge = (opt: ts.Expression): Verdict => {
+        if (ts.isNumericLiteral(opt)) return 'literal'
+        if (ts.isCallExpression(opt) && callsHangBudget(opt)) return 'widening' // vi.waitFor(cb, hangBudgetMs(5000)), the numeric form
+        if (!ts.isObjectLiteralExpression(opt)) return 'unreadable'
+        // A spread or a computed key may carry a timeout this row cannot see, so it fails closed. A quoted key is the same key.
+        if (opt.properties.some((p) => ts.isSpreadAssignment(p) || (p.name && ts.isComputedPropertyName(p.name)))) return 'unreadable'
+        const timeout = opt.properties.find((p) => p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === 'timeout')
+        if (!timeout) return 'no-timeout'
+        if (!ts.isPropertyAssignment(timeout)) return 'unreadable'
+        if (callsHangBudget(timeout.initializer)) return 'widening'
+        return ts.isNumericLiteral(timeout.initializer) ? 'literal' : 'unreadable'
+      }
+      const visit = (n: ts.Node): void => {
+        if (ts.isCallExpression(n)) {
+          const callee = n.expression
+          const viName =
+            ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'vi' && /^(waitFor|waitUntil)$/.test(callee.name.text)
+              ? callee.name.text
+              : undefined
+          const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : ''
+          const isLibraryWait =
+            !viName && (name === 'waitFor' || name === 'waitForElementToBeRemoved') && (ts.isPropertyAccessExpression(callee) || fromTestingLibrary.has(name))
+          const isFind = /^find(All)?By[A-Z]\w*$/.test(name)
+          if (viName || isLibraryWait || isFind) {
+            waits++
+            if (viName) viWaits++
+            const opt = n.arguments[isFind ? 2 : 1]
+            const verdict: Verdict | 'none' = opt ? judge(opt) : 'none'
+            const where = `${rel}:${source.getLineAndCharacterOfPosition(n.getStart(source)).line + 1}`
+            if (viName && verdict !== 'widening') violations.push(`${where} vi.${viName} needs { timeout: hangBudgetMs(n) } (found: ${verdict})`)
+            else if (!viName && (verdict === 'literal' || verdict === 'unreadable'))
+              violations.push(`${where} ${name}: drop the ${verdict} timeout (the setup default applies), or pass { timeout: hangBudgetMs(n) } with n of 5000 or more`)
+          }
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(source)
+    }
+    return { violations, waits, viWaits }
+  }
+
+  it('every vi.waitFor passes hangBudgetMs, and no wait passes a literal timeout', () => {
+    const { violations, waits, viWaits } = scan()
+    // The walk reads the real tree: it saw the whole wait population, not an empty or half-parsed one.
+    expect(waits).toBeGreaterThan(1500)
+    expect(viWaits).toBeGreaterThan(40) // catches a broken walk, not a refactor that deletes a few waits (71 today)
+    expect(violations).toEqual([])
+  })
+})

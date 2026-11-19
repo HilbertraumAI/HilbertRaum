@@ -373,7 +373,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       // Checking a program that is being replaced would say nothing.
       expect(within(banner()).getByRole('button', { name: en('models.engineProblem.check') })).toBeDisabled()
       // Main drops the verdict as the job ends, and the banner with it — the toast says what happened.
-      expect(await screen.findByText(en('models.engineProblem.reinstalled'), {}, { timeout: hangBudgetMs(4000) })).toBeInTheDocument()
+      expect(await screen.findByText(en('models.engineProblem.reinstalled'), {})).toBeInTheDocument()
     })
 
     it.each([

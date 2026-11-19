@@ -1021,7 +1021,7 @@ describe('ReviewScreen — a failed save is never dropped silently (#837)', () =
     fireEvent.click(
       within(items[0]).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
     )
-    return screen.findByRole('button', { name: t('en', 'review.autosave.retry') }, { timeout: 3000 })
+    return screen.findByRole('button', { name: t('en', 'review.autosave.retry') })
   }
 
   // #839 U1e.
@@ -1316,7 +1316,7 @@ describe('ReviewScreen — live regions exist before their text arrives (#837)',
     )
     const saving = screen.getByText(t('en', 'review.autosave.saving'))
     expect(statusBefore).toContain(saving.closest('[role="status"]'))
-    const failure = await screen.findByText(/database or disk is full/, {}, { timeout: 3000 })
+    const failure = await screen.findByText(/database or disk is full/)
     expect(alertBefore).toContain(failure.closest('[role="alert"]'))
   })
 })
