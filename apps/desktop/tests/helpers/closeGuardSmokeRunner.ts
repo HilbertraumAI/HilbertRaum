@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { renameSync, writeFileSync } from 'node:fs'
 import { app, BrowserWindow, ipcMain, session, type Dialog, type MessageBoxReturnValue } from 'electron'
 import {
   createCloseGuard,
@@ -51,10 +51,16 @@ const t0 = Date.now()
 const events: Array<{ ms: number; event: string }> = []
 const log = (event: string): void => void events.push({ ms: Date.now() - t0, event })
 let written = false
+/**
+ * The test ends the row as soon as the result file exists, so it appears whole: written beside it, then renamed. It
+ * is final at `will-quit`; what Electron does after that (its teardown took up to 36 s under load, follow-ups wave
+ * 3 W8) is not part of any row.
+ */
 function writeResult(outcome: string): void {
   if (written) return
   written = true
-  writeFileSync(resultPath!, JSON.stringify({ scenario, outcome, events }), 'utf8')
+  writeFileSync(`${resultPath!}.part`, JSON.stringify({ scenario, outcome, events }), 'utf8')
+  renameSync(`${resultPath!}.part`, resultPath!)
 }
 
 app.commandLine.appendSwitch('no-proxy-server')
@@ -71,11 +77,13 @@ app.on('will-quit', () => {
   log('will-quit')
   writeResult('quit')
 })
+// A hang names itself: 40 s from this module's start (a scenario took up to 15 s from here under a 12-thread load,
+// W8), inside the test's own 70 s deadline from the spawn and its 80 s row budget.
 setTimeout(() => {
   log('runner-timeout')
   writeResult('timeout')
   app.exit(2)
-}, 20_000).unref()
+}, 40_000).unref()
 
 /** The page's answer to request n (1-based): 'saved' | 'unsaved' | null (never answers). */
 function answerFor(n: number): 'saved' | 'unsaved' | null {

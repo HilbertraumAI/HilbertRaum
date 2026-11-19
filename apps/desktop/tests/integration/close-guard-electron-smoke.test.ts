@@ -47,6 +47,17 @@ interface SmokeResult {
 let root = ''
 let runnerPath = ''
 
+// Measured on this desk (follow-ups wave 3 W8): a row takes 2-4 s alone. Under a 12-thread CPU load one took 48 s,
+// 36 s of it after `will-quit`, in Electron's own teardown, which no row asserts; that is how rows ran out of the old
+// 30 s. The rest under that load: up to 4 s to start, up to 15 s from the runner's start to `will-quit`. So once the
+// result appears (the runner renames it into place, whole, at `will-quit` or at its own 40 s timeout), the child gets
+// EXIT_GRACE_MS to exit by itself (alone it takes about 65 ms) and is then killed. A child that writes nothing is
+// killed at CHILD_DEADLINE_MS and named. Both stay inside the row budget, so a hang never ends as a bare vitest
+// timeout.
+const ROW_BUDGET_MS = testBudgetMs(80_000)
+const CHILD_DEADLINE_MS = ROW_BUDGET_MS - 10_000
+const EXIT_GRACE_MS = 2_000
+
 async function runScenario(scenario: string): Promise<SmokeResult> {
   const resultPath = join(root, `${scenario}.json`)
   const env = { ...process.env }
@@ -56,13 +67,28 @@ async function runScenario(scenario: string): Promise<SmokeResult> {
   const args = [`--user-data-dir=${join(root, `profile-${scenario}`)}`, runnerPath, resultPath, scenario]
   if (process.platform === 'linux') args.unshift('--no-sandbox')
   const stderr: string[] = []
-  const code = await new Promise<number>((resolve, reject) => {
+  const end = await new Promise<string>((resolve, reject) => {
     const child = spawn(ELECTRON_BIN!, args, { env, windowsHide: true })
+    let grace: ReturnType<typeof setTimeout> | undefined
+    const stop = (why: string): void => {
+      clearInterval(poll)
+      clearTimeout(deadline)
+      clearTimeout(grace)
+      if (child.exitCode === null && child.signalCode === null) child.kill()
+      resolve(why)
+    }
+    const poll = setInterval(() => {
+      if (!existsSync(resultPath)) return
+      clearInterval(poll)
+      clearTimeout(deadline)
+      grace = setTimeout(() => stop(`result written, killed ${EXIT_GRACE_MS} ms later`), EXIT_GRACE_MS)
+    }, 50)
+    const deadline = setTimeout(() => stop(`killed at the ${CHILD_DEADLINE_MS} ms deadline`), CHILD_DEADLINE_MS)
     child.stderr.on('data', (d: Buffer) => stderr.push(d.toString()))
     child.on('error', reject)
-    child.on('exit', (c) => resolve(c ?? -1))
+    child.on('exit', (c) => stop(`exit ${c ?? -1}`))
   })
-  if (!existsSync(resultPath)) throw new Error(`${scenario}: no result (exit ${code})\n${stderr.join('')}`)
+  if (!existsSync(resultPath)) throw new Error(`${scenario}: no result (${end})\n${stderr.join('')}`)
   const result = JSON.parse(readFileSync(resultPath, 'utf8')) as SmokeResult
   expect(result.outcome, `${scenario}: ${JSON.stringify(result.events)}\n${stderr.join('')}`).toBe('quit')
   return result
@@ -100,7 +126,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a quit: the held close cancels it, and the guard’s quit after the save ends the app', async () => {
     const r = await runScenario('quit')
@@ -115,7 +141,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'closed',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a second X while saving is held and ignored: one save, one close', async () => {
     const r = await runScenario('xx')
@@ -130,7 +156,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a window that never answers closes at the bound', async () => {
     const r = await runScenario('hang')
@@ -145,7 +171,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'will-quit'
     ])
     expect(at(r, 'answer:none') - at(r, 'ask')).toBeGreaterThanOrEqual(1_500)
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('Keep open keeps the window; the next close asks again and closes once it is saved', async () => {
     const r = await runScenario('keep')
@@ -165,7 +191,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a window still loading its page is not asked and closes at once', async () => {
     const r = await runScenario('loading')
@@ -180,7 +206,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'will-quit'
     ])
     expect(at(r, 'answer:none') - at(r, 'ask')).toBeLessThan(500)
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   // #910: before, the X closed the main window and the app went on running with no window (the runner timed out),
   // the workspace unlocked, until the helper went.
@@ -197,7 +223,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'helper:closed',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   // #910 review SF-1: a quit the guard holds (Ctrl+Q on Linux, ⌘Q or Dock Quit on macOS, File → Exit in a development
   // build) closes the helper window while the main window still saves, so a run there ends before `will-quit` — the
@@ -219,7 +245,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
     const runs = names(r).filter((e) => e.startsWith('helper:run-'))
     expect(runs).toEqual(['helper:run-aborted'])
     expect(names(r).indexOf('helper:run-aborted')).toBeLessThan(names(r).indexOf('will-quit'))
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('another window’s answer to the same request is ignored: the main window’s “unsaved” brings the dialog', async () => {
     const r = await runScenario('other-sender')
@@ -236,5 +262,5 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 })

@@ -13,7 +13,9 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // not; follow-ups wave 3, research A §1). The unit suite (tests/unit/app-menu.test.ts) pins the template; what only
 // Chromium shows lives here: that Ctrl+R, Ctrl+Shift+R and Ctrl+Shift+I really do nothing in a released build (nor does
 // `openDevTools()`), that the zoom and close keys still work with the bar hidden, and that Ctrl+= zooms in. A development
-// build is the control: the same runner sees its reload and its DevTools.
+// build is the control: the same runner sees its reload and its DevTools. Every key step runs in the ACTIVE window (an
+// inactive one reaches no accelerator) and runs again when another app takes the activation on the way (follow-ups
+// wave 3 W8: another Electron app starting at the same time did, every time).
 //
 // SKIPS where the Electron binary is absent (CI installs none) and on Linux without a display, like
 // tests/integration/close-guard-electron-smoke.test.ts. macOS (⌘ keys through native menu selectors) is owed by hand.
@@ -40,6 +42,10 @@ interface MenuSmokeResult {
   outcome: 'done' | 'error' | 'timeout'
   error?: string
   rows: Record<string, boolean>
+  /** Key steps that found the window inactive and activated it first (a diagnosis, not a row). */
+  reactivated?: string[]
+  /** Key steps the runner ran again because the window lost the activation on the way (a diagnosis, not a row). */
+  lostActivation?: string[]
 }
 
 let root = ''
@@ -60,7 +66,9 @@ async function runBuild(build: 'packaged' | 'dev'): Promise<MenuSmokeResult> {
   })
   if (!existsSync(resultPath)) throw new Error(`${build}: no result (exit ${code})\n${stderr.join('')}`)
   const result = JSON.parse(readFileSync(resultPath, 'utf8')) as MenuSmokeResult
-  expect(result.outcome, `${build}: ${result.error ?? ''} ${JSON.stringify(result.rows)}\n${stderr.join('')}`).toBe('done')
+  const activation = JSON.stringify({ reactivated: result.reactivated, lostActivation: result.lostActivation })
+  const why = `${build}: ${result.error ?? ''} ${JSON.stringify(result.rows)} ${activation}\n${stderr.join('')}`
+  expect(result.outcome, why).toBe('done')
   return result
 }
 
@@ -96,7 +104,7 @@ describe.skipIf(!enabled)('the application menu on real Electron (#912; skips wh
       openDevTools: false,
       'Alt, Alt+F/E/V/W': false
     })
-  }, testBudgetMs(45_000))
+  }, testBudgetMs(75_000))
 
   it('a development build (the control): the same keys reload, open the developer tools and bring up the bar', async () => {
     const r = await runBuild('dev')
@@ -107,5 +115,5 @@ describe.skipIf(!enabled)('the application menu on real Electron (#912; skips wh
       'Ctrl+Shift+I': true,
       Alt: true
     })
-  }, testBudgetMs(45_000))
+  }, testBudgetMs(75_000))
 })
