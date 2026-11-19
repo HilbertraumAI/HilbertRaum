@@ -34,6 +34,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts`, `main/app-protocol.ts` + `electron.vite.config.ts` |
 | **The app's pages come from its own `hilbertraum://app/` scheme, not `file://`; the packaged build turns `GrantFileProtocolExtraPrivileges` off** (#560) | `main/app-protocol.ts` (privileges, resolver, headers), `main/install-app-protocol.ts`, `electron-builder.yml` `electronFuses` |
 | **Packaged fuses: no `ELECTRON_RUN_AS_NODE`, no `--inspect`, `app.asar` integrity-checked and the only app source** (#562); a packaged build ignores the dev-server URL | `electron-builder.yml` `electronFuses`, `main/app-protocol.ts` `devRendererUrl` |
+| **A released build has no DevTools and no Reload, Force Reload or Toggle Developer Tools menu item** (#912; Electron has no fuse for either) | `main/window-security.ts` `devToolsAllowed` (main window), `main/app-menu.ts`, both applied in `main/index.ts` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
@@ -250,6 +251,21 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
   build, but the OCR window loaded `${ELECTRON_RENDERER_URL}/ocr.html` whenever it was set (measured:
   a packaged build fetched the page from a local server named that way). Both windows now ask
   `devRendererUrl(app.isPackaged)` in `app-protocol.ts`, the only reader of the variable.
+- **No DevTools and no reload in a released build (#912).** No fuse governs DevTools or the menu.
+  Until #912 the app set no menu, so Electron's default one shipped: Toggle Developer Tools
+  (Ctrl+Shift+I) opened a console that holds the renderer's `window.api`, and Reload (Ctrl+R) and
+  Force Reload (Ctrl+Shift+R) reloaded the window without a close, so the save before closing
+  (#888) never ran and a review change not yet saved was lost. A released build now sets
+  `devTools: false` on the main window (`devToolsAllowed(app.isPackaged)`, `window-security.ts`),
+  so neither the shortcut nor `webContents.openDevTools()` opens them, and its menu
+  (`app-menu.ts`) has none of the three items. A development build keeps all three. The hidden
+  helper windows keep exactly `SECURE_WINDOW_WEB_PREFERENCES`: they have no shortcut route and
+  nothing opens their DevTools. Chromium's `--remote-debugging-port` and `webContents.debugger` still
+  answer with DevTools off (measured on Electron 43.8.6), so the packaged-app probe and the CDP walks
+  keep working. Pinned by `tests/unit/app-menu.test.ts`, `tests/unit/window-security.test.ts` and,
+  where the Electron binary is present (not CI), `tests/integration/app-menu-electron-smoke.test.ts`
+  (the keys pressed on real Electron: nothing reloads and no DevTools open, even with Toggle
+  Developer Tools put back in the menu).
 
 ### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
 Electron's default with **no** permission handler installed is to **GRANT** every permission
@@ -1665,7 +1681,8 @@ re-encrypts (the bullet below).
   only visible state of a quit. Pinned by `tests/unit/shutdown.test.ts` (B1 inverted, the
   activate guard, the deadline with the lock outside it).
 - **A window close saves first (#888, follow-ups wave 2).** The main window's first `close` (an X,
-  Alt+F4, the taskbar, Ctrl+W, File → Exit, ⌘Q, the macOS red button) is `preventDefault()`ed by a
+  Alt+F4, the taskbar, Ctrl+W, Ctrl+Q on Linux, ⌘Q, the macOS red button; File → Exit where a
+  development build shows its menu bar, #912) is `preventDefault()`ed by a
   per-window guard (`createMainWindowCloseGuard` over `createCloseGuard`, `main/close-guard.ts`,
   electron-free); the window is asked to save (`app:saveBeforeClose` → `app:saveBeforeCloseDone`,
   data-contracts "Core IPC") and closes exactly once on its answer or at `CLOSE_SAVE_BOUND_MS` (8 s,

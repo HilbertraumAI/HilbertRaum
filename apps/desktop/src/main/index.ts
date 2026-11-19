@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,11 +12,13 @@ import { installPermissionRequestHandler, installPermissionCheckHandler } from '
 import { installNavigationGuard } from './services/navigation-guard'
 import { appPageUrl, createMainWindowNavigationPredicate, devRendererUrl } from './app-protocol'
 import { installAppProtocol, registerAppSchemePrivileges } from './install-app-protocol'
+import { appMenuTemplate, mainWindowMenuBar } from './app-menu'
 import {
   NO_PROXY_SWITCH,
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
   createWindowOpenPolicy,
+  devToolsAllowed,
   disableSpellCheckerDownloads
 } from './window-security'
 import { getSettings } from './services/settings'
@@ -940,6 +942,9 @@ function createWindow(): void {
   // carries build/icon.ico (electron-builder embeds it), so build/ is not inside the
   // asar — this path only resolves in dev and on Linux, where the explicit icon matters.
   const iconPath = join(app.getAppPath(), 'build', 'icon.png')
+  // #912 (`app-menu.ts`): on Windows and Linux a released build hides the menu bar for good and a
+  // development build until Alt is pressed; the menu's shortcuts work either way.
+  const menuBar = mainWindowMenuBar({ platform: process.platform, packaged: app.isPackaged })
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -952,11 +957,15 @@ function createWindow(): void {
     // theme tokens — --bg light/dark — before first paint; this only avoids a
     // mismatched flash while the window comes up).
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f7f8fa',
+    autoHideMenuBar: menuBar === 'autoHide',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      ...SECURE_WINDOW_WEB_PREFERENCES
+      ...SECURE_WINDOW_WEB_PREFERENCES,
+      // #912: no DevTools in a released build (window-security.ts); this window only.
+      devTools: devToolsAllowed(app.isPackaged)
     }
   })
+  if (menuBar === 'hidden') mainWindow.setMenuBarVisibility(false)
 
   // Content-Security-Policy as a response header (defence in depth on top of the
   // index.html meta tag, spec §3.5). The strings live in window-security.ts (TS-2),
@@ -1110,6 +1119,12 @@ app.whenReady().then(() => {
   const protocolT0 = performance.now()
   const appFiles = installAppProtocol(join(__dirname, '../renderer'))
   perfMark('app_protocol_installed', { ms: perfMs(protocolT0), files: appFiles })
+  // #912: the app's own menu (`app-menu.ts`) instead of Electron's default one, whose View → Reload
+  // drops a review change not saved yet and whose Toggle Developer Tools opens a console with
+  // `window.api`; a released build has neither. Set before the first window, which takes it.
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(appMenuTemplate({ platform: process.platform, packaged: app.isPackaged }))
+  )
   createWindow()
 
   app.on('activate', lifecycle.onActivate)

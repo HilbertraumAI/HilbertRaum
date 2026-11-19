@@ -16871,6 +16871,10 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
 - Fuse 2 on until the downloaders trust the OS store (§3, #564).
 - `--remote-debugging-port` has no fuse. Refusing it in a packaged build would also refuse the
   packaged smoke harnesses.
+- DevTools have no fuse either. Since #912 a packaged build turns them off on the main window
+  (`devTools: devToolsAllowed(app.isPackaged)`, `window-security.ts`) and its menu has no Reload,
+  Force Reload or Toggle Developer Tools item (`app-menu.ts`); `--remote-debugging-port` and
+  `webContents.debugger` still work with DevTools off (measured), so the harnesses keep working.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
