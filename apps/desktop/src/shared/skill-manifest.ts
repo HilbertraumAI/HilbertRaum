@@ -15,6 +15,7 @@
 // and feeds them here.
 
 import { parse as parseYaml } from 'yaml'
+import { appOlderThanMinimum, type AppVersionRead } from './app-version'
 
 /** `instruction` ships in v1; `tool` is reserved for Tier-2 (skills plan §5/§6.5). */
 export type SkillKind = 'instruction' | 'tool'
@@ -268,8 +269,9 @@ const BIDI_CONTROL_RE = new RegExp('[\\u202A-\\u202E\\u2066-\\u2069]')
 export const SKILL_SEMVER_RE = /^\d+\.\d+\.\d+$/
 
 /**
- * Parse the leading MAJOR.MINOR.PATCH of a version, ignoring any `-prerelease`/`+build` suffix. null = not a
- * version the §6.5 gate can compare (the registry's #846 re-enable then acts on nothing).
+ * Parse the leading MAJOR.MINOR.PATCH of a version, ignoring whatever follows it. The §6.5 gate reads a minimum with
+ * it; its app-side read (`readSkillAppVersion`, which also notes a pre-release) is null on exactly the same strings.
+ * null = not a version the gate can compare (the registry's #846 re-enable then acts on nothing).
  */
 export function parseSemverCore(v: string): [number, number, number] | null {
   const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim())
@@ -277,23 +279,32 @@ export function parseSemverCore(v: string): [number, number, number] | null {
 }
 
 /**
- * The §6.5 compatibility gate, finally enforced: true when a skill's declared
- * `compatibility.minAppVersion` is NEWER than the running app, so the skill must be listed but kept
- * DISABLED (it cannot be enabled, suggested, or run until the app is new enough). Pure + shared so
- * main computes it and the renderer can label it the same way. Tolerant by design — a missing
- * requirement, or an unparseable version on either side, is treated as compatible (this is a DS6
- * courtesy gate, never a security control; versions are unsigned). The app version's
- * `-prerelease`/`+build` suffix is ignored (only the MAJOR.MINOR.PATCH core is compared).
+ * #896: the app's own version as the §6.5 gate reads it, as leniently as `parseSemverCore`: the trimmed value's leading
+ * MAJOR.MINOR.PATCH (no end anchor, so `0.1.66.4` reads as `0.1.66`), plus whether a `-pre.release` follows that core
+ * directly. A `+build` suffix is not a pre-release. null = a version the gate cannot read.
+ */
+const SKILL_APP_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?/
+function readSkillAppVersion(v: string): AppVersionRead | null {
+  const m = SKILL_APP_VERSION_RE.exec(v.trim())
+  return m ? { core: [Number(m[1]), Number(m[2]), Number(m[3])], prerelease: m[4] !== undefined } : null
+}
+
+/**
+ * The §6.5 compatibility gate: true when a skill's declared `compatibility.minAppVersion` is NEWER than the running
+ * app, so the skill is listed but kept DISABLED (it cannot be enabled, suggested, or run until the app is new enough).
+ * Main computes it at every use site (the renderer reads the result, `SkillInfo.incompatible`). The comparison is the
+ * model gate's (`appOlderThanMinimum`, #896): parts compare as numbers, and a pre-release app is OLDER than its own
+ * release (`0.1.66-beta.1` does not meet `0.1.66`); build metadata (`+…`) is ignored. Unlike the model gate it is
+ * tolerant by design, a DS6 courtesy gate and never a security control (versions are unsigned): a missing requirement,
+ * or a version on either side it cannot read, is treated as compatible, and both sides are read leniently (the minimum
+ * by `parseSemverCore`, so a validated leading-zero `01.1.66` compares as numbers; the app by its leading core).
  */
 export function skillNeedsNewerApp(minAppVersion: string | undefined, appVersion: string): boolean {
   if (!minAppVersion) return false
   const need = parseSemverCore(minAppVersion)
-  const have = parseSemverCore(appVersion)
+  const have = readSkillAppVersion(appVersion)
   if (!need || !have) return false
-  for (let i = 0; i < 3; i++) {
-    if (have[i] !== need[i]) return have[i] < need[i]
-  }
-  return false
+  return appOlderThanMinimum(have, need)
 }
 
 /** Default SKILL.md body cap (64 KiB of chars). The `limits.ts` default references this. */

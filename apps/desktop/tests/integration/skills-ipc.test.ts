@@ -470,8 +470,9 @@ describe('skills IPC — enableSkill policy (#583)', () => {
     expect(reasonOf('app:shared')).toBeNull()
   })
 
-  it('refuses enabling a skill that needs a newer app and changes nothing', async () => {
-    const { db } = seededHarness({ user: [{ id: 'too-new', minAppVersion: '99.0.0' }] }, { reconcile: true })
+  // #896: '0.0.0' too, since this file's app reports '0.0.0-test', a pre-release of 0.0.0 and so older than it.
+  it.each(['99.0.0', '0.0.0'])('refuses enabling a skill that needs a newer app (minimum %s) and changes nothing', async (min) => {
+    const { db } = seededHarness({ user: [{ id: 'too-new', minAppVersion: min }] }, { reconcile: true })
     expect(enabledOf(db, 'user:too-new')).toBe(false)
     await expect(invoke(handlers, IPC.enableSkill, 'user:too-new')).rejects.toThrow(/newer version/i)
     expect(enabledOf(db, 'user:too-new')).toBe(false)

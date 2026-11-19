@@ -8334,6 +8334,13 @@ unchanged §7 ceiling (no new capability, still offline, audit still ids/counts-
   the `enabled` flag and the use-sites gated only on `enabled`. **§15 closed it** — the gate is now airtight:
   the use-sites gate on *compatibility*, not just `enabled`.) **#846** built the other half: an app skill
   the gate kept off now comes back on by itself once the app is updated (`skills.disabled_reason`, §3).
+  **#896 amendment (owner decision G-7 (b′), 2026-11-18):** the gate now makes the model gate's comparison
+  (`appOlderThanMinimum`, `shared/app-version.ts`), so a pre-release app is older than its own release
+  (`0.1.66-beta.1` no longer meets `0.1.66`, and #846 re-enables at `0.1.66`, not at its beta). It keeps its
+  lenient read of both versions and its fail-open answer for one it cannot read; build metadata stays
+  ignored. The frozen `manifestNeedsNewerApp` is unchanged and keeps its own copy of the comparison
+  (`scripts/measure-manifest-read.mjs` loads `shared/manifest.ts` through Node's type stripping, which takes
+  no extensionless import); an agreement matrix in `skill-manifest.test.ts` holds the two gates equal.
 - **M2 — the Tier-2 "active tools" note is domain-free.** `skills.tool.note.active` no longer enumerates
   bank tools (it had shown bank copy for the invoice + redaction skills too); it now reads "run approved
   local tools on a document you choose…", true for every `kind:'tool'` skill.

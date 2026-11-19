@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   formatSkillNote,
   parseSkillMarkdown,
+  skillNeedsNewerApp,
   validateSkillManifest,
   SKILL_V1_PERMISSION_CEILING,
   SKILL_ID_RE,
   type SkillManifest
 } from '../../src/shared/skill-manifest'
+import { manifestNeedsNewerApp } from '../../src/shared/manifest'
 
 // A minimal valid frontmatter object (as parsed from YAML), mutable via overrides.
 function rawFront(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -456,6 +458,48 @@ describe('validateSkillManifest', () => {
     it('case-insensitive value (WHOLE-DOC) normalizes', () => {
       expect(validateSkillManifest(rawFront({ analysis: 'WHOLE-DOC' })).manifest?.analysis).toBe('whole-doc')
     })
+  })
+})
+
+// #896 (G-7 (b′)): the §6.5 gate makes the model gate's comparison (parts as numbers; a pre-release app is OLDER than its
+// own release) and keeps its own lenient read and its fail-open answer: no minimum, or an app version it cannot read, is
+// compatible (a DS6 courtesy gate). Build metadata is ignored.
+describe('skillNeedsNewerApp — the §6.5 gate (#896)', () => {
+  it.each<[string, string | undefined, boolean]>([
+    ['0.1.65', '0.1.66', true],
+    ['0.1.66', '0.1.66', false],
+    ['0.1.67', '0.1.66', false],
+    ['0.1.9', '0.1.10', true], // parts compare as numbers, not text
+    ['0.1.66-beta.1', '0.1.66', true], // a pre-release app does not meet its own release
+    ['0.1.66-rc.1+abc', '0.1.66', true],
+    ['0.1.67-beta.1', '0.1.66', false], // a pre-release of a LATER release does
+    ['0.1.66+abc', '0.1.66', false], // build metadata is ignored
+    ['  0.1.66  ', '0.1.66', false], // lenient: trimmed
+    ['0.1.66.4', '0.1.66', false], // lenient: only the leading MAJOR.MINOR.PATCH is read
+    ['0.1.65.4', '0.1.66', true],
+    ['0.9.0', '01.0.0', true], // a leading-zero minimum passes validation and compares as numbers
+    ['', '0.1.66', false], // fail-open: an app version the gate cannot read
+    ['junk', '0.1.66', false],
+    ['v0.1.66', '0.1.66', false],
+    ['0.1.66', undefined, false] // no minimum
+  ])('app %j, minAppVersion %j: needs a newer app = %s', (app, min, expected) => {
+    expect(skillNeedsNewerApp(min, app)).toBe(expected)
+  })
+
+  // One rule for one question: on every app version BOTH gates can read and every minimum BOTH accept, a skill and a
+  // model with the same minimum get the same answer. (They still differ where one side cannot read a version: the
+  // model gate fails safe, this one fails open.)
+  it('agrees with the model gate wherever both can read the versions', () => {
+    const apps = ['0.0.9', '0.1.65', '0.1.66', '0.1.67', '0.1.100', '1.0.0', '0.1.66-beta.1', '0.1.66-rc.1', '0.1.66-0',
+      '0.1.66+abc', '0.1.66-beta.1+abc', '0.1.67-beta.1', '1.0.0-rc.1', '0.0.0-test']
+    const mins = ['0.0.0', '0.1.9', '0.1.10', '0.1.65', '0.1.66', '0.1.67', '1.0.0']
+    for (const app of apps) {
+      for (const min of mins) {
+        expect(skillNeedsNewerApp(min, app), `app ${app}, minimum ${min}`).toBe(
+          manifestNeedsNewerApp({ min_app_version: min }, app)
+        )
+      }
+    }
   })
 })
 
