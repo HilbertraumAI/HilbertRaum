@@ -27,6 +27,15 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-20 — the 2026-11-19 follow-ups wave 3 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-20, when the wave closed (PR #937 merged as `968e00af`, the last
+of PRs #922–#929 and #937); a short outcome entry with the open follow-ups (#930–#936) replaces it there. Its
+records are unchanged and listed in that entry. Citations of this entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-11-19 — **Follow-ups wave 3 (the follow-ups #910–#920 left by follow-ups wave 2): open.** Eight PRs in this order: W1 #916 + #920, W2 #910 + #912 + #917, W3 #911, W6 #918, W7 #919, W4 #913, W5 #914, W8 #915. Owner calls 2026-11-19, as recommended: released builds ship a menu without Reload or developer tools, with the menu bar hidden on Windows and Linux (#912); a start that finds no encrypted copy of the workspace keeps the last unencrypted one until the next unlock re-encrypts it (#911); a model a check found damaged never starts, and the search and voice models are hashed before their first start (#913); Performance rows for models not on the drive are marked and left out of the total (#914). Open: all eight PRs; then the wave review and the close (retire this line)._
+
 ## 2026-11-19 — the 2026-11-18 follow-ups wave 2 entry retired verbatim (wave closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-19, when the wave closed (PR #909 merged as `54b8620a`, the last
