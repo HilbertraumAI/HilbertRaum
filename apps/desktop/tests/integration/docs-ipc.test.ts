@@ -353,7 +353,7 @@ describe('registerDocsIpc', () => {
     // A stale token falls back to the raw (capped) seam.
     await expect(invoke(handlers, IPC.importPreflight, picked, token)).rejects.toThrow(/Too many files/)
     dialogState.result = { canceled: true, filePaths: [] }
-  })
+  }, testBudgetMs(60_000))
 
   // #274: the directory walk behind a folder drop/pick must not hold the main thread. With the
   // walk parked on one slow directory, the invoke must hand back its promise at once and a

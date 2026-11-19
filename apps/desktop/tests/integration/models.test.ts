@@ -47,7 +47,7 @@ import type { ModelManifest } from '../../src/shared/manifest'
 import type { ModelVerifyProgress } from '../../src/shared/types'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seededFreshDb } from '../helpers/seeded-db'
-import { until } from '../helpers/hang-budget'
+import { testBudgetMs, until } from '../helpers/hang-budget'
 import { manifestsDirWith, rawManifest, sha256, validManifest, writeDriveFile, writeManifest } from '../helpers/manifest-fixtures'
 
 /** What every `buildModelList` call passes for the machine's RAM, as production always does. Never the host's. */
@@ -1464,6 +1464,17 @@ describe('cancellable verification (#420)', () => {
     return file
   }
 
+  /** The single-flight rows below abort in the SAME tick as their calls, before `fs.open` completes, so what they prove
+   *  does not depend on the file's size: 4 KiB instead of 70 MiB (#915; the same four mutations of the sharing rule
+   *  stay red as on the big file). */
+  const SMALL_FILE = Buffer.alloc(4096, 7)
+  const smallFileSha = createHash('sha256').update(SMALL_FILE).digest('hex')
+  function smallFile(): string {
+    const file = join(tempRoot('abort'), 'weight.bin')
+    writeFileSync(file, SMALL_FILE)
+    return file
+  }
+
   // ---- trap 1: the promise must REJECT, never hang -----------------------------------
   // `sha256File` attaches only `error` and `end`. A naive `stream.destroy()` emits `close`
   // and NEITHER of those, so the promise would simply never settle and every awaiting caller
@@ -1513,7 +1524,7 @@ describe('cancellable verification (#420)', () => {
     // Nothing was cached: a fresh verify hashes for real and matches.
     expect((await verifyChecksum(file, bigFileSha())).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1)
-  })
+  }, testBudgetMs(30_000))
 
   // ---- trap 2: single-flight sharing --------------------------------------------------
   // `inFlightHashes` makes concurrent callers of the same path share ONE physical read —
@@ -1521,8 +1532,8 @@ describe('cancellable verification (#420)', () => {
   // same weight. The rule: the shared read is aborted only when EVERY waiter has abandoned
   // it, so an uncancellable caller can never be collateral damage.
   it('a cancelled screen pass does not abort the hash an uncancellable caller joined', async () => {
-    const file = bigFile()
-    const expected = bigFileSha()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     // Same tick: the leader registers in `inFlightHashes` synchronously, so the second call
@@ -1537,8 +1548,8 @@ describe('cancellable verification (#420)', () => {
   })
 
   it('…and the other way round: a cancelled JOINER leaves the uncancellable leader alone', async () => {
-    const file = bigFile()
-    const expected = bigFileSha()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     const gate = verifyChecksum(file, expected) // leads, uncancellable
@@ -1552,8 +1563,8 @@ describe('cancellable verification (#420)', () => {
 
   it('the physical read DOES stop once every waiter has cancelled', async () => {
     const readLog = armPerfLog()
-    const file = bigFile()
-    const expected = bigFileSha()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const a = new AbortController()
     const b = new AbortController()
@@ -1573,8 +1584,8 @@ describe('cancellable verification (#420)', () => {
   // The stream closes some ticks after the abort. A caller landing in that gap used to join the
   // dying read and reject, which from the §7.4 start gate fails a model start with "Hashing was cancelled".
   it('a caller arriving after every waiter left gets its own read, not the abandoned one (#752)', async () => {
-    const file = bigFile()
-    const expected = bigFileSha()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
@@ -1612,7 +1623,7 @@ describe('cancellable verification (#420)', () => {
     // the contrast case below.)
     recordModelLoadRead(file, 10_000, 'm', 6_000_000_000)
     expect(latestEffectiveReadBySource('model_load')).not.toBeNull()
-  })
+  }, testBudgetMs(30_000))
 
   it('…while a COMPLETED hash of the same file does mark it warm (the contrast)', async () => {
     resetEffectiveReadForTests()
@@ -1626,7 +1637,7 @@ describe('cancellable verification (#420)', () => {
     )
     recordModelLoadRead(file, 10_000, 'm', 6_000_000_000)
     expect(latestEffectiveReadBySource('model_load')).toBeNull()
-  })
+  }, testBudgetMs(30_000))
 
   // ---- the loops, not only the stream --------------------------------------------------
   it('a cancel between two weights stops the pass immediately — the next model never hashes', async () => {
