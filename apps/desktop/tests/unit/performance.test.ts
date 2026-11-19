@@ -458,6 +458,29 @@ describe('loadedAtOnceMb', () => {
     expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: bothOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(17408)
   })
 
+  // A lite drive on a card machine: the chat row is the only one on the drive and it runs on the card, so nothing
+  // lands on the processor. That is 0 (the screen leaves the line out), not null: null means nothing is installed.
+  it('discrete: a drive whose only model is a card-resident chat totals 0', () => {
+    const chatOnly = rows.map((r) => (r.role === 'chat' ? r : { ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnly, verdict: estimate })).toBe(0)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnly, verdict: { ...estimate, estimated: false, kind: 'partial', spillMb: 0 } })).toBe(0)
+  })
+
+  it('discrete: nothing installed totals null', () => {
+    const none = rows.map((r) => ({ ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: none, verdict: estimate })).toBeNull()
+  })
+
+  it('discrete: a card-resident chat plus a processor row on the drive totals that row alone', () => {
+    const withReranker = rows.map((r) => (r.role === 'chat' || r.role === 'reranker' ? r : { ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withReranker, verdict: estimate })).toBe(1126)
+  })
+
+  it('discrete: a card-resident chat whose observed spill is more than 0 still counts the spill', () => {
+    const chatOnly = rows.map((r) => (r.role === 'chat' ? r : { ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnly, verdict: { ...estimate, estimated: false, kind: 'partial', spillMb: 2100 } })).toBe(2100)
+  })
+
   it('unified: one pool — the full sum, whatever the rows say', () => {
     expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(17408)
   })

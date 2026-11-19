@@ -819,6 +819,17 @@ describe('everything loaded at once (DR5)', () => {
     expect(off.totals.ramAllMb).toBe(Math.round(off.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
   })
 
+  // A lite drive on a card machine: only the chat model is on the drive and it runs on the card. The total is 0
+  // (the honest number); null is reserved for nothing installed. The screen leaves the line out for 0.
+  it('discrete: a drive holding only the chat model totals 0, not null', () => {
+    const { placement: p } = cardMachine({ missing: ['translation', 'vision', 'reranker', 'embeddings', 'transcriber'], translation: null })
+    expect(p.memoryClass).toBe('discrete')
+    expect(p.models.filter((r) => r.onDrive).map((r) => r.role)).toEqual(['chat'])
+    expect(rowOf(p, 'chat').device).toBe('gpu')
+    expect(p.verdict.kind).toBe('gpu')
+    expect(p.totals.ramAllMb).toBe(0)
+  })
+
   // #914 (owner decision G-5 (c)): no TranslateGemma, no image model and no ranking model on the drive; the index
   // model and voice are there. The missing rows still name the catalog's models (what translation would take on the
   // card, before downloading it), marked not on this drive, and the total leaves them out. The images and ranking
