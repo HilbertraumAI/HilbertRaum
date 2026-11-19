@@ -11,6 +11,7 @@ import { RuntimeUnresponsiveError, isRuntimeUnresponsiveError } from '../runtime
 import { createPlacementParser } from '../runtime/placement'
 import { translationRanOnProcessor } from '../../../shared/runtime-status'
 import { log } from '../logging'
+import type { BoundModelStartCheck } from '../models'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
 import type { TranslationCpuCause, TranslationDeviceStatus } from '../../../shared/types'
@@ -297,6 +298,13 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
    * throw.
    */
   beforeGpuStart?: () => Promise<void>
+  /**
+   * #913: checks the translation model's file before each cold start, at the head of the start ladder (before the
+   * reranker yields the card and before any rung spawns). The composition passes the cache-only check: a file a check
+   * found damaged latches a `TranslationStartError` with `modelDamaged`, which the consumers show as their own copy;
+   * the `onModelInstalled` refresh replaces the latched instance after a re-download. Absent ⇒ no check.
+   */
+  checkModel?: BoundModelStartCheck
 }
 
 export interface TranslateOptions {
@@ -351,10 +359,16 @@ export class TranslationStartError extends Error {
    * engine copy instead of the "free memory / restart" one, which would send the user the wrong way.
    */
   readonly engineCannotRun: boolean
-  constructor(cause: Error) {
+  /**
+   * #913: the start check found the model's file damaged, so nothing was started — the consumers show the
+   * "download it again" copy, not the memory one.
+   */
+  readonly modelDamaged: boolean
+  constructor(cause: Error, opts: { modelDamaged?: boolean } = {}) {
     super(cause.message)
     this.name = 'TranslationStartError'
     this.engineCannotRun = isEngineCannotRunError(cause)
+    this.modelDamaged = opts.modelDamaged === true
   }
 }
 
@@ -718,6 +732,20 @@ export class TranslationRuntime {
     const abort = new AbortController()
     this.startAbort = abort
     try {
+      // #913: a file a check found damaged never starts, on either rung. First in the ladder, so
+      // the reranker keeps the card and the verdict is no device fault. A teardown that begins
+      // during the check aborts `abort`, which the catch below passes on as the abort it is.
+      if (this.opts.checkModel) {
+        const verdict = await this.opts.checkModel(abort.signal)
+        if (abort.signal.aborted) throw new DOMException('The translation start was aborted', 'AbortError')
+        if (verdict === 'damaged') {
+          const startError = new TranslationStartError(new Error('The translation model file failed its check'), {
+            modelDamaged: true
+          })
+          this.startFailed = startError
+          throw startError
+        }
+      }
       // #473: let the reranker leave the card first. Inside the try so a lock that begins while
       // this waits has aborted `abort` by the time `startAttempt` runs, which then never spawns.
       if (device === 'auto') await this.opts.beforeGpuStart?.().catch(() => undefined)
@@ -730,6 +758,8 @@ export class TranslationRuntime {
       // to the CPU rung (the lock/quit is tearing the child down right now). It propagates
       // raw; the in-flight job was already aborted by the teardown's own cancel pass.
       if (isStartAbortError(err) || abort.signal.aborted) throw error
+      // #913: the check's verdict above, already latched — no rung ran, so no device fault.
+      if (isTranslationStartError(err)) throw err
       // A TRANSIENT port-bind race must NOT arm either latch (the reranker F7 fix / chat REL-1):
       // it is not a device fault — LlamaServer already retried once on a fresh port. It propagates
       // RAW (not a TranslationStartError), so the consumers' transient-retry paths still treat it

@@ -23,7 +23,7 @@ import {
 } from './window-security'
 import { getSettings } from './services/settings'
 import { contextWindowOrNextLaunch } from './services/chat'
-import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/policy'
+import { loadPolicy, currentPolicyStatus, developerLeniency, isCommercialPolicy } from './services/policy'
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
@@ -97,7 +97,15 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
+import {
+  checkModelBeforeStart,
+  createSettingsHashStore,
+  findManifestById,
+  resolveBundledManifestsDir,
+  resolveManifestsDir,
+  setManifestAppVersion,
+  type ModelStartCheck
+} from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import {
@@ -579,6 +587,22 @@ function initBackend(): void {
       manifestsDir
     })
   }
+  // #913 (C §913.3): the start check every non-chat role runs at its cold start, before it spawns its
+  // model — the chat start gate's rule for the other roles: a file a check found damaged never
+  // starts. The manifest by id (re-read per call: a download may have changed it), the
+  // policy-aware leniency chat uses (a locked workspace reads the developer toggle as off), and this
+  // workspace's hash store (lock-aware: a cache miss while locked). The composers bind it to each
+  // role's model and hashing choice; vision binds it below.
+  const checkModel: ModelStartCheck = async (modelId, { hash, signal }) => {
+    const manifest = findManifestById(manifestsDir, modelId)
+    if (!manifest) return 'ok' // nothing to check against: the start goes on as before
+    return checkModelBeforeStart(manifest, paths.rootPath, {
+      developerMode: developerLeniency({ paths, isDev }, readSettingsOrNull()?.developerMode ?? false),
+      hashStore: createSettingsHashStore(() => workspace.requireDb(), paths.rootPath),
+      hash,
+      signal
+    })
+  }
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
@@ -594,7 +618,8 @@ function initBackend(): void {
     // Wave 8 rulings (a)/(b)(Q)/(b)(G): consulted by `rerank()` on every call, never once per
     // cold start any more (see `createRerankerCallbacks`'s doc comment above).
     rerankerDevicePosture,
-    rerankerRequestCeiling
+    rerankerRequestCeiling,
+    checkModel
   })
   // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
@@ -722,7 +747,9 @@ function initBackend(): void {
     pendingModelSwitches,
     // #782: the IPC layer's notices (a download stopped because internet access was switched off)
     // go out the way the runtime factories' do.
-    runtimeNotice: notifyRenderer
+    runtimeNotice: notifyRenderer,
+    // #913: so a transcriber refreshed after an install gets the same start check.
+    checkModel
   }
   // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
   // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the
@@ -752,7 +779,9 @@ function initBackend(): void {
     createRuntime: (status) => createVisionRuntimeFromContext(ctx as AppContext, status),
     // AUD-02: refuse for the whole lock teardown, not just this service's own stop() window —
     // an analyze admitted after that window would build a fresh vision sidecar that outlives it.
-    isWorkspaceLocking: () => workspace.isLocking()
+    isWorkspaceLocking: () => workspace.isLocking(),
+    // #913: the cache-only check (about 1 ms): vision is never hashed before its first start (G-4).
+    checkModel: (modelId, signal) => checkModel(modelId, { hash: false, signal })
   })
   // The Translate-view job orchestrator (TG-4). Built here — not inside registerTranslateIpc — so
   // the lock/quit teardown paths can reach it via `ctx.translateJobs` and abort an in-flight text
@@ -799,7 +828,8 @@ function initBackend(): void {
         rootPath: paths.rootPath,
         manifestsDir,
         isDev,
-        gpu: translationGpu
+        gpu: translationGpu,
+        checkModel
       },
       ctx.reranker
     )

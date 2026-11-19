@@ -2424,11 +2424,16 @@ whole renderer-visible surface.
   history `listImageSessions`/`getImageSession`/`deleteImageSession`/`clearImageSessions`.
   Types: `VisionStatus`, `ImageJob`, `ImageSessionSummary`/`ImageSessionDetail`
   (see also the #117–#124 wave section above). Record: `architecture.md` "Image
-  understanding — design record".
+  understanding — design record". #913 (additive, skew-safe): `VisionUnavailableReason` gained
+  `'damaged'` (a vision model on the drive failed its file check: a check found a file damaged, or
+  its hash is a placeholder outside developer mode) and `VisionErrorCode` gained `'modelDamaged'`
+  (the job's twin, when the status changed after the screen read it). No schema change.
 - **Translate view (text path)** — `translateStart(req: TranslateRequest): Promise<TranslateJob>`,
   `translateCancel(jobId)`, `getActiveTranslateJob(): Promise<TranslateJob | null>` (remount
   recovery), streams `onTranslateToken`/`onTranslateDone`/`onTranslateError`. Record:
-  `architecture.md` "Translation sidecar — design record" (TG waves).
+  `architecture.md` "Translation sidecar — design record" (TG waves). #913: `TranslateErrorCode`
+  gained `'modelDamaged'` (the start check refused a weight a check found damaged; additive, the
+  screen keeps its unknown-code fallback).
   Wave #156–#165 additions (2026-08-09): `TranslateErrorCode` gained `'tooLong'` and
   `shared/types.ts` the `TRANSLATE_MAX_TEXT_CHARS = 200_000` paste bound (#160 BE-3);
   `AppStatus` carries the additive gates `translationAvailable: boolean` (issue #40) and

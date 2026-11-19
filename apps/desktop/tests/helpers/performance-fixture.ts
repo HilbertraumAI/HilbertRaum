@@ -112,7 +112,8 @@ export async function closePerformanceFixture(): Promise<void> {
 
 export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}): AppContext {
   return {
-    paths: { rootPath: root, workspacePath: join(root, 'workspace') },
+    // configPath: the images status reads the drive policy (#913); none there means the dev defaults.
+    paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     db,
     workspace: workspaceStandIn(),
     // The registrars go through `guardedHandle` (#252), which refuses a context without a

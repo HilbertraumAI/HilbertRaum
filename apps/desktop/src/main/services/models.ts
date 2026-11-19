@@ -1067,6 +1067,62 @@ export async function computeInstallState(
   return 'installed'
 }
 
+/** #913: what the start check says about a model's files. `damaged` refuses the start; `ok` keeps today's start. */
+export type ModelStartVerdict = 'ok' | 'damaged'
+
+/**
+ * #913: the start check of one model by its manifest id, as the composition root builds it (`main/index.ts`): the
+ * manifest, the policy-aware developer leniency and the workspace hash store. `hash: false` reads the cache only;
+ * `hash: true` hashes a file the cache does not know. `signal` aborts a hash in progress.
+ */
+export type ModelStartCheck = (
+  modelId: string,
+  opts: { hash: boolean; signal?: AbortSignal }
+) => Promise<ModelStartVerdict>
+
+/** #913: one service's start check, bound to its model and its hashing choice (`compose-services.ts`). */
+export type BoundModelStartCheck = (signal?: AbortSignal) => Promise<ModelStartVerdict>
+
+/**
+ * #913 (C §913.3): the check every non-chat role runs at its cold start, inside its single-flight start and before it
+ * spawns, so a file a check found damaged never starts in any role (the chat start gate does its own full hash). Over
+ * `computeInstallState` with the same leniency as chat: `hash: false` is the `skipHash` read (a cached mismatch on any
+ * file, or a placeholder hash outside developer mode, is `damaged`; nothing is hashed), `hash: true` is the full check
+ * (the search and voice models, whose bad output is stored in the index: G-4 (d2), seconds once per workspace).
+ *
+ * Only a proven case refuses (the #876 rule): a missing or unsupported file is `ok` here, and so is a check that could
+ * not finish (a read error), which is logged; the start then fails or runs as it always did. An abort rejects with
+ * the hash's own `HashAbortedError`, so a lock or quit during the hash ends the start at once.
+ */
+export async function checkModelBeforeStart(
+  manifest: ModelManifest,
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStore; hash: boolean; signal?: AbortSignal }
+): Promise<ModelStartVerdict> {
+  let state: ModelState
+  try {
+    state = await computeInstallState(manifest, rootPath, {
+      developerMode: opts.developerMode,
+      hashStore: opts.hashStore,
+      skipHash: !opts.hash,
+      signal: opts.signal
+    })
+  } catch (err) {
+    if (isHashAborted(err) || opts.signal?.aborted) throw err
+    log.warn('Model start check could not finish; starting as before', {
+      modelId: manifest.id,
+      // The code or the name only: a file system error's message names the weight file by its path.
+      error: err instanceof Error ? ((err as NodeJS.ErrnoException).code ?? err.name) : 'unknown'
+    })
+    return 'ok'
+  }
+  if (state === 'checksum_failed') {
+    log.warn('Model start refused: a file of the model failed its check', { modelId: manifest.id })
+    return 'damaged'
+  }
+  return 'ok'
+}
+
 /**
  * Will `computeInstallState` actually hash this weight (a real, present, non-cached file
  * with a real expected hash)? Used by `buildModelList`'s pre-pass to compute the

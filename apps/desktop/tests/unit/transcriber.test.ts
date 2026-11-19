@@ -25,6 +25,7 @@ import {
   registeredSidecarPids
 } from '../../src/main/services/runtime/sidecar'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import type { ModelStartVerdict } from '../../src/main/services/models'
 import { until, within } from '../helpers/hang-budget'
 
 // #869 review: a pass-through `node:fs` whose `createReadStream`, once armed, hands the transcriber's
@@ -191,6 +192,8 @@ function fakeCliTranscriber(opts: {
   onSpawn?: (args: string[], o: SpawnOptions) => void
   /** The child runs until it is killed (no close of its own). */
   hold?: boolean
+  /** #913: the voice model's start check. */
+  checkModel?: (signal?: AbortSignal) => Promise<ModelStartVerdict>
 }): { transcriber: ReturnType<typeof createWhisperCliTranscriber>; spawned: string[][]; spawnOptions: SpawnOptions[] } {
   const spawned: string[][] = []
   const spawnOptions: SpawnOptions[] = []
@@ -201,6 +204,7 @@ function fakeCliTranscriber(opts: {
     vadModelPath: opts.vadModelPath,
     platform: opts.platform,
     threads: 4,
+    checkModel: opts.checkModel,
     spawnImpl: (_cmd: string, args: string[], o: SpawnOptions): ChildProcess => {
       spawned.push(args)
       spawnOptions.push(o)
@@ -595,6 +599,51 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     })
     await expect(t.transcribe('a.mp3', { workDir: '' })).rejects.toThrow(/workDir is required/i)
     expect(spawned).toBe(false)
+  })
+})
+
+// #913: the voice model's start check runs before each spawn, ahead of the engine gate and the binary check. Under
+// G-4 (d2) the composition passes the hashing check (a damaged model writes wrong transcripts into the index), so a
+// lock or quit during that hash must end the call before anything spawns.
+describe('WhisperCliTranscriber — the start check (#913)', () => {
+  it('a model the check finds damaged spawns nothing and hashes no binary; the next call checks again', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-check-'))
+    let verdict: ModelStartVerdict = 'damaged'
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => verdict)
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON, checkModel })
+    hashProbe.events.length = 0
+    await expect(transcriber.transcribe('a.mp3', { workDir })).rejects.toThrow(/failed its file check/)
+    expect(spawned).toHaveLength(0)
+    expect(hashProbe.events).toEqual([]) // refused before the binary check, too
+    expect(checkModel.mock.calls[0][0]).toBeInstanceOf(AbortSignal)
+    // No latch: a re-download primes the cache, and the next transcription checks again.
+    verdict = 'ok'
+    expect(await transcriber.transcribe('a.mp3', { workDir })).toHaveLength(2)
+    expect(checkModel).toHaveBeenCalledTimes(2)
+    expect(spawned).toHaveLength(1)
+  })
+
+  it.each<[string, (t: { suspend(): Promise<void>; stop(): Promise<void> }, c: AbortController) => unknown]>([
+    ['a lock (suspend)', (t) => t.suspend()],
+    ['a quit (stop)', (t) => t.stop()],
+    ['a cancel', (_t, c) => c.abort()]
+  ])('%s during the hash aborts it, and the call spawns nothing (G-4 d2)', async (_label, end) => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-check-'))
+    // A hash under way: it settles only when its signal aborts, as the real read does.
+    const checkModel = vi.fn(
+      (signal?: AbortSignal) =>
+        new Promise<ModelStartVerdict>((_resolve, reject) =>
+          signal?.addEventListener('abort', () => reject(new Error('Hashing was cancelled')), { once: true })
+        )
+    )
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON, checkModel })
+    const controller = new AbortController()
+    const call = transcriber.transcribe('a.mp3', { workDir, signal: controller.signal })
+    await until(() => checkModel.mock.calls.length > 0, 'the call reaching its start check')
+    await within(Promise.resolve(end(transcriber, controller)), 'the teardown settling while the call hashed')
+    await expect(within(call, 'the call ending after its hash was aborted')).rejects.toThrow(/cancelled/)
+    expect(spawned).toHaveLength(0)
+    expect(readdirSync(workDir)).toEqual([])
   })
 })
 

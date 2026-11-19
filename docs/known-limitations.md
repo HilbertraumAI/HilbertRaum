@@ -236,12 +236,16 @@ password recovery — are documented in
   is attacker-forgeable anyway). **Since #382 (2026-09-08) routine checks are also LAZY** — every
   screen asks for `lazyVerify`, so on a cold cache only the ACTIVE model is hashed and a present
   but un-started weight is reported `installed` without being read at all. Damage in such a file
-  is therefore found when the model is started, not before. Mitigations: the AI Model screen's
+  is therefore found when the chat model is started, not before; the other models are not hashed
+  at their start, except the search and voice models before their first start in a workspace
+  (#913: their bad output would be stored in the index), so damage in the image, translation or
+  re-ranking model is found only by a check. Mitigations: the AI Model screen's
   per-model **Verify checksum** forces a real re-hash, its screen-level **Check all model files**
   walks every present weight (**since #420, 2026-09-08 the screen-level pass can be stopped** with
   the Stop checking button beside its progress bar — what finished stays verified, the rest is simply
   unchecked; the per-model Verify checksum button is still uncancellable, one file), the §7.4 start
-  gate re-verifies whatever it launches, and the
+  gate re-verifies the chat model it launches, every other role refuses to start a file a check
+  found damaged (#913: the cache is read at each start, about 1 ms), and the
   ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
   full-audit 2026-07-16), closing the post-completion power-cut/unplug window that could otherwise
   persist the rename + `(size,mtime)` cache entry over a torn weight the cache then reports verified.

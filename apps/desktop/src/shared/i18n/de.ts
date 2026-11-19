@@ -3410,6 +3410,9 @@ export const de: Record<keyof typeof en, string> = {
   'images.avail.noModel': 'Bildverständnis braucht ein lokales KI-Bildmodell auf diesem Laufwerk.',
   'images.avail.noRuntime': 'Bildverständnis braucht zuerst die installierte KI-Engine.',
   'images.avail.incompatible': 'Das KI-Bildmodell dieses Laufwerks braucht eine neuere KI-Engine.',
+  'images.avail.damaged':
+    'Das KI-Bildmodell dieses Laufwerks hat die Dateiprüfung nicht bestanden. Lade es im Bereich ' +
+    '„KI-Modell“ erneut herunter.',
   'images.avail.cta': 'Zum KI-Modell',
   'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)“ im Bereich „Dokumente“.',
   'images.drop.title': 'Bild hier ablegen',
@@ -3466,6 +3469,9 @@ export const de: Record<keyof typeof en, string> = {
     'Das KI-Bildmodell konnte nicht starten. Versuch es erneut oder wähle ein anderes Modell.',
   // #530: another model would not help — the OS refused the engine program.
   'images.err.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
+  'images.err.modelDamaged':
+    'Das KI-Bildmodell hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es im ' +
+    'Bereich „KI-Modell“ erneut herunter.',
   'images.err.emptyResponse':
     'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
   // #120 Punkt 1: eine LEERE Frage ist ein Eingabeproblem, keine leere Modellantwort.
@@ -3576,6 +3582,9 @@ export const de: Record<keyof typeof en, string> = {
     'Das Übersetzungsmodell konnte nicht starten — möglicherweise ist zu wenig Arbeitsspeicher frei. Schließe andere Programme oder starte HilbertRaum neu und versuche es dann erneut.',
   // #530: not a memory problem — the OS refused the engine program.
   'translate.err.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
+  'translate.err.modelDamaged':
+    'Das Übersetzungsmodell hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es ' +
+    'im Bereich „KI-Modell“ erneut herunter.',
   'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
   'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.',
   // #160 (BE-3): die endliche Eingabegrenze (TRANSLATE_MAX_TEXT_CHARS — Zahl synchron halten).

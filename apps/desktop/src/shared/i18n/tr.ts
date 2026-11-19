@@ -3146,6 +3146,9 @@ export const tr: UiCatalog<'tr'> = {
   'images.avail.noRuntime': 'Görsel anlama için önce yapay zekâ motorunun kurulması gerekir.',
   'images.avail.incompatible':
     'Bu sürücüdeki görsel modeli daha yeni bir yapay zekâ motoru gerektiriyor.',
+  'images.avail.damaged':
+    'Bu sürücüdeki görsel modeli dosya denetiminden geçemedi. Yapay zekâ modeli ekranından yeniden ' +
+    'indirin.',
   'images.avail.cta': 'Yapay zekâ modeli ekranına git',
   'images.avail.ocrPointer':
     'Taranmış belgeler mi? Belgeler ekranındaki “Aranabilir yap (OCR)” düğmesini kullanın.',
@@ -3205,6 +3208,9 @@ export const tr: UiCatalog<'tr'> = {
   'images.err.engineCannotRun':
     'Yapay zekâ motoru bu bilgisayarda çalışamıyor. Neyin eksik olduğu Yapay zekâ modeli ' +
     'ekranında gösteriliyor.',
+  'images.err.modelDamaged':
+    'Görsel modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +
+    'yeniden indirin.',
   'images.err.emptyResponse':
     'Bu görsel için yanıt gelmedi. Sorunuzu farklı bir şekilde sormayı deneyin.',
   'images.err.emptyQuestion': 'Önce görsel hakkında bir soru yazın.',
@@ -3303,6 +3309,9 @@ export const tr: UiCatalog<'tr'> = {
   'translate.err.engineCannotRun':
     'Yapay zekâ motoru bu bilgisayarda çalışamıyor. Neyin eksik olduğu Yapay zekâ modeli ' +
     'ekranında gösteriliyor.',
+  'translate.err.modelDamaged':
+    'Çeviri modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +
+    'yeniden indirin.',
   'translate.err.empty': 'Çeviri gelmedi. Yeniden deneyin veya metni farklı bir şekilde yazın.',
   'translate.err.sameLang': 'İki farklı dil seçin.',
   'translate.err.tooLong':

@@ -50,7 +50,7 @@ import { detectSystem } from '../services/benchmark'
 import { machineKey } from '../services/performance'
 import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchmark-persistence'
 import type { Db } from '../services/db'
-import { loadPolicy } from '../services/policy'
+import { developerLeniency } from '../services/policy'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
@@ -61,12 +61,6 @@ import { isChatStreaming } from './inflight'
 // The hardware profile comes from the persisted benchmark (`lastBenchmark`),
 // falling back to UNKNOWN until the user runs the benchmark for the first time.
 
-/**
- * Effective checksum leniency: "developer" is the user toggle OR a dev build —
- * but the drive POLICY is authoritative and can only restrict. On a commercial drive
- * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
- * are rejected no matter what the toggle says; this also disables the mock fallback.
- */
 /**
  * The memory inputs the chat ★ pick goes by (§6.6; PR #308 audit decisions 6 and 9): the class
  * and the BUDGET device for the NEXT start, read through `nextStartMemoryFor` from the
@@ -147,12 +141,6 @@ export function liveChatRecommendation(s: AppSettings, manifests: ModelManifest[
   return { modelId, basis }
 }
 
-function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
-  const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
-  const developer = s.developerMode || ctx.isDev
-  return developer && policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
-}
-
 /**
  * Start the runtime for a chat model, enforcing the spec §7.4 install gate (shared by
  * the `startRuntime` IPC handler and the startup auto-start). Throws on any refusal.
@@ -193,7 +181,7 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // first-run journey alive — for a developer (toggle or dev build, when the drive
   // policy permits unverified models) a MISSING model may start, because the selecting
   // runtime factory then falls back to the built-in mock runtime.
-  const lenient = developerLeniency(ctx, s)
+  const lenient = developerLeniency(ctx, s.developerMode)
   // The multi-GB weight hash below is the dominant cold-start cost on slow media and is
   // otherwise invisible in the logs; `computed` moving distinguishes a real hash from a
   // (size+mtime) cache hit.
@@ -567,7 +555,7 @@ export function registerModelIpc(ctx: AppContext): void {
         const { models, manifestErrors } = await buildModelList({
           manifestsDir: ctx.manifestsDir,
           rootPath: ctx.paths.rootPath,
-          developerMode: developerLeniency(ctx, s),
+          developerMode: developerLeniency(ctx, s.developerMode),
           runningModelId: ctx.runtime.activeModelId(),
           hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
           machineRamGb: machineRamGb(),
@@ -665,7 +653,7 @@ export function registerModelIpc(ctx: AppContext): void {
     // straight to the session's "cannot be loaded" verdict.
     clearModelLoadLatch(modelId)
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
-      developerMode: developerLeniency(ctx, getSettings(ctx.db)),
+      developerMode: developerLeniency(ctx, getSettings(ctx.db).developerMode),
       hashStore: store
     })
     log.info('Model re-verified', { modelId, state })

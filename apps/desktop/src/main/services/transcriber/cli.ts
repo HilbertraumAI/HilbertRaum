@@ -24,6 +24,7 @@ import {
 } from '../runtime/engine-load'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
+import type { BoundModelStartCheck } from '../models'
 import { WhisperPathError, planWhisperArgv, whisperCommand } from './argv'
 import type { TranscribeOptions, Transcriber, TranscriptSegment } from './index'
 
@@ -158,6 +159,14 @@ export interface WhisperCliOptions {
   /** The OS this runs on (default `process.platform`): what the #530 spawn-error and load-failure
    *  classifiers report, and which command-line plan the #869 planner makes. A test seam. */
   platform?: NodeJS.Platform
+  /**
+   * #913 (G-4 d2): checks the voice model's files (the weight and the VAD model) before each whisper-cli spawn,
+   * ahead of the engine gate and the binary check. The composition passes the hashing check: the first transcription
+   * in a workspace hashes the files (a damaged model writes wrong transcripts into the index), later ones read the
+   * cache. A cancel, lock or quit during the hash aborts it. `damaged` fails the call before anything spawns.
+   * Absent ⇒ no check.
+   */
+  checkModel?: BoundModelStartCheck
 }
 
 export class WhisperCliTranscriber implements Transcriber {
@@ -187,6 +196,9 @@ export class WhisperCliTranscriber implements Transcriber {
    * child: an engine update suspends without aborting the import's own signal (`registerEngineIpc`).
    */
   private readonly copying = new Map<AbortController, Promise<void>>()
+  /** #913: the start checks in progress (one per call, before its child exists); suspend()/stop() abort them. */
+  private readonly checking = new Set<AbortController>()
+  private readonly checkModel?: BoundModelStartCheck
   private stopped = false
 
   constructor(opts: WhisperCliOptions) {
@@ -200,6 +212,7 @@ export class WhisperCliTranscriber implements Transcriber {
     this.suspendTimeoutMs = opts.suspendTimeoutMs ?? DEFAULT_SUSPEND_TIMEOUT_MS
     this.spawnImpl = opts.spawnImpl ?? nodeSpawn
     this.platform = opts.platform
+    this.checkModel = opts.checkModel
   }
 
   async transcribe(filePath: string, opts: TranscribeOptions): Promise<TranscriptSegment[]> {
@@ -357,6 +370,8 @@ export class WhisperCliTranscriber implements Transcriber {
     // suspend() aborted during the waits.
     const cancelled = (): boolean => opts.signal?.aborted === true || this.stopped || copySignal?.aborted === true
     if (cancelled()) throw new Error('Transcription was cancelled.')
+    // #913: the voice model's files first, before the engine gate: the binary is hashed right before the spawn.
+    if (this.checkModel) await this.checkBeforeSpawn(this.checkModel, opts.signal, copySignal)
     // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
     // packaged-build tamper is refused; the audio import then fails per-file with the
     // generic failure copy (the raw reason stays in the local log only).
@@ -486,6 +501,41 @@ export class WhisperCliTranscriber implements Transcriber {
   }
 
   /**
+   * #913: run the start check for one call. Its signal fires on the call's own cancel, on an abort of its copy (#869)
+   * and on suspend()/stop(), so a lock or quit during the hash ends the call here, before anything spawns. A `damaged`
+   * verdict fails the call with a path-free message (an import stores the generic transcription copy; dictation says
+   * it failed). Nothing is latched: the next call checks again, and a re-download primes the cache.
+   */
+  private async checkBeforeSpawn(
+    check: BoundModelStartCheck,
+    callSignal?: AbortSignal,
+    copySignal?: AbortSignal
+  ): Promise<void> {
+    const abort = new AbortController()
+    const onAbort = (): void => abort.abort()
+    callSignal?.addEventListener('abort', onAbort, { once: true })
+    copySignal?.addEventListener('abort', onAbort, { once: true })
+    this.checking.add(abort)
+    try {
+      let verdict: Awaited<ReturnType<BoundModelStartCheck>>
+      try {
+        verdict = await check(abort.signal)
+      } catch (err) {
+        if (abort.signal.aborted || this.stopped) throw new Error('Transcription was cancelled.')
+        throw err
+      }
+      if (abort.signal.aborted || this.stopped) throw new Error('Transcription was cancelled.')
+      if (verdict === 'damaged') {
+        throw new Error('The voice model failed its file check, so whisper-cli was not started')
+      }
+    } finally {
+      this.checking.delete(abort)
+      callSignal?.removeEventListener('abort', onAbort)
+      copySignal?.removeEventListener('abort', onAbort)
+    }
+  }
+
+  /**
    * #530: what a spawn error rejects with — thrown synchronously (#658) or emitted as `'error'`. A
    * Windows refusal by policy / security software is the voice engine's verdict and the typed error;
    * anything else is passed on as it came.
@@ -570,6 +620,8 @@ export class WhisperCliTranscriber implements Transcriber {
    * past `suspendTimeoutMs` we return regardless (the crash-sweep is the shred backstop).
    */
   async suspend(): Promise<void> {
+    // #913: a call still checking its model has no child and no copy to wait for; aborting ends it before it spawns.
+    for (const abort of this.checking) abort.abort()
     const pending = [...this.active.entries()]
     for (const [child] of pending) this.killWithEscalation(child)
     // #869: a call that copied (or is copying) its original and has no child yet — abort it (it then

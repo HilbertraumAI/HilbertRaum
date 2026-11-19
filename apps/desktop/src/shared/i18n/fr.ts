@@ -3545,6 +3545,9 @@ export const fr: UiCatalog<'fr'> = {
   'images.avail.incompatible':
     'Le modèle pour les images présent sur ce disque nécessite une version plus récente du ' +
     'moteur d’IA.',
+  'images.avail.damaged':
+    'Le modèle pour les images présent sur ce disque n’a pas réussi la vérification de ses fichiers. ' +
+    'Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
   'images.avail.cta': 'Ouvrir l’écran Modèle d’IA',
   'images.avail.ocrPointer':
     'Des documents numérisés\u00A0? Utilisez «\u00A0Rendre interrogeable (OCR)\u00A0» sur ' +
@@ -3611,6 +3614,9 @@ export const fr: UiCatalog<'fr'> = {
   'images.err.engineCannotRun':
     'Le moteur d’IA ne peut pas fonctionner sur cet ordinateur. L’écran Modèle d’IA indique ce ' +
     'qui manque.',
+  'images.err.modelDamaged':
+    'Le modèle pour les images n’a pas réussi la vérification de ses fichiers, il n’a donc pas été ' +
+    'démarré. Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
   'images.err.emptyResponse':
     'Aucune réponse n’a été renvoyée pour cette image. Essayez de reformuler votre question.',
   'images.err.emptyQuestion': 'Saisissez d’abord une question sur l’image.',
@@ -3723,6 +3729,9 @@ export const fr: UiCatalog<'fr'> = {
   'translate.err.engineCannotRun':
     'Le moteur d’IA ne peut pas fonctionner sur cet ordinateur. L’écran Modèle d’IA indique ce ' +
     'qui manque.',
+  'translate.err.modelDamaged':
+    'Le modèle de traduction n’a pas réussi la vérification de ses fichiers, il n’a donc pas été ' +
+    'démarré. Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
   'translate.err.empty': 'Aucune traduction n’a été renvoyée. Réessayez, ou reformulez le texte.',
   'translate.err.sameLang': 'Choisissez deux langues différentes.',
   'translate.err.tooLong':

@@ -7,7 +7,7 @@ import { createSelectedOcrEngine, listOcrLanguages, ocrAssetsDir, type OcrSelect
 import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
-import { discoverManifests, type DiscoveredManifest } from './models'
+import { discoverManifests, type BoundModelStartCheck, type DiscoveredManifest, type ModelStartCheck } from './models'
 import { engineFamilyHasHostBuild } from './runtime-download'
 import { log } from './logging'
 import { perfMark } from './perf'
@@ -89,6 +89,37 @@ export interface ComposeServicesDeps {
    * additive, never a behaviour change there.
    */
   rerankerRequestCeiling?: () => number
+  /**
+   * #913: the start check every non-chat role runs before it spawns its model (`main/index.ts` builds it from the
+   * workspace: the manifest by id, the policy-aware developer leniency, the hash store). Each composer binds it to its
+   * role's model and hashing choice (`HASH_BEFORE_FIRST_START`). Optional so a composition test or harness that does
+   * not pass it keeps today's starts; the one production caller passes it to every composer.
+   */
+  checkModel?: ModelStartCheck
+}
+
+/**
+ * #913, G-4 (d2): the roles whose file is hashed before its first start in a workspace (cold: seconds, once; then the
+ * cache answers in about 1 ms). Their bad output is stored: damaged search vectors go into the index, a damaged voice
+ * model writes wrong transcripts. The other roles only read the cache, so they refuse a file a check already found
+ * damaged and never pay a first-use hash (vision 10–33 s, translation 22–73 s on USB 3).
+ */
+export const HASH_BEFORE_FIRST_START = {
+  embeddings: true,
+  transcriber: true,
+  reranker: false,
+  translation: false
+} as const
+
+/** #913: `check` bound to one role's model, or undefined (no check) without a check or a model. */
+function startCheckFor(
+  check: ModelStartCheck | undefined,
+  model: { id: string } | null,
+  role: keyof typeof HASH_BEFORE_FIRST_START
+): BoundModelStartCheck | undefined {
+  if (!check || !model) return undefined
+  const hash = HASH_BEFORE_FIRST_START[role]
+  return (signal) => check(model.id, { hash, signal })
 }
 
 /**
@@ -128,13 +159,15 @@ export type ComposeTranscriberDeps = ComposeServicesDeps & EnginePinsDeps
  * lazy; construction spawns nothing).
  */
 export function composeTranslator(deps: ComposeServicesDeps, reranker?: Reranker | null): Translator | null {
+  const model = resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
+    discovered: deps.discovered
+  })
   return createSelectedTranslator({
     beforeGpuStart: translationGpuYield(reranker),
     rootPath: deps.rootPath,
     isDev: deps.isDev ?? false,
-    model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
-      discovered: deps.discovered
-    }),
+    model,
+    checkModel: startCheckFor(deps.checkModel, model, 'translation'),
     gpu: deps.gpu,
     onDeviceFallback: (reason) =>
       log.warn('Translation sidecar fell back to CPU for this session', { reason }),
@@ -214,6 +247,7 @@ export function composeTranscriberSlot(deps: ComposeTranscriberDeps): {
     rootPath: deps.rootPath,
     isDev,
     model,
+    checkModel: startCheckFor(deps.checkModel, model, 'transcriber'),
     onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
   })
   if (transcriber) return { transcriber, missing: null }
@@ -258,6 +292,8 @@ export interface TranscriberSlot {
   manifestsDir: AppContext['manifestsDir']
   bundledManifestsDir: AppContext['bundledManifestsDir']
   isDev: AppContext['isDev']
+  /** #913: the start check the refreshed transcriber gets, as at startup. */
+  checkModel?: AppContext['checkModel']
 }
 
 export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
@@ -267,7 +303,8 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
       rootPath: ctx.paths.rootPath,
       manifestsDir: ctx.manifestsDir,
       bundledManifestsDir: ctx.bundledManifestsDir,
-      isDev: ctx.isDev
+      isDev: ctx.isDev,
+      checkModel: ctx.checkModel
     })
     // #527: the reason moves with every refresh — an engine install that lands without the model
     // turns "engine" into "model", which the composer hint must say on the next status read.
@@ -427,7 +464,8 @@ export function composeServices({
   isDev = false,
   gpu,
   rerankerDevicePosture,
-  rerankerRequestCeiling
+  rerankerRequestCeiling,
+  checkModel
 }: ComposeServicesArgs): AvailabilityServices {
   // PF-4 (full-audit 2026-07-10): ONE manifest walk + YAML parse serves every role resolution
   // of this composition pass — initBackend runs it synchronously before the window exists, and
@@ -442,10 +480,13 @@ export function composeServices({
   } catch {
     discovered = []
   }
+  const embeddingModel = resolveModelByRole(manifestsDir, rootPath, 'embeddings', { discovered })
   const embedder = createSelectedEmbedder({
     rootPath,
     isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'embeddings', { discovered }),
+    model: embeddingModel,
+    // #913 (d2): hashed before its first start in a workspace — damaged vectors would go into the index.
+    checkModel: startCheckFor(checkModel, embeddingModel, 'embeddings'),
     onSelect: (kind, reason) => {
       log.info('Embedder backend selected', { kind, reason })
       // Measurement-run validity check: an ingestion timed against the mock embedder is
@@ -457,10 +498,12 @@ export function composeServices({
   // otherwise; retrieval then keeps today's ordering byte-identical). `rerankerDevicePosture`
   // is consulted by `rerank()` on every call (Wave 8 ruling (b)(Q)); `rerankerRequestCeiling`
   // gates the CPU posture's request size (Wave 8 ruling (b)(G)).
+  const rerankerModel = resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered })
   const reranker = createSelectedReranker({
     rootPath,
     isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered }),
+    model: rerankerModel,
+    checkModel: startCheckFor(checkModel, rerankerModel, 'reranker'),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason }),
     devicePosture: rerankerDevicePosture,
     requestCeiling: rerankerRequestCeiling,
@@ -478,7 +521,8 @@ export function composeServices({
     manifestsDir,
     bundledManifestsDir,
     isDev,
-    discovered
+    discovered,
+    checkModel
   })
   // Local OCR — tesseract.js over the drive's vendored `ocr/` language files; selected
   // only when those exist (null otherwise; photo imports fail per-file and detected scans
@@ -492,7 +536,7 @@ export function composeServices({
   // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.
   // Shares `composeTranslator` with the issue-#40 post-download re-selection so the two call
   // sites can never drift.
-  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered }, reranker)
+  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered, checkModel }, reranker)
 
   return { embedder, reranker, transcriber, transcriberMissing, ocrEngine, translator }
 }

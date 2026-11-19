@@ -2,6 +2,7 @@ import type { Reranker } from './index'
 import { createLlamaReranker } from './llama'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
+import type { BoundModelStartCheck } from '../models'
 
 // Availability-aware reranker selector (rag-design §11), mirroring
 // the embedder factory — with one deliberate difference: there is NO mock fallback.
@@ -44,6 +45,8 @@ export interface RerankerSelectionDeps {
    * GPU posture for the rest of the session. Observability only; must never throw.
    */
   onDeviceFallback?: (reason: string) => void
+  /** #913: the reranker's start check (`LlamaRerankerOptions.checkModel`). Absent ⇒ no check. */
+  checkModel?: BoundModelStartCheck
 }
 
 /**
@@ -59,7 +62,8 @@ export function createSelectedReranker(deps: RerankerSelectionDeps): Reranker | 
       contextTokens: model.contextTokens,
       devicePosture: deps.devicePosture,
       cpuRequestCeiling: deps.requestCeiling,
-      onDeviceFallback: deps.onDeviceFallback
+      onDeviceFallback: deps.onDeviceFallback,
+      checkModel: deps.checkModel
     })
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — a mock reranker would

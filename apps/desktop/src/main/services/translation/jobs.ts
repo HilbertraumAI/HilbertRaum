@@ -213,6 +213,8 @@ export class TranslateJobService {
         let startFailed = false
         /** #530: the latched start failure was the OS refusing the engine program. */
         let engineCannotRun = false
+        /** #913: the latched start failure was the start check finding the model's file damaged. */
+        let modelDamaged = false
         let timedOutSlow = false
         for (
           let attempt = 1;
@@ -266,6 +268,7 @@ export class TranslateJobService {
               log.warn('Translate view start failed', { jobId, window: i + 1, error: String(err) })
               startFailed = true
               engineCannotRun = err.engineCannotRun
+              modelDamaged = err.modelDamaged
               break
             }
             // #160 (BE-2): a per-request TIMEOUT during a LIVE decode (tokens flowed) is as
@@ -290,7 +293,7 @@ export class TranslateJobService {
           }
         }
         if (startFailed) {
-          this.fail(jobId, engineCannotRun ? 'engineCannotRun' : 'startFailed', emit)
+          this.fail(jobId, engineCannotRun ? 'engineCannotRun' : modelDamaged ? 'modelDamaged' : 'startFailed', emit)
           return
         }
         if (!clean) {

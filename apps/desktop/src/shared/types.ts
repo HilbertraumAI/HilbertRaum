@@ -1097,14 +1097,16 @@ export interface OcrInstallJob {
 /** Why image understanding is unavailable. NO `'locked'` reason (PROD-2): `getVisionStatus`
  *  is WORKSPACE-AGNOSTIC — vision weights aren't encrypted, so status doesn't fail on lock;
  *  the SCREEN owns the lock gate (it reads `workspaceReady`), and the sidecar is torn down on
- *  lock independently (§13). Status can read `available:true` while the screen shows locked. */
-export type VisionUnavailableReason = 'no-model' | 'no-runtime' | 'incompatible'
+ *  lock independently (§13). Status can read `available:true` while the screen shows locked.
+ *  `damaged` (#913): a vision model on the drive failed its file check (a check found a file
+ *  damaged, or its hash is a placeholder outside developer mode), so Images will not start it. */
+export type VisionUnavailableReason = 'no-model' | 'no-runtime' | 'incompatible' | 'damaged'
 
 export interface VisionStatus {
   available: boolean
   /** Present iff `!available`. */
   reason?: VisionUnavailableReason
-  /** The installed + verified vision model, if any. */
+  /** The vision model Images runs, if any: present, and no check found it damaged (only a cache read, #913). */
   modelId?: string
   /** Human label for the screen (no jargon — never "mmproj"/quantization). */
   modelDisplayName?: string
@@ -1145,7 +1147,9 @@ export type ImageJobState = 'queued' | 'starting' | 'analyzing' | 'done' | 'fail
  * `emptyResponse`, which means the model returned nothing). Renderers must keep an
  * unknown-code fallback (AnswerThread falls back to the `runtimeFailed` copy), so adding
  * codes here stays skew-safe (#123 / #120). `engineCannotRun` (#530): the operating system
- * refused to start the AI engine program — another model would not help.
+ * refused to start the AI engine program — another model would not help. `modelDamaged` (#913):
+ * a check found the vision model's file damaged, so it was not started (the status reason
+ * `damaged` says so first; this is the job's fallback when the status changed meanwhile).
  */
 export type VisionErrorCode =
   | 'tooLarge'
@@ -1159,6 +1163,7 @@ export type VisionErrorCode =
   | 'contextExceeded'
   | 'cancelled'
   | 'busy'
+  | 'modelDamaged'
 
 export interface ImageJob {
   jobId: string
@@ -1631,7 +1636,8 @@ export type TranslateJobState = 'queued' | 'translating' | 'done' | 'failed' | '
  * app or free memory — F-7 / FA-4 option c). `tooLong`: the pasted text exceeds
  * `TRANSLATE_MAX_TEXT_CHARS` (#160 BE-3 — the document path handles big inputs).
  * `engineCannotRun` (#530): the operating system refused to start the AI engine program — memory
- * is not the cause, so the `startFailed` copy would send the user the wrong way.
+ * is not the cause, so the `startFailed` copy would send the user the wrong way. `modelDamaged`
+ * (#913): a check found the translation model's file damaged, so it was not started.
  */
 export type TranslateErrorCode =
   | 'noModel'
@@ -1644,6 +1650,7 @@ export type TranslateErrorCode =
   | 'empty'
   | 'cancelled'
   | 'tooLong'
+  | 'modelDamaged'
 
 /**
  * #160 (BE-3): upper bound on the view-translate paste, in characters. Planning (regex split +

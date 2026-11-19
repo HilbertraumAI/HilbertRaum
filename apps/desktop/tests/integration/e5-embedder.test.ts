@@ -12,6 +12,10 @@ import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { createSelectedEmbedder } from '../../src/main/services/embeddings/factory'
 import { isEngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
+import { checkModelBeforeStart, checksumCacheStats, type ModelStartVerdict } from '../../src/main/services/models'
+import type { ModelManifest } from '../../src/shared/manifest'
+import { tempRoot } from '../helpers/db-fixtures'
+import { sha256, validManifest, writeDriveFile } from '../helpers/manifest-fixtures'
 
 const base = {
   id: 'multilingual-e5-small-q8',
@@ -943,6 +947,100 @@ describe('E5Embedder — OS loader refusal (#530)', () => {
     embedder.resetStartFailure()
     await expect(embedder.embed(['hello'])).rejects.toThrow() // refused again, but it TRIED
     expect(calls.length).toBe(2)
+    await embedder.stop()
+  })
+})
+
+// #913: the E5's start check. It runs inside the single-flight start, before anything spawns, so a file a check found
+// damaged never starts (row 4), and under G-4 (d2) the first start in a workspace hashes the file, because damaged
+// vectors would be stored in the index (row 6). A lock during that hash aborts it like the health wait.
+describe('E5Embedder — the start check (#913)', () => {
+  it('a file the check finds damaged starts no sidecar: a latched start failure until a lock re-arms it', async () => {
+    const { spawn, calls } = fakeSpawn()
+    let verdict: ModelStartVerdict = 'damaged'
+    const signals: Array<AbortSignal | undefined> = []
+    const checkModel = vi.fn(async (signal?: AbortSignal) => {
+      signals.push(signal)
+      return verdict
+    })
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]), checkModel })
+    const first = await embedder.embed(['a']).catch((e: unknown) => e)
+    // `start` is the kind whose copy says "On the AI Model screen, choose Check all model files — then try again".
+    expect(isEmbedderError(first) && first.kind).toBe('start')
+    expect(calls).toHaveLength(0)
+    expect(await embedder.embed(['a']).catch((e: unknown) => e)).toBe(first) // latched: no second check either
+    expect(checkModel).toHaveBeenCalledTimes(1)
+    expect(signals[0]).toBeInstanceOf(AbortSignal) // the start-abort signal goes into the check
+    await embedder.suspend() // a lock re-arms the latch: the next embed checks again
+    verdict = 'ok'
+    expect(await embedder.embed(['b'])).toHaveLength(1)
+    expect(checkModel).toHaveBeenCalledTimes(2)
+    expect(calls).toHaveLength(1)
+    await embedder.stop()
+  })
+
+  /** A real E5 file under a temp drive root and its manifest; `body` is what lands on the drive. */
+  function e5OnDrive(body: string): { manifest: ModelManifest; root: string } {
+    const root = tempRoot('e5-check')
+    writeDriveFile(root, 'models/embeddings/e5.gguf', body)
+    const manifest = validManifest({
+      id: 'multilingual-e5-small-q8',
+      role: 'embeddings',
+      local_path: 'models/embeddings/e5.gguf',
+      sha256: sha256('the e5 weights')
+    })
+    return { manifest, root }
+  }
+
+  it('hashes the file once, before the first start; a later cold start reads the cache (G-4 d2)', async () => {
+    const { manifest, root } = e5OnDrive('the e5 weights')
+    const checkModel = (signal?: AbortSignal): Promise<ModelStartVerdict> =>
+      checkModelBeforeStart(manifest, root, { developerMode: false, hash: true, signal })
+    const { spawn, calls } = fakeSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]), checkModel })
+    const before = checksumCacheStats.computed
+    await embedder.embed(['a'])
+    expect(checksumCacheStats.computed - before).toBe(1)
+    await embedder.embed(['b']) // resident: no check at all
+    await embedder.suspend()
+    await embedder.embed(['c']) // a cold start again: the cache answers
+    expect(checksumCacheStats.computed - before).toBe(1)
+    expect(calls).toHaveLength(2)
+    await embedder.stop()
+  })
+
+  it('a damaged file is refused at its first start, though no check had looked at it before (G-4 d2)', async () => {
+    const { manifest, root } = e5OnDrive('the e5 weightz') // same length: a bit flip
+    const checkModel = (signal?: AbortSignal): Promise<ModelStartVerdict> =>
+      checkModelBeforeStart(manifest, root, { developerMode: false, hash: true, signal })
+    const { spawn, calls } = fakeSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]), checkModel })
+    const err = await embedder.embed(['a']).catch((e: unknown) => e)
+    expect(isEmbedderError(err) && err.kind).toBe('start')
+    expect(calls).toHaveLength(0)
+    await embedder.stop()
+  })
+
+  it('a lock during the hash aborts it: the embed ends as interrupted, nothing spawns, is cached or latched', async () => {
+    const { manifest, root } = e5OnDrive('the e5 weights')
+    let hashing = false
+    const checkModel = (signal?: AbortSignal): Promise<ModelStartVerdict> => {
+      hashing = true
+      return checkModelBeforeStart(manifest, root, { developerMode: false, hash: true, signal })
+    }
+    const { spawn, calls } = fakeSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]), checkModel })
+    const before = checksumCacheStats.computed
+    const first = embedder.embed(['a']).catch((e: unknown) => e)
+    expect(hashing).toBe(true) // the start is inside the hash: its file read is open, no bytes in yet
+    await within(embedder.suspend(), 'the lock teardown settling while the start hashed')
+    expect(await first).toMatchObject({ name: 'EmbedderError', kind: 'interrupted' })
+    expect(calls).toHaveLength(0)
+    expect(checksumCacheStats.computed).toBe(before) // the aborted hash counted and cached nothing
+    // Not latched: the next embed hashes for real and starts.
+    expect(await embedder.embed(['b'])).toHaveLength(1)
+    expect(checksumCacheStats.computed - before).toBe(1)
+    expect(calls).toHaveLength(1)
     await embedder.stop()
   })
 })

@@ -1463,3 +1463,35 @@ describe('TranslationRuntime — OS loader refusal (#530)', () => {
     await rt.stop()
   })
 })
+
+// #913: the translation model's start check, first in the start ladder. A file a check found damaged never spawns, on
+// either rung, and never takes the reranker off the card; the refusal latches with `modelDamaged`, which the Translate
+// view shows as its own "download it again" copy (the BE-7 refresh replaces the latched instance after a re-download).
+describe('TranslationRuntime — the start check (#913)', () => {
+  it('a file the check finds damaged starts nothing: a latched modelDamaged start failure, no rung, no fallback', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const fallbacks: string[] = []
+    let yields = 0
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => 'damaged' as const)
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      onDeviceFallback: (reason) => fallbacks.push(reason),
+      beforeGpuStart: async () => void (yields += 1),
+      checkModel
+    })
+    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err)).toBe(true)
+    expect((err as { modelDamaged?: boolean }).modelDamaged).toBe(true)
+    expect((err as { engineCannotRun?: boolean }).engineCannotRun).toBe(false)
+    expect(calls).toHaveLength(0)
+    expect(yields).toBe(0) // the reranker keeps the card: nothing was going to load
+    expect(fallbacks).toEqual([]) // not a device fault
+    expect(rt.isStartFailed()).toBe(true)
+    expect(await rt.translate(translateOpts).catch((e: unknown) => e)).toBe(err) // latched
+    expect(checkModel).toHaveBeenCalledTimes(1)
+    expect(checkModel.mock.calls[0][0]).toBeInstanceOf(AbortSignal) // the ladder's abort signal goes in
+    await rt.stop()
+  })
+})

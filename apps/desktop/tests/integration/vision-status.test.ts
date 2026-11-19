@@ -70,7 +70,8 @@ function writeVisionManifest(
 
 function ctxFor(rootPath: string, manifestsDir: string | null): AppContext {
   return {
-    paths: { rootPath },
+    // #913: the developer leniency reads the drive policy from configPath (none there: the dev defaults).
+    paths: { rootPath, configPath: join(rootPath, 'config') },
     manifestsDir,
     isDev: true,
     // Locked → status stays workspace-agnostic and never touches the DB (PROD-2).
@@ -166,9 +167,10 @@ describe('getVisionStatus', () => {
     const ctx = { ...ctxFor(rootPath, manifestsDir), isDev: false } as AppContext // developer mode off
 
     expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'a-vision' })
-    // With a-vision's projector gone, the flagged z-vision is the only candidate and fails: no model.
+    // With a-vision's projector gone, the flagged z-vision is the only candidate and fails its check: damaged (#913;
+    // before, no-model, whose copy asks for a model the drive already has).
     rmSync(join(rootPath, 'models/vision/a-mmproj.gguf'))
-    expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'no-model' })
+    expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'damaged' })
     writeDriveFile(rootPath, 'models/vision/a-mmproj.gguf', 'a projector')
     // The same drive with the flag taken off z-vision: a-vision is the pick, and it is available.
     writeVisionManifest(manifestsDir, zVision, 'z-vision.yaml')
@@ -199,6 +201,27 @@ describe('getVisionStatus', () => {
     const status = await getVisionStatus(ctx)
     expect(status.available).toBe(false)
     expect(status.modelId).toBeUndefined()
+    // #913 (d): the reason whose copy sends the user back to the AI Model screen to download it again.
+    expect(status.reason).toBe('damaged')
+  })
+
+  // #913 (S-913-4): the images status takes the developer leniency every role uses, so the drive policy outranks a
+  // dev build or the developer toggle, as it does for the chat start. Before, a placeholder-hash vision model counted
+  // as installed on a commercial drive whenever developer mode was on.
+  it('lets the drive policy refuse a placeholder-hash vision model even in developer mode (#913)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    writeBinary(rootPath)
+    writeVisionManifest(manifestsDir) // placeholder hashes for both files
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-instruct-q4.gguf')
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf')
+    const ctx = ctxFor(rootPath, manifestsDir) // a dev build: developer mode on
+    expect(await getVisionStatus(ctx)).toMatchObject({ available: true })
+    mkdirSync(join(rootPath, 'config'), { recursive: true })
+    writeFileSync(
+      join(rootPath, 'config', 'policy.json'),
+      JSON.stringify({ models: { allow_unverified_models: false, require_sha256_match: true } })
+    )
+    expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'damaged' })
   })
 })
 

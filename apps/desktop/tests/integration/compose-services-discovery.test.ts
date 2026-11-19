@@ -21,7 +21,13 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
   }
 })
 
-import { composeServices, composeTranslator, refreshTranscriberSlot } from '../../src/main/services/compose-services'
+import {
+  composeServices,
+  composeTranslator,
+  refreshTranscriberSlot,
+  type TranscriberSlot
+} from '../../src/main/services/compose-services'
+import { whisperCliBinaryName, whisperCliDir } from '../../src/main/services/transcriber'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import { rawManifest, writeDriveFile, writeManifest } from '../helpers/manifest-fixtures'
 
@@ -135,5 +141,75 @@ describe('composeServices — the flagged embedder is the embedder, present or n
   it('a missing default file composes the mock embedder, never the other installed embedder', () => {
     expect(embedderId(drive(true))).toBe('z-default')
     expect(embedderId(drive(false))).toBe('mock-embedder')
+  })
+})
+
+// #913: the start check reaches every non-chat role through `composeServices` (and the transcriber's mid-session
+// refresh), bound to that role's model and hashing choice: G-4 (d2) hashes the search and voice models before their
+// first start, the reranker and translation read the cache only. Each service runs the check before it spawns, so a
+// `damaged` verdict proves the wire without a real binary: the placeholder binaries below are never started.
+describe('composeServices — the start check reaches every role (#913)', () => {
+  function provisioned(): { root: string; manifestsDir: string } {
+    const { root, manifestsDir } = tempDrive()
+    for (const [role, id] of [
+      ['embeddings', 'embed-test'],
+      ['reranker', 'rerank-test'],
+      ['transcriber', 'whisper-test'],
+      ['translation', 'translate-test']
+    ]) {
+      writeDriveFile(root, `models/${role}/${id}.bin`, 'weights')
+    }
+    mkdirSync(llamaServerDir(root), { recursive: true })
+    writeFileSync(join(llamaServerDir(root), llamaServerBinaryName()), '')
+    mkdirSync(whisperCliDir(root), { recursive: true })
+    writeFileSync(join(whisperCliDir(root), whisperCliBinaryName()), '')
+    return { root, manifestsDir }
+  }
+
+  it('each service asks it before its first start, with its own model and hashing choice, and refuses on damaged', async () => {
+    const { root, manifestsDir } = provisioned()
+    const asked: Array<[string, boolean]> = []
+    const checkModel = vi.fn(async (modelId: string, opts: { hash: boolean; signal?: AbortSignal }) => {
+      asked.push([modelId, opts.hash])
+      return 'damaged' as const
+    })
+    const services = composeServices({
+      rootPath: root,
+      manifestsDir,
+      bundledManifestsDir: null,
+      rerankerDevicePosture: () => 'cpu',
+      rerankerRequestCeiling: () => Infinity,
+      checkModel
+    })
+    expect(checkModel).not.toHaveBeenCalled() // composing starts nothing
+
+    await expect(services.embedder.embed(['x'])).rejects.toMatchObject({ name: 'EmbedderError', kind: 'start' })
+    await expect(services.reranker!.rerank('q', ['a', 'b'])).rejects.toThrow(/failed its check/)
+    await expect(services.translator!.translate({ sourceLang: 'de', targetLang: 'en', text: 'Hallo' })).rejects.toMatchObject({
+      name: 'TranslationStartError',
+      modelDamaged: true
+    })
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-check-'))
+    await expect(services.transcriber!.transcribe(join(workDir, 'a.wav'), { workDir })).rejects.toThrow(/failed its file check/)
+    expect(asked).toEqual([
+      ['embed-test', true],
+      ['rerank-test', false],
+      ['translate-test', false],
+      ['whisper-test', true]
+    ])
+
+    // The transcriber a mid-session install refreshes into an empty slot gets the same check.
+    const ctx: TranscriberSlot = {
+      transcriber: null,
+      paths: { rootPath: root },
+      manifestsDir,
+      bundledManifestsDir: null,
+      isDev: false,
+      checkModel
+    }
+    expect(refreshTranscriberSlot(ctx)).toBe(true)
+    await expect(ctx.transcriber!.transcribe(join(workDir, 'b.wav'), { workDir })).rejects.toThrow(/failed its file check/)
+    expect(asked.at(-1)).toEqual(['whisper-test', true])
+    await Promise.all([services.embedder.stop?.(), services.reranker!.stop?.(), services.translator!.stop()])
   })
 })

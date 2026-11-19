@@ -15,6 +15,7 @@ import {
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   beginChecksumInstrumentation,
+  checkModelBeforeStart,
   sha256File,
   verifyChecksum,
   computeInstallState,
@@ -819,6 +820,49 @@ describe('#310 multi-file install state (shard set)', () => {
     const m = shardManifest([shas[0], 'REPLACE_WITH_REAL_HASH', shas[2], shas[3]])
     expect(await computeInstallState(m, root, { developerMode: true })).toBe('installed')
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
+  })
+})
+
+// #913: the start check the non-chat roles run before they spawn. Only a proven case refuses (the #876 rule): a file a
+// check found damaged, or a placeholder hash outside developer mode, as for chat. `hash: false` reads the cache only;
+// `hash: true` (the search and voice models, G-4 d2) hashes an uncached file. The service rows fake this verdict.
+describe('checkModelBeforeStart (#913)', () => {
+  const REL = 'models/transcriber/voice.bin'
+  type Case = [string, { body?: string; sha?: string; primeBad?: boolean; developerMode?: boolean; hash: boolean }, string, number]
+  it.each<Case>([
+    ['a cached mismatch, cache only', { primeBad: true, hash: false }, 'damaged', 0],
+    ['no cache entry, cache only: nothing is hashed', { hash: false }, 'ok', 0],
+    ['no cache entry, hashed: a match', { hash: true }, 'ok', 1],
+    ['no cache entry, hashed: damaged', { body: 'voice bytez', hash: true }, 'damaged', 1],
+    ['a placeholder hash outside developer mode', { sha: 'REPLACE_WITH_REAL_HASH', hash: false }, 'damaged', 0],
+    ['a placeholder hash in developer mode', { sha: 'REPLACE_WITH_REAL_HASH', developerMode: true, hash: true }, 'ok', 0]
+  ])('%s', async (_label, c, verdict, hashed) => {
+    const root = tempRoot('start-check')
+    const path = join(root, ...REL.split('/'))
+    writeDriveFile(root, REL, c.body ?? 'voice bytes')
+    if (c.primeBad) primeChecksum(path, sha256('bytes a check found damaged'))
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: c.sha ?? sha256('voice bytes') })
+    const before = checksumCacheStats.computed
+    expect(await checkModelBeforeStart(m, root, { developerMode: c.developerMode ?? false, hash: c.hash })).toBe(verdict)
+    expect(checksumCacheStats.computed - before).toBe(hashed)
+  })
+
+  it('a missing file, or a check that cannot read the file, is no proof: the start goes on as before', async () => {
+    const root = tempRoot('start-check')
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: sha256('voice bytes') })
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hash: true })).toBe('ok') // missing
+    mkdirSync(join(root, ...REL.split('/')), { recursive: true }) // a folder where the file should be: the read fails
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hash: true })).toBe('ok')
+  })
+
+  it('an aborted check rejects with the abort, never ok: a lock or quit ends the start', async () => {
+    const root = tempRoot('start-check')
+    writeDriveFile(root, REL, 'voice bytes')
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: sha256('voice bytes') })
+    const controller = new AbortController()
+    const check = checkModelBeforeStart(m, root, { developerMode: false, hash: true, signal: controller.signal })
+    controller.abort() // the read is open: the hash is under way
+    await expect(check).rejects.toThrow(/cancelled/i)
   })
 })
 
