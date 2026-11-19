@@ -1928,6 +1928,33 @@ describe('reviewSession — Mark ready, Export and Reopen wait until every edit 
     expect(await markReviewReady()).toEqual({ outcome: 'ready' })
   })
 
+  // #917 code review: the stand-down is for a timer with nothing newer than the failed write. An edit typed while an
+  // earlier write is out arms its own timer; when that earlier write then fails during the timer's wait for the lane,
+  // the timer still writes: the new edit and the failed one. Round 1 stood it down too, and the new edit stayed queued.
+  it.each<['item' | 'head', string[]]>([
+    ['item', ['item:p1', 'item:p1', 'item:p2']],
+    ['head', ['head', 'head']]
+  ])(
+    'an edit typed while an earlier write is out, which then fails: its own timer writes both (%s, #917 code review)',
+    async (kind, writes) => {
+      const main = await setup('markReady')
+      if (kind === 'item') editReviewItem('p1', { decision: 'supported' }) // A
+      else editReviewHead({ generalNote: 'A' })
+      const writeA = main.holdNext(kind, 'fail')
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // A's timer: A's write is out
+      expect(main.order).toEqual([writes[0]])
+      if (kind === 'item') editReviewItem('p2', { reviewerNote: 'typed while A was being written' }) // B
+      else editReviewHead({ reviewerLabel: 'B' })
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // B's timer fires and waits for the lane
+      writeA.release() // A fails; the lane is free again
+      await vi.advanceTimersByTimeAsync(0)
+      expect(main.order[0]).toBe(writes[0]) // the failed write
+      expect([...main.order].sort()).toEqual(writes) // then B's timer wrote B and A again (one head write holds both)
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+      expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+    }
+  )
+
   it.each<['markReady' | 'reopen']>([['markReady'], ['reopen']])(
     '%s: a general note typed while main runs it stays on screen and is saved after it',
     async (a) => {
