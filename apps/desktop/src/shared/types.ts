@@ -331,7 +331,8 @@ export interface WorkspaceStateInfo {
   /** Policy requires encryption — onboarding may not offer plaintext. */
   encryptionRequired: boolean
   /**
-   * The changes since the previous lock are lost, and the lock screen says why, one notice per value.
+   * What the lock screen must tell the user before the unlock, one notice per value: why the changes since the previous
+   * lock are lost, or (#911) that the encrypted file was missing and the start kept the only copy.
    * `working_copy_lost`: a lock finished at the last good snapshot because the working file was gone
    * or no longer a database (#855), or the startup salvage had to shred the last session's only
    * fresh copy (#875). `session_not_closed` (#892): the app ended without locking (a power cut, the
@@ -341,8 +342,11 @@ export interface WorkspaceStateInfo {
    * locked, on what `lockWorkspace` returns and on `getWorkspaceState()` alike, until the next
    * successful unlock; `config/working-copy-lost.json` carries it across a restart (#875). Under a
    * newer-build verdict (#845) startup does not read the marker.
+   * `encrypted_file_missing` (#911): `.enc` was missing from the drive, so the start kept the working
+   * file, the only copy of the workspace, unencrypted as `<db>.recovery`; the next unlock with the
+   * right password encrypts it again. Nothing is lost. Read from the disk at every start (no marker).
    */
-  lockNotice?: 'working_copy_lost' | 'session_not_closed' | 'session_not_closed_full'
+  lockNotice?: 'working_copy_lost' | 'session_not_closed' | 'session_not_closed_full' | 'encrypted_file_missing'
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).
@@ -361,7 +365,10 @@ export interface WorkspaceStateInfo {
  *  `vault_open_failed` (#844): the password verified and the data is a database SQLite does not
  *  call damaged, but opening it could not finish (an upgrade step: a full drive, an I/O error, a
  *  bug in a new step). The failed open never rewrites the encrypted vault: free space and retry,
- *  or after an update start the previous version. */
+ *  or after an update start the previous version.
+ *  `vault_missing` (#911): the password verified, but the encrypted workspace file is missing from
+ *  the drive and no copy was left to restore it from. Nothing was written; put the file back or
+ *  restore the workspace folder from a backup, and never create a new workspace. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }
   | {
@@ -369,6 +376,7 @@ export type WorkspaceActionResult =
       reason:
         | 'wrong_password'
         | 'vault_damaged'
+        | 'vault_missing'
         | 'vault_open_failed'
         | 'vault_recovery_blocked'
         | 'workspace_newer'

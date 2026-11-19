@@ -2491,6 +2491,12 @@ export const en = {
     'Your workspace opens as it was when it was last locked; any changes made since then are lost. ' +
     'Make sure the drive has free space before you continue: without it, the next lock can\'t save ' +
     'your changes either.',
+  // #911: `.enc` was missing at the start, so the working file, the only copy of the workspace, was kept unencrypted
+  // as `.recovery`; the next unlock encrypts it again. Nothing is lost.
+  'gate.unlock.encryptedFileMissing':
+    'The encrypted workspace file was missing from the drive, so HilbertRaum kept the unencrypted ' +
+    'copy your last session left. Unlock now to encrypt it again, then find out what removed the ' +
+    'file, for example a sync or cleanup tool.',
   'gate.welcome.title': 'Welcome',
   'gate.welcome.intro':
     'This is your private AI workspace. Chat with an AI model and ask questions about your ' +
@@ -2693,6 +2699,12 @@ export const en = {
     'Your password is correct, but the workspace data on the drive is damaged and could ' +
     'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
     'keep the files as they are and restore the workspace folder from a backup.',
+  // #911: the password verified, but `.enc` is missing and no copy was left to restore it from. A new workspace would
+  // replace the data key the stored documents need, so the copy warns against it.
+  'main.workspace.vaultMissing':
+    'Your password is correct, but the encrypted workspace file is missing from the drive, and no ' +
+    'copy was left to recover it from. Do not create a new workspace. Put the file back, or restore ' +
+    'the workspace folder from a backup.',
   // #844: the password verified and the data is a database, but opening it could not finish (an
   // upgrade step: a full drive, an I/O error, a bug in a new step). Not damage: the failed open never
   // rewrites `.enc`.

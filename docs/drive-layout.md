@@ -27,6 +27,9 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   │                      # while the app runs, SQLite keeps -wal/-shm sidecars next to it (WAL
 │   │                      # mode); a clean quit checkpoints + removes them in BOTH modes (#51) —
 │   │                      # sidecars present at rest mean the last session ended uncleanly
+│   │                      # hilbertraum.sqlite.recovery: a copy a start set aside for the next unlock to roll
+│   │                      # forward (a failed lock's session, CODE-1b; or the only copy of the workspace when
+│   │                      # .enc was missing, #911); plaintext until that unlock
 │   ├── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
 │   ├── images/            # saved image-analysis history copies (<id><ext>.enc in encrypted mode)
 │   └── zim-transient/     # generated library XML for the knowledge-pack server (plaintext while

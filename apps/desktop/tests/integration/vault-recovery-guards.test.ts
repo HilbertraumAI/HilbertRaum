@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { existsSync, writeFileSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
@@ -67,9 +67,12 @@ const failures = vi.hoisted(() => ({
   /** statSync throws EIO for the working file itself (`…/hilbertraum.sqlite`, not its sidecars or temps) while armed:
    *  a failing drive under the #892 check at startup. */
   statThrowOnWorkingFile: false,
+  /** #911: `.enc` reads as a delete-pending file on Windows (deleted by another program while a handle stays open):
+   *  `statSync` throws EPERM for it and `existsSync`, which swallows the error, answers false. */
+  encDeletePending: false,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
-  hits: { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0 }
+  hits: { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0, encStat: 0 }
 }))
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -80,8 +83,16 @@ vi.mock('node:fs', async (importOriginal) => {
     return err
   }
   const isRecovery = (p: unknown): boolean => String(p).endsWith('.recovery')
+  const isEnc = (p: unknown): boolean => String(p).endsWith('.sqlite.enc')
   const mocked = {
     ...actual,
+    existsSync: vi.fn((path: Parameters<typeof actual.existsSync>[0]) => {
+      if (failures.encDeletePending && isEnc(path)) {
+        failures.hits.encStat += 1
+        return false
+      }
+      return actual.existsSync(path)
+    }),
     renameSync: vi.fn((from: Parameters<typeof actual.renameSync>[0], to: Parameters<typeof actual.renameSync>[1]) => {
       if (failures.renameThrowOnExistingRecoveryTarget && isRecovery(to) && actual.existsSync(to)) {
         failures.hits.renameSync += 1
@@ -126,6 +137,10 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.statSync += 1
         throw errnoError('EIO', 'EIO: i/o error, stat (the working file)')
       }
+      if (failures.encDeletePending && isEnc(args[0])) {
+        failures.hits.encStat += 1
+        throw errnoError('EPERM', 'EPERM: operation not permitted, stat (a delete-pending .enc)')
+      }
       return (actual.statSync as unknown as (...a: unknown[]) => unknown)(...args)
     })
   }
@@ -156,7 +171,8 @@ beforeEach(() => {
   failures.encTmpFds.clear()
   failures.openThrowOnWalPathOnce = false
   failures.statThrowOnWorkingFile = false
-  failures.hits = { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0 }
+  failures.encDeletePending = false
+  failures.hits = { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0, encStat: 0 }
   ipcState.handlers.clear()
 })
 
@@ -362,7 +378,7 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
-    expect(failures.hits).toEqual({ renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0 })
+    expect(failures.hits).toEqual({ renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0, encStat: 0 })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(recoveryPath)).toBe(true)
@@ -507,5 +523,70 @@ describe('the unclean-end check at startup, on a drive that fails a stat (#892)'
     for (const leftover of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) expect(existsSync(leftover)).toBe(false)
     expect(ctl.getState()).toMatchObject({ state: 'locked' })
     expect(ctl.getState()).not.toHaveProperty('lockNotice')
+  })
+})
+
+// #911: with no encrypted snapshot on the drive the start keeps the working file as `.recovery` (the only copy of the
+// workspace), and whatever it cannot judge or move it leaves alone, as #242 does.
+describe('the start over an encrypted file that is missing or cannot be read (#911)', () => {
+  // Only ENOENT proves `.enc` is gone. A delete-pending `.enc` on Windows fails a stat with EPERM, which `existsSync`
+  // read as "missing": the start then swept the working file (newer than `.enc`: the only fresh copy) as if no snapshot
+  // needed it. That doubt now refuses the sweep and the unlock until a retry can read `.enc`.
+  it('a stat of .enc that fails with EPERM blocks the start: the working file is neither moved nor shredded', () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    failedLockState(vp, 7171)
+    const workingBytes = readFileSync(vp.dbPath)
+
+    failures.encDeletePending = true
+    try {
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(failures.hits.encStat).toBeGreaterThan(0)
+      expect(ctl.isRecoveryBlocked()).toBe(true)
+      expect(readFileSync(vp.dbPath).equals(workingBytes)).toBe(true)
+      expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+      expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
+
+      // `.enc` readable again: the retry finds the failed lock's signature and rolls the session forward (CODE-1b).
+      failures.encDeletePending = false
+      ctl.unlock('pw')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+      ctl.lock()
+    } finally {
+      failures.encDeletePending = false
+    }
+  })
+
+  // #242's hold, in the #911 branch: a spent `.recovery` that another program holds sits on the name the only copy must
+  // move to. The start refuses to sweep it and the unlock to open; once the hold clears, the retry keeps it and the right
+  // password restores it.
+  it('a held .recovery on the name the only copy must move to blocks the start, and the retry restores the copy', () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    failedLockState(vp, 9119)
+    rmSync(vp.encPath)
+    const recoveryPath = plantLeftover(vp)
+    const workingBytes = readFileSync(vp.dbPath)
+
+    holdRecovery(true)
+    try {
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(failures.hits.renameSync).toBeGreaterThan(0)
+      expect(ctl.isRecoveryBlocked()).toBe(true)
+      expect(readFileSync(vp.dbPath).equals(workingBytes)).toBe(true)
+      expect(readFileSync(recoveryPath, 'utf8')).toBe(LEFTOVER)
+      expect(existsSync(vp.encPath)).toBe(false)
+      expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
+
+      holdRecovery(false)
+      ctl.unlock('pw')
+      expect(ctl.isRecoveryBlocked()).toBe(false)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(9119)
+      expect(existsSync(vp.encPath)).toBe(true)
+      expect(existsSync(recoveryPath)).toBe(false)
+      ctl.lock()
+    } finally {
+      holdRecovery(false)
+    }
   })
 })

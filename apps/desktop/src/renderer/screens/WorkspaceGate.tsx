@@ -72,11 +72,12 @@ function failureText(
 }
 
 /** The lock screen's banner for each `lockNotice` (#855, #875, #892): what the changes since the last lock were lost
- *  to. */
+ *  to, or (#911) that the start kept the only copy of the workspace because the encrypted file was missing. */
 const LOCK_NOTICE_COPY: Record<NonNullable<WorkspaceStateInfo['lockNotice']>, MessageKey> = {
   working_copy_lost: 'gate.unlock.workingCopyLost',
   session_not_closed: 'gate.unlock.sessionNotClosed',
-  session_not_closed_full: 'gate.unlock.sessionNotClosedFull'
+  session_not_closed_full: 'gate.unlock.sessionNotClosedFull',
+  encrypted_file_missing: 'gate.unlock.encryptedFileMissing'
 }
 
 /** The banner key for the state's notice, or null. An own-property read, like {@link failureText}'s: the state comes

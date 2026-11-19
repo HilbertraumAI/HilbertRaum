@@ -2388,6 +2388,11 @@ export const nl: UiCatalog<'nl'> = {
     'omdat de schijf vol was. Je werkruimte opent in de staat van de laatste vergrendeling; ' +
     'eventuele wijzigingen sindsdien zijn verloren gegaan. Zorg dat er vrije ruimte op de schijf is ' +
     'voordat je verdergaat: anders kan ook de volgende vergrendeling je wijzigingen niet opslaan.',
+  'gate.unlock.encryptedFileMissing':
+    'Het versleutelde bestand van de werkruimte ontbrak op de schijf, dus HilbertRaum heeft de ' +
+    'onversleutelde kopie bewaard die je laatste sessie achterliet. Ontgrendel nu om die opnieuw te ' +
+    'versleutelen, en zoek daarna uit wat het bestand heeft verwijderd, bijvoorbeeld een ' +
+    'synchronisatie- of opruimprogramma.',
   'gate.welcome.title': 'Welkom',
   'gate.welcome.intro':
     'Dit is je privéwerkruimte voor AI. Chat met een AI-model en stel vragen over je documenten: ' +
@@ -2574,6 +2579,10 @@ export const nl: UiCatalog<'nl'> = {
     'konden niet worden geopend. Het wachtwoord opnieuw invoeren helpt niet. Maak geen nieuwe ' +
     'werkruimte aan: laat de bestanden zoals ze zijn en herstel de map van de werkruimte vanuit ' +
     'een back-up.',
+  'main.workspace.vaultMissing':
+    'Je wachtwoord klopt, maar het versleutelde bestand van de werkruimte ontbreekt op de schijf, en ' +
+    'er is geen kopie meer waarmee het hersteld kan worden. Maak geen nieuwe werkruimte aan. Zet het ' +
+    'bestand terug of herstel de map van de werkruimte vanuit een back-up.',
   'main.workspace.vaultOpenFailed':
     'Je wachtwoord klopt, maar HilbertRaum kon het openen van de werkruimte niet afronden. ' +
     'De versleutelde werkruimte op de schijf is ongewijzigd gebleven. Zorg dat er vrije ' +

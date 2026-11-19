@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { closeSync, existsSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 
 // IPC-layer tests for registerWorkspaceIpc — the exception→result mapping the unlock gate
 // depends on (a wrong password / policy refusal / weak password must be a NORMAL
@@ -114,6 +114,13 @@ const unlockedVault = (): WorkspaceController => unlockedController(lockedVault(
 
 /** #208's on-disk state: the password verifies and `.enc` authenticates, but holds 64 KiB of our own noise. */
 const damagedOnDisk = (): VaultPaths => damagedVault(lockedVault('wsipc', PW), PW, 64 * 1024)
+
+/** #911: a locked vault whose `.enc` something outside the app removed, with no working copy left to keep. */
+function encRemoved(): VaultPaths {
+  const vp = lockedVault('wsipc', PW)
+  rmSync(vp.encPath)
+  return vp
+}
 
 beforeEach(() => ipcState.handlers.clear())
 
@@ -718,6 +725,11 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
       {
         how: 'a wrong password on a damaged vault',
         arrange: () => ({ workspace: startedOn(damagedOnDisk()), args: ['wrong-password'] })
+      },
+      // #911: the verifier is in the descriptor, so a wrong password is told apart with `.enc` gone too.
+      {
+        how: 'a wrong password on a vault whose .enc was removed',
+        arrange: () => ({ workspace: startedOn(encRemoved()), args: ['wrong-password'] })
       }
     ],
     vault_damaged: [
@@ -727,6 +739,10 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         how: 'an .enc whose tag fails after the password verified',
         arrange: () => ({ workspace: startedOn(tagFailingVault(lockedVault('wsipc', PW))), args: [PW] })
       }
+    ],
+    // #911: the password verified, and there is no encrypted file to open and no copy to restore it from.
+    vault_missing: [
+      { how: 'an .enc removed with nothing left to keep', arrange: () => ({ workspace: startedOn(encRemoved()), args: [PW] }) }
     ],
     // #844: a healthy database whose open's upgrade step cannot finish is not damage.
     vault_open_failed: [
@@ -785,6 +801,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
   const CREATE: Provocations = {
     wrong_password: NEVER_SENT,
     vault_damaged: NEVER_SENT,
+    vault_missing: NEVER_SENT,
     vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
     workspace_newer: [
@@ -954,6 +971,38 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
       expect(logged()).toHaveLength(1)
     } finally {
       ctrl.shutdown()
+    }
+  })
+})
+
+// #911 (owner decision D5: a log line, no audit type): the unlock that encrypts the copy a start kept over a missing
+// `.enc` leaves the one durable trace that something removed the file. Content-free, once, and only then: the same
+// roll-forward over an `.enc` that is there (a failed lock and quit, CODE-1b) says nothing.
+describe('the unlock that restores a missing encrypted file (#911)', () => {
+  it.each<[string, boolean]>([
+    ['.enc removed after a failed lock and quit', true],
+    ['.enc still there after a failed lock and quit', false]
+  ])('%s: the unlock logs the restore only when .enc was missing', async (_what, removed) => {
+    const vp = lockedVault('wsipc', PW)
+    failedLockState(vp, 7171, PW)
+    if (removed) rmSync(vp.encPath)
+    const workspace = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    const marker = `#911 marker ${randomUUID()}`
+    log.info(marker)
+    const logged = (): string[] => {
+      const all = readLogTail(100_000)
+      return all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('encrypted workspace file was missing'))
+    }
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true, state: { state: 'unlocked' } })
+      expect(logged()).toHaveLength(removed ? 1 : 0)
+      if (removed) expect(logged()[0]).not.toContain('hilbertraum.sqlite')
+      await invoke(handlers, IPC.lockWorkspace)
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(logged()).toHaveLength(removed ? 1 : 0)
+    } finally {
+      workspace.shutdown()
     }
   })
 })

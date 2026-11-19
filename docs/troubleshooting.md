@@ -436,6 +436,54 @@ HilbertRaum, or press **Lock now**, and wait for the window to close before you 
 
 ---
 
+## "The encrypted workspace file was missing from the drive"
+
+You see this on the unlock screen when HilbertRaum started and found the workspace's encrypted
+file, `workspace/hilbertraum.sqlite.enc`, gone from the drive, while the copy your last session
+worked on was still there. Something outside HilbertRaum removed the encrypted file: a sync or
+backup tool, a cleanup tool, a person tidying the drive, or a disk check that moved it into a
+`FOUND.000` folder. HilbertRaum never deletes it on its own.
+
+That working copy is now the only copy of your workspace, so the app kept it, as
+`workspace/hilbertraum.sqlite.recovery`, instead of removing it (issue #911). While it waits there
+it is **not encrypted**.
+
+What to do:
+
+- Unlock with your usual password. The app encrypts the copy again as the workspace's encrypted
+  file and opens the workspace with everything in it. Nothing is lost.
+- Then find out what removed the file, so it does not happen again: for example a sync tool that
+  mirrors the drive, or a cleanup tool that removes large files.
+- If you can't unlock it any more (you forgot the password), the kept copy is your workspace in
+  readable form, and the app no longer removes it at the next start. Delete
+  `workspace/hilbertraum.sqlite.recovery` yourself if you don't want it on the drive.
+
+---
+
+## "Your password is correct, but the encrypted workspace file is missing from the drive"
+
+This message (issue #911) means the app checked your password, and it is right, but the
+workspace's encrypted file, `workspace/hilbertraum.sqlite.enc`, is not on the drive, and no copy
+was left to restore it from. Something outside HilbertRaum removed it (see the section above).
+Retyping the password cannot help.
+
+What to do:
+
+- **Do not create a new workspace**, and do not delete anything: a new workspace cannot read the
+  documents you imported, and it replaces what a recovery needs.
+- Look for the file first: in the recycle bin or trash, in a sync tool's deleted or conflict
+  files, or in a `FOUND.000` folder at the drive's root after a disk check (its files are named
+  like `FILE0000.CHK`; the workspace is usually the largest). Put it back as
+  `workspace/hilbertraum.sqlite.enc` and unlock again.
+- Otherwise restore the `workspace/` and `config/` folders from a backup, then unlock with the
+  password that backup was made with.
+
+You can also see this message when an older version of HilbertRaum (0.1.65 or earlier) started on
+the drive after the encrypted file went missing: those versions removed the copy the last session
+left. Before #911 this case only ever said "Could not open the workspace."
+
+---
+
 ## "Could not open the workspace yet: another program is holding a recovery file"
 
 You see this on the unlock screen when a previous session's lock did not finish (see "Could
@@ -456,6 +504,11 @@ What to do:
   the recovery, so once the hold is gone it succeeds and your newest data is restored.
 - If it keeps happening, quit the app, safely eject and re-attach the drive (which releases any
   lingering handle), then start the app and unlock.
+
+The same message also appears when the workspace's encrypted file is missing and the app cannot
+yet set aside the copy your last session left (see "The encrypted workspace file was missing from
+the drive" above), usually because the drive is full or another program is reading the workspace:
+free some space or close that program, then unlock again.
 
 ---
 

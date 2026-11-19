@@ -1249,7 +1249,8 @@ head's own weights + KV.
   `changePassword(current, next, kdf?)`, `beginDocumentWork()` → release (refused with
   `VaultBusyError` during a password change), `beginLock()` / `isLocking()` / `cancelLock()` (the
   AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
-  locked or in plaintext), `takeWorkingCopyLost()` (#875, below).
+  locked or in plaintext), `takeWorkingCopyLost()` (#875, below), `takeRestoredMissingEnc()` (#911,
+  below).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
   what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
@@ -1303,10 +1304,30 @@ head's own weights + KV.
   round 2; an older damaged copy is a spent leftover: shredded, nothing recorded). `create()` removes
   a v1 marker a wiped vault left (with no vault, startup never reads one) and clears the record in
   memory; the commercial sell gate refuses a drive that carries it (`noUserData`, #893). Older builds ignore the file; the descriptor is untouched.
+- **Encrypted file missing (#911):** the one state in which the start keeps plaintext instead of
+  sweeping it: the descriptor is encrypted, a working file is there, **no encrypted snapshot of any
+  kind exists** (a stat of `.enc` says ENOENT, and no `.enc.new` is staged) and the #845 verdict
+  found nothing newer. `preserveNewerPlaintext` then replays the `-wal` into the main file
+  (`checkpointLeftoverWal`), removes what is left of the sidecars, probes the file and moves a
+  `database` (or `unchecked`, judged by its header) to `<db>.recovery`: outcome `'kept-only-copy'`,
+  sweep-safe like `'preserved'`. A copy whose structure is `damaged`, a shred survivor or a file
+  gone meanwhile is `'not-needed'` (swept; no notice). `'failed'` (blocked, every file kept, as
+  #242): a stat of `.enc` that fails other than ENOENT, a `-wal` that still holds commits after the
+  replay, a probe that cannot read the file, a rename that cannot land. The `.recovery` contract is
+  unchanged and now also carries this state: no start sweeps it, and the unlock rolls it forward
+  over a missing `.enc` (every build since 0.1.47). **No marker** is written, and the marker format
+  (`v`, `enc`, the `cause` set) is unchanged: the notice is derived from the disk at every start
+  (descriptor encrypted, `.enc` ENOENT, `.recovery` present), so `getState()` reports
+  `lockNotice: 'encrypted_file_missing'` while locked, across restarts and builds, until a
+  successful unlock. That unlock sets `UnlockedVault.restoredMissingEnc` (the roll-forward
+  encrypted over a missing `.enc`), and `takeRestoredMissingEnc() -> boolean` returns it once for
+  the unlock IPC's content-free log line (no audit type). With no `.enc` and nothing rolled forward,
+  `unlockEncryptedVault` throws `VaultMissingError` after the verifier (a wrong password is still
+  `WrongPasswordError`) and before anything is written.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
-  'vault_damaged'|'vault_open_failed'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
+  'vault_damaged'|'vault_missing'|'vault_open_failed'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
   wrong password / policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
   password-verified-but-undecryptable-to-a-database unlock failure, deliberately distinct from
   `wrong_password`, and since #844 only what SQLite itself calls not a database or corrupt, plus
@@ -1315,8 +1336,13 @@ head's own weights + KV.
   not call damaged (an upgrade step or the unlock's settings write, on a full drive, an I/O
   error, a bug in a new step) — the failed open never rewrites `.enc`; free space and retry,
   or start the previous version after an update;
+  `vault_missing` (#911) is the unlock whose password verified while `.enc` is missing and no
+  `.recovery` copy was rolled forward over it: nothing written; put the file back or restore the
+  workspace folder from a backup, never create a new workspace (create's table maps it to `null`:
+  never sent there);
   `vault_recovery_blocked` (#242) is the unlock refused because a held
-  `.recovery` file blocks the failed-lock salvage — retry once the hold clears, nothing lost;
+  `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
+  other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing) — retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
   written by a NEWER build — nothing written, update the app; since #845 also the unlock refused
   because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages
@@ -1338,7 +1364,9 @@ head's own weights + KV.
   finished at the last good snapshot because the working file was gone or no longer a database
   (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock, and
   since #892 also `session_not_closed` / `session_not_closed_full` for a start that swept the
-  session an unclean end left (see "Working copy lost" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
+  session an unclean end left (see "Working copy lost" above). Since #911 `getWorkspaceState` also
+  reports `encrypted_file_missing` while a copy the start kept over a missing `.enc` waits for the
+  unlock (see "Encrypted file missing" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
   `WorkspaceActionResult`: `wrong_password` (a wrong or non-string current password), `refused`
   (a new password under `MIN_PASSWORD_LENGTH` or not a string, the workspace locked or a lock under
   way, or document work in progress: `VaultBusyError`), `error` (anything else, #845's refusals
@@ -1346,7 +1374,8 @@ head's own weights + KV.
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
   `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`
-  (`lockNotice`: `working_copy_lost` | `session_not_closed` | `session_not_closed_full`, #892),
+  (`lockNotice`: `working_copy_lost` | `session_not_closed` | `session_not_closed_full`, #892;
+  `encrypted_file_missing`, #911),
   `WorkspaceActionResult`.
 ✅ **`AppContext.db` is now a getter** over `workspace.requireDb()` (throws while locked) +
   `AppContext.workspace: WorkspaceController`. `main/index.ts` builds the controller from

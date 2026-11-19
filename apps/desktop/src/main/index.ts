@@ -263,7 +263,9 @@ function initBackend(): void {
   if (workspace.isRecoveryBlocked()) {
     // #242: the salvage of the last session's newest data is blocked by a held recovery
     // file; the crash sweep was skipped and the unlock IPC refuses until a retry lands it.
-    log.warn('Workspace recovery blocked: a recovery file is held by another program')
+    // #911: also a stat of `.enc` that failed other than ENOENT, or, with `.enc` missing, a `-wal` the replay could
+    // not empty (a full drive, another program reading the file): nothing was moved or shredded.
+    log.warn('Workspace recovery blocked: a recovery file is held, or a workspace file could not be read or replayed')
   }
   if (workspace.isNewerWorkspace()) {
     // #247: the plaintext database on disk was written by a newer build — left closed and

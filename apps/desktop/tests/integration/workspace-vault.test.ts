@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdirSync, existsSync, linkSync, readFileSync, writeFileSync, renameSync, rmSync, statSync, utimesSync } from 'node:fs'
+import {
+  mkdirSync,
+  existsSync,
+  linkSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  utimesSync
+} from 'node:fs'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -28,15 +39,17 @@ import {
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
   VaultOpenFailedError,
+  WORKING_COPY_LOST_MARKER,
   WorkspaceController,
   WrongPasswordError,
-  vaultPathsFrom
+  vaultPathsFrom,
+  type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import { randomBytes } from 'node:crypto'
 import { encrypt, decrypt, serializeBlob, deserializeBlob, generateDataKey } from '../../src/main/services/security/crypto'
 import * as vaultCrypto from '../../src/main/services/security/crypto'
 import * as settingsModule from '../../src/main/services/settings'
-import { tempRoot } from '../helpers/db-fixtures'
+import { openRawDb, tempRoot } from '../helpers/db-fixtures'
 import {
   ENCRYPTION_REQUIRED,
   FAST_KDF,
@@ -1337,6 +1350,169 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
     expect(ctl.getState().state).toBe('locked')
     expect(ctl.unlock('pw').state).toBe('unlocked')
+    ctl.lock()
+  })
+})
+
+// ---- #911: the encrypted file missing from the drive ------------------------------
+
+/**
+ * What a kill (a power cut, a pulled drive) leaves of the session open on `db`: the main file, the `-wal` that holds
+ * its last commits and the `-shm`, copied while `db` is open and put back after the close (which checkpoints the
+ * `-wal` in and deletes both sidecars).
+ */
+function leaveAsKilled(vp: VaultPaths, db: ReturnType<typeof unlockEncryptedVault>['db']): void {
+  const files = new Map<string, Buffer>()
+  for (const path of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) files.set(path, readFileSync(path))
+  db.close()
+  for (const [path, bytes] of files) writeFileSync(path, bytes)
+}
+
+/** #892's unclean end, the realistic #911 state: a session that wrote `contextTokens: marker` (into the `-wal`) and
+ *  ended without a lock. */
+function endedUnlocked(vp: VaultPaths, marker: number, password = 'pw'): void {
+  const { db, key } = unlockEncryptedVault(vp, password)
+  updateSettings(db, { contextTokens: marker })
+  key.fill(0)
+  leaveAsKilled(vp, db)
+}
+
+describe('the encrypted file missing from the drive (#911)', () => {
+  const recoveryOf = (vp: VaultPaths): string => `${vp.dbPath}${RECOVERY_SUFFIX}`
+  const sidecarsOf = (vp: VaultPaths): string[] => [`${vp.dbPath}-wal`, `${vp.dbPath}-shm`]
+  const markerOf = (vp: VaultPaths): string => join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER)
+  const LOCKED = { state: 'locked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true }
+
+  // With no encrypted snapshot on the drive the working file is the only copy of the workspace, and the start used to
+  // shred it. Now it is kept as `.recovery`, which the unlock with the right password rolls forward over the missing
+  // `.enc`. An unclean end leaves the session's last commit in the `-wal` only, so the start replays it first; a failed
+  // lock and quit leaves a cleanly closed file. The notice is read from the disk, so a restart before the unlock still
+  // shows it, and no #875 marker is written: it names a snapshot, and there is none.
+  it.each<[string, (vp: VaultPaths) => void]>([
+    ['a session the app ended without locking (main file, -wal, -shm)', (vp) => endedUnlocked(vp, 9119)],
+    ['a failed lock and quit (a cleanly closed working file)', (vp) => failedLockState(vp, 9119)]
+  ])('#911: .enc removed after %s: the start keeps the only copy, and the right password restores all of it', (_what, end) => {
+    const vp = lockedVault('vault-911', 'pw')
+    end(vp)
+    rmSync(vp.encPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.isRecoveryBlocked()).toBe(false)
+    expect(existsSync(recoveryOf(vp))).toBe(true)
+    for (const path of [vp.dbPath, ...sidecarsOf(vp)]) expect(existsSync(path), path).toBe(false)
+    expect(existsSync(markerOf(vp))).toBe(false)
+    expect(ctl.getState()).toEqual({ ...LOCKED, lockNotice: 'encrypted_file_missing' })
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    expect(restarted.getState()).toEqual({ ...LOCKED, lockNotice: 'encrypted_file_missing' })
+    expect(existsSync(recoveryOf(vp))).toBe(true)
+
+    // The password is checked against the descriptor, so a wrong one is still told apart and keeps the copy.
+    expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+    expect(existsSync(recoveryOf(vp))).toBe(true)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(9119) // the session's last commit included
+    expect(existsSync(vp.encPath)).toBe(true)
+    expect(existsSync(recoveryOf(vp))).toBe(false)
+    expect(ctl.takeWorkingCopyLost()).toBeNull() // nothing was lost
+    expect(ctl.takeRestoredMissingEnc()).toBe(true) // for the IPC's one log line, once
+    expect(ctl.takeRestoredMissingEnc()).toBe(false)
+    expect(ctl.lock()).not.toHaveProperty('lockNotice')
+    const next = unlockedController(vp, 'pw')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(9119)
+    expect(next.takeRestoredMissingEnc()).toBe(false)
+    next.lock()
+  })
+
+  // Nothing left to keep (the session was locked, then `.enc` removed): the right password names the missing file
+  // instead of failing raw ("Could not open the workspace." on every try), a wrong one is still a wrong password, and
+  // nothing is written. Create stays refused: the descriptor holds the data key the stored documents need (#860 V4).
+  it('#911: .enc removed with nothing to keep: the right password says the file is missing, a wrong one is still wrong', () => {
+    const vp = lockedVault('vault-911', 'pw')
+    rmSync(vp.encPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.getState()).toEqual(LOCKED)
+    expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultMissingError')
+    expect(readdirSync(dirname(vp.dbPath))).toEqual([])
+    expect(ctl.getState()).toEqual(LOCKED)
+    expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+  })
+
+  // Owner decision D3: a copy that is no database after the replay (torn past page one, its `-wal` intact: SQLite calls
+  // it corrupt) is not kept. The sweep shreds it, as before, and the unlock then says the encrypted file is missing.
+  it('#911: .enc removed and the working file torn past page one: not kept, and the unlock says the file is missing', () => {
+    const vp = lockedVault('vault-911', 'pw')
+    endedUnlocked(vp, 9119)
+    rmSync(vp.encPath)
+    noisePastPageOne(vp.dbPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.isRecoveryBlocked()).toBe(false)
+    for (const path of [vp.dbPath, ...sidecarsOf(vp), recoveryOf(vp)]) expect(existsSync(path), path).toBe(false)
+    expect(ctl.getState()).toEqual(LOCKED)
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultMissingError')
+  })
+
+  // Owner decision D4: a replay that cannot finish (here another connection reads the session, as a second account's
+  // app on the same drive would; a full drive ends the same way) leaves the `-wal` holding commits. The start then
+  // touches nothing and refuses to open (#242's state). Once the hold is gone the unlock's retry keeps and restores it.
+  it('#911: .enc removed and the -wal held so its replay cannot finish: nothing is moved or shredded until the retry', () => {
+    const vp = lockedVault('vault-911', 'pw')
+    endedUnlocked(vp, 9119)
+    rmSync(vp.encPath)
+    const walBefore = readFileSync(`${vp.dbPath}-wal`)
+    const reader = openRawDb(vp.dbPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    try {
+      reader.exec('BEGIN')
+      reader.prepare('SELECT count(*) AS n FROM settings').get()
+      ctl.init()
+      expect(ctl.isRecoveryBlocked()).toBe(true)
+      expect(existsSync(vp.dbPath)).toBe(true)
+      expect(readFileSync(`${vp.dbPath}-wal`).equals(walBefore)).toBe(true)
+      expect(existsSync(recoveryOf(vp))).toBe(false)
+      expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultRecoveryBlockedError')
+    } finally {
+      reader.close()
+    }
+    ctl.unlock('pw')
+    expect(ctl.isRecoveryBlocked()).toBe(false)
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(9119)
+    expect(existsSync(vp.encPath)).toBe(true)
+    ctl.lock()
+  })
+
+  // F-10's boundary (declined by the owner): the start keeps the working copy only when NO encrypted snapshot exists.
+  // A v1 → v2 password change cut between the old `.enc`'s shred and the staged `.enc.new`'s rename leaves no `.enc`
+  // beside a live session: the staged snapshot rolls forward and the working copy is swept, as before. A commit made
+  // after the change is lost (the power-cut trade-off) instead of being rolled forward over that snapshot.
+  it('#911 guard: a password change cut short with a staged .enc.new and no .enc opens the staged snapshot, not the session', () => {
+    const vp = lockedVault('vault-911', 'pw', { legacyV1: true })
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    updateSettings(db, { contextTokens: 9119 })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'new-password', FAST_KDF) // the COMMIT
+    shredFile(vp.encPath) // applyPendingRekey's swap, first half: the cut lands before the rename
+    updateSettings(db, { ragTopKInitial: DEFAULT_SETTINGS.ragTopKInitial + 5 }) // a commit after the change
+    key.fill(0)
+    leaveAsKilled(vp, db)
+    expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(true)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(recoveryOf(vp))).toBe(false)
+    expect(existsSync(vp.encPath)).toBe(true)
+    expect(ctl.getState()).toEqual(LOCKED)
+    ctl.unlock('new-password')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(9119)
+    expect(getSettings(ctl.requireDb()).ragTopKInitial).toBe(DEFAULT_SETTINGS.ragTopKInitial)
     ctl.lock()
   })
 })

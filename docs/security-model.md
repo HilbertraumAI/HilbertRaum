@@ -1135,7 +1135,8 @@ explicitly:
   roll-forward re-applies the same freshness + database guards at unlock (a best-effort
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
-  good `.enc`). Anything not matching that narrow signature is shredded as before.
+  good `.enc`). Anything not matching that narrow signature is shredded as before, as long as an
+  encrypted snapshot is there (with none at all, see "Encrypted file missing" below).
   When the salvage cannot judge or move the fresh copy safely because a program holds the
   `.recovery` file, the app **refuses to open** rather than losing it (#242). Two legs: at
   startup, if the move-aside cannot land — another program holds the spent `.recovery`
@@ -1160,7 +1161,39 @@ explicitly:
   copy is this product's own scenario) predates `.recovery` entirely — it neither rolls
   the snapshot forward nor shreds it, so under an old copy the plaintext file simply
   rests beside the vault until a current version next unlocks. If a `<db>.recovery`
-  file lingers, unlock once with a current app version.
+  file lingers, unlock once with a current app version. Since #911 the same trade covers the
+  whole workspace when `.enc` is missing (next bullet): the kept copy is then the entire workspace
+  in plaintext, and a user who has forgotten the password keeps it on the drive, where the next
+  start used to shred it.
+- **Encrypted file missing (#911).** The app never removes `.enc` on its own (a lock, a create
+  and a password change replace it by rename), but something outside it can: a person tidying the
+  drive, a sync tool, a disk check that moves the file to `FOUND.000`. The working file is then the
+  only copy of the workspace, and the startup sweep used to shred it as derived data, after which
+  every correct unlock failed with "Could not open the workspace." Now, **only when no encrypted
+  snapshot of any kind is on the drive** (a stat of `.enc` says ENOENT, and no staged `.enc.new`
+  waits), `preserveNewerPlaintext` keeps the copy: it replays the `-wal` into the main file (after
+  an unclean end the session's last commits sit there), probes the file, and moves a database to
+  `<db>.recovery`. The next unlock with the right password rolls it forward over the missing `.enc`
+  through the CODE-1b path above, which every build since 0.1.47 has. Until then the lock screen
+  says so (`lockNotice: 'encrypted_file_missing'`), read from the disk at every start (descriptor
+  encrypted, `.enc` absent, `.recovery` present). No marker is written: the #875 marker names a
+  snapshot, and there is none. The password is checked against the descriptor's verifier, so a
+  wrong one is still a wrong password. What the start cannot judge it leaves alone and refuses to
+  open, as #242 does: a stat of `.enc` that fails other than ENOENT (a delete-pending file on
+  Windows used to read as missing), a `-wal` the replay cannot empty (a full drive, another program
+  reading the file), a held `.recovery` name. A copy that is damaged after the replay is shredded
+  (owner decision D3), and with nothing to roll forward the unlock answers `vault_missing`
+  (`main.workspace.vaultMissing`: put the file back or restore the workspace folder from a backup,
+  never create a new workspace) instead of a raw ENOENT. The unlock that restores the copy logs one
+  content-free line; there is no audit type (D5). **The boundary:** this never replaces an existing
+  snapshot. Wherever an `.enc` or a staged `.enc.new` is there, the rules above and below stand
+  unchanged: a mid-session crash is still shredded (the accepted trade-off below), and a replayed
+  session is never rolled forward over an existing `.enc` (that full-drive roll-forward was
+  declined by the owner). Don't read this branch as a step towards it. The probe reads only part of
+  a large file, so a partly damaged copy can still be kept and adopted; with no snapshot left that
+  beats losing everything. Owner decision G-3 (2026-11-19) accepted the plaintext at rest in this
+  state only, until the next successful unlock (the confidentiality trade of the CODE-1b bullet
+  above).
 - **Lock during an import fails the document — never a zero-key sidecar (full-audit
   2026-07-12 SEC-1).** `documentCipher()`'s closures re-read the live vault key on every
   invocation and throw a typed `VaultLockedError` once `lock()` has zeroed it. Previously a
@@ -1189,7 +1222,9 @@ explicitly:
   since the last successful lock.** Whole-file encryption means the at-rest `.enc` is only
   updated on lock/quit; a mid-session crash leaves a working file with live WAL sidecars,
   whose main file can be mid-checkpoint (torn) — rolling *that* forward could replace the
-  intact stale `.enc` with garbage, so it is deliberately shredded instead. Confidentiality
+  intact stale `.enc` with garbage, so it is deliberately shredded instead (while
+  such an `.enc` or a staged `.enc.new` is there; with no snapshot at all, see "Encrypted file
+  missing" above). Confidentiality
   is chosen over mid-session durability here; the mitigations are the clean quit path
   (lock-on-quit, the `uncaughtException` crash lock and the Windows session-end lock, #248) and
   the safe-eject guidance above. The trade-off is unchanged since #892, but no longer silent: the
@@ -1893,6 +1928,8 @@ sidecar's KV cache dies with the child, and the CPU replacement starts empty.
   DB is plaintext on the drive while the app runs (re-encrypted + shredded on lock/quit). Documented
   limitation. Re-indexing an encrypted document similarly uses a transient decrypted
   file, shredded after parsing; startup sweeps any crash leftovers (`.parse*`, `.tmp`, WAL/SHM).
+  One exception (#911): with `.enc` missing, startup keeps the working file, the only copy of the
+  workspace, as `<db>.recovery`, in plaintext until the next unlock ("Encrypted file missing").
 - **Logs are encrypted at rest** on an encrypted workspace (`logs/app.log.enc`, under the vault key);
   plaintext only on a `plaintext_dev` workspace. The log never contains document contents or chat
   text, but may contain file names/paths and model ids — which is why it is sealed. The narrow
