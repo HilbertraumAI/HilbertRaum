@@ -715,6 +715,14 @@ describe('helpers', () => {
     expect(suggestedPackFileName(`${'A'.repeat(59)} Clause 7`, 'html')).toBe(`${'A'.repeat(59)}.html`)
   })
 
+  // #899: the pack name goes through the shared file-name rule (file-name-stem.test.ts owns it). It used to strip
+  // combining marks, so vowel signs and a decomposed accent were lost.
+  it('suggestedPackFileName keeps the vowel signs and accents of a title, composing a decomposed one (#899)', () => {
+    expect(suggestedPackFileName('हिन्दी', 'html')).toBe('हिन्दी.html')
+    expect(suggestedPackFileName('Pru\u0308fung', 'pdf')).toBe('Pr\u00fcfung.pdf')
+    expect(suggestedPackFileName('Report (draft)', 'html')).toBe('Report draft.html') // ( ) only in document exports
+  })
+
   // AUD-15: the writer is ASYNC (fs.promises + a FileHandle fsync) so a multi-MB pack no
   // longer stalls the Electron main thread. The CONTRACT below is unchanged — write-through
   // to disk, the hash taken from the bytes read back, no tmp sibling left behind.

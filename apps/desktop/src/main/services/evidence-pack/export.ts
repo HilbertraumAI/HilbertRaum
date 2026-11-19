@@ -10,7 +10,7 @@ import type { EvidenceExportFormat, EvidenceExportRecord } from '../../../shared
 import { sha256Of } from '../assets'
 import { getEvidenceReview, recordEvidenceExport } from '../evidence-reviews'
 import type { Db } from '../db'
-import { codePointSlice } from '../text'
+import { fileNameStem } from '../text'
 import { computeEvidenceReviewFreshness } from './freshness'
 import {
   buildEvidencePackModel,
@@ -142,15 +142,15 @@ export function packFormatForDestination(
   return requested
 }
 
-/** Filename-safe slug from the review title (the exportConversation idiom): letters,
- *  numbers, space, `_`, `-`; empty → the neutral fallback; at most 60 code points, so the cut
- *  never splits an astral letter (`\p{L}` includes CJK Ext-B) into a lone surrogate, and trimmed
- *  again after the cut so no space is left before the extension (#839). The
- *  extension follows the requested format (P6). The title is CONTENT — it may end up in the
- *  user-chosen file name, which is exactly why the path/name never reaches audit or logs. */
+/** The suggested file name of a pack: the review title through the shared file-name rule
+ *  (`fileNameStem` in services/text.ts, #899, the one the chat and document exports use): composed
+ *  (NFC); letters with their marks, numbers, space, `_`, `-`; whole characters up to 60 code
+ *  points, so the cut never leaves half an astral letter, trimmed after the cut (#839); the neutral
+ *  `evidence-pack` when no letter or number is left. The extension follows the requested format
+ *  (P6). The title is CONTENT — it may end up in the user-chosen file name, which is exactly why the
+ *  path/name never reaches audit or logs. */
 export function suggestedPackFileName(title: string, format: EvidenceExportFormat): string {
-  const safe = codePointSlice(title.replace(/[^\p{L}\p{N} _-]/gu, '').trim(), 60).trimEnd()
-  return `${safe.length > 0 ? safe : 'evidence-pack'}${PACK_FILE_EXTENSION[format]}`
+  return `${fileNameStem(title, { fallback: 'evidence-pack' })}${PACK_FILE_EXTENSION[format]}`
 }
 
 /**

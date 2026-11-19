@@ -1905,9 +1905,23 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   the file.
   Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
   `<meta charset>` is the contract; recorded hash = on-disk bytes).
-  `suggestedPackFileName(title, format)` slugs the review title (content — which is why
-  path/name never reach audit), capped at 60 code points (never half an astral letter, #839),
-  + the format's extension.
+  `suggestedPackFileName(title, format)` = the review title through the shared file-name rule
+  (content — which is why path/name never reach audit) + the format's extension. The rule is
+  `fileNameStem(title, { fallback, keepParens?, maxCodePoints? })` (`main/services/text.ts`, #899):
+  NFC first, and every space, tab, line break or no-break space becomes a plain space; letters,
+  numbers, space, `_`, `-` (and `(` `)` with `keepParens`), a combining mark only inside
+  a character that holds a letter or number (a vowel sign stays, and a keycap `1️⃣` keeps its
+  selector, its base being a number; a stripped emoji's variation selector goes with it); format
+  characters go, ZWJ and ZWNJ included; whole characters (graphemes) up to 60 code points
+  (never half an astral letter, #839, nor a letter without its vowel sign; a character carrying
+  more marks than the whole cap keeps only its letter); composed again (NFC) once built; no
+  leading space, `_` or `-`, no trailing one or opening `(`; the fallback (`evidence-pack`
+  here) when no letter or number is left; `_` appended to a Windows device name (`CON`, `NUL`,
+  `COM1`, …). The chat transcript export (fallback `chat`) and the three document exports
+  (`documentFileName` in `registerDocsIpc.ts`: the title's extension is cut only when it is one, a
+  dot then 1-10 letters or digits, and the original export keeps it; fallback `document`, with
+  `(` `)`; a trailing "(…)" group such as a translation's "(Deutsch)" kept whole, the name
+  before it cut instead) build their suggested names through the same rule.
 ✅ **PDF print harness (P6, `main/services/evidence-pack/print-pdf.ts` — plan §11/D-1):**
   `printEvidencePackHtmlToPdf(html, {packId})` → PDF `Buffer`. Dedicated
   hidden `BrowserWindow` per print — `SECURE_WINDOW_WEB_PREFERENCES` spread (sandboxed),
