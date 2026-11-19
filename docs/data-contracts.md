@@ -1956,10 +1956,11 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   history renders real `detail.exports` rows **including the recorded SHA-256** (truncated
   mono display + a copy-full-hash action via `copyToClipboard` — the pack's own integrity
   note and the user guide point the reader here, fix round FIX-2). Store
-  (`reviewSession.ts`): `exportReviewPack(options)` FLUSHES pending edits first (the pack
-  renders persisted data; a failed flush REFUSES — pinned by test), then merges the
-  returned record into `detail.exports` newest-first under the `openToken` staleness
-  guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
+  (`reviewSession.ts`): `exportReviewPack(options)` DRAINS pending edits first (saves in
+  passes until nothing is queued, #889 — an edit made while that save was writing is in the
+  pack too; the pack renders persisted data; a failed save REFUSES — pinned by test), then
+  merges the returned record into `detail.exports` newest-first under the `openToken`
+  staleness guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
   (+friendly copy, rendered inline in the panel). A token change (lock/switch) landing
   AFTER a successful export still returns 'exported' (state untouched — the export is
   real; only a genuine rejection reports 'failed'; the lock case is pinned in
