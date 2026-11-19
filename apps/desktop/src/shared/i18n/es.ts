@@ -2436,6 +2436,10 @@ export const es: UiCatalog<'es'> = {
     'estaba llena. Tu espacio de trabajo se abre tal como estaba la última vez que se bloqueó; ' +
     'cualquier cambio hecho desde entonces se ha perdido. Asegúrate de que la unidad tenga espacio ' +
     'libre antes de continuar: si no, el próximo bloqueo tampoco podrá guardar tus cambios.',
+  'gate.unlock.encryptedFileMissing':
+    'El archivo cifrado del espacio de trabajo faltaba en la unidad, así que HilbertRaum conservó la ' +
+    'copia sin cifrar que dejó tu última sesión. Desbloquea ahora para volver a cifrarla y luego ' +
+    'averigua qué eliminó el archivo, por ejemplo una herramienta de sincronización o de limpieza.',
   'gate.welcome.title': 'Te damos la bienvenida',
   'gate.welcome.intro':
     'Este es tu espacio de trabajo de IA privado. Chatea con un modelo de IA y haz preguntas ' +
@@ -2616,6 +2620,10 @@ export const es: UiCatalog<'es'> = {
     'y no se pudieron abrir. Volver a escribir la contraseña no servirá. No crees un espacio de ' +
     'trabajo nuevo: deja los archivos como están y restaura la carpeta «workspace» desde una ' +
     'copia de seguridad.',
+  'main.workspace.vaultMissing':
+    'Tu contraseña es correcta, pero el archivo cifrado del espacio de trabajo falta en la unidad y ' +
+    'no quedó ninguna copia para recuperarlo. No crees un espacio de trabajo nuevo. Vuelve a poner ' +
+    'el archivo en su sitio o restaura la carpeta «workspace» desde una copia de seguridad.',
   'main.workspace.vaultOpenFailed':
     'Tu contraseña es correcta, pero HilbertRaum no pudo terminar de abrir el espacio de ' +
     'trabajo. El espacio de trabajo cifrado en la unidad se dejó como estaba. Asegúrate de ' +

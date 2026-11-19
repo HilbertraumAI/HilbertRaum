@@ -2460,6 +2460,11 @@ export const de: Record<keyof typeof en, string> = {
     'du seitdem etwas geändert hast, ist es verloren. Stell sicher, dass auf dem Laufwerk Platz frei ' +
     'ist, bevor du weitermachst: Sonst kann auch das nächste Sperren deine Änderungen nicht ' +
     'speichern.',
+  'gate.unlock.encryptedFileMissing':
+    'Die verschlüsselte Datei des Arbeitsbereichs fehlte auf dem Laufwerk, deshalb hat HilbertRaum ' +
+    'die unverschlüsselte Kopie behalten, die deine letzte Sitzung hinterlassen hat. Entsperre ' +
+    'jetzt, um sie wieder zu verschlüsseln, und finde dann heraus, was die Datei entfernt hat, zum ' +
+    'Beispiel ein Synchronisations- oder Aufräumprogramm.',
   'gate.welcome.title': 'Willkommen',
   'gate.welcome.intro':
     'Das ist dein privater KI-Arbeitsbereich. Chatte mit einem KI-Modell und stelle Fragen ' +
@@ -2652,6 +2657,11 @@ export const de: Record<keyof typeof en, string> = {
     'beschädigt und konnten nicht geöffnet werden. Das Passwort erneut einzugeben hilft ' +
     'nicht. Lege keinen neuen Arbeitsbereich an — lass die Dateien unverändert und stelle ' +
     'den Ordner „workspace“ aus einem Backup wieder her.',
+  'main.workspace.vaultMissing':
+    'Dein Passwort ist richtig, aber die verschlüsselte Datei des Arbeitsbereichs fehlt auf dem ' +
+    'Laufwerk, und es ist keine Kopie übrig, aus der sie sich wiederherstellen ließe. Lege keinen ' +
+    'neuen Arbeitsbereich an. Lege die Datei an ihren Platz zurück oder stelle den Ordner ' +
+    '„workspace“ aus einem Backup wieder her.',
   'main.workspace.vaultOpenFailed':
     'Dein Passwort ist richtig, aber HilbertRaum konnte das Öffnen des Arbeitsbereichs ' +
     'nicht abschließen. Der verschlüsselte Arbeitsbereich auf dem Laufwerk ist unverändert. ' +

@@ -1292,6 +1292,9 @@ export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
   let db: Db | null = null
   try {
     db = new DatabaseSync(dbPath)
+    // #911: the start also runs this before any password, on a file anyone with write access could plant: as in the
+    // probe, no function the file's schema names runs with the trust SQLite gives a schema by default.
+    db.exec('PRAGMA trusted_schema = OFF;')
     const row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
     return { outcome: row.busy ? 'busy' : 'checkpointed', log: row.log, checkpointed: row.checkpointed }
   } catch (err) {

@@ -175,6 +175,37 @@ password recovery — are documented in
   sweep and rekey recovery run over the newer files. The same shape as the schema stamp above:
   any future vault format has to be designed so those builds fail safely (the frozen constraints
   in `data-contracts.md` "Vault format versions"), and old artifacts still belong off the drive.
+- **A workspace whose encrypted file went missing rests in plaintext until the next unlock (#911;
+  owner decision G-3).** When a start finds `.enc` gone (something outside the app removed it) and
+  the working file still there, it keeps that file, the only copy of the workspace, as
+  `workspace/hilbertraum.sqlite.recovery`, and the next unlock with the right password encrypts it
+  again (`security-model.md` "Encrypted file missing"). The residuals:
+  - The copy is **unencrypted** until that unlock, and the lock screen says so. A user who has
+    forgotten the password keeps it on the drive indefinitely: the next start no longer shreds it.
+    Deleting the file by hand is the way out.
+  - Builds up to 0.1.65 don't keep it. One that starts first (a Kit carries several OSes' apps)
+    shreds the working file as before, and this build's unlock then says the encrypted file is
+    missing. Once a copy is kept, builds from 0.1.47 on leave it at their start and roll it forward
+    at their unlock; builds 0.1.6 to 0.1.46 ignore it, so it rests in plaintext beside the vault
+    until a newer build unlocks (the REL-3 note in `security-model.md`).
+  - The probe reads only part of a large file, so a partly damaged copy can be kept and adopted,
+    and the damage shows when the app reads those pages. With no snapshot left, that still beats
+    losing everything.
+  - A `-wal` that SQLite cannot replay (it reports the database as corrupt) is dropped, so a copy
+    kept then lacks the session's last commits.
+  - A copy that is damaged after the `-wal` replay is shredded, and the unlock then says the file is
+    missing (owner decision D3). So is a kept copy that is damaged by the time of the unlock: the
+    right password shreds it (a wrong one touches nothing), and the notice goes.
+  - The start never replaces a snapshot, but the unlock judges an `.enc` that came back after the
+    start (a sync tool restoring it, a copy put back by hand) by the CODE-1b roll-forward rule: the
+    kept copy replaces it unless the returned `.enc` is newer by mtime. If it is newer, it wins: the
+    kept copy is shredded as a spent leftover, the workspace opens at that older snapshot, and
+    nothing reports the session that was lost. The lock screen's section in `troubleshooting.md`
+    says to unlock first.
+  - A `-wal` the replay cannot empty (a full drive, another program reading the workspace) blocks
+    the start: nothing is moved or shredded, and the unlock shows the "another program is holding a
+    recovery file" message, whose words name only the holding program (owner decision D4: no copy
+    change; `troubleshooting.md` says what else it can mean).
 - **A pre-document-organization build ignores collections on a post-feature DB — but deletes still
   work.** An older app shows the flat document corpus (it never reads the `collections` /
   `document_collections` / `conversation_documents` tables), so organization is invisible, not

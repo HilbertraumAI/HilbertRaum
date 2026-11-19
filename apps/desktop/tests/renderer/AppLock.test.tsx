@@ -150,14 +150,16 @@ describe('the gate at start (#875)', () => {
   // (a marker on the drive) and reports it in the workspace state, so the gate at the next start says it from the
   // state App fetches on mount, with no lock in this session. #892: so does a start whose sweep shredded the session an
   // unclean end left behind, in its own words (the working file was neither removed nor damaged), and with the
-  // free-space advice when the drive was too full to lock. One banner per value, in that value's words only.
+  // free-space advice when the drive was too full to lock. #911: so does a start that found the encrypted file missing
+  // and kept the only copy, until the unlock encrypts it again. One banner per value, in that value's words only.
   const NOTICE_COPY = {
     working_copy_lost: 'gate.unlock.workingCopyLost',
     session_not_closed: 'gate.unlock.sessionNotClosed',
-    session_not_closed_full: 'gate.unlock.sessionNotClosedFull'
+    session_not_closed_full: 'gate.unlock.sessionNotClosedFull',
+    encrypted_file_missing: 'gate.unlock.encryptedFileMissing'
   } as const
   it.each(Object.entries(NOTICE_COPY) as Array<[keyof typeof NOTICE_COPY, (typeof NOTICE_COPY)[keyof typeof NOTICE_COPY]]>)(
-    'shows the %s notice on the gate at start, from the workspace state alone (#875, #892)',
+    'shows the %s notice on the gate at start, from the workspace state alone (#875, #892, #911)',
     async (notice, key) => {
       const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
       stubApi(

@@ -2483,6 +2483,11 @@ export const it: UiCatalog<'it'> = {
     'bloccata; le eventuali modifiche fatte da allora sono andate perse. Assicurati che sull’unità ' +
     'ci sia spazio libero prima di continuare: altrimenti anche il prossimo blocco non potrà salvare ' +
     'le tue modifiche.',
+  'gate.unlock.encryptedFileMissing':
+    'Il file crittografato dell’area di lavoro mancava dall’unità, quindi HilbertRaum ha conservato ' +
+    'la copia non crittografata lasciata dalla tua ultima sessione. Sblocca ora per crittografarla ' +
+    'di nuovo, poi scopri cosa ha rimosso il file, per esempio uno strumento di sincronizzazione o ' +
+    'di pulizia.',
   'gate.welcome.title': 'Ti diamo il benvenuto',
   'gate.welcome.intro':
     'Questa è la tua area di lavoro IA privata. Chatta con un modello IA e fai domande sui tuoi ' +
@@ -2665,6 +2670,10 @@ export const it: UiCatalog<'it'> = {
     'La tua password è corretta, ma i dati dell’area di lavoro sull’unità sono danneggiati e non ' +
     'è stato possibile aprirli. Reinserire la password non serve. Non creare una nuova area di ' +
     'lavoro: lascia i file come sono e ripristina la cartella «workspace» da un backup.',
+  'main.workspace.vaultMissing':
+    'La tua password è corretta, ma il file crittografato dell’area di lavoro manca dall’unità e non ' +
+    'è rimasta nessuna copia da cui recuperarlo. Non creare una nuova area di lavoro. Rimetti il ' +
+    'file al suo posto o ripristina la cartella «workspace» da un backup.',
   'main.workspace.vaultOpenFailed':
     'La tua password è corretta, ma HilbertRaum non è riuscito a completare l’apertura ' +
     'dell’area di lavoro. L’area di lavoro crittografata sull’unità è rimasta com’era. ' +

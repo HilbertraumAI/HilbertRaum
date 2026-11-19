@@ -2303,6 +2303,10 @@ export const tr: UiCatalog<'tr'> = {
     'alanınız en son kilitlendiği andaki hâliyle açılır; o zamandan beri yapılan değişiklikler varsa ' +
     'kayboldu. Devam etmeden önce sürücüde boş alan olduğundan emin olun; aksi hâlde bir sonraki ' +
     'kilitleme de değişikliklerinizi kaydedemez.',
+  'gate.unlock.encryptedFileMissing':
+    'Çalışma alanının şifreli dosyası sürücüde yoktu, bu yüzden HilbertRaum son oturumunuzun ' +
+    'bıraktığı şifrelenmemiş kopyayı sakladı. Yeniden şifrelemek için şimdi kilidi açın, ardından ' +
+    'dosyayı neyin sildiğini öğrenin (örneğin bir eşitleme veya temizleme aracı).',
   'gate.welcome.title': 'Hoş geldiniz',
   'gate.welcome.intro':
     'Burası özel yapay zekâ çalışma alanınız. Bir yapay zekâ modeliyle sohbet edin ve ' +
@@ -2470,6 +2474,10 @@ export const tr: UiCatalog<'tr'> = {
     'Parolanız doğru, ancak sürücüdeki çalışma alanı verileri hasarlı ve açılamadı. Parolayı ' +
     'yeniden yazmak işe yaramaz. Yeni bir çalışma alanı oluşturmayın: dosyaları olduğu gibi ' +
     'bırakın ve çalışma alanı klasörünü bir yedekten geri yükleyin.',
+  'main.workspace.vaultMissing':
+    'Parolanız doğru, ancak çalışma alanının şifreli dosyası sürücüde yok ve onu kurtarmak için ' +
+    'hiçbir kopya kalmadı. Yeni bir çalışma alanı oluşturmayın. Dosyayı yerine koyun veya çalışma ' +
+    'alanı klasörünü bir yedekten geri yükleyin.',
   'main.workspace.vaultOpenFailed':
     'Parolanız doğru, ancak HilbertRaum çalışma alanını açmayı tamamlayamadı. Sürücüdeki ' +
     'şifreli çalışma alanı olduğu gibi bırakıldı. Sürücüde boş alan olduğundan emin olun ve ' +

@@ -2579,6 +2579,11 @@ export const fr: UiCatalog<'fr'> = {
     'verrouillage\u00A0; toute modification faite depuis est perdue. Assurez-vous que le disque ' +
     'dispose d’espace libre avant de continuer\u00A0: sinon, le prochain verrouillage ne pourra pas ' +
     'non plus enregistrer vos modifications.',
+  'gate.unlock.encryptedFileMissing':
+    'Le fichier chiffré de l’espace de travail était absent du disque, HilbertRaum a donc conservé ' +
+    'la copie non chiffrée laissée par votre dernière session. Déverrouillez maintenant pour la ' +
+    'chiffrer à nouveau, puis cherchez ce qui a supprimé le fichier, par exemple un outil de ' +
+    'synchronisation ou de nettoyage.',
   'gate.welcome.title': 'Bienvenue',
   'gate.welcome.intro':
     'Voici votre espace de travail d’IA privé. Discutez avec un modèle d’IA et posez des ' +
@@ -2765,6 +2770,11 @@ export const fr: UiCatalog<'fr'> = {
     'endommagées et n’ont pas pu être ouvertes. Ressaisir le mot de passe n’y changera rien. Ne ' +
     'créez pas de nouvel espace de travail\u00A0: laissez les fichiers tels quels et restaurez ' +
     'le dossier «\u00A0workspace\u00A0» à partir d’une sauvegarde.',
+  'main.workspace.vaultMissing':
+    'Votre mot de passe est correct, mais le fichier chiffré de l’espace de travail est absent du ' +
+    'disque, et aucune copie ne permet de le récupérer. Ne créez pas de nouvel espace de travail. ' +
+    'Remettez le fichier à sa place ou restaurez le dossier «\u00A0workspace\u00A0» à partir d’une ' +
+    'sauvegarde.',
   'main.workspace.vaultOpenFailed':
     'Votre mot de passe est correct, mais HilbertRaum n’a pas pu terminer l’ouverture de ' +
     'l’espace de travail. L’espace de travail chiffré sur le disque est resté tel quel. ' +

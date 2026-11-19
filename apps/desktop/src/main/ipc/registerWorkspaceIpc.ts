@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import {
   VaultBusyError,
   VaultDamagedError,
+  VaultMissingError,
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
   WrongPasswordError,
@@ -223,6 +224,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
       attachLogKey(ctx)
       log.info('Workspace unlocked')
+      // #911 (owner decision D5: a log line, no audit type): the start found `.enc` missing and kept the only copy, and
+      // this unlock encrypted it again. Content-free; it is the one trace that something removed the file.
+      if (ctx.workspace.takeRestoredMissingEnc?.()) {
+        log.warn('The encrypted workspace file was missing; the copy the last session left was encrypted again')
+      }
       logProbeFallbacks(ctx)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
@@ -321,6 +327,23 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.vaultOpenFailed')
         }
       }
+      // #911: the password verified, but the encrypted workspace file is missing and no copy was left to restore it
+      // from. Before, this was a raw ENOENT that read "Could not open the workspace." on every try. The copy warns
+      // against a new workspace, which would replace the data key the stored documents need. The log line names no
+      // path. instanceof PLUS the name: the bundle-duplication quirk again.
+      if (err instanceof VaultMissingError || (err instanceof Error && err.name === 'VaultMissingError')) {
+        log.error('Workspace unlock failed: the encrypted workspace file is missing (password verified)')
+        // #911 (D3, SF-2): the unlock shredded a kept copy whose structure was damaged. Content-free, no path.
+        if ((err as VaultMissingError).keptCopyDiscarded) {
+          log.warn('Workspace unlock: a kept copy that could not be restored was removed')
+        }
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (encrypted file missing)')
+        return {
+          ok: false,
+          reason: 'vault_missing',
+          message: tMain('main.workspace.vaultMissing')
+        }
+      }
       // #242: the startup salvage is blocked — another program holds the recovery file the
       // last session's newest data must be moved onto, so opening now would decrypt the
       // stale snapshot over it. Its own reason + copy (close the holder, retry; nothing is
@@ -329,7 +352,12 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         err instanceof VaultRecoveryBlockedError ||
         (err instanceof Error && err.name === 'VaultRecoveryBlockedError')
       ) {
-        log.warn('Workspace unlock refused: a recovery file is held by another program')
+        // #911 widened what blocks: also a stat of `.enc` that fails other than ENOENT, and a `-wal` the start's replay
+        // could not empty while `.enc` is missing (a full drive, another program reading the file).
+        log.warn(
+          'Workspace unlock refused: the startup recovery is blocked (a held recovery file, or a workspace file it ' +
+            'could not read or replay)'
+        )
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (recovery blocked)')
         return {
           ok: false,

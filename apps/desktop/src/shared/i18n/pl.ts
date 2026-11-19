@@ -2479,6 +2479,11 @@ export const pl: UiCatalog<'pl'> = {
     'ewentualne zmiany wprowadzone od tego czasu zostały utracone. Upewnij się, że na dysku jest ' +
     'wolne miejsce, zanim przejdziesz dalej – inaczej także następne zablokowanie nie zapisze twoich ' +
     'zmian.',
+  'gate.unlock.encryptedFileMissing':
+    'Na dysku brakowało zaszyfrowanego pliku obszaru roboczego, dlatego aplikacja HilbertRaum ' +
+    'zachowała niezaszyfrowaną kopię pozostawioną przez ostatnią sesję. Odblokuj teraz, aby ponownie ' +
+    'ją zaszyfrować, a potem sprawdź, co usunęło plik, na przykład narzędzie do synchronizacji lub ' +
+    'czyszczenia.',
   'gate.welcome.title': 'Witaj',
   'gate.welcome.intro':
     'To twój prywatny obszar roboczy AI. Rozmawiaj z modelem AI i zadawaj pytania o swoje ' +
@@ -2652,6 +2657,10 @@ export const pl: UiCatalog<'pl'> = {
     'Hasło jest prawidłowe, ale dane obszaru roboczego na dysku są uszkodzone i nie udało się ' +
     'ich otworzyć. Ponowne wpisanie hasła nie pomoże. Nie twórz nowego obszaru roboczego – ' +
     'zostaw pliki bez zmian i przywróć folder obszaru roboczego z kopii zapasowej.',
+  'main.workspace.vaultMissing':
+    'Hasło jest prawidłowe, ale na dysku brakuje zaszyfrowanego pliku obszaru roboczego i nie ' +
+    'pozostała żadna kopia, z której można by go odzyskać. Nie twórz nowego obszaru roboczego. Odłóż ' +
+    'plik na miejsce albo przywróć folder obszaru roboczego z kopii zapasowej.',
   'main.workspace.vaultOpenFailed':
     'Hasło jest prawidłowe, ale aplikacja HilbertRaum nie mogła dokończyć otwierania ' +
     'obszaru roboczego. Zaszyfrowany obszar roboczy na dysku pozostał bez zmian. Upewnij ' +

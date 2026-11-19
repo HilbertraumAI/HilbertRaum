@@ -117,6 +117,13 @@ from its first public `1.0.0` release onward.
   full to lock. The changes made after the last lock were lost then too, and until now the next
   start said nothing. When the drive is too full, the message asks you to free space first, so the
   next session doesn't end the same way (#892).
+- **A workspace whose encrypted file was removed from the drive is no longer lost.** If something
+  outside HilbertRaum deleted the workspace's encrypted file (a sync or cleanup tool, a disk check)
+  and the app then started, it also removed the unencrypted copy your last session left, and the
+  lock screen answered every correct password with "Could not open the workspace." Now the app keeps
+  that copy, the lock screen says the encrypted file was missing, and your password brings the whole
+  workspace back, encrypted again. Until you unlock, that copy is not encrypted. When no copy was
+  left, the lock screen now says so, and that you should not create a new workspace (#911).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;

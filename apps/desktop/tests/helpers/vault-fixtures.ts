@@ -139,6 +139,28 @@ export function failedLockState(vp: VaultPaths, marker = 7171, password = 'pw'):
 }
 
 /**
+ * What a kill (a power cut, a pulled drive) leaves of the session open on `db` at `vp`: the main file, the `-wal` that
+ * holds its last commits and the `-shm`, copied while `db` is open and put back after the close (which checkpoints the
+ * `-wal` in and deletes both sidecars). #911's realistic state, used by workspace-vault and the fs-mocked
+ * vault-recovery-guards (the copies go through its mocked `node:fs`: build it before arming a failure).
+ */
+export function leaveAsKilled(vp: VaultPaths, db: Db): void {
+  const files = new Map<string, Buffer>()
+  for (const path of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) files.set(path, readFileSync(path))
+  db.close()
+  for (const [path, bytes] of files) writeFileSync(path, bytes)
+}
+
+/** #892's unclean end on the existing vault at `vp` (created under `password`): a session that wrote
+ *  `contextTokens: marker` (into the `-wal`) and ended without a lock ({@link leaveAsKilled}). */
+export function endedUnlocked(vp: VaultPaths, marker: number, password = 'pw'): void {
+  const { db, key } = unlockEncryptedVault(vp, password)
+  updateSettings(db, { contextTokens: marker })
+  key.fill(0)
+  leaveAsKilled(vp, db)
+}
+
+/**
  * #208's on-disk state on the existing vault at `vp` (created under `password`): the password verifies and `.enc`
  * authenticates, but it holds the app's own encryption of `noiseBytes` random bytes under the real key, not a
  * database. No default size ON PURPOSE: workspace-vault-destruction's #208 row reproduces the reporter's 483,328 bytes
