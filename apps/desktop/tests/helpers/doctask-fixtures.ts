@@ -78,7 +78,7 @@ export function dbAudit(db: Db): NonNullable<DocTaskDeps['audit']> {
 
 /**
  * A DocTaskManager over the world with harmless defaults — no runtime, no translator, no chat streaming, a 4,096
- * window, no ingestion deps, a no-op document-work lease, no audit — each replaced by `overrides`.
+ * window, no ingestion deps, a no-op document-work lease, not locking, no audit — each replaced by `overrides`.
  */
 export function docTaskManager(w: DocTaskWorld, overrides: Partial<DocTaskDeps> = {}): DocTaskManager {
   return new DocTaskManager({
@@ -90,6 +90,7 @@ export function docTaskManager(w: DocTaskWorld, overrides: Partial<DocTaskDeps> 
     getStoreDir: () => w.storeDir,
     getIngestionDeps: () => ({}),
     beginDocumentWork: () => () => {},
+    isWorkspaceLocking: () => false,
     ...overrides
   })
 }

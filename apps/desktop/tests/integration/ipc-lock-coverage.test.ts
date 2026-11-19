@@ -188,6 +188,7 @@ const MODULES: Array<{
       registerImagesIpc(
         ctx,
         new VisionService({
+          isWorkspaceLocking: () => false,
           getStatus: async () => ({ available: false, reason: 'no-model' }),
           createRuntime: () => {
             throw new Error('a locked workspace builds no vision runtime')

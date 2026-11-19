@@ -148,6 +148,7 @@ describe('vision security sentinel', () => {
 
     const audit = vi.fn()
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       createRuntime: () =>
         new VisionRuntime({
@@ -194,6 +195,7 @@ describe('vision security sentinel', () => {
 
     const audit = vi.fn()
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       createRuntime: () =>
         new VisionRuntime({
@@ -225,6 +227,7 @@ describe('vision security sentinel', () => {
   it('a failure AFTER the answer streamed logs ONLY a content-free {jobId, error}', async () => {
     const audit = vi.fn()
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       // Allowed test seam: the answer really flows through onToken, then a content-free throw.
       createRuntime: () => ({
@@ -262,6 +265,7 @@ describe('vision security sentinel', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-iso-'))
     const audit = vi.fn()
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({
         analyze: async (o: { onToken?: (d: string) => void }) => {
@@ -300,6 +304,7 @@ describe('vision security sentinel', () => {
   it('stop() purges completed-answer residue from the job map (lock-time RAM purge)', async () => {
     const audit = vi.fn()
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({
         analyze: async (o: { onToken?: (d: string) => void }) => {
@@ -327,6 +332,7 @@ describe('vision security sentinel', () => {
   it('bounds the job map: old terminal jobs are evicted (no unbounded growth)', async () => {
     const audit = vi.fn()
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({ analyze: async () => 'ok' })
     })
@@ -352,6 +358,7 @@ describe('vision security sentinel', () => {
   it('clamps hostile persistence fields and refuses a forged sessionId (validation clamps)', async () => {
     const audit = vi.fn()
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       createRuntime: () => ({
         analyze: async (o: { onToken?: (d: string) => void }) => {

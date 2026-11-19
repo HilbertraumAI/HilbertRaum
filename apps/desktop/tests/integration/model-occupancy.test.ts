@@ -257,6 +257,7 @@ describe('DocTaskManager vs the occupancy spans', () => {
 
   function makeManager(occ: ModelOccupancy, runtime: ModelRuntime | null = chatRuntime()): DocTaskManager {
     return new DocTaskManager({
+      isWorkspaceLocking: () => false,
       getDb: () => db,
       getRuntime: () => runtime,
       getTranslator: () => null,
@@ -339,6 +340,7 @@ describe('DocTaskManager vs the occupancy spans', () => {
 
   it('an unwired occupancy dep leaves the manager byte-identical (partial test deps)', () => {
     const manager = new DocTaskManager({
+      isWorkspaceLocking: () => false,
       getDb: () => db,
       getRuntime: () => chatRuntime(),
       getTranslator: () => null,

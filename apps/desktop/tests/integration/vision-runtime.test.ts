@@ -229,6 +229,7 @@ describe('VisionRuntime — start + analyze', () => {
 
   it('the typed code rides the job to the renderer as job.error (#123, service mapping)', async () => {
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => ({
         analyze: async () => {
@@ -575,6 +576,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     }) as typeof fetch
     let built = 0
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         built++
@@ -602,6 +604,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // dies every time (corrupt GGUF)
     let built = 0
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         built++
@@ -677,6 +680,7 @@ describe('VisionService — OS loader refusal (#530)', () => {
     let built = 0
     let healthy = false
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         built++
@@ -711,6 +715,7 @@ describe('VisionService — OS loader refusal (#530)', () => {
       )
     )
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => new VisionRuntime({ ...base, spawn, fetchImpl: refusedFetch })
     })
@@ -760,6 +765,7 @@ describe('#637 — a cancel during the vision cold start', () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
     })
@@ -789,6 +795,7 @@ describe('#637 — a cancel during the vision cold start', () => {
     const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
     const runtimes: VisionRuntime[] = []
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })

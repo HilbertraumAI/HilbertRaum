@@ -263,6 +263,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     }
     // Phase 33/34: the document task engine, wired exactly like main/index.ts does it.
     ctx.docTasks = new DocTaskManager({
+      isWorkspaceLocking: () => false,
       getDb: () => ctx.db,
       getRuntime: () => ctx.runtime.active(),
       // TG-3: translation runs on the sidecar seam. The echo translator plays the old

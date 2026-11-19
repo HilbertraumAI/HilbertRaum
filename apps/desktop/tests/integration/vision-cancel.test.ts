@@ -33,6 +33,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
   it('a cancel that races completion does not resurrect the job to done or fire emit.done', async () => {
     let resolveAnalyze!: (answer: string) => void
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       // A runtime that streams a token, then hangs until the test resolves it — letting the test
       // inject a cancel() while run() is parked on the analyze await.
@@ -79,6 +80,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     let releaseUnwind!: () => void
     const unwindGate = new Promise<void>((r) => (releaseUnwind = r))
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       // A runtime whose in-flight request does NOT unwind at the abort instant: on abort it
       // waits for the test's gate, then rejects — modelling the sidecar draining the request.

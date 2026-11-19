@@ -86,10 +86,10 @@ export interface DocTaskDeps {
    * end, after a multi-second awaited teardown (sidecar suspends, stream settles, this manager's
    * own task settle). `startDocTask` refuses while it is set — an admitted task would `pump()`
    * immediately and, since the suspends are deliberately non-latching, lazily RESPAWN the
-   * ~10 GB translation sidecar with document text in its KV cache, outliving the lock. Absent /
-   * unwired ⇒ never locking, so partial test deps stay valid.
+   * ~10 GB translation sidecar with document text in its KV cache, outliving the lock. Required: the composition root passes `workspace.isLocking()`; a test that is not about
+   * the lock passes `() => false`.
    */
-  isWorkspaceLocking?: () => boolean
+  isWorkspaceLocking: () => boolean
   /**
    * The OTHER background lane currently holding a model-occupancy span, or null (#185/#186 —
    * `services/runtime/occupancy.ts`). `startDocTask` refuses on it, completing the exclusion

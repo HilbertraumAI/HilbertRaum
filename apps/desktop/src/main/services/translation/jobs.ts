@@ -54,9 +54,10 @@ export interface TranslateJobServiceDeps {
    * controller and its first window would call `translate()` — lazily respawning the ~10 GB
    * sidecar the teardown just suspended, with the pasted source text in its KV cache. The
    * workspace is still "unlocked" throughout (the DB closes only at the very end), so this is
-   * the signal that expresses it. Absent/unwired ⇒ never locking (partial test deps stay valid).
+   * the signal that expresses it. Required: the composition root passes `workspace.isLocking()`; a test that is not about
+   * the lock passes `() => false`.
    */
-  isWorkspaceLocking?: () => boolean
+  isWorkspaceLocking: () => boolean
 }
 
 /** Cap on retained terminal jobs — the interactive view is one-at-a-time, so a tiny history
@@ -103,7 +104,7 @@ export class TranslateJobService {
     // in production today (the one call site is the IPC handler, which refuses first with the
     // module's localized locked copy), so it is defence in depth for a future caller outside IPC,
     // and adding a renderer code + en/de copy for a path no user can reach would be dead weight.
-    if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
+    if (this.deps.isWorkspaceLocking()) return failedJob('cancelled')
     const translator = this.deps.getTranslator()
     if (!translator) return failedJob('noModel')
     const source = req?.sourceLang

@@ -61,10 +61,10 @@ export interface VisionServiceDeps {
    * teardown itself and NOT the rest of the lock handler (the stream settles, the doc-task
    * settle, the vector purge, the re-encrypt) — several more seconds during which the workspace
    * still reports unlocked and an `analyze()` would build a FRESH ~4.6 GB vision sidecar with
-   * image-derived prefill that outlives the lock. Absent/unwired ⇒ never locking (partial test
-   * deps stay valid).
+   * image-derived prefill that outlives the lock. Required: the composition root passes `workspace.isLocking()`; a test that is not about
+   * the lock passes `() => false`.
    */
-  isWorkspaceLocking?: () => boolean
+  isWorkspaceLocking: () => boolean
 }
 
 export class VisionService {
@@ -153,7 +153,7 @@ export class VisionService {
     // when the `tearingDown` latch bars it, so the renderer path is unchanged; the IPC handler
     // refuses earlier with the localized locked copy. The images IPC is the only caller today, so
     // this is defence in depth for a future caller outside IPC.
-    if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
+    if (this.deps.isWorkspaceLocking()) return failedJob('cancelled')
     const bytes = req?.imageBytes
     const code = validateAnalyzeRequest(bytes, req?.mimeType, req?.question)
     if (code) return failedJob(code)
