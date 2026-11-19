@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import {
@@ -55,6 +55,28 @@ export const DRIVE_LICENSE_ARTIFACTS = [
   'THIRD-PARTY-NOTICES.md',
   'DRIVE-NOTICES.md'
 ] as const
+
+/**
+ * The folders a used workspace writes into, which a sold drive ships EMPTY (spec §12.2, #893).
+ * Every entry directly in one is user data: a file, or a link (named, never followed), as
+ * `<dir>/<name>`; a non-empty folder as `<dir>/<name>/*`. An empty folder is fine: the Kit build
+ * lays out `workspace/` and `logs/` empty, and the app creates `documents/`, `images/` and
+ * `zim-transient/` on first use and may leave them empty. A rule rather than a list of names:
+ * the vault, the logger and the knowledge-pack service write about twenty names, several of them
+ * plaintext (the decrypt temp, `.recovery`, the password-change journal, `zim-transient/`,
+ * `logs/app.log` in dev mode), and a list missed each new one. `build-commercial-drive.{ps1,sh}`
+ * re-state the rule in their native pre-flight; `tests/integration/script-drift.test.ts` pins
+ * both scripts' literals to this list and to `USER_DATA_CONFIG_FILES`.
+ */
+export const USER_DATA_DIRS = ['workspace', 'logs'] as const
+
+/**
+ * The `config/` files only a used workspace leaves (#893): the vault descriptor and the
+ * working-copy-lost marker (#875), each exact or with a suffix (`workspace.json.tmp`). Matched
+ * without case, as the existence check before #893 matched them on a case-insensitive drive
+ * (where the app would read `Workspace.json` as its descriptor).
+ */
+export const USER_DATA_CONFIG_FILES = ['workspace.json', 'working-copy-lost.json'] as const
 
 // ---- The final "is this drive sellable?" assertion ---------------------------------
 
@@ -196,7 +218,11 @@ export interface CommercialAssertion {
      * catalog-only model is not preloaded, so its own in-app license gate applies instead (#766).
      */
     licensesApproved: boolean
-    /** No user data present (a sold drive ships empty — spec §12.2). */
+    /**
+     * No user data present (a sold drive ships empty — spec §12.2): nothing but empty folders
+     * directly in `workspace/` and `logs/`, and no `config/workspace.json*` or
+     * `config/working-copy-lost.json*` (#893; `USER_DATA_DIRS`, `USER_DATA_CONFIG_FILES`).
+     */
     noUserData: boolean
     /**
      * Every pinned runtime build's install marker matches the runtime-sources.yaml pin
@@ -274,34 +300,38 @@ export interface CommercialAssertion {
   modelResults: ModelVerifyResult[]
 }
 
-/** Artifacts that mean a workspace has already been USED (must be absent on a sold drive). */
+/**
+ * Artifacts that mean a workspace has already been USED (must be absent on a sold drive): the
+ * `USER_DATA_DIRS` / `USER_DATA_CONFIG_FILES` rule (#893), sorted so the problem order is stable.
+ */
 function userDataArtifacts(rootPath: string): string[] {
-  const found: string[] = []
-  const ws = join(rootPath, 'workspace')
-  // A created workspace leaves a SQLite DB (plaintext) or its encrypted form + the vault
-  // descriptor — and a crash can leave the WAL/SHM sidecars (plaintext DB pages) that
-  // `cleanSidecars` normally shreds. Any of these means the drive was already initialised
-  // — not factory-fresh. (We check the sidecars too so this final ship gate doesn't rely
-  // on shredStalePlaintext having run.)
-  for (const rel of [
-    join('workspace', 'hilbertraum.sqlite'),
-    join('workspace', 'hilbertraum.sqlite.enc'),
-    join('workspace', 'hilbertraum.sqlite-wal'),
-    join('workspace', 'hilbertraum.sqlite-shm'),
-    join('config', 'workspace.json')
-  ]) {
-    if (existsSync(join(rootPath, rel))) found.push(rel.replace(/\\/g, '/'))
-  }
-  // Imported documents land under workspace/documents — a non-empty dir is user data.
-  const docs = join(ws, 'documents')
-  try {
-    if (existsSync(docs) && statSync(docs).isDirectory() && readdirSync(docs).length > 0) {
-      found.push('workspace/documents/*')
+  // Unreadable or missing → treat as absent; the policy/weight checks still gate the drive.
+  const entries = (dir: string): Dirent[] => {
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return []
     }
-  } catch {
-    /* unreadable → treat as absent; the policy/weight checks still gate the drive */
   }
-  return found
+  const found: string[] = []
+  // A created workspace leaves the DB in some state (plaintext, `.enc`, the decrypt and encrypt
+  // temps, a lock's `.recovery`, a password change's staged copy and journal), and a crash can
+  // leave the WAL/SHM sidecars (plaintext DB pages) that `cleanSidecars` normally shreds — this
+  // final ship gate does not rely on shredStalePlaintext having run. Stored documents, images and
+  // knowledge-pack transients live in sub-folders; the logs in logs/. Any of it means the drive
+  // was already initialised, not factory-fresh. A Dirent describes the entry itself, so a link or
+  // junction is not a directory here: it is named, and its target is never read.
+  for (const dir of USER_DATA_DIRS) {
+    for (const e of entries(join(rootPath, dir))) {
+      if (!e.isDirectory()) found.push(`${dir}/${e.name}`)
+      else if (entries(join(rootPath, dir, e.name)).length > 0) found.push(`${dir}/${e.name}/*`)
+    }
+  }
+  for (const e of entries(join(rootPath, 'config'))) {
+    const name = e.name.toLowerCase()
+    if (USER_DATA_CONFIG_FILES.some((f) => name === f || name.startsWith(`${f}.`))) found.push(`config/${e.name}`)
+  }
+  return found.sort()
 }
 
 /**

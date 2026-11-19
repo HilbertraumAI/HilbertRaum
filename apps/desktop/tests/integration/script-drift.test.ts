@@ -11,7 +11,12 @@ import { SUPPORTED_RUNTIME_FORMATS } from '../../src/main/services/models'
 import { SIDECAR_FAMILY_SPECS, compareRuntimeVersions, sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
 import { isRealSha256 } from '../../src/shared/manifest'
 import { KIT_PLATFORMS, type RuntimeFamily } from '../../src/shared/runtime-sources'
-import { DRIVE_LICENSE_ARTIFACTS, KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
+import {
+  DRIVE_LICENSE_ARTIFACTS,
+  KIT_PLATFORM_SPECS,
+  USER_DATA_CONFIG_FILES,
+  USER_DATA_DIRS
+} from '../../src/main/services/commercial-drive'
 import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
 import { extractScriptArray } from '../helpers/script-legs'
 import { MARKER_ROWS } from '../helpers/fetch-runtime-markers'
@@ -273,6 +278,23 @@ describe('TS ↔ shell-script drift (drive license artifacts, LIC-1)', () => {
     ['scripts/build-commercial-drive.sh', 'LICENSE_ARTIFACTS=(']
   ])('%s spells exactly the canonical artifact list', (rel, header) => {
     expect(extractScriptArray(repoText(rel), header)).toEqual([...DRIVE_LICENSE_ARTIFACTS])
+  })
+})
+
+// --- No user data on a sold drive (#893) ---------------------------------------------
+// The builder's native pre-flight re-states the sell gate's user-data rule
+// (commercial-drive.ts `userDataArtifacts`): the folders that must hold nothing and the config
+// names a used workspace leaves. A native problem alone makes the build NOT SELLABLE, so a twin
+// that drifts either way is wrong: one list longer refuses a drive the canonical gate passes,
+// one list shorter stops naming a leftover.
+describe('TS ↔ shell-script drift (user-data rules, #893)', () => {
+  it.each([
+    ['scripts/build-commercial-drive.ps1', '$UserDataDirs = @(', USER_DATA_DIRS],
+    ['scripts/build-commercial-drive.sh', 'USER_DATA_DIRS=(', USER_DATA_DIRS],
+    ['scripts/build-commercial-drive.ps1', '$UserDataConfigFiles = @(', USER_DATA_CONFIG_FILES],
+    ['scripts/build-commercial-drive.sh', 'USER_DATA_CONFIG_FILES=(', USER_DATA_CONFIG_FILES]
+  ] as const)('%s %s spells exactly the canonical list', (rel, header, canonical) => {
+    expect(extractScriptArray(repoText(rel), header)).toEqual([...canonical])
   })
 })
 

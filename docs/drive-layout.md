@@ -118,13 +118,18 @@ HILBERTRAUM/
 │   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + kiwix_tools + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
 ├── user-skills/                                # user Skills (read-write PLAIN folders) — EMPTY on a sold drive
-├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive
-├── logs/
+├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive:
+│                                                #   the sell gate refuses any file or link in it and any
+│                                                #   non-empty folder; empty documents/, images/ and
+│                                                #   zim-transient/ are fine (#893)
+├── logs/                                       # app.log.enc (app.log in plaintext dev mode) — EMPTY on a sold
+│                                                #   drive, by the same sell-gate rule (#893)
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}  # + workspace.json once a workspace exists, and
                                                 #   working-copy-lost.json only after a lock kept the last
                                                 #   saved state (#875); a workspace created here removes a
-                                                #   leftover one (the sell gate does not check for it)
+                                                #   leftover one. The sell gate refuses both, and either
+                                                #   one's temporary copy (`<name>.*`, #893)
 ```
 
 > **Skills on a commercial drive (S3 lays the dirs; S9 provisions + asserts).** `app-skills/` carries

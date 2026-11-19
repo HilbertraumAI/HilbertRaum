@@ -125,6 +125,15 @@ from its first public `1.0.0` release onward.
   script now keeps an engine that is newer than the drive's list and says so; pass
   `-AllowDowngrade` (`--allow-downgrade` in the `.sh` script) to replace it anyway. Building a
   Kit with `build-commercial-drive` still installs exactly the version the app ships with (#873).
+- **The Kit builder no longer calls a drive sellable while it still holds files from a used
+  workspace.** Its final check looked for five workspace files and a non-empty
+  `workspace/documents/` only, so a drive wiped by hand could pass with a leftover such as the
+  unencrypted working copy of the workspace, the copy a failed lock kept, a password change's
+  journal, the image history, the logs or the note about a lost working copy. `build-commercial-drive`
+  and its final check now require `workspace/` and `logs/` to hold nothing but empty folders, and
+  `config/` to hold no `workspace.json` or `working-copy-lost.json` or a temporary copy of either.
+  Each leftover is named, so you know what to delete; a Finder `.DS_Store` in those folders counts
+  too (#893).
 - **A workspace that could not finish opening is no longer reported as damaged.** When unlocking
   failed after the password was accepted, for example because the drive was nearly full while
   the app updated the workspace after an update, the lock screen said the workspace data was

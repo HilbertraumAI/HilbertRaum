@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
@@ -202,6 +202,10 @@ function sellableDrive(): string {
   writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
   mkdirSync(join(root, 'user-skills'))
+  // The folders a Kit build lays out empty, and the ones the app creates on first use and may leave empty (#893).
+  for (const dir of ['workspace/documents', 'workspace/images', 'workspace/zim-transient', 'logs']) {
+    mkdirSync(join(root, ...dir.split('/')), { recursive: true })
+  }
   for (const name of DRIVE_LICENSE_ARTIFACTS) writeDriveFile(root, name, name)
   writeDriveFile(root, `HilbertRaum-${APP_VERSION}-portable.exe`, 'app')
   writeDriveFile(root, 'Start HilbertRaum.cmd', 'launcher')
@@ -1230,6 +1234,43 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain('NOT SELLABLE')
         expect(out).toContain(`    - ${line}`)
         expect(out).not.toContain('SELLABLE: canonical gate passed')
+      })
+
+      // #893: a hand-wiped drive that kept files beside the workspace, in logs/ or in config/. The pre-flight names each one,
+      // a file in a sub-folder by its folder and a link by its own name (never followed: its target here is an empty folder).
+      // One combined row per leg: a verify run is slow on the Windows runner (#458).
+      it.skipIf(!toolBuilt)('a used drive: the pre-flight names every leftover (#893)', () => {
+        const root = sellableDrive()
+        for (const rel of [
+          'workspace/hilbertraum.sqlite.recovery',
+          'workspace/hilbertraum.sqlite.tmp',
+          'workspace/images/a.enc',
+          'config/working-copy-lost.json',
+          'logs/app.log.enc'
+        ]) {
+          writeDriveFile(root, rel, 'x')
+        }
+        const linkTarget = mkdtempSync(join(tmpdir(), 'hilbertraum-script-link-'))
+        symlinkSync(linkTarget, join(root, 'workspace', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('NOT SELLABLE')
+        // Whole lines: `…sqlite.tmp` must not pass for `…sqlite`, and the empty folders sellableDrive() lays out stay unnamed.
+        const native = out
+          .split(/\r?\n/)
+          .map((l) => l.trimEnd())
+          .filter((l) => l.startsWith('    - user data present: '))
+        expect(native.sort(), out).toEqual(
+          [
+            'config/working-copy-lost.json',
+            'logs/app.log.enc',
+            'workspace/hilbertraum.sqlite.recovery',
+            'workspace/hilbertraum.sqlite.tmp',
+            'workspace/images/*',
+            'workspace/linked'
+          ].map((rel) => `    - user data present: ${rel}`)
+        )
       })
 
       // #766: a Kit ships its bundled set plus any model with a file on the drive, and lists every other manifest for in-app

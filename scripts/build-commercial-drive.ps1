@@ -295,14 +295,40 @@ if (Test-Path -LiteralPath $policyPath) {
 } else {
   $problems += 'config/policy.json missing'
 }
-# No user data on a drive meant to ship empty (spec 12.2). Mirror assertCommercialDrive:
-# flat DB/descriptor files + the WAL/SHM sidecars + a non-empty documents dir.
-foreach ($ud in @('workspace/hilbertraum.sqlite', 'workspace/hilbertraum.sqlite.enc', 'workspace/hilbertraum.sqlite-wal', 'workspace/hilbertraum.sqlite-shm', 'config/workspace.json')) {
-  if (Test-Path -LiteralPath (Join-Path $Target $ud)) { $problems += "user data present: $ud" }
+# No user data on a drive meant to ship empty (spec 12.2, #893). Mirrors assertCommercialDrive's
+# rule (commercial-drive.ts USER_DATA_DIRS / USER_DATA_CONFIG_FILES): every entry directly in these
+# folders is user data -- a file or a link by its own name (a link is never followed), a non-empty
+# folder as <dir>/<name>/* (an empty one is fine) -- and so is a vault descriptor or a
+# working-copy-lost marker in config/, exact or with a suffix, in any case.
+$UserDataDirs = @(
+  'workspace',
+  'logs'
+)
+$UserDataConfigFiles = @(
+  'workspace.json',
+  'working-copy-lost.json'
+)
+foreach ($udDir in $UserDataDirs) {
+  $udPath = Join-Path $Target $udDir
+  if (-not (Test-Path -LiteralPath $udPath -PathType Container)) { continue }
+  foreach ($ud in @(Get-ChildItem -LiteralPath $udPath -Force -ErrorAction SilentlyContinue)) {
+    $udIsLink = [bool]($ud.Attributes -band [IO.FileAttributes]::ReparsePoint)
+    if (-not $ud.PSIsContainer -or $udIsLink) {
+      $problems += "user data present: $udDir/$($ud.Name)"
+    } elseif (Get-ChildItem -LiteralPath $ud.FullName -Force -ErrorAction SilentlyContinue | Select-Object -First 1) {
+      $problems += "user data present: $udDir/$($ud.Name)/*"
+    }
+  }
 }
-$docsDir = Join-Path $Target 'workspace/documents'
-if ((Test-Path -LiteralPath $docsDir) -and (Get-ChildItem -LiteralPath $docsDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-  $problems += 'user data present: workspace/documents/*'
+$configDir = Join-Path $Target 'config'
+if (Test-Path -LiteralPath $configDir -PathType Container) {
+  foreach ($cf in @(Get-ChildItem -LiteralPath $configDir -Force -ErrorAction SilentlyContinue)) {
+    foreach ($udc in $UserDataConfigFiles) {
+      if ($cf.Name -eq $udc -or $cf.Name.StartsWith("$udc.", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $problems += "user data present: config/$($cf.Name)"
+      }
+    }
+  }
 }
 # App skills present + user-skills empty (assertCommercialDrive parity, skills plan S9 / §14):
 # a sold drive ships trusted PRODUCT skills under app-skills/ (a folder with a SKILL.md) and an

@@ -268,12 +268,37 @@ if [[ -f "$POLICY" ]]; then
 else
   PROBLEMS+=("config/policy.json missing")
 fi
-# Mirror assertCommercialDrive: flat DB/descriptor files + WAL/SHM sidecars + documents dir.
-for ud in workspace/hilbertraum.sqlite workspace/hilbertraum.sqlite.enc workspace/hilbertraum.sqlite-wal workspace/hilbertraum.sqlite-shm config/workspace.json; do
-  [[ -e "$TARGET/$ud" ]] && PROBLEMS+=("user data present: $ud")
+# No user data on a drive meant to ship empty (spec 12.2, #893). Mirrors assertCommercialDrive's
+# rule (commercial-drive.ts USER_DATA_DIRS / USER_DATA_CONFIG_FILES): every entry directly in these
+# folders is user data -- a file or a link by its own name (a link is never followed), a non-empty
+# folder as <dir>/<name>/* (an empty one is fine) -- and so is a vault descriptor or a
+# working-copy-lost marker in config/, exact or with a suffix, in any case. Bash 3.2: no mapfile.
+USER_DATA_DIRS=(
+  workspace
+  logs
+)
+USER_DATA_CONFIG_FILES=(
+  workspace.json
+  working-copy-lost.json
+)
+for udd in "${USER_DATA_DIRS[@]}"; do
+  [[ -d "$TARGET/$udd" ]] || continue
+  while IFS= read -r ud; do
+    [[ -n "$ud" ]] || continue
+    if [[ -L "$TARGET/$udd/$ud" || ! -d "$TARGET/$udd/$ud" ]]; then
+      PROBLEMS+=("user data present: $udd/$ud")
+    elif [[ -n "$(ls -A "$TARGET/$udd/$ud" 2>/dev/null)" ]]; then
+      PROBLEMS+=("user data present: $udd/$ud/*")
+    fi
+  done < <(ls -A "$TARGET/$udd" 2>/dev/null)
 done
-if [[ -d "$TARGET/workspace/documents" ]] && [[ -n "$(ls -A "$TARGET/workspace/documents" 2>/dev/null)" ]]; then
-  PROBLEMS+=("user data present: workspace/documents/*")
+if [[ -d "$TARGET/config" ]]; then
+  while IFS= read -r cf; do
+    cf_lower="$(printf '%s' "$cf" | tr '[:upper:]' '[:lower:]')"
+    for udc in "${USER_DATA_CONFIG_FILES[@]}"; do
+      if [[ "$cf_lower" == "$udc" || "$cf_lower" == "$udc".* ]]; then PROBLEMS+=("user data present: config/$cf"); fi
+    done
+  done < <(ls -A "$TARGET/config" 2>/dev/null)
 fi
 # App skills present + user-skills empty (assertCommercialDrive parity, skills plan S9 / §14):
 # a sold drive ships trusted PRODUCT skills under app-skills/ (a folder with a SKILL.md) and an
