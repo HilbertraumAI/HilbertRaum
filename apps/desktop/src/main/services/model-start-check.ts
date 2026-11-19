@@ -29,13 +29,16 @@ export interface ModelStartCheckDeps {
 /**
  * #913 (C §913.3): the start check by model id. The manifest by id, the policy-aware developer leniency
  * the chat start uses, and the workspace hash store (lock-aware: a cache miss while locked). A model id no
- * manifest names answers `ok`: there is nothing to check against, so the start goes on as before. The
- * manifest read is synchronous, once per cold start (a few tens of ms on a Kit, #333): acceptable.
+ * manifest names answers `ok`: there is nothing to check against, so the start goes on as before. A check that
+ * comes with its service's manifest reads no folder; one without (vision) reads it synchronously, once per cold
+ * start (a few tens of ms on a Kit, #333).
  */
 export function createModelStartCheck(deps: ModelStartCheckDeps): ModelStartCheck {
   const hashStore = createSettingsHashStore(deps.getDb, deps.paths.rootPath)
-  return async (modelId, { hash, signal }) => {
-    const manifest = findManifestById(deps.manifestsDir, modelId)
+  return async (modelId, { hash, signal, manifest: bound }) => {
+    // The composers bind the manifest their service was built from (#913 code review), so a transcription
+    // reads no manifest folder; vision names its model per status read and looks it up here.
+    const manifest = bound ?? findManifestById(deps.manifestsDir, modelId)
     if (!manifest) return 'ok'
     return checkModelBeforeStart(manifest, deps.paths.rootPath, {
       developerMode: developerLeniency(deps, deps.getSettings()?.developerMode ?? false),
@@ -49,24 +52,36 @@ export function createModelStartCheck(deps: ModelStartCheckDeps): ModelStartChec
 /** The consumers a repair re-arms: every non-chat role that can hold a start refusal. */
 export type RearmTargets = Pick<AppContext, 'embedder' | 'reranker' | 'vision' | 'refreshTranslatorSlot'>
 
+/** A model a check found intact, or a download just put on the drive: its manifest id and role. */
+export interface CheckedModel {
+  id: string
+  role: string
+}
+
 /**
- * #913 review S1: re-arm the start refusals the models in `modelIds` may have left behind, after a
- * check found them intact (a clean "Verify checksum" or "Check all model files") or a download put them
- * on the drive. Before, only the chat ladder and the search model were re-armed, so a translation or
- * re-ranking model put right by hand stayed refused until a restart. The search model and the reranker
- * by their id; the images cooldown and the translator slot (a latched instance is replaced) always:
- * each service checks its files again at its next cold start, so a file that is still damaged is
- * refused again in about 1 ms. Never throws.
+ * Re-arm the start refusals the non-chat roles latched: the search model's and the reranker's failed-start latch, the
+ * images cooldown, and a latched translator (`refreshTranslatorSlot` replaces it with a fresh instance). Never throws.
+ * - Without `checked`: every role. The engine heal (`rearmLlamaConsumers`, #530 / #654): the program they all run
+ *   starts again.
+ * - With `checked` (#913 review S1): only the roles whose model is in it. A clean "Verify checksum" or "Check all
+ *   model files", or a download (`afterModelInstalled`). The search model and the reranker by their id; the images
+ *   and translation roles by role (their services name no single model; an empty translator slot is filled the
+ *   issue-#40 way). A check of an unrelated model leaves a latch alone, so a translator latched for memory pressure,
+ *   and its session GPU fallback, survive a check of the chat model.
+ * Each re-armed service checks its files again at its next cold start, so a file still damaged is refused again in
+ * about 1 ms.
  */
-export function rearmCheckedModels(ctx: RearmTargets, modelIds: Iterable<string>): void {
-  const ids = new Set(modelIds)
+export function rearmStartRefusals(ctx: RearmTargets, checked?: Iterable<CheckedModel>): void {
+  const models = checked ? [...checked] : null
+  const named = (id: string | undefined): boolean => models === null || models.some((m) => m.id === id)
+  const hasRole = (role: string): boolean => models === null || models.some((m) => m.role === role)
   try {
     // `embedder` is always set in the app; a partial context (a handler row) may leave it out.
-    if (ctx.embedder && ids.has(ctx.embedder.id)) ctx.embedder.resetStartFailure?.()
-    if (ctx.reranker && ids.has(ctx.reranker.id)) ctx.reranker.resetStartFailure?.()
-    ctx.vision?.resetStartFailure()
-    ctx.refreshTranslatorSlot?.()
+    if (ctx.embedder && named(ctx.embedder.id)) ctx.embedder.resetStartFailure?.()
+    if (ctx.reranker && named(ctx.reranker.id)) ctx.reranker.resetStartFailure?.()
+    if (hasRole('vision')) ctx.vision?.resetStartFailure()
+    if (hasRole('translation')) ctx.refreshTranslatorSlot?.()
   } catch (err) {
-    log.warn('Re-arming the model starts after a check failed', { error: String(err) })
+    log.warn('Re-arming the model starts failed', { error: String(err) })
   }
 }

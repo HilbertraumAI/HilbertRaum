@@ -2172,9 +2172,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the first (the AI Model screen shows the damaged file). One damaged file is enough: "Check all model
   files" stops at it and leaves the model's other file unhashed, and since #913 the screen and Images
   keep reading it as damaged after that. The running analyzer keeps the model it was
-  built with until a failed start, an engine update, a lock or quit: a vision model installed
-  mid-session that becomes the pick (a flagged one, or one earlier in walk order) moves the Performance
-  row and the Images status at their next update, and the analysis only at that rebuild.
+  built with until a failed start, an engine update, a lock or quit, or (since #913) its next cold
+  start after the idle teardown, which loads the model the Images status names: a vision model
+  installed mid-session that becomes the pick (a flagged one, or one earlier in walk order) moves the
+  Performance row and the Images status at their next update, and the analysis at that rebuild.
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start

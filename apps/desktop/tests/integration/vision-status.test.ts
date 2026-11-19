@@ -5,6 +5,11 @@ import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { getVisionStatus, pickVisionManifest, visionCandidates } from '../../src/main/services/vision/status'
 import { computeInstallState, manifestFilesPresent } from '../../src/main/services/models'
+import { createModelStartCheck } from '../../src/main/services/model-start-check'
+import { VisionService, type VisionAnalyzer, type VisionStreamEmitter } from '../../src/main/services/vision'
+import type { ImageJob } from '../../src/shared/types'
+import { until } from '../helpers/hang-budget'
+import { pngHeader } from '../helpers/image-fixtures'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import type { AppContext } from '../../src/main/services/context'
 import { sha256, validManifest } from '../helpers/manifest-fixtures'
@@ -222,6 +227,76 @@ describe('getVisionStatus', () => {
       JSON.stringify({ models: { allow_unverified_models: false, require_sha256_match: true } })
     )
     expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'damaged' })
+  })
+})
+
+// #913 code review: the images service runs the model the status names at every cold start. Two vision models, A (the
+// pick) and B. A answers, then its sidecar idles out: the service keeps the instance, which is bound to A. "Check all
+// model files" finds A damaged, so the status now names B, and B passes its check. Before, the next analyze reused the
+// kept instance and cold-started the damaged A.
+describe('VisionService on a drive with two vision models (#913 code review)', () => {
+  it('a cold start after a check found the pick damaged loads the next model, not the instance kept for the pick', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    writeBinary(rootPath)
+    const vision = (id: string, flagged: boolean): Record<string, unknown> => ({
+      id,
+      local_path: `models/vision/${id}.gguf`,
+      sha256: sha256(`${id} weights`),
+      mmproj: { local_path: `models/vision/${id}-mmproj.gguf`, sha256: sha256(`${id} projector`) },
+      ...(flagged ? { default_for_role: true } : {})
+    })
+    writeVisionManifest(manifestsDir, vision('a-vision', true), 'a-vision.yaml')
+    writeVisionManifest(manifestsDir, vision('b-vision', false), 'b-vision.yaml')
+    writeDriveFile(rootPath, 'models/vision/a-vision.gguf', 'a-vision weightz') // damaged; no check has seen it yet
+    writeDriveFile(rootPath, 'models/vision/a-vision-mmproj.gguf', 'a-vision projector')
+    writeDriveFile(rootPath, 'models/vision/b-vision.gguf', 'b-vision weights')
+    writeDriveFile(rootPath, 'models/vision/b-vision-mmproj.gguf', 'b-vision projector')
+    const ctx = ctxFor(rootPath, manifestsDir)
+    const checkModel = createModelStartCheck({
+      manifestsDir,
+      paths: ctx.paths,
+      isDev: false,
+      getSettings: () => null,
+      getDb: () => {
+        throw new Error('locked') // the store degrades to the in-memory cache
+      }
+    })
+    const built: string[] = []
+    const idleOut: Array<() => void> = []
+    const service = new VisionService({
+      getStatus: () => getVisionStatus(ctx),
+      createRuntime: (status): VisionAnalyzer => {
+        const id = status.modelId ?? '?'
+        built.push(id)
+        let loaded = false
+        idleOut.push(() => (loaded = false))
+        return {
+          analyze: async () => {
+            loaded = true // a cold start of this instance loads `id`
+            return `answer from ${id}`
+          },
+          isLoaded: () => loaded,
+          stop: async () => void (loaded = false)
+        }
+      },
+      isWorkspaceLocking: () => false,
+      checkModel: (modelId, signal) => checkModel(modelId, { hash: false, signal })
+    })
+    const analyze = async (): Promise<ImageJob> => {
+      const emit: VisionStreamEmitter = { token: () => {}, done: () => {}, error: () => {} }
+      const { jobId } = service.analyze({ imageBytes: pngHeader(2, 2), mimeType: 'image/png', question: 'what is it' }, emit)
+      await until(() => ['done', 'failed', 'cancelled'].includes(service.getJob(jobId).state), 'the vision job ending')
+      return service.getJob(jobId)
+    }
+
+    expect(await analyze()).toMatchObject({ state: 'done', answer: 'answer from a-vision' })
+    idleOut[0]() // the idle teardown: the sidecar goes, the instance stays
+    const a = validManifest({ role: 'vision', ...vision('a-vision', true) })
+    expect(await computeInstallState(a, rootPath, { developerMode: false })).toBe('checksum_failed') // Check all
+    expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'b-vision' })
+    expect(await analyze()).toMatchObject({ state: 'done', answer: 'answer from b-vision' })
+    expect(built).toEqual(['a-vision', 'b-vision'])
+    await service.stop()
   })
 })
 

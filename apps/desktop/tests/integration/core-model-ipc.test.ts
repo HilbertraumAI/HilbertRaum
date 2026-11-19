@@ -1012,6 +1012,24 @@ describe('registerModelIpc', () => {
       expect(spawned()).toBe(2)
       await Promise.all([ctx.translator.stop(), ctx.reranker.stop()])
     })
+
+    // #913 code review: a clean check re-arms only the roles whose model it checked. A clean Verify of the re-ranking
+    // model leaves the latched translator as it is: the same instance, with its session latches (the GPU fallback
+    // among them), still refusing.
+    it('a clean Verify of one model leaves the latch of another role alone', async () => {
+      const { ctx, d } = refusingCtx()
+      reg(ctx as unknown as AppContext)
+      await invoke(handlers, IPC.listModels, undefined, 'run-913c')
+      const latched = ctx.translator
+      expect(await translate(ctx).catch((e: unknown) => isTranslationStartError(e) && e.modelDamaged)).toBe(true)
+      await expect(ctx.reranker.rerank('q', ['a', 'b'])).rejects.toThrow(/failed its check/)
+      putRight(d.file('rr-test'), true)
+      expect((await invoke(handlers, IPC.verifyModel, 'rr-test')).result).toBe('installed')
+      expect(await ctx.reranker.rerank('q', ['a', 'b'])).toHaveLength(2) // its own role: re-armed
+      expect(ctx.translator).toBe(latched) // the other role: untouched
+      expect(await translate(ctx).catch((e: unknown) => isTranslationStartError(e) && e.modelDamaged)).toBe(true)
+      await Promise.all([ctx.translator.stop(), ctx.reranker.stop()])
+    })
   })
 
 

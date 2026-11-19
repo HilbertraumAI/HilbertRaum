@@ -733,9 +733,11 @@ export class TranslationRuntime {
     const abort = new AbortController()
     this.startAbort = abort
     try {
-      // #913: a file a check found damaged never starts, on either rung. First in the ladder, so
-      // the reranker keeps the card and the verdict is no device fault. A teardown that begins
-      // during the check aborts `abort`, which the catch below passes on as the abort it is.
+      // #913: a file a check found damaged never starts, on either rung. Before the device ladder
+      // (the reranker's order, #913 code review), so nothing the check does is read as a device
+      // fault: the reranker keeps the card, and a check that throws arms no GPU fallback and walks
+      // no CPU rung (its error goes to the caller as it is, unlatched). A teardown that begins
+      // during the check aborts `abort`: the start ends as the abort it is.
       if (this.opts.checkModel) {
         const verdict = await this.opts.checkModel(abort.signal)
         if (abort.signal.aborted) throw new DOMException('The translation start was aborted', 'AbortError')
@@ -747,6 +749,20 @@ export class TranslationRuntime {
           throw startError
         }
       }
+      await this.deviceLadder(device, cause, abort)
+    } finally {
+      if (this.startAbort === abort) this.startAbort = null
+      this.startingDevice = null
+    }
+  }
+
+  /** The device ladder proper (`startLadder`): the resolved posture, then the CPU rung on a GPU fault. */
+  private async deviceLadder(
+    device: TranslationDevice,
+    cause: TranslationCpuCause | null,
+    abort: AbortController
+  ): Promise<void> {
+    try {
       // #473: let the reranker leave the card first. Inside the try so a lock that begins while
       // this waits has aborted `abort` by the time `startAttempt` runs, which then never spawns.
       if (device === 'auto') await this.opts.beforeGpuStart?.().catch(() => undefined)
@@ -759,8 +775,6 @@ export class TranslationRuntime {
       // to the CPU rung (the lock/quit is tearing the child down right now). It propagates
       // raw; the in-flight job was already aborted by the teardown's own cancel pass.
       if (isStartAbortError(err) || abort.signal.aborted) throw error
-      // #913: the check's verdict above, already latched — no rung ran, so no device fault.
-      if (isTranslationStartError(err)) throw err
       // A TRANSIENT port-bind race must NOT arm either latch (the reranker F7 fix / chat REL-1):
       // it is not a device fault — LlamaServer already retried once on a fresh port. It propagates
       // RAW (not a TranslationStartError), so the consumers' transient-retry paths still treat it
@@ -805,9 +819,6 @@ export class TranslationRuntime {
       const startError = new TranslationStartError(error)
       this.startFailed = startError
       throw startError
-    } finally {
-      if (this.startAbort === abort) this.startAbort = null
-      this.startingDevice = null
     }
   }
 

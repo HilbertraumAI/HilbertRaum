@@ -87,7 +87,14 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     const { root, manifestsDir } = tempDrive()
     discoverCalls.mockClear()
     // No `discovered` — a speech-model download or a whisper.cpp install just changed the drive.
-    const ctx = { transcriber: null, paths: { rootPath: root }, manifestsDir, bundledManifestsDir: null, isDev: false }
+    const ctx = {
+      transcriber: null,
+      paths: { rootPath: root },
+      manifestsDir,
+      bundledManifestsDir: null,
+      isDev: false,
+      checkModel: async () => 'ok' as const
+    }
     expect(refreshTranscriberSlot(ctx)).toBe(false) // no binary in the fixture
     expect(discoverCalls).toHaveBeenCalledTimes(1)
   })
@@ -172,7 +179,7 @@ describe('composeServices — the start check reaches every role (#913)', () => 
   it('each service asks it before its first start, with its own model and hashing choice, and refuses on damaged', async () => {
     const { root, manifestsDir } = provisioned()
     const asked: Array<[string, boolean]> = []
-    const checkModel = vi.fn(async (modelId: string, opts: { hash: boolean; signal?: AbortSignal }) => {
+    const checkModel = vi.fn(async (modelId: string, opts: { hash: boolean; signal?: AbortSignal; manifest?: { id: string } }) => {
       asked.push([modelId, opts.hash])
       return 'damaged' as const
     })
@@ -200,6 +207,8 @@ describe('composeServices — the start check reaches every role (#913)', () => 
       ['translate-test', false],
       ['whisper-test', true]
     ])
+    // #913 code review: each carries the manifest its service was composed from, so no check re-reads the folder.
+    expect(checkModel.mock.calls.map(([id, opts]) => [id, opts.manifest?.id])).toEqual(asked.map(([id]) => [id, id]))
 
     // The transcriber a mid-session install refreshes into an empty slot gets the same check.
     const ctx: TranscriberSlot = {

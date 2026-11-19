@@ -1494,4 +1494,34 @@ describe('TranslationRuntime — the start check (#913)', () => {
     expect(checkModel.mock.calls[0][0]).toBeInstanceOf(AbortSignal) // the ladder's abort signal goes in
     await rt.stop()
   })
+
+  // #913 code review: the check runs before the device ladder, so a check that throws (not an abort) is not read as a
+  // failed GPU start. Before, it armed the session GPU fallback and walked the CPU rung.
+  it('a check that throws arms no GPU fallback and walks no CPU rung; the next start keeps the card', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const fallbacks: string[] = []
+    let fails = true
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => {
+      if (fails) {
+        fails = false
+        throw new Error('the check could not run')
+      }
+      return 'ok' as const
+    })
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      onDeviceFallback: (reason) => fallbacks.push(reason),
+      checkModel
+    })
+    await expect(rt.translate(translateOpts)).rejects.toThrow('the check could not run')
+    expect(calls).toHaveLength(0)
+    expect(fallbacks).toEqual([])
+    expect(rt.isStartFailed()).toBe(false) // not latched: the next start checks again
+    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].args.join(' ')).not.toContain('--device') // the 'auto' posture: the card, not the processor
+    await rt.stop()
+  })
 })

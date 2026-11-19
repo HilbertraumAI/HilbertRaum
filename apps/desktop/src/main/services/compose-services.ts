@@ -7,10 +7,16 @@ import { createSelectedOcrEngine, listOcrLanguages, ocrAssetsDir, type OcrSelect
 import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
-import { discoverManifests, type BoundModelStartCheck, type DiscoveredManifest, type ModelStartCheck } from './models'
+import {
+  discoverManifests,
+  findManifestById,
+  type BoundModelStartCheck,
+  type DiscoveredManifest,
+  type ModelStartCheck
+} from './models'
 import { engineFamilyHasHostBuild } from './runtime-download'
 import { clearModelLoadLatch } from './runtime/factory'
-import { rearmCheckedModels, type RearmTargets } from './model-start-check'
+import { rearmStartRefusals, type RearmTargets } from './model-start-check'
 import { log } from './logging'
 import { perfMark } from './perf'
 import type { Embedder } from './embeddings'
@@ -114,15 +120,25 @@ export const HASH_BEFORE_FIRST_START = {
   translation: false
 } as const
 
-/** #913: `check` bound to one role's model, or undefined (no check) without a check or a model. */
+/**
+ * #913: `check` bound to one role's model, its hashing choice and the manifest the service is composed from, or
+ * undefined (no check) without a check or a model. The manifest comes from this composition's walk (`discovered`),
+ * else from one read now, so a cold start (and every transcription) reads no manifest folder (#913 code review): the
+ * service runs the file this manifest names until it is composed again, and the check goes by the same manifest.
+ */
 function startCheckFor(
   check: ModelStartCheck | undefined,
   model: { id: string } | null,
-  role: keyof typeof HASH_BEFORE_FIRST_START
+  role: keyof typeof HASH_BEFORE_FIRST_START,
+  deps: Pick<ComposeServicesDeps, 'manifestsDir' | 'discovered'>
 ): BoundModelStartCheck | undefined {
   if (!check || !model) return undefined
   const hash = HASH_BEFORE_FIRST_START[role]
-  return (signal) => check(model.id, { hash, signal })
+  const manifest =
+    deps.discovered?.find((d) => d.manifest.id === model.id)?.manifest ??
+    findManifestById(deps.manifestsDir, model.id) ??
+    undefined
+  return (signal) => check(model.id, { hash, signal, manifest })
 }
 
 /**
@@ -154,8 +170,10 @@ export interface EnginePinsDeps {
   bundledManifestsDir: string | null
 }
 
-/** The transcriber's composition: the drive layout plus the engine pins (#842). */
-export type ComposeTranscriberDeps = ComposeServicesDeps & EnginePinsDeps
+/** The transcriber's composition: the drive layout plus the engine pins (#842) and the start check (#913, required). */
+export type ComposeTranscriberDeps = ComposeServicesDeps &
+  EnginePinsDeps &
+  Required<Pick<ComposeServicesDeps, 'checkModel'>>
 
 /**
  * Build (or re-build) JUST the translation sidecar selection from the current drive layout.
@@ -173,7 +191,7 @@ export function composeTranslator(deps: ComposeTranslatorDeps, reranker?: Rerank
     rootPath: deps.rootPath,
     isDev: deps.isDev ?? false,
     model,
-    checkModel: startCheckFor(deps.checkModel, model, 'translation'),
+    checkModel: startCheckFor(deps.checkModel, model, 'translation', deps),
     gpu: deps.gpu,
     onDeviceFallback: (reason) =>
       log.warn('Translation sidecar fell back to CPU for this session', { reason }),
@@ -253,7 +271,7 @@ export function composeTranscriberSlot(deps: ComposeTranscriberDeps): {
     rootPath: deps.rootPath,
     isDev,
     model,
-    checkModel: startCheckFor(deps.checkModel, model, 'transcriber'),
+    checkModel: startCheckFor(deps.checkModel, model, 'transcriber', deps),
     onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
   })
   if (transcriber) return { transcriber, missing: null }
@@ -298,8 +316,8 @@ export interface TranscriberSlot {
   manifestsDir: AppContext['manifestsDir']
   bundledManifestsDir: AppContext['bundledManifestsDir']
   isDev: AppContext['isDev']
-  /** #913: the start check the refreshed transcriber gets, as at startup. */
-  checkModel?: AppContext['checkModel']
+  /** #913: the start check the refreshed transcriber gets, as at startup. Required (#913 code review). */
+  checkModel: AppContext['checkModel']
 }
 
 export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
@@ -329,13 +347,15 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
  * swallows the whole hook, so a throw would skip what follows it.
  * - #372: a freshly downloaded weight is a new file — re-arm the chat ladder for this model first.
  * - #497: fill an empty transcriber slot, before the translator refresh (a different slot).
- * - #634 / #913 review S1: re-arm every role that refused (`rearmCheckedModels`: the search model and the
- *   reranker by their id, the images cooldown, and the translator slot, issue #40's refresh).
+ * - #634 / #913 review S1: re-arm the role that refused, if this model is its (`rearmStartRefusals`: the search
+ *   model and the reranker by their id, the images and translation roles by role — an empty translator slot is
+ *   filled, issue #40). The role comes from the model's manifest; one no manifest names re-arms by id only.
  */
 export function afterModelInstalled(ctx: TranscriberSlot & RearmTargets, modelId: string): void {
   clearModelLoadLatch(modelId)
   refreshTranscriberSlot(ctx)
-  rearmCheckedModels(ctx, [modelId])
+  const role = findManifestById(ctx.manifestsDir, modelId)?.role ?? 'unknown'
+  rearmStartRefusals(ctx, [{ id: modelId, role }])
 }
 
 export interface ComposeOcrEngineDeps {
@@ -506,7 +526,7 @@ export function composeServices({
     isDev,
     model: embeddingModel,
     // #913 (d2): hashed before its first start in a workspace — damaged vectors would go into the index.
-    checkModel: startCheckFor(checkModel, embeddingModel, 'embeddings'),
+    checkModel: startCheckFor(checkModel, embeddingModel, 'embeddings', { manifestsDir, discovered }),
     onSelect: (kind, reason) => {
       log.info('Embedder backend selected', { kind, reason })
       // Measurement-run validity check: an ingestion timed against the mock embedder is
@@ -523,7 +543,7 @@ export function composeServices({
     rootPath,
     isDev,
     model: rerankerModel,
-    checkModel: startCheckFor(checkModel, rerankerModel, 'reranker'),
+    checkModel: startCheckFor(checkModel, rerankerModel, 'reranker', { manifestsDir, discovered }),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason }),
     devicePosture: rerankerDevicePosture,
     requestCeiling: rerankerRequestCeiling,

@@ -51,7 +51,7 @@ import { machineKey } from '../services/performance'
 import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchmark-persistence'
 import type { Db } from '../services/db'
 import { developerLeniency } from '../services/policy'
-import { rearmCheckedModels } from '../services/model-start-check'
+import { rearmStartRefusals } from '../services/model-start-check'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
@@ -598,9 +598,9 @@ export function registerModelIpc(ctx: AppContext): void {
         // drive, or a memory shortage, may pass now). A damaged file is re-armed by its re-download
         // (`onModelInstalled`) or a clean "Verify checksum".
         if (!lazyVerify && !controller?.signal.aborted) {
-          rearmCheckedModels(
+          rearmStartRefusals(
             ctx,
-            models.filter((m) => m.state !== 'checksum_failed').map((m) => m.id)
+            models.filter((m) => m.state !== 'checksum_failed').map((m) => ({ id: m.id, role: m.role }))
           )
         }
         return models
@@ -665,7 +665,7 @@ export function registerModelIpc(ctx: AppContext): void {
     ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
     // #913 review S1: the forced re-hash is the one action that clears a stale mismatch (a file put
     // back from a backup keeps its size and mtime), so a clean answer re-arms every role that refused.
-    if (state !== 'checksum_failed') rearmCheckedModels(ctx, [modelId])
+    if (state !== 'checksum_failed') rearmStartRefusals(ctx, [{ id: modelId, role: found.manifest.role }])
     // #108: the forced re-hash is a real full-file read — persist any fresh sample.
     persistEffectiveRead(ctx)
     return state

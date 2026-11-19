@@ -1077,7 +1077,8 @@ export type ModelStartVerdict = 'ok' | 'damaged'
  */
 export type ModelStartCheck = (
   modelId: string,
-  opts: { hash: boolean; signal?: AbortSignal }
+  /** `manifest`: the one the service was composed with, when the caller holds it (no folder read). */
+  opts: { hash: boolean; signal?: AbortSignal; manifest?: ModelManifest }
 ) => Promise<ModelStartVerdict>
 
 /** #913: one service's start check, bound to its model and its hashing choice (`compose-services.ts`). */

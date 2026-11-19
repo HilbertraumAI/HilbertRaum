@@ -26,6 +26,9 @@ import type { TranscriberMissing } from '../../src/shared/types'
 // issue asks for), and since #527 the reason the slot is empty.
 
 /** A minimal VALID transcriber manifest (JSON is YAML — discoverManifests parses it fine). */
+/** #913: the start check every composition now requires; these rows are about selection, so it passes all. */
+const checkModel = async (): Promise<'ok'> => 'ok'
+
 const MANIFEST = {
   id: 'whisper-test',
   display_name: 'Whisper (test)',
@@ -95,10 +98,10 @@ describe('composeTranscriberSlot — the Silero VAD file as the second required 
     const { root, manifestsDir } = tempDriveWithVad()
     installBinary(root)
     installWeight(root)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: null }).transcriber).toBeNull()
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: null, checkModel }).transcriber).toBeNull()
 
     writeFileSync(join(root, 'models', 'transcriber', VAD_NAME), 'vad-bytes')
-    const transcriber = composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: null }).transcriber
+    const transcriber = composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: null, checkModel }).transcriber
     expect(transcriber).toBeInstanceOf(WhisperCliTranscriber)
     expect((transcriber as WhisperCliTranscriber).vadModelPath).toBe(join(root, 'models', 'transcriber', VAD_NAME))
   })
@@ -114,7 +117,7 @@ function fakeTranscriber(): Transcriber {
 
 describe('refreshTranscriberSlot (#497 — the hook body both install paths share)', () => {
   function slot(root: string, manifestsDir: string | null, transcriber: Transcriber | null = null) {
-    return { transcriber, paths: { rootPath: root }, manifestsDir, bundledManifestsDir: null, isDev: false }
+    return { transcriber, paths: { rootPath: root }, manifestsDir, bundledManifestsDir: null, isDev: false, checkModel }
   }
 
   it('leaves a LIVE instance untouched — same object, no re-composition', () => {
@@ -138,7 +141,8 @@ describe('refreshTranscriberSlot (#497 — the hook body both install paths shar
       },
       manifestsDir: null,
       bundledManifestsDir: null,
-      isDev: false
+      isDev: false,
+      checkModel
     }
     expect(() => refreshTranscriberSlot(ctx)).not.toThrow()
     expect(refreshTranscriberSlot(ctx)).toBe(false)
@@ -249,7 +253,7 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
   it('walks a fresh drive from "both missing" to "engine" to selected', () => {
     const { root, manifestsDir, appDir } = tempDrive()
     writeRuntimeSources(appDir)
-    const deps = { rootPath: root, manifestsDir, bundledManifestsDir: appDir }
+    const deps = { rootPath: root, manifestsDir, bundledManifestsDir: appDir, checkModel }
     expect(composeTranscriberSlot(deps)).toEqual({
       transcriber: null,
       missing: 'model-and-engine'
@@ -268,14 +272,14 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
     const { root, manifestsDir, appDir } = tempDrive()
     writeRuntimeSources(appDir)
     installBinary(root)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: appDir }).missing).toBe('model')
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: appDir, checkModel }).missing).toBe('model')
   })
 
   it('the issue’s drive: speech model installed, no engine, and no engine build for this OS', () => {
     const { root, manifestsDir, appDir } = tempDrive()
     writeRuntimeSources(appDir, otherOs())
     installWeight(root)
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: appDir })).toEqual({
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir, bundledManifestsDir: appDir, checkModel })).toEqual({
       transcriber: null,
       missing: 'engine-unsupported'
     })
@@ -286,7 +290,7 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
   it('asks the app’s engine pins whether the voice engine could be fetched, never the drive’s (#842)', () => {
     const { root, manifestsDir, appDir } = tempDrive()
     installWeight(root)
-    const deps = { rootPath: root, manifestsDir, bundledManifestsDir: appDir }
+    const deps = { rootPath: root, manifestsDir, bundledManifestsDir: appDir, checkModel }
     writeRuntimeSources(manifestsDir, otherOs()) // the drive's yaml: no build for this system
     writeRuntimeSources(appDir) // the app's: one
     expect(composeTranscriberSlot(deps).missing).toBe('engine')
@@ -299,7 +303,7 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
     const { root } = tempDrive()
     installBinary(root)
     installWeight(root) // both pieces ARE on the drive: only the missing manifests dir keeps the slot empty
-    expect(composeTranscriberSlot({ rootPath: root, manifestsDir: null, bundledManifestsDir: null })).toEqual({ transcriber: null, missing: 'model' })
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir: null, bundledManifestsDir: null, checkModel })).toEqual({ transcriber: null, missing: 'model' })
   })
 
   it('composeServices carries the reason alongside the slot', () => {
@@ -327,7 +331,8 @@ describe('refreshTranscriberSlot keeps the reason in step (#527)', () => {
       paths: { rootPath: root },
       manifestsDir,
       bundledManifestsDir,
-      isDev: false
+      isDev: false,
+      checkModel
     }
   }
 

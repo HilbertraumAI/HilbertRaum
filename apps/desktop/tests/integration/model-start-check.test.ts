@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -7,7 +7,7 @@ import {
   createSettingsHashStore,
   invalidateChecksum
 } from '../../src/main/services/models'
-import { createModelStartCheck } from '../../src/main/services/model-start-check'
+import { createModelStartCheck, rearmStartRefusals, type RearmTargets } from '../../src/main/services/model-start-check'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings } from '../../src/shared/types'
 import { tempRoot } from '../helpers/db-fixtures'
@@ -74,5 +74,53 @@ describe('createModelStartCheck (#913 review S3)', () => {
     expect(await check('rr', { hash: false })).toBe('ok') // the toggle is on
     lock()
     expect(await check('rr', { hash: false })).toBe('damaged') // locked: its settings can't be read
+  })
+
+  it('a check that comes with its service\'s manifest reads no manifest folder (#913 code review)', async () => {
+    const root = tempRoot('start-check-factory')
+    writeDriveFile(root, REL, 'reranker bytez') // a bit flip
+    const m = validManifest({ id: 'rr', role: 'reranker', local_path: REL, sha256: sha256('reranker bytes') })
+    expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed') // a full check
+    const check = createModelStartCheck({
+      manifestsDir: null, // nothing to read: only the bound manifest can name the file
+      paths: { rootPath: root, configPath: join(root, 'config') },
+      isDev: false,
+      getSettings: () => null,
+      getDb: () => seededFreshDb('start-check-factory')
+    })
+    expect(await check('rr', { hash: false })).toBe('ok') // unbound: no manifest found, starts as before
+    expect(await check('rr', { hash: false, manifest: m })).toBe('damaged')
+  })
+})
+
+// #913 code review: the one re-arm helper. Unfiltered (the engine heal, `rearmLlamaConsumers`) it re-arms every role;
+// filtered (a clean check or a download) only the roles whose model is in the list, so a check of an unrelated model
+// leaves a latch, and a translator's session GPU fallback, alone.
+describe('rearmStartRefusals (#913 code review)', () => {
+  function targets() {
+    const spies = { embedder: vi.fn(), reranker: vi.fn(), vision: vi.fn(), translator: vi.fn() }
+    const ctx = {
+      embedder: { id: 'e5', resetStartFailure: spies.embedder },
+      reranker: { id: 'rr', resetStartFailure: spies.reranker },
+      vision: { resetStartFailure: spies.vision },
+      refreshTranslatorSlot: spies.translator
+    } as unknown as RearmTargets
+    const calls = (): string[] =>
+      (Object.keys(spies) as Array<keyof typeof spies>).filter((k) => spies[k].mock.calls.length > 0)
+    return { ctx, calls }
+  }
+
+  it.each([
+    ['no filter (the engine heal)', undefined, ['embedder', 'reranker', 'vision', 'translator']],
+    ['the search model', [{ id: 'e5', role: 'embeddings' }], ['embedder']],
+    ['the re-ranking model', [{ id: 'rr', role: 'reranker' }], ['reranker']],
+    ['an images model', [{ id: 'some-vision', role: 'vision' }], ['vision']],
+    ['a translation model', [{ id: 'some-translation', role: 'translation' }], ['translator']],
+    ['a chat model only', [{ id: 'qwen', role: 'chat' }], []],
+    ['nothing checked clean', [], []]
+  ] as const)('re-arms what was checked: %s', (_label, checked, expected) => {
+    const { ctx, calls } = targets()
+    rearmStartRefusals(ctx, checked)
+    expect(calls()).toEqual(expected)
   })
 })
