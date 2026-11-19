@@ -112,6 +112,11 @@ from its first public `1.0.0` release onward.
   damaged copy over the last good one, and the workspace could no longer be opened (#876).
   When this happens as the app closes, the lock screen says so the next time you start
   HilbertRaum, and Settings → Diagnostics (advanced) → Activity records it when you unlock (#875).
+  The lock screen now also says, in its own words, when HilbertRaum ended without locking the
+  workspace: the drive pulled out, a power cut, the app stopped by force, or a quit on a drive too
+  full to lock. The changes made after the last lock were lost then too, and until now the next
+  start said nothing. When the drive is too full, the message asks you to free space first, so the
+  next session doesn't end the same way (#892).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;

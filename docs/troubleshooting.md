@@ -379,8 +379,13 @@ then keeps the workspace **open and usable**, and nothing is lost.
 
 What to do: free some space on the drive (delete files you no longer need, or move a large
 model off the drive via the AI Model screen), then press **Lock now** again. Quitting the app
-retries the lock too. Even if the app closes before a lock ever succeeds, your newest data is
-kept safely on the drive and secured at the next unlock — you don't lose the session's work.
+retries the lock too, but **free space before you quit**: whether a quit on a full drive keeps the
+session depends on where the lock stopped. If only the re-encrypt failed, the app closes the
+workspace's database cleanly, and your newest data is secured at the next unlock. If the drive is
+so full that the session's last changes could not even be written into the database file, the
+quit cannot lock the workspace or close it cleanly either: the next start opens it as it was the
+last time it was locked, those changes are lost, and the unlock screen says so (see "HilbertRaum
+didn't lock your workspace the last time it closed" below).
 
 The lock stops the AI model (and every other engine) before it re-encrypts, so after a failed
 lock the model comes back the same way it does after an unlock: automatically in the
@@ -404,6 +409,27 @@ was closed. The changes made since then are lost; everything before is intact.
 What to do: if another copy of HilbertRaum is open on this drive (started from another folder
 or another computer), close it first. Then unlock as usual and carry on. If it happens again,
 find what else touches the drive's `workspace` folder, and check the drive for errors.
+
+---
+
+## "HilbertRaum didn't lock your workspace the last time it closed"
+
+You see this on the unlock screen when HilbertRaum ended while the workspace was open, without
+locking it: the drive was pulled out, the computer lost power, or the app was stopped by force
+(Task Manager, a kill). The session's working copy was left on the drive unencrypted, so this
+start removed it securely, as it always does in that case, and opened the workspace as it was the
+last time it was locked. The changes made after that are lost; everything before is intact.
+**Settings → Diagnostics (advanced) → Activity** records it when you unlock, as "Recent changes
+lost".
+
+If the message also says **the drive is too full to lock it**, the drive has less free space than
+a lock needs to write the next encrypted copy of the workspace. That is how a quit on a full drive
+ends (see "Could not lock the workspace" above). Free some space on the drive before you continue
+(delete files you no longer need, or move a large model off the drive via the AI Model screen), or
+the next session ends the same way.
+
+What to do: unlock as usual and redo what you changed after the last lock. Next time, quit
+HilbertRaum, or press **Lock now**, and wait for the window to close before you remove the drive.
 
 ---
 

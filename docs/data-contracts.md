@@ -1236,6 +1236,7 @@ head's own weights + KV.
   next successful unlock, `getState()` reports `lockNotice: 'working_copy_lost'` while the state is
   `locked`. The lock also writes
   **`config/working-copy-lost.json`** = `{ "v": 1, "enc": "<base64 of the 12-byte IV of .enc>", "cause": "lock" }`
+  (`cause`: `lock` | `startup` | `unclean` | `unclean-full`)
   (temp + fsync + rename, best-effort), so a lock at quit, a crash or a session end is reported at
   the next start: `init()` (encrypted branch, after the verdict, the salvage, the sweep and the
   rekey recovery) adopts a v1 marker whose `enc` equals the IV of the `.enc` there now, and removes
@@ -1244,11 +1245,24 @@ head's own weights + KV.
   none is read. The startup salvage raises the same notice when the sweep shreds a newer working
   file whose header reads but whose structure is `damaged` (no shred of ours leaves a header; a
   header-less one is a successful lock's shred survivor and raises nothing); its marker says
-  `"cause": "startup"`. A successful unlock consumes it: the flag clears, this build's marker is
+  `"cause": "startup"`. **An unclean end (#892):** beside live `-wal`/`-shm` (the mid-session crash
+  state the sweep shreds as before) `preserveNewerPlaintext` returns `'swept-unclean'`, sweep-safe
+  exactly like `'not-needed'`, when the working file or its `-wal` is newer than `.enc` and
+  `probeDatabaseFile` reads the working file as `database`, `damaged` or `unchecked` (`not-database`,
+  `unknown`, `gone` and any error raise nothing). `init()` then reads the free space through the
+  controller's injected `freeBytes(path)` (default `disk-space.ts` `freeBytesSync`, statfs) BEFORE
+  the sweep, and records the loss AFTER the sweep and the rekey recovery, only while `.enc` still has
+  the IV it had before that recovery (a roll-forward that swapped it opens the staged copy of the
+  session): `lockNotice: 'session_not_closed'`, marker `"cause": "unclean"`; or
+  `'session_not_closed_full'` / `"unclean-full"` when the free space is below the size of `.enc` (a
+  null answer is not full). The notice per cause: `lock`, `startup` → `working_copy_lost`. The reader
+  maps a cause this build writes (`lock`, `startup`, `unclean`, `unclean-full`) 1:1 and **any other
+  (a later build's, or none) to `unclean`**, never to `lock`. A successful unlock consumes it: the
+  flag clears, this build's marker is
   removed, and `takeWorkingCopyLost() → { cause, lostAt: <marker mtime ISO> | null } | null` returns
   it once, for the unlock IPC to log ("The changes since the last saved state were lost …") and
   audit (`workspace_working_copy_lost`, metadata `{ cause, lostAt }`, `cause` = `lock` | `startup` |
-  `recovery`). `recovery` is a loss the unlock itself makes: `unlockEncryptedVault` shreds a
+  `unclean` | `unclean-full` | `recovery`). `recovery` is a loss the unlock itself makes: `unlockEncryptedVault` shreds a
   `.recovery` newer than `.enc` whose structure is `damaged` (`UnlockedVault.recoveryDiscarded`),
   recorded with no `lostAt` (the event's own time is when); that copy is shredded only once the
   unlock has succeeded, so a failed unlock keeps the evidence and the next one records it (review
@@ -1288,15 +1302,17 @@ head's own weights + KV.
   than PR #289;
   `lockWorkspace` → `WorkspaceStateInfo`, with `lockNotice: 'working_copy_lost'` when the lock
   finished at the last good snapshot because the working file was gone or no longer a database
-  (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock (see
-  "Working copy lost" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
+  (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock, and
+  since #892 also `session_not_closed` / `session_not_closed_full` for a start that swept the
+  session an unclean end left (see "Working copy lost" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
   `WorkspaceActionResult`: `wrong_password` (a wrong or non-string current password), `refused`
   (a new password under `MIN_PASSWORD_LENGTH` or not a string, the workspace locked or a lock under
   way, or document work in progress: `VaultBusyError`), `error` (anything else, #845's refusals
   included: the current password still works). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
-  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`,
+  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`
+  (`lockNotice`: `working_copy_lost` | `session_not_closed` | `session_not_closed_full`, #892),
   `WorkspaceActionResult`.
 ✅ **`AppContext.db` is now a getter** over `workspace.requireDb()` (throws while locked) +
   `AppContext.workspace: WorkspaceController`. `main/index.ts` builds the controller from
