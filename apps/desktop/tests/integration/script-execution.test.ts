@@ -397,6 +397,30 @@ describe.skipIf(!toolBuilt)('assert-commercial-drive command line', () => {
   })
 })
 
+// A name is bytes. BSD tr (macOS) refuses a sequence that is not valid UTF-8 in a UTF-8 locale ("Illegal byte sequence"), and
+// under `set -euo pipefail` that ended the gate with no verdict. GNU tr never refuses, so this stand-in plays BSD tr: first on
+// PATH it exits 1 on a non-UTF-8 name unless the locale is C. Whether a Mac can hold such a name at all (APFS refuses it) is owed by hand; the
+// darwin row below pins what the real tr does with the byte.
+const BSD_TR_STAND_IN = [
+  '#!/bin/bash',
+  'loc="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"',
+  'input="$(cat; echo x)"; input="${input%x}"',
+  'case "$loc" in',
+  "  C|POSIX|'') ;;",
+  '  *) if ! printf \'%s\' "$input" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then echo "tr: Illegal byte sequence" >&2; exit 1; fi ;;',
+  'esac',
+  "printf '%s' \"$input\" | /usr/bin/tr \"$@\"",
+  ''
+].join('\n')
+
+// The premise of the row below, on the real BSD tr: under LC_ALL=C a byte that is not UTF-8 passes through and the exit
+// code is 0 (the fix relies on it). od's field width differs between BSD and GNU, so the hex bytes are normalised.
+it.skipIf(process.platform !== 'darwin')('the real tr passes a non-UTF-8 byte under LC_ALL=C (#919 premise)', () => {
+  const r = spawnSync('bash', ['-c', `set -o pipefail; printf '\\377x' | LC_ALL=C tr '[:upper:]' '[:lower:]' | od -An -tx1`], { encoding: 'utf8' })
+  expect(r.status, outputOf(r)).toBe(0)
+  expect(r.stdout.trim().split(/\s+/).join(' ')).toBe('ff 78')
+})
+
 for (const leg of SCRIPT_LEGS) {
   describe.skipIf(leg.skip)(`script execution — ${leg.name}`, () => {
     const builder = `build-commercial-drive.${leg.ext}`
@@ -1335,22 +1359,6 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
       })
 
-      // A name is bytes. BSD tr (macOS) refuses a sequence that is not valid UTF-8 in a UTF-8 locale ("Illegal byte sequence"), and
-      // under `set -euo pipefail` that ended the gate with no verdict. GNU tr never refuses, so this stand-in plays BSD tr: first on
-      // PATH it exits 1 on a non-UTF-8 name unless the locale is C. Whether a Mac can hold such a name at all (APFS refuses it) is owed by hand; the
-      // darwin row below records what the real tr does with the byte.
-      const BSD_TR_STAND_IN = [
-        '#!/bin/bash',
-        'loc="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"',
-        'input="$(cat; echo x)"; input="${input%x}"',
-        'case "$loc" in',
-        "  C|POSIX|'') ;;",
-        '  *) if ! printf \'%s\' "$input" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then echo "tr: Illegal byte sequence" >&2; exit 1; fi ;;',
-        'esac',
-        "printf '%s' \"$input\" | /usr/bin/tr \"$@\"",
-        ''
-      ].join('\n')
-
       it.skipIf(!toolBuilt || process.platform === 'win32')(
         'a config/ name that is not UTF-8 is one entry: the gate still gives its verdict (#919)',
         (ctx) => {
@@ -1382,20 +1390,6 @@ for (const leg of SCRIPT_LEGS) {
           }
         }
       )
-
-      // The premise of the row above, on the real BSD tr: under LC_ALL=C a byte that is not UTF-8 passes through and the
-      // exit code is 0 (the fix relies on it). What the same pipe does in a UTF-8 locale is only recorded, not asserted.
-      it.skipIf(process.platform !== 'darwin')('the real tr passes a non-UTF-8 byte under LC_ALL=C (#919 premise)', () => {
-        const pipe = (locale: string) =>
-          spawnSync('bash', ['-c', `set -o pipefail; printf '\\377x' | LC_ALL=${locale} tr '[:upper:]' '[:lower:]' | od -An -tx1`], { encoding: 'utf8' })
-        const c = pipe('C')
-        expect(c.status, outputOf(c)).toBe(0)
-        expect(c.stdout.trim()).toBe('ff 78')
-        for (const locale of ['en_US.UTF-8', 'C.UTF-8']) {
-          const u = pipe(locale)
-          console.log(`[#919 premise] LC_ALL=${locale}: exit ${u.status}, bytes ${u.stdout.trim()}, stderr ${(u.stderr ?? '').trim()}`)
-        }
-      })
 
       // #766: a Kit ships its bundled set plus any model with a file on the drive, and lists every other manifest for in-app
       // download. The pre-flight and the canonical gate both leave a catalog model alone, and both refuse a drive that ships

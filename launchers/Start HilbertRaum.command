@@ -135,7 +135,8 @@ if [ -z "$APP" ]; then
     # files from a sudo start) must not be reused, or its files would be published with ours.
     # #919: only a folder that is there is an earlier unpack. Otherwise it could not be made at all:
     # a full disk, or a cache folder this user cannot write to.
-    if ! mkdir -p "$(dirname "$PARTIAL")" 2>/dev/null || ! mkdir "$PARTIAL" 2>/dev/null; then
+    # (The OS's own error stays visible above our message: "No space left on device", "Permission denied".)
+    if ! mkdir -p "$(dirname "$PARTIAL")" || ! mkdir "$PARTIAL"; then
       echo
       if [ -e "$PARTIAL" ] || [ -L "$PARTIAL" ]; then
         echo "  An earlier unpack at '$PARTIAL' could not be removed."
@@ -143,7 +144,7 @@ if [ -z "$APP" ]; then
       else
         echo "  Could not create '$PARTIAL' to unpack the app into."
         echo "  Check that this Mac's disk has free space and that you can write to"
-        echo "  '$(dirname "$PARTIAL")', then start again."
+        echo "  '$(dirname "$PARTIAL")' (or the folder that holds it), then start again."
       fi
       echo "  See docs/troubleshooting.md for help."
       echo
@@ -154,6 +155,7 @@ if [ -z "$APP" ]; then
     if ! ditto -x -k "$ZIP" "$PARTIAL"; then
       echo
       echo "  Could not unpack '$ZIP'."
+      echo "  Check that this Mac's disk has free space (the app needs about 400 MB to unpack)."
       echo "  Copy it to your Desktop and double-click it, then see docs/troubleshooting.md."
       echo
       rm -rf "$PARTIAL"

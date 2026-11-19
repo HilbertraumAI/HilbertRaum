@@ -323,7 +323,7 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
     const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH'
     const firstHalf = (caches: string): string => join(caches, cached, 'HilbertRaum.app', 'Contents', 'Frameworks', 'first-half')
 
-    type DittoMode = 'ok' | 'fail' | 'empty' | 'nobin'
+    type DittoMode = 'ok' | 'fail' | 'empty' | 'nobin' | 'full'
     interface Started {
       exited: Promise<{ status: number | null; out: string }>
       kill(): void
@@ -374,6 +374,8 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
           '#!/bin/bash',
           'echo "$*" >> "$DITTO_LOG"',
           'case "$DITTO_MODE" in fail) exit 1 ;; empty) exit 0 ;; esac',
+          // A full disk: the unpack gets part-way, then the write fails.
+          'if [ "$DITTO_MODE" = full ]; then mkdir -p "$4/half"; echo "ditto: $4/half: No space left on device" >&2; exit 1; fi',
           'mkdir -p "$4/HilbertRaum.app/Contents/Frameworks"',
           ': > "$4/HilbertRaum.app/Contents/Frameworks/first-half"',
           ...waitFor('DITTO_GATE'),
@@ -779,6 +781,7 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
     // later start then refused it without unpacking again (#769). So did a bundle without its app binary, after which every
     // start told the user to get past Gatekeeper (#887).
     it.each([
+      ['runs out of disk space', 'full', /Could not unpack '.*\.app\.zip'\.\s+Check that this Mac's disk has free space/],
       ['fails', 'fail', /Could not unpack '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip'/],
       ['unpacks no .app', 'empty', /found no \.app inside it/],
       ['unpacks an .app without its app binary', 'nobin', /Unpacked '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip' but the app inside it lacks its program file/]
