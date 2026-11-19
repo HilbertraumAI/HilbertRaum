@@ -86,8 +86,9 @@ export interface DocTaskDeps {
    * end, after a multi-second awaited teardown (sidecar suspends, stream settles, this manager's
    * own task settle). `startDocTask` refuses while it is set — an admitted task would `pump()`
    * immediately and, since the suspends are deliberately non-latching, lazily RESPAWN the
-   * ~10 GB translation sidecar with document text in its KV cache, outliving the lock. Required: the composition root passes `workspace.isLocking()`; a test that is not about
-   * the lock passes `() => false`.
+   * ~10 GB translation sidecar with document text in its KV cache, outliving the lock.
+   * Required: the composition root passes `workspace.isLocking()`; a test that is not about the
+   * lock passes `() => false`.
    */
   isWorkspaceLocking: () => boolean
   /**

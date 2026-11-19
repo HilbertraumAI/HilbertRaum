@@ -136,8 +136,8 @@ describe('VisionService.analyze refuses while a workspace lock is under way (AUD
     expect(service.hasActiveJob()).toBe(false)
   })
 
-  // Its twin with the dependency present and answering "not locking", as production always injects it: the guard reads
-  // the answer, not the dependency's presence, so the same request is admitted and runs to its answer.
+  // Its twin with the latch answering "not locking", as it does whenever no lock is under way: the guard reads the
+  // answer, so the same request is admitted and runs to its answer.
   it('admits the same request when the latch answers "not locking"', async () => {
     const getStatus = vi.fn(async () => AVAILABLE)
     const service = new VisionService({

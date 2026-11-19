@@ -54,8 +54,8 @@ export interface TranslateJobServiceDeps {
    * controller and its first window would call `translate()` — lazily respawning the ~10 GB
    * sidecar the teardown just suspended, with the pasted source text in its KV cache. The
    * workspace is still "unlocked" throughout (the DB closes only at the very end), so this is
-   * the signal that expresses it. Required: the composition root passes `workspace.isLocking()`; a test that is not about
-   * the lock passes `() => false`.
+   * the signal that expresses it. Required: the composition root passes `workspace.isLocking()`;
+   * a test that is not about the lock passes `() => false`.
    */
   isWorkspaceLocking: () => boolean
 }

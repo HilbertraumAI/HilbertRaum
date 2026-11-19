@@ -1805,9 +1805,9 @@ workspace is locked" is the honest answer and the renderer is about to swap to t
 anyway. Each site keeps its **own** localized copy (`main.task.workspaceLocked`,
 `main.chat.locked`, `main.docs.locked`, …); only the predicate is shared. Three **services** carry
 the guard too, as defence in depth (`DocTaskManager.startDocTask`, `TranslateJobService.start`,
-`VisionService.analyze` — via an injected `isWorkspaceLocking` dependency, a required one, so the composition root cannot omit it). Only
-`DocTaskManager.startDocTask` has callers outside IPC today: its own tree and extract chains, and
-the skills categorize run.
+`VisionService.analyze` — via an injected `isWorkspaceLocking` dependency, a required one, so
+the composition root cannot omit it). Only `DocTaskManager.startDocTask` has callers outside IPC
+today: its own tree and extract chains, and the skills categorize run.
 
 How it is proved: `ipc-lock-coverage.test.ts` drives every registrar in its `MODULES` list in two
 postures, locked and mid-lock (`isUnlocked()` still true, `isLocking()` set), and every handler

@@ -61,8 +61,8 @@ export interface VisionServiceDeps {
    * teardown itself and NOT the rest of the lock handler (the stream settles, the doc-task
    * settle, the vector purge, the re-encrypt) — several more seconds during which the workspace
    * still reports unlocked and an `analyze()` would build a FRESH ~4.6 GB vision sidecar with
-   * image-derived prefill that outlives the lock. Required: the composition root passes `workspace.isLocking()`; a test that is not about
-   * the lock passes `() => false`.
+   * image-derived prefill that outlives the lock. Required: the composition root passes
+   * `workspace.isLocking()`; a test that is not about the lock passes `() => false`.
    */
   isWorkspaceLocking: () => boolean
 }
