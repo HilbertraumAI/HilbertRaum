@@ -2451,13 +2451,15 @@ export const de: Record<keyof typeof en, string> = {
   'gate.unlock.sessionNotClosed':
     'HilbertRaum hat deinen Arbeitsbereich beim letzten Schließen nicht gesperrt, zum Beispiel weil ' +
     'das Laufwerk entfernt wurde, der Computer keinen Strom mehr hatte oder die App zwangsweise ' +
-    'beendet wurde. Dein Arbeitsbereich öffnet sich so, wie er beim letzten Sperren war; Änderungen ' +
-    'danach sind verloren. Beende HilbertRaum beim nächsten Mal, bevor du das Laufwerk entfernst.',
+    'beendet wurde. Dein Arbeitsbereich öffnet sich so, wie er beim letzten Sperren war; falls du ' +
+    'seitdem etwas geändert hast, ist es verloren. Beende HilbertRaum beim nächsten Mal, bevor du ' +
+    'das Laufwerk entfernst.',
   'gate.unlock.sessionNotClosedFull':
-    'HilbertRaum hat deinen Arbeitsbereich beim letzten Schließen nicht gesperrt, und auf dem ' +
-    'Laufwerk ist zu wenig Platz, um ihn zu sperren. Dein Arbeitsbereich öffnet sich so, wie er beim ' +
-    'letzten Sperren war; Änderungen danach sind verloren. Gib Speicherplatz auf dem Laufwerk frei, ' +
-    'bevor du weitermachst: Sonst kann auch das nächste Sperren deine Änderungen nicht speichern.',
+    'HilbertRaum konnte deinen Arbeitsbereich beim letzten Schließen nicht sperren, weil das ' +
+    'Laufwerk voll war. Dein Arbeitsbereich öffnet sich so, wie er beim letzten Sperren war; falls ' +
+    'du seitdem etwas geändert hast, ist es verloren. Stell sicher, dass auf dem Laufwerk Platz frei ' +
+    'ist, bevor du weitermachst: Sonst kann auch das nächste Sperren deine Änderungen nicht ' +
+    'speichern.',
   'gate.welcome.title': 'Willkommen',
   'gate.welcome.intro':
     'Das ist dein privater KI-Arbeitsbereich. Chatte mit einem KI-Modell und stelle Fragen ' +

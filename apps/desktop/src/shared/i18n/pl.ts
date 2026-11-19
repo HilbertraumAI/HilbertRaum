@@ -2470,13 +2470,15 @@ export const pl: UiCatalog<'pl'> = {
   'gate.unlock.sessionNotClosed':
     'Przy ostatnim zamknięciu aplikacji HilbertRaum obszar roboczy nie został zablokowany, na ' +
     'przykład dlatego, że odłączono dysk, zabrakło zasilania komputera lub wymuszono zamknięcie ' +
-    'aplikacji. Obszar roboczy otwiera się w stanie z ostatniego zablokowania; zmiany wprowadzone ' +
-    'później zostały utracone. Następnym razem zamknij aplikację HilbertRaum przed odłączeniem dysku.',
+    'aplikacji. Obszar roboczy otwiera się w stanie z ostatniego zablokowania; ewentualne zmiany ' +
+    'wprowadzone od tego czasu zostały utracone. Następnym razem zamknij aplikację HilbertRaum przed ' +
+    'odłączeniem dysku.',
   'gate.unlock.sessionNotClosedFull':
-    'Przy ostatnim zamknięciu aplikacji HilbertRaum obszar roboczy nie został zablokowany, a na ' +
-    'dysku jest za mało wolnego miejsca, aby go zablokować. Obszar roboczy otwiera się w stanie z ' +
-    'ostatniego zablokowania; zmiany wprowadzone później zostały utracone. Zwolnij miejsce na dysku, ' +
-    'zanim przejdziesz dalej – inaczej także następne zablokowanie nie zapisze twoich zmian.',
+    'Przy ostatnim zamknięciu aplikacji HilbertRaum nie udało się zablokować obszaru roboczego, ' +
+    'ponieważ dysk był pełny. Obszar roboczy otwiera się w stanie z ostatniego zablokowania; ' +
+    'ewentualne zmiany wprowadzone od tego czasu zostały utracone. Upewnij się, że na dysku jest ' +
+    'wolne miejsce, zanim przejdziesz dalej – inaczej także następne zablokowanie nie zapisze twoich ' +
+    'zmian.',
   'gate.welcome.title': 'Witaj',
   'gate.welcome.intro':
     'To twój prywatny obszar roboczy AI. Rozmawiaj z modelem AI i zadawaj pytania o swoje ' +

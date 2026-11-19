@@ -2381,14 +2381,13 @@ export const nl: UiCatalog<'nl'> = {
     'HilbertRaum heeft je werkruimte niet vergrendeld toen de app de laatste keer werd gesloten, ' +
     'bijvoorbeeld omdat de schijf werd losgekoppeld, de computer zonder stroom kwam te zitten of de ' +
     'app geforceerd werd gestopt. Je werkruimte opent in de staat van de laatste vergrendeling; ' +
-    'wijzigingen daarna zijn verloren gegaan. Sluit HilbertRaum de volgende keer af voordat je de ' +
-    'schijf loskoppelt.',
+    'eventuele wijzigingen sindsdien zijn verloren gegaan. Sluit HilbertRaum de volgende keer af ' +
+    'voordat je de schijf loskoppelt.',
   'gate.unlock.sessionNotClosedFull':
-    'HilbertRaum heeft je werkruimte niet vergrendeld toen de app de laatste keer werd gesloten, en ' +
-    'op de schijf is niet genoeg vrije ruimte om de werkruimte te vergrendelen. Je werkruimte opent ' +
-    'in de staat van de laatste vergrendeling; wijzigingen daarna zijn verloren gegaan. Maak ruimte ' +
-    'vrij op de schijf voordat je verdergaat: anders kan ook de volgende vergrendeling je ' +
-    'wijzigingen niet opslaan.',
+    'HilbertRaum kon je werkruimte niet vergrendelen toen de app de laatste keer werd gesloten, ' +
+    'omdat de schijf vol was. Je werkruimte opent in de staat van de laatste vergrendeling; ' +
+    'eventuele wijzigingen sindsdien zijn verloren gegaan. Zorg dat er vrije ruimte op de schijf is ' +
+    'voordat je verdergaat: anders kan ook de volgende vergrendeling je wijzigingen niet opslaan.',
   'gate.welcome.title': 'Welkom',
   'gate.welcome.intro':
     'Dit is je privéwerkruimte voor AI. Chat met een AI-model en stel vragen over je documenten: ' +

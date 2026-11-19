@@ -902,7 +902,7 @@ export function preserveNewerPlaintext(vaultPaths: VaultPaths, onProbeFallback?:
   try {
     if (!existsSync(vaultPaths.dbPath) || !existsSync(vaultPaths.encPath)) return 'not-needed'
     if (existsSync(`${vaultPaths.dbPath}-wal`) || existsSync(`${vaultPaths.dbPath}-shm`)) {
-      return uncleanEndLeftWorkingCopy(vaultPaths, onProbeFallback) ? 'swept-unclean' : 'not-needed'
+      return uncleanEndLeftWorkingCopy(vaultPaths) ? 'swept-unclean' : 'not-needed'
     }
     if (statSync(vaultPaths.dbPath).mtimeMs <= statSync(vaultPaths.encPath).mtimeMs) return 'not-needed'
     // #876: the structure, not only the header. A header read that fails (a hold, the file
@@ -939,12 +939,14 @@ export function preserveNewerPlaintext(vaultPaths: VaultPaths, onProbeFallback?:
  * a verdict that proves nothing) answers false, and the check can only add a notice, never change a verdict.
  *   • the working file or its `-wal` is strictly NEWER than `.enc`: every unlock decrypts the working file after the
  *     lock that wrote `.enc`, so a session that ended unlocked always is; older is derived data;
- *   • the probe reads the working file (the main file alone, `immutable`: it touches no sidecar) as a database, or as
- *     `damaged` (torn mid-checkpoint: still the session's own file), or cannot read its structure for a reason that is
- *     not damage (judged by its header, as at every probe site). A shred survivor (`not-database`: our shred never
- *     leaves a header), a file the probe cannot read at all (`unknown`) or one gone meanwhile (`gone`) proves nothing.
+ *   • the working file starts like a database ({@link startsLikeDatabase}): the session's own file, whole or torn
+ *     mid-checkpoint. That is exactly when {@link probeDatabaseFile} answers `database`, `damaged` or `unchecked`, the
+ *     answers this check needs, at a fraction of the cost (one 100-byte read instead of the structural walk: 0.13 ms
+ *     against 3.6 ms on a warm 28 MB working file, far more on a cold stick), and with no probe fallback to note for a
+ *     check that salvages nothing. A shred survivor (no header: our shred never leaves one), a file that cannot be
+ *     read, or one gone meanwhile proves nothing.
  */
-function uncleanEndLeftWorkingCopy(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNote): boolean {
+function uncleanEndLeftWorkingCopy(vaultPaths: VaultPaths): boolean {
   try {
     let newest = statSync(vaultPaths.dbPath).mtimeMs
     try {
@@ -953,10 +955,28 @@ function uncleanEndLeftWorkingCopy(vaultPaths: VaultPaths, onProbeFallback?: Pro
       /* only a -shm: the working file's own time */
     }
     if (newest <= statSync(vaultPaths.encPath).mtimeMs) return false
-    const probe = probeDatabaseFile(vaultPaths.dbPath)
-    return probe.verdict === 'damaged' || readsAsDatabase(probe, 'salvage', onProbeFallback)
+    return startsLikeDatabase(vaultPaths.dbPath)
   } catch {
     return false
+  }
+}
+
+/** The 16 bytes every SQLite database file starts with ("SQLite format 3" and a NUL). */
+const SQLITE_FILE_MAGIC = Buffer.concat([Buffer.from('SQLite format 3', 'latin1'), Buffer.alloc(1)])
+/** The SQLite database header's size: a file shorter than it is no database to {@link probeDatabaseFile} either. */
+const SQLITE_DATABASE_HEADER_BYTES = 100
+
+/** #892: does the file at `path` start like a database: a whole 100-byte database header that begins with the SQLite
+ *  magic? The first step of {@link probeDatabaseFile}, alone: every file it lets through, the probe answers
+ *  `database`, `damaged` or `unchecked`. Throws when the file cannot be read (the caller's doubt). */
+function startsLikeDatabase(path: string): boolean {
+  const fd = openSync(path, 'r')
+  try {
+    const header = Buffer.alloc(SQLITE_DATABASE_HEADER_BYTES)
+    if (readSync(fd, header, 0, header.length, 0) < header.length) return false
+    return header.subarray(0, SQLITE_FILE_MAGIC.length).equals(SQLITE_FILE_MAGIC)
+  } finally {
+    closeSync(fd)
   }
 }
 
@@ -1063,9 +1083,12 @@ function readWorkingCopyLostMarker(vaultPaths: VaultPaths): WorkingCopyLostMarke
 
 /** Write the marker for the `.enc` that is there now (temp + fsync + rename, so it is whole or absent; a temp a failed
  *  write leaves behind is removed). Throws on an I/O failure; nothing is written when `.enc` has no readable frame (no
- *  snapshot to name). */
-function writeWorkingCopyLostMarker(vaultPaths: VaultPaths, cause: MarkedLossCause): void {
-  const enc = frameIvOf(vaultPaths.encPath)
+ *  snapshot to name). `enc`: that frame's IV when the caller has just read it (`init()`), else read here. */
+function writeWorkingCopyLostMarker(
+  vaultPaths: VaultPaths,
+  cause: MarkedLossCause,
+  enc: string | null = frameIvOf(vaultPaths.encPath)
+): void {
   if (enc === null) return
   const path = workingCopyLostPath(vaultPaths)
   const tmp = `${path}.tmp`
@@ -2273,11 +2296,13 @@ export class WorkspaceController {
       // `.enc` with no readable frame, which names no snapshot to open as it was. Then the marker a
       // lock left (here or in an earlier run, against the `.enc` that is there now) — after the
       // rekey recovery, which may have swapped `.enc`.
-      if (salvage === 'discarded') this.markWorkingCopyLost('startup')
-      else if (unclean !== null && unclean.enc !== null && frameIvOf(this.vaultPaths.encPath) === unclean.enc) {
-        this.markWorkingCopyLost(unclean.cause)
+      // `.enc`'s frame is read once here, after the recovery, for the comparison, the marker and the adopt.
+      const enc = frameIvOf(this.vaultPaths.encPath)
+      if (salvage === 'discarded') this.markWorkingCopyLost('startup', enc)
+      else if (unclean !== null && unclean.enc !== null && enc === unclean.enc) {
+        this.markWorkingCopyLost(unclean.cause, enc)
       }
-      this.adoptWorkingCopyLostMarker()
+      this.adoptWorkingCopyLostMarker(enc)
       return // locked; await unlock
     }
     if (this.vaultExistsOnDisk()) {
@@ -2341,13 +2366,23 @@ export class WorkspaceController {
 
   /**
    * #892: which unclean end the startup sweep is about to report. `unclean-full` when the drive has less free space
-   * than the size of `.enc`: a lock writes the next snapshot beside the last one, so there was no room for it, which is
-   * how a quit on a full drive ends without a lock. A drive that cannot say, or any other doubt, is the generic case.
+   * than the working file and its `-wal` together, both as the app left them (read before the sweep frees them): the
+   * session's lock needed room for its checkpoint (the main file grows by what the `-wal` holds) and for its encrypt (a
+   * new snapshot the size of the working file), so there was none, which is how a quit on a full drive ends without a
+   * lock. (The last `.enc`'s size says nothing about a session that grew past it.) A drive that cannot say, or any
+   * other doubt, is the generic case.
    */
   private uncleanEndCause(): 'unclean' | 'unclean-full' {
     try {
       const free = this.freeBytes(dirname(this.vaultPaths.encPath))
-      return free !== null && free < statSync(this.vaultPaths.encPath).size ? 'unclean-full' : 'unclean'
+      if (free === null) return 'unclean'
+      let needed = statSync(this.vaultPaths.dbPath).size
+      try {
+        needed += statSync(`${this.vaultPaths.dbPath}-wal`).size
+      } catch {
+        /* only a -shm: nothing to checkpoint */
+      }
+      return free < needed ? 'unclean-full' : 'unclean'
     } catch {
       return 'unclean'
     }
@@ -2366,21 +2401,21 @@ export class WorkspaceController {
 
   /** #875: a lock finished at the last snapshot, or a start swept the last session's broken working file (or, #892, the
    *  session an unclean end left): report it until the next unlock, in this run and (best-effort, the marker) the next. */
-  private markWorkingCopyLost(cause: MarkedLossCause): void {
+  private markWorkingCopyLost(cause: MarkedLossCause, enc?: string | null): void {
     this._workingCopyLost = cause
     try {
-      writeWorkingCopyLostMarker(this.vaultPaths, cause)
+      writeWorkingCopyLostMarker(this.vaultPaths, cause, enc)
     } catch {
       // Best-effort: this run still shows the notice; only a restart before the next unlock loses it.
     }
   }
 
-  /** #875: adopt the marker a lock left for the `.enc` that is there now; one a later lock (by any build) made stale
-   *  is removed; one of another version, or with no readable `.enc` to judge it by, is left alone. */
-  private adoptWorkingCopyLostMarker(): void {
+  /** #875: adopt the marker a lock left for the `.enc` that is there now (`enc`: its frame's IV, which `init()` has
+   *  just read); one a later lock (by any build) made stale is removed; one of another version, or with no readable
+   *  `.enc` to judge it by, is left alone. */
+  private adoptWorkingCopyLostMarker(enc: string | null): void {
     const marker = readWorkingCopyLostMarker(this.vaultPaths)
     if (marker.kind !== 'current') return
-    const enc = frameIvOf(this.vaultPaths.encPath)
     if (enc === null) return
     if (marker.enc === enc) this._workingCopyLost = marker.cause
     else removeWorkingCopyLostMarker(this.vaultPaths)

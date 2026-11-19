@@ -2296,13 +2296,13 @@ export const tr: UiCatalog<'tr'> = {
   'gate.unlock.sessionNotClosed':
     'HilbertRaum son kapandığında çalışma alanınız kilitlenmedi. Sürücü çıkarılmış, bilgisayarın ' +
     'elektriği kesilmiş veya uygulama zorla durdurulmuş olabilir. Çalışma alanınız en son ' +
-    'kilitlendiği andaki hâliyle açılır; sonrasında yapılan değişiklikler kayboldu. Bir dahaki ' +
-    'sefere sürücüyü çıkarmadan önce HilbertRaum uygulamasını kapatın.',
+    'kilitlendiği andaki hâliyle açılır; o zamandan beri yapılan değişiklikler varsa kayboldu. Bir ' +
+    'dahaki sefere sürücüyü çıkarmadan önce HilbertRaum uygulamasını kapatın.',
   'gate.unlock.sessionNotClosedFull':
-    'HilbertRaum son kapandığında çalışma alanınız kilitlenmedi ve sürücüde kilitlemek için yeterli ' +
-    'boş alan yok. Çalışma alanınız en son kilitlendiği andaki hâliyle açılır; sonrasında yapılan ' +
-    'değişiklikler kayboldu. Devam etmeden önce sürücüde yer açın; aksi hâlde bir sonraki kilitleme ' +
-    'de değişikliklerinizi kaydedemez.',
+    'HilbertRaum son kapandığında sürücü dolu olduğu için çalışma alanınız kilitlenemedi. Çalışma ' +
+    'alanınız en son kilitlendiği andaki hâliyle açılır; o zamandan beri yapılan değişiklikler varsa ' +
+    'kayboldu. Devam etmeden önce sürücüde boş alan olduğundan emin olun; aksi hâlde bir sonraki ' +
+    'kilitleme de değişikliklerinizi kaydedemez.',
   'gate.welcome.title': 'Hoş geldiniz',
   'gate.welcome.intro':
     'Burası özel yapay zekâ çalışma alanınız. Bir yapay zekâ modeliyle sohbet edin ve ' +

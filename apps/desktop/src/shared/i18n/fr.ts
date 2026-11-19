@@ -2571,14 +2571,14 @@ export const fr: UiCatalog<'fr'> = {
     'HilbertRaum n’a pas verrouillé votre espace de travail lors de sa dernière fermeture, par ' +
     'exemple parce que le disque a été retiré, que l’ordinateur a subi une coupure de courant ou que ' +
     'l’application a été arrêtée de force. Votre espace de travail s’ouvre tel qu’il était lors de ' +
-    'son dernier verrouillage\u00A0; les modifications faites depuis sont perdues. La prochaine ' +
-    'fois, quittez HilbertRaum avant de retirer le disque.',
+    'son dernier verrouillage\u00A0; toute modification faite depuis est perdue. La prochaine fois, ' +
+    'quittez HilbertRaum avant de retirer le disque.',
   'gate.unlock.sessionNotClosedFull':
-    'HilbertRaum n’a pas verrouillé votre espace de travail lors de sa dernière fermeture, et le ' +
-    'disque n’a pas assez d’espace libre pour le verrouiller. Votre espace de travail s’ouvre tel ' +
-    'qu’il était lors de son dernier verrouillage\u00A0; les modifications faites depuis sont ' +
-    'perdues. Libérez de l’espace sur le disque avant de continuer\u00A0: sinon, le prochain ' +
-    'verrouillage ne pourra pas non plus enregistrer vos modifications.',
+    'HilbertRaum n’a pas pu verrouiller votre espace de travail lors de sa dernière fermeture, car ' +
+    'le disque était plein. Votre espace de travail s’ouvre tel qu’il était lors de son dernier ' +
+    'verrouillage\u00A0; toute modification faite depuis est perdue. Assurez-vous que le disque ' +
+    'dispose d’espace libre avant de continuer\u00A0: sinon, le prochain verrouillage ne pourra pas ' +
+    'non plus enregistrer vos modifications.',
   'gate.welcome.title': 'Bienvenue',
   'gate.welcome.intro':
     'Voici votre espace de travail d’IA privé. Discutez avec un modèle d’IA et posez des ' +

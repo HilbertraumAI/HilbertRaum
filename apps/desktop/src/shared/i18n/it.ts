@@ -2475,14 +2475,14 @@ export const it: UiCatalog<'it'> = {
     'HilbertRaum non ha bloccato la tua area di lavoro l’ultima volta che l’app si è chiusa, per ' +
     'esempio perché l’unità è stata scollegata, il computer è rimasto senza corrente o l’app è stata ' +
     'chiusa forzatamente. La tua area di lavoro si apre com’era l’ultima volta che è stata bloccata; ' +
-    'le modifiche fatte dopo sono andate perse. La prossima volta, chiudi HilbertRaum prima di ' +
-    'scollegare l’unità.',
+    'le eventuali modifiche fatte da allora sono andate perse. La prossima volta, chiudi HilbertRaum ' +
+    'prima di scollegare l’unità.',
   'gate.unlock.sessionNotClosedFull':
-    'HilbertRaum non ha bloccato la tua area di lavoro l’ultima volta che l’app si è chiusa, e ' +
-    'sull’unità non c’è abbastanza spazio libero per bloccarla. La tua area di lavoro si apre ' +
-    'com’era l’ultima volta che è stata bloccata; le modifiche fatte dopo sono andate perse. Libera ' +
-    'spazio sull’unità prima di continuare: altrimenti anche il prossimo blocco non potrà salvare le ' +
-    'tue modifiche.',
+    'Non è stato possibile bloccare la tua area di lavoro l’ultima volta che l’app si è chiusa, ' +
+    'perché l’unità era piena. La tua area di lavoro si apre com’era l’ultima volta che è stata ' +
+    'bloccata; le eventuali modifiche fatte da allora sono andate perse. Assicurati che sull’unità ' +
+    'ci sia spazio libero prima di continuare: altrimenti anche il prossimo blocco non potrà salvare ' +
+    'le tue modifiche.',
   'gate.welcome.title': 'Ti diamo il benvenuto',
   'gate.welcome.intro':
     'Questa è la tua area di lavoro IA privata. Chatta con un modello IA e fai domande sui tuoi ' +

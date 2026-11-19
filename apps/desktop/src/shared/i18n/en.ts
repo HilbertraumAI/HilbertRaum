@@ -2484,12 +2484,12 @@ export const en = {
   'gate.unlock.sessionNotClosed':
     'HilbertRaum didn\'t lock your workspace the last time it closed, for example because the drive ' +
     'was removed, the computer lost power or the app was stopped. Your workspace opens as it was ' +
-    'when it was last locked; changes made after that are lost. Next time, quit HilbertRaum before ' +
-    'you remove the drive.',
+    'when it was last locked; any changes made since then are lost. Next time, quit HilbertRaum ' +
+    'before you remove the drive.',
   'gate.unlock.sessionNotClosedFull':
-    'HilbertRaum didn\'t lock your workspace the last time it closed, and the drive is too full to ' +
-    'lock it. Your workspace opens as it was when it was last locked; changes made after that are ' +
-    'lost. Free some space on the drive before you continue: without it, the next lock can\'t save ' +
+    'HilbertRaum couldn\'t lock your workspace the last time it closed, because the drive was full. ' +
+    'Your workspace opens as it was when it was last locked; any changes made since then are lost. ' +
+    'Make sure the drive has free space before you continue: without it, the next lock can\'t save ' +
     'your changes either.',
   'gate.welcome.title': 'Welcome',
   'gate.welcome.intro':

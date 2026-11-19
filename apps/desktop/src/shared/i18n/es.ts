@@ -2429,13 +2429,13 @@ export const es: UiCatalog<'es'> = {
   'gate.unlock.sessionNotClosed':
     'HilbertRaum no bloqueó tu espacio de trabajo la última vez que se cerró, por ejemplo porque se ' +
     'quitó la unidad, el equipo se quedó sin corriente o se forzó el cierre de la aplicación. Tu ' +
-    'espacio de trabajo se abre tal como estaba la última vez que se bloqueó; los cambios hechos ' +
-    'después se han perdido. La próxima vez, cierra HilbertRaum antes de quitar la unidad.',
+    'espacio de trabajo se abre tal como estaba la última vez que se bloqueó; cualquier cambio hecho ' +
+    'desde entonces se ha perdido. La próxima vez, cierra HilbertRaum antes de quitar la unidad.',
   'gate.unlock.sessionNotClosedFull':
-    'HilbertRaum no bloqueó tu espacio de trabajo la última vez que se cerró, y la unidad no tiene ' +
-    'espacio libre suficiente para bloquearlo. Tu espacio de trabajo se abre tal como estaba la ' +
-    'última vez que se bloqueó; los cambios hechos después se han perdido. Libera espacio en la ' +
-    'unidad antes de continuar: si no, el próximo bloqueo tampoco podrá guardar tus cambios.',
+    'HilbertRaum no pudo bloquear tu espacio de trabajo la última vez que se cerró porque la unidad ' +
+    'estaba llena. Tu espacio de trabajo se abre tal como estaba la última vez que se bloqueó; ' +
+    'cualquier cambio hecho desde entonces se ha perdido. Asegúrate de que la unidad tenga espacio ' +
+    'libre antes de continuar: si no, el próximo bloqueo tampoco podrá guardar tus cambios.',
   'gate.welcome.title': 'Te damos la bienvenida',
   'gate.welcome.intro':
     'Este es tu espacio de trabajo de IA privado. Chatea con un modelo de IA y haz preguntas ' +

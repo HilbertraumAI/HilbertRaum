@@ -886,6 +886,16 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
       }
     ],
     [
+      // The SQLite magic and nothing after it: shorter than a database header, so no database to the probe either.
+      'a working file cut short inside the database header',
+      (vp) => {
+        writeFileSync(vp.dbPath, Buffer.concat([Buffer.from('SQLite format 3', 'latin1'), Buffer.alloc(1)]))
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        backdate(vp.encPath)
+      }
+    ],
+    [
       // Newer means strictly newer: a working file and `-wal` exactly as old as `.enc` prove no change after it.
       'a working file and -wal exactly as old as .enc',
       (vp) => {
@@ -954,10 +964,10 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
   })
 
-  // #892: a working copy whose structure the probe cannot read for a reason that is not damage (here a table only the
-  // session's own connection could read) is judged by its header, as at every probe site, and the start says so for the
-  // log: the same notice, and the salvage's header fallback noted.
-  it('#892: live sidecars beside a working file the probe judges by its header: the notice, and the fallback noted', () => {
+  // #892: the check asks only whether the working file starts like a database (the SQLite header), so a structure the
+  // probe could not read for a reason that is not damage (here a table only the session's own connection could read)
+  // counts like any other, and nothing is noted as a salvage fallback: the check salvages nothing.
+  it('#892: live sidecars beside a working file whose structure the probe could not read: the notice, no fallback noted', () => {
     const vp = lockedVault('vault', 'pw')
     const { db } = unlockEncryptedVault(vp, 'pw')
     plantProbeTrap(db)
@@ -971,31 +981,44 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.init()
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
-    expect(ctl.takeProbeFallbacks()).toEqual([{ site: 'salvage', code: expect.stringMatching(/^sqlite 1\b/) }])
+    expect(ctl.takeProbeFallbacks()).toEqual([])
   })
 
-  // #892 (e): a drive with less free space than the size of `.enc` has no room for a lock to write the next snapshot
-  // beside the last one, which is how a quit on a full drive ends without a lock: the notice names it, so the user frees
-  // space before the next session ends the same way. A drive that cannot say how much is free is not called full.
-  it.each<[string, (encSize: number) => number | null, string, string]>([
-    ['one byte less than the size of .enc', (encSize) => encSize - 1, 'session_not_closed_full', 'unclean-full'],
-    ['exactly the size of .enc', (encSize) => encSize, 'session_not_closed', 'unclean'],
-    ['no answer from the drive', () => null, 'session_not_closed', 'unclean'],
+  // #892 (e): a lock that the full drive refused needed room for its checkpoint (the main file grows by what the `-wal`
+  // holds) and for its encrypt (a new snapshot the size of the working file). Less free space than the working file and
+  // its `-wal` together, measured before the sweep frees them, names that cause, so the user frees space before the next
+  // session ends the same way. A drive that cannot say how much is free is not called full.
+  it.each<[string, number, (workingCopy: number, encSize: number) => number | null, string, string]>([
+    ['one byte less than the working file and its -wal', 0, (workingCopy) => workingCopy - 1, 'session_not_closed_full', 'unclean-full'],
+    ['exactly the working file and its -wal', 0, (workingCopy) => workingCopy, 'session_not_closed', 'unclean'],
+    // The last lock's snapshot is small and the session grew far past it in the `-wal`: room for another `.enc` of that
+    // size is not room for this session's lock.
+    [
+      'enough for .enc but not for a -wal that grew far past it',
+      1024 * 1024,
+      (workingCopy, encSize) => encSize + Math.floor((workingCopy - encSize) / 2),
+      'session_not_closed_full',
+      'unclean-full'
+    ],
+    ['no answer from the drive', 0, () => null, 'session_not_closed', 'unclean'],
     // A read that fails sits in front of the sweep: it must neither stop the start nor keep the plaintext at rest.
     [
       'a read that fails',
+      0,
       () => {
         throw Object.assign(new Error('EIO: i/o error, statfs'), { code: 'EIO' })
       },
       'session_not_closed',
       'unclean'
     ]
-  ])('#892: a mid-session crash on a drive whose free space is %s', (_what, free, notice, cause) => {
+  ])('#892: a mid-session crash on a drive whose free space is %s', (_what, walBytes, free, notice, cause) => {
     const vp = lockedVault('vault', 'pw')
     failedLockState(vp)
-    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-wal`, walBytes > 0 ? randomBytes(walBytes) : 'wal')
     writeFileSync(`${vp.dbPath}-shm`, 'shm')
-    const drive = (): number | null => free(statSync(vp.encPath).size)
+    const workingCopy = statSync(vp.dbPath).size + statSync(`${vp.dbPath}-wal`).size
+    const encSize = statSync(vp.encPath).size
+    const drive = (): number | null => free(workingCopy, encSize)
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, encryptFile, drive)
     ctl.init()

@@ -1110,11 +1110,12 @@ explicitly:
   like every build before #876, it checks only the header, and such a copy keeps its header. Since
   #892 the notice also covers an **unclean end**: when the startup sweep shreds a working file
   beside live `-wal`/`-shm` (the accepted trade-off below, unchanged) that is a real copy of a
-  session (it or its `-wal` newer than `.enc`, and a database, or torn, by the probe; a shred
-  survivor or a file the probe cannot read says nothing), the lock screen says the app did not lock
-  the workspace (`gate.unlock.sessionNotClosed`), or, with less free space than the size of `.enc`
-  (read before the sweep frees the working copy's room), that the drive is too full to lock it
-  (`…Full`). This is the one durable trace of a quit whose lock #876 refused on a full drive: that
+  session (it or its `-wal` newer than `.enc`, and starting with the SQLite header, whole or torn;
+  a shred survivor or a file that cannot be read says nothing), the lock screen says the app did
+  not lock the workspace (`gate.unlock.sessionNotClosed`), or, with less free space than the
+  working file and its `-wal` together (read before the sweep frees them), that it could not lock
+  it because the drive was full (`…Full`). This is the one durable trace of a quit whose lock #876
+  refused on a full drive: that
   quit's own log line is written after the log key is gone and dies with the process. The marker is
   written at the start, after the sweep (which frees the room it needs), so nothing is written on a
   full drive at quit. A marker cause this build does not know reads as the generic unclean end,
