@@ -46,10 +46,12 @@ const LETTER_OR_NUMBER = /[\p{L}\p{N}]/u
 const WORD_CHARACTER = /[\p{L}\p{M}\p{N}]/u
 /** Any space, tab, line break or no-break space: it separates words, so it becomes a plain space. */
 const WHITE_SPACE = /\p{White_Space}/gu
-/** What a name does not start with: a space, `_` or `-` (a name starting with `-` reads as an option). */
-const LEADING_SEPARATOR = ' _-'
-/** What a name does not end with, right before its extension: a space, `_`, `-` or an opening `(`. */
-const TRAILING_SEPARATORS = /[ _(-]+$/u
+/** What a name does not start with: a space or `-` (a name starting with `-` reads as an option). `_` is a
+ *  name character (`__init__.py`, `_config.yml`), so it stays. */
+const LEADING_SEPARATOR = ' -'
+/** What a name does not end with, right before its extension: a space, `-` or an opening `(` (a cut can land
+ *  right after one). `_` is a name character and stays. */
+const TRAILING_SEPARATORS = /[ (-]+$/u
 /** The names Windows reserves for devices, also when an extension follows (Microsoft's naming rules:
  *  `NUL.txt` is `NUL`). `\p{N}` keeps superscript digits, and `COM¹`–`COM³`, `LPT¹`–`LPT³` are
  *  reserved too. */
@@ -70,10 +72,10 @@ const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])$
  *   and ZWNJ included (a Sinhala or Persian joiner is lost; the letters stay);
  * - it holds at most `maxCodePoints` (60) code points, cut between whole characters (graphemes), so
  *   the cut never leaves half an astral letter or a letter without its vowel sign. A character that
- *   alone carries more marks than the whole cap keeps only its letter, so the rest of the title
- *   still counts;
- * - it never starts with a space, `_` or `-`, and never ends with one or with an opening `(` (the cut
- *   can land right after one), so nothing odd stands before the extension (#839);
+ *   alone carries more marks than the whole cap keeps only its letter, and one that holds more
+ *   letters than the cap is left out, so the rest of the title still counts;
+ * - it never starts with a space or `-`, and never ends with a space, `-` or an opening `(` (the cut
+ *   can land right after one), so nothing odd stands before the extension (#839). `_` stays at both ends;
  * - it is composed (NFC) again once built: dropping a joiner or a stripped character can leave a
  *   letter and a mark that compose. Composing never adds code points here (the title was composed
  *   before the cut, so no character NFC would decompose is in it), so the cap still holds;
@@ -93,6 +95,7 @@ export function fileNameStem(
     const inWord = LETTER_OR_NUMBER.test(segment)
     let kept = [...segment].filter((c) => punctuation.includes(c) || (inWord && WORD_CHARACTER.test(c)))
     if (kept.length > max) kept = kept.filter((c) => LETTER_OR_NUMBER.test(c))
+    if (kept.length > max) continue // more letters than the cap: it can never fit, so it is left out, not the cut
     if (kept.length === 0 || (count === 0 && kept.every((c) => LEADING_SEPARATOR.includes(c)))) continue
     if (count + kept.length > max) break
     stem += kept.join('')

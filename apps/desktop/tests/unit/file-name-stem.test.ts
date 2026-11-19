@@ -89,13 +89,20 @@ describe('fileNameStem (#899)', () => {
     expect(chat('Line1\nLine2\tend')).toBe('Line1 Line2 end')
   })
 
-  it('never starts with "-" or "_", and never ends with one or with an opening "(" the cut left', () => {
+  it('never starts with "-", keeps "_" at either end, and never ends with a space, "-" or an opening "(" the cut left (#918)', () => {
     expect(chat('-rf')).toBe('rf')
-    expect(chat('__init')).toBe('init')
+    expect(chat('__init')).toBe('__init') // `__init__.py` and `_config.yml` are real names
     expect(doc('(draft) notes')).toBe('(draft) notes') // an opening ( may start a name
-    expect(chat('notes_')).toBe('notes')
+    expect(chat('notes_')).toBe('notes_')
     expect(chat(`${A59}-x`)).toBe(A59)
     expect(doc(`${'a'.repeat(58)} (Deutsch)`)).toBe('a'.repeat(58))
+  })
+
+  it('leaves out a character with more letters than the cap, so the rest of the title still counts (#918)', () => {
+    // 61 Hangul choseong jamo (U+1100) are one grapheme (L+L+...), 61 letters: it can never fit.
+    const jamo = 'ᄀ'.repeat(61)
+    expect(chat(`${jamo} report`)).toBe('report')
+    expect(chat(`Quarterly ${jamo} report`)).toBe('Quarterly  report')
   })
 
   it('cuts at maxCodePoints when a caller gives a smaller cap', () => {

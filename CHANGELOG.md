@@ -365,7 +365,7 @@ from its first public `1.0.0` release onward.
   translations of one document no longer get the same name. Words separated by a line break or a
   no-break space no longer run together. A title with no letter or number left gets the plain default name,
   and a name Windows keeps for itself, such as CON or NUL, gets an `_` added. A suggested name no
-  longer starts or ends with `_` or `-`, so `__init__.py` is suggested as `init.py` (#899).
+  longer starts with `-` (#899).
 
 ## [0.1.65] — 2026-11-11
 

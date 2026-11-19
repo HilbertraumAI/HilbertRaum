@@ -1797,6 +1797,17 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     expect(String(saveDialog.lastOptions?.defaultPath)).toBe(want)
   })
 
+  // #918: "_" at the edges is part of a name (`__init__.py`), so the original export suggests it whole.
+  it('docs:exportOriginal keeps the underscores at both ends of the name (#918)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath))
+    const id = await importNotes(workspacePath)
+    db.prepare('UPDATE documents SET title = ? WHERE id = ?').run('__init__.py', id)
+
+    expect((await invoke(handlers, IPC.exportDocumentOriginal, id)).result).toBeNull() // the default: cancelled
+    expect(String(saveDialog.lastOptions?.defaultPath)).toBe('__init__.py')
+  })
+
   it('docs:exportOriginal refuses an empty or non-string id before taking the document-work lease', async () => {
     const { db, workspacePath } = freshWorkspace()
     const beginDocumentWork = vi.fn(() => () => {})
