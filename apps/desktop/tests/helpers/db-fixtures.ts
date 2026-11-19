@@ -28,7 +28,7 @@ export function openFreshDb(label: string): Db {
  * evidence-pack-export-concurrent.test.ts:137-138 (`beforeEach`), and the temp-root + DB halves of
  * evidence-snapshot.test.ts:22, evidence-reviews.test.ts:55, evidence-review-batch-ops.test.ts:62,
  * evidence-source-context-overlap.test.ts:29, evidence-reviews-ipc.test.ts:147 and evidence-review-open-perf.test.ts:77
- * (each a local `mkdtempSync`).
+ * (each a local `mkdtempSync`); at 11e3a5f7 the root + DB half of invoice-audit-ia1.test.ts:86-87 (#898).
  */
 export function freshWorkspaceDb(label: string): { db: Db; root: string } {
   const root = tempRoot(label)

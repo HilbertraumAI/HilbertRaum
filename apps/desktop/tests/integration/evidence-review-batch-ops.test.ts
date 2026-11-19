@@ -52,7 +52,7 @@ import {
 } from '../../src/main/services/evidence-reviews'
 import type { Citation, EvidenceReviewItem, EvidenceReviewSummary } from '../../src/shared/types'
 import { freshWorkspaceDb } from '../helpers/db-fixtures'
-import { capturePrepares } from '../helpers/db-spy'
+import { capturePrepares, recordExecutions } from '../helpers/db-spy'
 import { evidenceIpcContext, seedEvidenceReview, seedSourceDocument } from '../helpers/evidence-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
@@ -62,48 +62,6 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
  *  handler's `safeId` turns it into an unknown id. `{}` or an array would not do: `{}` binds as an
  *  empty named-parameter bag (reads NULL) and an array throws a different named-parameter error. */
 const UNBINDABLE_ID: unknown = true
-
-/**
- * A Db facade that RECORDS the SQL text of every statement it executes. `prepareCached`
- * keys its statement cache on the Db object, so the proxy gets its own cache and every
- * prepare — cached or not — is funnelled through here. Everything still runs against the
- * real SQLite database; the proxy only observes.
- */
-function recordingDb(db: Db): { db: Db; executed: string[] } {
-  const executed: string[] = []
-  const wrapStatement = (sql: string, stmt: object): object =>
-    new Proxy(stmt, {
-      get(target, prop) {
-        const value = Reflect.get(target, prop, target)
-        if (typeof value !== 'function') return value
-        if (prop === 'get' || prop === 'all' || prop === 'run' || prop === 'iterate') {
-          return (...args: unknown[]) => {
-            executed.push(sql)
-            return (value as (...a: unknown[]) => unknown).apply(target, args)
-          }
-        }
-        return (value as (...a: unknown[]) => unknown).bind(target)
-      }
-    })
-  const proxy = new Proxy(db as unknown as object, {
-    get(target, prop) {
-      const value = Reflect.get(target, prop, target)
-      if (typeof value !== 'function') return value
-      if (prop === 'prepare') {
-        return (sql: string) =>
-          wrapStatement(sql, (value as (s: string) => object).call(target, sql))
-      }
-      if (prop === 'exec') {
-        return (sql: string) => {
-          executed.push(sql)
-          return (value as (s: string) => unknown).call(target, sql)
-        }
-      }
-      return (value as (...a: unknown[]) => unknown).bind(target)
-    }
-  })
-  return { db: proxy as unknown as Db, executed }
-}
 
 /** How many recorded statements match `needle` (a substring of the SQL text). */
 function countMatching(executed: readonly string[], needle: string): number {
@@ -166,7 +124,7 @@ describe('AUD-12 — evidence-review chip state loads per CONVERSATION, not per 
     for (const id of messageIds) seedEvidenceReview(raw, { messageId: id })
 
     // The batch read: TWO statements for the whole conversation, whatever its length.
-    const batch = recordingDb(raw)
+    const batch = recordExecutions(raw)
     const summaries = listEvidenceReviewSummariesForConversation(batch.db, conversationId)
     expect(summaries).toHaveLength(REVIEWS)
     expect(batch.executed).toHaveLength(2)
@@ -280,7 +238,7 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
     expect(undecided.length).toBeGreaterThan(1) // the sweep must be genuinely plural
 
     // The batched action: constant statement counts, however many items it sweeps.
-    const batched = recordingDb(raw)
+    const batched = recordExecutions(raw)
     const after = applyEvidenceReviewBulkAction(batched.db, reviewId, 'undecided_follow_up')
     expect(after).not.toBeNull()
     expect(countMatching(batched.executed, 'SELECT * FROM evidence_reviews WHERE id = ?')).toBe(1)
@@ -359,7 +317,7 @@ describe('AUD-13 — bulk decision actions apply in ONE transaction', () => {
     const { reviewId } = seedReviewForSweep(db)
     expect(applyEvidenceReviewBulkAction(db, reviewId, 'clear_decisions')).not.toBeNull()
     const stamp = getEvidenceReview(db, reviewId)!.updatedAt
-    const again = recordingDb(db)
+    const again = recordExecutions(db)
     expect(applyEvidenceReviewBulkAction(again.db, reviewId, 'clear_decisions')).not.toBeNull()
     expect(
       countMatching(again.executed, 'UPDATE evidence_reviews SET updated_at = ? WHERE id = ?')

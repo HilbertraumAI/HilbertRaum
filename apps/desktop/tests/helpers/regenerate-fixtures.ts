@@ -14,7 +14,7 @@ import { freshWorkspaceDb } from './db-fixtures'
  * `freshWorkspaceDb(label)` (a `hilbertraum-<label>-` root with its workspace DB at `<root>/test.sqlite`) plus
  * `seedSettings`; `workspacePath` is `<root>/workspace` (not created). Pass it to `makeRagAskContext` as the world.
  * Replaces `freshDb` at 27bd0b0d: regenerate-evidence-review-guard.test.ts:88 and
- * regenerate-result-table-restore.test.ts:120.
+ * regenerate-result-table-restore.test.ts:120; at 11e3a5f7 rag-regenerate-ipc.test.ts:41 (#898).
  */
 export function regenWorkspace(label: string): { db: Db; root: string; workspacePath: string } {
   const { db, root } = freshWorkspaceDb(label)
@@ -25,7 +25,7 @@ export function regenWorkspace(label: string): { db: Db; root: string; workspace
 /**
  * Drive a guarded runFn (`withRegenerateGuard(…)`) with `signal` (default: a fresh, never-aborted one) and inert
  * senders; the guard ignores their output. Replaces `drive` at 27bd0b0d: regenerate-evidence-review-guard.test.ts:221,
- * regenerate-result-table-restore.test.ts:197 (and chat-stream-regenerate.test.ts:26, out of this campaign's scope).
+ * regenerate-result-table-restore.test.ts:197; at 11e3a5f7 chat-stream-regenerate.test.ts:26 (#898).
  */
 export function driveGuarded(
   wrapped: ChatStreamRunFn,

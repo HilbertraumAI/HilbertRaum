@@ -12,6 +12,7 @@ import {
   type ModelInfo,
   type ModelVerifyProgress
 } from '../../src/shared/types'
+import { LOCKED_ENCRYPTED_WORKSPACE, UNLOCKED_ENCRYPTED_WORKSPACE } from '../helpers/app-shell'
 import { catalogOf } from '../helpers/i18n-catalogs'
 import { modelInfo } from '../helpers/model-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
@@ -31,19 +32,12 @@ const UNINITIALIZED: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
-const LOCKED: WorkspaceStateInfo = {
-  state: 'locked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
-const UNLOCKED: WorkspaceStateInfo = { ...UNINITIALIZED, state: 'unlocked', mode: 'encrypted' }
 
 /** A minimal installed chat model for the starter-step gate. */
 const chatModel = (state: ModelInfo['state']): ModelInfo => modelInfo({ id: 'qwen3-4b-instruct-q4', state, recommended: true })
 
 const okCreate = (): Mock =>
-  vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED }))
+  vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE }))
 
 /** Stubs for a create that SUCCEEDS: the gate then subscribes to first-run verify progress (the preload returns an
  *  unsubscribe function) before it lists the models. */
@@ -230,7 +224,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     expect(createWorkspace).toHaveBeenCalledWith('longenough', 'encrypted')
     // The step-3 check runs AFTER create succeeds (listModels needs an unlocked
     // workspace) and, with a model installed, skips the starter step entirely.
-    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'chat'))
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE, 'chat'))
     expect(screen.queryByText(/no ai model is installed/i)).not.toBeInTheDocument()
   })
 
@@ -263,7 +257,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
 
     await user.click(screen.getByRole('button', { name: t('en', exit) }))
     expect(onUnlocked).toHaveBeenCalledTimes(1)
-    expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, landOn)
+    expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE, landOn)
   })
 
   // FE-E (full-audit-2026-06-29-followup, Phase 8): a THROWN model-listing/verify failure
@@ -286,7 +280,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
     await user.click(screen.getByRole('button', { name: /create workspace/i }))
 
-    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'models'))
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE, 'models'))
   })
 
   it('shows a determinate verification bar while first-run hashing runs, then unsubscribes', async () => {
@@ -353,7 +347,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     const createWorkspace = vi.fn(
       async (): Promise<WorkspaceActionResult> => ({
         ok: true,
-        state: { ...UNLOCKED, mode: 'plaintext_dev' }
+        state: { ...UNLOCKED_ENCRYPTED_WORKSPACE, mode: 'plaintext_dev' }
       })
     )
     stubCreate({ createWorkspace, listModels: vi.fn(async (): Promise<ModelInfo[]> => []) })
@@ -377,11 +371,11 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
   it('unlocks with the entered password and stays a one-step screen', async () => {
     const user = userEvent.setup()
     const unlockWorkspace = vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED })
+      async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE })
     )
     const onUnlocked = vi.fn()
     stubApi({ unlockWorkspace })
-    render(<WorkspaceGate state={LOCKED} onUnlocked={onUnlocked} />)
+    render(<WorkspaceGate state={LOCKED_ENCRYPTED_WORKSPACE} onUnlocked={onUnlocked} />)
 
     // No first-run steps on unlock: the password field is immediately there.
     expect(screen.getByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
@@ -391,7 +385,7 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
 
     expect(unlockWorkspace).toHaveBeenCalledWith('my-passphrase')
     // A plain unlock passes no landing target — the shell keeps its screen.
-    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED))
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE))
   })
 })
 
@@ -407,7 +401,7 @@ describe('WorkspaceGate — the edition name stays English in a Turkish UI', () 
 
   it('"HilbertRaum Lite" resolves to lang="en" under <html lang="tr">', () => {
     stubApi({})
-    renderInLanguage(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />, 'tr')
+    renderInLanguage(<WorkspaceGate state={LOCKED_ENCRYPTED_WORKSPACE} onUnlocked={vi.fn()} />, 'tr')
     expect(document.documentElement.lang).toBe('tr')
     expect(screen.getByText('HilbertRaum Lite').closest('[lang]')?.getAttribute('lang')).toBe('en')
   })
@@ -435,7 +429,7 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     const onUnlocked = vi.fn()
     stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
     renderInLanguage(
-      <WorkspaceGate state={call === 'unlock' ? LOCKED : UNINITIALIZED} onUnlocked={onUnlocked} />,
+      <WorkspaceGate state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED} onUnlocked={onUnlocked} />,
       'de'
     )
     if (call === 'unlock') {

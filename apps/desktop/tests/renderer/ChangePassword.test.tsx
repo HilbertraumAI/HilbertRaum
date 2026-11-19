@@ -11,6 +11,7 @@ import {
   type WorkspaceActionResult
 } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
+import { UNLOCKED_ENCRYPTED_WORKSPACE } from '../helpers/app-shell'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 
 // Phase 32: the Settings → General "Change password" card. Reuses the Phase-27
@@ -29,15 +30,7 @@ function stubSettings(opts: {
   const change =
     opts.changeWorkspacePassword ??
     vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({
-        ok: true,
-        state: {
-          state: 'unlocked',
-          mode: 'encrypted',
-          plaintextAllowed: false,
-          encryptionRequired: true
-        }
-      })
+      async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE })
     )
   stubApi({
     getSettings: vi.fn(async () => opts.settings ?? settings()),

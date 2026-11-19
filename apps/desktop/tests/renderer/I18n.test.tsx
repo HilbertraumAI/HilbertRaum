@@ -12,12 +12,7 @@ import {
   resolvePreUnlockLanguage,
   useT
 } from '../../src/renderer/i18n'
-import {
-  DEFAULT_SETTINGS,
-  type AppSettings,
-  type SaveBeforeCloseResult,
-  type WorkspaceStateInfo
-} from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type AppSettings, type SaveBeforeCloseResult } from '../../src/shared/types'
 import {
   UI_LANGUAGES,
   UI_LANGUAGE_CODES,
@@ -25,7 +20,7 @@ import {
   type UiLanguage,
   type UiLanguageSetting
 } from '../../src/shared/i18n'
-import { appShellStubs } from '../helpers/app-shell'
+import { LOCKED_ENCRYPTED_WORKSPACE, appShellStubs } from '../helpers/app-shell'
 import { deferred } from '../helpers/deferred'
 import { renderInLanguage } from '../helpers/render-language'
 import { stubApi } from '../helpers/renderer'
@@ -34,13 +29,6 @@ import { stubApi } from '../helpers/renderer'
 // gate resolves from the localStorage mirror (falling back to navigator.language),
 // the Settings → General picker patches `uiLanguage` and switches the UI live, and
 // the RESOLVED language is mirrored to localStorage + `<html lang>`.
-
-const LOCKED: WorkspaceStateInfo = {
-  state: 'locked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
 
 afterEach(() => {
   cleanup()
@@ -66,7 +54,7 @@ describe('resolvePreUnlockLanguage', () => {
 
 describe('pre-unlock gate language (App + WorkspaceGate)', () => {
   it('renders the locked gate in English with no stored state', async () => {
-    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE) }))
     render(<App />)
     expect(
       await screen.findByRole('heading', { name: 'Unlock your workspace' })
@@ -76,7 +64,7 @@ describe('pre-unlock gate language (App + WorkspaceGate)', () => {
 
   it('renders the locked gate in German when the mirror says de (German render smoke)', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE) }))
     render(<App />)
     expect(
       await screen.findByRole('heading', { name: 'Arbeitsbereich entsperren' })
@@ -304,7 +292,7 @@ describe('Settings → General language picker', () => {
     // Only the mirror survives into the next start: the gate must set <html lang> itself.
     document.documentElement.lang = ''
 
-    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE) }))
     render(<App />)
     expect(await screen.findByRole('heading', { name: t('ru', 'gate.unlock.title') })).toBeInTheDocument()
     expect(screen.getByPlaceholderText(t('ru', 'gate.passwordPlaceholder'))).toBeInTheDocument()

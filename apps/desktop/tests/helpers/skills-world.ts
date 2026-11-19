@@ -98,7 +98,7 @@ export interface RagAuditEvent {
  * The AppContext the RAG-ask suites hand to registerRagIpc; `audit` records `{ type, meta }` (unread by the noop-audit
  * suites). `skills` is optional: without it the context has no `skills` key at all (the regenerate suites' shape,
  * regenerate-fixtures.ts `regenWorkspace`; replaces their `makeCtx` at 27bd0b0d: regenerate-evidence-review-guard.test.ts:95
- * and regenerate-result-table-restore.test.ts:127).
+ * and regenerate-result-table-restore.test.ts:127, and at 11e3a5f7 rag-regenerate-ipc.test.ts:48, #898).
  */
 export function makeRagAskContext(
   w: Pick<SkillsWorld, 'db' | 'root' | 'workspacePath'> & { skills?: SkillRegistry },

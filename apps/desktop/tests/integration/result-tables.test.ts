@@ -9,27 +9,14 @@ import { join } from 'node:path'
 // chat-ipc.test.ts's T-8 row. The audit carries ids/counts only.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
-type SaveDialogOptions = {
-  title?: string
-  defaultPath?: string
-  filters?: Array<{ name: string; extensions: string[] }>
-}
-const dialogState = vi.hoisted(() => ({
-  saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
-  lastSaveOptions: undefined as SaveDialogOptions | undefined
-}))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: {
-    showSaveDialog: async (...args: unknown[]) => {
-      dialogState.lastSaveOptions = (args.length > 1 ? args[1] : args[0]) as SaveDialogOptions
-      return dialogState.saveResult
-    }
-  },
+  dialog: { showSaveDialog: saveDialog.showSaveDialog },
   app: { getVersion: () => '0.0.0-test' }
 }))
 
@@ -78,8 +65,7 @@ function seedMessageWithTable(db: Db): { conversationId: string; messageId: stri
 
 beforeEach(() => {
   ipcState.handlers.clear()
-  dialogState.saveResult = { canceled: true }
-  dialogState.lastSaveOptions = undefined
+  saveDialog.reset()
 })
 
 describe('result-table store (Phase 2)', () => {
@@ -134,7 +120,7 @@ describe('chat:exportMessageTable IPC (Phase 2)', () => {
     registerChatIpc(makeCtx(db, (type, message, meta) => events.push({ type, message, meta })))
 
     const outPath = join(tempRoot('rtables-out'), 'export.csv')
-    dialogState.saveResult = { canceled: false, filePath: outPath }
+    saveDialog.result = { canceled: false, filePath: outPath }
     const { result } = await invoke(handlers, IPC.exportMessageTable, messageId)
     expect(result).toBe(outPath)
 
@@ -146,8 +132,8 @@ describe('chat:exportMessageTable IPC (Phase 2)', () => {
     expect(lines[2]).toBe('2026-01-03,Salary,2500.00,Sonstiges')
 
     // Dialog metadata: the CSV filter + a .csv default name.
-    expect(dialogState.lastSaveOptions?.filters?.[0]?.extensions).toEqual(['csv'])
-    expect(dialogState.lastSaveOptions?.defaultPath).toMatch(/\.csv$/)
+    expect(saveDialog.lastOptions?.filters?.[0]?.extensions).toEqual(['csv'])
+    expect(saveDialog.lastOptions?.defaultPath).toMatch(/\.csv$/)
 
     // Audit: exactly one event, id + row count only — never a column/row/path (the sentinel description stays
     // out). Every audited string is searched RAW: JSON doubles Windows backslashes, so a JSON search for the path
@@ -168,7 +154,7 @@ describe('chat:exportMessageTable IPC (Phase 2)', () => {
     registerChatIpc(makeCtx(db, (type) => events.push(type)))
     const dir = tempRoot('rtables-out')
     // The dialog still reports a path: `canceled` must be the guard that stops the write.
-    dialogState.saveResult = { canceled: true, filePath: join(dir, 'export.csv') }
+    saveDialog.result = { canceled: true, filePath: join(dir, 'export.csv') }
     const { result } = await invoke(handlers, IPC.exportMessageTable, messageId)
     expect(result).toBeNull()
     expect(readdirSync(dir)).toEqual([])

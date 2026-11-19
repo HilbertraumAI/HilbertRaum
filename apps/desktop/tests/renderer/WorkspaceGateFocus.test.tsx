@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { WorkspaceGate } from '../../src/renderer/screens/WorkspaceGate'
 import type { WorkspaceStateInfo, WorkspaceActionResult, ModelInfo } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
+import { LOCKED_ENCRYPTED_WORKSPACE, UNLOCKED_ENCRYPTED_WORKSPACE } from '../helpers/app-shell'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 
 // F20 (audit full-audit-2026-06-29 postmerge): the CREATE flow swaps the whole card per
@@ -21,10 +22,9 @@ const UNINITIALIZED: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
-const UNLOCKED: WorkspaceStateInfo = { ...UNINITIALIZED, state: 'unlocked', mode: 'encrypted' }
 
 const okCreate = (): Mock =>
-  vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED }))
+  vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE }))
 
 /** Advance create: welcome → password → submit a valid password (lands on finishing). */
 async function submitValidPassword(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -88,13 +88,6 @@ describe('WorkspaceGate — F20 phase-change focus management (WCAG 2.4.3)', () 
 // is announced (a freshly inserted role="alert" element is missed by many screen readers).
 // A failed CREATE is the same keyboard dead end on the password step (#860 R2).
 describe('WorkspaceGate — failed unlock or create: focus + announcement (SH-2/SH-12)', () => {
-  const LOCKED: WorkspaceStateInfo = {
-    state: 'locked',
-    mode: 'encrypted',
-    plaintextAllowed: false,
-    encryptionRequired: true
-  }
-
   it.each([
     ['unlock', 'wrong_password', 'main.workspace.wrongPassword'],
     ['create', 'error', 'main.workspace.createFailed']
@@ -104,7 +97,7 @@ describe('WorkspaceGate — failed unlock or create: focus + announcement (SH-2/
       const user = userEvent.setup()
       const answer = vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: false, reason, message: 'It failed.' }))
       stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
-      render(<WorkspaceGate state={call === 'unlock' ? LOCKED : UNINITIALIZED} onUnlocked={vi.fn()} />)
+      render(<WorkspaceGate state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED} onUnlocked={vi.fn()} />)
       if (call === 'create') await user.click(screen.getByRole('button', { name: /get started/i }))
 
       const pw = await screen.findByPlaceholderText('Password')

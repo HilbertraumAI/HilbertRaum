@@ -13,23 +13,14 @@ const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 // calls `BrowserWindow.getFocusedWindow()` + `dialog.showSaveDialog`. Fake both so we can assert
 // the sanitized default path and drive cancel/write outcomes. `getFocusedWindow → null` routes
 // saveTextExport down the single-arg `showSaveDialog(options)` branch.
-type SaveDialogOptions = { title?: string; defaultPath?: string; filters?: unknown }
-const dialogState = vi.hoisted(() => ({
-  saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
-  lastSaveOptions: undefined as SaveDialogOptions | undefined
-}))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: {
-    showSaveDialog: async (...args: unknown[]) => {
-      dialogState.lastSaveOptions = (args.length > 1 ? args[1] : args[0]) as SaveDialogOptions
-      return dialogState.saveResult
-    }
-  }
+  dialog: { showSaveDialog: saveDialog.showSaveDialog }
 }))
 
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
@@ -104,8 +95,7 @@ function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn
 beforeEach(() => {
   ipcState.handlers.clear()
   inFlightStreams.clear()
-  dialogState.saveResult = { canceled: true }
-  dialogState.lastSaveOptions = undefined
+  saveDialog.reset()
 })
 
 describe('registerChatIpc', () => {
@@ -560,13 +550,13 @@ describe('chat export handlers (T-8)', () => {
 
     const dir = tempRoot('export')
     const outPath = join(dir, 'saved.md')
-    dialogState.saveResult = { canceled: false, filePath: outPath }
+    saveDialog.result = { canceled: false, filePath: outPath }
 
     const filePath = (await invoke(handlers, IPC.exportConversation, conv.id)).result as string | null
     expect(filePath).toBe(outPath)
     // TEETH: the file-name rule removed ':' '/' '<' '>' and collapsed to a safe stem. Weaken it
     // (e.g. stop stripping '/') → the '/'-bearing "Report Q1/Q2 draft.md" reddens this.
-    expect(dialogState.lastSaveOptions?.defaultPath).toBe('Report Q1Q2 draft.md')
+    expect(saveDialog.lastOptions?.defaultPath).toBe('Report Q1Q2 draft.md')
     // Audit records the id ONLY — never the title (chat content) or the chosen path (user-private).
     expect(audit).toHaveBeenCalledTimes(1)
     const [type, message, meta] = audit.mock.calls[0]!
@@ -591,7 +581,7 @@ describe('chat export handlers (T-8)', () => {
     registerChatIpc(ctx)
 
     expect((await invoke(handlers, IPC.exportConversation, conv.id)).result).toBeNull() // the default: cancelled
-    expect(dialogState.lastSaveOptions?.defaultPath).toBe(want)
+    expect(saveDialog.lastOptions?.defaultPath).toBe(want)
   })
 
   it('exportConversation returns null on cancel — nothing written, nothing audited', async () => {
@@ -599,7 +589,7 @@ describe('chat export handlers (T-8)', () => {
     const { ctx, audit } = ctxWithAudit(db)
     const conv = createConversation(db, { title: 'Cancelled export' })
     registerChatIpc(ctx)
-    dialogState.saveResult = { canceled: true } // user pressed Cancel
+    saveDialog.result = { canceled: true } // user pressed Cancel
 
     const filePath = (await invoke(handlers, IPC.exportConversation, conv.id)).result as string | null
     expect(filePath).toBeNull()
@@ -617,17 +607,16 @@ describe('chat export handlers (T-8)', () => {
     registerChatIpc(ctx)
 
     const dir = tempRoot('exporttbl')
-    dialogState.saveResult = { canceled: false, filePath: join(dir, 'out.csv') }
+    saveDialog.result = { canceled: false, filePath: join(dir, 'out.csv') }
     const ok = (await invoke(handlers, IPC.exportMessageTable, withTable.id)).result as string | null
     expect(ok).toBe(join(dir, 'out.csv'))
     // The table's data IS content, so the suggested filename is a fixed, content-free name.
-    expect(dialogState.lastSaveOptions?.defaultPath).toBe('table.csv')
+    expect(saveDialog.lastOptions?.defaultPath).toBe('table.csv')
 
     // A message with no persisted table resolves to null BEFORE opening the dialog.
-    dialogState.lastSaveOptions = undefined
     const none = (await invoke(handlers, IPC.exportMessageTable, noTable.id)).result as string | null
     expect(none).toBeNull()
-    expect(dialogState.lastSaveOptions).toBeUndefined() // returned before the save dialog
+    expect(saveDialog.calls).toHaveLength(1) // only the export above: returned before the save dialog
   })
 })
 
@@ -641,41 +630,39 @@ describe('chat:saveCodeBlock (#286)', () => {
   const INFO_SENTINEL = 'XINFO_SENTINEL_private_project'
   const SENTINELS = [CONTENT_SENTINEL, INFO_SENTINEL]
   const BOM = Buffer.from([0xef, 0xbb, 0xbf])
-  // Read through a function: TS narrows the hoisted state to never after an = undefined reset.
-  const lastSave = (): SaveDialogOptions | undefined => dialogState.lastSaveOptions
 
   it('offers code.html + an HTML-first filter for an html fence, code.txt for an unknown language', async () => {
     const { ctx } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
-    dialogState.saveResult = { canceled: true }
+    saveDialog.result = { canceled: true }
 
     await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '<b>x</b>', 'html title="x"')
-    expect(lastSave()?.defaultPath).toBe('code.html')
-    expect(lastSave()?.title).toBe('Save code block as a file')
-    expect(lastSave()?.filters).toEqual([
+    expect(saveDialog.lastOptions?.defaultPath).toBe('code.html')
+    expect(saveDialog.lastOptions?.title).toBe('Save code block as a file')
+    expect(saveDialog.lastOptions?.filters).toEqual([
       { name: 'HTML', extensions: ['html'] },
       { name: 'All files', extensions: ['*'] }
     ])
 
-    dialogState.lastSaveOptions = undefined
     await invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'fn main() {}', 'rust')
-    expect(lastSave()?.defaultPath).toBe('code.txt')
-    expect(lastSave()?.filters).toEqual([
+    expect(saveDialog.calls).toHaveLength(2)
+    expect(saveDialog.lastOptions?.defaultPath).toBe('code.txt')
+    expect(saveDialog.lastOptions?.filters).toEqual([
       { name: 'TXT', extensions: ['txt'] },
       { name: 'All files', extensions: ['*'] }
     ])
 
     // No language at all (a bare fence) → txt too.
-    dialogState.lastSaveOptions = undefined
     await invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'plain', '')
-    expect(lastSave()?.defaultPath).toBe('code.txt')
+    expect(saveDialog.calls).toHaveLength(3)
+    expect(saveDialog.lastOptions?.defaultPath).toBe('code.txt')
   })
 
   it('cancel → null, nothing written, nothing audited', async () => {
     const { ctx, audit } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
     const dir = tempRoot('codeblock')
-    dialogState.saveResult = { canceled: true, filePath: join(dir, 'code.html') }
+    saveDialog.result = { canceled: true, filePath: join(dir, 'code.html') }
 
     const result = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '<b>x</b>', 'html')).result
     expect(result).toBeNull()
@@ -694,7 +681,7 @@ describe('chat:saveCodeBlock (#286)', () => {
 
     for (const name of ['out.txt', 'out.csv', 'out.sh']) {
       const dest = join(dir, name)
-      dialogState.saveResult = { canceled: false, filePath: dest }
+      saveDialog.result = { canceled: false, filePath: dest }
       const saved = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, content, 'sh')).result
       expect(saved).toBe(dest)
       const onDisk = readFileSync(dest)
@@ -706,7 +693,7 @@ describe('chat:saveCodeBlock (#286)', () => {
     const conv = createConversation(db, { title: 'BOM contrast' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
     const transcriptDest = join(dir, 'transcript.txt')
-    dialogState.saveResult = { canceled: false, filePath: transcriptDest }
+    saveDialog.result = { canceled: false, filePath: transcriptDest }
     await invoke(handlers, IPC.exportConversation, conv.id)
     expect(readFileSync(transcriptDest).subarray(0, 3).equals(BOM)).toBe(true)
   })
@@ -716,7 +703,7 @@ describe('chat:saveCodeBlock (#286)', () => {
     registerChatIpc(ctx)
     const dir = tempRoot('codeblock')
     const dest = join(dir, 'empty.txt')
-    dialogState.saveResult = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
     expect((await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '', '')).result).toBe(dest)
     expect(readFileSync(dest).length).toBe(0)
   })
@@ -724,8 +711,7 @@ describe('chat:saveCodeBlock (#286)', () => {
   it('rejects non-string content and a malformed message id WITHOUT opening the dialog', async () => {
     const { ctx, audit } = ctxWithAudit(openFreshDb('chatipc'))
     registerChatIpc(ctx)
-    dialogState.saveResult = { canceled: false, filePath: join(tempRoot('codeblock'), 'never-written.txt') }
-    dialogState.lastSaveOptions = undefined
+    saveDialog.result = { canceled: false, filePath: join(tempRoot('codeblock'), 'never-written.txt') }
 
     for (const bad of [undefined, null, 42, { toString: () => 'x' }, ['a'], Buffer.from('a')]) {
       const r = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, bad, 'html')).result
@@ -735,15 +721,15 @@ describe('chat:saveCodeBlock (#286)', () => {
       const r = (await invoke(handlers, IPC.saveCodeBlock, badId, 'text', 'html')).result
       expect(r, `messageId=${String(badId)}`).toBeNull()
     }
-    expect(dialogState.lastSaveOptions).toBeUndefined()
+    expect(saveDialog.calls).toHaveLength(0)
     expect(audit).not.toHaveBeenCalled()
 
     // A non-string language is tolerated (treated as no language → txt); the content still wins.
     const dir = tempRoot('codeblock')
-    dialogState.saveResult = { canceled: false, filePath: join(dir, 'x.txt') }
+    saveDialog.result = { canceled: false, filePath: join(dir, 'x.txt') }
     const r = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'ok', 12 as unknown as string)).result
     expect(r).toBe(join(dir, 'x.txt'))
-    expect(lastSave()?.defaultPath).toBe('code.txt')
+    expect(saveDialog.lastOptions?.defaultPath).toBe('code.txt')
   })
 
   it('audits { messageId, bytes, extension } ONLY; no audit row or log line carries the content, the info string or the path', async () => {
@@ -757,7 +743,7 @@ describe('chat:saveCodeBlock (#286)', () => {
     try {
       const dir = tempRoot('codeblock')
       const dest = join(dir, 'code.html')
-      dialogState.saveResult = { canceled: false, filePath: dest }
+      saveDialog.result = { canceled: false, filePath: dest }
       const content = `<!doctype html>\n<p>${CONTENT_SENTINEL}</p>\n`
       const info = `html title="${INFO_SENTINEL}"`
       const saved = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, content, info)).result

@@ -6,7 +6,7 @@ import { App } from '../../src/renderer/App'
 import { getVisionSession, loadSession, clearVisionSession } from '../../src/renderer/lib/visionSession'
 import type { WorkspaceStateInfo } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
-import { appShellStubs } from '../helpers/app-shell'
+import { LOCKED_ENCRYPTED_WORKSPACE, UNLOCKED_ENCRYPTED_WORKSPACE, appShellStubs } from '../helpers/app-shell'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { selectedImage } from '../helpers/vision-fixtures'
 
@@ -21,18 +21,6 @@ import { selectedImage } from '../helpers/vision-fixtures'
 // shows. What `purgeSessionStores` clears, store by store, is lockPurge.test.ts's; the review
 // store's flush → lock → purge order is ReviewLockSeam.test.tsx's.
 
-const unlockedEncrypted: WorkspaceStateInfo = {
-  state: 'unlocked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
-const lockedState: WorkspaceStateInfo = {
-  state: 'locked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
 
 /** A resident vision session: an image and one answered turn, the content a lock must drop. */
 function seedVisionSession(): void {
@@ -59,12 +47,12 @@ afterEach(() => {
 
 describe('App.lockNow — purges the session stores at the real lock seam (TA-2)', () => {
   it('runs the whole session-store purge when the workspace locks (the vision store emptied), then shows the gate', async () => {
-    const lockWorkspace = vi.fn(async () => lockedState)
+    const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
     // Once the lock shows the gate, App marks it for opt-in measurement runs (benchmark.md "gate_visible").
     const perfMark = vi.fn()
     stubApi(
       appShellStubs({
-        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
         lockWorkspace,
         perfMark
       })
@@ -101,8 +89,8 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
   it('shows the gate with the lost-changes notice when the lock finished at the last snapshot (#855)', async () => {
     stubApi(
       appShellStubs({
-        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
-        lockWorkspace: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: 'working_copy_lost' })),
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
+        lockWorkspace: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...LOCKED_ENCRYPTED_WORKSPACE, lockNotice: 'working_copy_lost' })),
         perfMark: vi.fn()
       })
     )
@@ -128,7 +116,7 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     })
     stubApi(
       appShellStubs({
-        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
         lockWorkspace
       })
     )
@@ -172,10 +160,10 @@ describe('the gate at start (#875)', () => {
   it.each(Object.entries(NOTICE_COPY) as Array<[keyof typeof NOTICE_COPY, (typeof NOTICE_COPY)[keyof typeof NOTICE_COPY]]>)(
     'shows the %s notice on the gate at start, from the workspace state alone (#875, #892)',
     async (notice, key) => {
-      const lockWorkspace = vi.fn(async () => lockedState)
+      const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
       stubApi(
         appShellStubs({
-          getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: notice })),
+          getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...LOCKED_ENCRYPTED_WORKSPACE, lockNotice: notice })),
           lockWorkspace,
           perfMark: vi.fn()
         })
@@ -198,9 +186,9 @@ describe('the gate at start (#875)', () => {
     stubApi(
       appShellStubs({
         getWorkspaceState: vi.fn(
-          async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: notice as WorkspaceStateInfo['lockNotice'] })
+          async (): Promise<WorkspaceStateInfo> => ({ ...LOCKED_ENCRYPTED_WORKSPACE, lockNotice: notice as WorkspaceStateInfo['lockNotice'] })
         ),
-        lockWorkspace: vi.fn(async () => lockedState),
+        lockWorkspace: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE),
         perfMark: vi.fn()
       })
     )

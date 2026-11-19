@@ -212,7 +212,8 @@ export function archiveSource(over: Partial<EvidenceSourceSnapshot> = {}): Evide
 /**
  * The chip-state read-model (one `getEvidenceReviewSummariesForConversation` element) for `makeDetail()`'s review:
  * draft, not outdated, gate 0 of 2. Replaces `summary()` at 27bd0b0d: ReviewEntryPoints.test.tsx:35 (whose defaults
- * these are) and ChatReviewChipBatch.test.tsx:45 (which derived `id` from the message id: pass `id` and `messageId`).
+ * these are) and ChatReviewChipBatch.test.tsx:45 (which derived `id` from the message id: pass `id` and `messageId`);
+ * at 11e3a5f7 TranscriptReviewUndoGuard.test.tsx:46 and SkillOffer.test.tsx:76 (#898).
  */
 export function makeSummary(over: Partial<EvidenceReviewSummary> = {}): EvidenceReviewSummary {
   return {

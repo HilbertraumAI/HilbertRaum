@@ -2,8 +2,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { screen, cleanup } from '@testing-library/react'
 import { t } from '../../src/shared/i18n'
-import type { EvidenceReviewSummary, SkillOffer } from '../../src/shared/types'
+import type { SkillOffer } from '../../src/shared/types'
 import { makeMessage, userMsg } from '../helpers/chat-fixtures'
+import { makeSummary } from '../helpers/evidenceReview'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { renderTranscript, type TranscriptProps } from '../helpers/transcript'
 
@@ -73,16 +74,7 @@ describe('per-answer skill offer (#80)', () => {
   it('is DISABLED with the explanatory title when the reply carries an evidence review (AUD-01)', () => {
     const onRunWithSkill = vi.fn()
     const answer = makeMessage({ skillOffer: OFFER })
-    const summary: EvidenceReviewSummary = {
-      id: 'r1',
-      conversationId: 'c1',
-      messageId: answer.id,
-      title: 'Review',
-      status: 'draft',
-      outdated: false,
-      gate: { eligible: false, requiredTotal: 1, decidedTotal: 0 },
-      updatedAt: '2026-08-09T10:00:00.000Z'
-    }
+    const summary = makeSummary({ messageId: answer.id })
     renderOffer({
       messages: [answer],
       onRunWithSkill,

@@ -12,27 +12,18 @@ import { join } from 'node:path'
 
 const ipcState = vi.hoisted(() => ({
   handlers: new Map() as IpcHandlers,
-  // The export handler's native save dialog, test-controlled; `lastOptions` is what the handler passed.
-  saveDialog: {
-    canceled: true as boolean,
-    filePath: undefined as string | undefined,
-    lastOptions: undefined as Record<string, unknown> | undefined
-  },
   // The REAL print harness on the shared fake hidden window (#563: it fetches through the app's real scheme handler).
   print: { windows: [] as FakePrintWindow[], appListeners: new Map() } as FakePrintElectronState
 }))
+// The export handler's native save dialog, test-controlled; `lastOptions` is what the handler passed.
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', async () => {
   const { fakePrintElectron } = await import('../helpers/fake-print-window')
   const { fakeIpcMain } = await import('../helpers/ipc')
   // The fake `app.getVersion()` is '0.0.0-test': create stamps it into the generation snapshot (IP1 reads it).
   return fakePrintElectron(ipcState.print, {
     ipcMain: fakeIpcMain(ipcState.handlers),
-    dialog: {
-      showSaveDialog: async (options: Record<string, unknown>) => {
-        ipcState.saveDialog.lastOptions = options
-        return { canceled: ipcState.saveDialog.canceled, filePath: ipcState.saveDialog.filePath }
-      }
-    }
+    dialog: { showSaveDialog: saveDialog.showSaveDialog }
   })
 })
 
@@ -416,9 +407,7 @@ describe('vault lock + the D-2 delete-confirm count (EP-1 plan §7 exit gate)', 
 
 describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () => {
   beforeEach(() => {
-    ipcState.saveDialog.canceled = true
-    ipcState.saveDialog.filePath = undefined
-    ipcState.saveDialog.lastOptions = undefined
+    saveDialog.reset()
     ipcState.print.windows.length = 0
     ipcState.print.printToPDF = async () => PDF_BYTES
   })
@@ -432,7 +421,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     })
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
-    ipcState.saveDialog.canceled = true
+    saveDialog.result = { canceled: true }
     const { result } = await invoke(handlers, IPC.exportEvidencePack, created.id, {})
     expect(result).toBeNull()
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
@@ -451,8 +440,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(h.root, 'post-rename-ipc.html')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     // Injected row-insert failure AFTER the pipeline's load (INSERT-only trigger).
     h.db.exec(
       "CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected'); END"
@@ -478,8 +466,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(root, 'unrecorded-ipc.html')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     // The record INSERT fails after the rename, and the unlink that would restore "no file" fails too.
     db.exec("CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected'); END")
     fsState.failRmFor = dest
@@ -505,7 +492,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect((await invoke(handlers, IPC.exportEvidencePack, 42, {})).result).toBeNull()
     expect((await invoke(handlers, IPC.exportEvidencePack, '', {})).result).toBeNull()
     expect((await invoke(handlers, IPC.exportEvidencePack, 'no-such-review', {})).result).toBeNull()
-    expect(ipcState.saveDialog.lastOptions).toBeUndefined() // no dialog for a malformed or unknown id
+    expect(saveDialog.calls).toHaveLength(0) // no dialog for a malformed or unknown id
 
     const { messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
@@ -515,8 +502,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(h.root, 'hostile-options.html')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
       language: 'xx',
       includeReviewerNotes: 'yes',
@@ -546,8 +532,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(h.root, 'pack.pdf')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
       language: 'en',
       format: 'pdf'
@@ -555,11 +540,11 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const record = recordRaw as EvidenceExportRecord
 
     // The dialog offered BOTH formats, requested one first, suggested name .pdf.
-    expect(ipcState.saveDialog.lastOptions?.filters).toEqual([
+    expect(saveDialog.lastOptions?.filters).toEqual([
       { name: 'PDF', extensions: ['pdf'] },
       { name: 'HTML', extensions: ['html'] }
     ])
-    expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.pdf$/)
+    expect(String(saveDialog.lastOptions?.defaultPath)).toMatch(/\.pdf$/)
 
     // The REAL print harness ran: it loaded the pack FROM MEMORY on the print host under a
     // random token (#563), served once by the app's own scheme handler — and nothing beside the
@@ -597,15 +582,15 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     // 'PDF' (wrong case) is NOT normalized — the boundary reads it as the default.
-    ipcState.saveDialog.canceled = true
+    saveDialog.result = { canceled: true }
     await invoke(handlers, IPC.exportEvidencePack, created.id, { format: 'PDF' })
-    expect(ipcState.saveDialog.lastOptions?.filters).toEqual([
+    expect(saveDialog.lastOptions?.filters).toEqual([
       { name: 'HTML', extensions: ['html'] },
       { name: 'PDF', extensions: ['pdf'] }
     ])
-    expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
+    expect(String(saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
     // §24.3 (#839 F3): the pack leaves the encrypted workspace; the dialog says so (the macOS sheet shows `message`).
-    expect(ipcState.saveDialog.lastOptions?.message).toBe(tShared('en', 'review.export.encryptionWarning'))
+    expect(saveDialog.lastOptions?.message).toBe(tShared('en', 'review.export.encryptionWarning'))
     expect(h.runtimeTouched).toEqual([])
   })
 })

@@ -9,14 +9,9 @@ import { join } from 'node:path'
 // model cancels the skill runs streaming on it, and a lock or quit cancels the benchmark's speed leg.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
-// A gate a test can set to HOLD the save dialog — and with it a confirmed skill run — open, so
-// the occupancy span can be observed while the run is genuinely in flight.
-const dialogState = vi.hoisted(() => ({
-  saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
-  gate: undefined as Promise<void> | undefined,
-  /** How many save dialogs opened (#606: a cancelled run must never reach one). */
-  calls: 0
-}))
+// The save dialog: its `gate` HOLDS it — and with it a confirmed skill run — open, so the occupancy span can be
+// observed while the run is genuinely in flight; `calls` counts the dialogs (#606: a cancelled run must never reach one).
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
@@ -25,11 +20,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: {
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
-    showSaveDialog: async () => {
-      dialogState.calls++
-      if (dialogState.gate) await dialogState.gate
-      return dialogState.saveResult
-    }
+    showSaveDialog: saveDialog.showSaveDialog
   },
   app: { getVersion: () => '0.0.0-test' }
 }))
@@ -154,9 +145,7 @@ async function pollUntilTerminal(runHandle: string): Promise<SkillRunState> {
 
 beforeEach(() => {
   ipcState.handlers.clear()
-  dialogState.saveResult = { canceled: true }
-  dialogState.gate = undefined
-  dialogState.calls = 0
+  saveDialog.reset()
   inFlightStreams.clear()
 })
 
@@ -196,7 +185,7 @@ describe('startSkillRun — the model-lane guard (#186)', () => {
     const h = await makeHarness('redaction', ['redact_document'], DOC)
     // Hold the save dialog open so the run is genuinely in flight while we look.
     let openDialog!: () => void
-    dialogState.gate = new Promise<void>((resolve) => {
+    saveDialog.gate = new Promise<void>((resolve) => {
       openDialog = resolve
     })
 
@@ -368,7 +357,7 @@ describe('a stop or switch of the chat model mid-run (#606)', () => {
       appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: 'Change Anna to Bea.' })
     }
     const out = join(tempDir(), 'copy.txt')
-    dialogState.saveResult = { canceled: false, filePath: out }
+    saveDialog.result = { canceled: false, filePath: out }
 
     const handle = startedHandle(await startRun(h, tool, true))
     await parked // the locate pass's model request is in flight
@@ -377,7 +366,7 @@ describe('a stop or switch of the chat model mid-run (#606)', () => {
 
     const final = await pollUntilTerminal(handle)
     expect(final.state).toBe('cancelled') // "Stopped. Nothing was saved."
-    expect(dialogState.calls).toBe(0)
+    expect(saveDialog.calls).toHaveLength(0)
     expect(existsSync(out)).toBe(false)
   })
 })
@@ -402,7 +391,7 @@ describe('startSkillRun while a model is starting (#620)', () => {
     const starting = h.runtime.start({ modelId: 'm2', modelPath: '/m2.gguf', contextTokens: 2048 })
 
     expect(refusal(await startRun(h, tool, true))).toBe(t('en', 'main.modelStarting'))
-    expect(dialogState.calls).toBe(0)
+    expect(saveDialog.calls).toHaveLength(0)
 
     loaded()
     await starting
