@@ -1237,15 +1237,18 @@ for (const leg of SCRIPT_LEGS) {
       })
 
       // #893: a hand-wiped drive that kept files beside the workspace, in logs/ or in config/. The pre-flight names each one,
-      // a file in a sub-folder by its folder and a link by its own name (never followed: its target here is an empty folder).
-      // One combined row per leg: a verify run is slow on the Windows runner (#458).
+      // a file in a sub-folder by its folder and a link by its own name (never followed: its target here is an empty folder),
+      // a config file in any case and with any suffix, and a dot file. One combined row per leg: a verify run is slow on the
+      // Windows runner (#458).
       it.skipIf(!toolBuilt)('a used drive: the pre-flight names every leftover (#893)', () => {
         const root = sellableDrive()
         for (const rel of [
           'workspace/hilbertraum.sqlite.recovery',
           'workspace/hilbertraum.sqlite.tmp',
           'workspace/images/a.enc',
+          'workspace/.write-test-1',
           'config/working-copy-lost.json',
+          'config/Workspace.json.tmp',
           'logs/app.log.enc'
         ]) {
           writeDriveFile(root, rel, 'x')
@@ -1263,8 +1266,10 @@ for (const leg of SCRIPT_LEGS) {
           .filter((l) => l.startsWith('    - user data present: '))
         expect(native.sort(), out).toEqual(
           [
+            'config/Workspace.json.tmp',
             'config/working-copy-lost.json',
             'logs/app.log.enc',
+            'workspace/.write-test-1',
             'workspace/hilbertraum.sqlite.recovery',
             'workspace/hilbertraum.sqlite.tmp',
             'workspace/images/*',
