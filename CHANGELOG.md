@@ -133,7 +133,8 @@ from its first public `1.0.0` release onward.
   and its final check now require `workspace/` and `logs/` to hold nothing but empty folders, and
   `config/` to hold no `workspace.json` or `working-copy-lost.json` or a temporary copy of either.
   Each leftover is named, so you know what to delete; a Finder `.DS_Store` in those folders counts
-  too (#893).
+  too. A folder the check cannot open, or a file in the place of one of these folders, is refused
+  as well instead of passing as empty (#893).
 - **A workspace that could not finish opening is no longer reported as damaged.** When unlocking
   failed after the password was accepted, for example because the drive was nearly full while
   the app updated the workspace after an update, the lock screen said the workspace data was

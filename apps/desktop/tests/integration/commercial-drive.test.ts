@@ -9,6 +9,7 @@ import { buildPolicyJson, DRIVE_LAYOUT_DIRS } from '../../src/main/services/driv
 import { writeRuntimeMarker } from '../../src/main/services/assets'
 import type { ModelManifest } from '../../src/shared/manifest'
 import { validManifest, writeDriveFile } from '../helpers/manifest-fixtures'
+import { canMakeUnreadable, makeUnreadable } from '../helpers/unreadable-dir'
 import {
   validateRuntimeSources,
   type KitPlatform,
@@ -739,6 +740,48 @@ describe('assertCommercialDrive', () => {
     const res = await assertCommercialDrive(root, [chat])
     expect(res.checks.noUserData).toBe(false)
     expect(userDataLines(res.problems)).toEqual(['workspace/linked'])
+  })
+
+  /** The lines for what the gate could not look into, without the shared prefix. */
+  const unreadableLines = (problems: string[]): string[] =>
+    problems
+      .filter((p) => p.startsWith('user data unreadable on a drive meant to ship empty: '))
+      .map((p) => p.slice('user data unreadable on a drive meant to ship empty: '.length))
+
+  // #893: a file where one of these folders belongs used to pass, read as an empty folder. The gate cannot look into it.
+  it.each([['workspace'], ['logs'], ['config']])('refuses a file named %s where the folder belongs', async (dir) => {
+    const root = tempDir('hilbertraum-commercial-notdir-')
+    if (dir !== 'config') writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    writeFileSync(join(root, dir), 'x')
+
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.checks.noUserData).toBe(false)
+    expect(unreadableLines(res.problems)).toEqual([`${dir} (not a folder)`])
+  })
+
+  // #893: a folder the gate could not list used to pass as empty. Each is named instead: logs/ and a sub-folder of
+  // workspace/ that hold a file, and a config/ whose policy still opens by its path while the folder cannot be listed.
+  it.skipIf(!canMakeUnreadable)('refuses a folder it cannot list, naming each one', async () => {
+    const root = tempDir('hilbertraum-commercial-unreadable-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    writeDriveFile(root, 'logs/app.log', 'x')
+    writeDriveFile(root, 'workspace/documents/a.enc', 'x')
+    const undo = [
+      makeUnreadable(join(root, 'logs')),
+      makeUnreadable(join(root, 'workspace', 'documents')),
+      makeUnreadable(join(root, 'config'), { traverse: true })
+    ]
+    try {
+      const res = await assertCommercialDrive(root, [chat])
+      expect(res.checks.policyCommercial).toBe(true)
+      expect(res.checks.noUserData).toBe(false)
+      expect(unreadableLines(res.problems)).toEqual(['config/', 'logs/', 'workspace/documents/'])
+      expect(userDataLines(res.problems)).toEqual([])
+    } finally {
+      for (const u of undo) u()
+    }
   })
 
   it('names every leftover of a used drive, in a stable order', async () => {

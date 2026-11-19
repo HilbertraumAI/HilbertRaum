@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, opendirSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import {
@@ -222,6 +222,8 @@ export interface CommercialAssertion {
      * No user data present (a sold drive ships empty — spec §12.2): nothing but empty folders
      * directly in `workspace/` and `logs/`, and no `config/workspace.json*` or
      * `config/working-copy-lost.json*` (#893; `USER_DATA_DIRS`, `USER_DATA_CONFIG_FILES`).
+     * Fail closed: one of those folders, or a folder in `workspace/` or `logs/`, that cannot be
+     * listed, and a file where one of the three folders belongs, fail it too; only a missing one passes.
      */
     noUserData: boolean
     /**
@@ -300,20 +302,62 @@ export interface CommercialAssertion {
   modelResults: ModelVerifyResult[]
 }
 
+/** A look into one folder for the user-data rule: its entries, or why there are none to read. */
+type UserDataListing =
+  | { kind: 'entries'; entries: Dirent[] }
+  | { kind: 'absent' }
+  | { kind: 'not-a-folder' }
+  | { kind: 'unreadable' }
+
+/** Only a missing path (ENOENT) is "nothing there"; any other failure is a look the gate could not take. */
+const lookFailed = (e: unknown): { kind: 'absent' } | { kind: 'unreadable' } =>
+  (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable' }
+
+/**
+ * Lists `dir`, failing closed (#893): a file where the folder belongs, and a folder this process
+ * cannot list or enter (the native pre-flights test the same read + enter rights), are reported,
+ * never read as empty. A link to a folder is followed here, as the app follows it.
+ */
+function listForUserData(dir: string): UserDataListing {
+  try {
+    if (!statSync(dir).isDirectory()) return { kind: 'not-a-folder' }
+    accessSync(dir, fsConstants.R_OK | fsConstants.X_OK)
+    return { kind: 'entries', entries: readdirSync(dir, { withFileTypes: true }) }
+  } catch (e) {
+    return lookFailed(e)
+  }
+}
+
+/** Whether the folder `dir` holds anything, from its first entry alone (a folder of thousands is not read). */
+function firstEntryOf(dir: string): 'empty' | 'held' | 'absent' | 'unreadable' {
+  try {
+    accessSync(dir, fsConstants.R_OK | fsConstants.X_OK)
+    const handle = opendirSync(dir)
+    try {
+      return handle.readSync() === null ? 'empty' : 'held'
+    } finally {
+      handle.closeSync()
+    }
+  } catch (e) {
+    return lookFailed(e).kind
+  }
+}
+
 /**
  * Artifacts that mean a workspace has already been USED (must be absent on a sold drive): the
- * `USER_DATA_DIRS` / `USER_DATA_CONFIG_FILES` rule (#893), sorted so the problem order is stable.
+ * `USER_DATA_DIRS` / `USER_DATA_CONFIG_FILES` rule (#893), each list sorted so the problem order is
+ * stable. `present` names what is there; `unreadable` what the gate could not look into:
+ * `<dir>/` for a folder it cannot list, `<dir> (not a folder)` for a file where the folder belongs.
  */
-function userDataArtifacts(rootPath: string): string[] {
-  // Unreadable or missing → treat as absent; the policy/weight checks still gate the drive.
-  const entries = (dir: string): Dirent[] => {
-    try {
-      return readdirSync(dir, { withFileTypes: true })
-    } catch {
-      return []
-    }
+function userDataArtifacts(rootPath: string): { present: string[]; unreadable: string[] } {
+  const present: string[] = []
+  const unreadable: string[] = []
+  const look = (dir: string): Dirent[] => {
+    const listing = listForUserData(join(rootPath, dir))
+    if (listing.kind === 'not-a-folder') unreadable.push(`${dir} (not a folder)`)
+    if (listing.kind === 'unreadable') unreadable.push(`${dir}/`)
+    return listing.kind === 'entries' ? listing.entries : []
   }
-  const found: string[] = []
   // A created workspace leaves the DB in some state (plaintext, `.enc`, the decrypt and encrypt
   // temps, a lock's `.recovery`, a password change's staged copy and journal), and a crash can
   // leave the WAL/SHM sidecars (plaintext DB pages) that `cleanSidecars` normally shreds — this
@@ -322,16 +366,21 @@ function userDataArtifacts(rootPath: string): string[] {
   // was already initialised, not factory-fresh. A Dirent describes the entry itself, so a link or
   // junction is not a directory here: it is named, and its target is never read.
   for (const dir of USER_DATA_DIRS) {
-    for (const e of entries(join(rootPath, dir))) {
-      if (!e.isDirectory()) found.push(`${dir}/${e.name}`)
-      else if (entries(join(rootPath, dir, e.name)).length > 0) found.push(`${dir}/${e.name}/*`)
+    for (const e of look(dir)) {
+      if (!e.isDirectory()) {
+        present.push(`${dir}/${e.name}`)
+        continue
+      }
+      const held = firstEntryOf(join(rootPath, dir, e.name))
+      if (held === 'held') present.push(`${dir}/${e.name}/*`)
+      else if (held === 'unreadable') unreadable.push(`${dir}/${e.name}/`)
     }
   }
-  for (const e of entries(join(rootPath, 'config'))) {
+  for (const e of look('config')) {
     const name = e.name.toLowerCase()
-    if (USER_DATA_CONFIG_FILES.some((f) => name === f || name.startsWith(`${f}.`))) found.push(`config/${e.name}`)
+    if (USER_DATA_CONFIG_FILES.some((f) => name === f || name.startsWith(`${f}.`))) present.push(`config/${e.name}`)
   }
-  return found.sort()
+  return { present: present.sort(), unreadable: unreadable.sort() }
 }
 
 /**
@@ -427,9 +476,12 @@ export async function assertCommercialDrive(
 
   // --- No user data (spec §12.2) ---
   const userData = userDataArtifacts(rootPath)
-  const noUserData = userData.length === 0
-  for (const path of userData) {
+  const noUserData = userData.present.length === 0 && userData.unreadable.length === 0
+  for (const path of userData.present) {
     problems.push(`user data present on a drive meant to ship empty: ${path}`)
+  }
+  for (const path of userData.unreadable) {
+    problems.push(`user data unreadable on a drive meant to ship empty: ${path}`)
   }
 
   // --- Root license/attribution artifacts present + non-empty (LIC-1, 2026-07-12b) ---

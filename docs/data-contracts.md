@@ -1565,8 +1565,12 @@ head's own weights + KV.
   directly in `workspace/` or `logs/` (`USER_DATA_DIRS`; a file or a link, never followed, is named `<dir>/<name>`, a
   non-empty folder `<dir>/<name>/*`, an empty folder passes) and no `config/workspace.json*` or
   `config/working-copy-lost.json*` (`USER_DATA_CONFIG_FILES`, exact or `<name>.*`, any case); one sorted problem per
-  entry, `user data present on a drive meant to ship empty: <path>`. The builders' native pre-flight states the same
-  rule (`user data present: <path>`; `script-drift.test.ts` pins both lists). The Kit rule (#766): a model SHIPS when it is bundled
+  entry, `user data present on a drive meant to ship empty: <path>`. It fails closed: `workspace/`, `logs/`, `config/`
+  or a folder directly in the first two that cannot be listed (no read or enter right), and a file where one of the
+  three folders belongs, each add `user data unreadable on a drive meant to ship empty: <dir>/` or `<dir> (not a
+  folder)`; only a missing path (ENOENT) passes. A link is what Node's `Dirent` calls one (a symlink, a junction; a
+  cloud placeholder folder is a folder). The builders' native pre-flight states the same rule (`user data present:
+  <path>`, `user data unreadable: <path>`; `script-drift.test.ts` pins both lists). The Kit rule (#766): a model SHIPS when it is bundled
   (`bundled_on_preconfigured_drive`) or has any file on the drive; at least one model is bundled, every shipped weight
   is VERIFIED (`weightsVerified`) and every shipped model's `license_review.status` is `approved` (`licensesApproved` —
   `--accept-license` never overrides it); a manifest with no file on the drive is the in-app catalog and is not checked.

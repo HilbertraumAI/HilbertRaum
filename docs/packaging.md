@@ -761,7 +761,8 @@ final check: THE canonical gate — node apps/desktop/out/tools/assert-commercia
              + runtime install markers match the pin AND record a matching binary hash (#234)
              + exactly one app artifact + the launcher per declared platform (--platforms; #233)
              + no user data: nothing but empty folders in workspace/ and logs/,
-               no config/workspace.json* or config/working-copy-lost.json* (#893)
+               no config/workspace.json* or config/working-copy-lost.json*, and every
+               one of those folders readable (#893)
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
              + root license/attribution artifacts present + non-empty (LIC-1)
 ```
@@ -830,7 +831,8 @@ plaintext off, models must verify, **no phone-home** — model downloads are a p
 but update-checks + telemetry are denied) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
 that **no user data is present** (spec §12.2: `workspace/` and `logs/` hold nothing but empty folders,
 and `config/` holds no `workspace.json*` or `working-copy-lost.json*`; the gate names each leftover,
-and OS litter such as a Finder `.DS_Store` in those folders counts too, #893) **and** that **at least one trusted product skill is
+OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder it cannot list or a
+file in a folder's place fails the check as unreadable, #893) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
 declared platform has exactly one app artifact of the version being built plus its launcher** (#233)
 **and** that **every sidecar binary matches the SHA-256 its install marker records** (#234) — the
@@ -1254,7 +1256,10 @@ These sessions create a workspace, documents and logs. Run them on a scratch dri
 that ships. If they ran on the Kit, wipe it afterwards (delete everything inside `workspace/` and
 `logs/` but keep the two folders, and delete `config/workspace.json*` and
 `config/working-copy-lost.json*`), then run `build-commercial-drive` with `-VerifyOnly`
-(`--verify-only`) again: the sell gate names every file the wipe missed (#893).
+(`--verify-only`) again: the sell gate names every file the wipe missed (#893). On a Mac, Finder
+writes a `.DS_Store` into each folder you open on the stick, and macOS writes `._<name>` companion
+files beside files it copies or tags there (exFAT keeps no extended attributes); the gate counts
+both. Delete them too before that final check, or do not browse `workspace/` and `logs/` in Finder.
 
 1. **Post-package smoke on the produced `.exe`:** import a PDF, a DOCX, and a CSV; create + unlock
    an encrypted workspace (exercises the externalized parser libs and `@noble/hashes` argon2id,

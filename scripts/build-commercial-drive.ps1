@@ -299,7 +299,11 @@ if (Test-Path -LiteralPath $policyPath) {
 # rule (commercial-drive.ts USER_DATA_DIRS / USER_DATA_CONFIG_FILES): every entry directly in these
 # folders is user data -- a file or a link by its own name (a link is never followed), a non-empty
 # folder as <dir>/<name>/* (an empty one is fine) -- and so is a vault descriptor or a
-# working-copy-lost marker in config/, exact or with a suffix, in any case.
+# working-copy-lost marker in config/, exact or with a suffix, in any case. Fail closed: a folder
+# that cannot be listed is "user data unreadable: <dir>/", a file where workspace/, logs/ or config/
+# belongs is "user data unreadable: <dir> (not a folder)"; only a missing one passes. A link is a
+# symbolic link or a junction, as Node's Dirent reads it: other reparse points (a OneDrive or other
+# cloud placeholder folder) are folders.
 $UserDataDirs = @(
   'workspace',
   'logs'
@@ -308,25 +312,44 @@ $UserDataConfigFiles = @(
   'workspace.json',
   'working-copy-lost.json'
 )
-foreach ($udDir in $UserDataDirs) {
-  $udPath = Join-Path $Target $udDir
-  if (-not (Test-Path -LiteralPath $udPath -PathType Container)) { continue }
-  foreach ($ud in @(Get-ChildItem -LiteralPath $udPath -Force -ErrorAction SilentlyContinue)) {
-    $udIsLink = [bool]($ud.Attributes -band [IO.FileAttributes]::ReparsePoint)
-    if (-not $ud.PSIsContainer -or $udIsLink) {
-      $problems += "user data present: $udDir/$($ud.Name)"
-    } elseif (Get-ChildItem -LiteralPath $ud.FullName -Force -ErrorAction SilentlyContinue | Select-Object -First 1) {
-      $problems += "user data present: $udDir/$($ud.Name)/*"
-    }
+# The entries of one folder; none, after naming why, when the gate cannot look into it.
+function Get-UserDataEntries([string]$Rel) {
+  $path = Join-Path $Target $Rel
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+    $script:problems += "user data unreadable: $Rel (not a folder)"
+    return
+  }
+  try {
+    Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop
+  } catch [System.Management.Automation.ItemNotFoundException], [System.IO.DirectoryNotFoundException] {
+    return
+  } catch {
+    $script:problems += "user data unreadable: $Rel/"
   }
 }
-$configDir = Join-Path $Target 'config'
-if (Test-Path -LiteralPath $configDir -PathType Container) {
-  foreach ($cf in @(Get-ChildItem -LiteralPath $configDir -Force -ErrorAction SilentlyContinue)) {
-    foreach ($udc in $UserDataConfigFiles) {
-      if ($cf.Name -eq $udc -or $cf.Name.StartsWith("$udc.", [System.StringComparison]::OrdinalIgnoreCase)) {
-        $problems += "user data present: config/$($cf.Name)"
-      }
+foreach ($udDir in $UserDataDirs) {
+  foreach ($ud in @(Get-UserDataEntries $udDir)) {
+    $udIsLink = $ud.LinkType -eq 'SymbolicLink' -or $ud.LinkType -eq 'Junction'
+    if (-not $ud.PSIsContainer -or $udIsLink) {
+      $problems += "user data present: $udDir/$($ud.Name)"
+      continue
+    }
+    try {
+      $udFirst = Get-ChildItem -LiteralPath $ud.FullName -Force -ErrorAction Stop | Select-Object -First 1
+    } catch [System.Management.Automation.ItemNotFoundException], [System.IO.DirectoryNotFoundException] {
+      continue
+    } catch {
+      $problems += "user data unreadable: $udDir/$($ud.Name)/"
+      continue
+    }
+    if ($udFirst) { $problems += "user data present: $udDir/$($ud.Name)/*" }
+  }
+}
+foreach ($cf in @(Get-UserDataEntries 'config')) {
+  foreach ($udc in $UserDataConfigFiles) {
+    if ($cf.Name -eq $udc -or $cf.Name.StartsWith("$udc.", [System.StringComparison]::OrdinalIgnoreCase)) {
+      $problems += "user data present: config/$($cf.Name)"
     }
   }
 }
