@@ -81,7 +81,7 @@ describe.skipIf(!enabled)('the application menu on real Electron (#912; skips wh
     })
   }, testBudgetMs(60_000))
 
-  it('a released build: no reload, no developer tools, no menu bar; zoom (Ctrl+= too) and close still work', async () => {
+  it('a released build: no reload, no developer tools, no menu bar (Alt included); zoom (Ctrl+= too) and close work', async () => {
     const r = await runBuild('packaged')
     expect(r.rows).toEqual({
       menuBarVisible: false,
@@ -93,12 +93,19 @@ describe.skipIf(!enabled)('the application menu on real Electron (#912; skips wh
       'Ctrl+R': false,
       'Ctrl+Shift+R': false,
       'Ctrl+Shift+I': false,
-      openDevTools: false
+      openDevTools: false,
+      'Alt, Alt+F/E/V/W': false
     })
   }, testBudgetMs(45_000))
 
-  it('a development build (the control): the same keys reload the window and open the developer tools', async () => {
+  it('a development build (the control): the same keys reload, open the developer tools and bring up the bar', async () => {
     const r = await runBuild('dev')
-    expect(r.rows).toMatchObject({ 'Ctrl+=': true, 'Ctrl+R': true, 'Ctrl+Shift+R': true, 'Ctrl+Shift+I': true })
+    expect(r.rows).toMatchObject({
+      'Ctrl+=': true,
+      'Ctrl+R': true,
+      'Ctrl+Shift+R': true,
+      'Ctrl+Shift+I': true,
+      Alt: true
+    })
   }, testBudgetMs(45_000))
 })

@@ -34,7 +34,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts`, `main/app-protocol.ts` + `electron.vite.config.ts` |
 | **The app's pages come from its own `hilbertraum://app/` scheme, not `file://`; the packaged build turns `GrantFileProtocolExtraPrivileges` off** (#560) | `main/app-protocol.ts` (privileges, resolver, headers), `main/install-app-protocol.ts`, `electron-builder.yml` `electronFuses` |
 | **Packaged fuses: no `ELECTRON_RUN_AS_NODE`, no `--inspect`, `app.asar` integrity-checked and the only app source** (#562); a packaged build ignores the dev-server URL | `electron-builder.yml` `electronFuses`, `main/app-protocol.ts` `devRendererUrl` |
-| **A released build has no DevTools and no Reload, Force Reload or Toggle Developer Tools menu item** (#912; Electron has no fuse for either) | `main/window-security.ts` `devToolsAllowed` (main window), `main/app-menu.ts`, both applied in `main/index.ts` |
+| **A released build has no DevTools on the main window and no Reload, Force Reload or Toggle Developer Tools menu item** (#912; Electron has no fuse for either). Hardening, not a boundary: `--remote-debugging-port` still reaches the same `window.api` | `main/window-security.ts` `devToolsAllowed` (main window), `main/app-menu.ts`, both applied in `main/index.ts` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
@@ -260,12 +260,15 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
   so neither the shortcut nor `webContents.openDevTools()` opens them, and its menu
   (`app-menu.ts`) has none of the three items. A development build keeps all three. The hidden
   helper windows keep exactly `SECURE_WINDOW_WEB_PREFERENCES`: they have no shortcut route and
-  nothing opens their DevTools. Chromium's `--remote-debugging-port` and `webContents.debugger` still
-  answer with DevTools off (measured on Electron 43.8.6), so the packaged-app probe and the CDP walks
-  keep working. Pinned by `tests/unit/app-menu.test.ts`, `tests/unit/window-security.test.ts` and,
-  where the Electron binary is present (not CI), `tests/integration/app-menu-electron-smoke.test.ts`
-  (the keys pressed on real Electron: nothing reloads and no DevTools open, even with Toggle
-  Developer Tools put back in the menu).
+  nothing opens their DevTools. This is hardening against a stray shortcut, not a boundary against a
+  local user: Chromium's `--remote-debugging-port` and `webContents.debugger` still answer with
+  DevTools off (measured on Electron 43.8.6), and no fuse governs the port (`architecture.md`
+  "Electron fuses" §7). Anyone who can start the exe with that switch gets `Runtime.evaluate` in the
+  renderer, which is the same `window.api` a DevTools console would hold. The packaged-app probe and
+  the CDP walks use those routes. Pinned by `tests/unit/app-menu.test.ts`,
+  `tests/unit/window-security.test.ts` and, where the Electron binary is present (not CI),
+  `tests/integration/app-menu-electron-smoke.test.ts` (the keys pressed on real Electron: nothing
+  reloads, no DevTools open, and Alt does not bring the hidden bar back).
 
 ### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
 Electron's default with **no** permission handler installed is to **GRANT** every permission

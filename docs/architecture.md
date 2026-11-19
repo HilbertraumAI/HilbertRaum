@@ -16879,6 +16879,9 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
   (`devTools: devToolsAllowed(app.isPackaged)`, `window-security.ts`) and its menu has no Reload,
   Force Reload or Toggle Developer Tools item (`app-menu.ts`); `--remote-debugging-port` and
   `webContents.debugger` still work with DevTools off (measured), so the harnesses keep working.
+  That makes it hardening, not a boundary: a local user who starts the exe with
+  `--remote-debugging-port` reaches the renderer's `window.api` through `Runtime.evaluate` all the
+  same.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

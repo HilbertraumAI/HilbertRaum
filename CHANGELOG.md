@@ -71,8 +71,8 @@ from its first public `1.0.0` release onward.
   Windows and Linux the English menu bar (File, Edit, View, Window) no longer shows, which leaves
   a little more room in the window. Its shortcuts still work: zoom in (Ctrl+Plus), zoom out
   (Ctrl+Minus), actual size (Ctrl+0), full screen (F11), minimize (Ctrl+M) and close (Ctrl+W).
-  Ctrl+= now zooms in too, and so does Ctrl with the + key on a German keyboard. To quit on
-  Windows, close the window (the X or Alt+F4); on Linux, Ctrl+Q still quits (#912).
+  Ctrl+= now zooms in too. To quit on Windows, close the window (the X or Alt+F4); on Linux,
+  Ctrl+Q still quits (#912).
 - **An encrypted workspace written by a newer HilbertRaum is left untouched.** If the workspace's
   own files (`config/workspace.json`, the encrypted data, an interrupted password change) are in a
   format a newer version of the app wrote, for example on a drive where only one computer's copy

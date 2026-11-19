@@ -221,10 +221,11 @@ happens by itself:
    survives searching and filtering, and it is still there when you leave the **AI Model** screen
    and come back. If the window has to reload (the **Reload** button after an unexpected error),
    it is kept too: the screen finds the running download — or the result you haven't dealt with
-   yet — again by itself, and anything you dismissed stays dismissed. **Retry download** re-opens the same confirmation (size, license, address) for
-   exactly that model; it is greyed out with the reason when downloads are switched off, the
-   file is no longer offered, or the model turns out to be on this drive already. **Dismiss** clears the panel and puts the result back on the model's
-   own card, where its Resume button is.
+   yet — again by itself, and anything you dismissed stays dismissed. **Retry download**
+   re-opens the same confirmation (size, license, address) for exactly that model; it is greyed
+   out with the reason when downloads are switched off, the file is no longer offered, or the
+   model turns out to be on this drive already. **Dismiss** clears the panel and puts the result
+   back on the model's own card, where its Resume button is.
 4. The file is checksum-verified before the app will use it — a corrupted download is
    discarded automatically, never silently kept.
 

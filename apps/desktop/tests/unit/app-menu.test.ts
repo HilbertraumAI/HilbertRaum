@@ -47,7 +47,7 @@ describe('the application menu template (#912)', () => {
     }
   )
 
-  it.each(PLATFORMS)('on %s a hidden second zoom in answers Ctrl+= (US) and the German Ctrl++ (#912 S7)', (platform) => {
+  it.each(PLATFORMS)('on %s a hidden second zoom in answers Ctrl+= (#912 S7)', (platform) => {
     // Electron maps the zoom-in role's own `CommandOrControl+Plus` to Ctrl+Shift+= only (measured).
     expect(ZOOM_IN_ALIAS_ACCELERATOR).toBe('CommandOrControl+=')
     for (const packaged of [true, false]) {
@@ -56,6 +56,15 @@ describe('the application menu template (#912)', () => {
       )
       expect(aliases).toEqual([{ role: 'zoomIn', accelerator: 'CommandOrControl+=', visible: false }])
     }
+  })
+
+  // Review N-5: on Windows and Linux a label with `&` (an access key, `&File`) lets Alt+F bring the hidden bar up and
+  // keep it there (measured; Electron 43's role labels carry none). The released build's bar must stay hidden, Alt
+  // included.
+  it.each(PLATFORMS)('on %s no label in the released template carries an access-key ampersand', (platform) => {
+    const labelled = flatten(appMenuTemplate({ platform, packaged: true })).filter((item) => item.label !== undefined)
+    expect(labelled.length).toBeGreaterThan(0) // the custom View menu has its own label
+    for (const item of labelled) expect(item.label, item.label).not.toContain('&')
   })
 
   it('the menu bar: hidden for good in a released build on Windows and Linux, until Alt in a development build; none in a macOS window', () => {

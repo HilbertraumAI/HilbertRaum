@@ -13,7 +13,9 @@
 //   route to the 200 % the accessibility posture names (docs/design-guidelines.md); without a menu it is gone.
 // - Window: minimize (Ctrl+M) and close (Ctrl+W, which goes through the close guard like the X).
 // - A hidden second zoom in on `CommandOrControl+=`: Electron maps `CommandOrControl+Plus` to Ctrl+Shift+= only,
-//   so a US keyboard's Ctrl+= and the German keyboard's Ctrl++ (the same key, unshifted) did not zoom in.
+//   so Ctrl+= on a US keyboard did not zoom in (measured at the virtual-key level; the German keyboard's Ctrl and +
+//   is the same virtual key, which a physical key press on a packaged build still owes). On macOS the hidden item
+//   keeps its key too (`acceleratorWorksWhenHidden` defaults to true there).
 //
 // The labels are Electron's English role labels. On Windows and Linux a released build hides the menu bar for good
 // (`mainWindowMenuBar`), so no English bar shows in a translated interface and the window gains the bar's height;

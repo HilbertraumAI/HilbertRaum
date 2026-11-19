@@ -170,6 +170,28 @@ app.whenReady().then(async () => {
       await until(() => devtoolsOpened > 0, 'Ctrl+Shift+I opening DevTools')
       rows['Ctrl+Shift+I'] = true
     }
+
+    // The hidden bar and Alt (review N-5). A released build hides the bar for good: a single Alt and Alt with the
+    // first letter of a menu leave it hidden (a mnemonic such as `&File` would bring it up). A development build
+    // hides it until Alt: the same Alt shows it, the control that the key reaches the bar at all. Last: a bar that
+    // shows takes the keys after it.
+    const alt = (letter?: string): void => {
+      const keyCode = letter ?? 'Alt'
+      // `rawKeyDown` is the key-down Chromium hands to the menu bar's Alt handling; the typings name only `keyDown`.
+      const down = { type: 'rawKeyDown', keyCode, modifiers: ['alt'] } as unknown as Electron.KeyboardInputEvent
+      win.webContents.sendInputEvent(down)
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers: letter ? ['alt'] : [] })
+    }
+    if (packaged) {
+      alt()
+      for (const letter of ['F', 'E', 'V', 'W']) alt(letter)
+      await barrier()
+      rows['Alt, Alt+F/E/V/W'] = win.isMenuBarVisible()
+    } else {
+      alt()
+      await until(() => win.isMenuBarVisible(), 'Alt showing the development build’s menu bar')
+      rows.Alt = true
+    }
     win.removeAllListeners('close')
     win.destroy()
     writeResult('done')

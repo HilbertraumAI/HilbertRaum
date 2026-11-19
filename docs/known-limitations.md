@@ -2773,7 +2773,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   exits still cannot wait for the window: a Windows shutdown, restart or log-off with the app open
   (Windows ends the app; it locks at once, and a change not yet saved is lost), and a crash. A
   reload of the window, which closes nothing and so saves nothing first, exists only in a
-  development build since #912 (View → Reload or Ctrl+R); the released app has no reload.
+  development build since #912 (View → Reload or Ctrl+R); the released app has no reload
+  shortcut or menu item. The error screen's own Reload button, shown after an unexpected error, still
+  reloads without that save.
   Quitting (Ctrl+Q on Linux, ⌘Q on macOS) closes the hidden helper windows while the window still
   saves, so an OCR run in progress stops at once and ends as cancelled, even when you then pick Keep
   open; and an evidence-pack PDF export in progress is stopped by Ctrl+Q or ⌘Q itself (the print's
