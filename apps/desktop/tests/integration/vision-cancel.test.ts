@@ -129,6 +129,8 @@ describe('VisionService.analyze refuses while a workspace lock is under way (AUD
     expect(getStatus).not.toHaveBeenCalled()
     expect(createRuntime).not.toHaveBeenCalled()
     expect(emit.token).not.toHaveBeenCalled()
+    expect(emit.done).not.toHaveBeenCalled()
+    expect(emit.error).not.toHaveBeenCalled()
     expect(service.hasActiveJob()).toBe(false)
   })
 })

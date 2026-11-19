@@ -21,7 +21,6 @@ import { selectedImage } from '../helpers/vision-fixtures'
 // shows. What `purgeSessionStores` clears, store by store, is lockPurge.test.ts's; the review
 // store's flush → lock → purge order is ReviewLockSeam.test.tsx's.
 
-
 /** A resident vision session: an image and one answered turn, the content a lock must drop. */
 function seedVisionSession(): void {
   loadSession(

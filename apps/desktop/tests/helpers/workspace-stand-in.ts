@@ -1,7 +1,8 @@
 // The workspace stand-in for a partial AppContext (#897): every member `workspaceAdmitsWork` reads, the unlock-session
 // counter the epoch-guarded paths read, the lock latch the lock and quit paths arm, and the document-work members.
-// `WorkspaceStandIn` picks each signature off the real `WorkspaceController`, so a member the product starts to read, or
-// one whose signature changes, fails the typecheck HERE, once: the suites' `as unknown as AppContext` casts hide a
+// `WorkspaceStandIn` picks each signature off the real `WorkspaceController`, so a member whose signature changes fails the
+// typecheck HERE, once; a member the product starts to read must be added to the pick (and then to every suite at once,
+// through this one helper), since the suites' `as unknown as AppContext` casts hide a
 // partial literal from the typecheck, and a product `try`/`catch` can turn its TypeError into a silent skip. Type-only
 // imports, so it loads in any suite, with or without a hoisted `vi.mock('electron', …)`.
 import type { DocumentCipher, WorkspaceAdmission, WorkspaceController } from '../../src/main/services/workspace-vault'
