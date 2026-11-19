@@ -186,23 +186,53 @@ describe('saving before the window closes (#888)', () => {
   })
 
   // Code review round 3 (item 1): a write a lane holder still has out (here a bulk sweep: nothing queued, no item
-  // flush) is not known to be written, and a sweep that failed persisted nothing: both are review changes the close
-  // would lose, so the window answers unsaved and main asks.
-  it.each<[string, (held: Promise<never>) => Promise<never>]>([
-    ['is still out when the save gives up', (held) => held],
-    ['has failed', () => Promise.reject(new Error('disk I/O error'))]
-  ])('a bulk sweep that %s answers unsaved', async (what, call) => {
+  // flush) is not known to be written, so the window answers unsaved and main asks.
+  it('a bulk sweep that is still out when the save gives up answers unsaved', async () => {
     vi.useFakeTimers()
     const held = deferred<never>()
-    await openReview({ applyEvidenceReviewBulkAction: vi.fn(() => call(held.promise)) })
+    await openReview({ applyEvidenceReviewBulkAction: vi.fn(() => held.promise) })
     const ask = mainSide()
     void bulkMarkUndecidedFollowUp()
     await vi.advanceTimersByTimeAsync(0)
-    if (what === 'has failed') expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error' })
     let answer: SaveBeforeCloseResult | null | undefined
     void ask().then((a) => (answer = a))
     await vi.advanceTimersByTimeAsync(BEFORE_CLOSE_SAVE_BOUND_MS)
     expect(answer).toEqual({ unsaved: true })
+  })
+
+  // #917: a sweep that failed persisted nothing (main applies it in one transaction) and the screen shows the
+  // database's values again, so no save can write anything of it. Counted as unsaved, it made the dialog's default,
+  // Try again, ask the same question again for ever. Its error line is the screen's, and it stays.
+  it('a bulk sweep that has failed answers saved: the close writes nothing, and the error line stays on screen (#917)', async () => {
+    const main = await openReview({
+      applyEvidenceReviewBulkAction: vi.fn(() => Promise.reject(new Error('disk I/O error')))
+    })
+    const ask = mainSide()
+    await bulkMarkUndecidedFollowUp()
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error', saveError: 'disk I/O error' })
+    expect(await ask()).toEqual({ unsaved: false })
+    expect(main.order).toEqual([]) // the close-time save wrote nothing and read nothing
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error', saveError: 'disk I/O error' })
+  })
+
+  // #917: what dropping the failed sweep from the answer must keep — a note typed while the sweep's call was out is a
+  // real queued edit: the close writes it, and only then answers saved.
+  it('a failed sweep with a note typed during its call: the close writes the note and answers saved (#917)', async () => {
+    vi.useFakeTimers()
+    const call = deferred<never>()
+    const main = await openReview({ applyEvidenceReviewBulkAction: vi.fn(() => call.promise) })
+    const sweeping = bulkMarkUndecidedFollowUp()
+    await vi.advanceTimersByTimeAsync(0)
+    editReviewItem('p1', { reviewerNote: 'typed during the sweep' })
+    call.reject(new Error('disk I/O error'))
+    await sweeping
+    const ask = mainSide()
+    let answer: SaveBeforeCloseResult | null | undefined
+    void ask().then((a) => (answer = a))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(main.order).toEqual(['item:p1'])
+    expect(main.db().items[0]!.reviewerNote).toBe('typed during the sweep')
+    expect(answer).toEqual({ unsaved: false })
   })
 
   // Code review round 3 (item 3): a best-effort registrant (the language pick) is waited for, but one that throws

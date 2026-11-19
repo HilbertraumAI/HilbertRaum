@@ -1875,6 +1875,86 @@ describe('reviewSession — Mark ready, Export and Reopen wait until every edit 
     }
   )
 
+  // #917: in the row above, edit 2's own timer flush was waiting for the lane while the action's save failed. It then
+  // wrote edit 2 again and succeeded, so a moment after the refusal the error line was gone: Mark ready and Reopen had
+  // refused without a word, and Export's message blamed the export. The timer is no retry now: it stands down, the
+  // error line and Try again stay, and the user's Try again lets the action through.
+  it.each<[Action]>([['markReady'], ['export'], ['reopen']])(
+    '%s: after a refusal over a failed write, the waiting timer does not write behind it: the error line stays until Try again, and then it goes through (#917)',
+    async (a) => {
+      const main = await setup(a)
+      edit(a, 1)
+      const write1 = main.holdNext(writeOf(a))
+      const acting = run(a)
+      await vi.advanceTimersByTimeAsync(0)
+      edit(a, 2)
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // edit 2's timer fires and waits for the lane
+      main.failNext(writeOf(a))
+      write1.release()
+      const result = await acting
+      expect(result === false || (result as { outcome: string }).outcome === 'failed').toBe(true)
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // the waiting timer's turn
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error', saveError: 'disk I/O error' })
+      expect(main.order).toEqual(a === 'reopen' ? ['head', 'head'] : ['item:p1', 'item:p2']) // nothing written behind it
+      expect(main.atCall).toEqual([])
+      await retryReviewSave()
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+      expect(await run(a)).toEqual(
+        a === 'markReady' ? { outcome: 'ready' } : a === 'export' ? { outcome: 'exported' } : true
+      )
+      expect(main.atCall.map((c) => c.call)).toEqual([a])
+      expect(edit2SavedAtCall(a, main)).toBe(true)
+    }
+  )
+
+  // #917: the timer that stood down leaves the failed edit queued; it must not be stranded there. A new edit arms a new
+  // timer, which started after the failure and so writes everything queued.
+  it('after that refusal, a new edit’s own timer writes it and the failed edit, and Mark ready then goes through (#917)', async () => {
+    const main = await setup('markReady')
+    edit('markReady', 1)
+    const write1 = main.holdNext('item')
+    const acting = markReviewReady()
+    await vi.advanceTimersByTimeAsync(0)
+    edit('markReady', 2)
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    main.failNext('item')
+    write1.release()
+    expect(await acting).toEqual({ outcome: 'failed' })
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    editReviewItem('p1', { reviewerNote: 'typed after the refusal' })
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+    expect(await markReviewReady()).toEqual({ outcome: 'ready' })
+  })
+
+  // #917 code review: the stand-down is for a timer with nothing newer than the failed write. An edit typed while an
+  // earlier write is out arms its own timer; when that earlier write then fails during the timer's wait for the lane,
+  // the timer still writes: the new edit and the failed one. Round 1 stood it down too, and the new edit stayed queued.
+  it.each<['item' | 'head', string[]]>([
+    ['item', ['item:p1', 'item:p1', 'item:p2']],
+    ['head', ['head', 'head']]
+  ])(
+    'an edit typed while an earlier write is out, which then fails: its own timer writes both (%s, #917 code review)',
+    async (kind, writes) => {
+      const main = await setup('markReady')
+      if (kind === 'item') editReviewItem('p1', { decision: 'supported' }) // A
+      else editReviewHead({ generalNote: 'A' })
+      const writeA = main.holdNext(kind, 'fail')
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // A's timer: A's write is out
+      expect(main.order).toEqual([writes[0]])
+      if (kind === 'item') editReviewItem('p2', { reviewerNote: 'typed while A was being written' }) // B
+      else editReviewHead({ reviewerLabel: 'B' })
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // B's timer fires and waits for the lane
+      writeA.release() // A fails; the lane is free again
+      await vi.advanceTimersByTimeAsync(0)
+      expect(main.order[0]).toBe(writes[0]) // the failed write
+      expect([...main.order].sort()).toEqual(writes) // then B's timer wrote B and A again (one head write holds both)
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+      expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+    }
+  )
+
   it.each<['markReady' | 'reopen']>([['markReady'], ['reopen']])(
     '%s: a general note typed while main runs it stays on screen and is saved after it',
     async (a) => {

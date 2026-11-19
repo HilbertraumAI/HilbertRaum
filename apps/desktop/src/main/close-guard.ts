@@ -11,8 +11,9 @@ import type { SaveBeforeCloseResult } from '../shared/types'
 // bound has passed. A change that could not be saved asks first (owner call G-2): Try again (the
 // default), Keep open (Esc) or Close anyway.
 //
-// Every quit closes the window before `will-quit` (File → Exit, Cmd+Q, Dock Quit, and
-// `window-all-closed`'s own quit after an X), and `will-quit` is where the lock starts
+// Every quit closes the window before `will-quit` (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit), and an X
+// quits only after the window has closed (on Windows and Linux the main window's `closed` starts the
+// quit, `lifecycle.onMainWindowClosed`, #910). `will-quit` is where the lock starts
 // (`performShutdown` → `beginLock`), so a save this guard waits for always lands before the lock.
 // A close that came from a quit (`before-quit` fired first) quits again after the save: the
 // prevented close cancelled that quit, and on macOS the app would otherwise stay open with no
@@ -66,6 +67,11 @@ export interface CloseGuardDeps {
 export interface CloseGuard {
   /** The main window's `close` listener. */
   onClose(event: CloseEventLike): void
+  /**
+   * #910 (macOS): did this guard let the window's close go through as part of a quit (⌘Q, Dock Quit: a quit asked
+   * before or during the save, which the guard then re-ran)? Read at the window's `closed`; false for a plain close.
+   */
+  closedForQuit(): boolean
 }
 
 /** Resolves in a later macrotask (after the current event and every microtask it queued). */
@@ -79,6 +85,8 @@ const nextTask = (): Promise<void> => new Promise((resolve) => setImmediate(reso
  */
 export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
   let phase: 'open' | 'saving' | 'closing' = 'open'
+  /** The close the guard let through was for a quit (`closedForQuit`). */
+  let closingForQuit = false
   /** The answer, or null for a request that throws or rejects (review round 2). */
   const askSafely = (): Promise<SaveBeforeCloseResult | null> => {
     try {
@@ -135,6 +143,7 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
           return
         }
         phase = 'closing'
+        closingForQuit = fromQuit
         try {
           if (fromQuit) deps.quit()
           else deps.closeWindow()
@@ -142,7 +151,8 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
           deps.log.warn('close: closing the window failed', { error: String(err) })
         }
       })()
-    }
+    },
+    closedForQuit: () => closingForQuit
   }
 }
 
@@ -290,8 +300,9 @@ export interface QuitRequests {
 }
 
 /**
- * Records every quit (File → Exit, Cmd+Q, Dock Quit, `window-all-closed`'s own quit): each fires
- * `before-quit` before it closes the windows. One per app (`index.ts`, module scope); every main
+ * Records every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit): each fires `before-quit` before it
+ * closes the windows. The quit an X starts on Windows and Linux (#910) fires it only after the main
+ * window has closed, so no guard reads it. One per app (`index.ts`, module scope); every main
  * window's guard reads it. The print harness has its own `before-quit` hook (`print-pdf.ts`).
  */
 export function trackQuitRequests(app: { on(event: 'before-quit', listener: () => void): unknown }): QuitRequests {

@@ -227,9 +227,10 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     await settleAndCleanZimTransients(ctx, log)
   }, log)
   sweepPlaintextOps(ctx, log)
-  // #238: by now no window is left (Windows/Linux quit after window-all-closed), so this line
-  // is the only visible state of a quit that is locking — and it lands in the encrypted log
-  // because it precedes the flush below.
+  // #238: by now no window is left (every quit closes the windows before `will-quit`; on
+  // Windows/Linux the main window's last close starts the quit, #910), so this line is the only
+  // visible state of a quit that is locking — and it lands in the encrypted log because it
+  // precedes the flush below.
   log.info('quit: locking workspace')
   // Flush the encrypted diagnostics log to disk while the vault key is still live (lock() zeroes it).
   // No-op for plaintext_dev (that log is appended in real time).
@@ -360,8 +361,17 @@ export interface AppLifecycleDeps {
   exit: (code: number) => void
   /** `createWindow` (a macOS Dock click fires `activate` with no window open). */
   createWindow: () => void
-  /** `BrowserWindow.getAllWindows().length`. */
-  windowCount: () => number
+  /**
+   * How many MAIN windows are open: 0 or 1 (`mainWindow === null ? 0 : 1`), never
+   * `BrowserWindow.getAllWindows().length` (#910). The hidden helper windows (the OCR rasterizer,
+   * the evidence-pack print window) are windows too, and counting them kept a macOS Dock click
+   * from bringing the window back while an OCR run went on.
+   */
+  mainWindowCount: () => number
+  /** `process.platform`: macOS keeps the app open with no window, Windows and Linux quit. */
+  platform: NodeJS.Platform
+  /** `app.quit()`: the quit the main window's last close starts on Windows and Linux (#910). */
+  quit: () => void
   /**
    * `killRegisteredSidecarChildren` — reaps, synchronously and right before `exit`, whatever a
    * deadline-abandoned sidecar stop left behind (the CODE-11 crash-path reaper, reused). A no-op
@@ -374,6 +384,20 @@ export interface AppLifecycleDeps {
 export interface AppLifecycleHandlers {
   onWillQuit: (event: WillQuitEventLike) => void
   onActivate: () => void
+  /**
+   * The main window is gone (its `closed` event, after the close guard let the close through,
+   * #888). On Windows and Linux that quits the app (#910): Electron's own quit
+   * (`window-all-closed`) waits for EVERY window, and a hidden helper window (an OCR run, a PDF
+   * export's print) kept the app running with no window and the workspace unlocked, then quit
+   * synchronously when the helper went — which cancelled the OCR run it had just finished. The
+   * quit closes the helpers and goes through `before-quit` → `will-quit` like any other quit
+   * (measured on Electron 43.8.6). On macOS the app stays open with no window (the platform
+   * convention); a Dock click brings the window back (`onActivate`, `mainWindowCount`), except while
+   * a quit that closed the window is still closing the helper windows. `closedForQuit` is the close
+   * guard's own answer for this close (`CloseGuard.closedForQuit()`): it let the close go through as
+   * part of a quit (⌘Q, Dock Quit), after the save.
+   */
+  onMainWindowClosed: (closedForQuit: boolean) => void
   /**
    * The OS is ending the session (#248): Windows `session-end` on the main window (a shutdown,
    * restart or log-off — cannot be prevented; the process is killed once the handler returns),
@@ -413,6 +437,12 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
   let shuttingDown = false
   /** The session-end lock ran (nothing awaits; a later `will-quit` has nothing left to do). */
   let sessionEndLocked = false
+  /**
+   * #910: the main window's last close started the quit (Windows, Linux), or closed through one (macOS ⌘Q or
+   * Dock Quit). Until its `will-quit` the quit is still closing the helper windows (a few ms, measured; longer
+   * during a print), and a second launch or a Dock click then must not open a window into it.
+   */
+  let quitAfterLastClose = false
   return {
     onWillQuit: (event) => {
       // #238: EVERY will-quit is prevented — the first one starts the teardown, any later one
@@ -448,9 +478,24 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
         })
     },
     onActivate: () => {
-      // #238: no fresh window once a quit has begun.
-      if (shuttingDown) return
-      if (deps.windowCount() === 0) deps.createWindow()
+      // #238: no fresh window once a quit has begun (#910: also the quit the last close started).
+      if (shuttingDown || quitAfterLastClose) return
+      // #910: main windows only — a hidden helper window is not a window the user can use.
+      if (deps.mainWindowCount() === 0) deps.createWindow()
+    },
+    onMainWindowClosed: (closedForQuit) => {
+      // #910: Windows and Linux quit when the main window closes, whatever helper windows are
+      // left; the quit closes them. During a quit that is already running the call adds nothing
+      // (Electron ignores a nested `app.quit()`: one `before-quit`, one `will-quit`, measured).
+      if (deps.platform === 'darwin') {
+        // macOS stays open after the red button. A window its guard closed for a quit is not coming back: that
+        // quit runs to `will-quit`. (The guard's answer for this close, never the app-level quit flag, which
+        // only a guard's consume() clears: a stale one would block every later Dock click.)
+        if (closedForQuit) quitAfterLastClose = true
+        return
+      }
+      quitAfterLastClose = true
+      deps.quit()
     },
     onSessionEnd: (event) => {
       // #248: once only, and never beside a running quit teardown (see the factory comment).

@@ -34,6 +34,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts`, `main/app-protocol.ts` + `electron.vite.config.ts` |
 | **The app's pages come from its own `hilbertraum://app/` scheme, not `file://`; the packaged build turns `GrantFileProtocolExtraPrivileges` off** (#560) | `main/app-protocol.ts` (privileges, resolver, headers), `main/install-app-protocol.ts`, `electron-builder.yml` `electronFuses` |
 | **Packaged fuses: no `ELECTRON_RUN_AS_NODE`, no `--inspect`, `app.asar` integrity-checked and the only app source** (#562); a packaged build ignores the dev-server URL | `electron-builder.yml` `electronFuses`, `main/app-protocol.ts` `devRendererUrl` |
+| **A released build has no DevTools on the main window and no Reload, Force Reload or Toggle Developer Tools menu item** (#912; Electron has no fuse for either). Hardening, not a boundary: `--remote-debugging-port` still reaches the same `window.api` | `main/window-security.ts` `devToolsAllowed` (main window), `main/app-menu.ts`, both applied in `main/index.ts` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
@@ -250,6 +251,24 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
   build, but the OCR window loaded `${ELECTRON_RENDERER_URL}/ocr.html` whenever it was set (measured:
   a packaged build fetched the page from a local server named that way). Both windows now ask
   `devRendererUrl(app.isPackaged)` in `app-protocol.ts`, the only reader of the variable.
+- **No DevTools and no reload in a released build (#912).** No fuse governs DevTools or the menu.
+  Until #912 the app set no menu, so Electron's default one shipped: Toggle Developer Tools
+  (Ctrl+Shift+I) opened a console that holds the renderer's `window.api`, and Reload (Ctrl+R) and
+  Force Reload (Ctrl+Shift+R) reloaded the window without a close, so the save before closing
+  (#888) never ran and a review change not yet saved was lost. A released build now sets
+  `devTools: false` on the main window (`devToolsAllowed(app.isPackaged)`, `window-security.ts`),
+  so neither the shortcut nor `webContents.openDevTools()` opens them, and its menu
+  (`app-menu.ts`) has none of the three items. A development build keeps all three. The hidden
+  helper windows keep exactly `SECURE_WINDOW_WEB_PREFERENCES`: they have no shortcut route and
+  nothing opens their DevTools. This is hardening against a stray shortcut, not a boundary against a
+  local user: Chromium's `--remote-debugging-port` and `webContents.debugger` still answer with
+  DevTools off (measured on Electron 43.8.6), and no fuse governs the port (`architecture.md`
+  "Electron fuses" §7). Anyone who can start the exe with that switch gets `Runtime.evaluate` in the
+  renderer, which is the same `window.api` a DevTools console would hold. The packaged-app probe and
+  the CDP walks use those routes. Pinned by `tests/unit/app-menu.test.ts`,
+  `tests/unit/window-security.test.ts` and, where the Electron binary is present (not CI),
+  `tests/integration/app-menu-electron-smoke.test.ts` (the keys pressed on real Electron: nothing
+  reloads, no DevTools open, and Alt does not bring the hidden bar back).
 
 ### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
 Electron's default with **no** permission handler installed is to **GRANT** every permission
@@ -1716,13 +1735,16 @@ re-encrypts (the bullet below).
   only visible state of a quit. Pinned by `tests/unit/shutdown.test.ts` (B1 inverted, the
   activate guard, the deadline with the lock outside it).
 - **A window close saves first (#888, follow-ups wave 2).** The main window's first `close` (an X,
-  Alt+F4, the taskbar, Ctrl+W, File → Exit, ⌘Q, the macOS red button) is `preventDefault()`ed by a
+  Alt+F4, the taskbar, Ctrl+W, Ctrl+Q on Linux, ⌘Q, the macOS red button; File → Exit where a
+  development build shows its menu bar, #912) is `preventDefault()`ed by a
   per-window guard (`createMainWindowCloseGuard` over `createCloseGuard`, `main/close-guard.ts`,
   electron-free); the window is asked to save (`app:saveBeforeClose` → `app:saveBeforeCloseDone`,
   data-contracts "Core IPC") and closes exactly once on its answer or at `CLOSE_SAVE_BOUND_MS` (8 s,
   longer than the window's own bounds: the review store's 6 s inside the bridge's 6.5 s, which
   answers "unsaved" for any registrant that throws or has not settled, except a best-effort one (the
-  language pick); the review store counts a write still out on its lane and a failed bulk sweep too;
+  language pick); the review store counts a write still out on its lane too, but not a bulk sweep
+  that failed: main applies a sweep in one transaction, so a failed one persisted nothing and leaves
+  nothing to save, and asking about it made Try again ask for ever (#917);
   so a write that hangs is reported by the window, not guessed by main, with more than a second to
   spare for a minimized window's throttled timers). A close during the save is prevented and
   ignored. A close that came from a quit (`before-quit` fired first; the app-level
@@ -1748,16 +1770,52 @@ re-encrypts (the bullet below).
   the window's id from `trustedSenders` and resets `mainWindow`, so a `second-instance` no longer
   calls a destroyed window: on macOS after the red button, and on every OS during the quit teardown
   (up to 30 s after the window closed), where it threw into `uncaughtException` → `emergencyLock`
-  beside the running teardown → exit 1. Pinned by `tests/unit/close-guard.test.ts` and, where the
-  Electron binary is present (not CI), `tests/integration/close-guard-electron-smoke.test.ts` on
-  real Electron. Not yet checked on a Mac (the red button, ⌘Q, a logout).
+  beside the running teardown → exit 1. *The last close quits (#910).* On Windows and Linux that
+  `closed` handler starts the quit itself (`lifecycle.onMainWindowClosed`, `main/shutdown.ts`).
+  Electron's own quit (`window-all-closed`) waits for every window, and the OCR rasterizer and the
+  evidence-pack print window are hidden windows: an X during an OCR run left the app running with
+  no window and the workspace unlocked (the opted-in local API still answering, the model still
+  loaded, a session end reaching only the helper window, which has no lock listener), and the
+  helper's final `destroy()` then quit synchronously, which cancelled the OCR run it had just
+  finished. Now the quit closes the helpers and runs `before-quit` → `will-quit` like any quit
+  (measured on Electron 43.8.6): an OCR run is cancelled there and persists nothing (GAP-7), and a
+  print fails through its own `before-quit` hook. `window-all-closed` stays as a fallback; Electron
+  does not emit it during a quit. When the rasterizer's window goes away mid-run
+  (`services/ocr/window-gone.ts`), the run ends one task after the window's `destroyed` event, not
+  after its 60 s step timeout, whatever step it was on (a page waiting, a recognition still running
+  before the next page request, the page load; code review: only a waiting page used to): as an
+  abort when a quit was asked (`before-quit`), so the
+  OCR task ends `cancelled` and persists nothing on every quit path, and as a failure when nothing
+  asked to quit. The quits the close guard holds while the window saves (Ctrl+Q on Linux, ⌘Q or
+  Dock Quit on macOS, File → Exit in a development build) close the helper window before their
+  `will-quit` (+17 ms with an instant answer, +320 ms with a 300 ms one, measured), or never reach
+  it (Keep open); before the follow-ups wave 3 review the run ended there as a failure, with an
+  audit "failed" entry. After an X the quit's `will-quit` runs before that task (measured), so its
+  cancel, which also empties the task queue, comes first. On a held quit a task queued behind the
+  OCR run can start while the window saves; the quit's `will-quit` then cancels it (residual). macOS
+  stays open with no window after the red button: `activate` counts the main window only
+  (`mainWindowCount`, no longer `getAllWindows()`, which counted the hidden helpers, so a Dock click
+  during an OCR run opened nothing), and a `second-instance` with no main window takes the same
+  path once the app is ready. That path opens nothing once the last close has started the quit
+  (Windows, Linux) or the window closed for one (⌘Q or Dock Quit: the close guard's own answer for
+  that close, `closedForQuit()`, never the app-level quit flag, which only a guard's consume clears):
+  until its `will-quit` that quit is still closing the helper windows, and no window opens into it.
+  Pinned by `tests/unit/close-guard.test.ts`, `tests/unit/shutdown.test.ts`,
+  `tests/unit/ocr-rasterizer-harness.test.ts`, `tests/integration/ocr-task.test.ts` and, where the
+  Electron binary is present (not CI), `tests/integration/close-guard-electron-smoke.test.ts` on real
+  Electron (with the production quit rule and window watch bundled, and a hidden helper window open
+  at the X and at a quit the guard holds). Not yet checked on a Mac (the red button, ⌘Q, a logout,
+  a Dock click during an OCR run).
 - **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
   owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above
   never ran and the process was killed with the working DB still plaintext on the drive — the next
   launch shredded the live working copy and the session delta was lost. The event Electron does
   emit is a WINDOW event, `session-end` (after which the process is killed): `main/index.ts`
-  registers it on the main window (win32) → `onSessionEnd` on the lifecycle factory
+  registers it on the main window (win32; Electron 43 emits it on every window and then ends the
+  process at once, with no `will-quit`, measured with synthetic end-session messages, so the main
+  window's listener is enough while that window exists, and since #910 the app no longer runs on
+  without it) → `onSessionEnd` on the lifecycle factory
   (`main/shutdown.ts`), which runs `emergencyLock` — the `uncaughtException` crash path's
   synchronous best-effort lock, extracted and now shared: arm the lock latch, fire-and-forget the
   local-API stop, flush the encrypted log, `workspace.shutdown()` (re-encrypt + shred; a

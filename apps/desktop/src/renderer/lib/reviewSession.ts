@@ -32,7 +32,10 @@ import { friendlyIpcError } from './errors'
 //  - `flushReviewSession()` is the one-pass flush (debounce timer, screen exit). Whatever must
 //    run only once EVERYTHING is saved drains instead (`drainReviewSaves`: passes until nothing
 //    is queued or a write fails, #889): mark ready, export, reopen, a review switch, Try again,
-//    the pre-lock seam and the save before the window closes (#888, the same bounded call).
+//    the pre-lock seam and the save before the window closes (#888, the same bounded call). A
+//    failed write is not retried behind the caller's back: a debounce timer that waited for the
+//    lane while a write failed, with no edit made after that write left, stands down (#917), so
+//    the failure stays on screen until the user acts (a new edit, Try again).
 //
 // Null-result contract (plan §14 P1 handoff): every mutation returns null/false for unknown
 // ids and refused inputs — treated here as a stale-handle refusal (`saveState: 'error'`),
@@ -203,9 +206,26 @@ export async function flushReviewSessionBeforeLock(): Promise<void> {
 /**
  * #837 (review round 5): a FAILED sweep is shown until the user acts. Its error line stays
  * through a later automatic save (an edit queued during the sweep's call is still written after
- * it); a new edit, Try again, or a switch/lock clears it.
+ * it); a new edit, Try again, or a switch/lock clears it. Screen state only (#917): the sweep is
+ * one transaction in main and persisted nothing, so it leaves nothing a save could write, and the
+ * close does not ask about it (`hasUnsavedReviewEdits`).
  */
 let sweepFailed = false
+
+/**
+ * #917: how many item or head writes have failed (a count, never reset). A debounce timer's flush
+ * reads it when it starts and again once the lane is free; a failure in between means it waited
+ * across a failed write (`flushFromTimer`).
+ */
+let writeFailures = 0
+/**
+ * #917 (code review): every new item or head edit counts here (a sequence, never reset). A write
+ * leaves with every edit counted so far (`doFlush`), and a failed one records that count in
+ * `failedWriteCovered`: an edit counted after it is newer than the failed write.
+ */
+let editSeq = 0
+/** The `editSeq` the latest failed write left with. */
+let failedWriteCovered = 0
 
 function notify(): void {
   for (const fn of listeners) fn()
@@ -237,7 +257,7 @@ function armTimer(): void {
   clearTimer()
   timer = setTimeout(() => {
     timer = null
-    void flushReviewSession()
+    void flushFromTimer()
   }, REVIEW_SAVE_DEBOUNCE_MS)
 }
 
@@ -247,15 +267,17 @@ function hasUnsavedEdits(): boolean {
 }
 
 /**
- * #888: is any review change not yet known to be written — queued, in a write still out on the
+ * #888: is any review change not yet known to be written — queued, or in a write still out on the
  * lane (an item flush, or a holder's call: a bulk sweep, a delete, Mark ready or Reopen; one the
- * close-time save's bound gave up on may yet fail), or a bulk sweep that failed (it persisted
- * nothing)? A link or unlink holds the lane only until its call is sent (`sendLinkCall`), so its
- * answer is not waited for: the call is already with main. What the window answers main before it
- * closes.
+ * close-time save's bound gave up on may yet fail)? A link or unlink holds the lane only until its
+ * call is sent (`sendLinkCall`), so its answer is not waited for: the call is already with main.
+ * What the window answers main before it closes. A bulk sweep that FAILED is not counted (#917):
+ * main applies it in one transaction, so it persisted nothing, the screen already shows the
+ * database's values again, and nothing a save can write is left of it. Counting it made the close
+ * dialog's Try again (its default) ask the same question again for ever.
  */
 export function hasUnsavedReviewEdits(): boolean {
-  return hasUnsavedEdits() || laneBusy() || sweepFailed
+  return hasUnsavedEdits() || laneBusy()
 }
 
 // #888: closing or quitting the app saves first — the same bounded drain Lock now runs, then the
@@ -528,6 +550,7 @@ export function editReviewItem(itemId: string, patch: EvidenceReviewItemPatch): 
   if (itemEditingClosed()) return
   applyItemLocally(itemId, patch)
   pendingItems.set(itemId, mergeItemPatch(pendingItems.get(itemId), patch))
+  editSeq++
   sweepFailed = false // the user acted after a failed sweep
   setState({ saveState: 'pending', saveError: null })
   armTimer()
@@ -545,6 +568,7 @@ export function editReviewHead(patch: EvidenceReviewPatch): void {
   sweepFailed = false // the user acted after a failed sweep
   setState({ detail: applyHeadPatch(detail, safe), saveState: 'pending', saveError: null })
   pendingHead = { ...pendingHead, ...safe }
+  editSeq++
   armTimer()
 }
 
@@ -553,10 +577,30 @@ export function editReviewHead(patch: EvidenceReviewPatch): void {
  * await — a timer-started run replacing `flushInFlight` mid-wait must also be awaited,
  * FIX-2b) and no lane holder runs (`sweepLane`, the one write lane), then drains whatever
  * is pending at that point — ONE pass: an edit made while it writes is left for the next
- * (`drainReviewSaves` runs passes). Loss-free: see the module header.
+ * (`drainReviewSaves` runs passes). Loss-free: see the module header. The screen exit and the
+ * pre-sweep flush write after a failure they waited across; the debounce timer has its own
+ * `flushFromTimer` (#917), so a caller handing this one on as a callback cannot reach its rule. The
+ * lane wait is written out in both, not shared through a helper: with the lane free nothing is
+ * awaited, so the first write goes out in the caller's own task.
  */
 export async function flushReviewSession(): Promise<void> {
   while (laneBusy()) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
+  if (!hasUnsavedEdits()) return
+  await flushPass()
+}
+
+/**
+ * #917: the debounce timer is no retry. When a write failed while this flush waited for the lane
+ * (a drain's last write, say) and no edit was made after that write left, it stands down: writing
+ * the failed patch again behind the caller's back used to turn a refused Mark ready, Export or
+ * Reopen into one with no error line left a moment later. The failure stands, with its error line,
+ * until the user acts: an edit made after the failed write left (code review: also one typed while
+ * that write was out) arms a timer that writes everything queued; Try again drains.
+ */
+async function flushFromTimer(): Promise<void> {
+  const failures = writeFailures
+  while (laneBusy()) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
+  if (writeFailures !== failures && editSeq <= failedWriteCovered) return
   if (!hasUnsavedEdits()) return
   await flushPass()
 }
@@ -570,6 +614,7 @@ async function doFlush(): Promise<void> {
   pendingItems = new Map()
   pendingHead = null
   clearTimer()
+  const covered = editSeq // this write leaves with every edit counted so far (#917)
   let failed = false
   let staleHandle = false
   for (const [itemId, patch] of items) {
@@ -585,6 +630,8 @@ async function doFlush(): Promise<void> {
     } catch (e) {
       if (token !== openToken) return // a post-purge re-merge would resurrect note plaintext
       failed = true
+      writeFailures++
+      failedWriteCovered = covered
       // Re-merge UNDER newer pending fields: a field edited again mid-flight keeps its
       // newer pending value; only fields with no newer edit return to pending.
       pendingItems.set(itemId, { ...patch, ...pendingItems.get(itemId) })
@@ -599,6 +646,8 @@ async function doFlush(): Promise<void> {
     } catch (e) {
       if (token !== openToken) return
       failed = true
+      writeFailures++
+      failedWriteCovered = covered
       pendingHead = { ...head, ...(pendingHead ?? {}) }
       if (state.saveError == null) setState({ saveError: friendlyIpcError(e) })
     }

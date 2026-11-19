@@ -2806,7 +2806,9 @@ grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*
 ## 16. Minimum window — design record (2026-11-15, #803)
 
 The main window can't be made smaller than **880×600** (`minWidth` / `minHeight`,
-`main/index.ts`); on Windows that leaves 864×535 for the content. Every screen has to work there
+`main/index.ts`); on Windows that leaves 864×561 for the content since #912 hid the menu bar
+(864×535 with the bar; both measured on a bare Electron 43.8.6 window with the app's menu rule, at
+100 % scaling, not yet in the running app). Every screen has to work there
 in every interface language. What #803 changed for it (open-issues wave owner call G-9 and the
 owner rounds in the `architecture.md` i18n legend):
 

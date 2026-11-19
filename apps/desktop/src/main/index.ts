@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,11 +12,13 @@ import { installPermissionRequestHandler, installPermissionCheckHandler } from '
 import { installNavigationGuard } from './services/navigation-guard'
 import { appPageUrl, createMainWindowNavigationPredicate, devRendererUrl } from './app-protocol'
 import { installAppProtocol, registerAppSchemePrivileges } from './install-app-protocol'
+import { appMenuTemplate, mainWindowMenuBar } from './app-menu'
 import {
   NO_PROXY_SWITCH,
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
   createWindowOpenPolicy,
+  devToolsAllowed,
   disableSpellCheckerDownloads
 } from './window-security'
 import { getSettings } from './services/settings'
@@ -149,6 +151,12 @@ if (!isPrimaryInstance) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
+    } else if (app.isReady()) {
+      // #910: no main window — macOS after the red button, or a quit teardown on any OS. The Dock
+      // click's path brings the window back, and opens none once a quit has begun (`onActivate`).
+      // Electron emits `second-instance` only after `ready` (its docs guarantee it); the check only keeps
+      // `createWindow` from ever running before `ready`, when no window can be made.
+      lifecycle.onActivate()
     }
   })
 }
@@ -942,6 +950,9 @@ function createWindow(): void {
   // carries build/icon.ico (electron-builder embeds it), so build/ is not inside the
   // asar — this path only resolves in dev and on Linux, where the explicit icon matters.
   const iconPath = join(app.getAppPath(), 'build', 'icon.png')
+  // #912 (`app-menu.ts`): on Windows and Linux a released build hides the menu bar for good and a
+  // development build until Alt is pressed; the menu's shortcuts work either way.
+  const menuBar = mainWindowMenuBar({ platform: process.platform, packaged: app.isPackaged })
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -954,11 +965,15 @@ function createWindow(): void {
     // theme tokens — --bg light/dark — before first paint; this only avoids a
     // mismatched flash while the window comes up).
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f7f8fa',
+    autoHideMenuBar: menuBar === 'autoHide',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      ...SECURE_WINDOW_WEB_PREFERENCES
+      ...SECURE_WINDOW_WEB_PREFERENCES,
+      // #912: no DevTools in a released build (window-security.ts); this window only.
+      devTools: devToolsAllowed(app.isPackaged)
     }
   })
+  if (menuBar === 'hidden') mainWindow.setMenuBarVisibility(false)
 
   // Content-Security-Policy as a response header (defence in depth on top of the
   // index.html meta tag, spec §3.5). The strings live in window-security.ts (TS-2),
@@ -1004,7 +1019,9 @@ function createWindow(): void {
   // (Electron's `app` docs) — it is a WINDOW event, `session-end`, after which the process is
   // killed. Lock the workspace synchronously in the handler (the crash path's `emergencyLock`,
   // shared closure with the quit handlers so it can never run beside a quit teardown). The
-  // window exists for the whole unlocked session on Windows (`window-all-closed` quits).
+  // window exists for the whole unlocked session on Windows: its last close quits the app (#910,
+  // `lifecycle.onMainWindowClosed` below), and Electron emits `session-end` on every window, so
+  // this one listener is enough.
   if (process.platform === 'win32') mainWindow.on('session-end', lifecycle.onSessionEnd)
 
   // #888: every close of this window (X, Alt+F4, the taskbar, Ctrl+W, File → Exit, Cmd+Q, the
@@ -1027,9 +1044,12 @@ function createWindow(): void {
   // The window is gone: its sender id is no longer trusted, and `mainWindow` no longer points at a
   // destroyed window, which `second-instance` would call: on macOS the app stays open, and on every
   // OS a second launch can arrive during the quit teardown (up to 30 s after the window closed).
+  // #910: then the app quits on Windows and Linux, even while a hidden helper window (an OCR run, a
+  // PDF export's print) is still open; macOS stays open with no window (`shutdown.ts`).
   win.on('closed', () => {
     trustedSenders.delete(senderId)
     if (mainWindow === win) mainWindow = null
+    lifecycle.onMainWindowClosed(closeGuard.closedForQuit())
   })
 
   // Open external links in the OS browser, never inside the app window — policy in
@@ -1069,7 +1089,10 @@ const lifecycle = createAppLifecycleHandlers({
   emergencyLock: () => emergencyLock(ctx),
   exit: (code) => app.exit(code),
   createWindow,
-  windowCount: () => BrowserWindow.getAllWindows().length,
+  // #910: the main window only; the hidden helper windows do not count.
+  mainWindowCount: () => (mainWindow === null ? 0 : 1),
+  platform: process.platform,
+  quit: () => app.quit(),
   killSidecarChildren: killRegisteredSidecarChildren,
   log
 })
@@ -1104,6 +1127,12 @@ app.whenReady().then(() => {
   const protocolT0 = performance.now()
   const appFiles = installAppProtocol(join(__dirname, '../renderer'))
   perfMark('app_protocol_installed', { ms: perfMs(protocolT0), files: appFiles })
+  // #912: the app's own menu (`app-menu.ts`) instead of Electron's default one, whose View → Reload
+  // drops a review change not saved yet and whose Toggle Developer Tools opens a console with
+  // `window.api`; a released build has neither. Set before the first window, which takes it.
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(appMenuTemplate({ platform: process.platform, packaged: app.isPackaged }))
+  )
   createWindow()
 
   app.on('activate', lifecycle.onActivate)
@@ -1115,9 +1144,10 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())
 })
 
-// #888: every quit (File → Exit, Cmd+Q, Dock Quit, `window-all-closed`'s own quit) fires
-// `before-quit` before it closes the windows. Each main window's close guard reads and clears this
-// app-level flag: a close it prevents cancels that quit, so the guard quits again after the save.
+// #888: every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit) fires `before-quit` before it closes the
+// windows. Each main window's close guard reads and clears this app-level flag: a close it prevents
+// cancels that quit, so the guard quits again after the save. The quit an X starts on Windows and
+// Linux (#910) comes after the main window has closed, so no guard reads it.
 const quitRequests = trackQuitRequests(app)
 
 app.on('will-quit', lifecycle.onWillQuit)
@@ -1141,6 +1171,8 @@ process.on('unhandledRejection', (reason) => {
   log.warn('Unhandled rejection', { reason: String(reason) })
 })
 
+// A fallback only (#910): on Windows and Linux the main window's `closed` already quit, and Electron
+// does not emit this event during a quit. It still keeps macOS open with no window.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

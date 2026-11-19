@@ -14313,7 +14313,13 @@ with one asks first (#888: Try again / Keep open / Close anyway).
 (`drainReviewSaves`) takes the write lane and saves in passes inside it until nothing is queued
 or a write fails (at most four, the valve against typing that never stops), and resolves still
 holding the lane, so its verdict is read after the last write and no waiting timer write can
-take the queue first or fail after the caller went ahead. Mark ready, export, reopen, a review
+take the queue first or fail after the caller went ahead — nor write after the caller refused:
+the debounce timer's flush stands down when a write failed while it waited for the lane (a
+`writeFailures` count read before and after the wait) and no edit was made after that write left
+(an edit sequence the write records; code review: an edit typed while it was out still gets its
+own timer's save, with the failed patch), so a refused Mark ready, Export or Reopen
+keeps its error line and Try again until the user acts (#917; before, the timer wrote the failed
+edit again and the line was gone a moment later). Mark ready, export, reopen, a review
 switch, Try again, the pre-lock save and the save before the window closes (#888) share it. When the passes run out with an edit still
 queued, Mark ready and export refuse as after a failed save but with no error (the line still
 says "Saving…" and the timer writes the edit); reopen goes ahead, since only head fields can be
@@ -16871,6 +16877,13 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
 - Fuse 2 on until the downloaders trust the OS store (§3, #564).
 - `--remote-debugging-port` has no fuse. Refusing it in a packaged build would also refuse the
   packaged smoke harnesses.
+- DevTools have no fuse either. Since #912 a packaged build turns them off on the main window
+  (`devTools: devToolsAllowed(app.isPackaged)`, `window-security.ts`) and its menu has no Reload,
+  Force Reload or Toggle Developer Tools item (`app-menu.ts`); `--remote-debugging-port` and
+  `webContents.debugger` still work with DevTools off (measured), so the harnesses keep working.
+  That makes it hardening, not a boundary: a local user who starts the exe with
+  `--remote-debugging-port` reaches the renderer's `window.api` through `Runtime.evaluate` all the
+  same.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

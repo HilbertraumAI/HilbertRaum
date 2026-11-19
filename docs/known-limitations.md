@@ -2800,18 +2800,24 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   every lock path takes. Closing or quitting the app is different since #888: it saves first, with
   the same bounded save (giving up after about 6 seconds), so a change made less than a second
   before closing (the auto-save waits 600 ms) is kept, and so is a language just picked in Settings.
-  A change it cannot save asks first: Try again, Keep open, or Close anyway, which drops it. Three
+  A change it cannot save asks first: Try again, Keep open, or Close anyway, which drops it. Two
   exits still cannot wait for the window: a Windows shutdown, restart or log-off with the app open
-  (Windows ends the app; it locks at once, and a change not yet saved is lost), a crash, and a
-  reload of the window (View → Reload or Ctrl+R in the default window menu), which closes nothing
-  and so saves nothing first. A quit the app holds back to ask (File → Exit or ⌘Q, then Keep open,
-  or a slow Try again) has already closed the hidden helper windows, so an OCR run in progress fails
-  (possibly only after its 60-second step timeout); and an evidence-pack PDF export in progress is
-  stopped by File → Exit or ⌘Q itself (the print's own `before-quit` hook), even when you then pick
-  Keep open. Both can be started again. On macOS, a log-out or shutdown with the app open may be
-  interrupted once while the window saves: the order of the system's quit and its shutdown event is
-  unverified (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF export), and a
-  log-out or shutdown with the app open.
+  (Windows ends the app; it locks at once, and a change not yet saved is lost), and a crash. A
+  reload of the window, which closes nothing and so saves nothing first, exists only in a
+  development build since #912 (View → Reload or Ctrl+R); the released app has no reload
+  shortcut or menu item. The error screen's own Reload button, shown after an unexpected error, still
+  reloads without that save.
+  Quitting (Ctrl+Q on Linux, ⌘Q on macOS) closes the hidden helper windows while the window still
+  saves, so an OCR run in progress stops at once and ends as cancelled, even when you then pick Keep
+  open; and an evidence-pack PDF export in progress is stopped by Ctrl+Q or ⌘Q itself (the print's
+  own `before-quit` hook), even when you then pick Keep open. Both can be started again. On
+  Windows and Linux, closing the window quits the app, so closing it during an OCR run or a PDF
+  export stops that run the way quitting does (#910; before, the app went on running with no window
+  and the workspace unlocked, and then threw the finished OCR run away); start it again the next
+  time you open the app. On macOS, a log-out or shutdown with the app open may be interrupted once
+  while the window saves: the order of the system's quit and its shutdown event is unverified
+  (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF export), a Dock click during
+  an OCR run (it should bring the window back, #910), and a log-out or shutdown with the app open.
 
 ## Local API ([`local-api.md`](local-api.md) · [`architecture.md`](architecture.md) "Local API endpoint — design record")
 

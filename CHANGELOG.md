@@ -65,6 +65,14 @@ from its first public `1.0.0` release onward.
   Copy report on the Performance screen copy the report in your language, then a line "--- English ---", then
   the same report in English, so the people helping you can read it. In English and German you
   get one report, as before (#812).
+- **Ctrl+R no longer reloads the window, and the menu bar is gone on Windows and Linux.** Ctrl+R
+  and Ctrl+Shift+R reloaded the window, which could lose a review change that was not saved yet,
+  and Ctrl+Shift+I opened the developer tools. Neither does anything in the released app now. On
+  Windows and Linux the English menu bar (File, Edit, View, Window) no longer shows, which leaves
+  a little more room in the window. Its shortcuts still work: zoom in (Ctrl+Plus), zoom out
+  (Ctrl+Minus), actual size (Ctrl+0), full screen (F11), minimize (Ctrl+M) and close (Ctrl+W).
+  Ctrl+= now zooms in too. To quit on Windows, close the window (the X or Alt+F4); on Linux,
+  Ctrl+Q still quits (#912).
 - **An encrypted workspace written by a newer HilbertRaum is left untouched.** If the workspace's
   own files (`config/workspace.json`, the encrypted data, an interrupted password change) are in a
   format a newer version of the app wrote, for example on a drive where only one computer's copy
@@ -316,11 +324,17 @@ from its first public `1.0.0` release onward.
   blanks the note on screen, and a change typed while Try again reloads the review stays. While
   Mark review ready runs, the passages can briefly not be edited (#889, #901).
 - **Closing or quitting HilbertRaum right after a review change no longer loses it.** Closing
-  the window, File → Exit or Cmd+Q now saves the review changes and a language just picked in
-  Settings before the app closes. If a change cannot be saved, for example because the drive is
-  full, the app asks first: Try again, Keep open, or Close anyway. Before, a change made in the
-  last second, or one whose save had failed, was lost without a word. A Windows shutdown or
+  the window, Ctrl+Q on Linux or Cmd+Q on macOS now saves the review changes and a language just
+  picked in Settings before the app closes. If a change cannot be saved, for example because the
+  drive is full, the app asks first: Try again, Keep open, or Close anyway. Before, a change made
+  in the last second, or one whose save had failed, was lost without a word. A Windows shutdown or
   log-off with the app open still cannot wait for this (#888).
+- **Closing the window while a scan is being made searchable now quits HilbertRaum and locks
+  the workspace.** On Windows and Linux, closing the window during text recognition (OCR) or a
+  PDF export left the app running with no window and the workspace unlocked until the run ended,
+  and the finished recognition was then thrown away. Closing the window now stops the run, the
+  same as quitting, and the workspace locks; start it again the next time. On macOS, clicking the
+  Dock icon during the run now opens the window again (#910).
 - **A failed skill export no longer destroys the file you chose to replace.** The transactions
   and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
   straight onto the chosen file: a full drive or another failure part-way through left a

@@ -33,6 +33,20 @@ export const SECURE_WINDOW_WEB_PREFERENCES = Object.freeze({
 }) satisfies Readonly<WebPreferences>
 
 /**
+ * #912: the main window's DevTools switch (its `webPreferences`, beside the spread above): off in a
+ * released build, on in a development build. Electron has no DevTools fuse; with the switch off,
+ * neither Ctrl+Shift+I nor `webContents.openDevTools()` opens them, and a DevTools console would
+ * otherwise hold the renderer's `window.api`. The CDP routes the packaged-app probe and the dev
+ * walks drive (`--remote-debugging-port`, `webContents.debugger`) still answer with it off
+ * (measured on Electron 43.8.6). Main window only: the two hidden helper windows have no shortcut
+ * route and nothing opens their DevTools, and their preferences stay exactly the shared constant
+ * (pinned in three tests).
+ */
+export function devToolsAllowed(packaged: boolean): boolean {
+  return !packaged
+}
+
+/**
  * #567: Chromium's command-line switch for "never use a proxy". Without it the browser engine
  * follows the OS proxy settings, and with "Automatically detect settings" on (the Windows
  * default) it requests `http://wpad/wpad.dat` at start (4 requests and 16 name lookups in 15 s),

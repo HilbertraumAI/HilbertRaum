@@ -1306,6 +1306,15 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    bump or a local `npm run package:win`, from `apps/desktop`: set `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar`
    and `HILBERTRAUM_PACKED_EXE=release/win-unpacked/HilbertRaum.exe`, then
    `npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`.
+12. **The menu and DevTools of the packaged build (#912).** On Windows and Linux the window has no
+   menu bar, and Alt does not bring one up. Ctrl+R, Ctrl+Shift+R and Ctrl+Shift+I do nothing (no
+   reload, no developer tools). Ctrl+= and Ctrl+Shift+= zoom in (on a German keyboard, Ctrl and
+   the `+` key), Ctrl+- zooms out, Ctrl+0 resets, F11 toggles full screen, Ctrl+M minimizes, and
+   Ctrl+W closes through the save before closing. On Linux, Ctrl+Q quits. On a Mac: ⌘C and ⌘V
+   work in a text field, ⌘Q quits through the save before closing, and ⌘R does nothing. The
+   off-screen real-Electron row (`tests/integration/app-menu-electron-smoke.test.ts`) presses the
+   Windows keys against the production menu with `webContents.sendInputEvent`, but only a packaged
+   build and a physical keyboard prove the shipped binary.
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 

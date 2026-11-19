@@ -6,6 +6,8 @@ import {
   createWindowSaveRequest,
   type ConfirmWindow
 } from '../../src/main/close-guard'
+import { createAppLifecycleHandlers } from '../../src/main/shutdown'
+import { watchRunWindowGone } from '../../src/main/services/ocr/window-gone'
 import { EVENTS, IPC } from '../../src/shared/ipc'
 
 // REAL-Electron smoke runner for #888 — NOT a test file. `tests/integration/close-guard-electron-smoke.test.ts`
@@ -14,6 +16,15 @@ import { EVENTS, IPC } from '../../src/shared/ipc'
 // real `ipcMain` and the real `app` quit sequence, and records every lifecycle event in order into a result
 // JSON. What the unit suite's fakes model (a prevented close cancels a quit, `win.close()` emits `close` again,
 // `event.sender` is the window's own `webContents`), this proves on Chromium.
+//
+// #910: the window's `closed` runs the PRODUCTION rule, `createAppLifecycleHandlers(...).onMainWindowClosed`
+// (`src/main/shutdown.ts`, bundled from source; only that handler is used): on Windows and Linux the main window's
+// last close quits, so an X ends in `closed → before-quit → will-quit`, and Electron's `window-all-closed` (kept
+// below as index.ts keeps it, a fallback) never fires during that quit.
+//
+// The helper window stands in for the OCR rasterizer's: the PRODUCTION `watchRunWindowGone`
+// (`src/main/services/ocr/window-gone.ts`) watches it, and `helper:run-aborted` / `helper:run-failed` records how a
+// run there would end. The result is written at `will-quit`, so an outcome that comes after it is not listed.
 //
 // The page stands in for the preload: it answers `app:saveBeforeClose` on `app:saveBeforeCloseDone` with
 // `{ requestId, unsaved }` (the preload's own reply is tests/unit/preload-save-before-close.test.ts's). The
@@ -30,6 +41,10 @@ import { EVENTS, IPC } from '../../src/shared/ipc'
 //                   unsaved after 300 ms → the dialog must appear (Close anyway)
 //   loading         win.close() in the same tick `loadURL()` resolves, while `isLoading()` is still true:
 //                   not asked (a page still loading holds no edit), closed at once
+//   helper          as x, with a hidden, skip-taskbar helper window open at the X (the OCR rasterizer's and the
+//                   print window's shape, #910): the quit the close starts closes it
+//   quit-helper     as quit, with that helper open: the quit closes it while the guard still holds the main
+//                   window for its save, so the run ends before `will-quit` (review SF-1)
 
 const [resultPath, scenario] = process.argv.slice(-2)
 const t0 = Date.now()
@@ -78,6 +93,34 @@ app.whenReady().then(async () => {
   session.defaultSession.setSpellCheckerEnabled(false)
   const webPreferences = { nodeIntegration: true, contextIsolation: false, sandbox: false }
   const win = new BrowserWindow({ show: false, webPreferences })
+  if (scenario === 'helper' || scenario === 'quit-helper') {
+    const helper = new BrowserWindow({ show: false, skipTaskbar: true, webPreferences })
+    helper.on('closed', () => log('helper:closed'))
+    await helper.loadURL(page(''))
+    watchRunWindowGone({
+      app,
+      webContents: helper.webContents,
+      isWindowDestroyed: () => helper.isDestroyed(),
+      failPage: (err) => {
+        log(`helper:run-${err.name === 'AbortError' ? 'aborted' : 'failed'}`)
+        return true
+      },
+      abortError: () => new DOMException('PDF rasterization aborted', 'AbortError'),
+      log: console
+    })
+  }
+  // The production quit rule (#910). Only `onMainWindowClosed` is used; the runner's own `will-quit` above ends it.
+  const lifecycle = createAppLifecycleHandlers({
+    performShutdown: async () => undefined,
+    emergencyLock: () => undefined,
+    exit: (code) => app.exit(code),
+    createWindow: () => undefined,
+    mainWindowCount: () => (win.isDestroyed() ? 0 : 1),
+    platform: process.platform,
+    quit: () => app.quit(),
+    killSidecarChildren: () => undefined,
+    log: console
+  })
   let intruder: BrowserWindow | null = null
   const dropIntruder = (): void => {
     if (intruder && !intruder.isDestroyed()) intruder.destroy()
@@ -145,7 +188,7 @@ app.whenReady().then(async () => {
     },
     closeWindow: () => {
       log('guard:closeWindow')
-      dropIntruder() // whatever happened, it must not keep the app alive
+      dropIntruder() // whatever happened, it is not needed any more (the quit would close it too, #910)
       if (!win.isDestroyed()) win.close()
     },
     quit: () => {
@@ -166,9 +209,12 @@ app.whenReady().then(async () => {
     guard.onClose({ preventDefault: () => ((held = true), e.preventDefault()) })
     log(`close#${closes}:${held ? 'held' : 'through'}`)
   })
-  win.on('closed', () => log('closed'))
+  win.on('closed', () => {
+    log('closed')
+    lifecycle.onMainWindowClosed(guard.closedForQuit())
+  })
 
-  if (scenario === 'quit') app.quit()
+  if (scenario === 'quit' || scenario === 'quit-helper') app.quit()
   else win.close()
   if (scenario === 'xx') setTimeout(() => win.close(), 50)
 })
