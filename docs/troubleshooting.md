@@ -423,11 +423,13 @@ last time it was locked. Any changes made after that are lost; everything before
 lost".
 
 If the message says HilbertRaum **couldn't lock your workspace because the drive was full**, the
-drive had less free space than the lock needed when the app closed (room for the session's working
-files). That is how a quit on a full drive ends (see "Could not lock the workspace" above). Make
+drive had less free space than a lock of that session needs (room for the session's working
+files), measured at this start, before the working copy was removed. That is how a quit on a full drive ends (see "Could not lock the workspace" above). Make
 sure the drive has free space before you continue (delete files you no longer need, or move a large
 model off the drive via the AI Model screen), or the next session ends the same way. The message
-stays until you unlock, even if you have already freed space.
+stays until you unlock, even if you have already freed space. The app can't see why the last
+session ended, only how much room is left: if the drive was also pulled out or the power was lost,
+the message still names the full drive.
 
 What to do: unlock as usual and redo what you changed after the last lock. Next time, quit
 HilbertRaum, or press **Lock now**, and wait for the window to close before you remove the drive.

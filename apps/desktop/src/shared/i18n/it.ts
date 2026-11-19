@@ -2478,7 +2478,7 @@ export const it: UiCatalog<'it'> = {
     'le eventuali modifiche fatte da allora sono andate perse. La prossima volta, chiudi HilbertRaum ' +
     'prima di scollegare l’unità.',
   'gate.unlock.sessionNotClosedFull':
-    'Non è stato possibile bloccare la tua area di lavoro l’ultima volta che l’app si è chiusa, ' +
+    'HilbertRaum non è riuscito a bloccare la tua area di lavoro l’ultima volta che l’app si è chiusa, ' +
     'perché l’unità era piena. La tua area di lavoro si apre com’era l’ultima volta che è stata ' +
     'bloccata; le eventuali modifiche fatte da allora sono andate perse. Assicurati che sull’unità ' +
     'ci sia spazio libero prima di continuare: altrimenti anche il prossimo blocco non potrà salvare ' +

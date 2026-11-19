@@ -1123,7 +1123,8 @@ explicitly:
   the audit metadata name which loss it was (`cause`: `lock`, `startup`, `unclean`, `unclean-full`,
   `recovery`). A
   workspace created where a wiped one left its marker removes it. The marker reveals only that a
-  lock or a start fell back to the last snapshot, and when.
+  lock or a start fell back to the last snapshot, when, and why: a lock, a start's salvage, or an
+  unclean end (and whether the drive was then short of free space).
 - **Newer-file roll-forward (CODE-1b).** If the app exits after a failed lock, the startup
   crash sweep must NOT shred the working file — it is the only fresh copy of the session's
   data. `preserveNewerPlaintext` detects the failed-lock signature (working file **newer

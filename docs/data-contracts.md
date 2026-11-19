@@ -1289,7 +1289,9 @@ head's own weights + KV.
   even if space is freed before a later start (its copy speaks in the past for that reason); and a
   session run on a computer whose clock is behind the one that last locked the drive leaves a
   working file and `-wal` older than `.enc`, so its loss is not reported (the salvage's mtime rule,
-  which treats such a file as derived data). A successful unlock consumes it: the
+  which treats such a file as derived data); and `unclean-full` measures the room, not why the session
+  ended: a pulled drive or a power cut on a drive short of that room is reported as `unclean-full` too. A
+  successful unlock consumes it: the
   flag clears, this build's marker is
   removed, and `takeWorkingCopyLost() → { cause, lostAt: <marker mtime ISO> | null } | null` returns
   it once, for the unlock IPC to log ("The changes since the last saved state were lost …") and
