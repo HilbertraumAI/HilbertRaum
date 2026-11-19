@@ -149,6 +149,11 @@ if (!isPrimaryInstance) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
+    } else if (app.isReady()) {
+      // #910: no main window — macOS after the red button, or a quit teardown on any OS. The Dock
+      // click's path brings the window back, and opens none once a quit has begun (`onActivate`).
+      // A second launch can arrive before `ready`; then the first window is still to come.
+      lifecycle.onActivate()
     }
   })
 }
@@ -997,7 +1002,9 @@ function createWindow(): void {
   // (Electron's `app` docs) — it is a WINDOW event, `session-end`, after which the process is
   // killed. Lock the workspace synchronously in the handler (the crash path's `emergencyLock`,
   // shared closure with the quit handlers so it can never run beside a quit teardown). The
-  // window exists for the whole unlocked session on Windows (`window-all-closed` quits).
+  // window exists for the whole unlocked session on Windows: its last close quits the app (#910,
+  // `lifecycle.onMainWindowClosed` below), and Electron emits `session-end` on every window, so
+  // this one listener is enough.
   if (process.platform === 'win32') mainWindow.on('session-end', lifecycle.onSessionEnd)
 
   // #888: every close of this window (X, Alt+F4, the taskbar, Ctrl+W, File → Exit, Cmd+Q, the
@@ -1020,9 +1027,12 @@ function createWindow(): void {
   // The window is gone: its sender id is no longer trusted, and `mainWindow` no longer points at a
   // destroyed window, which `second-instance` would call: on macOS the app stays open, and on every
   // OS a second launch can arrive during the quit teardown (up to 30 s after the window closed).
+  // #910: then the app quits on Windows and Linux, even while a hidden helper window (an OCR run, a
+  // PDF export's print) is still open; macOS stays open with no window (`shutdown.ts`).
   win.on('closed', () => {
     trustedSenders.delete(senderId)
     if (mainWindow === win) mainWindow = null
+    lifecycle.onMainWindowClosed()
   })
 
   // Open external links in the OS browser, never inside the app window — policy in
@@ -1062,7 +1072,10 @@ const lifecycle = createAppLifecycleHandlers({
   emergencyLock: () => emergencyLock(ctx),
   exit: (code) => app.exit(code),
   createWindow,
-  windowCount: () => BrowserWindow.getAllWindows().length,
+  // #910: the main window only; the hidden helper windows do not count.
+  mainWindowCount: () => (mainWindow === null ? 0 : 1),
+  platform: process.platform,
+  quit: () => app.quit(),
   killSidecarChildren: killRegisteredSidecarChildren,
   log
 })
@@ -1108,9 +1121,10 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())
 })
 
-// #888: every quit (File → Exit, Cmd+Q, Dock Quit, `window-all-closed`'s own quit) fires
-// `before-quit` before it closes the windows. Each main window's close guard reads and clears this
-// app-level flag: a close it prevents cancels that quit, so the guard quits again after the save.
+// #888: every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit) fires `before-quit` before it closes the
+// windows. Each main window's close guard reads and clears this app-level flag: a close it prevents
+// cancels that quit, so the guard quits again after the save. The quit an X starts on Windows and
+// Linux (#910) comes after the main window has closed, so no guard reads it.
 const quitRequests = trackQuitRequests(app)
 
 app.on('will-quit', lifecycle.onWillQuit)
@@ -1134,6 +1148,8 @@ process.on('unhandledRejection', (reason) => {
   log.warn('Unhandled rejection', { reason: String(reason) })
 })
 
+// A fallback only (#910): on Windows and Linux the main window's `closed` already quit, and Electron
+// does not emit this event during a quit. It still keeps macOS open with no window.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

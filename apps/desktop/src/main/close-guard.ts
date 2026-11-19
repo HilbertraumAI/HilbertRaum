@@ -11,8 +11,9 @@ import type { SaveBeforeCloseResult } from '../shared/types'
 // bound has passed. A change that could not be saved asks first (owner call G-2): Try again (the
 // default), Keep open (Esc) or Close anyway.
 //
-// Every quit closes the window before `will-quit` (File → Exit, Cmd+Q, Dock Quit, and
-// `window-all-closed`'s own quit after an X), and `will-quit` is where the lock starts
+// Every quit closes the window before `will-quit` (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit), and an X
+// quits only after the window has closed (on Windows and Linux the main window's `closed` starts the
+// quit, `lifecycle.onMainWindowClosed`, #910). `will-quit` is where the lock starts
 // (`performShutdown` → `beginLock`), so a save this guard waits for always lands before the lock.
 // A close that came from a quit (`before-quit` fired first) quits again after the save: the
 // prevented close cancelled that quit, and on macOS the app would otherwise stay open with no
@@ -290,8 +291,9 @@ export interface QuitRequests {
 }
 
 /**
- * Records every quit (File → Exit, Cmd+Q, Dock Quit, `window-all-closed`'s own quit): each fires
- * `before-quit` before it closes the windows. One per app (`index.ts`, module scope); every main
+ * Records every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit): each fires `before-quit` before it
+ * closes the windows. The quit an X starts on Windows and Linux (#910) fires it only after the main
+ * window has closed, so no guard reads it. One per app (`index.ts`, module scope); every main
  * window's guard reads it. The print harness has its own `before-quit` hook (`print-pdf.ts`).
  */
 export function trackQuitRequests(app: { on(event: 'before-quit', listener: () => void): unknown }): QuitRequests {

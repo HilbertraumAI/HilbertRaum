@@ -376,7 +376,9 @@ describe('will-quit re-entry during a parked teardown (#238, B1 inverted)', () =
         exits.push(code)
       },
       createWindow: () => order.push('createWindow'),
-      windowCount: () => 0,
+      mainWindowCount: () => 0,
+      platform: 'darwin',
+      quit: () => order.push('quit'),
       killSidecarChildren: () => order.push('reap'),
       log: quietLog
     })
@@ -436,17 +438,68 @@ describe('activate during a parked teardown (#238)', () => {
         created++
         windows++
       },
-      windowCount: () => windows,
+      mainWindowCount: () => windows,
+      platform: 'darwin',
+      quit: () => undefined,
       killSidecarChildren: () => undefined,
       log: quietLog
     })
     handlers.onActivate()
     expect(created).toBe(1) // a normal Dock click with no window creates one
-    windows = 0 // the user closed the window; the app stays in the Dock (macOS)
+    // The user closed the window; the app stays in the Dock (macOS). A hidden OCR or print window may still be open:
+    // only the main window counts (#910; index.ts binds `mainWindowCount` to `mainWindow`, pinned below).
+    windows = 0
     handlers.onWillQuit(quitEvent())
     expect(handlers.isShuttingDown()).toBe(true)
     handlers.onActivate()
     expect(created).toBe(1) // no fresh window against a workspace whose lock latch is armed
+  })
+})
+
+// #910: Electron quits on its own (`window-all-closed`) only once EVERY window is gone, and the OCR rasterizer and the PDF
+// print window are hidden windows. An X during an OCR run left the app running with no window and the workspace unlocked,
+// then quit synchronously when the run's window went, which cancelled the run it had just finished. The main window's
+// own `closed` now quits on Windows and Linux; the quit closes the helpers (real Electron:
+// close-guard-electron-smoke.test.ts, the `helper` scenario).
+describe('the main window’s last close quits on Windows and Linux (#910)', () => {
+  it.each<[NodeJS.Platform, string[]]>([
+    ['win32', ['quit']],
+    ['linux', ['quit']],
+    ['darwin', []]
+  ])('the main window closed on %s: quits %j', (platform, expected) => {
+    const order: string[] = []
+    const handlers = createAppLifecycleHandlers({
+      performShutdown: async () => undefined,
+      emergencyLock: () => undefined,
+      exit: () => undefined,
+      createWindow: () => order.push('createWindow'),
+      mainWindowCount: () => 0,
+      platform,
+      quit: () => order.push('quit'),
+      killSidecarChildren: () => undefined,
+      log: quietLog
+    })
+    handlers.onMainWindowClosed()
+    // macOS keeps the app open with no window, as after the red button today; nothing else happens on the close.
+    expect(order).toEqual(expected)
+  })
+
+  it('index.ts wires it: the closed handler quits, activate counts the main window only, a second launch falls back to activate', () => {
+    // Source-text pin (the idiom above): index.ts cannot be imported under vitest.
+    const src = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+    expect(src).toMatch(
+      /win\.on\('closed', \(\) => \{\n\s*trustedSenders\.delete\(senderId\)\n\s*if \(mainWindow === win\) mainWindow = null\n\s*lifecycle\.onMainWindowClosed\(\)\n\s*\}\)/
+    )
+    expect(src).toContain('mainWindowCount: () => (mainWindow === null ? 0 : 1),')
+    expect(src).toContain('platform: process.platform,')
+    expect(src).toContain('quit: () => app.quit(),')
+    // A hidden helper window must never count as the window a Dock click or a second launch brings back.
+    expect(src).not.toMatch(/getAllWindows\(\)\.length/)
+    // With no main window (macOS after the red button, or a quit teardown), a second launch takes the Dock click's path,
+    // which opens no window once a quit has begun; before `ready` the first window is still to come.
+    expect(src).toMatch(
+      /app\.on\('second-instance', \(\) => \{\n\s*if \(mainWindow\) \{[^}]*\} else if \(app\.isReady\(\)\) \{\n(?:\s*\/\/[^\n]*\n)*\s*lifecycle\.onActivate\(\)\n\s*\}\n\s*\}\)/
+    )
   })
 })
 
@@ -485,7 +538,9 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
         order.push('createWindow')
         windows++
       },
-      windowCount: () => windows,
+      mainWindowCount: () => windows,
+      platform: 'win32',
+      quit: () => order.push('quit'),
       killSidecarChildren: () => order.push('reap'),
       log: quietLog
     })

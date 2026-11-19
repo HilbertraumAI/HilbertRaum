@@ -2775,12 +2775,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   reload of the window (View → Reload or Ctrl+R in the default window menu), which closes nothing
   and so saves nothing first. A quit the app holds back to ask (File → Exit or ⌘Q, then Keep open,
   or a slow Try again) has already closed the hidden helper windows, so an OCR run in progress fails
-  (possibly only after its 60-second step timeout); and an evidence-pack PDF export in progress is
-  stopped by File → Exit or ⌘Q itself (the print's own `before-quit` hook), even when you then pick
-  Keep open. Both can be started again. On macOS, a log-out or shutdown with the app open may be
-  interrupted once while the window saves: the order of the system's quit and its shutdown event is
-  unverified (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF export), and a
-  log-out or shutdown with the app open.
+  at once; and an evidence-pack PDF export in progress is stopped by File → Exit or ⌘Q itself (the
+  print's own `before-quit` hook), even when you then pick Keep open. Both can be started again. On
+  Windows and Linux, closing the window quits the app, so closing it during an OCR run or a PDF
+  export stops that run the way quitting does (#910; before, the app went on running with no window
+  and the workspace unlocked, and then threw the finished OCR run away); start it again the next
+  time you open the app. On macOS, a log-out or shutdown with the app open may be interrupted once
+  while the window saves: the order of the system's quit and its shutdown event is unverified
+  (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF export), a Dock click during
+  an OCR run (it should bring the window back, #910), and a log-out or shutdown with the app open.
 
 ## Local API ([`local-api.md`](local-api.md) · [`architecture.md`](architecture.md) "Local API endpoint — design record")
 

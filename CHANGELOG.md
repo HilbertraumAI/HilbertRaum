@@ -312,6 +312,12 @@ from its first public `1.0.0` release onward.
   full, the app asks first: Try again, Keep open, or Close anyway. Before, a change made in the
   last second, or one whose save had failed, was lost without a word. A Windows shutdown or
   log-off with the app open still cannot wait for this (#888).
+- **Closing the window while a scan is being made searchable now quits HilbertRaum and locks
+  the workspace.** On Windows and Linux, closing the window during text recognition (OCR) or a
+  PDF export left the app running with no window and the workspace unlocked until the run ended,
+  and the finished recognition was then thrown away. Closing the window now stops the run, the
+  same as quitting, and the workspace locks; start it again the next time. On macOS, clicking the
+  Dock icon during the run now opens the window again (#910).
 - **A failed skill export no longer destroys the file you chose to replace.** The transactions
   and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
   straight onto the chosen file: a full drive or another failure part-way through left a

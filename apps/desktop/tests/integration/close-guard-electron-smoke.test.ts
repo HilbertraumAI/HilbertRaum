@@ -13,7 +13,11 @@ import { testBudgetMs } from '../helpers/hang-budget'
 // close really cancels a quit and the guard's `app.quit()` really ends the app, that the close the
 // guard starts is the one that goes through, and that `event.sender` is the window's own
 // `webContents` (a second window's answer is ignored). Electron 43.8.6 measured this order on
-// Windows 11 (follow-ups wave 2, research A §3.2); this file keeps it measured.
+// Windows 11 (follow-ups wave 2, research A §3.2); this file keeps it measured. Since #910 the runner's
+// `closed` runs the production quit rule (`createAppLifecycleHandlers(...).onMainWindowClosed`, bundled
+// from `src/main/shutdown.ts`): an X quits from the window's own `closed`, so `window-all-closed` never
+// fires, and a hidden helper window open at the X (the OCR rasterizer's shape) no longer keeps the app
+// running with no window.
 //
 // SKIPS where the Electron binary is absent (CI installs none) and on Linux without a display, like
 // tests/integration/evidence-pack-pdf-smoke.test.ts.
@@ -93,7 +97,6 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'guard:closeWindow',
       'close#2:through',
       'closed',
-      'window-all-closed',
       'before-quit',
       'will-quit'
     ])
@@ -124,7 +127,6 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'guard:closeWindow',
       'close#3:through',
       'closed',
-      'window-all-closed',
       'before-quit',
       'will-quit'
     ])
@@ -139,7 +141,6 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'guard:closeWindow',
       'close#2:through',
       'closed',
-      'window-all-closed',
       'before-quit',
       'will-quit'
     ])
@@ -161,7 +162,6 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'guard:closeWindow',
       'close#3:through',
       'closed',
-      'window-all-closed',
       'before-quit',
       'will-quit'
     ])
@@ -176,11 +176,27 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'guard:closeWindow',
       'close#2:through',
       'closed',
-      'window-all-closed',
       'before-quit',
       'will-quit'
     ])
     expect(at(r, 'answer:none') - at(r, 'ask')).toBeLessThan(500)
+  }, testBudgetMs(30_000))
+
+  // #910: before, the X closed the main window and the app went on running with no window (the runner timed out),
+  // the workspace unlocked, until the helper went.
+  it('an X with a hidden helper window open quits: the quit closes the helper, then will-quit', async () => {
+    const r = await runScenario('helper')
+    expect(names(r)).toEqual([
+      'ask',
+      'close#1:held',
+      'answer:saved',
+      'guard:closeWindow',
+      'close#2:through',
+      'closed',
+      'before-quit',
+      'helper:closed',
+      'will-quit'
+    ])
   }, testBudgetMs(30_000))
 
   it('another window’s answer to the same request is ignored: the main window’s “unsaved” brings the dialog', async () => {
@@ -195,7 +211,6 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'guard:closeWindow',
       'close#2:through',
       'closed',
-      'window-all-closed',
       'before-quit',
       'will-quit'
     ])

@@ -1697,16 +1697,40 @@ re-encrypts (the bullet below).
   the window's id from `trustedSenders` and resets `mainWindow`, so a `second-instance` no longer
   calls a destroyed window: on macOS after the red button, and on every OS during the quit teardown
   (up to 30 s after the window closed), where it threw into `uncaughtException` → `emergencyLock`
-  beside the running teardown → exit 1. Pinned by `tests/unit/close-guard.test.ts` and, where the
-  Electron binary is present (not CI), `tests/integration/close-guard-electron-smoke.test.ts` on
-  real Electron. Not yet checked on a Mac (the red button, ⌘Q, a logout).
+  beside the running teardown → exit 1. *The last close quits (#910).* On Windows and Linux that
+  `closed` handler starts the quit itself (`lifecycle.onMainWindowClosed`, `main/shutdown.ts`).
+  Electron's own quit (`window-all-closed`) waits for every window, and the OCR rasterizer and the
+  evidence-pack print window are hidden windows: an X during an OCR run left the app running with
+  no window and the workspace unlocked (the opted-in local API still answering, the model still
+  loaded, a session end reaching only the helper window, which has no lock listener), and the
+  helper's final `destroy()` then quit synchronously, which cancelled the OCR run it had just
+  finished. Now the quit closes the helpers and runs `before-quit` → `will-quit` like any quit
+  (measured on Electron 43.8.6): an OCR run is cancelled there and persists nothing (GAP-7), and a
+  print fails through its own `before-quit` hook. `window-all-closed` stays as a fallback; Electron
+  does not emit it during a quit. A window a quit closes fails the rasterizer's page in flight one
+  task after its `destroyed` event, so a quit that is then cancelled (Keep open) fails the OCR run
+  at once instead of after its 60 s step timeout, while a quit that goes on still ends it as a
+  cancel (its `will-quit` runs first, measured). macOS stays open
+  with no window: `activate` counts the main window only (`mainWindowCount`, no longer
+  `getAllWindows()`, which counted the hidden helpers, so a Dock click during an OCR run opened
+  nothing), and a `second-instance` with no main window takes the same path once the app is ready.
+  On Windows and Linux that path opens nothing once the last close has started the quit: until its
+  `will-quit` that quit is still closing the helper windows, and no window opens into it.
+  Pinned by `tests/unit/close-guard.test.ts`, `tests/unit/shutdown.test.ts`,
+  `tests/unit/ocr-rasterizer-harness.test.ts` and, where the Electron binary is present (not CI),
+  `tests/integration/close-guard-electron-smoke.test.ts` on real Electron (with the production quit
+  rule bundled, and a hidden helper window open at the X). Not yet checked on a Mac (the red button,
+  ⌘Q, a logout, a Dock click during an OCR run).
 - **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
   owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above
   never ran and the process was killed with the working DB still plaintext on the drive — the next
   launch shredded the live working copy and the session delta was lost. The event Electron does
   emit is a WINDOW event, `session-end` (after which the process is killed): `main/index.ts`
-  registers it on the main window (win32) → `onSessionEnd` on the lifecycle factory
+  registers it on the main window (win32; Electron 43 emits it on every window and then ends the
+  process at once, with no `will-quit`, measured with synthetic end-session messages, so the main
+  window's listener is enough while that window exists, and since #910 the app no longer runs on
+  without it) → `onSessionEnd` on the lifecycle factory
   (`main/shutdown.ts`), which runs `emergencyLock` — the `uncaughtException` crash path's
   synchronous best-effort lock, extracted and now shared: arm the lock latch, fire-and-forget the
   local-API stop, flush the encrypted log, `workspace.shutdown()` (re-encrypt + shred; a

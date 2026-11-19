@@ -195,6 +195,22 @@ export async function rasterizePdfWithHiddenWindow(
   }
   win.webContents.on('render-process-gone', onRenderGone)
 
+  // #910 (A R5): a window that goes away mid-run (a quit closes every window, and File → Exit then
+  // Keep open leaves the app running without this one) emits `destroyed`, never
+  // `render-process-gone` (measured on Electron 43.8.6), so the page in flight used to wait out its
+  // 60 s step timeout. Fail it instead — one task later: a quit's `will-quit`, which cancels the OCR
+  // task, runs after the window's `destroyed` but before that task (measured), so a run a quit closes
+  // still ends as the quit's cancel and the task queue does not move on into the quit. Removed in the
+  // `finally`, before the window is destroyed there.
+  const onWindowGone = (): void => {
+    setImmediate(() => {
+      if (slot.fail(new Error('The rasterizer window closed while rendering the PDF'))) {
+        log.warn('OCR rasterizer window closed during the run')
+      }
+    })
+  }
+  win.webContents.on('destroyed', onWindowGone)
+
   const withTimeout = async (p: Promise<Record<string, unknown>>): Promise<Record<string, unknown>> => {
     let timer: ReturnType<typeof setTimeout> | null = null
     try {
@@ -268,6 +284,7 @@ export async function rasterizePdfWithHiddenWindow(
     for (const [ch, fn] of listeners) ipcMain.removeListener(ch, fn)
     if (!win.isDestroyed()) {
       win.webContents.removeListener('render-process-gone', onRenderGone)
+      win.webContents.removeListener('destroyed', onWindowGone)
       win.destroy()
     }
   }
