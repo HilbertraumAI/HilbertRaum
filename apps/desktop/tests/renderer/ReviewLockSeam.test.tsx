@@ -11,13 +11,10 @@ import {
   openReviewSession,
   purgeReviewSession
 } from '../../src/renderer/lib/reviewSession'
-import {
-  type EvidenceReviewItemPatch,
-  type WorkspaceStateInfo
-} from '../../src/shared/types'
+import { type EvidenceReviewItemPatch } from '../../src/shared/types'
 
 import { makeDetail, makeItem, stubReviewApi } from '../helpers/evidenceReview'
-import { appShellStubs } from '../helpers/app-shell'
+import { LOCKED_ENCRYPTED_WORKSPACE, UNLOCKED_ENCRYPTED_WORKSPACE, appShellStubs } from '../helpers/app-shell'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // EP-1 Phase 2 review FIX-3 — the review store's LOCK SEAM, pinned end-to-end through the
@@ -33,18 +30,6 @@ import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
 // `assertNoUnexpectedApiCalls()`; the one call App makes beyond `appShellStubs` is the gate's
 // `perfMark('gate_visible')`, stubbed locally.
 
-const unlockedEncrypted: WorkspaceStateInfo = {
-  state: 'unlocked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
-const lockedState: WorkspaceStateInfo = {
-  state: 'locked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
 // #832: once the lock shows the gate, App marks it (App.tsx:231-233). Local on purpose: appShellStubs stays unchanged
 // (AppLock and I18n reach the same call outside this group).
 const gateMark: Partial<PreloadApi> = { perfMark: () => {} }
@@ -61,14 +46,14 @@ afterEach(() => {
 
 describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then purges (FIX-3)', () => {
   it('a note pending just before lock is SAVED (flush → lockWorkspace → purge, in that order)', async () => {
-    const lockWorkspace = vi.fn(async () => lockedState)
+    const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
     const updateEvidenceReviewItem = vi.fn(
       async (id: string, patch: EvidenceReviewItemPatch) => makeItem({ id, ...patch })
     )
     stubReviewApi(
       appShellStubs({
         ...gateMark,
-        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
         lockWorkspace,
         getEvidenceReview: vi.fn(async () => makeDetail()),
         updateEvidenceReviewItem
@@ -110,14 +95,14 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
   })
 
   it('a failed pre-lock flush never blocks the lock (the security action wins)', async () => {
-    const lockWorkspace = vi.fn(async () => lockedState)
+    const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
     const updateEvidenceReviewItem = vi.fn(async () => {
       throw new Error('disk full')
     })
     stubReviewApi(
       appShellStubs({
         ...gateMark,
-        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
         lockWorkspace,
         getEvidenceReview: vi.fn(async () => makeDetail()),
         updateEvidenceReviewItem
@@ -147,7 +132,7 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
   it('a hung bulk sweep never blocks the lock: the pre-lock flush gives up at its bound', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
-      const lockWorkspace = vi.fn(async () => lockedState)
+      const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
       const applyEvidenceReviewBulkAction = vi.fn(() => new Promise<never>(() => {}))
       const updateEvidenceReviewItem = vi.fn(
         async (id: string, patch: EvidenceReviewItemPatch) => makeItem({ id, ...patch })
@@ -155,7 +140,7 @@ describe('App.lockNow — review auto-save flushes BEFORE the vault locks, then 
       stubReviewApi(
         appShellStubs({
           ...gateMark,
-          getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+          getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
           lockWorkspace,
           getEvidenceReview: vi.fn(async () =>
             makeDetail({ items: [makeItem({ id: 'i1', decision: 'supported' }), makeItem({ id: 'i2', ordinal: 1 })] })

@@ -45,6 +45,7 @@ import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb, START_READS } from '../helpers/performance-fixture'
 import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as IpcHandlers
 const HOST_OS = hostRuntimeOs()
@@ -346,7 +347,7 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
     await reached
     // The lock begins (AUD-02: the database is still open, the workspace no longer admits work).
-    ;(d.ctx as { workspace: unknown }).workspace = { isUnlocked: () => true, isLocking: () => true }
+    ;(d.ctx as { workspace: unknown }).workspace = workspaceStandIn({ locking: true })
     release()
     const job = await settle(d, result as EngineDownloadJob)
     expect(job.status).toBe('done')
@@ -474,9 +475,9 @@ describe('engine load verdicts over IPC (#530)', () => {
   it('engine:recheck is registered and refuses while the workspace does not admit work', async () => {
     const d = makeDrive()
     expect(d.handlers.has(IPC.recheckEngine)).toBe(true)
-    ;(d.ctx as unknown as { workspace: unknown }).workspace = { isUnlocked: () => false }
+    ;(d.ctx as unknown as { workspace: unknown }).workspace = workspaceStandIn({ unlocked: false })
     await expect(invoke(d.handlers, IPC.recheckEngine)).rejects.toThrow(/locked/i)
-    ;(d.ctx as unknown as { workspace: unknown }).workspace = { isUnlocked: () => true, isLocking: () => true }
+    ;(d.ctx as unknown as { workspace: unknown }).workspace = workspaceStandIn({ locking: true })
     await expect(invoke(d.handlers, IPC.recheckEngine)).rejects.toThrow(/locked/i)
   })
 

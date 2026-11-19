@@ -34,6 +34,7 @@ import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from
 import { until, untilValue } from '../helpers/hang-budget'
 import { fakeSpawn, sseBody } from '../helpers/fake-sidecar'
 import { pngHeader } from '../helpers/image-fixtures'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -65,11 +66,7 @@ function ctxFor(
     db: openDatabase(join(rootPath, 'hilbertraum.sqlite')),
     manifestsDir: null,
     isDev: false,
-    workspace: {
-      isUnlocked: () => true,
-      beginDocumentWork: () => () => {},
-      documentCipher: () => cipher
-    },
+    workspace: workspaceStandIn({ documentCipher: cipher }),
     audit
   } as unknown as AppContext
 }

@@ -28,6 +28,7 @@ import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
 import { until, untilValue } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -35,7 +36,7 @@ function ctxFor(unlocked = true): AppContext {
   // The lock-TEARDOWN half of `workspaceAdmitsWork` (AUD-02) is lock-admission-race.test.ts's, over a real vault.
   return {
     trustedSenders: ANY_SENDER,
-    workspace: { isUnlocked: () => unlocked }
+    workspace: workspaceStandIn({ unlocked })
   } as unknown as AppContext
 }
 
@@ -460,7 +461,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow(/Workspace is locked\./)
   })
 
-  it('#163 (T-1): the SERVICE-level isWorkspaceLocking refusal (the non-IPC callers\' guard)', async () => {
+  it('#163 (T-1): the SERVICE-level isWorkspaceLocking refusal, the service\'s own guard (defence in depth; the IPC guard refuses first)', async () => {
     // `TranslateJobService.start()`'s own AUD-02 check. The production wiring
     // (main/index.ts) passes isWorkspaceLocking; a start during the teardown must come back
     // terminal without touching the sidecar.

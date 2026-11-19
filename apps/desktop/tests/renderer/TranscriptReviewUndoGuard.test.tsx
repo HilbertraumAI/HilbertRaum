@@ -2,8 +2,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { screen, cleanup } from '@testing-library/react'
 import { t } from '../../src/shared/i18n'
-import type { EvidenceReviewSummary, Message } from '../../src/shared/types'
+import type { Message } from '../../src/shared/types'
 import { makeMessage } from '../helpers/chat-fixtures'
+import { makeSummary } from '../helpers/evidenceReview'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { renderTranscript, type TranscriptProps } from '../helpers/transcript'
 
@@ -43,20 +44,6 @@ const msg = (over: Partial<Message> = {}): Message =>
     ...over
   })
 
-function summary(over: Partial<EvidenceReviewSummary> = {}): EvidenceReviewSummary {
-  return {
-    id: 'r1',
-    conversationId: 'c1',
-    messageId: 'm1',
-    title: 'Payment terms review',
-    status: 'draft',
-    outdated: false,
-    gate: { eligible: false, requiredTotal: 1, decidedTotal: 0 },
-    updatedAt: '2026-07-23T10:00:00.000Z',
-    ...over
-  }
-}
-
 /** A documents-conversation transcript with the undo and the review entry point wired. */
 function renderGuard(opts: Partial<TranscriptProps>): void {
   renderTranscript({
@@ -73,8 +60,8 @@ describe('"Answer without it" undo vs. an evidence review (AUD-01)', () => {
   // handler while it streams, so that leg is the component's own contract, as for the other
   // actions (#743).
   const blocked: Array<[string, Partial<TranscriptProps>, string | null]> = [
-    ['the turn carries a draft review, with the review title', { reviewSummaries: new Map([['m1', summary({ status: 'draft' })]]) }, BLOCKED_TITLE],
-    ['the turn carries a ready review, with the review title', { reviewSummaries: new Map([['m1', summary({ status: 'ready' })]]) }, BLOCKED_TITLE],
+    ['the turn carries a draft review, with the review title', { reviewSummaries: new Map([['m1', makeSummary({ status: 'draft' })]]) }, BLOCKED_TITLE],
+    ['the turn carries a ready review, with the review title', { reviewSummaries: new Map([['m1', makeSummary({ status: 'ready' })]]) }, BLOCKED_TITLE],
     ['the row’s actions are disabled and there is no review, with no title', { actionsDisabled: true }, null]
   ]
   it.each(blocked)('renders the undo DISABLED when %s, and a click does nothing', (_case, state, title) => {
@@ -100,7 +87,7 @@ describe('"Answer without it" undo vs. an evidence review (AUD-01)', () => {
   it('a review on ANOTHER message never disables this turn\'s undo', () => {
     renderGuard({
       messages: [msg({ id: 'm1' })],
-      reviewSummaries: new Map([['m-other', summary({ messageId: 'm-other' })]])
+      reviewSummaries: new Map([['m-other', makeSummary({ messageId: 'm-other' })]])
     })
     expect(screen.getByRole('button', { name: UNDO })).toBeEnabled()
   })

@@ -26,6 +26,7 @@ import { t } from '../../src/shared/i18n'
 import { sseBody } from '../helpers/fake-sidecar'
 import { manualSource, type ManualSource } from '../helpers/manual-stream'
 import { hangBudgetMs, until, within } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 // Regression tests for the runtime-lifecycle fix:
 //  B2 — RuntimeManager.start() must NOT leave a half-started runtime as "active" when
@@ -686,7 +687,7 @@ describe('quit-path lifecycle (full-audit 2026-07-11 CODE-2/CODE-3)', () => {
     const ctx = {
       runtime: h.mgr,
       embedder: {},
-      workspace: { shutdown: () => undefined }
+      workspace: workspaceStandIn()
     } as unknown as AppContext
     await performShutdown(ctx, {
       inFlightStreams: new Map(),

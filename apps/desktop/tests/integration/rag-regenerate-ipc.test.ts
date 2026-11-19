@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { join } from 'node:path'
 
 // F2 (post-merge audit) — the RAG channel mirror of the chat regenerate data-loss fix.
 // `askDocuments(regenerate:true)` used to DELETE the prior assistant reply (committed,
@@ -18,50 +17,19 @@ vi.mock('electron', () => ({
 }))
 
 import { IPC } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
 import { MockEmbedder } from '../../src/main/services/embeddings'
-import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { appendMessage, createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import type { AppContext } from '../../src/main/services/context'
-import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ModelRuntime } from '../../src/main/services/runtime'
-import { runningManager } from '../helpers/chat-runtime-stub'
-import { tempRoot } from '../helpers/db-fixtures'
 import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { regenWorkspace } from '../helpers/regenerate-fixtures'
 import { failingRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { makeRagAskContext } from '../helpers/skills-world'
 import { t } from '../../src/shared/i18n'
 import type { Message } from '../../src/shared/types'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
-
-function freshDb(): { db: Db; workspacePath: string } {
-  const root = tempRoot('ragregen')
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  return { db, workspacePath: join(root, 'workspace') }
-}
-
-function makeCtx(db: Db, workspacePath: string, runtime: ModelRuntime): AppContext {
-  return {
-    trustedSenders: ANY_SENDER,
-    paths: { rootPath: workspacePath, workspacePath },
-    get db() {
-      return db
-    },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    runtime: runningManager(runtime),
-    embedder: createMockEmbedder(),
-    reranker: null,
-    ocrEngine: undefined,
-    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
-    // unconditionally now (no more `??` fallback).
-    pendingModelSwitches: createPendingModelSwitchCounter()
-  } as unknown as AppContext
-}
 
 beforeEach(() => {
   ipcState.handlers.clear()
@@ -76,7 +44,8 @@ describe('askDocuments regenerate — F2 data-loss guard', () => {
   // permanently stripped and the offer row silently vanished — structurally the same bug the
   // result_tables capture fixed.
   it('a failed regenerate restores the prior reply WITH its skill offer intact', async () => {
-    const { db, workspacePath } = freshDb()
+    const w = regenWorkspace('ragregen')
+    const { db } = w
     const embedder = new MockEmbedder()
     const question = 'kategorisiere alle transaktionen'
     const docId = await seedEmbeddedDoc(db, embedder, 'statement.pdf', [question])
@@ -93,7 +62,7 @@ describe('askDocuments regenerate — F2 data-loss guard', () => {
     })
     expect(prior.skillOffer).toBeTruthy()
 
-    registerRagIpc(makeCtx(db, workspacePath, failingRuntime()))
+    registerRagIpc(makeRagAskContext(w, failingRuntime()).ctx)
     await expect(
       invoke(handlers, IPC.askDocuments, conv.id, question, null, /* regenerate */ true)
     ).rejects.toThrow(/HTTP 400|too large/i)
@@ -116,19 +85,21 @@ describe('askDocuments regenerate — F2 data-loss guard', () => {
 // #613 "Send again" — the documents channel's twin of chat's resend (its own branch in the handler):
 // the stored question is the question, so retrieval and the model get it, and nothing is appended.
 describe('askDocuments "Send again" (#613)', () => {
-  async function unansweredDocumentQuestion(): Promise<{ db: Db; workspacePath: string; convId: string; questionId: string }> {
-    const { db, workspacePath } = freshDb()
+  async function unansweredDocumentQuestion(): Promise<ReturnType<typeof regenWorkspace> & { convId: string; questionId: string }> {
+    const w = regenWorkspace('ragregen')
+    const { db } = w
     const question = 'what are the payment terms'
     const docId = await seedEmbeddedDoc(db, new MockEmbedder(), 'contract.pdf', [question])
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
     const q = appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
-    return { db, workspacePath, convId: conv.id, questionId: q.id }
+    return { ...w, convId: conv.id, questionId: q.id }
   }
 
   it('answers the unanswered last question from the documents — no second copy', async () => {
-    const { db, workspacePath, convId, questionId } = await unansweredDocumentQuestion()
+    const w = await unansweredDocumentQuestion()
+    const { db, convId, questionId } = w
     const calls: ScriptedCall[] = []
-    registerRagIpc(makeCtx(db, workspacePath, scriptedRuntime('Net 30 days.', calls)))
+    registerRagIpc(makeRagAskContext(w, scriptedRuntime('Net 30 days.', calls)).ctx)
 
     const { result } = await invoke(handlers, IPC.askDocuments, convId, '', null, false, undefined, questionId)
 
@@ -144,10 +115,11 @@ describe('askDocuments "Send again" (#613)', () => {
   })
 
   it('refuses a question that is no longer the last message — nothing streams, nothing is written', async () => {
-    const { db, workspacePath, convId, questionId } = await unansweredDocumentQuestion()
+    const w = await unansweredDocumentQuestion()
+    const { db, convId, questionId } = w
     appendMessage(db, { conversationId: convId, role: 'assistant', content: 'answered meanwhile' })
     const calls: ScriptedCall[] = []
-    registerRagIpc(makeCtx(db, workspacePath, scriptedRuntime('never', calls)))
+    registerRagIpc(makeRagAskContext(w, scriptedRuntime('never', calls)).ctx)
     const before = listMessages(db, convId)
 
     await expect(

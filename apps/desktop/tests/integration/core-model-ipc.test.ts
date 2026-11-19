@@ -64,7 +64,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
 import { reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
-import { CARDS, CATALOG_MANIFESTS, committingRuntime, sessionWorkspace, START_READS, writeChatManifest } from '../helpers/performance-fixture'
+import { CARDS, CATALOG_MANIFESTS, committingRuntime, START_READS, writeChatManifest } from '../helpers/performance-fixture'
 import { seededFreshDb } from '../helpers/seeded-db'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
@@ -79,6 +79,7 @@ import type { MainSettingsKey, RendererSettingsPatch } from '../../src/shared/se
 import { benchmarkResult, modelPlacement } from '../helpers/benchmark-records'
 import { until } from '../helpers/hang-budget'
 import { freePort } from '../helpers/local-api-harness'
+import { workspaceStandIn, type WorkspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -99,7 +100,7 @@ beforeEach(() => {
 describe('registerCoreIpc', () => {
   it('getAppStatus keeps the offline ceiling while the workspace is locked', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -134,7 +135,7 @@ describe('registerCoreIpc', () => {
   // passing probe) kept reporting true. The flag now reads the engine's execution state.
   it('getAppStatus reports ocrAvailable from the engine’s execution state, not its presence (#232)', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -174,7 +175,7 @@ describe('registerCoreIpc', () => {
   // (startup + the install hooks) and only READ here — this handler is polled by the shell.
   it('getAppStatus reports why dictation is unavailable, and null once a transcriber is selected (#527)', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -214,7 +215,7 @@ describe('registerCoreIpc', () => {
       trustedSenders: ANY_SENDER,
       paths: { configPath: bogusConfigDir() },
       workspace: {
-        isUnlocked: () => false,
+        ...workspaceStandIn({ unlocked: false }),
         getState: (): WorkspaceStateInfo => ({ state: 'locked', mode: null, plaintextAllowed: false, encryptionRequired: true })
       }
     } as unknown as AppContext
@@ -229,7 +230,7 @@ describe('registerCoreIpc', () => {
 
   it('getAppStatus forwards the translation device outcome (issue #42 reopen — the Translate hint feed)', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -259,7 +260,7 @@ describe('registerCoreIpc', () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
       paths: {},
-      workspace: { isUnlocked: () => false }
+      workspace: workspaceStandIn({ unlocked: false })
     } as unknown as AppContext
     registerCoreIpc(ctx)
 
@@ -272,7 +273,7 @@ describe('registerCoreIpc', () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
       paths: {},
-      workspace: { isUnlocked: () => false }
+      workspace: workspaceStandIn({ unlocked: false })
     } as unknown as AppContext
     registerCoreIpc(ctx)
     ipcState.clipboardThrows = true
@@ -289,7 +290,7 @@ describe('registerCoreIpc', () => {
       trustedSenders: ANY_SENDER,
       paths: { configPath: bogusConfigDir() },
       db: seededDb(),
-      workspace: { isUnlocked: () => true }
+      workspace: workspaceStandIn()
     } as unknown as AppContext
     registerCoreIpc(ctx)
 
@@ -312,7 +313,7 @@ describe('registerCoreIpc', () => {
         trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         db,
-        workspace: { isUnlocked: () => true },
+        workspace: workspaceStandIn(),
         ...extra
       } as unknown as AppContext
       registerCoreIpc(ctx)
@@ -427,7 +428,7 @@ describe('registerCoreIpc', () => {
         paths: { configPath: bogusConfigDir() },
         isDev: true,
         db,
-        workspace: { isUnlocked: () => true, isLocking: () => false },
+        workspace: workspaceStandIn(),
         runtime: new RuntimeManager(() => {
           throw new Error('no model in this row')
         })
@@ -460,7 +461,7 @@ describe('registerCoreIpc', () => {
         trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         db: seededDb(),
-        workspace: { isUnlocked: () => true },
+        workspace: workspaceStandIn(),
         reranker: { id: 'fake', rerank: async () => [], suspend }
       } as unknown as AppContext
       registerCoreIpc(ctx)
@@ -491,7 +492,7 @@ describe('registerCoreIpc', () => {
         trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         db: seededDb(),
-        workspace: { isUnlocked: () => true },
+        workspace: workspaceStandIn(),
         reranker: null
       } as unknown as AppContext
       registerCoreIpc(ctx)
@@ -512,7 +513,7 @@ describe('registerCoreIpc', () => {
         trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         db,
-        workspace: { isUnlocked: () => true },
+        workspace: workspaceStandIn(),
         downloadsNetworkSwitched: downloads,
         installsNetworkSwitched: installs
       } as unknown as AppContext
@@ -558,10 +559,10 @@ describe('registerModelIpc', () => {
   const reg = (ctx: AppContext): void =>
     registerModelIpc({
       trustedSenders: ANY_SENDER,
-      workspace: { isUnlocked: () => true },
+      workspace: workspaceStandIn(),
       pendingModelSwitches: createPendingModelSwitchCounter(),
       ...(ctx as object)
-    } as AppContext)
+    } as unknown as AppContext)
 
   // Model handlers resolve the drive policy from `paths.configPath` (M10); a missing
   // config dir means "no policy file" → developer-friendly defaults.
@@ -1785,15 +1786,15 @@ describe('maybeAutoStartActiveModel', () => {
     unlocked?: boolean
     runningModelId?: string | null
     onStart?: () => void
-    /** AUD-03: a session-aware workspace stand-in (see `sessionWorkspace`). */
-    workspace?: unknown
+    /** AUD-03: a session-aware workspace stand-in (its `completeLock` / `completeUnlock` drive the session). */
+    workspace?: WorkspaceStandIn
   }): AppContext {
     return {
       db: opts.db,
       manifestsDir: CATALOG_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: bogusConfigDir() },
       isDev: true, // developer leniency → the missing-weights model may start (mock fallback)
-      workspace: opts.workspace ?? { isUnlocked: () => opts.unlocked !== false },
+      workspace: opts.workspace ?? workspaceStandIn({ unlocked: opts.unlocked !== false }),
       runtime: {
         ...START_READS,
         start: async () => {
@@ -1884,7 +1885,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 
@@ -1909,7 +1910,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 
@@ -1935,7 +1936,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 
@@ -1958,7 +1959,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 

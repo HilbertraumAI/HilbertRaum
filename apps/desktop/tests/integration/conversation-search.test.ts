@@ -29,6 +29,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { legacyDbPath, openFreshDb } from '../helpers/db-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { SEARCH_FOLD_CASES, SEARCH_FOLD_STORED, type SearchFoldLabel } from '../helpers/search-fold-cases'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -333,7 +334,7 @@ describe('chat:search IPC', () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
       db,
-      workspace: { isUnlocked: () => true },
+      workspace: workspaceStandIn(),
       runtime: { active: () => null, activeModelId: () => null },
       audit
     } as unknown as AppContext

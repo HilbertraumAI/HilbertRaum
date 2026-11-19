@@ -91,6 +91,7 @@ import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
 import { seedStoredTextDoc } from '../helpers/doc-fixtures'
 import { killableRuntime } from '../helpers/killable-runtime'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const PW = 'right-password'
@@ -742,7 +743,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         how: 'a recovery file another program holds',
         arrange: () => ({
           workspace: {
-            isUnlocked: () => false, // the handler answers an open workspace before it unlocks (#858)
+            ...workspaceStandIn({ unlocked: false }), // the handler answers an open workspace before it unlocks (#858)
             unlock: () => {
               throw new VaultRecoveryBlockedError()
             }

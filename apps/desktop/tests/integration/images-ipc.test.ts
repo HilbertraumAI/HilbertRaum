@@ -58,6 +58,7 @@ import { testCipher } from '../helpers/test-cipher'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
 import { until, untilValue } from '../helpers/hang-budget'
 import { pngHeader } from '../helpers/image-fixtures'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -67,7 +68,7 @@ function ctxFor(rootPath: string): AppContext {
     paths: { rootPath },
     manifestsDir: null,
     isDev: false,
-    workspace: { isUnlocked: () => true }
+    workspace: workspaceStandIn()
   } as unknown as AppContext
 }
 
@@ -392,11 +393,7 @@ describe('registerImagesIpc — history persistence', () => {
       db,
       manifestsDir: null,
       isDev: false,
-      workspace: {
-        isUnlocked: () => true,
-        beginDocumentWork: () => () => {},
-        documentCipher: () => cipher
-      }
+      workspace: workspaceStandIn({ documentCipher: cipher })
     } as unknown as AppContext
     return { ctx, db, workspacePath, imagesPath: join(workspacePath, 'images') }
   }

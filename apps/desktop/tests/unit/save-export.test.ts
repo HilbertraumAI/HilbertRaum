@@ -8,9 +8,7 @@ import { join } from 'node:path'
 // failure. `node:fs` is a recording pass-through (no synchronous write may reach the destination, #256);
 // `node:fs/promises` is a pass-through whose next `open` can be armed to fail its fsync or to short-write once.
 
-const dialogState = vi.hoisted(() => ({
-  result: { canceled: true as boolean, filePath: undefined as string | undefined }
-}))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 // Pass-through `node:fs` wrapper that only RECORDS the synchronous write-side calls — every
 // call still hits the real filesystem (#256, the pattern of the evidence-pack async-fs test).
 const syncCalls = vi.hoisted(() => ({ list: [] as Array<{ fn: string; path: string }> }))
@@ -91,9 +89,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: {
-    showSaveDialog: async () => dialogState.result
-  }
+  dialog: { showSaveDialog: saveDialog.showSaveDialog }
 }))
 
 import { bomFor, saveBinaryExport, saveTextExport, type SaveExportDialogOptions } from '../../src/main/ipc/save-export'
@@ -106,7 +102,7 @@ const BINARY_BYTES = Buffer.concat([
 ])
 
 beforeEach(() => {
-  dialogState.result = { canceled: true, filePath: undefined }
+  saveDialog.reset()
   fsFaults.failSync = false
   fsFaults.shortWrite = false
   fsFaults.failWrite = false
@@ -156,7 +152,7 @@ describe('saveBinaryExport (#90)', () => {
     // A plain-text extension deliberately: `bomFor` would prefix U+FEFF on the TEXT path; the binary path must never
     // consult it.
     const dest = join(dir, 'export.csv')
-    dialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
 
     const saved = await saveBinaryExport(OPTIONS, BINARY_BYTES)
     expect(saved).toBe(dest)
@@ -166,7 +162,7 @@ describe('saveBinaryExport (#90)', () => {
   it('success leaves only the destination (no tmp sibling)', async () => {
     const dir = freshDir()
     const dest = join(dir, 'contract.docx')
-    dialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
 
     await saveBinaryExport(OPTIONS, BINARY_BYTES)
     expect(readdirSync(dir)).toEqual(['contract.docx'])
@@ -176,7 +172,7 @@ describe('saveBinaryExport (#90)', () => {
 describe('the shared atomic tail, both writers (#90, #256)', () => {
   it.each(WRITERS)('%s: a cancel that still reports a path returns null and writes nothing', async (_name, write) => {
     const dir = freshDir()
-    dialogState.result = { canceled: true, filePath: join(dir, 'out.txt') }
+    saveDialog.result = { canceled: true, filePath: join(dir, 'out.txt') }
     expect(await write(OPTIONS, 'payload')).toBeNull()
     expect(readdirSync(dir)).toEqual([])
   })
@@ -187,7 +183,7 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
       const dir = freshDir()
       const dest = join(dir, 'out.txt')
       writeFileSync(dest, 'OLD CONTENT')
-      dialogState.result = { canceled: false, filePath: dest }
+      saveDialog.result = { canceled: false, filePath: dest }
       fsFaults.failSync = true
       await expect(write(OPTIONS, 'new content')).rejects.toThrow(/injected fsync failure/)
       expect(fsFaults.failSync).toBe(false) // consumed: the tail opened a handle and reached its fsync
@@ -200,7 +196,7 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
     '%s: a failed fsync on a new destination rejects, leaves NO destination file and NO tmp residue',
     async (_name, write) => {
       const dir = freshDir()
-      dialogState.result = { canceled: false, filePath: join(dir, 'out.txt') }
+      saveDialog.result = { canceled: false, filePath: join(dir, 'out.txt') }
       fsFaults.failSync = true
       await expect(write(OPTIONS, 'payload')).rejects.toThrow(/injected fsync failure/)
       expect(fsFaults.failSync).toBe(false)
@@ -217,7 +213,7 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
       const dir = freshDir()
       const dest = join(dir, 'out.txt')
       writeFileSync(dest, 'OLD CONTENT')
-      dialogState.result = { canceled: false, filePath: dest }
+      saveDialog.result = { canceled: false, filePath: dest }
       fsFaults.failWrite = true
       fsFaults.failClose = true
       fsSteps.order.length = 0
@@ -235,7 +231,7 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
     '%s: a close failure after a good write still rejects and leaves no tmp sibling',
     async (_name, write) => {
       const dir = freshDir()
-      dialogState.result = { canceled: false, filePath: join(dir, 'out.txt') }
+      saveDialog.result = { canceled: false, filePath: join(dir, 'out.txt') }
       fsFaults.failClose = true
       await expect(write(OPTIONS, 'payload')).rejects.toThrow(/injected close failure/)
       expect(readdirSync(dir)).toEqual([])
@@ -244,7 +240,7 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
 
   it('a short write refuses: rejects, leaves NO destination file and NO tmp residue', async () => {
     const dir = freshDir()
-    dialogState.result = { canceled: false, filePath: join(dir, 'contract.docx') }
+    saveDialog.result = { canceled: false, filePath: join(dir, 'contract.docx') }
     fsFaults.shortWrite = true
     await expect(saveBinaryExport(OPTIONS, BINARY_BYTES)).rejects.toThrow(/short write/)
     expect(fsFaults.shortWrite).toBe(false)
@@ -260,7 +256,7 @@ describe('saveTextExport writes off the synchronous fs API (#256)', () => {
   it('no synchronous write reaches the destination directory during the export', async () => {
     const dir = freshDir()
     const dest = join(dir, 'big.md')
-    dialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
     const content = 'ausschließlich '.repeat(200_000) // ~3 MB
 
     syncCalls.list.length = 0

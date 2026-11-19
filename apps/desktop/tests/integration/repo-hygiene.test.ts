@@ -416,10 +416,10 @@ describe('repo hygiene — BUILD_STATE.md stays a one-pass handoff file (retenti
 // workspace locked. ~15 IPC modules were converted from the bare check to the predicate.
 //
 // Why a repo-level text latch rather than a behavioural test: the IPC lock-coverage meta-test
-// exercises handlers with a `{ isUnlocked: () => false }` stand-in, and a BARE `isUnlocked()`
-// check satisfies that stand-in exactly as well as the predicate does. A silent drift back to
-// the bare form is therefore invisible to every existing behavioural test. This enumerates the
-// bare call sites that remain and pins the set.
+// exercises handlers with a locked stand-in (`workspaceStandIn({ unlocked: false })`), and a BARE
+// `isUnlocked()` check satisfies that stand-in exactly as well as the predicate does. A silent drift
+// back to the bare form is therefore invisible to every existing behavioural test. This enumerates
+// the bare call sites that remain and pins the set.
 describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlisted (AUD-02)', () => {
   const MAIN = join(DESKTOP_ROOT, 'src', 'main')
 
@@ -475,7 +475,7 @@ describe('repo hygiene — bare workspace.isUnlocked() call sites stay allowlist
     // and a cache miss; it computes install state, it does not load a model.
     'src/main/services/vision/status.ts :: const unlocked = ctx.workspace.isUnlocked()',
     // The predicate itself — this is the one place the bare read is the definition.
-    'src/main/services/workspace-vault.ts :: return workspace.isUnlocked() && workspace.isLocking?.() !== true',
+    'src/main/services/workspace-vault.ts :: return workspace.isUnlocked() && !workspace.isLocking()',
     // `getState()` — the controller's own unlocked/locked/uninitialized report.
     "src/main/services/workspace-vault.ts :: const state = this.isUnlocked() ? 'unlocked' : this.vaultExistsOnDisk() ? 'locked' : 'uninitialized'",
     // `unlock()`'s already-open early return — deliberately BEFORE `beginSession()` so an unlock

@@ -37,6 +37,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import { scriptedRuntime } from '../helpers/scripted-runtime'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -57,11 +58,7 @@ function makeHarness(): Harness {
     trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath },
     db,
-    workspace: {
-      isUnlocked: () => true,
-      documentCipher: () => null,
-      beginDocumentWork: () => () => {}
-    },
+    workspace: workspaceStandIn(),
     runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,

@@ -37,6 +37,7 @@ import { IPC } from '../../src/shared/ipc'
 import type { SkillToolAudit } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -293,7 +294,7 @@ describe('deleteDocument IPC — a document WITH a tool run deletes + audits (TE
       trustedSenders: ANY_SENDER,
       paths: { rootPath, workspacePath, configPath: join(rootPath, 'config') },
       db,
-      workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
+      workspace: workspaceStandIn(),
       embedder: createMockEmbedder(),
       audit: (type: string) => events.push({ type })
     } as unknown as AppContext

@@ -87,6 +87,7 @@ import {
   withLlamaBinary
 } from '../helpers/performance-fixture'
 import { runtimeStatus } from '../helpers/status'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 // #656: pinned, not inherited from the host. The memory class reads process.platform /
 // process.arch, and every probe here is a Vulkan Windows/Linux machine: on an Apple Silicon host
@@ -410,7 +411,7 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     let unlocked = true
     const pending = deferred<GpuDevice[]>()
     const ctx = ctxWith(root, db, {
-      workspace: { isUnlocked: () => unlocked, isLocking: () => false },
+      workspace: workspaceStandIn({ unlocked: () => unlocked }),
       probeGpu: fakeGpuProbe(() => pending.promise)
     })
     const spy = performanceChangedSpy()
@@ -433,7 +434,7 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     let epoch = 3
     const pending = deferred<GpuDevice[]>()
     const ctx = ctxWith(root, db, {
-      workspace: { isUnlocked: () => true, isLocking: () => false, unlockEpoch: () => epoch },
+      workspace: workspaceStandIn({ epoch: () => epoch }),
       probeGpu: fakeGpuProbe(() => pending.promise)
     })
     const spy = performanceChangedSpy()
@@ -518,7 +519,7 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     let unlocked = true
     const pending = deferred<GpuDevice[] | null>()
     const ctx = ctxWith(root, db, {
-      workspace: { isUnlocked: () => unlocked, isLocking: () => false },
+      workspace: workspaceStandIn({ unlocked: () => unlocked }),
       probeGpu: fakeGpuProbe(() => pending.promise)
     })
     // As in production, the database is out of reach once the lock completed.

@@ -16,18 +16,12 @@ import { STREAM } from '../../src/shared/ipc'
 import type { CoverageInfo, Message } from '../../src/shared/types'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { makeEvent } from '../helpers/ipc'
+import { driveGuarded } from '../helpers/regenerate-fixtures'
 
 // CB-2 — a regenerate deletes the prior reply INSIDE the stream (F2) and, before this fix, restored
 // it only on a NON-abort failure. A user Stop BEFORE the first token resolves (does not throw) with
 // an unpersisted empty message, so the destructive delete stood with nothing in its place: two clicks
 // (Regenerate, Stop) silently erased the answer. The guard now also restores on that empty resolve.
-
-/** Drive the guarded runFn with a real abort signal + inert senders (the guard ignores their output). */
-function drive(wrapped: ChatStreamRunFn): Promise<Message> {
-  const signal = new AbortController().signal
-  const noop = (): void => {}
-  return wrapped(signal, noop, noop, noop, noop, noop)
-}
 
 describe('withRegenerateGuard — CB-2 (a produced-nothing regenerate never loses the prior answer)', () => {
   it('a Stop before the first token restores the prior reply byte-faithfully (id, citations, coverage, skill stamp)', async () => {
@@ -47,7 +41,7 @@ describe('withRegenerateGuard — CB-2 (a produced-nothing regenerate never lose
 
     // The run resolves with an unpersisted empty message — a Stop before the first token.
     const wrapped = withRegenerateGuard(db, conv.id, true, async () => emptyAssistantMessage(conv.id))
-    const result = await drive(wrapped)
+    const result = await driveGuarded(wrapped)
 
     // The prior reply is back (same identity), and chat:done carries it so the UI re-shows the answer.
     const history = listMessages(db, conv.id)
@@ -76,7 +70,7 @@ describe('withRegenerateGuard — CB-2 (a produced-nothing regenerate never lose
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
 
     const runFn: ChatStreamRunFn = async () => emptyAssistantMessage(conv.id)
-    const result = await drive(withRegenerateGuard(db, conv.id, false, runFn))
+    const result = await driveGuarded(withRegenerateGuard(db, conv.id, false, runFn))
 
     expect(result.content).toBe('')
     // The earlier answer stays and nothing new was persisted (#600 wraps every turn, so this pins the

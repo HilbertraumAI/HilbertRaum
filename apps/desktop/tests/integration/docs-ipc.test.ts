@@ -85,10 +85,7 @@ const dialogState = vi.hoisted(() => ({
 }))
 // #90: the save-dialog seam for the original-bytes export; `lastOptions` captures the dialog
 // options so the suggested name / title / encryption-boundary `message` can be asserted.
-const saveDialogState = vi.hoisted(() => ({
-  result: { canceled: true as boolean, filePath: undefined as string | undefined },
-  lastOptions: null as Record<string, unknown> | null
-}))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
@@ -100,10 +97,7 @@ vi.mock('electron', () => ({
       dialogState.onOpen?.()
       return dialogState.result
     },
-    showSaveDialog: async (options: Record<string, unknown>) => {
-      saveDialogState.lastOptions = options
-      return saveDialogState.result
-    }
+    showSaveDialog: saveDialog.showSaveDialog
   }
 }))
 
@@ -152,6 +146,7 @@ import { tempRoot } from '../helpers/db-fixtures'
 import { documentIdsInCollection } from '../helpers/doc-fixtures'
 import { testCipher } from '../helpers/test-cipher'
 import { docTaskManager, docTaskRuntime, waitTerminal } from '../helpers/doctask-fixtures'
+import { workspaceStandIn, type WorkspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -179,8 +174,8 @@ interface CtxOverrides {
   skillRunActive?: AppContext['skillRunActive']
   /** The knowledge-pack article-save probe registerZimIpc assigns (a doc being saved into). */
   articleSaveActive?: AppContext['articleSaveActive']
-  /** Merged over the default workspace (unlocked, a no-op lease, the `cipher` above). */
-  workspace?: { isUnlocked?: () => boolean; unlockEpoch?: () => number; beginDocumentWork?: () => () => void }
+  /** Spread over the default stand-in (unlocked, a no-op lease, the `cipher` above). */
+  workspace?: Partial<WorkspaceStandIn>
 }
 
 function ctxWith(db: Db, workspacePath: string, o: CtxOverrides = {}): AppContext {
@@ -189,13 +184,8 @@ function ctxWith(db: Db, workspacePath: string, o: CtxOverrides = {}): AppContex
     db,
     paths: { workspacePath },
     embedder: o.embedder ?? createMockEmbedder(),
-    // A full-enough workspace for the background import loop (lease + null cipher by default).
-    workspace: {
-      isUnlocked: () => true,
-      beginDocumentWork: () => () => {},
-      documentCipher: () => o.cipher ?? null,
-      ...o.workspace
-    },
+    // The background import loop's workspace (lease + null cipher by default).
+    workspace: workspaceStandIn({ documentCipher: o.cipher ?? null }, o.workspace),
     docTasks: o.docTasks,
     audit: o.audit,
     skillRunActive: o.skillRunActive,
@@ -301,8 +291,7 @@ beforeEach(() => {
   ipcState.handlers.clear()
   dialogState.result = { canceled: true, filePaths: [] }
   dialogState.onOpen = null
-  saveDialogState.result = { canceled: true, filePath: undefined }
-  saveDialogState.lastOptions = null
+  saveDialog.reset()
 })
 
 describe('registerDocsIpc', () => {
@@ -1361,7 +1350,7 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
     await expect(invoke(handlers, IPC.reindexDocument, id)).rejects.toThrow(/skill is working/i)
     // #682: the original export takes the same gate (the task gate is doctasks-ipc's busy-document row).
     await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(/skill is working/i)
-    expect(saveDialogState.lastOptions).toBeNull() // refused before the save dialog opened
+    expect(saveDialog.calls).toHaveLength(0) // refused before the save dialog opened
 
     // The run finishes → both proceed again (the guard is scoped to a LIVE run, not sticky).
     skillBusy = false
@@ -1565,8 +1554,7 @@ describe('auto deep-index enqueue at import with a runtime up (#158 / DT-3)', ()
 // re-key.
 describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => {
   beforeEach(() => {
-    saveDialogState.result = { canceled: true, filePath: undefined }
-    saveDialogState.lastOptions = null
+    saveDialog.reset()
   })
 
   /** Bytes that are deliberately NOT valid UTF-8: a text-decode round-trip would corrupt
@@ -1599,7 +1587,7 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     release.mockClear() // …and released it through the same shared `release`
 
     const dest = join(workspacePath, 'exported-notes.txt')
-    saveDialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
     const { result } = await invoke(handlers, IPC.exportDocumentOriginal, id)
     expect(result).toBe(dest)
     // Byte-for-byte: the export is the ORIGINAL, not a re-render.
@@ -1607,8 +1595,8 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     expect(sha256Hex(exported)).toBe(sha256Hex(bytes))
     // The save dialog carried the document's own extension as suggestion + the
     // encryption-boundary warning as `message` (the macOS-sheet voice of the warning).
-    expect(String(saveDialogState.lastOptions?.defaultPath)).toMatch(/\.txt$/)
-    expect(String(saveDialogState.lastOptions?.message)).toMatch(
+    expect(String(saveDialog.lastOptions?.defaultPath)).toMatch(/\.txt$/)
+    expect(String(saveDialog.lastOptions?.message)).toMatch(
       /not protected by your workspace password/
     )
     // Atomic write: no tmp sibling residue next to the destination.
@@ -1651,7 +1639,7 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     decryptDests.length = 0 // count the EXPORT's decrypt alone
 
     const dest = join(workspacePath, 'exported-contract.txt')
-    saveDialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
     const { result } = await invoke(handlers, IPC.exportDocumentOriginal, id)
     expect(result).toBe(dest)
     // Byte-for-byte the ORIGINAL — only possible if the `.enc` copy was decrypted.
@@ -1670,7 +1658,7 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     const job = await runImport([path])
     audit.mockClear()
 
-    saveDialogState.result = { canceled: true, filePath: undefined }
+    saveDialog.result = { canceled: true, filePath: undefined }
     const { result } = await invoke(handlers, IPC.exportDocumentOriginal, job.documentIds[0])
     expect(result).toBeNull()
     expect(audit).not.toHaveBeenCalled()
@@ -1688,7 +1676,7 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     }
     if (row.stored_path) rmSync(row.stored_path)
     rmSync(path)
-    saveDialogState.result = { canceled: false, filePath: join(workspacePath, 'never.txt') }
+    saveDialog.result = { canceled: false, filePath: join(workspacePath, 'never.txt') }
     await expect(invoke(handlers, IPC.exportDocumentOriginal, id)).rejects.toThrow(
       /no longer on disk/
     )
@@ -1713,11 +1701,11 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     audit.mockClear()
 
     expect((await invoke(handlers, IPC.exportDocument, id)).result).toBeNull() // the default: cancelled
-    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe('Quarterly notes.md')
+    expect(String(saveDialog.lastOptions?.defaultPath)).toBe('Quarterly notes.md')
     expect(audit).not.toHaveBeenCalled()
 
     const dest = join(workspacePath, 'out.md')
-    saveDialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
     expect((await invoke(handlers, IPC.exportDocument, id)).result).toBe(dest)
     expect(readFileSync(dest, 'utf8')).toBe('\ufeffalpha beta gamma delta epsilon — the notes as imported')
     expect(audit).toHaveBeenCalledExactlyOnceWith('document_exported', expect.any(String), { documentId: id })
@@ -1730,7 +1718,7 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     writeFileSync(p, makeScanOnlyPdf(1)) // a PDF row (scan-detected): its stored copy is the binary original
     const id = (await runImport([p])).documentIds[0]
     await expect(invoke(handlers, IPC.exportDocument, id)).rejects.toThrow(t('en', 'main.docs.exportTextOnly'))
-    expect(saveDialogState.lastOptions).toBeNull()
+    expect(saveDialog.calls).toHaveLength(0)
   })
 
   it('docs:exportSummary answers null without a dialog when there is no summary; with one it saves <title>-summary.md', async () => {
@@ -1741,15 +1729,15 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     audit.mockClear()
 
     expect((await invoke(handlers, IPC.exportSummary, id)).result).toBeNull()
-    expect(saveDialogState.lastOptions).toBeNull() // no summary: the dialog never opened
+    expect(saveDialog.calls).toHaveLength(0) // no summary: the dialog never opened
 
     setDocumentSummary(db, id, { text: 'The notes, summarized.', modelId: 'm', createdAt: new Date().toISOString(), truncated: false })
     expect((await invoke(handlers, IPC.exportSummary, id)).result).toBeNull() // cancelled
-    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe('Quarterly notes-summary.md')
+    expect(String(saveDialog.lastOptions?.defaultPath)).toBe('Quarterly notes-summary.md')
     expect(audit).not.toHaveBeenCalled()
 
     const dest = join(workspacePath, 'summary.md')
-    saveDialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
     expect((await invoke(handlers, IPC.exportSummary, id)).result).toBe(dest)
     expect(readFileSync(dest, 'utf8')).toBe('\ufeffThe notes, summarized.')
     expect(audit).toHaveBeenCalledExactlyOnceWith('summary_exported', expect.any(String), { documentId: id })
@@ -1769,7 +1757,7 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     setDocumentSummary(db, id, { text: 'Summary.', modelId: 'm', createdAt: new Date().toISOString(), truncated: false })
 
     expect((await invoke(handlers, channel, id)).result).toBeNull() // the default: cancelled
-    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe(want)
+    expect(String(saveDialog.lastOptions?.defaultPath)).toBe(want)
   })
 
   // #899: a title the app wrote itself (a Hindi translation of report.pdf, `translatedDocumentTitle`), and the cut the
@@ -1790,7 +1778,7 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(title, id) // the row a translation or a long name leaves
 
     expect((await invoke(handlers, IPC.exportDocument, id)).result).toBeNull() // the default: cancelled
-    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe(want)
+    expect(String(saveDialog.lastOptions?.defaultPath)).toBe(want)
   })
 
   // #899: only an extension is cut (a dot, then 1-10 letters or digits). A title whose last dot starts anything
@@ -1806,7 +1794,7 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     setDocumentSummary(db, id, { text: 'Summary.', modelId: 'm', createdAt: new Date().toISOString(), truncated: false })
 
     expect((await invoke(handlers, channel, id)).result).toBeNull() // the default: cancelled
-    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe(want)
+    expect(String(saveDialog.lastOptions?.defaultPath)).toBe(want)
   })
 
   it('docs:exportOriginal refuses an empty or non-string id before taking the document-work lease', async () => {
@@ -1817,7 +1805,7 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
       await expect(invoke(handlers, IPC.exportDocumentOriginal, bad), String(bad)).rejects.toThrow(/^Unknown document$/)
     }
     expect(beginDocumentWork).not.toHaveBeenCalled()
-    expect(saveDialogState.lastOptions).toBeNull()
+    expect(saveDialog.calls).toHaveLength(0)
   })
 
   // #687 / #237: an export of an ENCRYPTED stored copy decrypts it to a transient plaintext file; the reader registers it
@@ -1849,7 +1837,7 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     ctx.plaintextOps = ops
     registerDocsIpc(ctx)
     const id = await importNotes(workspacePath)
-    saveDialogState.result = { canceled: false, filePath: join(workspacePath, 'never.txt') }
+    saveDialog.result = { canceled: false, filePath: join(workspacePath, 'never.txt') }
 
     parkNext = true
     const exported = invoke(handlers, channel, id)

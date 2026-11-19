@@ -37,6 +37,7 @@ import type { AppContext } from '../../src/main/services/context'
 import type { WorkspaceAdmission } from '../../src/main/services/workspace-vault'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { until, within } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -79,7 +80,7 @@ function ctxWith(workspacePath: string, transcriber: Transcriber | null): {
     paths: { workspacePath },
     transcriber,
     audit,
-    workspace: { isUnlocked: () => true }
+    workspace: workspaceStandIn()
   } as unknown as AppContext
   return { ctx, audit }
 }
@@ -180,10 +181,12 @@ describe('registerDictationIpc', () => {
   // LOCKED workspace, it must refuse with the friendly locked copy and write nothing.
   // AUD-02 (#860 L6): the second posture is an open workspace mid-lock — `isUnlocked()` is still true for the whole
   // teardown, so only the latch (`workspaceAdmitsWork`) keeps the plaintext WAV out of documents/ then.
-  it.each<[string, WorkspaceAdmission]>([
-    ['on a locked vault', { isUnlocked: () => false }],
-    ['while a lock is under way (AUD-02 latch)', { isUnlocked: () => true, isLocking: () => true }]
-  ])('refuses %s and writes NO file under documents/ (S3)', async (_posture, workspace) => {
+  // Each row builds its own stand-in (it is stateful), so a retry or a later row never inherits a moved posture.
+  it.each<[string, () => WorkspaceAdmission]>([
+    ['on a locked vault', () => workspaceStandIn({ unlocked: false })],
+    ['while a lock is under way (AUD-02 latch)', () => workspaceStandIn({ locking: true })]
+  ])('refuses %s and writes NO file under documents/ (S3)', async (_posture, makeWorkspace) => {
+    const workspace = makeWorkspace()
     const workspacePath = freshWorkspacePath()
     const { transcriber, seen } = fakeTranscriber()
     const lockedCtx = {
