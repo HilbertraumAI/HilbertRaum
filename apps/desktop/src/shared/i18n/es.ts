@@ -1996,8 +1996,7 @@ export const es: UiCatalog<'es'> = {
   'diag.audit.workspace_lock_failed':
     'Intento de bloqueo fallido (el espacio de trabajo siguió abierto)',
   'diag.audit.workspace_password_changed': 'Contraseña del espacio de trabajo cambiada',
-  'diag.audit.workspace_working_copy_lost':
-    'Cambios recientes perdidos (el archivo de trabajo se eliminó o se dañó)',
+  'diag.audit.workspace_working_copy_lost': 'Cambios recientes perdidos',
   'diag.audit.settings_changed': 'Ajustes cambiados',
   'diag.audit.local_api_toggled': 'API local activada o desactivada',
   'diag.audit.policy_warning': 'Aviso de política',
@@ -2427,6 +2426,16 @@ export const es: UiCatalog<'es'> = {
     'El archivo de trabajo del espacio de trabajo en la unidad se eliminó o se dañó. Tu espacio de ' +
     'trabajo se conserva tal como estaba la última vez que se bloqueó o se cerró la aplicación; los ' +
     'cambios hechos desde entonces se han perdido.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum no bloqueó tu espacio de trabajo la última vez que se cerró, por ejemplo porque se ' +
+    'quitó la unidad, el equipo se quedó sin corriente o se forzó el cierre de la aplicación. Tu ' +
+    'espacio de trabajo se abre tal como estaba la última vez que se bloqueó; los cambios hechos ' +
+    'después se han perdido. La próxima vez, cierra HilbertRaum antes de quitar la unidad.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum no bloqueó tu espacio de trabajo la última vez que se cerró, y la unidad no tiene ' +
+    'espacio libre suficiente para bloquearlo. Tu espacio de trabajo se abre tal como estaba la ' +
+    'última vez que se bloqueó; los cambios hechos después se han perdido. Libera espacio en la ' +
+    'unidad antes de continuar: si no, el próximo bloqueo tampoco podrá guardar tus cambios.',
   'gate.welcome.title': 'Te damos la bienvenida',
   'gate.welcome.intro':
     'Este es tu espacio de trabajo de IA privado. Chatea con un modelo de IA y haz preguntas ' +

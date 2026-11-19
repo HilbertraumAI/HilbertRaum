@@ -2035,8 +2035,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.workspace_unlock_failed': 'Entsperrversuch fehlgeschlagen',
   'diag.audit.workspace_lock_failed': 'Sperrversuch fehlgeschlagen (Arbeitsbereich blieb geöffnet)',
   'diag.audit.workspace_password_changed': 'Arbeitsbereich-Passwort geändert',
-  'diag.audit.workspace_working_copy_lost':
-    'Letzte Änderungen verloren (Arbeitsdatei entfernt oder beschädigt)',
+  'diag.audit.workspace_working_copy_lost': 'Letzte Änderungen verloren',
   'diag.audit.settings_changed': 'Einstellungen geändert',
   'diag.audit.local_api_toggled': 'Lokale API ein- oder ausgeschaltet',
   'diag.audit.policy_warning': 'Richtlinien-Hinweis',
@@ -2449,6 +2448,16 @@ export const de: Record<keyof typeof en, string> = {
     'Die Arbeitsdatei des Arbeitsbereichs auf dem Laufwerk wurde entfernt oder beschädigt. Dein ' +
     'Arbeitsbereich bleibt so erhalten, wie er beim letzten Sperren oder Schließen der App war; ' +
     'Änderungen seitdem sind verloren.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum hat deinen Arbeitsbereich beim letzten Schließen nicht gesperrt, zum Beispiel weil ' +
+    'das Laufwerk entfernt wurde, der Computer keinen Strom mehr hatte oder die App zwangsweise ' +
+    'beendet wurde. Dein Arbeitsbereich öffnet sich so, wie er beim letzten Sperren war; Änderungen ' +
+    'danach sind verloren. Beende HilbertRaum beim nächsten Mal, bevor du das Laufwerk entfernst.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum hat deinen Arbeitsbereich beim letzten Schließen nicht gesperrt, und auf dem ' +
+    'Laufwerk ist zu wenig Platz, um ihn zu sperren. Dein Arbeitsbereich öffnet sich so, wie er beim ' +
+    'letzten Sperren war; Änderungen danach sind verloren. Gib Speicherplatz auf dem Laufwerk frei, ' +
+    'bevor du weitermachst: Sonst kann auch das nächste Sperren deine Änderungen nicht speichern.',
   'gate.welcome.title': 'Willkommen',
   'gate.welcome.intro':
     'Das ist dein privater KI-Arbeitsbereich. Chatte mit einem KI-Modell und stelle Fragen ' +

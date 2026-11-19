@@ -71,6 +71,21 @@ function failureText(
   return key === null ? failure.message : t(key)
 }
 
+/** The lock screen's banner for each `lockNotice` (#855, #875, #892): what the changes since the last lock were lost
+ *  to. */
+const LOCK_NOTICE_COPY: Record<NonNullable<WorkspaceStateInfo['lockNotice']>, MessageKey> = {
+  working_copy_lost: 'gate.unlock.workingCopyLost',
+  session_not_closed: 'gate.unlock.sessionNotClosed',
+  session_not_closed_full: 'gate.unlock.sessionNotClosedFull'
+}
+
+/** The banner key for the state's notice, or null. An own-property read, like {@link failureText}'s: the state comes
+ *  over IPC. */
+function lockNoticeKey(state: WorkspaceStateInfo): MessageKey | null {
+  const notice = state.lockNotice
+  return notice !== undefined && Object.hasOwn(LOCK_NOTICE_COPY, notice) ? LOCK_NOTICE_COPY[notice] : null
+}
+
 export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const creating = state.state === 'uninitialized'
   const [phase, setPhase] = useState<CreatePhase>('welcome')
@@ -215,6 +230,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
 
   // ---- Unlock: a single calm screen -------------------------------------------
   if (!creating) {
+    const noticeKey = lockNoticeKey(state)
     return (
       <div className="gate-shell">
         <form className="gate-card card" onSubmit={(e) => void submit(e)}>
@@ -223,10 +239,10 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           <p className="hint">{t('gate.unlock.hint')}</p>
           {/* #855: a lock finished at the last good snapshot because the working file was gone or
               damaged. The state carries it until the next unlock: on what that lock returned, and
-              (#875) on getWorkspaceState() at the next start too, from the marker it left. */}
-          {state.lockNotice === 'working_copy_lost' && (
-            <Banner tone="warning">{t('gate.unlock.workingCopyLost')}</Banner>
-          )}
+              (#875) on getWorkspaceState() at the next start too, from the marker it left. #892: or
+              the start swept the session the app left when it ended without a lock, in words of
+              its own (and with the free-space advice when the drive was too full to lock). */}
+          {noticeKey !== null && <Banner tone="warning">{t(noticeKey)}</Banner>}
           <div className="gate-fields">
             <PasswordField
               placeholder={t('gate.passwordPlaceholder')}

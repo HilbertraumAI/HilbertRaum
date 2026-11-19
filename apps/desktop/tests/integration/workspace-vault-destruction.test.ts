@@ -17,7 +17,7 @@ import { randomBytes } from 'node:crypto'
 import { inspect } from 'node:util'
 import {
   decryptFile,
-  type encryptFile,
+  encryptFile,
   unlockEncryptedVault,
   lockEncryptedVault,
   stageRekey,
@@ -29,7 +29,8 @@ import {
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import type { Db } from '../../src/main/services/db'
+import { walAwaitsCheckpoint, type Db } from '../../src/main/services/db'
+import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import { openRawDb } from '../helpers/db-fixtures'
 import {
   ENCRYPTION_REQUIRED,
@@ -512,6 +513,50 @@ describe('issue #876 — a lock whose checkpoint could not finish keeps the sess
     }
   })
 
+  // #892: the same full-drive branch at QUIT, end to end. The quit's lock refuses like the one above, `shutdown()`
+  // closes what it can and rethrows (shutdown.ts logs that into a log nobody keeps, and the app exits), and the session
+  // stays in a `-wal` beside a stale main file. The next start's sweep shreds both, as it always has (the documented
+  // trade-off), so its lock screen must say what happened: the app did not lock the workspace, and the drive is too full
+  // to. The read-only main file stands in for the full drive at quit only, and is writable again before the next start
+  // (a sweep overwrites in place, which a full drive allows). The drive the next start measures is a full one: no room
+  // at all while the working copy is on it, plenty once the sweep has freed it, so the free space has to be read before
+  // the sweep. On POSIX the refused lock's re-open keeps a read-only connection where Windows keeps the closed handle
+  // (see the row above); `shutdown()` closes either, and neither checkpoints a read-only main file, so both leave the
+  // same files at rest.
+  it.skipIf(process.getuid?.() === 0)('a quit on a full drive whose lock is refused: the next start sweeps the session and says the drive was too full to lock it (#892)', () => {
+    const vp = lockedVault('vault-876', PW)
+    const ctrl = unlockedController(vp, PW)
+    const db = ctrl.requireDb()
+    writeTheSession(db)
+    const staleMain = readFileSync(vp.dbPath) // before the lock's checkpoint: the commits are only in the WAL
+    const sessionWal = readFileSync(`${vp.dbPath}-wal`)
+    const close = db.close.bind(db)
+    ;(db as unknown as { close: () => void }).close = () => {
+      close()
+      writeFileSync(vp.dbPath, staleMain)
+      writeFileSync(`${vp.dbPath}-wal`, sessionWal)
+      chmodSync(vp.dbPath, 0o444)
+    }
+    try {
+      expect(thrownBy(() => ctrl.shutdown()).name).toBe('VaultLockError')
+      expect(ctrl.isUnlocked()).toBe(false)
+    } finally {
+      if (existsSync(vp.dbPath)) chmodSync(vp.dbPath, 0o666)
+    }
+    expect(walAwaitsCheckpoint(vp.dbPath)).toBe(true) // the session, at rest in the -wal
+
+    const fullUntilSwept = (): number => (existsSync(vp.dbPath) ? 0 : 1024 ** 3)
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, encryptFile, fullUntilSwept)
+    next.init()
+    for (const leftover of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) expect(existsSync(leftover)).toBe(false)
+    expect(next.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed_full' })
+    next.unlock(PW)
+    expect(getSettings(next.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens) // the session is gone
+    // What the unlock IPC records in Activity and app.log, once.
+    expect(next.takeWorkingCopyLost()).toEqual({ cause: 'unclean-full', lostAt: expect.any(String) })
+    next.lock()
+  })
+
   // When the WAL refuses the lock before the probe ran, the controller's catch probes the file itself; a structure it
   // cannot read (not damage) is noted there too, once (#876 review round 2).
   it('a refused lock whose probe ran in the catch notes the header fallback there, once', () => {
@@ -816,6 +861,26 @@ describe('issue #875 — the notice of a lock that finished at the last snapshot
     c.unlock(PW)
     c.lock()
     expect(readFileSync(markerPath(vp)).equals(newer)).toBe(true)
+  })
+
+  // #892: a cause this build does not know (a later build's, or none at all) still says that the changes since the last
+  // lock are lost, in the generic words of an unclean end, and is recorded as one. Never as `lock`: that copy blames a
+  // working file something removed or damaged, which this build cannot know.
+  it.each<[string, (marker: Record<string, unknown>) => Record<string, unknown>]>([
+    ['a cause a later build added', (marker) => ({ ...marker, cause: 'a-later-cause' })],
+    ['no cause at all', ({ cause: _cause, ...marker }) => marker]
+  ])('a marker with %s reads as the notice of an unclean end, never as a lock', (_what, edit) => {
+    const vp = lockedVault('vault-875', PW)
+    loseWorkingCopyAtQuit(vp)
+    writeFileSync(markerPath(vp), JSON.stringify(edit(JSON.parse(readFileSync(markerPath(vp), 'utf8')) as Record<string, unknown>)))
+
+    const c = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    c.init()
+    expect(c.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
+    c.unlock(PW)
+    expect(c.takeWorkingCopyLost()).toEqual({ cause: 'unclean', lostAt: expect.any(String) })
+    expect(existsSync(markerPath(vp))).toBe(false)
+    c.lock()
   })
 
   // #845: a vault format a newer build wrote leaves the whole workspace as it is: startup reads nothing past the

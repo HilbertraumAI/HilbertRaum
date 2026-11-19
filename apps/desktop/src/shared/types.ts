@@ -322,15 +322,18 @@ export interface WorkspaceStateInfo {
   /** Policy requires encryption — onboarding may not offer plaintext. */
   encryptionRequired: boolean
   /**
-   * A lock finished at the last good snapshot because the working file was gone or no longer a
-   * database, so the changes since the previous lock are lost (#855). The lock screen says so.
-   * Set while the workspace is locked, on what `lockWorkspace` returns and on
-   * `getWorkspaceState()` alike, until the next successful unlock; a lock at quit leaves
-   * `config/working-copy-lost.json`, so the next start reports it too (#875). Also set when the
-   * startup salvage had to shred the last session's only fresh copy (#875). Under a
+   * The changes since the previous lock are lost, and the lock screen says why, one notice per value.
+   * `working_copy_lost`: a lock finished at the last good snapshot because the working file was gone
+   * or no longer a database (#855), or the startup salvage had to shred the last session's only
+   * fresh copy (#875). `session_not_closed` (#892): the app ended without locking (a power cut, the
+   * drive pulled out, a kill), and the startup sweep shredded the session it left;
+   * `session_not_closed_full`: the same with less free space on the drive than a lock needs (how a
+   * quit on a full drive ends), so the copy asks the user to free space. Set while the workspace is
+   * locked, on what `lockWorkspace` returns and on `getWorkspaceState()` alike, until the next
+   * successful unlock; `config/working-copy-lost.json` carries it across a restart (#875). Under a
    * newer-build verdict (#845) startup does not read the marker.
    */
-  lockNotice?: 'working_copy_lost'
+  lockNotice?: 'working_copy_lost' | 'session_not_closed' | 'session_not_closed_full'
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).
@@ -3592,8 +3595,10 @@ export type AuditEventType =
   | 'workspace_password_changed'
   // #875: the changes since the last saved state were lost, recorded by the unlock after the loss: the previous lock
   // finished at the last saved state (the working file gone or no longer a database), the start swept the working file,
-  // or this unlock discarded a broken recovery copy. Content-free; metadata { cause: 'lock' | 'startup' | 'recovery',
-  // lostAt? } (lostAt: when the marker was written; none for 'recovery', the event's own time).
+  // the start swept the session an app that ended without a lock left (#892; 'unclean-full' on a drive too full to
+  // lock), or this unlock discarded a broken recovery copy. Content-free; metadata { cause: 'lock' | 'startup' |
+  // 'unclean' | 'unclean-full' | 'recovery', lostAt? } (lostAt: when the marker was written; none for 'recovery', the
+  // event's own time).
   | 'workspace_working_copy_lost'
   | 'settings_changed'
   // The local API master switch flipped. Metadata is BOOLEANS ONLY ({ enabled }) — the

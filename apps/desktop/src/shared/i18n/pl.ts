@@ -2040,8 +2040,7 @@ export const pl: UiCatalog<'pl'> = {
   'diag.audit.workspace_lock_failed':
     'Próba zablokowania nie powiodła się (obszar roboczy pozostał odblokowany)',
   'diag.audit.workspace_password_changed': 'Zmieniono hasło obszaru roboczego',
-  'diag.audit.workspace_working_copy_lost':
-    'Utracono ostatnie zmiany (plik roboczy został usunięty lub uszkodzony)',
+  'diag.audit.workspace_working_copy_lost': 'Utracono ostatnie zmiany',
   'diag.audit.settings_changed': 'Zmieniono ustawienia',
   'diag.audit.local_api_toggled': 'Włączono lub wyłączono lokalne API',
   'diag.audit.policy_warning': 'Komunikat zasad dysku',
@@ -2468,6 +2467,16 @@ export const pl: UiCatalog<'pl'> = {
     'Plik roboczy obszaru roboczego na dysku został usunięty lub uszkodzony. Twój obszar roboczy ' +
     'jest zachowany w stanie z ostatniego zablokowania lub zamknięcia aplikacji; zmiany ' +
     'wprowadzone od tego czasu zostały utracone.',
+  'gate.unlock.sessionNotClosed':
+    'Przy ostatnim zamknięciu aplikacji HilbertRaum obszar roboczy nie został zablokowany, na ' +
+    'przykład dlatego, że odłączono dysk, zabrakło zasilania komputera lub wymuszono zamknięcie ' +
+    'aplikacji. Obszar roboczy otwiera się w stanie z ostatniego zablokowania; zmiany wprowadzone ' +
+    'później zostały utracone. Następnym razem zamknij aplikację HilbertRaum przed odłączeniem dysku.',
+  'gate.unlock.sessionNotClosedFull':
+    'Przy ostatnim zamknięciu aplikacji HilbertRaum obszar roboczy nie został zablokowany, a na ' +
+    'dysku jest za mało wolnego miejsca, aby go zablokować. Obszar roboczy otwiera się w stanie z ' +
+    'ostatniego zablokowania; zmiany wprowadzone później zostały utracone. Zwolnij miejsce na dysku, ' +
+    'zanim przejdziesz dalej – inaczej także następne zablokowanie nie zapisze twoich zmian.',
   'gate.welcome.title': 'Witaj',
   'gate.welcome.intro':
     'To twój prywatny obszar roboczy AI. Rozmawiaj z modelem AI i zadawaj pytania o swoje ' +

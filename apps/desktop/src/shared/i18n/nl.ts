@@ -1960,8 +1960,7 @@ export const nl: UiCatalog<'nl'> = {
   'diag.audit.workspace_unlock_failed': 'Ontgrendelen mislukt',
   'diag.audit.workspace_lock_failed': 'Vergrendelen mislukt (de werkruimte bleef open)',
   'diag.audit.workspace_password_changed': 'Wachtwoord van de werkruimte gewijzigd',
-  'diag.audit.workspace_working_copy_lost':
-    'Recente wijzigingen verloren (het werkbestand is verwijderd of beschadigd)',
+  'diag.audit.workspace_working_copy_lost': 'Recente wijzigingen verloren',
   'diag.audit.settings_changed': 'Instellingen gewijzigd',
   'diag.audit.local_api_toggled': 'Lokale API in- of uitgeschakeld',
   'diag.audit.policy_warning': 'Melding over het beleid',
@@ -2378,6 +2377,18 @@ export const nl: UiCatalog<'nl'> = {
     'Het werkbestand van de werkruimte op de schijf is verwijderd of beschadigd. Je werkruimte ' +
     'blijft zoals hij was toen hij voor het laatst werd vergrendeld of de app werd gesloten; ' +
     'wijzigingen sinds dat moment zijn verloren gegaan.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum heeft je werkruimte niet vergrendeld toen de app de laatste keer werd gesloten, ' +
+    'bijvoorbeeld omdat de schijf werd losgekoppeld, de computer zonder stroom kwam te zitten of de ' +
+    'app geforceerd werd gestopt. Je werkruimte opent in de staat van de laatste vergrendeling; ' +
+    'wijzigingen daarna zijn verloren gegaan. Sluit HilbertRaum de volgende keer af voordat je de ' +
+    'schijf loskoppelt.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum heeft je werkruimte niet vergrendeld toen de app de laatste keer werd gesloten, en ' +
+    'op de schijf is niet genoeg vrije ruimte om de werkruimte te vergrendelen. Je werkruimte opent ' +
+    'in de staat van de laatste vergrendeling; wijzigingen daarna zijn verloren gegaan. Maak ruimte ' +
+    'vrij op de schijf voordat je verdergaat: anders kan ook de volgende vergrendeling je ' +
+    'wijzigingen niet opslaan.',
   'gate.welcome.title': 'Welkom',
   'gate.welcome.intro':
     'Dit is je privéwerkruimte voor AI. Chat met een AI-model en stel vragen over je documenten: ' +
