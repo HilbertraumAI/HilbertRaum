@@ -1388,7 +1388,11 @@ show the *"scan and fix this drive?"* prompt on the next plug-in (harmless, but 
 **If the app is not quit cleanly:** pulling the drive while the app is running, a power cut or a
 forced kill of the app loses any changes made since the workspace last locked (the last
 **Lock now** or a normal quit). The workspace itself is not damaged — it reopens from that last
-locked point — but everything after it is gone, so quit the app first.
+locked point — but everything after it is gone, so quit the app first. The next start says so on
+the unlock screen. A quit on a drive that is almost full can end the same way: when there is no
+room left to lock the workspace, the quit cannot lock it, and the unlock screen then also asks you
+to free space. So when **Lock now** says it could not lock, free some space and lock again before
+you quit.
 
 **Shutting down, restarting or logging off with the app still open:** on Windows the app locks
 the workspace on its own as the session ends. That is a best-effort safety net — a very large

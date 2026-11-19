@@ -1107,9 +1107,21 @@ explicitly:
   open), and shreds the copy only once the unlock has succeeded, so a failed unlock keeps the
   evidence for the next. Until then an older build (0.1.65 or earlier) can still roll that kept
   copy forward over `.enc` on a Kit started from more than one OS with builds of different ages:
-  like every build before #876, it checks only the header, and such a copy keeps its header. The
-  log line and
-  the audit metadata name which of the three it was (`cause`: `lock`, `startup`, `recovery`). A
+  like every build before #876, it checks only the header, and such a copy keeps its header. Since
+  #892 the notice also covers an **unclean end**: when the startup sweep shreds a working file
+  beside live `-wal`/`-shm` (the accepted trade-off below, unchanged) that is a real copy of a
+  session (it or its `-wal` newer than `.enc`, and starting with the SQLite header, whole or torn;
+  a shred survivor or a file that cannot be read says nothing), the lock screen says the app did
+  not lock the workspace (`gate.unlock.sessionNotClosed`), or, with less free space than the
+  working file and its `-wal` together (read before the sweep frees them), that it could not lock
+  it because the drive was full (`…Full`). This is the one durable trace of a quit whose lock #876
+  refused on a full drive: that
+  quit's own log line is written after the log key is gone and dies with the process. The marker is
+  written at the start, after the sweep (which frees the room it needs), so nothing is written on a
+  full drive at quit. A marker cause this build does not know reads as the generic unclean end,
+  never as a lock. The log line and
+  the audit metadata name which loss it was (`cause`: `lock`, `startup`, `unclean`, `unclean-full`,
+  `recovery`). A
   workspace created where a wiped one left its marker removes it. The marker reveals only that a
   lock or a start fell back to the last snapshot, and when.
 - **Newer-file roll-forward (CODE-1b).** If the app exits after a failed lock, the startup
@@ -1179,7 +1191,10 @@ explicitly:
   intact stale `.enc` with garbage, so it is deliberately shredded instead. Confidentiality
   is chosen over mid-session durability here; the mitigations are the clean quit path
   (lock-on-quit, the `uncaughtException` crash lock and the Windows session-end lock, #248) and
-  the safe-eject guidance above.
+  the safe-eject guidance above. The trade-off is unchanged since #892, but no longer silent: the
+  next lock screen says the session was not locked (see "Working file gone or not a database"
+  above). A quit, or a crash lock, on a drive too full for the lock's checkpoint (#876) ends here
+  too: the session sits in a `-wal` beside a stale main file, and the next start shreds both.
   A separate, filesystem-level durability limit — a rename that has not yet reached the
   directory metadata can roll back after a power cut on exFAT/FAT32, and no directory-flush
   primitive is exposed through Node on Windows — is covered in

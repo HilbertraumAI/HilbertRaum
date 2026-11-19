@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdirSync, existsSync, linkSync, readFileSync, writeFileSync, renameSync, rmSync, utimesSync } from 'node:fs'
+import { mkdirSync, existsSync, linkSync, readFileSync, writeFileSync, renameSync, rmSync, statSync, utimesSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
@@ -23,6 +23,8 @@ import {
   shredFile,
   shredFileAsync,
   applyPendingRekey,
+  rewrapVaultKey,
+  stageRekey,
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
   VaultOpenFailedError,
@@ -31,7 +33,7 @@ import {
   vaultPathsFrom
 } from '../../src/main/services/workspace-vault'
 import { randomBytes } from 'node:crypto'
-import { encrypt, decrypt, serializeBlob, deserializeBlob } from '../../src/main/services/security/crypto'
+import { encrypt, decrypt, serializeBlob, deserializeBlob, generateDataKey } from '../../src/main/services/security/crypto'
 import * as vaultCrypto from '../../src/main/services/security/crypto'
 import * as settingsModule from '../../src/main/services/settings'
 import { tempRoot } from '../helpers/db-fixtures'
@@ -694,6 +696,8 @@ describe('WorkspaceController', () => {
     expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
     expect(existsSync(vp.encPath)).toBe(true)
     expect(ctrl.getState().state).toBe('locked')
+    // #892: that leftover is no database, so no session was lost with it, and the start says nothing.
+    expect(ctrl.getState()).not.toHaveProperty('lockNotice')
     // And it still unlocks correctly afterwards.
     const u = ctrl.unlock('pw')
     expect(u.state).toBe('unlocked')
@@ -839,9 +843,223 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.init()
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    // #892: what the sweep shredded was a real working copy of a session that changed something after the last lock
+    // (a database, newer than `.enc`), so the lock screen says the app did not lock the workspace when it closed, and a
+    // restart before the unlock still says so.
+    expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    expect(restarted.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
     // The stale `.enc` snapshot wins (the 7171 write is gone — the accepted trade-off).
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(DEFAULT_SETTINGS.contextTokens)
+    // The unlock consumed the notice, once, for the IPC to record (the marker's time is when the start saw the loss).
+    expect(ctl.takeWorkingCopyLost()).toEqual({ cause: 'unclean', lostAt: expect.any(String) })
+    expect(ctl.lock()).not.toHaveProperty('lockNotice')
+    const after = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    after.init()
+    expect(after.getState()).not.toHaveProperty('lockNotice')
+  })
+
+  // #892: the notice may only ADD a report of a proven loss. Beside live sidecars the sweep shreds the working file in
+  // every case, as before; it says so only for a real working copy (a database, or one torn mid-checkpoint) newer than
+  // `.enc`. Each row has exactly one reason to stay silent: `.enc` is backdated where the mtime alone would decide.
+  it.each<[string, (vp: FreshVaultPaths) => void]>([
+    [
+      // What a lock that SUCCEEDED leaves when the unlink after each shred fails (a hold on Windows): random bytes under
+      // all three names, newer than `.enc`. Our shred never leaves a header, so nothing was lost.
+      'a shred survivor (random bytes in the working file and both sidecars)',
+      (vp) => {
+        for (const path of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) writeFileSync(path, randomBytes(64 * 1024))
+        backdate(vp.encPath)
+      }
+    ],
+    [
+      // A real database, but neither it nor its `-wal` is newer than the snapshot that opens: derived data.
+      'a working file and -wal older than .enc',
+      (vp) => {
+        failedLockState(vp) // `.enc` backdated 60 s …
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        backdate(vp.dbPath, 120_000) // … the working file and its -wal older still (the -shm's time is not read)
+        backdate(`${vp.dbPath}-wal`, 120_000)
+      }
+    ],
+    [
+      // The SQLite magic and nothing after it: shorter than a database header, so no database to the probe either.
+      'a working file cut short inside the database header',
+      (vp) => {
+        writeFileSync(vp.dbPath, Buffer.concat([Buffer.from('SQLite format 3', 'latin1'), Buffer.alloc(1)]))
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        backdate(vp.encPath)
+      }
+    ],
+    [
+      // Newer means strictly newer: a working file and `-wal` exactly as old as `.enc` prove no change after it.
+      'a working file and -wal exactly as old as .enc',
+      (vp) => {
+        failedLockState(vp)
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        const sameTime = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000) // whole seconds: every file system keeps them
+        for (const path of [vp.dbPath, `${vp.dbPath}-wal`, vp.encPath]) utimesSync(path, sameTime, sameTime)
+      }
+    ],
+    [
+      // The probe cannot read it (`unknown`: a hold, a permission error); a folder under its name stands in on every OS.
+      'a working file the probe cannot read',
+      (vp) => {
+        mkdirSync(vp.dbPath)
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        backdate(vp.encPath)
+      }
+    ],
+    [
+      // A real working copy, newer than an `.enc` cut short after its frame magic: there is no snapshot to name, and the
+      // notice's "your workspace opens as it was when it was last locked" cannot hold, so nothing is said (review N-2).
+      'a working copy whose .enc has no readable frame',
+      (vp) => {
+        failedLockState(vp)
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        writeFileSync(vp.encPath, readFileSync(vp.encPath).subarray(0, 'HRAUMEN1'.length))
+        backdate(vp.encPath)
+      }
+    ]
+  ])('CODE-1b / #892: live sidecars beside %s: swept as before, and no notice', (_what, plant) => {
+    const vp = lockedVault('vault', 'pw')
+    plant(vp)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.isRecoveryBlocked()).toBe(false)
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
+    expect(ctl.getState().state).toBe('locked')
+    expect(ctl.getState()).not.toHaveProperty('lockNotice')
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    expect(restarted.getState()).not.toHaveProperty('lockNotice')
+  })
+
+  // #892: …and it does say so for the session's own file in the other states an unclean end leaves it in: torn where a
+  // checkpoint stopped (its header reads, its structure does not), or older than `.enc` while its `-wal`, which holds
+  // the session's commits, is newer (the drive moved to a computer whose clock is behind the one that locked it last).
+  it.each<[string, (vp: FreshVaultPaths) => void]>([
+    ['torn mid-checkpoint', (vp) => noisePastPageOne(vp.dbPath)],
+    ['older than .enc while its -wal is newer', (vp) => backdate(vp.dbPath, 120_000)]
+  ])('#892: live sidecars beside the session’s working file %s: swept as before, and the notice', (_what, plant) => {
+    const vp = lockedVault('vault', 'pw')
+    failedLockState(vp) // `.enc` backdated 60 s
+    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    plant(vp)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
+  })
+
+  // #892: the check asks only whether the working file starts like a database (the SQLite header), so a structure the
+  // probe could not read for a reason that is not damage (here a table only the session's own connection could read)
+  // counts like any other, and nothing is noted as a salvage fallback: the check salvages nothing.
+  it('#892: live sidecars beside a working file whose structure the probe could not read: the notice, no fallback noted', () => {
+    const vp = lockedVault('vault', 'pw')
+    const { db } = unlockEncryptedVault(vp, 'pw')
+    plantProbeTrap(db)
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    backdate(vp.encPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
+    expect(ctl.takeProbeFallbacks()).toEqual([])
+  })
+
+  // #892 (e): a lock that the full drive refused needed room for its checkpoint (the main file grows by what the `-wal`
+  // holds) and for its encrypt (a new snapshot the size of the working file). Less free space than the working file and
+  // its `-wal` together, measured before the sweep frees them, names that cause, so the user frees space before the next
+  // session ends the same way. A drive that cannot say how much is free is not called full.
+  it.each<[string, number, (workingCopy: number, encSize: number) => number | null, string, string]>([
+    ['one byte less than the working file and its -wal', 0, (workingCopy) => workingCopy - 1, 'session_not_closed_full', 'unclean-full'],
+    ['exactly the working file and its -wal', 0, (workingCopy) => workingCopy, 'session_not_closed', 'unclean'],
+    // The last lock's snapshot is small and the session grew far past it in the `-wal`: room for another `.enc` of that
+    // size is not room for this session's lock.
+    [
+      'enough for .enc but not for a -wal that grew far past it',
+      1024 * 1024,
+      (workingCopy, encSize) => encSize + Math.floor((workingCopy - encSize) / 2),
+      'session_not_closed_full',
+      'unclean-full'
+    ],
+    ['no answer from the drive', 0, () => null, 'session_not_closed', 'unclean'],
+    // A read that fails sits in front of the sweep: it must neither stop the start nor keep the plaintext at rest.
+    [
+      'a read that fails',
+      0,
+      () => {
+        throw Object.assign(new Error('EIO: i/o error, statfs'), { code: 'EIO' })
+      },
+      'session_not_closed',
+      'unclean'
+    ]
+  ])('#892: a mid-session crash on a drive whose free space is %s', (_what, walBytes, free, notice, cause) => {
+    const vp = lockedVault('vault', 'pw')
+    failedLockState(vp)
+    writeFileSync(`${vp.dbPath}-wal`, walBytes > 0 ? randomBytes(walBytes) : 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    const workingCopy = statSync(vp.dbPath).size + statSync(`${vp.dbPath}-wal`).size
+    const encSize = statSync(vp.encPath).size
+    const drive = (): number | null => free(workingCopy, encSize)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, encryptFile, drive)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: notice })
+    // The marker carries the cause across a restart (on any drive: the next start does not measure again).
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    expect(restarted.getState()).toMatchObject({ lockNotice: notice })
+    restarted.unlock('pw')
+    expect(restarted.takeWorkingCopyLost()).toEqual({ cause, lostAt: expect.any(String) })
+    restarted.lock()
+  })
+
+  // #892: a password change (the v1 → v2 migration) cut short after its commit, with the session's sidecars still live:
+  // the start's rekey recovery rolls the new password's files forward, and the staged database holds the session, so
+  // nothing was lost. The working copy beside the sidecars was judged against the snapshot that was there before the
+  // recovery swapped `.enc`; it proves no loss of the one that opens, so the start says nothing.
+  it('#892: a crash right after a v1 password change committed (sidecars live): rolled forward, the session kept, no notice', () => {
+    const vp = lockedVault('vault', 'pw', { legacyV1: true })
+    backdate(vp.encPath)
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    updateSettings(db, { contextTokens: 5151 })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'new-password', FAST_KDF) // the COMMIT; the crash comes before the swap
+    db.close()
+    writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false) // swept, as before
+    expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false) // rolled forward
+    expect(ctl.getState()).not.toHaveProperty('lockNotice')
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    expect(restarted.getState()).not.toHaveProperty('lockNotice')
+    ctl.unlock('new-password')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    expect(ctl.takeWorkingCopyLost()).toBeNull()
     ctl.lock()
   })
 

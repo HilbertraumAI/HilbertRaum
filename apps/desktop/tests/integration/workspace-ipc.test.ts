@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { closeSync, existsSync, openSync, readFileSync, statSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
 
 // IPC-layer tests for registerWorkspaceIpc — the exception→result mapping the unlock gate
 // depends on (a wrong password / policy refusal / weak password must be a NORMAL
@@ -51,7 +51,8 @@ import {
   decryptFile,
   lockEncryptedVault,
   unlockEncryptedVault,
-  type VaultPaths
+  type VaultPaths,
+  type WorkingCopyLossCause
 } from '../../src/main/services/workspace-vault'
 import { dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
@@ -94,9 +95,15 @@ import { killableRuntime } from '../helpers/killable-runtime'
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const PW = 'right-password'
 
-/** A controller that ran `init()` over `vp`: its state is whatever the disk holds. */
-function startedOn(vp: VaultPaths, policy: PrivacyPolicy = ENCRYPTION_REQUIRED, devMode = false): WorkspaceController {
-  const ctrl = new WorkspaceController(vp, policy, devMode)
+/** A controller that ran `init()` over `vp`: its state is whatever the disk holds (and, given, the free space the drive
+ *  reports, #892). */
+function startedOn(
+  vp: VaultPaths,
+  policy: PrivacyPolicy = ENCRYPTION_REQUIRED,
+  devMode = false,
+  freeBytes?: (path: string) => number | null
+): WorkspaceController {
+  const ctrl = new WorkspaceController(vp, policy, devMode, undefined, freeBytes)
   ctrl.init()
   return ctrl
 }
@@ -889,22 +896,36 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
     noisePastPageOne(recoveryPath)
     backdate(vp.encPath)
   }
+  /** #892: the app ended mid-session without a lock (a power cut, the drive pulled, a kill): the session's working file,
+   *  newer than `.enc`, beside its live `-wal`/`-shm`. The next start sweeps it. */
+  const endedUnlocked = (vp: VaultPaths): void => {
+    failedLockState(vp, 7171, PW)
+    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+  }
+  /** #892: a drive with no room for the lock's next snapshot (less free than the size of `.enc`). */
+  const fullDrive = (): number => 0
 
   // The audit metadata goes verbatim into the plaintext activity-log export, so it is pinned whole: the cause, and for a
   // loss a marker recorded, when that was (the marker's mtime). A recovery copy is discarded at this unlock, so the
   // event's own time is when.
-  // The log line names what was lost: the working file (a lock, a start) or the recovery copy a failed lock left.
-  it.each<[string, (vp: VaultPaths) => void, 'lock' | 'startup' | 'recovery', boolean, string]>([
-    ['a lock at quit that finished at the last snapshot', lostAtQuit, 'lock', true, 'the working file was gone or no longer a database'],
-    ['a start that swept the last session’s broken working file', discardedAtStart, 'startup', true, 'the working file was no longer a database'],
-    ['an unlock that discarded a damaged recovery copy', damagedRecovery, 'recovery', false, 'the recovery copy a failed lock left was no longer a database']
-  ])('after %s, the unlock records workspace_working_copy_lost and one log line, once', async (_what, lose, cause, noticeAtStart, what) => {
+  // The log line names what was lost: the working file (a lock, a start), the recovery copy a failed lock left, or the
+  // session the app ended without locking (#892).
+  it.each<[string, (vp: VaultPaths) => void, WorkingCopyLossCause, WorkspaceStateInfo['lockNotice'] | null, string, ((path: string) => number | null)?]>([
+    ['a lock at quit that finished at the last snapshot', lostAtQuit, 'lock', 'working_copy_lost', 'the working file was gone or no longer a database'],
+    ['a start that swept the last session’s broken working file', discardedAtStart, 'startup', 'working_copy_lost', 'the working file was no longer a database'],
+    ['an unlock that discarded a damaged recovery copy', damagedRecovery, 'recovery', null, 'the recovery copy a failed lock left was no longer a database'],
+    ['a start that swept a session the app ended without locking', endedUnlocked, 'unclean', 'session_not_closed', 'the app ended without locking the workspace'],
+    // What was measured, not the cause it suggests (a power cut on a drive that full logs the same, #892 review N-4).
+    ['the same on a drive too full to lock', endedUnlocked, 'unclean-full', 'session_not_closed_full', 'the app ended without locking the workspace, and at the next start the free space on the drive was below the size of the workspace', fullDrive]
+  ])('after %s, the unlock records workspace_working_copy_lost and one log line, once', async (_what, lose, cause, notice, what, drive) => {
     const vp = lockedVault('wsipc', PW)
     lose(vp)
 
-    const ctrl = startedOn(vp) // the next start
+    const ctrl = startedOn(vp, ENCRYPTION_REQUIRED, false, drive) // the next start
     registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { audit: createAuditRecorder(() => ctrl.requireDb()) } }))
     const markerFile = join(dirname(vp.descriptorPath), 'working-copy-lost.json')
+    const noticeAtStart = notice !== null
     const lostAt = noticeAtStart ? statSync(markerFile).mtime.toISOString() : undefined
     const lostEvents = (): Array<Record<string, unknown> | null> =>
       listAuditEvents(ctrl.requireDb())
@@ -918,13 +939,13 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
     }
     try {
       const state = (await invoke(handlers, IPC.getWorkspaceState)).result
-      if (noticeAtStart) expect(state).toMatchObject({ lockNotice: 'working_copy_lost' })
+      if (noticeAtStart) expect(state).toMatchObject({ lockNotice: notice })
       else expect(state).not.toHaveProperty('lockNotice')
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true, state: { state: 'unlocked' } })
       expect(lostEvents()).toEqual([noticeAtStart ? { cause, lostAt } : { cause }])
       expect(logged()).toHaveLength(1)
       expect(logged()[0]).toContain(`"cause":"${cause}"`)
-      expect(logged()[0]).toContain(`were lost: ${what}`)
+      expect(logged()[0]).toContain(`were lost: ${what} {`) // the whole phrase, up to the metadata
 
       await invoke(handlers, IPC.lockWorkspace)
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })

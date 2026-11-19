@@ -2114,8 +2114,7 @@ export const fr: UiCatalog<'fr'> = {
   'diag.audit.workspace_lock_failed':
     'Échec d’une tentative de verrouillage (l’espace de travail est resté ouvert)',
   'diag.audit.workspace_password_changed': 'Mot de passe de l’espace de travail modifié',
-  'diag.audit.workspace_working_copy_lost':
-    'Modifications récentes perdues (le fichier de travail a été supprimé ou endommagé)',
+  'diag.audit.workspace_working_copy_lost': 'Modifications récentes perdues',
   'diag.audit.settings_changed': 'Paramètres modifiés',
   'diag.audit.local_api_toggled': 'API locale activée ou désactivée',
   'diag.audit.policy_warning': 'Avis de la politique du disque',
@@ -2568,6 +2567,18 @@ export const fr: UiCatalog<'fr'> = {
     'Le fichier de travail de l’espace de travail sur le disque a été supprimé ou endommagé. Votre ' +
     'espace de travail est conservé tel qu’il était la dernière fois qu’il a été verrouillé ou que ' +
     'l’application a été fermée\u00A0; les modifications faites depuis sont perdues.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum n’a pas verrouillé votre espace de travail lors de sa dernière fermeture, par ' +
+    'exemple parce que le disque a été retiré, que l’ordinateur a subi une coupure de courant ou que ' +
+    'l’application a été arrêtée de force. Votre espace de travail s’ouvre tel qu’il était lors de ' +
+    'son dernier verrouillage\u00A0; toute modification faite depuis est perdue. La prochaine fois, ' +
+    'quittez HilbertRaum avant de retirer le disque.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum n’a pas pu verrouiller votre espace de travail lors de sa dernière fermeture, car ' +
+    'le disque était plein. Votre espace de travail s’ouvre tel qu’il était lors de son dernier ' +
+    'verrouillage\u00A0; toute modification faite depuis est perdue. Assurez-vous que le disque ' +
+    'dispose d’espace libre avant de continuer\u00A0: sinon, le prochain verrouillage ne pourra pas ' +
+    'non plus enregistrer vos modifications.',
   'gate.welcome.title': 'Bienvenue',
   'gate.welcome.intro':
     'Voici votre espace de travail d’IA privé. Discutez avec un modèle d’IA et posez des ' +

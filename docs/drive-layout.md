@@ -42,7 +42,8 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
                            #   working-copy-lost.json: only after a lock that kept the last saved state
-                           #   because the working file was gone or damaged (#875); content-free, bound
+                           #   because the working file was gone or damaged (#875), or a start that
+                           #   shredded the session an unclean end left (#892); content-free, bound
                            #   to that .enc snapshot, removed by the next unlock
 ```
 
@@ -127,7 +128,8 @@ HILBERTRAUM/
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}  # + workspace.json once a workspace exists, and
                                                 #   working-copy-lost.json only after a lock kept the last
-                                                #   saved state (#875); a workspace created here removes a
+                                                #   saved state (#875) or a start shredded the session an
+                                                #   unclean end left (#892); a workspace created here removes a
                                                 #   leftover one. The sell gate refuses both, and either
                                                 #   one's temporary copy (`<name>.*`, #893)
 ```

@@ -1887,8 +1887,7 @@ export const tr: UiCatalog<'tr'> = {
   'diag.audit.workspace_lock_failed':
     'Kilitleme denemesi başarısız oldu (çalışma alanının kilidi açık kaldı)',
   'diag.audit.workspace_password_changed': 'Çalışma alanı parolası değiştirildi',
-  'diag.audit.workspace_working_copy_lost':
-    'Son değişiklikler kayboldu (çalışma dosyası silindi veya hasar gördü)',
+  'diag.audit.workspace_working_copy_lost': 'Son değişiklikler kayboldu',
   'diag.audit.settings_changed': 'Ayarlar değiştirildi',
   'diag.audit.local_api_toggled': 'Yerel API açıldı veya kapatıldı',
   'diag.audit.policy_warning': 'İlke bildirimi',
@@ -2294,6 +2293,16 @@ export const tr: UiCatalog<'tr'> = {
     'Çalışma alanının sürücüdeki çalışma dosyası silindi veya hasar gördü. Çalışma alanınız, en son ' +
     'kilitlendiği veya uygulamanın en son kapatıldığı andaki hâliyle korunuyor; o zamandan beri ' +
     'yapılan değişiklikler kayboldu.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum son kapandığında çalışma alanınız kilitlenmedi. Sürücü çıkarılmış, bilgisayarın ' +
+    'elektriği kesilmiş veya uygulama zorla durdurulmuş olabilir. Çalışma alanınız en son ' +
+    'kilitlendiği andaki hâliyle açılır; o zamandan beri yapılan değişiklikler varsa kayboldu. Bir ' +
+    'dahaki sefere sürücüyü çıkarmadan önce HilbertRaum uygulamasını kapatın.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum son kapandığında sürücü dolu olduğu için çalışma alanınız kilitlenemedi. Çalışma ' +
+    'alanınız en son kilitlendiği andaki hâliyle açılır; o zamandan beri yapılan değişiklikler varsa ' +
+    'kayboldu. Devam etmeden önce sürücüde boş alan olduğundan emin olun; aksi hâlde bir sonraki ' +
+    'kilitleme de değişikliklerinizi kaydedemez.',
   'gate.welcome.title': 'Hoş geldiniz',
   'gate.welcome.intro':
     'Burası özel yapay zekâ çalışma alanınız. Bir yapay zekâ modeliyle sohbet edin ve ' +

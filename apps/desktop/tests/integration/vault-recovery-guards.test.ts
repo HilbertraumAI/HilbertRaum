@@ -64,9 +64,12 @@ const failures = vi.hoisted(() => ({
   /** openSync throws EBUSY ONCE for the next `-wal` path while armed (an antivirus hold on the WAL at the lock's first
    *  look, gone by its retry; #876 review round 2), then disarms itself. */
   openThrowOnWalPathOnce: false,
+  /** statSync throws EIO for the working file itself (`…/hilbertraum.sqlite`, not its sidecars or temps) while armed:
+   *  a failing drive under the #892 check at startup. */
+  statThrowOnWorkingFile: false,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
-  hits: { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0 }
+  hits: { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0 }
 }))
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -117,6 +120,13 @@ vi.mock('node:fs', async (importOriginal) => {
     closeSync: vi.fn((fd: number) => {
       failures.encTmpFds.delete(fd)
       return actual.closeSync(fd)
+    }),
+    statSync: vi.fn((...args: unknown[]) => {
+      if (failures.statThrowOnWorkingFile && String(args[0]).endsWith('hilbertraum.sqlite')) {
+        failures.hits.statSync += 1
+        throw errnoError('EIO', 'EIO: i/o error, stat (the working file)')
+      }
+      return (actual.statSync as unknown as (...a: unknown[]) => unknown)(...args)
     })
   }
   return { ...mocked, default: mocked }
@@ -145,7 +155,8 @@ beforeEach(() => {
   failures.enospcOnEncTmpWrite = false
   failures.encTmpFds.clear()
   failures.openThrowOnWalPathOnce = false
-  failures.hits = { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0 }
+  failures.statThrowOnWorkingFile = false
+  failures.hits = { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0 }
   ipcState.handlers.clear()
 })
 
@@ -351,7 +362,7 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
-    expect(failures.hits).toEqual({ renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0 })
+    expect(failures.hits).toEqual({ renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0 })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(recoveryPath)).toBe(true)
@@ -472,5 +483,29 @@ describe('a -wal held at the lock’s first look (#876)', () => {
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(4343)
     ctl.lock()
+  })
+})
+
+// #892: the start's check for a session an unclean end left (live sidecars) only REPORTS, so any doubt is no evidence:
+// a working file it cannot even stat (a failing drive) raises no notice, and the start goes on to sweep as before.
+describe('the unclean-end check at startup, on a drive that fails a stat (#892)', () => {
+  it('reports nothing and changes nothing: swept, not blocked, no notice', () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    failedLockState(vp) // a real working copy, newer than `.enc`
+    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.statThrowOnWorkingFile = true
+    try {
+      ctl.init()
+    } finally {
+      failures.statThrowOnWorkingFile = false
+    }
+    expect(failures.hits.statSync).toBeGreaterThan(0)
+    expect(ctl.isRecoveryBlocked()).toBe(false)
+    for (const leftover of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) expect(existsSync(leftover)).toBe(false)
+    expect(ctl.getState()).toMatchObject({ state: 'locked' })
+    expect(ctl.getState()).not.toHaveProperty('lockNotice')
   })
 })

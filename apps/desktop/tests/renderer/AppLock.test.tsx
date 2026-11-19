@@ -161,13 +161,46 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
 describe('the gate at start (#875)', () => {
   // #875: a lock at QUIT that finished at the last snapshot has no lock screen to return the notice to. Main keeps it
   // (a marker on the drive) and reports it in the workspace state, so the gate at the next start says it from the
-  // state App fetches on mount, with no lock in this session.
-  it('shows the lost-changes notice on the gate at start, from the workspace state alone (#875)', async () => {
-    const lockWorkspace = vi.fn(async () => lockedState)
+  // state App fetches on mount, with no lock in this session. #892: so does a start whose sweep shredded the session an
+  // unclean end left behind, in its own words (the working file was neither removed nor damaged), and with the
+  // free-space advice when the drive was too full to lock. One banner per value, in that value's words only.
+  const NOTICE_COPY = {
+    working_copy_lost: 'gate.unlock.workingCopyLost',
+    session_not_closed: 'gate.unlock.sessionNotClosed',
+    session_not_closed_full: 'gate.unlock.sessionNotClosedFull'
+  } as const
+  it.each(Object.entries(NOTICE_COPY) as Array<[keyof typeof NOTICE_COPY, (typeof NOTICE_COPY)[keyof typeof NOTICE_COPY]]>)(
+    'shows the %s notice on the gate at start, from the workspace state alone (#875, #892)',
+    async (notice, key) => {
+      const lockWorkspace = vi.fn(async () => lockedState)
+      stubApi(
+        appShellStubs({
+          getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: notice })),
+          lockWorkspace,
+          perfMark: vi.fn()
+        })
+      )
+
+      render(<App />)
+
+      expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+      expect(screen.getByRole('status')).toHaveTextContent(t('en', key))
+      for (const other of Object.values(NOTICE_COPY).filter((k) => k !== key)) {
+        expect(screen.queryByText(t('en', other))).not.toBeInTheDocument()
+      }
+      expect(lockWorkspace).not.toHaveBeenCalled()
+    }
+  )
+
+  // The state crosses the IPC: a value the gate has no copy for shows no banner, also one that names a member every
+  // object inherits (an own-property read, as for a failure's `reason`), instead of rendering garbage or crashing.
+  it.each(['toString', 'a-later-notice'])('shows no notice for a value it has no copy for (%s)', async (notice) => {
     stubApi(
       appShellStubs({
-        getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: 'working_copy_lost' })),
-        lockWorkspace,
+        getWorkspaceState: vi.fn(
+          async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: notice as WorkspaceStateInfo['lockNotice'] })
+        ),
+        lockWorkspace: vi.fn(async () => lockedState),
         perfMark: vi.fn()
       })
     )
@@ -175,8 +208,7 @@ describe('the gate at start (#875)', () => {
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent(t('en', 'gate.unlock.workingCopyLost'))
-    expect(lockWorkspace).not.toHaveBeenCalled()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   // #860 A1: with no workspace state there is neither a gate nor a shell to show. The start says the app could not

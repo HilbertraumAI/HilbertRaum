@@ -2041,8 +2041,7 @@ export const it: UiCatalog<'it'> = {
   'diag.audit.workspace_lock_failed':
     'Tentativo di blocco non riuscito (l’area di lavoro è rimasta aperta)',
   'diag.audit.workspace_password_changed': 'Password dell’area di lavoro cambiata',
-  'diag.audit.workspace_working_copy_lost':
-    'Modifiche recenti perse (il file di lavoro è stato rimosso o danneggiato)',
+  'diag.audit.workspace_working_copy_lost': 'Modifiche recenti perse',
   'diag.audit.settings_changed': 'Impostazioni modificate',
   'diag.audit.local_api_toggled': 'API locale attivata o disattivata',
   'diag.audit.policy_warning': 'Avviso sui criteri dell’unità',
@@ -2472,6 +2471,18 @@ export const it: UiCatalog<'it'> = {
     'Il file di lavoro dell’area di lavoro sull’unità è stato rimosso o danneggiato. La tua area di ' +
     'lavoro resta com’era l’ultima volta che è stata bloccata o che l’app è stata chiusa; le ' +
     'modifiche fatte da allora sono andate perse.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum non ha bloccato la tua area di lavoro l’ultima volta che l’app si è chiusa, per ' +
+    'esempio perché l’unità è stata scollegata, il computer è rimasto senza corrente o l’app è stata ' +
+    'chiusa forzatamente. La tua area di lavoro si apre com’era l’ultima volta che è stata bloccata; ' +
+    'le eventuali modifiche fatte da allora sono andate perse. La prossima volta, chiudi HilbertRaum ' +
+    'prima di scollegare l’unità.',
+  'gate.unlock.sessionNotClosedFull':
+    'Non è stato possibile bloccare la tua area di lavoro l’ultima volta che l’app si è chiusa, ' +
+    'perché l’unità era piena. La tua area di lavoro si apre com’era l’ultima volta che è stata ' +
+    'bloccata; le eventuali modifiche fatte da allora sono andate perse. Assicurati che sull’unità ' +
+    'ci sia spazio libero prima di continuare: altrimenti anche il prossimo blocco non potrà salvare ' +
+    'le tue modifiche.',
   'gate.welcome.title': 'Ti diamo il benvenuto',
   'gate.welcome.intro':
     'Questa è la tua area di lavoro IA privata. Chatta con un modello IA e fai domande sui tuoi ' +
