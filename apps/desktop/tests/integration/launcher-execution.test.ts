@@ -332,9 +332,16 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
       root: string
       caches: string
       run(mode: DittoMode): SpawnSyncReturns<string>
-      /** A launch that runs beside the test, for the rows where two launches overlap. */
-      start(mode: DittoMode, env: Record<string, string>): Started
-      /** Puts an `mv` stub first on PATH that, with MV_GATE set, waits before it moves. */
+      /**
+       * A launch that runs beside the test, for the rows where two launches overlap. `prelude` runs first in the shell that
+       * then `exec`s the launcher, so its `$$` is the launcher's PID.
+       */
+      start(mode: DittoMode, env: Record<string, string>, prelude?: string): Started
+      /**
+       * Puts an `mv` stub first on PATH that, with MV_GATE set, waits before it moves. With MV_MODE=lose it loses the rename
+       * race instead: a parallel start publishes a complete copy (marked `rival`) at the target, and the rename fails. With
+       * MV_MODE=fail it fails and publishes nothing.
+       */
       stubMv(): void
       /** A gate file prefix for DITTO_GATE / MV_GATE: the stub writes `<gate>.started` and waits for `<gate>.go`. */
       gate(name: string): string
@@ -392,8 +399,8 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
         run: (mode) => runBash(root, COMMAND, [], env(mode)),
         // Git Bash's bash.exe puts its own /usr/bin ahead of the PATH it inherits, which hides an `mv` stub (a `ditto` one
         // has nothing to hide behind). The inner bash keeps the PATH it is given, and `exec` keeps the PID.
-        start: (mode, extra) => {
-          const child = spawn('bash', ['-c', 'PATH="$(cd "$1" && pwd):$PATH"; exec bash "$2"', 'launch', stubs, join(root, COMMAND)], {
+        start: (mode, extra, prelude = '') => {
+          const child = spawn('bash', ['-c', `${prelude}PATH="$(cd "$1" && pwd):$PATH"; exec bash "$2"`, 'launch', stubs, join(root, COMMAND)], {
             stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, ...env(mode, extra) }
           })
@@ -407,7 +414,23 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
         },
         // /bin/mv exists on macOS, on the usrmerged Ubuntu runners and in Git Bash.
         stubMv: () => {
-          writeFileSync(join(stubs, 'mv'), ['#!/bin/bash', ...waitFor('MV_GATE'), 'exec /bin/mv "$@"', ''].join('\n'))
+          writeFileSync(
+            join(stubs, 'mv'),
+            [
+              '#!/bin/bash',
+              ...waitFor('MV_GATE'),
+              'if [ "${MV_MODE:-}" = lose ]; then',
+              '  mkdir -p "$2/HilbertRaum.app/Contents/MacOS" "$2/HilbertRaum.app/Contents/Frameworks"',
+              '  cp "$DITTO_APP" "$2/HilbertRaum.app/Contents/MacOS/HilbertRaum"',
+              '  : > "$2/HilbertRaum.app/Contents/Frameworks/rival"',
+              '  echo "mv: rename $1 to $2: Directory not empty" >&2',
+              '  exit 1',
+              'fi',
+              'if [ "${MV_MODE:-}" = fail ]; then echo "mv: rename $1 to $2: Permission denied" >&2; exit 1; fi',
+              'exec /bin/mv "$@"',
+              ''
+            ].join('\n')
+          )
           chmodSync(join(stubs, 'mv'), 0o755)
         },
         gate: (name) => join(stubs, `gate-${name}`),
@@ -466,17 +489,51 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
     })
 
     // A partial unpack is `<zip name>.partial.<pid of the start writing it>`. One whose start has ended is swept; a name
-    // that is no PID is swept too (`kill -0 0` succeeds, so `.partial.0` would otherwise stay forever).
+    // that is no PID is swept too: `kill -0 0` and `kill -0 00` signal the start's own process group and `kill -0 -1` every
+    // process it may signal, so each succeeds and such a folder would otherwise stay forever.
     it.each([
       ['the PID of a start that has ended', deadPid],
       ['0', () => '0'],
-      ['no number', () => 'abc']
+      ['a leading zero (00)', () => '00'],
+      ['a minus sign (-1)', () => '-1']
     ])('sweeps a partial unpack left behind whose name holds %s (#887)', (_, suffix) => {
       const drive = zipDrive()
       mkdirSync(join(drive.caches, `${cached}.partial.${suffix()}`, 'HilbertRaum.app'), { recursive: true })
       const r = drive.run('ok')
       expect(r.status, outputOf(r)).toBe(0)
       expect(readdirSync(drive.caches)).toEqual([cached])
+    })
+
+    // The launcher's own PID passes `kill -0`, so only the sweep's own-PID arm removes a stale partial that carries it (a
+    // killed start of the same number). Kept, the unpack would land on top of its files and publish them. The shell that
+    // plants it `exec`s the launcher, so the PID is the same.
+    it('sweeps a stale partial unpack that holds its own PID before it unpacks (#887)', async () => {
+      const drive = zipDrive()
+      const own = `"$HOME/Library/Caches/HilbertRaum/${cached}.partial.$$/HilbertRaum.app/Contents/Frameworks"`
+      const s = drive.start('ok', {}, `mkdir -p ${own} && : > ${own}/STALE || exit 97; `)
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(0)
+        expect(readdirSync(drive.caches)).toEqual([cached])
+        const app = join(drive.caches, cached, 'HilbertRaum.app')
+        expect(existsSync(join(app, 'Contents', 'Frameworks', 'STALE')), 'the stale file was published').toBe(false)
+        expect(existsSync(join(app, 'Contents', 'MacOS', 'launched.txt'))).toBe(true)
+      } finally {
+        s.kill()
+      }
+    })
+
+    // #887: the sweep ran only while the cache was missing, so a start stopped during its unpack after another start had
+    // published kept its partial (up to ~400 MB) for as long as that version was used.
+    it('sweeps a partial unpack left behind once the cache is published too (#887)', () => {
+      const drive = zipDrive()
+      const first = drive.run('ok')
+      expect(first.status, outputOf(first)).toBe(0)
+      mkdirSync(join(drive.caches, `${cached}.partial.${deadPid()}`, 'HilbertRaum.app'), { recursive: true })
+      const r = drive.run('ok')
+      expect(r.status, outputOf(r)).toBe(0)
+      expect(readdirSync(drive.caches)).toEqual([cached])
+      expect(drive.dittoCalls()).toHaveLength(1)
     })
 
     // #887: every start used to delete every partial unpack, so a second double-click during the first unpack deleted the
@@ -543,6 +600,41 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
       } finally {
         for (const gate of [one, two]) drive.release(gate)
         for (const s of starts) s.kill()
+      }
+    })
+
+    // A parallel start can also publish between mv's own look at the target and its rename: the rename then fails
+    // ("Directory not empty"). That start used to stop there under `set -e` with a raw `mv` line and keep its partial.
+    it('a start whose publish loses the rename race to a parallel start runs that copy and leaves no partial (#887)', async () => {
+      const drive = zipDrive()
+      drive.stubMv()
+      const s = drive.start('ok', { MV_MODE: 'lose' })
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(0)
+        expect(r.out).not.toMatch(/Directory not empty/)
+        expect(readdirSync(drive.caches)).toEqual([cached])
+        const app = join(drive.caches, cached, 'HilbertRaum.app')
+        expect(existsSync(join(app, 'Contents', 'Frameworks', 'rival')), "the parallel start's copy").toBe(true)
+        expect(existsSync(join(app, 'Contents', 'MacOS', 'launched.txt'))).toBe(true)
+      } finally {
+        s.kill()
+      }
+    })
+
+    it('a publish that fails with no copy published stops with a message and leaves no partial (#887)', async () => {
+      const drive = zipDrive()
+      drive.stubMv()
+      const s = drive.start('ok', { MV_MODE: 'fail' })
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(1)
+        expect(r.out).toMatch(/Could not finish unpacking '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip'/)
+        // It stops there: going on, it would tell the user to delete a cache folder that does not exist.
+        expect(r.out).not.toMatch(/is incomplete/)
+        expect(readdirSync(drive.caches), 'no partial and no cache').toEqual([])
+      } finally {
+        s.kill()
       }
     })
 

@@ -105,26 +105,29 @@ if [ -z "$APP" ]; then
   fi
 
   CACHE="$HOME/Library/Caches/HilbertRaum/$(basename "$ZIP" .zip)"
+  # Each unpack writes into its own <cache>.partial.<pid> folder (below). Every start first
+  # sweeps the ones whose start has ended, also once the cache is published (a start stopped
+  # during its unpack leaves up to 400 MB), but never one whose start is still running: a
+  # second double-click during the first unpack must not delete the folder the first start
+  # is still writing (#887). kill -0 fails for a PID that is gone, and for another user's (a
+  # reused PID): both are stale. A reused PID of our own keeps a dead run's folder until a
+  # later start: disk, never data. A name that is no PID is stale too (a PID never starts
+  # with 0, and kill -0 succeeds for 0, 00 and -1), and so is our own PID (a killed run of
+  # ours). A failed rm (a tree still being written) is not fatal.
+  for p in "$CACHE".partial.*; do
+    [ -e "$p" ] || continue
+    pid="${p##*.partial.}"
+    case "$pid" in
+      ''|*[!0-9]*|0*|"$$") ;;
+      *) if kill -0 "$pid" 2>/dev/null; then continue; fi ;;
+    esac
+    rm -rf "$p" 2>/dev/null || true
+  done
   if [ ! -d "$CACHE" ]; then
     echo "  First run for this version: unpacking the app (about 400 MB, one time)..."
     # The partial dir is PID-unique: extraction takes long enough that an impatient
     # second double-click is likely, and two runs sharing one partial path would
     # rm -rf each other's in-progress extraction (and could publish a half tree).
-    # Stale partials from killed runs are swept here instead, but only those whose start has
-    # ended: a second double-click during the first unpack must not delete the folder the first
-    # start is still writing (#887). kill -0 fails for a PID that is gone, and for another
-    # user's (a reused PID): both are stale. A reused PID of our own keeps a dead run's folder
-    # until a later start: disk, never data. A name that is no PID, or our own PID (a killed
-    # run of ours), is stale too. A failed rm (a tree still being written) is not fatal.
-    for p in "$CACHE".partial.*; do
-      [ -e "$p" ] || continue
-      pid="${p##*.partial.}"
-      case "$pid" in
-        ''|*[!0-9]*|0|"$$") ;;
-        *) if kill -0 "$pid" 2>/dev/null; then continue; fi ;;
-      esac
-      rm -rf "$p" 2>/dev/null || true
-    done
     PARTIAL="$CACHE.partial.$$"
     mkdir -p "$PARTIAL"
     # ditto, not unzip: it is the macOS-native tool that restores the bundle's
@@ -163,13 +166,23 @@ if [ -z "$APP" ]; then
     # first run cannot leave a half-unpacked bundle that looks complete. If a
     # parallel launch published first, use its copy and drop ours. The test and the
     # mv are two steps, so a parallel launch can still publish in between; mv onto
-    # an existing dir then moves ours INSIDE it instead of replacing it (#887).
+    # an existing dir then moves ours INSIDE it instead of replacing it, and one that
+    # publishes between mv's own look and its rename makes the mv fail (#887).
     if [ -d "$CACHE" ]; then
-      rm -rf "$PARTIAL"
-    else
-      mv "$PARTIAL" "$CACHE"
+      rm -rf "$PARTIAL" 2>/dev/null || true
+    elif mv "$PARTIAL" "$CACHE" 2>/dev/null; then
       # Drop that nested copy if it happened: the published one is complete too.
-      rm -rf "$CACHE/$(basename "$PARTIAL")"
+      rm -rf "$CACHE/$(basename "$PARTIAL")" 2>/dev/null || true
+    elif [ -d "$CACHE" ]; then
+      # The mv lost that race: the published copy is complete too, so use it.
+      rm -rf "$PARTIAL" 2>/dev/null || true
+    else
+      echo
+      echo "  Could not finish unpacking '$ZIP'."
+      echo "  See docs/troubleshooting.md for help."
+      echo
+      rm -rf "$PARTIAL" 2>/dev/null || true
+      exit 1
     fi
   fi
 

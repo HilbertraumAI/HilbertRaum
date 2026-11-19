@@ -682,7 +682,7 @@ The drive root ships an obvious, double-clickable launcher (spec §6 names). Sou
 | OS | File | What it does |
 |---|---|---|
 | Windows | `Start HilbertRaum.cmd` | `%~dp0` → drive root → set `HILBERTRAUM_DRIVE_ROOT` → spawn the portable `.exe`. |
-| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, and runs the bundle from there. Each start unpacks into its own `<zip name without .zip>.partial.<pid>` folder beside it and publishes that folder only when an `.app` with its app binary landed in it (#769, #887). Before it unpacks, a start removes only the partial folders whose start has ended (a PID that is no longer running, or a name that is no PID), so a second double-click during the first unpack leaves that unpack alone; the second start then uses whichever copy was published first, and drops a copy of its own that a concurrent publish nested inside the cache (#887). An extracted `.app` at the root runs in place. |
+| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, and runs the bundle from there. Each start unpacks into its own `<zip name without .zip>.partial.<pid>` folder beside it and publishes that folder only when an `.app` with its app binary landed in it (#769, #887). Every start, also once the cache is published, first removes the partial folders of its zip whose start has ended, and only those: a PID that is no longer running, another user's, or the start's own, and a name that is no PID (empty, starting with `0`, or holding anything but digits). So a second double-click during the first unpack leaves that unpack alone, and the next start removes what a stopped one left; the second start then uses whichever copy was published first, drops a copy of its own that a concurrent publish nested inside the cache, and drops its own copy when a concurrent publish won the rename (#887). An extracted `.app` at the root runs in place. |
 | Linux | `start-hilbertraum.sh` | same, next to the AppImage. |
 | all | `READ ME FIRST.txt` | friendly first-run + SmartScreen/Gatekeeper instructions. |
 
@@ -696,7 +696,9 @@ resolved, and exits without starting it.
 **The Mac unpack cache is shared by every start and every version (#887, a contract for #849).**
 Anything that prunes `$HOME/Library/Caches/HilbertRaum/` must leave each `*.partial.<pid>` folder
 alone while its PID is running, whatever version it unpacks: a start is still writing into it, and
-two Kits of different versions can unpack on one Mac at the same time.
+two Kits of different versions can unpack on one Mac at the same time. The launcher itself removes,
+on every start, only the dead partial folders of the zip it starts; another version's partials and
+caches stay for #849.
 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
 > **its own location every launch** (`%~dp0` / `dirname "$0"`), so the same drive works on a second
