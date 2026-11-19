@@ -381,7 +381,10 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
  * whatever `onDrive` says (#914 code review: a weight deleted while the runtime holds it open, a
  * manifest removed under a running model): its memory is in use.
  *
- * null when no row that is on the drive or loaded has a size (nothing installed).
+ * null only when nothing that is on the drive or loaded has a size (nothing installed). A drive
+ * whose every counted row runs on the card gives 0, the honest number (the screen leaves the line
+ * out when it would read 0.0 GB). An ESTIMATED chat spill is not counted until a start is
+ * observed (`!verdict.estimated`).
  */
 export function loadedAtOnceMb(input: {
   memoryClass: MemoryClass

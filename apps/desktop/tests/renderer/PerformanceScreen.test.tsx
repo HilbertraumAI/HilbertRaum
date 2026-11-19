@@ -568,6 +568,39 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.getByText('Too much at once')).toBeInTheDocument()
   })
 
+  // A lite drive on a card machine: only the chat row is on the drive and it runs on the card, so main reports 0 (or a
+  // few MiB of spill). "about 0.0 GB of 31.3 GB RAM" with a Fits pill says nothing, so the line and its pill go.
+  describe('the everything-at-once line on a drive whose only model runs on the card', () => {
+    const cardOnly = (ramAllMb: number | null, over: Partial<ReturnType<typeof placement>> = {}) => {
+      const base = placement()
+      const models = base.models.map((r) => (r.role === 'chat' ? r : { ...r, onDrive: false, loaded: false }))
+      install(snapshot({ placement: { ...base, ramMb: 32_000, models, ...over, totals: { ramAllMb, bothOnCard: false, chatAndTranslationOnCard: false } } }))
+      renderPerformanceScreen()
+    }
+    const ramLine = (sum: string) => t('en', 'perf.models.ram', { sum, ram: fmt1(32_000 / 1024, 'en') })
+    // The key text before the figure, from the catalogue; the matcher gets whitespace-normalized text.
+    const lineKey = ramLine('0.1').split(' 0.1')[0].replace(/\s+/g, ' ').trim()
+
+    it.each([null, 0, 30, 51])('shows no line and no pill at %s MiB', async (mb) => {
+      cardOnly(mb)
+      expect(await screen.findByText(/Graphics card: chat/)).toBeInTheDocument()
+      expect(screen.queryByText((text) => text.startsWith(lineKey))).not.toBeInTheDocument()
+      expect(screen.queryByText(t('en', 'perf.models.ramOk'))).not.toBeInTheDocument()
+      expect(screen.queryByText(t('en', 'perf.models.ramTooMuch'))).not.toBeInTheDocument()
+    })
+
+    it.each([[52, '0.1'], [512, '0.5']])('shows the line and the Fits pill at %i MiB, reading %s GB', async (mb, gb) => {
+      cardOnly(mb)
+      expect(await screen.findByText(ramLine(gb))).toBeInTheDocument()
+      expect(screen.getByText(t('en', 'perf.models.ramOk'))).toBeInTheDocument()
+    })
+
+    it('shows the unified-memory variant of the line at 512 MiB', async () => {
+      cardOnly(512, { memoryClass: 'unified' })
+      expect(await screen.findByText(t('en', 'perf.models.memory', { sum: '0.5', budget: fmt1(24_822 / 1024, 'en') }))).toBeInTheDocument()
+    })
+  })
+
   it('warns when chat and translation are both on the card, with the start-order advice', async () => {
     install(
       snapshot({

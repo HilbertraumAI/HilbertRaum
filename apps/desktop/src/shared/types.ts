@@ -3127,8 +3127,10 @@ export interface PerformanceSnapshot {
        * split is tracked for it); on `unified` the full sum (one pool — the copy says "memory",
        * not "RAM", and the pill compares against the unified budget). On every class only the
        * rows on this drive count (`onDrive`, #914): a row named from the catalog whose files are
-       * not here adds nothing, unless it is loaded (its memory is in use). null when nothing is
-       * installed (no row that is on the drive or loaded has a size).
+       * not here adds nothing, unless it is loaded (its memory is in use). null only when
+       * nothing that is on the drive or loaded has a size (nothing installed). 0 means every
+       * counted row runs on the card (an estimated chat spill is not counted); a small value is an
+       * observed small spill. The screen leaves the line out while it would read 0.0 GB.
        */
       ramAllMb: number | null
       /**

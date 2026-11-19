@@ -944,8 +944,14 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const unifiedPool = p.memoryClass === 'unified'
     const againstMb = unifiedPool ? (p.verdict.budgetMb ?? p.ramMb) : p.ramMb
     const againstGb = againstMb != null ? fmt1(againstMb / 1024, lang) : null
-    const sumGb = p.totals.ramAllMb != null ? fmt1(p.totals.ramAllMb / 1024, lang) : null
-    const tooMuch = p.totals.ramAllMb != null && againstMb != null && p.totals.ramAllMb > againstMb
+    // The "everything loaded at once" line and its pill are left out while the figure would print as "0.0"
+    // (`fmt1(0)`): nothing installed (null), or every model on this drive runs on the card (0, or a small
+    // observed spill). The printed string decides, so this follows `fmt1`; "0.0 GB" comes back only if that
+    // format gains digits, and the line then shows its real figure.
+    const ramAllMb = p.totals.ramAllMb
+    const ramAllGb = ramAllMb != null ? fmt1(ramAllMb / 1024, lang) : null
+    const sumGb = ramAllGb != null && ramAllGb !== fmt1(0, lang) ? ramAllGb : null
+    const tooMuch = sumGb != null && ramAllMb != null && againstMb != null && ramAllMb > againstMb
     /** Where a row runs, in words: the pinned roles (vision, embeddings, transcriber) say "by
      *  design"; chat and translation on the processor are there because of the machine or the
      *  configuration, and say just that. Wave 8 ruling (d): the reranker joins that plain

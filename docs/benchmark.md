@@ -933,11 +933,15 @@ left out of the processor total** (#914, owner decision G-5 (c); `ResidentModelR
 `manifestFilesPresent`, presence only, never a hash): it keeps naming its model and size, so the
 screen still shows what that model would take before it is downloaded, but it reads "not on this
 drive" in place of "not loaded", and `loadedAtOnceMb` adds nothing for it, because nothing will
-load it. **Loaded beats `onDrive`** (#914 code review): a row whose model is resident (a weight
-deleted while the runtime holds it open, a manifest removed under a running model) reads "loaded
-now" and counts, whatever its files say. The chat row asks the same of the active model (with its
-files gone a start is refused); an active model outside the catalog has no size
-(`sizeOnDiskGb: null`, never `0`) and names no files, so it is not on the drive either.
+load it. `totals.ramAllMb` is `null` only when nothing is installed; a drive whose every model
+runs on the card gives 0 (an estimated chat spill is not counted until a start is observed). The
+screen leaves the line and its pill out whenever the total would read "0.0 GB" at its one decimal
+(below 0.05 GiB), where it would only mislead. **Loaded beats `onDrive`** (#914 code review): a
+row whose model is resident (a weight deleted while the runtime holds it open, a manifest removed
+under a running model) reads "loaded now" and counts, whatever its files say. The chat row asks
+the same of the active model (with its files gone a start is refused); an active model outside
+the catalog has no size (`sizeOnDiskGb: null`, never `0`) and names no files, so it is not on the
+drive either.
 Chat and translation auto-fit onto the card (`device: 'gpu'`) —
 under the CURRENT configuration
 (PR #303 audit DR1; the memory class alone used to decide): the row says `'cpu'` on a machine

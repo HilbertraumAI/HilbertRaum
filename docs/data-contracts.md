@@ -1011,10 +1011,12 @@ head's own weights + KV.
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
   unified budget), on every class over the rows that are `onDrive` or `loaded` only (null when no
-  such row has a size), and `totals.bothOnCard` is true when two or more of chat, translation and the
-  reranker are genuinely resident on the card — chat with an observed GPU start and at least one
-  layer offloaded, translation live with layers on the card, the reranker `'gpu'`-postured and
-  loaded.
+  such row has a size, i.e. nothing installed; 0 when every counted row runs on the card, an
+  estimated chat spill not counted; a small value is an observed small spill — the screen leaves
+  the line out while it would read 0.0 GB), and `totals.bothOnCard` is true when two or more of
+  chat, translation and the reranker are genuinely resident on the card — chat with an observed
+  GPU start and at least one layer offloaded, translation live with layers on the card, the
+  reranker `'gpu'`-postured and loaded.
   **#495 follow-up:** `totals.chatAndTranslationOnCard` is chat-and-translation specifically,
   never the reranker — it gates `perf.models.cardBoth`'s pair-naming sentence so that sentence
   stays true when the contending pair `bothOnCard` reports is chat+reranker or
