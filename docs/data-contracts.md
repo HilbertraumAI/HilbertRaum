@@ -1254,7 +1254,7 @@ head's own weights + KV.
   unlock has succeeded, so a failed unlock keeps the evidence and the next one records it (review
   round 2; an older damaged copy is a spent leftover: shredded, nothing recorded). `create()` removes
   a v1 marker a wiped vault left (with no vault, startup never reads one) and clears the record in
-  memory; the commercial sell gate does not list the file. Older builds ignore the file; the descriptor is untouched.
+  memory; the commercial sell gate refuses a drive that carries it (`noUserData`, #893). Older builds ignore the file; the descriptor is untouched.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
@@ -1563,7 +1563,16 @@ head's own weights + KV.
   problems[], checks{ policyCommercial, networkDenied, weightsVerified, licensesApproved, noUserData, runtimeCurrent,
   runtimeHashed, optionalRuntimesConsistent, kiwixSourceBundle, ocrAssetsVerified, appSkillsPresent, userSkillsEmpty,
   licenseArtifactsPresent, platformMatrixDeclared, appArtifactsPresent, launchersPresent }, modelResults }>`. Never
-  throws; every failed check adds a `problems[]` line. The Kit rule (#766): a model SHIPS when it is bundled
+  throws; every failed check adds a `problems[]` line. `noUserData` (#893) is a rule, not a list of names: no entry
+  directly in `workspace/` or `logs/` (`USER_DATA_DIRS`; a file or a link, never followed, is named `<dir>/<name>`, a
+  non-empty folder `<dir>/<name>/*`, an empty folder passes) and no `config/workspace.json*` or
+  `config/working-copy-lost.json*` (`USER_DATA_CONFIG_FILES`, exact or `<name>.*`, any case); one sorted problem per
+  entry, `user data present on a drive meant to ship empty: <path>`. It fails closed: `workspace/`, `logs/`, `config/`
+  or a folder directly in the first two that cannot be listed (no read or enter right), and a file where one of the
+  three folders belongs, each add `user data unreadable on a drive meant to ship empty: <dir>/` or `<dir> (not a
+  folder)`; only a missing path (ENOENT) passes. A link is what Node's `Dirent` calls one (a symlink, a junction; a
+  cloud placeholder folder is a folder). The builders' native pre-flight states the same rule (`user data present:
+  <path>`, `user data unreadable: <path>`; `script-drift.test.ts` pins both lists). The Kit rule (#766): a model SHIPS when it is bundled
   (`bundled_on_preconfigured_drive`) or has any file on the drive; at least one model is bundled, every shipped weight
   is VERIFIED (`weightsVerified`) and every shipped model's `license_review.status` is `approved` (`licensesApproved` —
   `--accept-license` never overrides it); a manifest with no file on the drive is the in-app catalog and is not checked.

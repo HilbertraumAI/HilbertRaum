@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assertCommercialDrive } from '../../src/main/services/commercial-drive'
-import { buildPolicyJson } from '../../src/main/services/drive'
+import { buildPolicyJson, DRIVE_LAYOUT_DIRS } from '../../src/main/services/drive'
 import { writeRuntimeMarker } from '../../src/main/services/assets'
 import type { ModelManifest } from '../../src/shared/manifest'
 import { validManifest, writeDriveFile } from '../helpers/manifest-fixtures'
+import { canMakeUnreadable, makeUnreadable } from '../helpers/unreadable-dir'
 import {
   validateRuntimeSources,
   type KitPlatform,
@@ -677,14 +678,44 @@ describe('assertCommercialDrive', () => {
     expect(res.problems.some((p) => /user data/i.test(p))).toBe(true)
   })
 
+  /** The gate's user-data lines, without the shared prefix. */
+  const userDataLines = (problems: string[]): string[] =>
+    problems
+      .filter((p) => p.startsWith('user data present on a drive meant to ship empty: '))
+      .map((p) => p.slice('user data present on a drive meant to ship empty: '.length))
+
   // Each user-data artifact independently flips noUserData (matrix), incl. the WAL/SHM
-  // sidecars a crash can leave behind (the P1 fix) and a non-empty documents dir.
+  // sidecars a crash can leave behind (the P1 fix), and every other file a used workspace,
+  // its logs or a lock can leave (#893: each of these passed the gate when planted alone on a
+  // wiped drive, several of them plaintext). A file inside a sub-folder is named by its folder.
   it.each([
-    ['plaintext DB', 'workspace/hilbertraum.sqlite'],
-    ['vault descriptor', 'config/workspace.json'],
-    ['WAL sidecar', 'workspace/hilbertraum.sqlite-wal'],
-    ['SHM sidecar', 'workspace/hilbertraum.sqlite-shm']
-  ])('flags a %s as user data', async (_label, rel) => {
+    ['plaintext DB', 'workspace/hilbertraum.sqlite', 'workspace/hilbertraum.sqlite'],
+    ['vault descriptor', 'config/workspace.json', 'config/workspace.json'],
+    ['WAL sidecar', 'workspace/hilbertraum.sqlite-wal', 'workspace/hilbertraum.sqlite-wal'],
+    ['SHM sidecar', 'workspace/hilbertraum.sqlite-shm', 'workspace/hilbertraum.sqlite-shm'],
+    ['vault descriptor temp', 'config/workspace.json.tmp', 'config/workspace.json.tmp'],
+    // On a case-insensitive drive the app reads this as its descriptor.
+    ['vault descriptor in another case', 'config/Workspace.json', 'config/Workspace.json'],
+    ['lost working copy marker', 'config/working-copy-lost.json', 'config/working-copy-lost.json'],
+    ['lost working copy marker temp', 'config/working-copy-lost.json.tmp', 'config/working-copy-lost.json.tmp'],
+    ['salvaged plaintext DB', 'workspace/hilbertraum.sqlite.recovery', 'workspace/hilbertraum.sqlite.recovery'],
+    ['decrypt temp (plaintext DB)', 'workspace/hilbertraum.sqlite.tmp', 'workspace/hilbertraum.sqlite.tmp'],
+    ['encrypt temp', 'workspace/hilbertraum.sqlite.enc.tmp', 'workspace/hilbertraum.sqlite.enc.tmp'],
+    ['staged password-change copy', 'workspace/hilbertraum.sqlite.enc.new', 'workspace/hilbertraum.sqlite.enc.new'],
+    ['staged password-change temp', 'workspace/hilbertraum.sqlite.enc.new.tmp', 'workspace/hilbertraum.sqlite.enc.new.tmp'],
+    ['password-change journal', 'workspace/rekey-journal.json', 'workspace/rekey-journal.json'],
+    ['password-change journal temp', 'workspace/rekey-journal.json.tmp', 'workspace/rekey-journal.json.tmp'],
+    ['set-aside password-change journal', 'workspace/rekey-journal.json.corrupt', 'workspace/rekey-journal.json.corrupt'],
+    ['benchmark leftover', 'workspace/.hilbertraum-benchmark-1-2.tmp', 'workspace/.hilbertraum-benchmark-1-2.tmp'],
+    ['write probe leftover', 'workspace/.write-test-1234', 'workspace/.write-test-1234'],
+    ['stored image', 'workspace/images/a.png.enc', 'workspace/images/*'],
+    ['knowledge-pack library file', 'workspace/zim-transient/library.1.xml', 'workspace/zim-transient/*'],
+    ['encrypted log', 'logs/app.log.enc', 'logs/app.log.enc'],
+    ['rotated encrypted log', 'logs/app.1.log.enc', 'logs/app.1.log.enc'],
+    ['encrypted log temp', 'logs/app.log.enc.tmp', 'logs/app.log.enc.tmp'],
+    ['plaintext log', 'logs/app.log', 'logs/app.log'],
+    ['timing log', 'logs/perf.log', 'logs/perf.log']
+  ])('flags a %s as user data', async (_label, rel, line) => {
     const root = tempDir('hilbertraum-commercial-ud-')
     writePolicy(root, buildPolicyJson())
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
@@ -694,7 +725,81 @@ describe('assertCommercialDrive', () => {
 
     const res = await assertCommercialDrive(root, [chat])
     expect(res.checks.noUserData).toBe(false)
-    expect(res.problems.some((p) => p.includes(rel))).toBe(true)
+    expect(userDataLines(res.problems)).toEqual([line])
+  })
+
+  // A link is named, never followed (#893): its target may be anything, and an empty folder
+  // behind it must not let it pass. A junction on Windows needs no privilege.
+  it('flags a link in workspace/ by its own name, even when it points at an empty folder', async () => {
+    const root = tempDir('hilbertraum-commercial-link-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    mkdirSync(join(root, 'workspace'), { recursive: true })
+    symlinkSync(tempDir('hilbertraum-commercial-link-target-'), join(root, 'workspace', 'linked'), 'junction')
+
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.checks.noUserData).toBe(false)
+    expect(userDataLines(res.problems)).toEqual(['workspace/linked'])
+  })
+
+  /** The lines for what the gate could not look into, without the shared prefix. */
+  const unreadableLines = (problems: string[]): string[] =>
+    problems
+      .filter((p) => p.startsWith('user data unreadable on a drive meant to ship empty: '))
+      .map((p) => p.slice('user data unreadable on a drive meant to ship empty: '.length))
+
+  // #893: a file where one of these folders belongs used to pass, read as an empty folder. The gate cannot look into it.
+  it.each([['workspace'], ['logs'], ['config']])('refuses a file named %s where the folder belongs', async (dir) => {
+    const root = tempDir('hilbertraum-commercial-notdir-')
+    if (dir !== 'config') writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    writeFileSync(join(root, dir), 'x')
+
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.checks.noUserData).toBe(false)
+    expect(unreadableLines(res.problems)).toEqual([`${dir} (not a folder)`])
+  })
+
+  // #893: a folder the gate could not list used to pass as empty. Each is named instead: logs/ and a sub-folder of
+  // workspace/ that hold a file, and a config/ whose policy still opens by its path while the folder cannot be listed.
+  it.skipIf(!canMakeUnreadable)('refuses a folder it cannot list, naming each one', async () => {
+    const root = tempDir('hilbertraum-commercial-unreadable-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    writeDriveFile(root, 'logs/app.log', 'x')
+    writeDriveFile(root, 'workspace/documents/a.enc', 'x')
+    const undo = [
+      makeUnreadable(join(root, 'logs')),
+      makeUnreadable(join(root, 'workspace', 'documents')),
+      makeUnreadable(join(root, 'config'), { traverse: true })
+    ]
+    try {
+      const res = await assertCommercialDrive(root, [chat])
+      expect(res.checks.policyCommercial).toBe(true)
+      expect(res.checks.noUserData).toBe(false)
+      expect(unreadableLines(res.problems)).toEqual(['config/', 'logs/', 'workspace/documents/'])
+      expect(userDataLines(res.problems)).toEqual([])
+    } finally {
+      for (const u of undo) u()
+    }
+  })
+
+  it('names every leftover of a used drive, in a stable order', async () => {
+    const root = tempDir('hilbertraum-commercial-many-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    for (const rel of ['workspace/rekey-journal.json', 'logs/app.log.enc', 'workspace/documents/a.enc', 'config/working-copy-lost.json']) {
+      mkdirSync(join(root, ...rel.split('/'), '..'), { recursive: true })
+      writeFileSync(join(root, ...rel.split('/')), 'x')
+    }
+
+    const res = await assertCommercialDrive(root, [chat])
+    expect(userDataLines(res.problems)).toEqual([
+      'config/working-copy-lost.json',
+      'logs/app.log.enc',
+      'workspace/documents/*',
+      'workspace/rekey-journal.json'
+    ])
   })
 
   it('flags a non-empty workspace/documents/ directory as user data', async () => {
@@ -719,6 +824,23 @@ describe('assertCommercialDrive', () => {
     provisionApp(root)
     const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
     expect(res.ok).toBe(true)
+    expect(res.checks.noUserData).toBe(true)
+  })
+
+  // The Kit build lays out every drive folder and leaves `workspace/` and `logs/` empty; the
+  // app creates documents/, images/ and zim-transient/ on first use, and an empty one may stay
+  // behind. None of that is user data (#893: the stricter rule must keep a fresh Kit SELLABLE).
+  it('a fresh layout with empty workspace/ sub-folders and an empty logs/ is NOT user data', async () => {
+    const root = tempDir('hilbertraum-commercial-layout-')
+    for (const dir of DRIVE_LAYOUT_DIRS) mkdirSync(join(root, ...dir.split('/')), { recursive: true })
+    for (const dir of ['documents', 'images', 'zim-transient']) mkdirSync(join(root, 'workspace', dir))
+    writePolicy(root, buildPolicyJson())
+    provisionAppSkill(root)
+    provisionLicenseArtifacts(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    provisionApp(root)
+    const res = await assertCommercialDrive(root, [chat], null, null, null, kit())
+    expect(res.problems).toEqual([])
     expect(res.checks.noUserData).toBe(true)
   })
 

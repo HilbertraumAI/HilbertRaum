@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
@@ -12,6 +12,7 @@ import { SCRIPT_LEGS, downloadEnv, isolatedScripts, outputOf, scriptRoot } from 
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
 import { MARKER_ROWS, type MarkerFamily } from '../helpers/fetch-runtime-markers'
 import { testBudgetMs } from '../helpers/hang-budget'
+import { canMakeUnreadable, makeUnreadable } from '../helpers/unreadable-dir'
 
 // Executes the drive-builder scripts (#233, #234) — unlike script-drift.test.ts, which is
 // text-only by charter. Every case is OFFLINE and deterministic: the fetch cases stop before
@@ -202,6 +203,10 @@ function sellableDrive(): string {
   writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
   mkdirSync(join(root, 'user-skills'))
+  // The folders a Kit build lays out empty, and the ones the app creates on first use and may leave empty (#893).
+  for (const dir of ['workspace/documents', 'workspace/images', 'workspace/zim-transient', 'logs']) {
+    mkdirSync(join(root, ...dir.split('/')), { recursive: true })
+  }
   for (const name of DRIVE_LICENSE_ARTIFACTS) writeDriveFile(root, name, name)
   writeDriveFile(root, `HilbertRaum-${APP_VERSION}-portable.exe`, 'app')
   writeDriveFile(root, 'Start HilbertRaum.cmd', 'launcher')
@@ -1230,6 +1235,104 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain('NOT SELLABLE')
         expect(out).toContain(`    - ${line}`)
         expect(out).not.toContain('SELLABLE: canonical gate passed')
+      })
+
+      /** The native pre-flight's user-data lines (both families), whole and sorted. */
+      const nativeUserData = (out: string): string[] =>
+        out
+          .split(/\r?\n/)
+          .map((l) => l.trimEnd())
+          .filter((l) => l.startsWith('    - user data '))
+          .sort()
+
+      // #893: a hand-wiped drive that kept files beside the workspace, in logs/ or in config/. The pre-flight names each one,
+      // a file in a sub-folder by its folder and a link by its own name (never followed: its target here is an empty folder),
+      // a config file in any case and with any suffix, and a dot file. One combined row per leg: a verify run is slow on the
+      // Windows runner (#458).
+      it.skipIf(!toolBuilt)('a used drive: the pre-flight names every leftover (#893)', () => {
+        const root = sellableDrive()
+        for (const rel of [
+          'workspace/hilbertraum.sqlite.recovery',
+          'workspace/hilbertraum.sqlite.tmp',
+          'workspace/images/a.enc',
+          'workspace/.write-test-1',
+          'config/working-copy-lost.json',
+          'config/Workspace.json.tmp',
+          'logs/app.log.enc'
+        ]) {
+          writeDriveFile(root, rel, 'x')
+        }
+        const linkTarget = mkdtempSync(join(tmpdir(), 'hilbertraum-script-link-'))
+        symlinkSync(linkTarget, join(root, 'workspace', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('NOT SELLABLE')
+        // Whole lines: `…sqlite.tmp` must not pass for `…sqlite`, and the empty folders sellableDrive() lays out stay unnamed.
+        expect(nativeUserData(out), out).toEqual(
+          [
+            'config/Workspace.json.tmp',
+            'config/working-copy-lost.json',
+            'logs/app.log.enc',
+            'workspace/.write-test-1',
+            'workspace/hilbertraum.sqlite.recovery',
+            'workspace/hilbertraum.sqlite.tmp',
+            'workspace/images/*',
+            'workspace/linked'
+          ].map((rel) => `    - user data present: ${rel}`)
+        )
+      })
+
+      // #893: the pre-flight read a folder it could not list, or a file where the folder belongs, as empty. It refuses each
+      // and names it: logs/ and a workspace sub-folder that hold a file, and a config/ whose policy still opens by its path.
+      it.skipIf(!toolBuilt || !canMakeUnreadable)('a drive the pre-flight cannot look into: it names each folder (#893)', () => {
+        const root = sellableDrive()
+        writeDriveFile(root, 'logs/app.log', 'x')
+        writeDriveFile(root, 'workspace/documents/a.enc', 'x')
+        const undo = [
+          makeUnreadable(join(root, 'logs')),
+          makeUnreadable(join(root, 'workspace', 'documents')),
+          makeUnreadable(join(root, 'config'), { traverse: true })
+        ]
+        try {
+          const r = verify(root)
+          const out = outputOf(r)
+          expect(r.status, out).toBe(1)
+          expect(out).toContain('NOT SELLABLE')
+          expect(nativeUserData(out), out).toEqual(
+            ['config/', 'logs/', 'workspace/documents/'].map((rel) => `    - user data unreadable: ${rel}`)
+          )
+        } finally {
+          for (const u of undo) u()
+        }
+      })
+
+      it.skipIf(!toolBuilt)('a drive whose workspace and logs are files: the pre-flight names each (#893)', () => {
+        const root = sellableDrive()
+        for (const dir of ['workspace', 'logs']) {
+          rm(root, dir)
+          writeDriveFile(root, dir, 'x')
+        }
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('NOT SELLABLE')
+        expect(nativeUserData(out), out).toEqual(
+          ['logs (not a folder)', 'workspace (not a folder)'].map((rel) => `    - user data unreadable: ${rel}`)
+        )
+      })
+
+      // A POSIX name may hold a newline. Each entry is one name, as the TS gate reads it: an empty folder named so is no user
+      // data, and `x<newline>workspace.json` is no vault descriptor, so the drive stays SELLABLE. Windows names hold none.
+      it.skipIf(!toolBuilt || process.platform === 'win32')('names holding a newline are one entry each: the drive stays SELLABLE (#893)', () => {
+        const root = sellableDrive()
+        mkdirSync(join(root, 'workspace', 'new\nline'))
+        writeDriveFile(root, 'config/x\nworkspace.json', 'x')
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(nativeUserData(out), out).toEqual([])
+        expect(r.status, out).toBe(0)
+        expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
       })
 
       // #766: a Kit ships its bundled set plus any model with a file on the drive, and lists every other manifest for in-app

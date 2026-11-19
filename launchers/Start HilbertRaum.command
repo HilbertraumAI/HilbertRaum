@@ -105,15 +105,43 @@ if [ -z "$APP" ]; then
   fi
 
   CACHE="$HOME/Library/Caches/HilbertRaum/$(basename "$ZIP" .zip)"
+  # Each unpack writes into its own <cache>.partial.<pid> folder (below). Every start first
+  # sweeps the ones whose start has ended, also once the cache is published (a start stopped
+  # during its unpack leaves up to 400 MB), but never one whose start is still running: a
+  # second double-click during the first unpack must not delete the folder the first start
+  # is still writing (#887). kill -0 fails for a PID that is gone, and for another user's (a
+  # reused PID): both are stale. A reused PID of our own keeps a dead run's folder until a
+  # later start: disk, never data. A name that is no PID is stale too (a PID never starts
+  # with 0, and kill -0 succeeds for 0, 00 and -1), and so is our own PID (a killed run of
+  # ours). A failed rm (a tree still being written) is not fatal. The same goes for a copy a
+  # start nested INSIDE the published cache when it lost the publish race (below) and was
+  # stopped before it removed it.
+  for p in "$CACHE".partial.* "$CACHE/$(basename "$CACHE")".partial.*; do
+    [ -e "$p" ] || continue
+    pid="${p##*.partial.}"
+    case "$pid" in
+      ''|*[!0-9]*|0*|"$$") ;;
+      *) if kill -0 "$pid" 2>/dev/null; then continue; fi ;;
+    esac
+    rm -rf "$p" 2>/dev/null || true
+  done
   if [ ! -d "$CACHE" ]; then
     echo "  First run for this version: unpacking the app (about 400 MB, one time)..."
     # The partial dir is PID-unique: extraction takes long enough that an impatient
     # second double-click is likely, and two runs sharing one partial path would
     # rm -rf each other's in-progress extraction (and could publish a half tree).
-    # Stale partials from killed runs are swept here instead (-f: no-match is fine).
-    rm -rf "$CACHE".partial.*
     PARTIAL="$CACHE.partial.$$"
-    mkdir -p "$PARTIAL"
+    # mkdir without -p: a leftover of our own PID that the sweep could not remove (root-owned
+    # files from a sudo start) must not be reused, or its files would be published with ours.
+    mkdir -p "$(dirname "$PARTIAL")"
+    if ! mkdir "$PARTIAL" 2>/dev/null; then
+      echo
+      echo "  An earlier unpack at '$PARTIAL' could not be removed."
+      echo "  Delete that folder, then start again."
+      echo "  See docs/troubleshooting.md for help."
+      echo
+      exit 1
+    fi
     # ditto, not unzip: it is the macOS-native tool that restores the bundle's
     # symlinks, permissions and extended attributes intact.
     if ! ditto -x -k "$ZIP" "$PARTIAL"; then
@@ -125,15 +153,26 @@ if [ -z "$APP" ]; then
       exit 1
     fi
     # An archive can unpack cleanly and still hold no .app (a zip made without
-    # --keepParent). Refuse it here: published, it would be run from the cache on
-    # every later start and never unpacked again (#769).
+    # --keepParent), or an .app without its app binary. Refuse it here: published, it
+    # would be run from the cache on every later start and never unpacked again (#769),
+    # and a bundle without its binary would get the Gatekeeper advice below every time
+    # (#887). The bundle and binary it looks for are the ones the run check below uses.
+    # UNPACKED_APP: 0 no .app, 1 an .app with its binary, 2 an .app without it.
     UNPACKED_APP=0
     for candidate in "$PARTIAL"/*.app; do
-      if [ -d "$candidate" ]; then UNPACKED_APP=1; break; fi
+      if [ -d "$candidate" ]; then
+        UNPACKED_APP=2
+        if [ -x "$candidate/Contents/MacOS/$(basename "$candidate" .app)" ]; then UNPACKED_APP=1; fi
+        break
+      fi
     done
-    if [ "$UNPACKED_APP" = 0 ]; then
+    if [ "$UNPACKED_APP" != 1 ]; then
       echo
-      echo "  Unpacked '$ZIP' but found no .app inside it."
+      if [ "$UNPACKED_APP" = 0 ]; then
+        echo "  Unpacked '$ZIP' but found no .app inside it."
+      else
+        echo "  Unpacked '$ZIP' but the app inside it lacks its program file."
+      fi
       echo "  The file is damaged or is not a HilbertRaum app archive. Copy the"
       echo "  release's .app.zip to the drive again, then start again."
       echo "  See docs/troubleshooting.md for help."
@@ -143,12 +182,25 @@ if [ -z "$APP" ]; then
     fi
     # Only publish the cache once extraction fully succeeded, so an interrupted
     # first run cannot leave a half-unpacked bundle that looks complete. If a
-    # parallel launch published first, use its copy (mv onto an existing dir would
-    # nest ours INSIDE it, not replace it).
+    # parallel launch published first, use its copy and drop ours. The test and the
+    # mv are two steps, so a parallel launch can still publish in between; mv onto
+    # an existing dir then moves ours INSIDE it instead of replacing it, and one that
+    # publishes between mv's own look and its rename makes the mv fail (#887).
     if [ -d "$CACHE" ]; then
-      rm -rf "$PARTIAL"
+      rm -rf "$PARTIAL" 2>/dev/null || true
+    elif mv "$PARTIAL" "$CACHE" 2>/dev/null; then
+      # Drop that nested copy if it happened: the published one is complete too.
+      rm -rf "$CACHE/$(basename "$PARTIAL")" 2>/dev/null || true
+    elif [ -d "$CACHE" ]; then
+      # The mv lost that race: the published copy is complete too, so use it.
+      rm -rf "$PARTIAL" 2>/dev/null || true
     else
-      mv "$PARTIAL" "$CACHE"
+      echo
+      echo "  Could not finish unpacking '$ZIP'."
+      echo "  See docs/troubleshooting.md for help."
+      echo
+      rm -rf "$PARTIAL" 2>/dev/null || true
+      exit 1
     fi
   fi
 

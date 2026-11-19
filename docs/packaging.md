@@ -682,7 +682,7 @@ The drive root ships an obvious, double-clickable launcher (spec §6 names). Sou
 | OS | File | What it does |
 |---|---|---|
 | Windows | `Start HilbertRaum.cmd` | `%~dp0` → drive root → set `HILBERTRAUM_DRIVE_ROOT` → spawn the portable `.exe`. |
-| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, publishes that folder only when an `.app` landed in it (#769), and runs the bundle from there. An extracted `.app` at the root runs in place. |
+| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, and runs the bundle from there. Each start unpacks into its own `<zip name without .zip>.partial.<pid>` folder beside it and publishes that folder only when an `.app` with its app binary landed in it (#769, #887). Every start, also once the cache is published, first removes the partial folders of its zip whose start has ended, and only those: a PID that is no longer running, another user's, or the start's own, and a name that is no PID (empty, starting with `0`, or holding anything but digits). So a second double-click during the first unpack leaves that unpack alone, and the next start removes what a stopped one left, a copy it left nested inside the published cache included; the second start then uses whichever copy was published first, drops a copy of its own that a concurrent publish nested inside the cache, and drops its own copy when a concurrent publish won the rename (#887). A start never reuses a partial folder: one of its own PID that the sweep could not remove stops it with "An earlier unpack at '…' could not be removed", naming the folder to delete. An archive with no `.app` stops with "found no .app inside it", an `.app` without its app binary with "the app inside it lacks its program file", and a publish that fails with no copy published with "Could not finish unpacking" (#887). An extracted `.app` at the root runs in place. |
 | Linux | `start-hilbertraum.sh` | same, next to the AppImage. |
 | all | `READ ME FIRST.txt` | friendly first-run + SmartScreen/Gatekeeper instructions. |
 
@@ -692,6 +692,13 @@ zip), naming the files to delete and never deleting anything themselves (#235); 
 (`/check` on Windows) prints the drive root, the manifests folder the app will read and the app it
 resolved, and exits without starting it.
 `tests/integration/launcher-execution.test.ts` executes all three in scratch roots.
+
+**The Mac unpack cache is shared by every start and every version (#887, a contract for #849).**
+Anything that prunes `$HOME/Library/Caches/HilbertRaum/` must leave each `*.partial.<pid>` folder
+alone while its PID is running, whatever version it unpacks: a start is still writing into it, and
+two Kits of different versions can unpack on one Mac at the same time. The launcher itself removes,
+on every start, only the dead partial folders of the zip it starts; another version's partials and
+caches stay for #849.
 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
 > **its own location every launch** (`%~dp0` / `dirname "$0"`), so the same drive works on a second
@@ -753,7 +760,9 @@ final check: THE canonical gate — node apps/desktop/out/tools/assert-commercia
              + every shipped weight VERIFIED and approved, at least one model bundled (#766)
              + runtime install markers match the pin AND record a matching binary hash (#234)
              + exactly one app artifact + the launcher per declared platform (--platforms; #233)
-             + no user data
+             + no user data: nothing but empty folders in workspace/ and logs/,
+               no config/workspace.json* or config/working-copy-lost.json*, and every
+               one of those folders readable (#893)
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
              + root license/attribution artifacts present + non-empty (LIC-1)
 ```
@@ -820,7 +829,10 @@ a non-empty `SOURCES.md` beside it.
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
 but update-checks + telemetry are denied) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
-that **no user data is present** (spec §12.2) **and** that **at least one trusted product skill is
+that **no user data is present** (spec §12.2: `workspace/` and `logs/` hold nothing but empty folders,
+and `config/` holds no `workspace.json*` or `working-copy-lost.json*`; the gate names each leftover,
+OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder it cannot list or a
+file in a folder's place fails the check as unreadable, #893) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
 declared platform has exactly one app artifact of the version being built plus its launcher** (#233)
 **and** that **every sidecar binary matches the SHA-256 its install marker records** (#234) — the
@@ -1238,7 +1250,16 @@ on a tag (a release leg has no PR gate ahead of it) — a deliberate, registered
 
 The green gate (`typecheck`/`test`/`build`) runs on mocks with zero weight files, so real-runtime /
 real-drive behaviour never shows up in CI. Before any drive ships (commercial or a DIY hand-off),
-run one real-model session covering:
+run one real-model session covering the items below.
+
+These sessions create a workspace, documents and logs. Run them on a scratch drive, not the Kit
+that ships. If they ran on the Kit, wipe it afterwards (delete everything inside `workspace/` and
+`logs/` but keep the two folders, and delete `config/workspace.json*` and
+`config/working-copy-lost.json*`), then run `build-commercial-drive` with `-VerifyOnly`
+(`--verify-only`) again: the sell gate names every file the wipe missed (#893). On a Mac, Finder
+writes a `.DS_Store` into each folder you open on the stick, and macOS writes `._<name>` companion
+files beside files it copies or tags there (exFAT keeps no extended attributes); the gate counts
+both. Delete them too before that final check, or do not browse `workspace/` and `logs/` in Finder.
 
 1. **Post-package smoke on the produced `.exe`:** import a PDF, a DOCX, and a CSV; create + unlock
    an encrypted workspace (exercises the externalized parser libs and `@noble/hashes` argon2id,

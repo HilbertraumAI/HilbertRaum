@@ -268,13 +268,70 @@ if [[ -f "$POLICY" ]]; then
 else
   PROBLEMS+=("config/policy.json missing")
 fi
-# Mirror assertCommercialDrive: flat DB/descriptor files + WAL/SHM sidecars + documents dir.
-for ud in workspace/hilbertraum.sqlite workspace/hilbertraum.sqlite.enc workspace/hilbertraum.sqlite-wal workspace/hilbertraum.sqlite-shm config/workspace.json; do
-  [[ -e "$TARGET/$ud" ]] && PROBLEMS+=("user data present: $ud")
+# No user data on a drive meant to ship empty (spec 12.2, #893). Mirrors assertCommercialDrive's
+# rule (commercial-drive.ts USER_DATA_DIRS / USER_DATA_CONFIG_FILES): every entry directly in these
+# folders is user data -- a file or a link by its own name (a link is never followed), a non-empty
+# folder as <dir>/<name>/* (an empty one is fine) -- and so is a vault descriptor or a
+# working-copy-lost marker in config/, exact or with a suffix, in any case. Fail closed: a folder
+# that cannot be listed is "user data unreadable: <dir>/", a file where workspace/, logs/ or config/
+# belongs is "user data unreadable: <dir> (not a folder)"; only a missing one passes. The entries
+# come from a glob, never from parsing ls, so a name holding a newline is one entry. Bash 3.2: no
+# mapfile, and no empty-array expansion under set -u.
+USER_DATA_DIRS=(
+  workspace
+  logs
+)
+USER_DATA_CONFIG_FILES=(
+  workspace.json
+  working-copy-lost.json
+)
+# 0 when the folder $1 can be listed: the read and enter rights, then ls itself, which also fails
+# on a folder a Windows deny entry hides from Git Bash's -r.
+ud_can_list() { [[ -r "$1" && -x "$1" ]] && ls -A "$1" >/dev/null 2>&1; }
+# 0 when $1 (under $TARGET) is a folder to look into; names why not when it is there and is none.
+ud_lookable() {
+  [[ -e "$TARGET/$1" ]] || return 1
+  if [[ ! -d "$TARGET/$1" ]]; then
+    PROBLEMS+=("user data unreadable: $1 (not a folder)")
+    return 1
+  fi
+  if ! ud_can_list "$TARGET/$1"; then
+    PROBLEMS+=("user data unreadable: $1/")
+    return 1
+  fi
+}
+ud_glob_restore="$(shopt -p dotglob nullglob || true)"
+shopt -s dotglob nullglob
+for udd in "${USER_DATA_DIRS[@]}"; do
+  ud_lookable "$udd" || continue
+  for ud_path in "$TARGET/$udd"/*; do
+    ud="${ud_path##*/}"
+    if [[ -L "$ud_path" || ! -d "$ud_path" ]]; then
+      PROBLEMS+=("user data present: $udd/$ud")
+      continue
+    fi
+    # The first entry decides; ls runs only on a folder that shows none, to tell empty from unlistable.
+    ud_held=0
+    if [[ -r "$ud_path" && -x "$ud_path" ]]; then
+      for ud_first in "$ud_path"/*; do ud_held=1; break; done
+    fi
+    if [[ $ud_held -eq 1 ]]; then
+      PROBLEMS+=("user data present: $udd/$ud/*")
+    elif ! ud_can_list "$ud_path"; then
+      PROBLEMS+=("user data unreadable: $udd/$ud/")
+    fi
+  done
 done
-if [[ -d "$TARGET/workspace/documents" ]] && [[ -n "$(ls -A "$TARGET/workspace/documents" 2>/dev/null)" ]]; then
-  PROBLEMS+=("user data present: workspace/documents/*")
+if ud_lookable config; then
+  for cf_path in "$TARGET/config"/*; do
+    cf="${cf_path##*/}"
+    cf_lower="$(printf '%s' "$cf" | tr '[:upper:]' '[:lower:]')"
+    for udc in "${USER_DATA_CONFIG_FILES[@]}"; do
+      if [[ "$cf_lower" == "$udc" || "$cf_lower" == "$udc".* ]]; then PROBLEMS+=("user data present: config/$cf"); fi
+    done
+  done
 fi
+eval "$ud_glob_restore"
 # App skills present + user-skills empty (assertCommercialDrive parity, skills plan S9 / §14):
 # a sold drive ships trusted PRODUCT skills under app-skills/ (a folder with a SKILL.md) and an
 # EMPTY user-skills/ (the buyer fills it). Mirrors commercial-drive.ts listSkillFolders.
