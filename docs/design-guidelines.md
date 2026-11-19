@@ -2425,11 +2425,15 @@ backend/data-contract/IPC changes. Before/after eyeball captures lived in
      still wrap cleanly to two lines. Guard: `tests/unit/rail-labels.test.ts`.
    - **The rail scrolls at short window heights** (#803, 2026-11-15; open-issues wave owner call
      G-9). Its content is about 631 px tall on an encrypted workspace (571 px on a plaintext one,
-     which has no lock button), so below a window height of about 696 px (636; Turkish, with its
-     two-line «Yapay zekâ modeli», about 15 px more) its foot, Lock now and the network
-     indicator, sat under the window and the whole app scrolled to reach it. `.sidebar` now
-     scrolls on its own (`overflow-y: auto; min-height: 0`), by wheel and keyboard (Tab brings the
-     lock button and the indicator into view), with no visible scrollbar
+     which has no lock button), so below an outer window height of about 670 px (610 plaintext;
+     Turkish, with its two-line «Yapay zekâ modeli», about 15 px more) its foot, Lock now and the
+     network indicator, sat under the window and the whole app scrolled to reach it. Those
+     figures are for the menu bar hidden, as on Windows and Linux since #912; with the bar shown
+     they are 696 / 636 (the bar takes 26 px). Measured 2026-11-19 in the running dev app at
+     880 px outer width, 100 % scaling, English UI: the largest outer heights that scroll were 669
+     (encrypted), 609 (plaintext) and 695 (encrypted, bar shown); Turkish not measured. `.sidebar`
+     now scrolls on its own (`overflow-y: auto; min-height: 0`), by wheel and keyboard (Tab
+     brings the lock button and the indicator into view), with no visible scrollbar
      (`scrollbar-width: none`): a classic bar takes about 15 px of the column, and the labels are
      sized to the pixel (German «Einstellungen» has 0.3 px to spare). It never scrolls sideways
      (`overflow-x: hidden`, owner round 2026-11-15): a label too wide for the column is clipped

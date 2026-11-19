@@ -125,7 +125,7 @@ export interface LlamaRerankerOptions extends LlamaRerankerDeps {
    * #913: checks the reranker's file before each cold start spawns, at the head of the start ladder. The
    * composition passes the cache-only check: a file a check found damaged latches `startFailed` (rerank() then
    * fails fast and retrieval keeps the fused order, as for a load fault); a clean check of the file, a download of
-   * it (`rearmCheckedModels`), an engine re-check or a restart re-arms it. Absent ⇒ no check.
+   * it (`rearmStartRefusals`), an engine re-check or a restart re-arms it. Absent ⇒ no check.
    */
   checkModel?: BoundModelStartCheck
 }

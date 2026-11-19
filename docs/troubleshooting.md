@@ -451,7 +451,8 @@ it is **not encrypted**.
 What to do:
 
 - Unlock with your usual password. The app encrypts the copy again as the workspace's encrypted
-  file and opens the workspace with everything in it. Nothing is lost.
+  file and opens the workspace as your last session left it. In rare cases the last changes of that
+  session are missing, or a damaged copy is not kept (see `docs/known-limitations.md`).
 - Unlock first. Don't put an older copy of the encrypted file back before you unlock: if that copy
   carries a newer file date than the kept one, the app takes it for the newest, and the changes of
   your last session are lost.
@@ -478,8 +479,10 @@ What to do:
   files, or in a `FOUND.000` folder at the drive's root after a disk check (its files are named
   like `FILE0000.CHK`; the workspace is usually the largest). Put it back as
   `workspace/hilbertraum.sqlite.enc` and unlock again.
-- Otherwise restore the `workspace/` and `config/` folders from a backup, then unlock with the
-  password that backup was made with.
+- Otherwise restore the `workspace/` folder from a backup and unlock with your current password.
+  Leave `config/` as it is: it holds the wrapped key that opens the workspace, and it follows your
+  password. Only a backup made before the first password change on a workspace that an older
+  version created needs its own `config/` folder too; then unlock with that backup's password.
 
 You can also see this message when an older version of HilbertRaum (0.1.65 or earlier) started on
 the drive after the encrypted file went missing: those versions removed the copy the last session
@@ -891,9 +894,9 @@ your drive. If the screen shows a calm *"Image understanding needs a local visio
 drive"* card, choose **Go to AI Model**: it opens the AI Model screen on the vision model. Download
 it there — it's an optional download, like the larger chat models, so internet access must be
 enabled in Settings (see the User Guide §5). There is nothing to start afterwards: the vision model
-has no **Use** button, and its row says it is used automatically on the Images screen. This is
-**not** OCR: for a scanned PDF or a document you want to search, use the document's **Make
-searchable (OCR)** action instead (above).
+has no **Use** button, and its row says the Images screen picks its vision model automatically.
+This is **not** OCR: for a scanned PDF or a document you want to search, use the document's
+**Make searchable (OCR)** action instead (above).
 
 If you drop a PDF on the Images screen, it says *"This screen reads one picture, not a PDF"* and
 offers **Go to Documents**. Add the PDF there; if it is a scan, use **Make searchable (OCR)** on
