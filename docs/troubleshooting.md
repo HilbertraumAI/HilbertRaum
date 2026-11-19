@@ -653,10 +653,13 @@ right after.
 - On Windows, the portable `.exe` may take a few seconds on first launch — wait for the window.
 - On macOS, the launcher unpacks the app once from the drive's `.app.zip` into
   `~/Library/Caches/HilbertRaum/` on this Mac (a folder named after the zip) and starts it from
-  there; your workspace stays on the drive. If it says **"found no .app inside it"**, the zip on
-  the drive is damaged: copy it to the drive again. If it says the app unpacked earlier **"is
-  incomplete"**, delete the folder it names (in Finder: **Go → Go to Folder…**, paste the path);
-  the next start unpacks a fresh copy. Double-clicked the launcher again while it was unpacking?
+  there; your workspace stays on the drive. If it says **"found no .app inside it"** or that the
+  app inside it **"lacks its program file"**, the zip on the drive is damaged: copy it to the drive
+  again. If it says the app unpacked earlier **"is incomplete"**, delete the folder it names (in
+  Finder: **Go → Go to Folder…**, paste the path); the next start unpacks a fresh copy. If it
+  says **"An earlier unpack at … could not be removed"**, delete the folder it names the same way
+  (macOS asks for an administrator password when a start with `sudo` made it), then start again.
+  Double-clicked the launcher again while it was unpacking?
   Both windows unpack, and the app opens once. An older launcher could leave an incomplete copy
   when that happened: if the app quits right away every time on this Mac, delete the folder named
   after the zip in `~/Library/Caches/HilbertRaum/` the same way.

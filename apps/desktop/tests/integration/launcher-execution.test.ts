@@ -523,6 +523,44 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
       }
     })
 
+    // A leftover with this start's own PID that the sweep cannot remove (root-owned files from a `sudo` start) used to be
+    // reused by `mkdir -p`: the unpack landed beside its files and published them. NTFS ignores the mode and root may delete
+    // anything, so the row needs a POSIX desk and a normal user (on a Windows box, WSL runs it: round-3 log).
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a leftover partial unpack with its own PID that the sweep cannot remove stops the start, and none of it is published (#887)',
+      async () => {
+        const drive = zipDrive()
+        const own = `"$HOME/Library/Caches/HilbertRaum/${cached}.partial.$$/locked"`
+        const s = drive.start('ok', {}, `mkdir -p ${own} && : > ${own}/f && chmod 555 ${own} || exit 97; `)
+        try {
+          const r = await within(s.exited, 'the start ended', 10_000)
+          expect(r.status, r.out).toBe(1)
+          expect(r.out).toMatch(/An earlier unpack at '.*\.partial\.\d+' could not be removed/)
+          expect(existsSync(join(drive.caches, cached)), 'a published cache').toBe(false)
+          expect(drive.dittoCalls()).toEqual([])
+        } finally {
+          s.kill()
+          for (const name of existsSync(drive.caches) ? readdirSync(drive.caches) : []) {
+            const locked = join(drive.caches, name, 'locked')
+            if (existsSync(locked)) chmodSync(locked, 0o755)
+          }
+        }
+      }
+    )
+
+    // A start that loses the publish race moves its copy INSIDE the published cache and removes it there; stopped in
+    // between, it left that copy (up to ~400 MB) inside the cache for good.
+    it('removes a copy that a stopped start left nested inside the published cache (#887)', () => {
+      const drive = zipDrive()
+      const first = drive.run('ok')
+      expect(first.status, outputOf(first)).toBe(0)
+      mkdirSync(join(drive.caches, cached, `${cached}.partial.${deadPid()}`, 'HilbertRaum.app'), { recursive: true })
+      const r = drive.run('ok')
+      expect(r.status, outputOf(r)).toBe(0)
+      expect(readdirSync(join(drive.caches, cached))).toEqual(['HilbertRaum.app'])
+      expect(drive.dittoCalls()).toHaveLength(1)
+    })
+
     // #887: the sweep ran only while the cache was missing, so a start stopped during its unpack after another start had
     // published kept its partial (up to ~400 MB) for as long as that version was used.
     it('sweeps a partial unpack left behind once the cache is published too (#887)', () => {
@@ -664,7 +702,7 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
     it.each([
       ['fails', 'fail', /Could not unpack '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip'/],
       ['unpacks no .app', 'empty', /found no \.app inside it/],
-      ['unpacks an .app without its app binary', 'nobin', /found no \.app inside it/]
+      ['unpacks an .app without its app binary', 'nobin', /Unpacked '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip' but the app inside it lacks its program file/]
     ] as const)('when ditto %s it publishes nothing, leaves no partial, and the next start unpacks again', (_, mode, message) => {
       const drive = zipDrive()
       for (const attempt of [1, 2]) {

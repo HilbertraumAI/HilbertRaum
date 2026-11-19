@@ -113,8 +113,10 @@ if [ -z "$APP" ]; then
   # reused PID): both are stale. A reused PID of our own keeps a dead run's folder until a
   # later start: disk, never data. A name that is no PID is stale too (a PID never starts
   # with 0, and kill -0 succeeds for 0, 00 and -1), and so is our own PID (a killed run of
-  # ours). A failed rm (a tree still being written) is not fatal.
-  for p in "$CACHE".partial.*; do
+  # ours). A failed rm (a tree still being written) is not fatal. The same goes for a copy a
+  # start nested INSIDE the published cache when it lost the publish race (below) and was
+  # stopped before it removed it.
+  for p in "$CACHE".partial.* "$CACHE/$(basename "$CACHE")".partial.*; do
     [ -e "$p" ] || continue
     pid="${p##*.partial.}"
     case "$pid" in
@@ -129,7 +131,17 @@ if [ -z "$APP" ]; then
     # second double-click is likely, and two runs sharing one partial path would
     # rm -rf each other's in-progress extraction (and could publish a half tree).
     PARTIAL="$CACHE.partial.$$"
-    mkdir -p "$PARTIAL"
+    # mkdir without -p: a leftover of our own PID that the sweep could not remove (root-owned
+    # files from a sudo start) must not be reused, or its files would be published with ours.
+    mkdir -p "$(dirname "$PARTIAL")"
+    if ! mkdir "$PARTIAL" 2>/dev/null; then
+      echo
+      echo "  An earlier unpack at '$PARTIAL' could not be removed."
+      echo "  Delete that folder, then start again."
+      echo "  See docs/troubleshooting.md for help."
+      echo
+      exit 1
+    fi
     # ditto, not unzip: it is the macOS-native tool that restores the bundle's
     # symlinks, permissions and extended attributes intact.
     if ! ditto -x -k "$ZIP" "$PARTIAL"; then
@@ -145,16 +157,22 @@ if [ -z "$APP" ]; then
     # would be run from the cache on every later start and never unpacked again (#769),
     # and a bundle without its binary would get the Gatekeeper advice below every time
     # (#887). The bundle and binary it looks for are the ones the run check below uses.
+    # UNPACKED_APP: 0 no .app, 1 an .app with its binary, 2 an .app without it.
     UNPACKED_APP=0
     for candidate in "$PARTIAL"/*.app; do
       if [ -d "$candidate" ]; then
+        UNPACKED_APP=2
         if [ -x "$candidate/Contents/MacOS/$(basename "$candidate" .app)" ]; then UNPACKED_APP=1; fi
         break
       fi
     done
-    if [ "$UNPACKED_APP" = 0 ]; then
+    if [ "$UNPACKED_APP" != 1 ]; then
       echo
-      echo "  Unpacked '$ZIP' but found no .app inside it."
+      if [ "$UNPACKED_APP" = 0 ]; then
+        echo "  Unpacked '$ZIP' but found no .app inside it."
+      else
+        echo "  Unpacked '$ZIP' but the app inside it lacks its program file."
+      fi
       echo "  The file is damaged or is not a HilbertRaum app archive. Copy the"
       echo "  release's .app.zip to the drive again, then start again."
       echo "  See docs/troubleshooting.md for help."

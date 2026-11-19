@@ -160,8 +160,8 @@ from its first public `1.0.0` release onward.
   incomplete app, and every later start reused that copy. Each start now leaves an unpack that is
   still running alone and uses whichever copy was finished first. A leftover from an unpack that
   was stopped and cannot be removed no longer stops every start, and an unpacked app that lacks
-  its program file is not kept, so the next start unpacks it again instead of pointing you to the
-  Gatekeeper advice each time (#887).
+  its program file is not kept: the launcher says so, and the next start unpacks it again instead
+  of pointing you to the Gatekeeper advice each time (#887).
 - **An unlock request on a workspace that is already open no longer pretends to unlock it.** The
   lock screen never sends one, but if one arrived it answered "unlocked" whatever the password,
   wrote a "Workspace unlocked" entry to the activity log, repeated earlier lines in the
