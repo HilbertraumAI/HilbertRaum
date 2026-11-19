@@ -393,10 +393,13 @@ function isUnsafeManifestPath(p: string): boolean {
 }
 
 /**
- * #848: THE model for a role, among the USABLE manifests (`discoverManifests().manifests`, walk order): the first one
- * flagged `default_for_role`, present on the drive or not, else the first of the role. One rule for every place that
- * names "the role's model" — `resolveModelByRole` (what the app composes), the Performance screen's rows, the
- * Models-screen ★ on an embeddings card — so they cannot disagree. When no usable manifest of the role is flagged
+ * #848: THE model for a role, among the manifests it is given (`discoverManifests().manifests`, walk order): the first
+ * one flagged `default_for_role`, else the first of the role; whether its files are on the drive is the caller's
+ * business. One rule for every place that names "the role's model" — `resolveModelByRole` (what the app composes),
+ * the Performance screen's rows, the Models-screen ★ on an embeddings card, and (#890) the images model
+ * (`visionCandidates` passes only the vision manifests whose files are all on the drive, so a flagged model that is
+ * not there is passed over; the Performance row names that pick and `getVisionStatus` tries it first) — so they
+ * cannot disagree. When no usable manifest of the role is flagged
  * (none ever was, or the flagged one is invalid or for a newer HilbertRaum), the walk-order fallback applies; hence the
  * frozen constraint that a release never makes the flagged manifest unusable for an older build without flagging a
  * replacement (model-policy.md `default_for_role`).

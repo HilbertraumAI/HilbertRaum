@@ -972,6 +972,23 @@ export interface InstallStateOptions {
 }
 
 /**
+ * #890: the synchronous part of `computeInstallState`, its first two steps in the same order: the runtime/format is
+ * one this app supports, and EVERY file the manifest declares (`manifestFiles`: GGUF, mmproj, `files:`) exists. So
+ * true means the state is past `unsupported` and `missing`; it verifies no hash. A path that escapes the drive root
+ * (`safeDrivePath` throws) names no file on the drive, so it counts as absent rather than throwing to the caller.
+ */
+export function manifestFilesPresent(rootPath: string, manifest: ModelManifest): boolean {
+  if (!isSupportedRuntimeFormat(manifest.runtime, manifest.format)) return false
+  let files: ManifestFile[]
+  try {
+    files = manifestFiles(rootPath, manifest)
+  } catch {
+    return false
+  }
+  return files.every((f) => existsSync(f.path))
+}
+
+/**
  * Compute the install-level model state (spec §7.4): unsupported | missing |
  * checksum_failed | installed. Runtime states (ready/running) are layered on later.
  */

@@ -39,6 +39,7 @@ import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { displayDevice, eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests, graphicsBudgetMib, launchContextTokens, weightsMib } from '../services/models'
+import { pickVisionManifest } from '../services/vision/status'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -1044,11 +1045,13 @@ function buildPlacement(
   // start's load log put no buffer on a graphics device (`gpuBuffers === false`, #671).
   // #848 review: a role's model is the one the app composes (`pickManifestForRole`, the function behind
   // `resolveModelByRole`: the flagged default, else the first in walk order), so a row can never name a model the
-  // app does not run. The embeddings row still prefers `activeEmbeddingModelId` (a separate follow-up).
+  // app does not run. #890: the embeddings row too (no composer reads `activeEmbeddingModelId`), and the images row
+  // names the images pick (`pickVisionManifest`, the same rule over the vision models on the drive), the model
+  // `getVisionStatus` runs whenever it verifies (one whose files fail their check is passed over there).
   const byRole = (role: ModelManifest['role']): ModelManifest | undefined => pickManifestForRole(manifests, role)
-  const embeddingsManifest = settings.activeEmbeddingModelId
-    ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
-    : byRole('embeddings')
+  const embeddingsManifest = byRole('embeddings')
+  // With no vision model on the drive the row still names the catalog's (every model the app can hold).
+  const visionManifest = pickVisionManifest(manifests, ctx.paths.rootPath) ?? byRole('vision')
   const cardEligible = nextStartUsesGpu(memory)
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
@@ -1086,8 +1089,8 @@ function buildPlacement(
     },
     {
       role: 'vision',
-      modelId: byRole('vision')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('vision')),
+      modelId: visionManifest?.id ?? null,
+      sizeOnDiskGb: gib(visionManifest),
       device: 'cpu',
       loaded: ctx.vision?.isLoaded?.() ?? false,
       lifetime: 'idle',

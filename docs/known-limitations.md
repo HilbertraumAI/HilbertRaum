@@ -2128,9 +2128,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   installed. That is deliberate: the other model's vectors are a different space from the index the E5
   built, so a silent switch would leave every document stale now and again when the E5 returns. Download
   the E5 again from the AI Model screen ("Check all model files" shows a damaged one). It is written only by
-  `models:select` (which the AI Model screen never calls for embeddings), and its one visible reader is
-  the Performance screen's embeddings row, so if it were ever set that row could name a model other than
-  the one in use. Honouring a workspace choice belongs to the deferred embedder swap.
+  `models:select` (which the AI Model screen never calls for embeddings), and since #890 nothing visible
+  reads it: the Performance screen's embeddings row names the composed embedder like every other role row.
+  Honouring a workspace choice belongs to the deferred embedder swap. The **images model** is picked by
+  the same rule among the vision models whose files are all on the drive (#890); when that model's files
+  fail their check, Images runs the next vision model on the drive while the Performance row still names
+  the first (the AI Model screen shows the damaged file). The running analyzer keeps the model it was
+  built with until a failed start, an engine update, a lock or quit: a vision model installed
+  mid-session that becomes the pick (a flagged one, or one earlier in walk order) moves the Performance
+  row and the Images status at their next update, and the analysis only at that rebuild.
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start

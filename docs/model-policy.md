@@ -264,7 +264,11 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
 
 - **`default_for_role`** (optional boolean, default `false`, #848) makes THIS manifest its role's model.
   `resolveModelByRole` (the embedder, the reranker, the transcriber, the translator) takes the first
-  manifest of the role that sets it, else the first of the role in walk order. Discovery walks
+  manifest of the role that sets it, else the first of the role in walk order. The images model applies
+  the same rule to the vision manifests whose files are ALL on the drive (`pickVisionManifest`, #890): the
+  flagged one when it is there, else the first one there. Images runs that model; when its files are there
+  but fail their check, it runs the next vision model on the drive (`visionCandidates`), so it never goes
+  dark while another model would run. Discovery walks
   `model-manifests/` depth first, each folder's entry names in code-unit order, on every OS (FAT/exFAT,
   ext4 and APFS do not list a folder sorted, NTFS does), so the order no longer depends on the drive. The
   committed embedder, `multilingual-e5-small-q8`, sets it, so an embeddings manifest a later release or a
@@ -280,8 +284,9 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   embedder included. **Frozen constraint:** a release must never make the `default_for_role` manifest
   unusable for an older build (no `min_app_version` on it, no field change that build rejects) without
   flagging a usable replacement in the same release. One function, `pickManifestForRole`
-  (`shared/manifest.ts`), is this rule for what the app composes (`resolveModelByRole`), the Performance
-  screen's role rows and the AI Model screen's ★ on an embeddings card. That ★ marks the composed model when
+  (`shared/manifest.ts`), is this rule for what the app composes (`resolveModelByRole`), the images model
+  (`getVisionStatus`, over the vision manifests on the drive), the Performance screen's role rows and the
+  AI Model screen's ★ on an embeddings card. That ★ marks the composed model when
   it fits this machine's RAM, and no embeddings card otherwise (the ★ is runnable by construction).
 - **Fields an older app reads are ignored where they are inert, never rejected (#848, D848-3).** A
   manifest field this release reads must not make a later release's manifest vanish from it: a field that
@@ -320,9 +325,13 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   a usable manifest always keeps its id (above). Builds up to v0.1.65 ignore the field and use the
   manifest. No committed manifest sets it. The app compares it with `app.getVersion()`, the sell gate
   with its `--app-version`. The skills gate (a skill's `compatibility.minAppVersion`, `skillNeedsNewerApp`)
-  is an older courtesy gate and differs: it reads a version by its leading `MAJOR.MINOR.PATCH`, is fail-open,
-  and lets a pre-release app meet its own release, so on a pre-release build a skill and a model with the same
-  minimum can disagree (a follow-up candidate).
+  makes the same comparison (`appOlderThanMinimum`, `shared/app-version.ts`, #896; the frozen model gate
+  keeps its own copy, and a unit test holds the two to one answer): parts compare as numbers, and a
+  pre-release app is older than its own release, so a skill and a model with the same minimum get the same
+  answer on every version both can read. It still differs as an older courtesy gate:
+  it is fail-open (an app version it cannot read, such as `''`, is compatible), and it reads both sides
+  leniently (the app by its leading `MAJOR.MINOR.PATCH`, so `0.1.66.4` reads as `0.1.66`; a validated
+  minimum with a leading zero, `01.1.66`, compares as numbers).
 
 - **`files`** (optional, #310) declares the ADDITIONAL required files of this model's weight
   beyond `local_path`/`sha256`, which stay mandatory and PRIMARY — shard 1, the file

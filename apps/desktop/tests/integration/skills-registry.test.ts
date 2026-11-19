@@ -425,6 +425,9 @@ describe('skills registry — disabled reason (#846)', () => {
     // Still too old, then a run that does not know its own version: nothing moves.
     expect(reconcileSkills(db, at(dirs, '1.9.9', T2)).reenabled).toBe(0)
     expect(reconcileSkills(db, at(dirs, undefined, T2)).reenabled).toBe(0)
+    // #896: a pre-release of the release it needs is older than that release, as for a model's `min_app_version`.
+    expect(reconcileSkills(db, at(dirs, '2.0.0-beta.1', T2)).reenabled).toBe(0)
+    expect(reasonOf(db, 'app:future')).toBe('min_app_version')
     expect(enabledOf(db, 'app:future')).toBe(false)
 
     const info = vi.spyOn(log, 'info')
