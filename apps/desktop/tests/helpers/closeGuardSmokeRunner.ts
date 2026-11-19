@@ -1,4 +1,3 @@
-import { renameSync, writeFileSync } from 'node:fs'
 import { app, BrowserWindow, ipcMain, session, type Dialog, type MessageBoxReturnValue } from 'electron'
 import {
   createCloseGuard,
@@ -9,6 +8,7 @@ import {
 import { createAppLifecycleHandlers } from '../../src/main/shutdown'
 import { watchRunWindowGone } from '../../src/main/services/ocr/window-gone'
 import { EVENTS, IPC } from '../../src/shared/ipc'
+import { writeSmokeResult } from './electron-smoke-child'
 
 // REAL-Electron smoke runner for #888 — NOT a test file. `tests/integration/close-guard-electron-smoke.test.ts`
 // bundles this entry with esbuild and spawns it under the locally installed Electron binary, once per scenario.
@@ -31,8 +31,8 @@ import { EVENTS, IPC } from '../../src/shared/ipc'
 // dialog is a stand-in that records and answers per scenario; the window calls the dialog makes (restore /
 // show / focus) are recorded and not run, so no window appears on the desk.
 //
-// argv (last two): <resultPath> <scenario>
-//   x               win.close(); the page answers saved after 300 ms
+// argv (last three): <resultPath> <selfTimeoutMs> <scenario> (tests/helpers/electron-smoke-child.ts sets the timeout)
+//   x              win.close(); the page answers saved after 300 ms
 //   quit            app.quit() (File → Exit, Cmd+Q); answered saved after 300 ms
 //   xx              win.close() twice, the second 50 ms into the save
 //   hang            the page never answers (bound 1.5 s here; the app's is CLOSE_SAVE_BOUND_MS)
@@ -46,21 +46,16 @@ import { EVENTS, IPC } from '../../src/shared/ipc'
 //   quit-helper     as quit, with that helper open: the quit closes it while the guard still holds the main
 //                   window for its save, so the run ends before `will-quit` (review SF-1)
 
-const [resultPath, scenario] = process.argv.slice(-2)
+const [resultPath, selfTimeoutMs, scenario] = process.argv.slice(-3)
 const t0 = Date.now()
 const events: Array<{ ms: number; event: string }> = []
 const log = (event: string): void => void events.push({ ms: Date.now() - t0, event })
 let written = false
-/**
- * The test ends the row as soon as the result file exists, so it appears whole: written beside it, then renamed. It
- * is final at `will-quit`; what Electron does after that (its teardown took up to 36 s under load, follow-ups wave
- * 3 W8) is not part of any row.
- */
+/** Final at `will-quit` (the test ends the row once it appears; nothing after `will-quit` is part of any row). */
 function writeResult(outcome: string): void {
   if (written) return
   written = true
-  writeFileSync(`${resultPath!}.part`, JSON.stringify({ scenario, outcome, events }), 'utf8')
-  renameSync(`${resultPath!}.part`, resultPath!)
+  writeSmokeResult(resultPath!, { scenario, outcome, events })
 }
 
 app.commandLine.appendSwitch('no-proxy-server')
@@ -77,13 +72,13 @@ app.on('will-quit', () => {
   log('will-quit')
   writeResult('quit')
 })
-// A hang names itself: 40 s from this module's start (a scenario took up to 15 s from here under a 12-thread load,
-// W8), inside the test's own 70 s deadline from the spawn and its 80 s row budget.
+// A hang names itself (the events so far), inside the test's child deadline and row budget: the test derives this
+// timeout from the row budget. A scenario took up to 15 s from here under a 12-thread load (W8).
 setTimeout(() => {
   log('runner-timeout')
   writeResult('timeout')
   app.exit(2)
-}, 40_000).unref()
+}, Number(selfTimeoutMs)).unref()
 
 /** The page's answer to request n (1-based): 'saved' | 'unsaved' | null (never answers). */
 function answerFor(n: number): 'saved' | 'unsaved' | null {

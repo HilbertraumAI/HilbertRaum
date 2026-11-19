@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { tempRoot } from '../helpers/db-fixtures'
+import { runSmokeChild } from '../helpers/electron-smoke-child'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // #912 on real Electron: the production application menu (`src/main/app-menu.ts`), the production menu-bar rule and
@@ -51,23 +51,22 @@ interface MenuSmokeResult {
 let root = ''
 let runnerPath = ''
 
+// A released-build row takes about 7 s alone; under a 12-thread CPU load up to 43 s, Electron's teardown included (W8).
+// The child's bounds come from this budget (tests/helpers/electron-smoke-child.ts): deadline 65 s, runner self-timeout
+// 55 s, so a hang reports itself by name (the step, its attempt and the wait) inside the row.
+const ROW_BUDGET_MS = testBudgetMs(75_000)
+
 async function runBuild(build: 'packaged' | 'dev'): Promise<MenuSmokeResult> {
-  const resultPath = join(root, `${build}.json`)
-  const env = { ...process.env }
-  delete env.ELECTRON_RUN_AS_NODE // must launch as Electron, never as plain node
-  const args = [`--user-data-dir=${join(root, `profile-${build}`)}`, runnerPath, resultPath, build]
-  if (process.platform === 'linux') args.unshift('--no-sandbox')
-  const stderr: string[] = []
-  const code = await new Promise<number>((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN!, args, { env, windowsHide: true })
-    child.stderr.on('data', (d: Buffer) => stderr.push(d.toString()))
-    child.on('error', reject)
-    child.on('exit', (c) => resolve(c ?? -1))
+  const { result, stderr } = await runSmokeChild<MenuSmokeResult>({
+    what: build,
+    bin: ELECTRON_BIN!,
+    runnerPath,
+    resultPath: join(root, `${build}.json`),
+    profileDir: join(root, `profile-${build}`),
+    rowBudgetMs: ROW_BUDGET_MS
   })
-  if (!existsSync(resultPath)) throw new Error(`${build}: no result (exit ${code})\n${stderr.join('')}`)
-  const result = JSON.parse(readFileSync(resultPath, 'utf8')) as MenuSmokeResult
   const activation = JSON.stringify({ reactivated: result.reactivated, lostActivation: result.lostActivation })
-  const why = `${build}: ${result.error ?? ''} ${JSON.stringify(result.rows)} ${activation}\n${stderr.join('')}`
+  const why = `${build}: ${result.error ?? ''} ${JSON.stringify(result.rows)} ${activation}\n${stderr}`
   expect(result.outcome, why).toBe('done')
   return result
 }
@@ -104,7 +103,7 @@ describe.skipIf(!enabled)('the application menu on real Electron (#912; skips wh
       openDevTools: false,
       'Alt, Alt+F/E/V/W': false
     })
-  }, testBudgetMs(75_000))
+  }, ROW_BUDGET_MS)
 
   it('a development build (the control): the same keys reload, open the developer tools and bring up the bar', async () => {
     const r = await runBuild('dev')
@@ -115,5 +114,5 @@ describe.skipIf(!enabled)('the application menu on real Electron (#912; skips wh
       'Ctrl+Shift+I': true,
       Alt: true
     })
-  }, testBudgetMs(75_000))
+  }, ROW_BUDGET_MS)
 })

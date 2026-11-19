@@ -1,7 +1,7 @@
-import { writeFileSync } from 'node:fs'
 import { app, BrowserWindow, Menu, session } from 'electron'
 import { appMenuTemplate, mainWindowMenuBar } from '../../src/main/app-menu'
 import { devToolsAllowed } from '../../src/main/window-security'
+import { writeSmokeResult } from './electron-smoke-child'
 
 // REAL-Electron smoke runner for #912 — NOT a test file. `tests/integration/app-menu-electron-smoke.test.ts` bundles
 // this entry with esbuild and spawns it under the locally installed Electron binary, once per build kind. It sets the
@@ -20,47 +20,59 @@ import { devToolsAllowed } from '../../src/main/window-security'
 // key, but no accelerator fires: an awaited key never shows its effect, and a key that must do nothing does nothing
 // for the wrong reason (measured, W8). Another app taking the foreground takes the activation away mid-run; another
 // Electron app starting at the same time (a second smoke run, a dev app) did so every time. So each key step goes
-// through `press`: it activates this window and waits for that, presses, and waits for the effect. A `blur` on the way
-// voids the step, which runs again (at most three times). A step that passes had the window active from before its
-// first key until its effect showed.
+// through `press`: it activates this window and waits for that, presses, and waits for the effect. A key whose own
+// effect shows reached an active window. A step that proves a key did NOTHING passes only if the window stayed active
+// from before its first key until the Ctrl+0 after it showed. A step that lost the activation runs again (at most
+// three times).
 //
 // Not pressed here: the editing keys (Ctrl+A, Ctrl+Z, copy, paste). On Windows and Linux the browser engine handles
 // them in a text field with or without a menu (measured, research A §4), so a row here could not fail on a menu
 // change; on macOS they exist only through the edit menu, which the unit template rows pin and a Mac owes by hand.
 //
-// argv (last two): <resultPath> <build>   build: packaged | dev
+// argv (last three): <resultPath> <selfTimeoutMs> <build>   build: packaged | dev
+// (tests/helpers/electron-smoke-child.ts sets the timeout from the row budget)
 
-const [resultPath, build] = process.argv.slice(-2)
+const [resultPath, selfTimeoutMs, build] = process.argv.slice(-3)
 const packaged = build === 'packaged'
 const rows: Record<string, unknown> = {}
 // Not rows, a diagnosis in the result JSON: the steps that found the window inactive (and activated it first), and the
-// steps a `blur` voided (run again).
+// steps a lost activation made run again.
 const reactivated: string[] = []
 const lostActivation: string[] = []
+// Where the run is, for the self-timeout's message: the key step and its attempt, and the wait inside it.
+let step = 'start-up'
+let attemptNo = 0
+let waitingFor = 'the app to be ready'
 let written = false
 function writeResult(outcome: string, error?: string): void {
   if (written) return
   written = true
-  writeFileSync(resultPath!, JSON.stringify({ build, outcome, error, rows, reactivated, lostActivation }), 'utf8')
+  writeSmokeResult(resultPath!, { build, outcome, error, rows, reactivated, lostActivation })
 }
 app.commandLine.appendSwitch('no-proxy-server')
-// Under a 12-thread CPU load a released-build run took 36 s, and one wait for the control window's DevTools ran out at
-// 5 s (alone they open in 0.9-1.5 s; W8). So each wait gets 10 s, and the run 50 s: with up to 4 s to start and up
-// to 11 s of Electron's teardown after it (measured under that load), a hang still reports here, inside the 75 s row
-// budget.
+// Under a 12-thread CPU load a released-build run took up to 43 s, and one wait for the control window's DevTools ran
+// out at 5 s (alone they open in 0.9-1.5 s; W8). So each wait gets 10 s. The worst case of `press` does NOT fit inside
+// this self-timeout (three attempts of up to 10 s for the activation and 10 s for the effect: 60 s for one step), so
+// the timeout names where the run was: the step, its attempt and the wait.
 setTimeout(() => {
-  writeResult('timeout')
+  const where = attemptNo ? `${step}, attempt ${attemptNo}` : step
+  writeResult('timeout', `timeout during ${where}, waiting for ${waitingFor}`)
   app.exit(2)
-}, 50_000).unref()
+}, Number(selfTimeoutMs)).unref()
 
-/** Poll `check` until it holds, or fail by name after `ms` (a hang detector, not a timing proof). */
-async function until(check: () => boolean | Promise<boolean>, what: string, ms = 10_000): Promise<void> {
+/** Poll `check` until it holds or `ms` pass; false on time-out (a hang detector, not a timing proof). */
+async function settles(check: () => boolean | Promise<boolean>, what: string, ms = 10_000): Promise<boolean> {
+  waitingFor = what
   const end = Date.now() + ms
   for (;;) {
-    if (await check()) return
-    if (Date.now() > end) throw new Error(`${what} never happened`)
+    if (await check()) return true
+    if (Date.now() > end) return false
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
+}
+/** `settles`, failing by name: "<what> never happened". */
+async function until(check: () => boolean | Promise<boolean>, what: string, ms = 10_000): Promise<void> {
+  if (!(await settles(check, what, ms))) throw new Error(`${what} never happened`)
 }
 
 app.whenReady().then(async () => {
@@ -84,7 +96,10 @@ app.whenReady().then(async () => {
     let loads = 0
     let devtoolsOpened = 0
     let closes = 0
-    let blurs = 0
+    // The key step in flight: its `done`, and whether the window lost the activation while `done` did not hold yet
+    // (looked at when the `blur` comes, so a blur after the step's effect showed does not count).
+    let pending: (() => boolean) | null = null
+    let lostBeforeDone = false
     win.webContents.on('did-start-loading', () => loads++)
     win.webContents.on('devtools-opened', () => {
       devtoolsOpened++
@@ -94,7 +109,9 @@ app.whenReady().then(async () => {
       closes++
       e.preventDefault() // Ctrl+W reaches the window's close (the app's close guard); keep the window here
     })
-    win.on('blur', () => blurs++)
+    win.on('blur', () => {
+      if (pending && !pending()) lostBeforeDone = true
+    })
     await win.loadURL('data:text/html,' + encodeURIComponent('<!doctype html><p>menu smoke</p>'))
     win.showInactive()
     await until(() => win.isVisible(), 'the window showing')
@@ -104,20 +121,34 @@ app.whenReady().then(async () => {
     }
     const zoom = (): number => win.webContents.getZoomLevel()
     /**
-     * One key step in the active window: activate it and wait for that, `send`, then wait until `done` (named `what`
-     * when it never comes). A `blur` before `done` voids the step and runs it again; `send` sets up its own start
-     * state, so a rerun starts from scratch.
+     * One key step in the active window: activate it and wait for that, `send`, then wait for `done` ("<what> never
+     * happened" when it does not come). `send` sets up its own start state and baselines, so a rerun starts afresh.
+     * - 'effect': `done` is the key's own effect (a zoom, a close, a reload, DevTools, the bar). Once it shows, the key
+     *   reached an active window, whatever came after, so a `blur` does not end the wait. If the effect does not come
+     *   and the window lost the activation first, the key was dropped, and the step runs again.
+     * - 'barrier': `done` is the Ctrl+0 after keys that must do nothing; it only orders them. A `blur` before it shows
+     *   voids the step at once, and the step runs again.
+     * At most three attempts.
      */
-    const press = async (what: string, send: () => void, done: () => boolean): Promise<void> => {
+    type StepKind = 'effect' | 'barrier'
+    const press = async (what: string, kind: StepKind, send: () => void, done: () => boolean): Promise<void> => {
+      step = what
       for (let attempt = 1; attempt <= 3; attempt++) {
+        attemptNo = attempt
         if (!win.isFocused()) reactivated.push(what)
         win.webContents.focus()
         await until(() => win.isFocused(), `the window active (before ${what})`)
-        const blurs0 = blurs
+        lostBeforeDone = false
         send()
-        await until(() => done() || blurs > blurs0, what)
-        if (blurs === blurs0) return
-        lostActivation.push(what)
+        pending = done
+        const shown = await settles(() => done() || (kind === 'barrier' && lostBeforeDone), what)
+        pending = null
+        if (shown && !(kind === 'barrier' && lostBeforeDone)) {
+          attemptNo = 0
+          return
+        }
+        if (!lostBeforeDone) throw new Error(`${what} never happened`)
+        if (attempt < 3) lostActivation.push(what)
       }
       throw new Error(`${what}: the window lost the activation three times`)
     }
@@ -133,6 +164,7 @@ app.whenReady().then(async () => {
     let from = 0
     await press(
       'Ctrl+= zooming in',
+      'effect',
       () => {
         win.webContents.setZoomLevel(0)
         key('=', ['control'])
@@ -142,6 +174,7 @@ app.whenReady().then(async () => {
     rows['Ctrl+='] = zoom() > 0
     await press(
       'Ctrl+Shift+= zooming in',
+      'effect',
       () => {
         from = zoom()
         key('Plus', ['control', 'shift'])
@@ -151,6 +184,7 @@ app.whenReady().then(async () => {
     rows['Ctrl+Shift+='] = true
     await press(
       'Ctrl+- zooming out',
+      'effect',
       () => {
         from = zoom()
         key('-', ['control'])
@@ -158,13 +192,14 @@ app.whenReady().then(async () => {
       () => zoom() < from
     )
     rows['Ctrl+-'] = true
-    await press('Ctrl+0 (the barrier)', ctrl0, zeroed)
+    await press('Ctrl+0 resetting the zoom', 'effect', ctrl0, zeroed)
     rows['Ctrl+0'] = true
 
     // The window's close (Ctrl+W, through the close guard in the app).
     let closes0 = 0
     await press(
       'Ctrl+W closing the window',
+      'effect',
       () => {
         closes0 = closes
         key('W', ['control'])
@@ -173,13 +208,15 @@ app.whenReady().then(async () => {
     )
     rows['Ctrl+W'] = true
 
-    // The developer keys: gone in a released build, kept in a development build.
-    let loads0 = 0
+    // The developer keys: gone in a released build, kept in a development build. A released build's baseline is
+    // taken once, before the step, so a reload from any attempt counts; a development build's in each attempt, so
+    // the reload that passes the step is that attempt's own.
+    let loads0 = loads
     if (packaged) {
       await press(
         'Ctrl+0 after Ctrl+R (the barrier)',
+        'barrier',
         () => {
-          loads0 = loads
           key('R', ['control'])
           ctrl0()
         },
@@ -188,6 +225,7 @@ app.whenReady().then(async () => {
     } else {
       await press(
         'Ctrl+R reloading',
+        'effect',
         () => {
           loads0 = loads
           key('R', ['control'])
@@ -197,11 +235,12 @@ app.whenReady().then(async () => {
     }
     rows['Ctrl+R'] = loads > loads0
     if (!packaged) await until(() => !win.webContents.isLoading(), 'the reload finishing')
+    loads0 = loads
     if (packaged) {
       await press(
         'Ctrl+0 after Ctrl+Shift+R (the barrier)',
+        'barrier',
         () => {
-          loads0 = loads
           key('R', ['control', 'shift'])
           ctrl0()
         },
@@ -210,6 +249,7 @@ app.whenReady().then(async () => {
     } else {
       await press(
         'Ctrl+Shift+R reloading',
+        'effect',
         () => {
           loads0 = loads
           key('R', ['control', 'shift'])
@@ -252,12 +292,14 @@ app.whenReady().then(async () => {
       }
       await press(
         'Ctrl+0 after Ctrl+Shift+I (the barrier)',
+        'barrier',
         () => {
           key('I', ['control', 'shift'])
           ctrl0()
         },
         zeroed
       )
+      step = 'the DevTools checks (the control window)'
       await controlCycles(2)
       rows['Ctrl+Shift+I'] = devtoolsOpened > 0 || win.webContents.isDevToolsOpened()
       // DevTools off closes the API route too, not only the shortcut.
@@ -266,7 +308,17 @@ app.whenReady().then(async () => {
       rows.openDevTools = devtoolsOpened > 0 || win.webContents.isDevToolsOpened()
       control.destroy()
     } else {
-      await press('Ctrl+Shift+I opening DevTools', () => key('I', ['control', 'shift']), () => devtoolsOpened > 0)
+      // The baseline is taken in each attempt, so the DevTools that pass the step are that attempt's own.
+      let opened0 = devtoolsOpened
+      await press(
+        'Ctrl+Shift+I opening DevTools',
+        'effect',
+        () => {
+          opened0 = devtoolsOpened
+          key('I', ['control', 'shift'])
+        },
+        () => devtoolsOpened > opened0
+      )
       rows['Ctrl+Shift+I'] = true
     }
 
@@ -286,6 +338,7 @@ app.whenReady().then(async () => {
     if (packaged) {
       await press(
         'Ctrl+0 after Alt, Alt+F/E/V/W (the barrier)',
+        'barrier',
         () => {
           alt()
           for (const letter of ['F', 'E', 'V', 'W']) alt(letter)
@@ -298,6 +351,7 @@ app.whenReady().then(async () => {
       // A single Alt toggles an auto-hidden bar, so each attempt starts from a hidden one.
       await press(
         'Alt showing the development build’s menu bar',
+        'effect',
         () => {
           win.setMenuBarVisibility(false)
           alt()

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { tempRoot } from '../helpers/db-fixtures'
+import { runSmokeChild } from '../helpers/electron-smoke-child'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // #888 on real Electron: the close guard (`src/main/close-guard.ts`), bundled from source into
@@ -47,50 +47,21 @@ interface SmokeResult {
 let root = ''
 let runnerPath = ''
 
-// Measured on this desk (follow-ups wave 3 W8): a row takes 2-4 s alone. Under a 12-thread CPU load one took 48 s,
-// 36 s of it after `will-quit`, in Electron's own teardown, which no row asserts; that is how rows ran out of the old
-// 30 s. The rest under that load: up to 4 s to start, up to 15 s from the runner's start to `will-quit`. So once the
-// result appears (the runner renames it into place, whole, at `will-quit` or at its own 40 s timeout), the child gets
-// EXIT_GRACE_MS to exit by itself (alone it takes about 65 ms) and is then killed. A child that writes nothing is
-// killed at CHILD_DEADLINE_MS and named. Both stay inside the row budget, so a hang never ends as a bare vitest
-// timeout.
-const ROW_BUDGET_MS = testBudgetMs(80_000)
-const CHILD_DEADLINE_MS = ROW_BUDGET_MS - 10_000
-const EXIT_GRACE_MS = 2_000
+// A row takes 2-4 s alone; under a 12-thread CPU load up to 31 s, of which the runner used up to 15 s (W8). The
+// child's bounds come from this budget (tests/helpers/electron-smoke-child.ts): deadline 60 s, runner self-timeout
+// 50 s, so a hang reports itself by name inside the row.
+const ROW_BUDGET_MS = testBudgetMs(70_000)
 
 async function runScenario(scenario: string): Promise<SmokeResult> {
-  const resultPath = join(root, `${scenario}.json`)
-  const env = { ...process.env }
-  delete env.ELECTRON_RUN_AS_NODE // must launch as Electron, never as plain node
-  // An isolated profile per child (the pdf smoke's lesson: a shared default profile's singleton lock
-  // crashes startup when another Electron runs).
-  const args = [`--user-data-dir=${join(root, `profile-${scenario}`)}`, runnerPath, resultPath, scenario]
-  if (process.platform === 'linux') args.unshift('--no-sandbox')
-  const stderr: string[] = []
-  const end = await new Promise<string>((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN!, args, { env, windowsHide: true })
-    let grace: ReturnType<typeof setTimeout> | undefined
-    const stop = (why: string): void => {
-      clearInterval(poll)
-      clearTimeout(deadline)
-      clearTimeout(grace)
-      if (child.exitCode === null && child.signalCode === null) child.kill()
-      resolve(why)
-    }
-    const poll = setInterval(() => {
-      if (!existsSync(resultPath)) return
-      clearInterval(poll)
-      clearTimeout(deadline)
-      grace = setTimeout(() => stop(`result written, killed ${EXIT_GRACE_MS} ms later`), EXIT_GRACE_MS)
-    }, 50)
-    const deadline = setTimeout(() => stop(`killed at the ${CHILD_DEADLINE_MS} ms deadline`), CHILD_DEADLINE_MS)
-    child.stderr.on('data', (d: Buffer) => stderr.push(d.toString()))
-    child.on('error', reject)
-    child.on('exit', (c) => stop(`exit ${c ?? -1}`))
+  const { result, stderr } = await runSmokeChild<SmokeResult>({
+    what: scenario,
+    bin: ELECTRON_BIN!,
+    runnerPath,
+    resultPath: join(root, `${scenario}.json`),
+    profileDir: join(root, `profile-${scenario}`),
+    rowBudgetMs: ROW_BUDGET_MS
   })
-  if (!existsSync(resultPath)) throw new Error(`${scenario}: no result (${end})\n${stderr.join('')}`)
-  const result = JSON.parse(readFileSync(resultPath, 'utf8')) as SmokeResult
-  expect(result.outcome, `${scenario}: ${JSON.stringify(result.events)}\n${stderr.join('')}`).toBe('quit')
+  expect(result.outcome, `${scenario}: ${JSON.stringify(result.events)}\n${stderr}`).toBe('quit')
   return result
 }
 
