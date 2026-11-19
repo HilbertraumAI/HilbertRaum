@@ -152,6 +152,15 @@ from its first public `1.0.0` release onward.
   the drive from the temporary folder it unpacks itself into, found nothing, and opened a new, empty
   workspace on the computer. It now looks from where the AppImage file really is. An empty
   `HILBERTRAUM_DRIVE_ROOT` setting is also ignored now instead of disabling that search (#858).
+- **On a Mac, starting the app twice during its first unpack no longer risks a broken copy.** The
+  first start from a Kit unpacks the app into a folder on the Mac, which takes about a minute. A
+  second double-click on the launcher in that minute could delete the first start's unpack while
+  it was still being written: either start could then stop with an error, or both could run an
+  incomplete app, and every later start reused that copy. Each start now leaves an unpack that is
+  still running alone and uses whichever copy was finished first. A leftover from an unpack that
+  was stopped and cannot be removed no longer stops every start, and an unpacked app that lacks
+  its program file is not kept, so the next start unpacks it again instead of pointing you to the
+  Gatekeeper advice each time (#887).
 - **An unlock request on a workspace that is already open no longer pretends to unlock it.** The
   lock screen never sends one, but if one arrived it answered "unlocked" whatever the password,
   wrote a "Workspace unlocked" entry to the activity log, repeated earlier lines in the

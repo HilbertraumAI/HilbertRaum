@@ -110,8 +110,21 @@ if [ -z "$APP" ]; then
     # The partial dir is PID-unique: extraction takes long enough that an impatient
     # second double-click is likely, and two runs sharing one partial path would
     # rm -rf each other's in-progress extraction (and could publish a half tree).
-    # Stale partials from killed runs are swept here instead (-f: no-match is fine).
-    rm -rf "$CACHE".partial.*
+    # Stale partials from killed runs are swept here instead, but only those whose start has
+    # ended: a second double-click during the first unpack must not delete the folder the first
+    # start is still writing (#887). kill -0 fails for a PID that is gone, and for another
+    # user's (a reused PID): both are stale. A reused PID of our own keeps a dead run's folder
+    # until a later start: disk, never data. A name that is no PID, or our own PID (a killed
+    # run of ours), is stale too. A failed rm (a tree still being written) is not fatal.
+    for p in "$CACHE".partial.*; do
+      [ -e "$p" ] || continue
+      pid="${p##*.partial.}"
+      case "$pid" in
+        ''|*[!0-9]*|0|"$$") ;;
+        *) if kill -0 "$pid" 2>/dev/null; then continue; fi ;;
+      esac
+      rm -rf "$p" 2>/dev/null || true
+    done
     PARTIAL="$CACHE.partial.$$"
     mkdir -p "$PARTIAL"
     # ditto, not unzip: it is the macOS-native tool that restores the bundle's
@@ -125,11 +138,16 @@ if [ -z "$APP" ]; then
       exit 1
     fi
     # An archive can unpack cleanly and still hold no .app (a zip made without
-    # --keepParent). Refuse it here: published, it would be run from the cache on
-    # every later start and never unpacked again (#769).
+    # --keepParent), or an .app without its app binary. Refuse it here: published, it
+    # would be run from the cache on every later start and never unpacked again (#769),
+    # and a bundle without its binary would get the Gatekeeper advice below every time
+    # (#887). The bundle and binary it looks for are the ones the run check below uses.
     UNPACKED_APP=0
     for candidate in "$PARTIAL"/*.app; do
-      if [ -d "$candidate" ]; then UNPACKED_APP=1; break; fi
+      if [ -d "$candidate" ]; then
+        if [ -x "$candidate/Contents/MacOS/$(basename "$candidate" .app)" ]; then UNPACKED_APP=1; fi
+        break
+      fi
     done
     if [ "$UNPACKED_APP" = 0 ]; then
       echo
@@ -143,12 +161,15 @@ if [ -z "$APP" ]; then
     fi
     # Only publish the cache once extraction fully succeeded, so an interrupted
     # first run cannot leave a half-unpacked bundle that looks complete. If a
-    # parallel launch published first, use its copy (mv onto an existing dir would
-    # nest ours INSIDE it, not replace it).
+    # parallel launch published first, use its copy and drop ours. The test and the
+    # mv are two steps, so a parallel launch can still publish in between; mv onto
+    # an existing dir then moves ours INSIDE it instead of replacing it (#887).
     if [ -d "$CACHE" ]; then
       rm -rf "$PARTIAL"
     else
       mv "$PARTIAL" "$CACHE"
+      # Drop that nested copy if it happened: the published one is complete too.
+      rm -rf "$CACHE/$(basename "$PARTIAL")"
     fi
   fi
 
