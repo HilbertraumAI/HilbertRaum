@@ -553,7 +553,7 @@ describe('chat export handlers (T-8)', () => {
   it('exportConversation sanitizes the title into the default path and audits the id only', async () => {
     const db = openFreshDb('chatipc')
     const { ctx, audit } = ctxWithAudit(db)
-    // A title full of filesystem-hostile characters — the sanitizer strips ':' '/' '<' '>'.
+    // A title full of filesystem-hostile characters — the file-name rule (`fileNameStem`) strips ':' '/' '<' '>'.
     const conv = createConversation(db, { title: 'Report: Q1/Q2 <draft>' })
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
     registerChatIpc(ctx)
@@ -564,8 +564,8 @@ describe('chat export handlers (T-8)', () => {
 
     const filePath = (await invoke(handlers, IPC.exportConversation, conv.id)).result as string | null
     expect(filePath).toBe(outPath)
-    // TEETH: the safeName regex removed ':' '/' '<' '>' and collapsed to a safe stem. Weaken the
-    // regex (e.g. stop stripping '/') → the '/'-bearing "Report Q1/Q2 draft.md" reddens this.
+    // TEETH: the file-name rule removed ':' '/' '<' '>' and collapsed to a safe stem. Weaken it
+    // (e.g. stop stripping '/') → the '/'-bearing "Report Q1/Q2 draft.md" reddens this.
     expect(dialogState.lastSaveOptions?.defaultPath).toBe('Report Q1Q2 draft.md')
     // Audit records the id ONLY — never the title (chat content) or the chosen path (user-private).
     expect(audit).toHaveBeenCalledTimes(1)
@@ -574,6 +574,24 @@ describe('chat export handlers (T-8)', () => {
     expect(meta).toEqual({ conversationId: conv.id })
     expect(message).not.toContain('Report') // no title leak in the message line
     expect(message).not.toContain(outPath) // raw value, not its JSON encoding (backslashes on Windows)
+  })
+
+  // #899: the transcript name goes through the shared file-name rule (file-name-stem.test.ts owns it). This site used
+  // to strip vowel signs, cut at 60 UTF-16 units and trim before the cut.
+  it.each([
+    { what: 'a Hindi title keeps its vowel signs', title: 'हिन्दी', want: 'हिन्दी.md' },
+    { what: 'an astral letter at the cut stays whole', title: `${'a'.repeat(59)}\u{20000}x`, want: `${'a'.repeat(59)}\u{20000}.md` },
+    { what: 'a cut on a space leaves none before the extension', title: `${'a'.repeat(59)} Clause 7`, want: `${'a'.repeat(59)}.md` },
+    { what: 'parentheses are dropped (only the document exports keep them)', title: 'Report (draft)', want: 'Report draft.md' },
+    { what: 'a title with no letter or number falls back to "chat"', title: '???', want: 'chat.md' }
+  ])('exportConversation suggests a whole name: $what (#899)', async ({ title, want }) => {
+    const db = openFreshDb('chatipc')
+    const { ctx } = ctxWithAudit(db)
+    const conv = createConversation(db, { title })
+    registerChatIpc(ctx)
+
+    expect((await invoke(handlers, IPC.exportConversation, conv.id)).result).toBeNull() // the default: cancelled
+    expect(dialogState.lastSaveOptions?.defaultPath).toBe(want)
   })
 
   it('exportConversation returns null on cancel — nothing written, nothing audited', async () => {

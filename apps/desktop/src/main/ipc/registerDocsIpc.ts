@@ -57,6 +57,7 @@ import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { saveBinaryExport, saveTextExport } from './save-export'
+import { fileNameStem } from '../services/text'
 
 // Process-start watermark (captured once at module load ≈ app boot). `skill_runs` rows created before
 // this belong to a PREVIOUS, killed session; current-session rows are protected regardless of status.
@@ -763,6 +764,14 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   )
 
+  // The suggested-name stem of the three document exports below: the title up to its last dot
+  // (the imported file's extension, or a translation's `.md`), through the shared file-name rule
+  // (`fileNameStem`, #899). `(` `)` are kept, so a translation keeps its "(<language>)".
+  const documentFileStem = (title: string): string => {
+    const dot = title.lastIndexOf('.')
+    return fileNameStem(dot > 0 ? title.slice(0, dot) : title, { fallback: 'document', keepParens: true })
+  }
+
   // Save a TEXT document's stored content to a user-chosen file (the
   // exportConversation pattern: dialog + fs in MAIN, never the renderer). Built for
   // materialized translations (always Markdown); any plain-text document qualifies.
@@ -774,15 +783,10 @@ export function registerDocsIpc(ctx: AppContext): void {
       cipher: ctx.workspace.documentCipher(),
       plaintextOps: ctx.plaintextOps
     })
-    const dot = title.lastIndexOf('.')
-    const baseName = (dot > 0 ? title.slice(0, dot) : title)
-      .replace(/[^\p{L}\p{N} ()_-]/gu, '')
-      .trim()
-      .slice(0, 60)
     const filePath = await saveTextExport(
       {
         title: tMain('main.dialog.exportDocument'),
-        defaultPath: `${baseName || 'document'}.md`,
+        defaultPath: `${documentFileStem(title)}.md`,
         filters: [
           { name: 'Markdown', extensions: ['md'] },
           { name: 'Text', extensions: ['txt'] }
@@ -832,20 +836,15 @@ export function registerDocsIpc(ctx: AppContext): void {
       } finally {
         releaseDocWork()
       }
-      // Suggested name per the exportDocument pattern above; the ORIGINAL extension
+      // Suggested name through `documentFileStem` (above); the ORIGINAL extension
       // survives sanitization so the OS file association and the dialog filter match
       // the format.
       const rawExt = extname(title).toLowerCase()
       const ext = /^\.[a-z0-9]{1,10}$/.test(rawExt) ? rawExt : ''
-      const dot = title.lastIndexOf('.')
-      const baseName = (dot > 0 ? title.slice(0, dot) : title)
-        .replace(/[^\p{L}\p{N} ()_-]/gu, '')
-        .trim()
-        .slice(0, 60)
       const filePath = await saveBinaryExport(
         {
           title: tMain('main.dialog.exportOriginal'),
-          defaultPath: `${baseName || 'document'}${ext}`,
+          defaultPath: `${documentFileStem(title)}${ext}`,
           filters: ext
             ? [
                 { name: ext.slice(1).toUpperCase(), extensions: [ext.slice(1)] },
@@ -875,15 +874,10 @@ export function registerDocsIpc(ctx: AppContext): void {
     const summary = getDocumentSummary(ctx.db, documentId)
     if (!summary) return null
     const title = getDocument(ctx.db, documentId)?.title ?? 'document'
-    const dot = title.lastIndexOf('.')
-    const baseName = (dot > 0 ? title.slice(0, dot) : title)
-      .replace(/[^\p{L}\p{N} ()_-]/gu, '')
-      .trim()
-      .slice(0, 60)
     const filePath = await saveTextExport(
       {
         title: tMain('main.dialog.exportSummary'),
-        defaultPath: `${baseName || 'document'}-summary.md`,
+        defaultPath: `${documentFileStem(title)}-summary.md`,
         filters: [
           { name: 'Markdown', extensions: ['md'] },
           { name: 'Text', extensions: ['txt'] }

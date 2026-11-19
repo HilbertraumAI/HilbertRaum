@@ -1755,6 +1755,40 @@ describe('registerDocsIpc — the text and summary exports (#682)', () => {
     expect(audit).toHaveBeenCalledExactlyOnceWith('summary_exported', expect.any(String), { documentId: id })
   })
 
+  // #899: the three document exports name the file through the shared rule (file-name-stem.test.ts owns it). Import
+  // does not normalise a name, and a file system may hand it over decomposed (NFD, as macOS does): the title is the
+  // path string, so it stays decomposed on every OS. Each site used to strip the marks, so "Prüfung" lost its umlaut.
+  it.each([
+    { channel: IPC.exportDocument, want: 'Pr\u00fcfung.md' },
+    { channel: IPC.exportSummary, want: 'Pr\u00fcfung-summary.md' },
+    { channel: IPC.exportDocumentOriginal, want: 'Pr\u00fcfung.txt' }
+  ])('$channel suggests a decomposed imported name with its accent (#899)', async ({ channel, want }) => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath))
+    const id = await importNotes(workspacePath, 'Pru\u0308fung.txt')
+    setDocumentSummary(db, id, { text: 'Summary.', modelId: 'm', createdAt: new Date().toISOString(), truncated: false })
+
+    expect((await invoke(handlers, channel, id)).result).toBeNull() // the default: cancelled
+    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe(want)
+  })
+
+  // #899: a title the app wrote itself (a Hindi translation of report.pdf, `translatedDocumentTitle`), and the cut the
+  // document names used to make at 60 UTF-16 units before a trim.
+  it.each([
+    { what: 'a translation keeps its language name and parentheses', title: 'report (हिन्दी).md', want: 'report (हिन्दी).md' },
+    { what: 'an astral letter at the cut stays whole', title: `${'a'.repeat(59)}\u{20000}x.txt`, want: `${'a'.repeat(59)}\u{20000}.md` },
+    { what: 'a cut on a space leaves none before the extension', title: `${'a'.repeat(59)} Clause 7.txt`, want: `${'a'.repeat(59)}.md` },
+    { what: 'a title with no letter or number falls back to "document"', title: '?.txt', want: 'document.md' }
+  ])('docs:export suggests a whole name: $what (#899)', async ({ title, want }) => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath))
+    const id = await importNotes(workspacePath)
+    db.prepare('UPDATE documents SET title = ? WHERE id = ?').run(title, id) // the row a translation or a long name leaves
+
+    expect((await invoke(handlers, IPC.exportDocument, id)).result).toBeNull() // the default: cancelled
+    expect(String(saveDialogState.lastOptions?.defaultPath)).toBe(want)
+  })
+
   it('docs:exportOriginal refuses an empty or non-string id before taking the document-work lease', async () => {
     const { db, workspacePath } = freshWorkspace()
     const beginDocumentWork = vi.fn(() => () => {})
