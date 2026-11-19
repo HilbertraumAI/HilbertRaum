@@ -99,6 +99,7 @@ function service(deps: {
   hasDocTask?: boolean
 }): TranslateJobService {
   return new TranslateJobService({
+    isWorkspaceLocking: () => false,
     getTranslator: () => deps.translator ?? null,
     hasActiveDocTask: () => deps.hasDocTask ?? false
   })

@@ -33,6 +33,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
   it('a cancel that races completion does not resurrect the job to done or fire emit.done', async () => {
     let resolveAnalyze!: (answer: string) => void
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       // A runtime that streams a token, then hangs until the test resolves it — letting the test
       // inject a cancel() while run() is parked on the analyze await.
@@ -79,6 +80,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     let releaseUnwind!: () => void
     const unwindGate = new Promise<void>((r) => (releaseUnwind = r))
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => AVAILABLE,
       // A runtime whose in-flight request does NOT unwind at the abort instant: on abort it
       // waits for the test's gate, then rejects — modelling the sidecar draining the request.
@@ -134,20 +136,4 @@ describe('VisionService.analyze refuses while a workspace lock is under way (AUD
     expect(service.hasActiveJob()).toBe(false)
   })
 
-  // Its twin with the dependency present and answering "not locking", as production always injects it: the guard reads
-  // the answer, not the dependency's presence, so the same request is admitted and runs to its answer.
-  it('admits the same request when the latch answers "not locking"', async () => {
-    const getStatus = vi.fn(async () => AVAILABLE)
-    const service = new VisionService({
-      getStatus,
-      createRuntime: () => ({ analyze: async () => 'a picture of a cat' }),
-      isWorkspaceLocking: () => false
-    })
-    const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
-
-    expect(service.analyze(req(), emit).state).toBe('queued')
-    await until(() => (emit.done as ReturnType<typeof vi.fn>).mock.calls.length > 0, 'the admitted analyze finishing')
-    expect(getStatus).toHaveBeenCalled()
-    expect(emit.error).not.toHaveBeenCalled()
-  })
 })

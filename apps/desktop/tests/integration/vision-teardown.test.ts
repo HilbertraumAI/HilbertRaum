@@ -72,7 +72,7 @@ describe('VisionService teardown vs runtime rebuild (REL-2)', () => {
         }
       }
     }
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime, isWorkspaceLocking: () => false })
 
     // First analyze → builds runtime #1 and completes; this.runtime is now live.
     const emit1: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
@@ -117,6 +117,7 @@ describe('VisionService teardown vs runtime rebuild (REL-2)', () => {
     let releaseStatus!: () => void
     const statusGate = new Promise<void>((r) => (releaseStatus = r))
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => {
         statusEntries++
         if (statusEntries >= 2) await statusGate // park ONLY run#2 in getStatus()

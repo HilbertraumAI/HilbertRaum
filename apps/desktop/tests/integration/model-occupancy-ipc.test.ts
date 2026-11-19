@@ -47,7 +47,7 @@ import { writeSkillPackage } from '../helpers/skill-fixtures'
 import { stubChatRuntime } from '../helpers/chat-runtime-stub'
 import { killableRuntime } from '../helpers/killable-runtime'
 import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
-import { untilValue } from '../helpers/hang-budget'
+import { until, untilValue } from '../helpers/hang-budget'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -184,22 +184,28 @@ describe('startSkillRun — the model-lane guard (#186)', () => {
 
   it('holds a skill-run span for the life of the run, and releases it on every exit', async () => {
     const h = await makeHarness('redaction', ['redact_document'], DOC)
-    // Hold the save dialog open so the run is genuinely in flight while we look.
+    // Hold the save dialog open: the run parks at its last await, so the span can be checked THERE.
     let openDialog!: () => void
     saveDialog.gate = new Promise<void>((resolve) => {
       openDialog = resolve
     })
 
     const start = await startRun(h, 'redact_document', true)
-    expect(start.started).toBe(true)
-    // The span is taken synchronously in the start handler, so it is already held here.
-    expect(h.runtime.occupancy.held('skill-run')).toBe(true)
-    // …and while it is held, a second run is refused with the skill-run copy.
-    const second = await startRun(h, 'redact_document', true)
-    expect(second.started).toBe(false)
-    expect(refusal(second)).toBe(t('en', 'main.busy.skillRun'))
-
-    openDialog()
+    try {
+      expect(start.started).toBe(true)
+      // The span is taken synchronously in the start handler, so it is already held here.
+      expect(h.runtime.occupancy.held('skill-run')).toBe(true)
+      // The run's last await: parked in the save dialog, its model work done. The span is still held THERE.
+      await until(() => saveDialog.calls.length === 1, 'the run reaching its save dialog')
+      expect(h.runtime.occupancy.held('skill-run')).toBe(true)
+      // …and while it is held, a second run is refused with the skill-run copy.
+      const second = await startRun(h, 'redact_document', true)
+      expect(second.started).toBe(false)
+      expect(refusal(second)).toBe(t('en', 'main.busy.skillRun'))
+    } finally {
+      // A failed wait or assertion above must not leave the gated dialog parked for ever.
+      openDialog()
+    }
     await pollUntilTerminal(startedHandle(start))
     // Released in the runner's own `finally` — a cancelled dialog is a terminal path too.
     expect(h.runtime.occupancy.held('skill-run')).toBe(false)

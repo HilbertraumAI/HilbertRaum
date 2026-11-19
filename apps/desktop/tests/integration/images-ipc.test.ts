@@ -115,7 +115,7 @@ function immediateAnalyzer(answer = 'a local answer'): VisionAnalyzer {
 
 /** The analyze service for tests that drive only the picker / readBytes handlers (it is never called). */
 const idleVision = (): VisionService =>
-  new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer() })
+  new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer(), isWorkspaceLocking: () => false })
 
 const goodReq = (): ImageAnalyzeRequest => ({
   imageBytes: pngHeader(2, 2),
@@ -154,7 +154,7 @@ beforeEach(() => {
 describe('registerImagesIpc — analyze job contract', () => {
   it('analyze returns an initial queued job and streams to done with the answer', async () => {
     const { analyzer, release } = gatedAnalyzer('the answer')
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
 
     const event = makeEvent()
@@ -176,7 +176,7 @@ describe('registerImagesIpc — analyze job contract', () => {
 
   it('busy-REJECTS a second analyze while one is in flight (never queued)', async () => {
     const { analyzer, release } = gatedAnalyzer()
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
 
     const first = (await invoke(handlers, IPC.imageAnalyze, goodReq())).result as ImageJob
@@ -193,7 +193,7 @@ describe('registerImagesIpc — analyze job contract', () => {
   })
 
   it('getJob on an unknown jobId is a terminal failed', async () => {
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => gatedAnalyzer().analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => gatedAnalyzer().analyzer, isWorkspaceLocking: () => false })
     registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
     const job = (await invoke(handlers, IPC.imageGetJob, 'no-such-job')).result as ImageJob
     expect(job.state).toBe('failed')
@@ -202,7 +202,7 @@ describe('registerImagesIpc — analyze job contract', () => {
 
   it('rejects a WEBP request with unsupportedType — the analyze accept set stays PNG/JPEG (#124)', async () => {
     const { analyzer } = gatedAnalyzer()
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
     const bad = (await invoke(handlers, IPC.imageAnalyze, { ...goodReq(), mimeType: 'image/webp' }))
       .result as ImageJob
@@ -212,6 +212,7 @@ describe('registerImagesIpc — analyze job contract', () => {
 
   it('fails the job with runtimeFailed when vision is unavailable (no fabricated answer)', async () => {
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
       getStatus: async () => ({ available: false, reason: 'no-model' }),
       createRuntime: () => {
         throw new Error('should not build a runtime when unavailable')
@@ -226,7 +227,7 @@ describe('registerImagesIpc — analyze job contract', () => {
 
   it('cancel marks an in-flight job cancelled', async () => {
     const { analyzer } = gatedAnalyzer()
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
     const job = (await invoke(handlers, IPC.imageAnalyze, goodReq())).result as ImageJob
     const cancelled = (await invoke(handlers, IPC.imageCancel, job.jobId)).result as ImageJob
@@ -254,7 +255,7 @@ describe('registerImagesIpc — analyze job contract', () => {
         runtimeStopped = true
       }
     }
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
 
     const job = (await invoke(handlers, IPC.imageAnalyze, goodReq())).result as ImageJob
@@ -408,7 +409,7 @@ describe('registerImagesIpc — history persistence', () => {
 
   it('persists the image (encrypted) + a turn on done, and surfaces the sessionId', async () => {
     const { analyzer, release } = gatedAnalyzer('a local answer')
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     const { ctx, imagesPath } = ctxWithDb()
     registerImagesIpc(ctx, service)
 
@@ -446,7 +447,7 @@ describe('registerImagesIpc — history persistence', () => {
   })
 
   it('a follow-up analyze with the sessionId APPENDS (one session, one stored image)', async () => {
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('ans') })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('ans'), isWorkspaceLocking: () => false })
     const { ctx, imagesPath } = ctxWithDb()
     registerImagesIpc(ctx, service)
 
@@ -471,7 +472,7 @@ describe('registerImagesIpc — history persistence', () => {
   // The renderer's vision store also guards a blank `done` (visionSession), a shape this pins main never
   // sends: an empty answer is a failure the user can act on, and no history entry is stored (#745).
   it('a blank answer fails the job with emptyResponse: an error event, no done, nothing stored', async () => {
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer(' \n ') })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer(' \n '), isWorkspaceLocking: () => false })
     const { ctx, imagesPath } = ctxWithDb()
     registerImagesIpc(ctx, service)
 
@@ -488,7 +489,7 @@ describe('registerImagesIpc — history persistence', () => {
   // #241 through the handler (#860 L9): the save takes the vault's document-work lease, so a save during a password
   // change is refused (`VaultBusyError`) — the answer still reaches the user, and nothing lands in images/ or the list.
   it('a save refused by the document-work lease (a password change running) still delivers the answer and stores nothing', async () => {
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('ans') })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('ans'), isWorkspaceLocking: () => false })
     const { ctx, imagesPath } = ctxWithDb()
     ;(ctx.workspace as unknown as { beginDocumentWork: () => () => void }).beginDocumentWork = () => {
       throw new VaultBusyError('A password change is running.')
@@ -505,7 +506,7 @@ describe('registerImagesIpc — history persistence', () => {
 
   it('a busy-REJECTED analyze persists nothing', async () => {
     const { analyzer, release } = gatedAnalyzer()
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     const { ctx } = ctxWithDb()
     registerImagesIpc(ctx, service)
 
@@ -522,7 +523,7 @@ describe('registerImagesIpc — history persistence', () => {
   })
 
   it('deleteImageSession removes the entry and shreds the stored image', async () => {
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('a') })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('a'), isWorkspaceLocking: () => false })
     const { ctx, imagesPath } = ctxWithDb()
     registerImagesIpc(ctx, service)
 

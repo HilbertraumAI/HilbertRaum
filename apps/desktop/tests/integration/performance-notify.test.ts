@@ -382,7 +382,7 @@ describe('resident sidecars', () => {
         }
       }
     }
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false })
     const pushes = vi.fn()
     service.onResidencyChange(pushes)
     const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
