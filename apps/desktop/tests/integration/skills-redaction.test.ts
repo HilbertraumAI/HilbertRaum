@@ -300,6 +300,36 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     expect(run.status).toBe('cancelled')
   })
 
+  // run.ts's cancelled-before-write guard (the `signal.aborted` check after the tool, before the dialog) can only be
+  // reached by an abort inside the tool's own progress tick: nothing is awaited between the tool's entry check and the
+  // guard. No runtime, so the run takes the deterministic floor and the tool is the only progress emitter.
+  it('a cancel landing as the tool finishes opens no save dialog and records cancelled, not a write', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, PII_TEXT)
+    const { audit } = capturingAudit()
+    const controller = new AbortController()
+    let saveCalled = false
+    let ticks = 0
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      signal: controller.signal,
+      onProgress: () => {
+        ticks += 1
+        controller.abort() // the tool has checked the signal already and now returns ok
+      },
+      saveTextFile: async () => {
+        saveCalled = true
+        return true
+      }
+    })
+    expect(ticks).toBe(1) // the tool's own tick, nothing else
+    expect(res).toMatchObject({ ok: false, cancelled: true })
+    expect(saveCalled).toBe(false)
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('cancelled')
+  })
+
   it('a throwing save reports a content-free write failure', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, PII_TEXT)

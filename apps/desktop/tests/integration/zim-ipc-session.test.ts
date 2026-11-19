@@ -33,7 +33,8 @@ import { testBudgetMs, until, within } from '../helpers/hang-budget'
 // again, so the late completion wrote into a DIFFERENT session's database.
 //
 // Every ordering fact below is a controlled promise with an `entered`/`release` pair. No fixed
-// sleep is ever the proof of an outcome; `tick`/`waitUntil` only bound "nothing else happened".
+// sleep is ever the proof of an outcome; `tick` only bounds "nothing else happened", and `waitUntil` is a
+// positive wait that fails by name if its state never arrives.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 const dialogState = vi.hoisted(() => ({
@@ -132,14 +133,13 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 1))
 
 /**
- * Resolve `true` as soon as `pred` holds; fail by name (`until`: real time, 5 s, wider on CI) if it never does. Never a
+ * Resolve as soon as `pred` holds; fail by name (`until`: real time, 5 s, wider on CI) if it never does. Never a
  * fixed sleep, and a deadline, not a count of timer turns (#895). Every caller is a positive wait (the negative windows
  * in this file are their own `tick` loops), so a wide bound costs nothing on success: the longest wait measured at an
  * idle desk was ~70 ms, and a loaded Windows leg can stall for seconds.
  */
-async function waitUntil(pred: () => boolean, what = 'the awaited pack state'): Promise<boolean> {
+async function waitUntil(pred: () => boolean, what = 'the awaited pack state'): Promise<void> {
   await until(pred, what)
-  return true
 }
 
 /**
@@ -558,7 +558,7 @@ const ARTICLE_HTML =
 async function parkedLock(h: SessionHarness): Promise<{ lockP: Promise<{ result: unknown }> }> {
   h.armLockGate()
   const lockP = invoke(handlers, IPC.lockWorkspace)
-  expect(await waitUntil(() => h.suspendEntered())).toBe(true)
+  await waitUntil(() => h.suspendEntered())
   // THE window: the teardown is running, the vault has NOT re-encrypted, `isUnlocked()` is true
   // — and `zimOps.abortAll()` has already fired (it precedes the sidecar block).
   expect(h.ctrl.isUnlocked()).toBe(true)
@@ -591,7 +591,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         let releaseDialog!: () => void
         dialogState.gate = new Promise<void>((r) => (releaseDialog = r))
         const addP = keepHandled(invoke(handlers, IPC.addKnowledgePacks))
-        expect(await waitUntil(() => dialogState.entered)).toBe(true)
+        await waitUntil(() => dialogState.entered)
 
         const { lockP } = await parkedLock(h)
         const rowsInLock = h.packRows()
@@ -779,7 +779,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         let releaseDialog!: () => void
         dialogState.gate = new Promise<void>((r) => (releaseDialog = r))
         const stalePickerP = keepHandled(invoke(handlers, IPC.addKnowledgePacks))
-        expect(await waitUntil(() => dialogState.entered)).toBe(true)
+        await waitUntil(() => dialogState.entered)
 
         // The lock runs its whole teardown and then fails at the re-encrypt (ENOSPC).
         await expect(invoke(handlers, IPC.lockWorkspace)).rejects.toThrow(
@@ -832,8 +832,8 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(result).toMatchObject({ ok: true })
         expect(pass).not.toHaveBeenCalled()
 
-        expect(await waitUntil(() => pass.mock.calls.length > 0)).toBe(true)
-        expect(await waitUntil(() => h.metaAdds.length > 0)).toBe(true)
+        await waitUntil(() => pass.mock.calls.length > 0)
+        await waitUntil(() => h.metaAdds.length > 0)
         for (let i = 0; i < 30; i++) await tick()
         expect(pass).toHaveBeenCalledTimes(1) // exactly ONE pass per session
         expect(h.metaAdds).toEqual(['on-the-drive.zim'])
@@ -856,7 +856,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(result).toMatchObject({ ok: true })
         expect(pass).not.toHaveBeenCalled() // never on the create's critical path either
 
-        expect(await waitUntil(() => h.metaAdds.length > 0)).toBe(true)
+        await waitUntil(() => h.metaAdds.length > 0)
         for (let i = 0; i < 30; i++) await tick()
         expect(pass).toHaveBeenCalledTimes(1)
         expect(h.packRows()).toHaveLength(1)
@@ -882,7 +882,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
         expect(pass).not.toHaveBeenCalled() // scheduled, never inline
         expect(existsSync(stranded)).toBe(true) // the cleanup is scheduled too
 
-        expect(await waitUntil(() => h.metaAdds.length > 0)).toBe(true)
+        await waitUntil(() => h.metaAdds.length > 0)
         for (let i = 0; i < 30; i++) await tick()
         expect(pass).toHaveBeenCalledTimes(1)
         expect(h.packRows()).toHaveLength(1)
@@ -924,7 +924,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
           detachVaultKey: () => {},
           log: { error: () => undefined, info: () => undefined }
         })
-        expect(await waitUntil(() => h.suspendEntered())).toBe(true)
+        await waitUntil(() => h.suspendEntered())
         h.hooks.probe = async () => true
         probeGate.release(true) // the probe succeeds — after the quit began
 
@@ -1447,7 +1447,7 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       const metaAddsAtPark = h.metaAdds.length
       manageGate.release()
       await parkedStartP
-      expect(await waitUntil(() => !h.svc.refreshing())).toBe(true) // the coalesced rerun finished
+      await waitUntil(() => !h.svc.refreshing()) // the coalesced rerun finished
       expect(await refreshingNow()).toBe(false)
       // The rerun finds `never-discovered.zim` ALREADY registered by the parked pass, so it
       // spawns no second manager call — proof there was no THIRD, uncoalesced pass either.
@@ -2120,7 +2120,7 @@ describe('#712 — a kiwix-serve start that fails is logged as a class, never wi
       h.addPackFile('alpha-712.zim')
       startKnowledgePackSession(h.ctx)
       const sessionLine = 'Knowledge-pack session start failed (non-fatal)'
-      expect(await waitUntil(() => warned(sessionLine).length > 0)).toBe(true)
+      await waitUntil(() => warned(sessionLine).length > 0)
       expect(h.serveSpawns).toHaveLength(1)
       // The child really printed the workspace path the log must not repeat.
       expect(h.serveSpawns[0]!.libraryXmlPath).toContain(basename(h.root))
@@ -2128,7 +2128,7 @@ describe('#712 — a kiwix-serve start that fails is logged as a class, never wi
       // Refresh under the same pack set: the latched failure is rethrown, no second spawn.
       const refreshLine = 'Knowledge-pack refresh failed'
       expect((await invoke(handlers, IPC.refreshKnowledgePacks)).result).toEqual({ started: true })
-      expect(await waitUntil(() => warned(refreshLine).length > 0)).toBe(true)
+      await waitUntil(() => warned(refreshLine).length > 0)
       expect(h.serveSpawns).toHaveLength(1)
 
       const expected = [{ error: 'serve:exit:code 1:library-unreadable' }]
@@ -2150,7 +2150,7 @@ describe('#712 — a kiwix-serve start that fails is logged as a class, never wi
       await invoke(handlers, IPC.setKnowledgePackEnabled, packId, false)
       await invoke(handlers, IPC.setKnowledgePackEnabled, packId, true)
       const probeLine = 'Knowledge-pack searchability probe failed (non-fatal)'
-      expect(await waitUntil(() => warned(probeLine).length > 0)).toBe(true)
+      await waitUntil(() => warned(probeLine).length > 0)
       expect(warned(probeLine)).toEqual(expected)
       expect(h.serveSpawns).toHaveLength(2)
 
@@ -2518,9 +2518,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       // The add RESOLVED before the probe ran (D3: never on the caller's critical path).
       expect(searchableOf(h, alpha)).toEqual({ searchable: null, searchable_key: null })
       expect(searchableOf(h, bravo)).toEqual({ searchable: null, searchable_key: null })
-      expect(
-        await waitUntil(() => searchableOf(h, alpha).searchable === 'yes' && searchableOf(h, bravo).searchable === 'no')
-      ).toBe(true)
+      await waitUntil(() => searchableOf(h, alpha).searchable === 'yes' && searchableOf(h, bravo).searchable === 'no')
       // Once per batch, after the loop: ONE sidecar start, one /suggest per pack.
       expect(h.serveSpawns.length - spawnsBefore).toBe(1)
       expect(suggestsSince(h, 0).filter((u) => u.includes('alpha-indexed'))).toHaveLength(1)
@@ -2553,7 +2551,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       for (let i = 0; i < 10; i++) await tick() // a ceiling, not a proof: nothing probed a disable
       expect(searchableOf(h, charlie).searchable).toBeNull()
       await invoke(handlers, IPC.setKnowledgePackEnabled, charlie, true)
-      expect(await waitUntil(() => searchableOf(h, charlie).searchable === 'yes')).toBe(true)
+      await waitUntil(() => searchableOf(h, charlie).searchable === 'yes')
 
       // ---- (4) a LOCK landing while the probe's /suggest is parked writes nothing --------
       h.hooks.respond = suggestFor(new Set(['alpha-indexed', 'charlie-indexed', 'delta-indexed']))
@@ -2577,7 +2575,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
       expect(unlocked).toMatchObject({ ok: true })
       expect(searchableOf(h, delta).searchable).toBeNull()
-      expect(await waitUntil(() => searchableOf(h, delta).searchable === 'yes')).toBe(true)
+      await waitUntil(() => searchableOf(h, delta).searchable === 'yes')
     } finally {
       await h.close()
     }
@@ -2627,12 +2625,10 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       expect((await status()).excluded).toBeNull()
       const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, 'right-password')
       expect(unlocked).toMatchObject({ ok: true })
-      expect(
-        await waitUntil(() => {
-          const s = h.svc.excluded()
-          return s !== null && s.length === 1 && s[0]!.packId === loserId
-        })
-      ).toBe(true)
+      await waitUntil(() => {
+        const s = h.svc.excluded()
+        return s !== null && s.length === 1 && s[0]!.packId === loserId
+      })
       expect((await status()).excluded).toEqual([{ packId: loserId, collidesWith: winnerId }])
 
       // No service at all (a partial context) reads as tools not installed, nothing computed.

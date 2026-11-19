@@ -137,7 +137,7 @@ export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkI
       log.info('GPU probe finished after the workspace locked; result not persisted')
       return false
     }
-    if (epoch !== undefined && ctx.workspace.unlockEpoch() !== epoch) {
+    if (ctx.workspace.unlockEpoch() !== epoch) {
       log.info('GPU probe outlived its workspace session; result not persisted')
       return false
     }
@@ -362,7 +362,7 @@ async function runBenchmarkAndPersist(
     log.info('Benchmark finished after the workspace locked; result not persisted')
     throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
-  if (epoch !== undefined && ctx.workspace.unlockEpoch() !== epoch) {
+  if (ctx.workspace.unlockEpoch() !== epoch) {
     log.info('Benchmark outlived its workspace session; result not persisted')
     throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
@@ -816,7 +816,7 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
       log.info(`${label} skipped: the workspace locked while the model start settled`)
       return 'skipped-admission'
     }
-    if (decision.epoch !== undefined && ctx.workspace.unlockEpoch() !== decision.epoch) {
+    if (ctx.workspace.unlockEpoch() !== decision.epoch) {
       log.info(`${label} skipped: the workspace was locked and re-opened meanwhile (the new session re-checks)`)
       return 'skipped-epoch'
     }
