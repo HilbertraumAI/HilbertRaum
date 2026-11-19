@@ -2446,6 +2446,13 @@ export const tr: UiCatalog<'tr'> = {
     'dosyasından geliyor. Tarayıcınız bu siteye bağlanacak.',
   'main.dialog.openLink.open': 'Bağlantıyı aç',
   'main.dialog.openLink.cancel': 'İptal',
+  'main.dialog.unsavedReview.title': 'İncelemedeki bazı değişiklikler kaydedilemedi.',
+  'main.dialog.unsavedReview.message': 'İncelemedeki bazı değişiklikler kaydedilemedi.',
+  'main.dialog.unsavedReview.detail':
+    'Şimdi kapatırsanız bu değişiklikler kaybolur. Sürücüde biraz yer açın, sonra yeniden deneyin.',
+  'main.dialog.unsavedReview.tryAgain': 'Yeniden dene',
+  'main.dialog.unsavedReview.keepOpen': 'Açık bırak',
+  'main.dialog.unsavedReview.closeAnyway': 'Yine de kapat',
   'main.workspace.wrongPassword':
     'Bu parola çalışma alanınızın kilidini açmadı. Parolayı kontrol edip yeniden deneyin.',
   'main.workspace.openFailed': 'Çalışma alanı açılamadı.',

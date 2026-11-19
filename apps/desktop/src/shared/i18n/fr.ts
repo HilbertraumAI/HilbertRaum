@@ -2736,6 +2736,16 @@ export const fr: UiCatalog<'fr'> = {
     'navigateur se connectera à ce site.',
   'main.dialog.openLink.open': 'Ouvrir',
   'main.dialog.openLink.cancel': 'Annuler',
+  'main.dialog.unsavedReview.title':
+    'Certaines modifications de la vérification n’ont pas pu être enregistrées.',
+  'main.dialog.unsavedReview.message':
+    'Certaines modifications de la vérification n’ont pas pu être enregistrées.',
+  'main.dialog.unsavedReview.detail':
+    'Si vous fermez maintenant, elles seront perdues. Libérez de l’espace sur le disque, puis ' +
+    'réessayez.',
+  'main.dialog.unsavedReview.tryAgain': 'Réessayer',
+  'main.dialog.unsavedReview.keepOpen': 'Ne pas fermer',
+  'main.dialog.unsavedReview.closeAnyway': 'Fermer quand même',
   'main.workspace.wrongPassword':
     'Ce mot de passe n’a pas déverrouillé votre espace de travail. Vérifiez-le et réessayez.',
   'main.workspace.openFailed': 'L’espace de travail n’a pas pu être ouvert.',

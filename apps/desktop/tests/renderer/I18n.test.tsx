@@ -5,13 +5,19 @@ import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { ToastProvider } from '../../src/renderer/components'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
+import { saveAllBeforeClose } from '../../src/renderer/lib/beforeClose'
 import {
   I18nProvider,
   UI_LANGUAGE_STORAGE_KEY,
   resolvePreUnlockLanguage,
   useT
 } from '../../src/renderer/i18n'
-import { DEFAULT_SETTINGS, type AppSettings, type WorkspaceStateInfo } from '../../src/shared/types'
+import {
+  DEFAULT_SETTINGS,
+  type AppSettings,
+  type SaveBeforeCloseResult,
+  type WorkspaceStateInfo
+} from '../../src/shared/types'
 import {
   UI_LANGUAGES,
   UI_LANGUAGE_CODES,
@@ -371,6 +377,26 @@ describe('Settings → General language picker', () => {
     await elapse(PAST_THE_PAUSE_MS)
     expect(updateSettings).toHaveBeenCalledTimes(1)
     expect(toasts()).toEqual([t('de', 'settings.saved')])
+  })
+
+  // #888: a window close runs no unmount, so a choice still inside its pause was lost (PR #823 saved it
+  // only on the pause, a blur or leaving the tab). The save before the window closes sends it, and
+  // answers main only once that save has answered.
+  it('a choice still inside its pause is saved when the window closes, before the close-time save answers (#888)', async () => {
+    const { updateSettings, release } = stubSettings({ ...DEFAULT_SETTINGS }, { hold: true })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    let answer: SaveBeforeCloseResult | undefined
+    void saveAllBeforeClose().then((a) => (answer = a))
+    await elapse(0)
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'de' }) // the pause has not passed
+    expect(answer).toBeUndefined() // waiting for that save
+    release()
+    await elapse(0)
+    expect(answer).toEqual({ unsaved: false })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
   })
 
   // #808, audit PA-4: the provider outlives the tab, so a choice saved by the unmount still switches

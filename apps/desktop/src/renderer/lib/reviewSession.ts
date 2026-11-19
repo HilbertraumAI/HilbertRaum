@@ -11,6 +11,7 @@ import type {
   ReviewDecision
 } from '@shared/types'
 import { deriveReadyGate } from '@shared/evidence-review'
+import { registerBeforeClose } from './beforeClose'
 import { friendlyIpcError } from './errors'
 
 // Evidence-review session store (EP-1 plan §7.5) — the doctasks idiom (module store +
@@ -30,8 +31,8 @@ import { friendlyIpcError } from './errors'
 //    pending fields (newest edit wins) so nothing is dropped and nothing old overwrites new.
 //  - `flushReviewSession()` is the one-pass flush (debounce timer, screen exit). Whatever must
 //    run only once EVERYTHING is saved drains instead (`drainReviewSaves`: passes until nothing
-//    is queued or a write fails, #889): mark ready, export, reopen, a review switch, Try again
-//    and the pre-lock seam.
+//    is queued or a write fails, #889): mark ready, export, reopen, a review switch, Try again,
+//    the pre-lock seam and the save before the window closes (#888, the same bounded call).
 //
 // Null-result contract (plan §14 P1 handoff): every mutation returns null/false for unknown
 // ids and refused inputs — treated here as a stale-handle refusal (`saveState: 'error'`),
@@ -50,7 +51,8 @@ import { friendlyIpcError } from './errors'
 // ready, export and reopen refuse; a sweep refuses; a switch to ANOTHER review is refused
 // with a choice (`openError.kind === 'unsaved'`: Try again / Discard changes and open / Back)
 // and re-opening the SAME review keeps the edit on screen. Only the lock still drops a failed
-// patch (`App.lockNow` — the user's security action wins; known-limitations).
+// patch without asking (`App.lockNow` — the user's security action wins; known-limitations);
+// closing the window asks first (#888: Try again / Keep open / Close anyway, main's dialog).
 //
 // ONE write lane (#837, widened by #889/#901): at most one of {an item/head flush, a lane
 // holder} writes at a time. Lane holders: a bulk sweep (its call through its merge), a selection
@@ -243,6 +245,22 @@ function armTimer(): void {
 function hasUnsavedEdits(): boolean {
   return pendingItems.size > 0 || pendingHead != null
 }
+
+/**
+ * #888: is any review edit not yet known to be written — queued, or in a write still out (a
+ * write the close-time save's bound gave up on counts: it may yet fail)? What the window answers
+ * main before it closes.
+ */
+export function hasUnsavedReviewEdits(): boolean {
+  return hasUnsavedEdits() || flushInFlight != null
+}
+
+// #888: closing or quitting the app saves first — the same bounded drain Lock now runs, then the
+// window tells main whether anything is still unsaved (main then asks the user before closing).
+registerBeforeClose(async () => {
+  await flushReviewSessionBeforeLock()
+  return { unsaved: hasUnsavedReviewEdits() }
+})
 
 /**
  * #837: an edit a FAILED write left unsaved is waiting for the user's Try again — the one

@@ -2626,6 +2626,13 @@ export const pl: UiCatalog<'pl'> = {
     'przeglądarka połączy się z tą witryną.',
   'main.dialog.openLink.open': 'Otwórz',
   'main.dialog.openLink.cancel': 'Anuluj',
+  'main.dialog.unsavedReview.title': 'Nie udało się zapisać części zmian w weryfikacji.',
+  'main.dialog.unsavedReview.message': 'Nie udało się zapisać części zmian w weryfikacji.',
+  'main.dialog.unsavedReview.detail':
+    'Jeśli zamkniesz teraz, zostaną utracone. Zwolnij trochę miejsca na dysku i spróbuj ponownie.',
+  'main.dialog.unsavedReview.tryAgain': 'Spróbuj ponownie',
+  'main.dialog.unsavedReview.keepOpen': 'Nie zamykaj',
+  'main.dialog.unsavedReview.closeAnyway': 'Zamknij mimo to',
   'main.workspace.wrongPassword':
     'To hasło nie odblokowało twojego obszaru roboczego. Sprawdź je i spróbuj ponownie.',
   'main.workspace.openFailed': 'Nie udało się otworzyć obszaru roboczego.',

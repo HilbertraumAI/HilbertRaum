@@ -7,6 +7,7 @@ import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
 import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
+import { createMainWindowCloseGuard, trackQuitRequests } from './close-guard'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
 import { appPageUrl, createMainWindowNavigationPredicate, devRendererUrl } from './app-protocol'
@@ -959,7 +960,10 @@ function createWindow(): void {
   // the app pages and, since #563, the print pages), and this hook adds its own copy there in
   // packaged builds (both measured attaching on the app pages, #560).
   const csp = buildCsp(isDev)
-  trustedSenders.add(mainWindow.webContents.id)
+  const win = mainWindow
+  // Read now: `webContents` is gone by the time `closed` fires.
+  const senderId = win.webContents.id
+  trustedSenders.add(senderId)
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -995,6 +999,31 @@ function createWindow(): void {
   // shared closure with the quit handlers so it can never run beside a quit teardown). The
   // window exists for the whole unlocked session on Windows (`window-all-closed` quits).
   if (process.platform === 'win32') mainWindow.on('session-end', lifecycle.onSessionEnd)
+
+  // #888: every close of this window (X, Alt+F4, the taskbar, Ctrl+W, File → Exit, Cmd+Q, the
+  // macOS red button) first asks the window to save its pending edits — a review change inside
+  // its 600 ms pause, one whose save failed, the language pick — and closes exactly once after
+  // the answer or the bound; a change that could not be saved asks the user first. A close that
+  // came from a quit quits again (`close-guard.ts`). One guard per window: a macOS `activate`
+  // window gets its own; the quit flag is the app's (`quitRequests`, below).
+  const closeGuard = createMainWindowCloseGuard({
+    window: win,
+    app,
+    ipc: ipcMain,
+    dialog,
+    t: tMain,
+    quitRequests,
+    isShuttingDown: () => lifecycle.isShuttingDown(),
+    log
+  })
+  win.on('close', closeGuard.onClose)
+  // The window is gone: its sender id is no longer trusted, and `mainWindow` no longer points at a
+  // destroyed window, which `second-instance` would call: on macOS the app stays open, and on every
+  // OS a second launch can arrive during the quit teardown (up to 30 s after the window closed).
+  win.on('closed', () => {
+    trustedSenders.delete(senderId)
+    if (mainWindow === win) mainWindow = null
+  })
 
   // Open external links in the OS browser, never inside the app window — policy in
   // window-security.ts (only http(s) reaches the OS handler; the in-app open is always
@@ -1078,6 +1107,11 @@ app.whenReady().then(() => {
   // time. Either ordering is safe by the shared closure (see `createAppLifecycleHandlers`).
   if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())
 })
+
+// #888: every quit (File → Exit, Cmd+Q, Dock Quit, `window-all-closed`'s own quit) fires
+// `before-quit` before it closes the windows. Each main window's close guard reads and clears this
+// app-level flag: a close it prevents cancels that quit, so the guard quits again after the save.
+const quitRequests = trackQuitRequests(app)
 
 app.on('will-quit', lifecycle.onWillQuit)
 

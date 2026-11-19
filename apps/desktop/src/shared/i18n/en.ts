@@ -2667,6 +2667,15 @@ export const en = {
     'will connect to this site.',
   'main.dialog.openLink.open': 'Open',
   'main.dialog.openLink.cancel': 'Cancel',
+  // #888: the native dialog when closing or quitting finds a review change it could not save (a full
+  // or failing drive). Buttons in order: Try again (the default), Keep open (Esc), Close anyway.
+  'main.dialog.unsavedReview.title': 'Some review changes could not be saved.',
+  'main.dialog.unsavedReview.message': 'Some review changes could not be saved.',
+  'main.dialog.unsavedReview.detail':
+    'If you close now, they are lost. Free some space on the drive, then try again.',
+  'main.dialog.unsavedReview.tryAgain': 'Try again',
+  'main.dialog.unsavedReview.keepOpen': 'Keep open',
+  'main.dialog.unsavedReview.closeAnyway': 'Close anyway',
   'main.workspace.wrongPassword':
     "That password didn't unlock your workspace. Check it and try again.",
   'main.workspace.openFailed': 'Could not open the workspace.',
