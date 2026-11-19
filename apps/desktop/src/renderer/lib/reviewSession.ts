@@ -28,7 +28,10 @@ import { friendlyIpcError } from './errors'
 //    snapshot BEFORE awaiting, so edits landing mid-flight repopulate the maps and are
 //    flushed by the follow-up pass; a FAILED write re-merges its patch UNDER any newer
 //    pending fields (newest edit wins) so nothing is dropped and nothing old overwrites new.
-//  - `flushReviewSession()` is the hard flush for screen exit and the pre-lock seam.
+//  - `flushReviewSession()` is the one-pass flush (debounce timer, screen exit). Whatever must
+//    run only once EVERYTHING is saved drains instead (`drainReviewSaves`: passes until nothing
+//    is queued or a write fails, #889): mark ready, export, reopen, a review switch, Try again
+//    and the pre-lock seam.
 //
 // Null-result contract (plan §14 P1 handoff): every mutation returns null/false for unknown
 // ids and refused inputs — treated here as a stale-handle refusal (`saveState: 'error'`),
@@ -43,11 +46,23 @@ import { friendlyIpcError } from './errors'
 // the UI from ever showing an optimistic value main would reject).
 //
 // A failed save is never run over (#837): a failed write leaves its patch queued and the
-// save-error line showing, and every action that runs after a flush checks for that. Mark
+// save-error line showing, and every action that runs after its save checks for that. Mark
 // ready, export and reopen refuse; a sweep refuses; a switch to ANOTHER review is refused
 // with a choice (`openError.kind === 'unsaved'`: Try again / Discard changes and open / Back)
 // and re-opening the SAME review keeps the edit on screen. Only the lock still drops a failed
 // patch (`App.lockNow` — the user's security action wins; known-limitations).
+//
+// ONE write lane (#837, widened by #889/#901): at most one of {an item/head flush, a lane
+// holder} writes at a time. Lane holders: a bulk sweep (its call through its merge), a selection
+// delete (its call), a link or unlink (until its call is sent: every write to an existing item —
+// an edit save, a delete, a link or unlink — takes the lane, so a link waits for a delete of its
+// row and is dropped with the row), mark ready and reopen (their drain through their call and
+// merge), Try again (its drain and re-read), and every drain while it saves. Adding a selection
+// does not take the lane: it creates a row, and nothing queued can target it. A holder takes
+// the lane through `acquireLane`, at once when it is free, so its first IPC still goes out in
+// the caller's own task.
+// Main's answer to a lane holder is merged with nothing written meanwhile, so the merge keeps
+// exactly the fields still queued (they are written after it).
 
 export type ReviewHandoffTarget = { reviewId: string } | { messageId: string }
 
@@ -87,6 +102,13 @@ export interface ReviewSessionState {
    * sweeps would merge over each other's optimistic values.
    */
   bulkRunning: boolean
+  /**
+   * #889 (G-4): Mark ready's call is with main — from the end of its save until main answers.
+   * Item-level editing (decisions, notes, links, selections) is refused meanwhile and the screen
+   * renders it read-only: main decides from the rows saved now, and an item write sent during
+   * the call would reach a review that is ready by then and be refused.
+   */
+  finishing: boolean
 }
 
 const INITIAL: ReviewSessionState = {
@@ -96,7 +118,8 @@ const INITIAL: ReviewSessionState = {
   saveState: 'idle',
   saveError: null,
   freshness: null,
-  bulkRunning: false
+  bulkRunning: false,
+  finishing: false
 }
 
 /** Debounce between an edit and its IPC flush (spec §26 — batch related writes). */
@@ -116,10 +139,12 @@ let openToken = 0
  */
 let purgeEpoch = 0
 /**
- * #837 (review round 4) — ONE write lane: set while a bulk sweep's call is in flight, until its
- * merge is done. `flushReviewSession` waits on it like on `flushInFlight`, so no item write
- * (debounce timer, screen exit, switch, lock) runs concurrently with a sweep; the sweep itself
- * waits out any item flush before it starts.
+ * #837 (review round 4) — ONE write lane: set while a lane holder runs (a bulk sweep's call until
+ * its merge is done; since #889/#901 also a drain, a selection delete, a link or unlink until its call
+ * is sent, mark ready / reopen through their merge, Try again's re-read — see the module header). `flushReviewSession` waits on it
+ * like on `flushInFlight`, so no item write (debounce timer, screen exit) runs concurrently with
+ * a holder; a holder waits out any item flush and any other holder before it starts
+ * (`acquireLane`).
  */
 let sweepLane: Promise<void> | null = null
 
@@ -151,12 +176,19 @@ function orPurge<T>(work: Promise<T>): Promise<T | undefined> {
  */
 export const REVIEW_LOCK_FLUSH_BOUND_MS = 6_000
 
-/** The pre-lock flush, bounded: it never rejects and gives up after `REVIEW_LOCK_FLUSH_BOUND_MS`. */
+/**
+ * The pre-lock save, bounded: it drains (#889 — an edit made while its first write is out is
+ * written too), never rejects, and gives up after `REVIEW_LOCK_FLUSH_BOUND_MS`. A drain the bound
+ * gave up on ends at the purge that follows (it releases every wait).
+ */
 export async function flushReviewSessionBeforeLock(): Promise<void> {
   let bound: ReturnType<typeof setTimeout> | null = null
   try {
     await Promise.race([
-      flushReviewSession().catch(() => {}),
+      drainReviewSaves().then(
+        (drained) => drained?.release(),
+        () => {}
+      ),
       new Promise<void>((resolve) => {
         bound = setTimeout(resolve, REVIEW_LOCK_FLUSH_BOUND_MS)
       })
@@ -223,8 +255,96 @@ export function hasEditsAfterFailedSave(): boolean {
   return state.saveState === 'error' && hasUnsavedEdits()
 }
 
-/** Flush passes a switch runs before it decides (the first + up to three more). */
-const SWITCH_FLUSH_PASSES = 4
+/** Flush passes a drain runs at most (the first + up to three more): the valve against edits
+ *  that never stop arriving. Edits past it are newer than the click and stay queued; Mark ready
+ *  and Export then refuse (review round 3), the switch keeps the review open, and the timer
+ *  writes them once the lane is free. */
+const DRAIN_MAX_PASSES = 4
+
+/** Is anything on the write lane right now (an item flush, or a lane holder)? */
+function laneBusy(): boolean {
+  return flushInFlight != null || sweepLane != null
+}
+
+/**
+ * Take the write lane — the ONE way a holder takes it. When the lane is free it is taken NOW
+ * and the release comes back synchronously: the caller uses it without an await
+ * (`typeof lane === 'function' ? lane : await lane`), so it goes on in its own task and its
+ * first IPC goes out before any await (rows pin that the lock's and the export's save reach the
+ * IPC before any await, and that a delete's IPC goes out before a purge in the same task).
+ * Otherwise a promise of the release once every item flush and every other holder is done; null
+ * when a lock (purge) ended the wait. The release is idempotent: a purge already dropped the
+ * lane, so a late release never frees a lane a newer holder took.
+ */
+function acquireLane(): (() => void) | Promise<(() => void) | null> {
+  return laneBusy() ? takeWriteLane() : laneNow()
+}
+
+/** Set the lane (only when `laneBusy()` is false; `acquireLane` checked, synchronously). */
+function laneNow(): () => void {
+  let open: () => void = () => {}
+  const lane = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  sweepLane = lane
+  return () => {
+    if (sweepLane === lane) sweepLane = null
+    open()
+  }
+}
+
+/** `acquireLane`'s wait: every item flush and every lane holder, then the lane. Null on a purge. */
+async function takeWriteLane(): Promise<(() => void) | null> {
+  const epoch = purgeEpoch
+  while (laneBusy()) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
+  return epoch === purgeEpoch ? laneNow() : null
+}
+
+/**
+ * One flush pass — the item-flush half of the lane, shared by `flushReviewSession` and the drain:
+ * write everything queued now (`doFlush`, whose first IPC goes out synchronously, in the caller's
+ * task), registered as `flushInFlight` so every holder waits it out, raced against the purge.
+ */
+async function flushPass(): Promise<void> {
+  const run = doFlush()
+  flushInFlight = run
+  try {
+    await orPurge(run)
+  } finally {
+    if (flushInFlight === run) flushInFlight = null
+  }
+}
+
+/**
+ * #889: the ONE drain. Takes the write lane, then saves in passes INSIDE it until nothing is
+ * queued or a write fails (at most `DRAIN_MAX_PASSES`). Resolves HOLDING the lane: the last
+ * write has answered and no other write starts until `release()` — so `failed` (and whether an
+ * edit is still queued) is read after the last write, and a waiting timer flush can neither take
+ * the queue first nor fail after the caller went ahead. Null when a lock (purge) ended it. Shared
+ * by mark ready, export, reopen, a review switch, Try again and the pre-lock save; `runSweep`
+ * keeps its single pre-sweep flush (a decision made during it is newer than the sweep and is
+ * written after it).
+ */
+async function drainReviewSaves(): Promise<{ failed: boolean; release: () => void } | null> {
+  const epoch = purgeEpoch
+  const lane = acquireLane()
+  const release = typeof lane === 'function' ? lane : await lane
+  if (!release) return null
+  try {
+    for (let pass = 0; pass < DRAIN_MAX_PASSES && hasUnsavedEdits(); pass++) {
+      await flushPass()
+      if (epoch !== purgeEpoch) {
+        release()
+        return null
+      }
+      if (state.saveState === 'error') break
+    }
+  } catch (e) {
+    release()
+    throw e
+  }
+  return { failed: state.saveState === 'error', release }
+}
 
 /** Does `target` name the review already in the store? */
 function isOpenReview(target: ReviewHandoffTarget): boolean {
@@ -235,23 +355,18 @@ function isOpenReview(target: ReviewHandoffTarget): boolean {
 
 /** Open (or create — the idempotent Phase-1 create) a review for the handoff target. */
 export async function openReviewSession(target: ReviewHandoffTarget): Promise<void> {
-  // A previous review's unsaved edits are flushed first so switching reviews loses nothing.
-  // A pass that ends with edits which landed WHILE it was writing re-arms the debounce and
-  // returns: the next pass writes those too, until nothing is queued or a write FAILS (a
-  // failure is not retried here — it stands, with its error line, until the user's Try again).
-  // After each pass, a flush ANOTHER caller started meanwhile (a screen's exit flush; React
-  // StrictMode runs that cleanup once more on mount) is waited out: it holds its patches OFF
-  // the queue while it writes, a failed write puts its patch back, and the reset below would
-  // otherwise leave that failure to land under the new token and be dropped. The pass count is
-  // only a safety valve against edits that never stop arriving. A lock (purge) landing during
-  // any of these waits ends the switch: nothing is opened into the purged store.
-  const epoch = purgeEpoch
-  for (let pass = 0; pass < SWITCH_FLUSH_PASSES; pass++) {
-    await flushReviewSession().catch(() => {})
-    while (flushInFlight) await orPurge(flushInFlight)
-    if (epoch !== purgeEpoch) return
-    if (!hasUnsavedEdits() || state.saveState === 'error') break
-  }
+  // A previous review's unsaved edits are saved first so switching reviews loses nothing: the
+  // drain writes in passes (edits that landed WHILE a pass was writing go in the next one) until
+  // nothing is queued or a write FAILS (a failure is not retried here — it stands, with its error
+  // line, until the user's Try again). It first waits out a flush ANOTHER caller started (a
+  // screen's exit flush; React StrictMode runs that cleanup once more on mount): that flush holds
+  // its patches OFF the queue while it writes, a failed write puts its patch back, and the reset
+  // below would otherwise leave that failure to land under the new token and be dropped. A lock
+  // (purge) landing during any of these waits ends the switch: nothing is opened into the purged
+  // store.
+  const drained = await drainReviewSaves()
+  if (!drained) return
+  drained.release()
   // #837: edits still queued now are ones a write FAILED to save (or, past the safety valve,
   // ones still arriving). The reset below used to drop them without a word.
   if (hasUnsavedEdits() && state.detail) {
@@ -347,26 +462,49 @@ function mergeItemPatch(
   return { ...base, ...patch }
 }
 
+/** `item` with what an item patch sets (decision, note; undefined = leave unchanged). The one
+ *  place a patch is spread over a row: the optimistic apply and Try again's re-read. */
+function applyItemPatch(item: EvidenceReviewItem, patch: EvidenceReviewItemPatch): EvidenceReviewItem {
+  return {
+    ...item,
+    ...(patch.decision !== undefined ? { decision: patch.decision } : null),
+    ...(patch.reviewerNote !== undefined ? { reviewerNote: patch.reviewerNote } : null)
+  }
+}
+
+/** `detail` with what a head patch sets (title, reviewer label, general note; undefined = leave
+ *  unchanged). The one place a head patch is spread: a head edit, Try again's re-read, and the
+ *  merge of Mark ready's / Reopen's answer (which keeps the fields still queued). */
+function applyHeadPatch(detail: EvidenceReviewDetail, patch: EvidenceReviewPatch): EvidenceReviewDetail {
+  return {
+    ...detail,
+    ...(patch.title !== undefined ? { title: patch.title } : null),
+    ...(patch.reviewerLabel !== undefined ? { reviewerLabel: patch.reviewerLabel } : null),
+    ...(patch.generalNote !== undefined ? { generalNote: patch.generalNote } : null)
+  }
+}
+
 /** Optimistically apply an item patch to the in-memory detail. */
 function applyItemLocally(itemId: string, patch: EvidenceReviewItemPatch): void {
   const detail = state.detail
   if (!detail) return
-  const items = detail.items.map((item) =>
-    item.id === itemId
-      ? {
-          ...item,
-          ...(patch.decision !== undefined ? { decision: patch.decision } : null),
-          ...(patch.reviewerNote !== undefined ? { reviewerNote: patch.reviewerNote } : null)
-        }
-      : item
-  )
+  const items = detail.items.map((item) => (item.id === itemId ? applyItemPatch(item, patch) : item))
   setState({ detail: { ...detail, items, gate: deriveReadyGate(items) } })
 }
 
-/** Record an item edit: optimistic apply + pending patch + debounce. Refused while the
- *  review is READY (FIX-1 — reopen first; main refuses these writes anyway). */
+/**
+ * Item-level editing (decisions, notes, links, selections) is closed: no review, a READY one
+ * (FIX-1 — reopen first; main refuses these writes too), or Mark ready's call is with main
+ * (`finishing`, #889 G-4 — the screen is read-only for it).
+ */
+function itemEditingClosed(): boolean {
+  return !state.detail || state.detail.status === 'ready' || state.finishing
+}
+
+/** Record an item edit: optimistic apply + pending patch + debounce. Refused while item
+ *  editing is closed (`itemEditingClosed`). */
 export function editReviewItem(itemId: string, patch: EvidenceReviewItemPatch): void {
-  if (!state.detail || state.detail.status === 'ready') return
+  if (itemEditingClosed()) return
   applyItemLocally(itemId, patch)
   pendingItems.set(itemId, mergeItemPatch(pendingItems.get(itemId), patch))
   sweepFailed = false // the user acted after a failed sweep
@@ -384,16 +522,7 @@ export function editReviewHead(patch: EvidenceReviewPatch): void {
   if (safe.title !== undefined && safe.title.trim().length === 0) delete safe.title
   if (Object.keys(safe).length === 0) return
   sweepFailed = false // the user acted after a failed sweep
-  setState({
-    detail: {
-      ...detail,
-      ...(safe.title !== undefined ? { title: safe.title } : null),
-      ...(safe.reviewerLabel !== undefined ? { reviewerLabel: safe.reviewerLabel } : null),
-      ...(safe.generalNote !== undefined ? { generalNote: safe.generalNote } : null)
-    },
-    saveState: 'pending',
-    saveError: null
-  })
+  setState({ detail: applyHeadPatch(detail, safe), saveState: 'pending', saveError: null })
   pendingHead = { ...pendingHead, ...safe }
   armTimer()
 }
@@ -401,19 +530,14 @@ export function editReviewHead(patch: EvidenceReviewPatch): void {
 /**
  * Flush all pending patches now. Waits until NO flush is in flight (a loop, not a single
  * await — a timer-started run replacing `flushInFlight` mid-wait must also be awaited,
- * FIX-2b) and no bulk sweep's call is in flight (`sweepLane`, the one write lane), then
- * drains whatever is pending at that point. Loss-free: see the module header.
+ * FIX-2b) and no lane holder runs (`sweepLane`, the one write lane), then drains whatever
+ * is pending at that point — ONE pass: an edit made while it writes is left for the next
+ * (`drainReviewSaves` runs passes). Loss-free: see the module header.
  */
 export async function flushReviewSession(): Promise<void> {
-  while (flushInFlight || sweepLane) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
-  if (pendingItems.size === 0 && pendingHead == null) return
-  const run = doFlush()
-  flushInFlight = run
-  try {
-    await orPurge(run)
-  } finally {
-    if (flushInFlight === run) flushInFlight = null
-  }
+  while (laneBusy()) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
+  if (!hasUnsavedEdits()) return
+  await flushPass()
 }
 
 async function doFlush(): Promise<void> {
@@ -475,36 +599,57 @@ async function doFlush(): Promise<void> {
 }
 
 /**
- * The save-error retry action (FIX-2d). A retry with pending edits simply re-flushes. A
- * retry with NOTHING pending is the stale-handle case (the failed patch was dropped as
- * unsaveable) — re-flushing would no-op and leave the UI showing a never-persisted value
+ * The save-error retry action (FIX-2d). A retry with pending edits simply re-saves (drains).
+ * A retry with NOTHING pending is the stale-handle case (the failed patch was dropped as
+ * unsaveable) — re-saving would no-op and leave the UI showing a never-persisted value
  * forever, so instead the store RECONCILES with the DB: re-fetch the detail; a vanished
  * review lands on the friendly not-found state.
  */
 export async function retryReviewSave(): Promise<void> {
-  await flushReviewSession()
   // #837 (review round 6): another flush or a sweep (a second Try again, the debounce, the
-  // screen's exit flush) may have drained the queue into a write still in flight — wait it out,
-  // so "nothing pending" below means nothing unsaved, not "being written right now". Otherwise
-  // the stale-handle branch re-read the database over a queued edit.
-  while (flushInFlight || sweepLane) await orPurge((flushInFlight ?? sweepLane) as Promise<void>)
-  if (state.saveState !== 'error') return
-  if (pendingItems.size > 0 || pendingHead != null) return // flush failed again — error stands
-  const reviewId = state.detail?.id
-  if (!reviewId) return
-  const token = openToken
+  // screen's exit flush) may have drained the queue into a write still in flight — the drain
+  // waits it out, so "nothing pending" below means nothing unsaved, not "being written right
+  // now". Otherwise the stale-handle branch re-read the database over a queued edit.
+  const drained = await drainReviewSaves()
+  if (!drained) return
   try {
-    const fresh = await window.api.getEvidenceReview(reviewId)
-    if (token !== openToken) return
-    if (fresh) {
-      sweepFailed = false // Try again reconciled the screen with the database
-      setState({ detail: fresh, saveState: 'idle', saveError: null })
-    } else {
-      setState({ detail: null, openError: { kind: 'notFound' }, saveState: 'idle', saveError: null })
+    if (state.saveState !== 'error') return
+    if (hasUnsavedEdits()) return // the save failed again — the error stands
+    const reviewId = state.detail?.id
+    if (!reviewId) return
+    const token = openToken
+    try {
+      // The lane is held through the read (S-2): no write runs meanwhile, so an edit typed
+      // during it is still queued when the read lands, and is put back over it below.
+      const fresh = await window.api.getEvidenceReview(reviewId)
+      if (token !== openToken) return
+      if (fresh) {
+        sweepFailed = false // Try again reconciled the screen with the database
+        setState({
+          detail: withQueuedEdits(fresh),
+          saveState: hasUnsavedEdits() ? 'pending' : 'idle',
+          saveError: null
+        })
+      } else {
+        setState({ detail: null, openError: { kind: 'notFound' }, saveState: 'idle', saveError: null })
+      }
+    } catch {
+      /* still unreachable — keep the error state for another retry */
     }
-  } catch {
-    /* still unreachable — keep the error state for another retry */
+  } finally {
+    drained.release()
   }
+}
+
+/** `detail` as main read it, with every edit still queued applied over it (they are written
+ *  after the read, so they are the newer values). */
+function withQueuedEdits(detail: EvidenceReviewDetail): EvidenceReviewDetail {
+  if (!hasUnsavedEdits()) return detail
+  const items = detail.items.map((item) => {
+    const patch = pendingItems.get(item.id)
+    return patch ? applyItemPatch(item, patch) : item
+  })
+  return { ...applyHeadPatch(detail, pendingHead ?? {}), items, gate: deriveReadyGate(items) }
 }
 
 /**
@@ -547,18 +692,26 @@ export async function discardAndSwitch(): Promise<void> {
  */
 export { deriveReadyGate as computeReadyGate }
 
-/** Merge a returned head (markReady/reopen) into the open detail. */
+/**
+ * Merge a returned head (markReady/reopen) into the open detail. Called with the write lane
+ * held, so no head write is in flight: a head field still QUEUED was typed during the call, is
+ * newer than main's answer and is written after it — it stays on screen (#889). (The screen
+ * shows every queued head field's value: a head edit applies it to both.)
+ */
 function mergeHead(review: EvidenceReview, gate?: EvidenceReadyGate): void {
   const detail = state.detail
   if (!detail || detail.id !== review.id) return
-  setState({ detail: { ...detail, ...review, gate: gate ?? detail.gate } })
+  setState({ detail: { ...applyHeadPatch({ ...detail, ...review }, pendingHead ?? {}), gate: gate ?? detail.gate } })
 }
 
 /**
- * Mark the open review ready (D-7 gated). Flushes pending edits FIRST — the gate is
- * derived main-side from persisted rows, so unsaved decisions must land before the check.
- * Returns the outcome; 'ineligible' carries main's authoritative gate ("N of M decided"),
- * rendered as guidance, never as a failure (P1 handoff).
+ * Mark the open review ready (D-7 gated). Drains pending edits FIRST — the gate is derived
+ * main-side from persisted rows, so every unsaved decision must land before the check (#889:
+ * also one made while the save was writing; it refuses while one is still queued). The write
+ * lane is held through main's call and the merge, and item editing is closed meanwhile
+ * (`finishing`, G-4). Returns the outcome;
+ * 'ineligible' carries main's authoritative gate ("N of M decided"), rendered as guidance,
+ * never as a failure (P1 handoff).
  */
 export async function markReviewReady(): Promise<
   | { outcome: 'ready' }
@@ -568,24 +721,34 @@ export async function markReviewReady(): Promise<
   const reviewId = state.detail?.id
   if (!reviewId) return { outcome: 'failed' }
   const token = openToken
-  await flushReviewSession()
-  if (token !== openToken) return { outcome: 'failed' }
-  if (state.saveState === 'error') return { outcome: 'failed' }
+  const drained = await drainReviewSaves()
+  if (!drained) return { outcome: 'failed' }
   try {
-    const result = await window.api.markEvidenceReviewReady(reviewId)
-    if (token !== openToken) return { outcome: 'failed' }
-    if (!result) {
-      setState({ saveState: 'error', saveError: null })
+    // Review round 3: past the drain's passes (typing that never stopped) an edit can still be
+    // queued. Main would decide without it and then refuse its write once ready, so Mark ready
+    // refuses as after a failed save — with no error: the line still says "Saving…", and the
+    // timer writes the edit once the lane is free.
+    if (token !== openToken || drained.failed || hasUnsavedEdits()) return { outcome: 'failed' }
+    setState({ finishing: true })
+    try {
+      const result = await window.api.markEvidenceReviewReady(reviewId)
+      if (token !== openToken) return { outcome: 'failed' }
+      if (!result) {
+        setState({ saveState: 'error', saveError: null })
+        return { outcome: 'failed' }
+      }
+      mergeHead(result.review, result.gate)
+      return result.review.status === 'ready'
+        ? { outcome: 'ready' }
+        : { outcome: 'ineligible', gate: result.gate }
+    } catch (e) {
+      if (token !== openToken) return { outcome: 'failed' }
+      setState({ saveState: 'error', saveError: friendlyIpcError(e) })
       return { outcome: 'failed' }
     }
-    mergeHead(result.review, result.gate)
-    return result.review.status === 'ready'
-      ? { outcome: 'ready' }
-      : { outcome: 'ineligible', gate: result.gate }
-  } catch (e) {
-    if (token !== openToken) return { outcome: 'failed' }
-    setState({ saveState: 'error', saveError: friendlyIpcError(e) })
-    return { outcome: 'failed' }
+  } finally {
+    if (token === openToken && state.finishing) setState({ finishing: false })
+    drained.release()
   }
 }
 
@@ -597,10 +760,14 @@ export type ReviewExportOutcome =
   | { outcome: 'failed'; message: string | null }
 
 /**
- * Export the open review as an evidence pack (Phase 3, plan §8.3/§8.4). Flushes pending
+ * Export the open review as an evidence pack (Phase 3, plan §8.3/§8.4). Drains pending
  * edits FIRST — the pack renders PERSISTED review data, so unsaved decisions/notes must
- * land before the render (the markReviewReady idiom); a failed flush refuses the export
- * rather than shipping a pack that silently misses on-screen edits. On success the
+ * land before the render (the markReviewReady idiom; #889: also one made while the save was
+ * writing); a failed save, or an edit still queued past the drain's passes, refuses the export
+ * rather than shipping a pack that silently misses on-screen edits. The write lane is released
+ * BEFORE main's call, with no await in between: the call reaches main first, and a save that
+ * comes due during the save dialog or a PDF print
+ * (minutes, possibly) is not held behind it, nor is the lock's pre-lock save. On success the
  * returned record is MERGED into `detail.exports` (newest-first — the store has no other
  * export-aware mutation; P2 handoff), behind the `openToken` staleness guard like every
  * post-await write. Export works on draft AND ready reviews — the ready-state write-guard
@@ -612,9 +779,14 @@ export async function exportReviewPack(
   const reviewId = state.detail?.id
   if (!reviewId) return { outcome: 'failed', message: null }
   const token = openToken
-  await flushReviewSession()
+  const drained = await drainReviewSaves()
+  if (!drained) return { outcome: 'failed', message: null }
+  // Read with the lane still held (review round 3): an edit still queued past the drain's passes
+  // would be missing from the pack, so it refuses as after a failed save.
+  const unsaved = drained.failed || hasUnsavedEdits()
+  drained.release()
   if (token !== openToken) return { outcome: 'failed', message: null }
-  if (state.saveState === 'error') return { outcome: 'failed', message: null }
+  if (unsaved) return { outcome: 'failed', message: null }
   try {
     const record = await window.api.exportEvidencePack(reviewId, options)
     if (!record) return { outcome: 'cancelled' }
@@ -637,46 +809,79 @@ export async function exportReviewPack(
   }
 }
 
-/** Reopen a ready review to draft (spec §18.4). Flushes pending HEAD edits first (FIX-2c —
+/** Reopen a ready review to draft (spec §18.4). Drains pending HEAD edits first (FIX-2c —
  *  symmetry with markReviewReady: a <debounce-old title/note edit must not be visually
- *  reverted by the merge of main's returned head). */
+ *  reverted by the merge of main's returned head; #889: nor one typed while the save was
+ *  writing), and holds the write lane through main's call and the merge, which keeps a head
+ *  field typed during the call. */
 export async function reopenReview(): Promise<boolean> {
   const reviewId = state.detail?.id
   if (!reviewId) return false
   const token = openToken
-  await flushReviewSession()
-  if (token !== openToken) return false
-  if (state.saveState === 'error') return false
+  const drained = await drainReviewSaves()
+  if (!drained) return false
   try {
-    const review = await window.api.reopenEvidenceReview(reviewId)
-    if (token !== openToken) return false
-    if (!review) return false
-    mergeHead(review)
-    return true
-  } catch (e) {
-    if (token !== openToken) return false
-    setState({ saveState: 'error', saveError: friendlyIpcError(e) })
-    return false
+    if (token !== openToken || drained.failed) return false
+    try {
+      const review = await window.api.reopenEvidenceReview(reviewId)
+      if (token !== openToken) return false
+      if (!review) return false
+      mergeHead(review)
+      return true
+    } catch (e) {
+      if (token !== openToken) return false
+      setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+      return false
+    }
+  } finally {
+    drained.release()
+  }
+}
+
+/**
+ * Send one link or unlink call inside the write lane (follow-ups wave 2 S-W2-1 — every write
+ * to an existing item takes the lane). It waits out a write or a selection delete in flight (at
+ * once when the lane is free, so the call still goes out in the click's own task), and is sent
+ * only while the row is still there: a delete that succeeded meanwhile removed it, and a call
+ * for that id would get main's null (a false save error) — there is nothing left to link. The
+ * lane is released as soon as the call is SENT (no await between): nothing written after a
+ * link conflicts with it, and its answer brings links only. Null = not sent (a lock, a switch,
+ * Mark ready, or the row is gone).
+ */
+async function sendLinkCall<T>(itemId: string, token: number, send: () => Promise<T>): Promise<{ answer: Promise<T> } | null> {
+  const lane = acquireLane()
+  const release = typeof lane === 'function' ? lane : await lane
+  if (!release) return null
+  try {
+    if (token !== openToken || itemEditingClosed()) return null
+    if (!state.detail?.items.some((i) => i.id === itemId)) return null
+    return { answer: send() }
+  } finally {
+    release()
   }
 }
 
 /**
  * Link one evidence source to an item (always `origin: 'reviewer'` — main forces it; the
  * "Cited by the answer" origin is minted only by the snapshot builder). Immediate IPC —
- * links are structural, not debounced. Null result = stale handle → surfaced, not thrown.
+ * links are structural, not debounced — sent through the write lane (`sendLinkCall`). Null
+ * result = stale handle → surfaced, not thrown. Only the LINKS are taken from main's returned
+ * row: a decision or note still queued (or being written) is newer than that row, so the
+ * screen keeps it (follow-ups wave 2 S-1 — the sweep's "merge what the call changed" rule).
  */
 export async function linkEvidence(
   itemId: string,
   evidenceKey: string,
   relation: 'supports' | 'qualifies' | 'contradicts' | 'context' | null
 ): Promise<void> {
-  if (!state.detail || state.detail.status === 'ready') return // FIX-1: reopen first
+  if (itemEditingClosed()) return // FIX-1: reopen first; #889 G-4: not during Mark ready
   const token = openToken
   try {
-    const updated = await window.api.setEvidenceLink(itemId, evidenceKey, {
-      origin: 'reviewer',
-      relation
-    })
+    const call = await sendLinkCall(itemId, token, () =>
+      window.api.setEvidenceLink(itemId, evidenceKey, { origin: 'reviewer', relation })
+    )
+    if (!call) return
+    const updated = await call.answer
     // FIX-2a: never write into a purged or switched store — the resolution may land
     // after App.lockNow's purge (re-inserting decrypted content) or after a review
     // switch (spreading a stale detail over the new one).
@@ -687,7 +892,7 @@ export async function linkEvidence(
       setState({ saveState: 'error', saveError: null })
       return
     }
-    const items = detail.items.map((i) => (i.id === itemId ? updated : i))
+    const items = detail.items.map((i) => (i.id === itemId ? { ...i, links: updated.links } : i))
     setState({ detail: { ...detail, items } })
   } catch (e) {
     if (token !== openToken) return
@@ -695,12 +900,15 @@ export async function linkEvidence(
   }
 }
 
-/** Remove one item→source link. A false result (already gone) still clears it locally. */
+/** Remove one item→source link, sent through the write lane (`sendLinkCall`). A false result
+ *  (already gone) still clears it locally. */
 export async function unlinkEvidence(itemId: string, evidenceKey: string): Promise<void> {
-  if (!state.detail || state.detail.status === 'ready') return // FIX-1: reopen first
+  if (itemEditingClosed()) return // FIX-1: reopen first; #889 G-4: not during Mark ready
   const token = openToken
   try {
-    await window.api.removeEvidenceLink(itemId, evidenceKey)
+    const call = await sendLinkCall(itemId, token, () => window.api.removeEvidenceLink(itemId, evidenceKey))
+    if (!call) return
+    await call.answer
     if (token !== openToken) return // FIX-2a: purge/switch landed mid-flight
     const detail = state.detail
     if (!detail) return
@@ -724,14 +932,15 @@ export async function unlinkEvidence(itemId: string, evidenceKey: string): Promi
 
 export type AddSelectionOutcome = 'added' | 'refused' | 'failed'
 
-/** Create a reviewer selection carved from one block item. Refused while READY (FIX-1 —
- *  the UI hides the affordance too; main refuses the write as well). */
+/** Create a reviewer selection carved from one block item. Refused while item editing is
+ *  closed (READY, FIX-1 — the UI hides the affordance too; main refuses the write as well; or
+ *  Mark ready's call is with main, #889 G-4). */
 export async function addReviewSelection(
   blockKey: string,
   startOffset: number,
   endOffset: number
 ): Promise<AddSelectionOutcome> {
-  if (!state.detail || state.detail.status === 'ready') return 'failed'
+  if (!state.detail || itemEditingClosed()) return 'failed'
   const token = openToken
   try {
     const created = await window.api.createEvidenceSelection(state.detail.id, {
@@ -756,15 +965,37 @@ export async function addReviewSelection(
   }
 }
 
-/** Delete a reviewer SELECTION (block items are structural — the UI never offers this for
- *  them; main refuses too). A false result (already gone) still clears it locally — the
- *  unlinkEvidence posture. */
+/**
+ * Delete a reviewer SELECTION (block items are structural — the UI never offers this for
+ * them; main refuses too). A false result (already gone) still clears it locally — the
+ * unlinkEvidence posture.
+ *
+ * #901: the delete takes the one write lane, so no write of this selection is in flight, or
+ * starts, while main deletes it (a write sent after the delete would get main's null for the
+ * unknown id, which reads as a stale handle: a false save error that blocked Mark ready and
+ * Export). Once main deleted it, its queued edit can never land and is dropped; with nothing
+ * else queued, "Saving…" ends here (no timer would end it). A delete that fails keeps the edit,
+ * and it is written after.
+ */
 export async function deleteReviewSelection(itemId: string): Promise<void> {
-  if (!state.detail || state.detail.status === 'ready') return
+  if (itemEditingClosed()) return
   const token = openToken
+  // At once when the lane is free: the delete still goes out in the click's own task (FIX-5d).
+  const lane = acquireLane()
+  const release = typeof lane === 'function' ? lane : await lane
+  if (!release) return
   try {
+    // Re-checked after a wait for the lane: a lock, a switch, or Mark ready may have ended it.
+    if (token !== openToken || itemEditingClosed()) return
     await window.api.deleteEvidenceSelection(itemId)
     if (token !== openToken) return
+    pendingItems.delete(itemId)
+    if (!hasUnsavedEdits()) {
+      clearTimer()
+      if (state.saveState === 'pending') {
+        setState(sweepFailed ? { saveState: 'error' } : { saveState: 'saved', saveError: null })
+      }
+    }
     const detail = state.detail
     if (!detail) return
     const items = detail.items.filter((i) => i.id !== itemId)
@@ -772,6 +1003,8 @@ export async function deleteReviewSelection(itemId: string): Promise<void> {
   } catch (e) {
     if (token !== openToken) return
     setState({ saveState: 'error', saveError: friendlyIpcError(e) })
+  } finally {
+    release()
   }
 }
 
@@ -859,8 +1092,23 @@ async function applyBulkAction(action: EvidenceReviewBulkAction): Promise<void> 
  * The optimistic apply follows the same rule.
  */
 async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, token: number): Promise<void> {
+  // ONE pre-sweep flush, not a drain: a decision made while it writes is newer than the sweep and
+  // must be written AFTER it (a drain would write it first, and the sweep would override it).
   await flushReviewSession()
-  while (flushInFlight) await orPurge(flushInFlight)
+  // Then the lane, through the shared helper: it also waits out another holder (a delete, a
+  // mark ready or reopen through its merge, Try again's re-read).
+  const lane = acquireLane()
+  const releaseLane = typeof lane === 'function' ? lane : await lane
+  if (!releaseLane) return
+  try {
+    await sweepInLane(action, reviewId, token)
+  } finally {
+    releaseLane()
+  }
+}
+
+/** The sweep's checks, optimistic apply, call and merge, with the write lane held. */
+async function sweepInLane(action: EvidenceReviewBulkAction, reviewId: string, token: number): Promise<void> {
   if (token !== openToken) return
   // #837: never sweep over an edit a FAILED write left unsaved (the markReviewReady /
   // exportReviewPack / reopenReview idiom, narrowed to what actually conflicts): the optimistic
@@ -898,11 +1146,6 @@ async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, toke
     setState({ saveState: 'error', saveError })
     if (hasUnsavedEdits()) armTimer()
   }
-  let releaseLane: () => void = () => {}
-  const lane = new Promise<void>((resolve) => {
-    releaseLane = resolve
-  })
-  sweepLane = lane
   try {
     // Raced against the purge gate: a call that never answers cannot outlive the lock.
     const updated = await orPurge(window.api.applyEvidenceReviewBulkAction(reviewId, action))
@@ -939,9 +1182,6 @@ async function runSweep(action: EvidenceReviewBulkAction, reviewId: string, toke
   } catch (e) {
     if (token !== openToken) return
     undo(friendlyIpcError(e))
-  } finally {
-    if (sweepLane === lane) sweepLane = null
-    releaseLane()
   }
 }
 
@@ -962,8 +1202,9 @@ export function bulkMarkUndecidedFollowUp(): Promise<void> {
 
 /**
  * Drop the resident review content at the workspace-lock seam (lockPurge.ts). Does NOT
- * flush — `App.lockNow` awaits `flushReviewSession()` BEFORE `lockWorkspace()` (while the
- * vault is still writable); by purge time main has already re-encrypted.
+ * save — `App.lockNow` awaits `flushReviewSessionBeforeLock()` (a bounded drain) BEFORE
+ * `lockWorkspace()` (while the vault is still writable); by purge time main has already
+ * re-encrypted.
  */
 export function purgeReviewSession(): void {
   openToken += 1

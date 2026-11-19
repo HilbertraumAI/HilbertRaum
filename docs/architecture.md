@@ -14280,11 +14280,11 @@ reveal + filter that matches the marker AS DISPLAYED incl. DE `Q{n}`); narrow wi
 the pane for a `Modal width='wide'` drawer with focus return. Edits flow through the
 repo's first **debounced auto-save store** (`renderer/lib/reviewSession.ts`: 600 ms,
 drain-before-await, failed patches re-merge under newer values, every post-await write
-`openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()` —
+`openToken`-guarded; a one-pass flush on exit, the drain below in `App.lockNow` before `lockWorkspace()` —
 bounded by `REVIEW_LOCK_FLUSH_BOUND_MS` (6 s) so a hung call never holds the lock — and the
 store purged after, which also releases every wait on a call that never answered). **A switch or a sweep never runs over a failed save** (#837): a failed
 write leaves its patch queued with the save-error line + Try again, and every action that
-runs after a flush checks for it — mark ready, export and reopen refuse; a bulk sweep refuses
+runs after a save checks for it — mark ready, export and reopen refuse; a bulk sweep refuses
 (and its Bulk actions trigger is disabled) only while an edit a failed write left unsaved
 is waiting (`hasEditsAfterFailedSave` — other errors queue nothing and block nothing), writes
 what was queued at the click first, and then holds ONE write lane (`sweepLane`): no item flush
@@ -14297,14 +14297,43 @@ fails or is refused persisted nothing, so its swept items with nothing queued go
 pre-sweep decisions and its error line stays until the user acts (an edit, Try again), while a
 decision queued during its call is still written after it; a sweep never clears an error that
 was already showing; a failed HEAD edit counts like an item edit; a switch
-flushes until nothing is queued or a write fails (up to four passes, a safety valve, each
-followed by waiting out any flush another caller has in flight) and is refused only then;
+drains (below) and is refused when a write failed, or when edits are still queued after the
+drain's four passes;
 re-opening the SAME review keeps the edit on screen with no re-read; a switch to ANOTHER
 review keeps the open one (detail + patches, no `openToken` bump) and records `openError:
 { kind: 'unsaved' }`, which the screen renders as a card naming that review, showing the save
 error, with Try again / Discard changes and open / Back (the card goes ahead on its own if a
 later save succeeds while it shows). Only the lock still drops a failed patch —
-`App.lockNow`'s flush is best-effort and the lock wins (`known-limitations.md`). The save line and the Outdated banner announce from
+`App.lockNow`'s flush is best-effort and the lock wins (`known-limitations.md`).
+**Every save settles before an action** (#889, #901, follow-ups wave 2): ONE drain
+(`drainReviewSaves`) takes the write lane and saves in passes inside it until nothing is queued
+or a write fails (at most four, the valve against typing that never stops), and resolves still
+holding the lane, so its verdict is read after the last write and no waiting timer write can
+take the queue first or fail after the caller went ahead. Mark ready, export, reopen, a review
+switch, Try again and the pre-lock save share it. When the passes run out with an edit still
+queued, Mark ready and export refuse as after a failed save but with no error (the line still
+says "Saving…" and the timer writes the edit); reopen goes ahead, since only head fields can be
+queued on a ready review and its merge keeps them. Mark ready and reopen hold the lane through
+their call and merge, and the merge keeps head fields still queued (typed during the call,
+written after it); while Mark ready's call is out, item editing is closed and the screen renders
+it read-only (`finishing`, G-4: main decides from the saved rows and refuses item writes once
+ready; what only Ready hides — the selection composer, Bulk actions — stays mounted, disabled,
+so an open composer keeps its range). Export releases the lane before its call, with no await
+between, so a save that comes due during its dialog or PDF print is not held behind it. Try
+again holds the lane through its
+re-read and puts the edits still queued back over it. A selection delete takes the lane too and,
+once main deleted the row, drops its queued edit and ends "Saving…" when nothing else is queued
+(a later write to the deleted id read as a stale handle: a false save error). A link or unlink
+takes the lane until its call is sent, so every write to an existing item (an edit save, a
+delete, a link or unlink) is on it: a link waits for a delete of its row in flight and is
+dropped once that delete succeeded. Adding a selection does not take the lane: it creates a
+row, and nothing queued can target a row that does not exist yet. Every holder takes
+the lane through one helper (`acquireLane`), at once when it is free, so its first IPC still
+goes out in the caller's own task; the drain and the one-pass flush share one flush pass. A
+link's answer contributes its links only, never the row's decision or note. A sweep keeps its
+single pre-sweep flush (a decision made during it is written after the sweep) and takes the lane
+through the same helper. Pinned by `reviewSession.test.ts` and a seeded random-order checker
+(`reviewSessionOrders.test.ts`). The save line and the Outdated banner announce from
 live regions mounted empty with the review (design-guidelines §6).
 **Ready is read-only** — main refuses item/selection/link mutations
 while ready (head edits stay allowed), the renderer disables the affordances, Reopen

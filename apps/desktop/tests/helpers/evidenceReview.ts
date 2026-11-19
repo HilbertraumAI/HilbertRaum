@@ -1,11 +1,15 @@
 import { vi, type Mock } from 'vitest'
 import type {
+  EvidenceExportRecord,
+  EvidenceLinkInput,
   EvidencePackOptions,
   EvidenceReview,
   EvidenceReviewBulkAction,
   EvidenceReviewDetail,
   EvidenceReviewFreshness,
   EvidenceReviewItem,
+  EvidenceReviewItemPatch,
+  EvidenceReviewPatch,
   EvidenceReviewSummary,
   EvidenceSourceSnapshot
 } from '../../src/shared/types'
@@ -262,6 +266,250 @@ export function bulkBackend(items: readonly EvidenceReviewItem[]): {
     return rows.map((i) => ({ ...i }))
   })
   return { spy, current: () => rows }
+}
+
+/** The review calls `reviewMain` answers, by the name its arrival log uses. */
+export type ReviewMainCall = 'item' | 'head' | 'link' | 'unlink' | 'delete' | 'markReady' | 'export' | 'reopen' | 'get'
+
+/** One answer `reviewMain` owes: decided at arrival, delivered once it is not held. */
+interface ReviewMainAnswer {
+  kind: ReviewMainCall
+  held: boolean
+  deliver(): void
+}
+
+/**
+ * A main-side stand-in for one open review that PERSISTS every write the store sends (#889, #901): item decisions and
+ * notes, the head (title / reviewer label / general note), links, selection deletes, ready / draft, and what each
+ * Mark ready / Export / Reopen found saved. Each handler decides at ARRIVAL, by main's rules
+ * (`services/evidence-reviews.ts`): an item write, a link or a delete on a READY review is refused (null / false), an
+ * unknown id answers null / false, a key outside the snapshot answers null, an empty title is ignored, Mark ready marks
+ * only when `deriveReadyGate` over the saved rows is eligible, and an export reads the saved review before its dialog
+ * opens (`exportEvidencePackToFile`).
+ *
+ * Answers: `holdNext(kind)` holds the next call of that kind (decided already, answered on `release()`; with `'fail'`
+ * it persists nothing and rejects when released); `failNext(kind)` makes it persist nothing and reject at once
+ * ("disk I/O error"). Every review handler but the export is synchronous in main, so their answers come back in
+ * ARRIVAL order: a held answer holds every later one behind it. The export (dialog, PDF print) is asynchronous and is
+ * held on its own. `onArrival` runs inside each handler, at the moment main sees the call.
+ */
+export function reviewMain(detail: EvidenceReviewDetail): {
+  api: Partial<PreloadApi>
+  /** Arrival order: `item:<id>`, `head`, `link:<id>`, `unlink:<id>`, `delete:<id>`, `markReady`, `export`, `reopen`, `get`. */
+  order: string[]
+  /** The review as saved now (what `getEvidenceReview` reads). */
+  db(): EvidenceReviewDetail
+  /** The saved review as each Mark ready / Export / Reopen found it on arrival, in arrival order. */
+  atCall: Array<{ call: 'markReady' | 'export' | 'reopen'; saved: EvidenceReviewDetail }>
+  holdNext(kind: ReviewMainCall, then?: 'answer' | 'fail'): { release(): void }
+  failNext(kind: ReviewMainCall): void
+  cancelPlans(): void
+  /** The answers still held, oldest first. */
+  held(): Array<{ kind: ReviewMainCall; release(): void }>
+  /** Rejections delivered to the store so far (of one kind of call, when given). */
+  failuresDelivered(kind?: ReviewMainCall): number
+  onArrival: ((kind: ReviewMainCall) => void) | null
+} {
+  type Plan = { kind: ReviewMainCall; hold: boolean; fail: boolean; answer?: ReviewMainAnswer }
+  let head = { title: detail.title, reviewerLabel: detail.reviewerLabel, generalNote: detail.generalNote }
+  let ready = detail.status === 'ready'
+  const copy = (i: EvidenceReviewItem): EvidenceReviewItem => ({ ...i, links: i.links.map((l) => ({ ...l })) })
+  let rows = detail.items.map(copy)
+  const keys = new Set(detail.sources.map((s) => s.key))
+  const order: string[] = []
+  const atCall: Array<{ call: 'markReady' | 'export' | 'reopen'; saved: EvidenceReviewDetail }> = []
+  const plans: Plan[] = []
+  const inOrder: ReviewMainAnswer[] = [] // the synchronous handlers' answers, delivered strictly in arrival order
+  const own: ReviewMainAnswer[] = [] // held export answers
+  const failures = new Map<ReviewMainCall, number>()
+  const db = (): EvidenceReviewDetail => {
+    const items = rows.map(copy)
+    return { ...detail, ...head, status: ready ? 'ready' : 'draft', items, gate: deriveReadyGate(items) }
+  }
+  const reviewHead = (): EvidenceReview => ({
+    ...makeReviewHead({ id: detail.id }),
+    ...head,
+    status: ready ? 'ready' : 'draft'
+  })
+  const live = (id: string): EvidenceReviewItem | undefined => rows.find((r) => r.id === id)
+  const pump = (): void => {
+    while (inOrder[0] && !inOrder[0].held) inOrder.shift()!.deliver()
+  }
+  const release = (answer: ReviewMainAnswer): void => {
+    if (!answer.held) return
+    answer.held = false
+    const at = own.indexOf(answer)
+    if (at >= 0) {
+      own.splice(at, 1)
+      answer.deliver()
+    } else pump()
+  }
+  function call<T>(kind: ReviewMainCall, label: string, decide: () => T): Promise<T> {
+    order.push(label)
+    main.onArrival?.(kind)
+    const at = plans.findIndex((p) => p.kind === kind)
+    const plan: Plan = at >= 0 ? plans.splice(at, 1)[0]! : { kind, hold: false, fail: false }
+    const value = plan.fail ? undefined : decide() // a failed call persists nothing
+    return new Promise<T>((resolve, reject) => {
+      const answer: ReviewMainAnswer = {
+        kind,
+        held: plan.hold,
+        deliver(): void {
+          if (!plan.fail) return resolve(value as T)
+          failures.set(kind, (failures.get(kind) ?? 0) + 1)
+          reject(new Error('disk I/O error'))
+        }
+      }
+      plan.answer = answer
+      if (kind === 'export') {
+        if (answer.held) own.push(answer)
+        else answer.deliver()
+      } else {
+        inOrder.push(answer)
+        pump()
+      }
+    })
+  }
+  const api: Partial<PreloadApi> = {
+    getEvidenceReview: vi.fn((id: string) => call('get', 'get', () => (id === detail.id ? db() : null))),
+    updateEvidenceReviewItem: vi.fn((id: string, patch: EvidenceReviewItemPatch) =>
+      call('item', `item:${id}`, () => {
+        const row = live(id)
+        if (!row || ready) return null
+        if (patch.decision !== undefined) row.decision = patch.decision
+        if (patch.reviewerNote !== undefined) row.reviewerNote = patch.reviewerNote
+        return copy(row)
+      })
+    ),
+    updateEvidenceReview: vi.fn((_id: string, patch: EvidenceReviewPatch) =>
+      call('head', 'head', () => {
+        head = {
+          title: patch.title !== undefined && patch.title.trim().length > 0 ? patch.title.trim() : head.title,
+          reviewerLabel: patch.reviewerLabel !== undefined ? patch.reviewerLabel : head.reviewerLabel,
+          generalNote: patch.generalNote !== undefined ? patch.generalNote : head.generalNote
+        }
+        return reviewHead()
+      })
+    ),
+    setEvidenceLink: vi.fn((itemId: string, key: string, input: EvidenceLinkInput) =>
+      call('link', `link:${itemId}`, () => {
+        const row = live(itemId)
+        if (!row || ready || !keys.has(key)) return null
+        row.links = [
+          ...row.links.filter((l) => l.evidenceKey !== key),
+          { evidenceKey: key, origin: 'reviewer' as const, relation: input.relation ?? null }
+        ]
+        return copy(row)
+      })
+    ),
+    removeEvidenceLink: vi.fn((itemId: string, key: string) =>
+      call('unlink', `unlink:${itemId}`, () => {
+        const row = live(itemId)
+        if (!row || ready || !row.links.some((l) => l.evidenceKey === key)) return false
+        row.links = row.links.filter((l) => l.evidenceKey !== key)
+        return true
+      })
+    ),
+    deleteEvidenceSelection: vi.fn((id: string) =>
+      call('delete', `delete:${id}`, () => {
+        const row = live(id)
+        if (!row || row.kind !== 'selection' || ready) return false
+        rows = rows.filter((r) => r.id !== id)
+        return true
+      })
+    ),
+    markEvidenceReviewReady: vi.fn(() =>
+      call('markReady', 'markReady', () => {
+        atCall.push({ call: 'markReady', saved: db() })
+        const gate = deriveReadyGate(rows)
+        if (gate.eligible) ready = true
+        return { review: reviewHead(), gate }
+      })
+    ),
+    reopenEvidenceReview: vi.fn(() =>
+      call('reopen', 'reopen', () => {
+        atCall.push({ call: 'reopen', saved: db() })
+        ready = false
+        return reviewHead()
+      })
+    ),
+    exportEvidencePack: vi.fn(() =>
+      call('export', 'export', (): EvidenceExportRecord => {
+        atCall.push({ call: 'export', saved: db() })
+        return {
+          id: `x${atCall.length}`,
+          reviewId: detail.id,
+          format: 'html',
+          schemaVersion: 1,
+          fileName: 'pack.html',
+          fileSha256: 'aa'.repeat(32),
+          options: null,
+          createdAt: '2026-07-18T12:00:00.000Z'
+        }
+      })
+    )
+  }
+  const main = {
+    api,
+    order,
+    db,
+    atCall,
+    holdNext(kind: ReviewMainCall, then: 'answer' | 'fail' = 'answer'): { release(): void } {
+      const plan: Plan = { kind, hold: true, fail: then === 'fail' }
+      plans.push(plan)
+      return {
+        release(): void {
+          if (!plan.answer) throw new Error(`reviewMain: the held ${kind} call has not arrived`)
+          release(plan.answer)
+        }
+      }
+    },
+    failNext(kind: ReviewMainCall): void {
+      plans.push({ kind, hold: false, fail: true })
+    },
+    /** Drop every `holdNext` / `failNext` no call has met yet. */
+    cancelPlans(): void {
+      plans.length = 0
+    },
+    held(): Array<{ kind: ReviewMainCall; release(): void }> {
+      return [...inOrder, ...own].filter((a) => a.held).map((a) => ({ kind: a.kind, release: () => release(a) }))
+    },
+    failuresDelivered: (kind?: ReviewMainCall): number =>
+      kind ? (failures.get(kind) ?? 0) : [...failures.values()].reduce((a, b) => a + b, 0),
+    onArrival: null as ((kind: ReviewMainCall) => void) | null
+  }
+  return main
+}
+
+/**
+ * Where the screen disagrees with the saved review (#889, #901): which items exist, each item's decision, note and
+ * (unless `links: false`) links, the progress gate, and the head's title, reviewer label, general note and status.
+ * Empty = the screen tells the truth. `links: false` is for a moment when a link's answer may still be on its way.
+ */
+export function reviewDiff(
+  shown: EvidenceReviewDetail | null,
+  saved: EvidenceReviewDetail,
+  opts: { links?: boolean } = {}
+): string[] {
+  if (!shown) return ['no review on screen']
+  const out: string[] = []
+  const say = (what: string, a: unknown, b: unknown): void => {
+    if (a !== b) out.push(`${what}: shown ${JSON.stringify(a)}, saved ${JSON.stringify(b)}`)
+  }
+  for (const field of ['title', 'reviewerLabel', 'generalNote', 'status'] as const) say(field, shown[field], saved[field])
+  const ids = (d: EvidenceReviewDetail): string => d.items.map((i) => i.id).sort().join(',')
+  say('items', ids(shown), ids(saved))
+  const links = (i: EvidenceReviewItem): string =>
+    i.links.map((l) => `${l.evidenceKey}/${l.origin}/${l.relation ?? null}`).sort().join(',')
+  for (const s of shown.items) {
+    const d = saved.items.find((i) => i.id === s.id)
+    if (!d) continue
+    say(`${s.id}.decision`, s.decision, d.decision)
+    say(`${s.id}.reviewerNote`, s.reviewerNote, d.reviewerNote)
+    if (opts.links !== false) say(`${s.id}.links`, links(s), links(d))
+  }
+  say('gate', JSON.stringify(shown.gate), JSON.stringify(deriveReadyGate(saved.items)))
+  return out
 }
 
 /**

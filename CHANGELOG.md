@@ -274,6 +274,14 @@ from its first public `1.0.0` release onward.
   or Back to chat. Locking the workspace still drops a change that could not be saved. The
   saving status and the Outdated warning are now in place before their text appears, the way
   screen readers announce text most reliably (#837).
+- **Mark review ready, Create evidence pack and Reopen review now wait until every change in
+  the review is saved.** A change made while one of them was saving could be left out: Mark
+  review ready decided without it and then could not save it, the evidence pack missed it, and
+  a title or note typed meanwhile went back to its old text on screen. Removing a text selection
+  you had just edited no longer shows "Some changes could not be saved yet." or blocks Mark
+  review ready and Create evidence pack. Linking a source right after typing a note no longer
+  blanks the note on screen, and a change typed while Try again reloads the review stays. While
+  Mark review ready runs, the passages can briefly not be edited (#889, #901).
 - **A failed skill export no longer destroys the file you chose to replace.** The transactions
   and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
   straight onto the chosen file: a full drive or another failure part-way through left a

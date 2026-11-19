@@ -22,6 +22,7 @@ import {
   editReviewItem,
   exportReviewPack,
   flushReviewSession,
+  flushReviewSessionBeforeLock,
   getReviewSessionSnapshot,
   linkEvidence,
   markReviewReady,
@@ -43,7 +44,10 @@ import {
   makeFreshness,
   makeItem,
   makeReviewHead,
-  stubReviewApi
+  reviewDiff,
+  reviewMain,
+  stubReviewApi,
+  type ReviewMainCall
 } from '../helpers/evidenceReview'
 
 // EP-1 plan §7.5 — the reviewSession module store: the repo's FIRST debounced auto-save.
@@ -1676,6 +1680,403 @@ describe('reviewSession — race hardening (FIX-2)', () => {
     await retryReviewSave()
     expect(getReviewSessionSnapshot().detail).toBeNull()
     expect(getReviewSessionSnapshot().openError).toEqual({ kind: 'notFound' })
+  })
+})
+
+// #901: removing a selection while an edit of it was still queued (or in the batch being written) left that edit in
+// place; its write reached main after the delete, main answered null for the unknown id, and the store read that as a
+// stale handle: "Some changes could not be saved yet." with no cause, and Mark ready and Export refused. The delete now
+// takes the one write lane (after any write in flight, before any later one) and retires the selection's queued edit.
+describe('reviewSession — removing a selection right after editing it (#901)', () => {
+  /** Two blocks and the selection `s1`, against a main that saves what it is sent. */
+  async function openWithSelection(): Promise<ReturnType<typeof reviewMain>> {
+    vi.useFakeTimers()
+    const detail = makeDetail({
+      items: [
+        makeItem({ id: 'i1', ordinal: 0 }),
+        makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' }),
+        makeItem({ id: 's1', ordinal: 2, kind: 'selection', startOffset: 0, endOffset: 5, textSnapshot: 'Alpha' })
+      ]
+    })
+    const main = reviewMain(detail)
+    stubReviewApi(main.api)
+    await openWith(detail)
+    main.order.length = 0
+    return main
+  }
+
+  it.each<[string, boolean]>([
+    ['with nothing else queued, the line says Saved and no save stays scheduled', false],
+    ['with another edit queued, the line stays on Saving… until that edit is written', true]
+  ])('edit a selection and remove it inside the pause: %s; nothing reaches the removed id, and Mark ready goes to main', async (_case, other) => {
+    const main = await openWithSelection()
+    editReviewItem('s1', { reviewerNote: 'typed then removed' })
+    if (other) editReviewItem('i1', { decision: 'supported' })
+    await deleteReviewSelection('s1')
+    expect(getReviewSessionSnapshot().detail!.items.map((i) => i.id)).toEqual(['i1', 'i2'])
+    expect(getReviewSessionSnapshot().saveState).toBe(other ? 'pending' : 'saved')
+    expect(vi.getTimerCount()).toBe(other ? 1 : 0)
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(other ? ['delete:s1', 'item:i1'] : ['delete:s1'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+    expect((await markReviewReady()).outcome).toBe('ineligible') // main decided; i2 is still undecided
+    expect(main.order.at(-1)).toBe('markReady')
+  })
+
+  it.each<['markReady' | 'export']>([['markReady'], ['export']])(
+    'edit a selection, remove it, then %s at once: main runs it, and nothing is written to the removed id',
+    async (action) => {
+      const main = await openWithSelection()
+      editReviewItem('s1', { decision: 'supported' })
+      await deleteReviewSelection('s1')
+      const result = action === 'markReady' ? await markReviewReady() : await exportReviewPack({})
+      expect(result.outcome).not.toBe('failed')
+      expect(main.order).toEqual(['delete:s1', action])
+      expect(getReviewSessionSnapshot().saveState).not.toBe('error')
+    }
+  )
+
+  it('remove a selection while the batch that holds its edit is being written: that write goes out first, then the delete', async () => {
+    const main = await openWithSelection()
+    editReviewItem('i1', { decision: 'supported' })
+    editReviewItem('s1', { reviewerNote: 'checked' })
+    const i1Write = main.holdNext('item')
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // the timer drained both; i1's write is out
+    expect(main.order).toEqual(['item:i1'])
+    const removing = deleteReviewSelection('s1')
+    i1Write.release()
+    await removing
+    expect(main.order).toEqual(['item:i1', 'item:s1', 'delete:s1'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+  })
+
+  it('the pause ends while the delete is still out: the save waits for the delete and then has nothing to write', async () => {
+    const main = await openWithSelection()
+    editReviewItem('s1', { reviewerNote: 'checked' })
+    const deleting = main.holdNext('delete')
+    const removing = deleteReviewSelection('s1')
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // the debounce fires while main is deleting
+    deleting.release()
+    await removing
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['delete:s1'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+  })
+
+  // Follow-ups wave 2 S-W2-1: a link sent while that selection's delete was still on its way reached main after it, got
+  // null for the unknown id, and showed the same false save error. A link now takes the lane like every write to an
+  // existing item: it waits for the delete, and is dropped when the delete removed the row.
+  it.each<[string, boolean]>([
+    ['succeeds: the link is dropped with the row, and no save error shows', true],
+    ['fails: the selection stays, and the link is made after it', false]
+  ])('a link to a selection whose removal is still on its way waits for it; the removal %s', async (_case, removed) => {
+    const main = await openWithSelection()
+    const deleting = main.holdNext('delete', removed ? 'answer' : 'fail')
+    const removing = deleteReviewSelection('s1')
+    const linking = linkEvidence('s1', 's1', 'supports') // the row is still on screen
+    deleting.release()
+    await Promise.all([removing, linking])
+    expect(main.order).toEqual(removed ? ['delete:s1'] : ['delete:s1', 'link:s1'])
+    expect(getReviewSessionSnapshot().saveError).toBe(removed ? null : 'disk I/O error')
+    expect(getReviewSessionSnapshot().saveState).toBe(removed ? 'idle' : 'error')
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+  })
+
+  it('a delete that fails keeps the selection and its queued edit, and the edit is then written', async () => {
+    const main = await openWithSelection()
+    editReviewItem('s1', { reviewerNote: 'kept' })
+    main.failNext('delete')
+    await deleteReviewSelection('s1')
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error', saveError: 'disk I/O error' })
+    expect(getReviewSessionSnapshot().detail!.items.map((i) => i.id)).toContain('s1')
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['delete:s1', 'item:s1'])
+    expect(main.db().items.find((i) => i.id === 's1')?.reviewerNote).toBe('kept')
+  })
+})
+
+// #889: Mark ready, Export and Reopen used to save ONCE and then call main. An edit made while that save was writing was
+// still queued when main ran the action (or a waiting timer took it the moment the write ended, and failed after the
+// action had run): Mark ready decided without it and then refused its write, Export packed without it, and Reopen (and
+// Mark ready) put main's old text over a title or note typed meanwhile. They now drain (save in passes, inside the one
+// write lane, until nothing is queued or a write fails); Mark ready and Reopen hold the lane through their call, and the
+// merge of main's answer keeps head fields still queued. The lock's pre-lock save shares the drain.
+describe('reviewSession — Mark ready, Export and Reopen wait until every edit is saved (#889)', () => {
+  type Action = 'markReady' | 'export' | 'reopen'
+  const run = (a: Action): Promise<unknown> =>
+    a === 'markReady' ? markReviewReady() : a === 'export' ? exportReviewPack({}) : reopenReview()
+
+  /** p1 and p2, undecided. Reopen runs on a READY review, where only head edits are allowed. */
+  async function setup(a: Action): Promise<ReturnType<typeof reviewMain>> {
+    vi.useFakeTimers()
+    const detail = makeDetail({
+      status: a === 'reopen' ? 'ready' : 'draft',
+      items: [
+        makeItem({ id: 'p1', ordinal: 0 }),
+        makeItem({ id: 'p2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta' })
+      ]
+    })
+    const main = reviewMain(detail)
+    stubReviewApi(main.api)
+    await openWith(detail)
+    main.order.length = 0
+    return main
+  }
+  /** The edit queued before the click (1) and the one made while the action's own save is writing (2). */
+  function edit(a: Action, n: 1 | 2): void {
+    if (a === 'reopen') editReviewHead({ generalNote: `note ${n}` })
+    else editReviewItem(n === 1 ? 'p1' : 'p2', { decision: 'supported' })
+  }
+  const writeOf = (a: Action): ReviewMainCall => (a === 'reopen' ? 'head' : 'item')
+  /** Did main find edit 2 saved when it ran the action? */
+  function edit2SavedAtCall(a: Action, main: ReturnType<typeof reviewMain>): boolean {
+    const saved = main.atCall[0]?.saved
+    return a === 'reopen'
+      ? saved?.generalNote === 'note 2'
+      : saved?.items.find((i) => i.id === 'p2')?.decision === 'supported'
+  }
+
+  it.each<[Action]>([['markReady'], ['export'], ['reopen']])(
+    '%s: an edit made while its own save is writing is saved before main runs it (the pack has it), and the screen ends equal to main',
+    async (a) => {
+      const main = await setup(a)
+      edit(a, 1)
+      const write1 = main.holdNext(writeOf(a))
+      const acting = run(a)
+      await vi.advanceTimersByTimeAsync(0) // the action's save is writing edit 1
+      edit(a, 2)
+      write1.release()
+      await acting
+      expect(main.atCall.map((c) => c.call)).toEqual([a])
+      expect(edit2SavedAtCall(a, main)).toBe(true)
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+      expect(getReviewSessionSnapshot().saveState).toBe('saved')
+      expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+    }
+  )
+
+  it.each<[Action]>([['markReady'], ['export'], ['reopen']])(
+    '%s: an edit made during its own save whose write then fails makes it refuse, and main never runs it',
+    async (a) => {
+      const main = await setup(a)
+      edit(a, 1)
+      const write1 = main.holdNext(writeOf(a))
+      const acting = run(a)
+      await vi.advanceTimersByTimeAsync(0)
+      edit(a, 2)
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // edit 2's own pause ends while write 1 is out
+      main.failNext(writeOf(a))
+      write1.release()
+      const result = await acting
+      expect(main.atCall).toEqual([])
+      expect(result === false || (result as { outcome: string }).outcome === 'failed').toBe(true)
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'error', saveError: 'disk I/O error' })
+    }
+  )
+
+  it.each<['markReady' | 'reopen']>([['markReady'], ['reopen']])(
+    '%s: a general note typed while main runs it stays on screen and is saved after it',
+    async (a) => {
+      const main = await setup(a)
+      const calling = main.holdNext(a)
+      const acting = run(a)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(main.order).toEqual([a])
+      editReviewHead({ generalNote: 'typed during the call' })
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // its pause ends while main is still on the action
+      calling.release()
+      await acting
+      expect(getReviewSessionSnapshot().detail!.generalNote).toBe('typed during the call')
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+      expect(main.order).toEqual([a, 'head'])
+      expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+    }
+  )
+
+  // Review round 3: a drain ends after a bounded number of passes, so a user who never stops typing can leave an edit
+  // queued when it ends. Mark ready used to go ahead (decided without the edit, then main refused its write once ready)
+  // and Export too (the pack missed it). Both now refuse, as after a failed save, but with no error: the save line still
+  // says "Saving…", the timer writes the edit once the typing stops, and a second click goes through.
+  it.each<['markReady' | 'export']>([['markReady'], ['export']])(
+    '%s while the user keeps typing past the save’s passes refuses with no error; once the typing stops the edit is saved and a second click goes through',
+    async (a) => {
+      const main = await setup(a)
+      editReviewItem('p1', { decision: 'supported' })
+      editReviewItem('p2', { decision: 'supported' })
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+      main.order.length = 0
+      let typing = true
+      let n = 0
+      main.onArrival = (kind) => {
+        // Another keystroke lands while each write is out.
+        if (kind === 'item' && typing) queueMicrotask(() => editReviewItem('p1', { reviewerNote: `n${++n}` }))
+      }
+      editReviewItem('p1', { reviewerNote: 'n0' })
+      expect((await run(a)) as { outcome: string }).toMatchObject({ outcome: 'failed' })
+      expect(main.atCall).toEqual([]) // nothing marked, nothing exported
+      expect(main.order.length).toBeGreaterThan(1) // it kept saving what arrived…
+      expect(main.order.length).toBeLessThanOrEqual(4) // …a bounded number of times
+      expect(main.order.every((step) => step === 'item:p1')).toBe(true)
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'pending', saveError: null, finishing: false })
+      typing = false
+      await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+      expect(main.db().items.find((i) => i.id === 'p1')!.reviewerNote).toBe(`n${n}`)
+      expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+      expect(await run(a)).toEqual(a === 'markReady' ? { outcome: 'ready' } : { outcome: 'exported' })
+      expect(main.atCall.map((c) => c.call)).toEqual([a])
+      expect(main.atCall[0]!.saved.items.find((i) => i.id === 'p1')!.reviewerNote).toBe(`n${n}`)
+      expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+    }
+  )
+
+  // G-4 (follow-ups wave 2): from the end of Mark ready's save until main answers, the review is read-only (the screen
+  // disables item editing on `finishing`): main decides from the rows saved now, and an item write sent meanwhile
+  // would reach a review that is ready by then and be refused.
+  it('while main runs Mark ready, item edits and links are refused: nothing is sent after the review is ready', async () => {
+    const main = await setup('markReady')
+    editReviewItem('p1', { decision: 'supported' })
+    editReviewItem('p2', { decision: 'supported' })
+    const calling = main.holdNext('markReady')
+    const acting = markReviewReady()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(main.order).toEqual(['item:p1', 'item:p2', 'markReady'])
+    const readOnlyDuringCall = getReviewSessionSnapshot().finishing
+    editReviewItem('p2', { reviewerNote: 'typed during the call' })
+    const linking = linkEvidence('p1', 's1', 'supports')
+    calling.release()
+    expect(await acting).toEqual({ outcome: 'ready' })
+    await linking
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['item:p1', 'item:p2', 'markReady'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ finishing: false, saveState: 'saved' })
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+    expect(readOnlyDuringCall).toBe(true) // what the screen renders read-only on
+  })
+
+  it('a save that comes due while an export’s dialog or print is open is written at once, not held behind it', async () => {
+    const main = await setup('export')
+    const exporting = main.holdNext('export')
+    const acting = exportReviewPack({})
+    await vi.advanceTimersByTimeAsync(0)
+    expect(main.order).toEqual(['export'])
+    editReviewItem('p1', { reviewerNote: 'typed while the dialog is open' })
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['export', 'item:p1'])
+    expect(getReviewSessionSnapshot().saveState).toBe('saved')
+    exporting.release()
+    expect(await acting).toEqual({ outcome: 'exported' })
+  })
+
+  it('the pre-lock save also writes an edit made while its first write is out', async () => {
+    const main = await setup('markReady')
+    editReviewItem('p1', { decision: 'supported' })
+    const write1 = main.holdNext('item')
+    const locking = flushReviewSessionBeforeLock()
+    await vi.advanceTimersByTimeAsync(0)
+    editReviewItem('p2', { reviewerNote: 'typed as Lock was clicked' })
+    write1.release()
+    await locking
+    expect(main.order).toEqual(['item:p1', 'item:p2'])
+    expect(main.db().items.find((i) => i.id === 'p2')?.reviewerNote).toBe('typed as Lock was clicked')
+  })
+
+  // Review round 2 (SF-2): `lockWorkspace()` can reject after the pre-lock save (`App.lockNow`), and then no purge follows.
+  // The pre-lock save holds the write lane while it drains; had it kept it, every later save would wait behind it for good.
+  it('a pre-lock save the lock never followed (the lock failed) gives the lane back: a later edit is saved by its own timer', async () => {
+    const main = await setup('markReady')
+    editReviewItem('p1', { decision: 'supported' })
+    await flushReviewSessionBeforeLock()
+    expect(main.order).toEqual(['item:p1'])
+    editReviewItem('p2', { reviewerNote: 'typed after the lock failed' })
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['item:p1', 'item:p2'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+  })
+
+  // Review round 2 (SF-2): the freeze ends with Mark ready's call whatever main answered, not only when the review became
+  // ready. A "not yet" (the gate) or a failed call leaves a draft the user goes on editing.
+  it.each<[string, 'answer' | 'fail']>([
+    ['answers "not yet"', 'answer'],
+    ['throws', 'fail']
+  ])('a Mark ready that %s ends the read-only freeze: an item edit made after it is taken and saved', async (_case, then) => {
+    const main = await setup('markReady') // p1 and p2 undecided: main answers "not yet"
+    const calling = main.holdNext('markReady', then)
+    const acting = markReviewReady()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(getReviewSessionSnapshot().finishing).toBe(true)
+    calling.release()
+    expect((await acting).outcome).toBe(then === 'answer' ? 'ineligible' : 'failed')
+    expect(getReviewSessionSnapshot().finishing).toBe(false)
+    editReviewItem('p1', { decision: 'supported' })
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p1')!.decision).toBe('supported')
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['markReady', 'item:p1'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+  })
+
+  // Review round 2 (SF-2): a link clicked while Mark ready's save is still writing passes the click's check (the review is
+  // a draft, not frozen yet) and waits for the lane, which Mark ready holds through its call. By then the review is ready:
+  // the link must be dropped, not sent (main refuses it once ready, and that null read as a save error).
+  it('a link clicked while Mark ready’s save is writing waits for it, and sends nothing once the review is ready', async () => {
+    const main = await setup('markReady')
+    editReviewItem('p1', { decision: 'supported' })
+    editReviewItem('p2', { decision: 'supported' })
+    const write1 = main.holdNext('item')
+    const acting = markReviewReady()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(main.order).toEqual(['item:p1']) // Mark ready's save is writing
+    const linking = linkEvidence('p1', 's1', 'supports')
+    write1.release()
+    expect(await acting).toEqual({ outcome: 'ready' })
+    await linking
+    expect(main.order).toEqual(['item:p1', 'item:p2', 'markReady'])
+    expect(getReviewSessionSnapshot()).toMatchObject({ saveState: 'saved', saveError: null })
+    expect(getReviewSessionSnapshot().detail!.status).toBe('ready')
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+  })
+
+  // Follow-ups wave 2 S-1: a link's answer is main's whole row, which lacks a note or decision still queued; the store
+  // used to put that row on screen (the note blanked under "Saved" while main then saved it). It takes the links only.
+  it('linking a source to an item whose note and decision are still queued keeps them on screen', async () => {
+    const main = await setup('markReady')
+    editReviewItem('p1', { reviewerNote: 'checked page 12', decision: 'supported' })
+    await linkEvidence('p1', 's1', 'supports')
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p1')).toMatchObject({
+      decision: 'supported',
+      reviewerNote: 'checked page 12',
+      links: [{ evidenceKey: 's1', origin: 'reviewer', relation: 'supports' }]
+    })
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['link:p1', 'item:p1'])
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
+  })
+
+  // Follow-ups wave 2 S-2: Try again with nothing queued re-reads the review. An edit typed during that read used to be
+  // overwritten on screen by the read (and saved after it). The read now runs inside the write lane and the edits
+  // still queued are put back over it.
+  it('an edit typed while Try again re-reads the review stays on screen and is saved after the read', async () => {
+    const main = await setup('markReady')
+    main.failNext('link')
+    await linkEvidence('p1', 's1', null)
+    expect(getReviewSessionSnapshot().saveState).toBe('error') // nothing queued: Try again re-reads
+    const reading = main.holdNext('get')
+    const retrying = retryReviewSave()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(main.order.at(-1)).toBe('get')
+    editReviewItem('p2', { reviewerNote: 'typed during the re-read' })
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10) // its pause ends while the read is out
+    reading.release()
+    await retrying
+    expect(getReviewSessionSnapshot().detail!.items.find((i) => i.id === 'p2')!.reviewerNote).toBe(
+      'typed during the re-read'
+    )
+    await vi.advanceTimersByTimeAsync(REVIEW_SAVE_DEBOUNCE_MS + 10)
+    expect(main.order).toEqual(['link:p1', 'get', 'item:p2'])
+    expect(getReviewSessionSnapshot().saveState).toBe('saved')
+    expect(reviewDiff(getReviewSessionSnapshot().detail, main.db())).toEqual([])
   })
 })
 
