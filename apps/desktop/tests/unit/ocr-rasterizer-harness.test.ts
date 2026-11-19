@@ -34,6 +34,8 @@ const fake = vi.hoisted(() => {
     windows: [] as FakeWin[],
     /** ipcMain.on registry — teardown leaves every channel EMPTY (asserted per test). */
     ipcListeners: new Map<string, Array<(event: unknown, payload: unknown) => void>>(),
+    /** app.on registry (`before-quit`, #910) — teardown leaves it EMPTY too. */
+    appListeners: new Map<string, Array<() => void>>(),
     /** Behavior knobs, reset per test. */
     load: undefined as ((url: string) => Promise<void>) | undefined,
     constructorThrows: false,
@@ -97,6 +99,15 @@ vi.mock('electron', () => {
     app: {
       get isPackaged(): boolean {
         return state.isPackaged
+      },
+      on: (event: string, fn: () => void): void => {
+        state.appListeners.set(event, [...(state.appListeners.get(event) ?? []), fn])
+      },
+      removeListener: (event: string, fn: () => void): void => {
+        state.appListeners.set(
+          event,
+          (state.appListeners.get(event) ?? []).filter((f) => f !== fn)
+        )
       }
     },
     BrowserWindow,
@@ -130,6 +141,7 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
 beforeEach(() => {
   fake.state.windows = []
   fake.state.ipcListeners = new Map()
+  fake.state.appListeners = new Map()
   fake.state.load = undefined
   fake.state.constructorThrows = false
   fake.state.isPackaged = false
@@ -186,6 +198,7 @@ function expectFullTeardown(win: FakeWin): void {
   ).toHaveLength(0)
   // #910: removed before the finally's own destroy, so that destroy never reads as a window gone mid-run.
   expect(win.webContents.eventListeners.get('destroyed') ?? [], 'destroyed listener leaked').toHaveLength(0)
+  expect(fake.state.appListeners.get('before-quit') ?? [], 'before-quit listener leaked').toHaveLength(0)
 }
 
 describe('rasterizePdfWithHiddenWindow — window creation and hardening wiring', () => {
@@ -451,10 +464,11 @@ describe('rasterizePdfWithHiddenWindow — failure paths destroy the window', ()
     for (const ch of RASTER_CHANNELS) expect(fake.state.ipcListeners.get(ch) ?? [], ch).toHaveLength(0)
   })
 
-  it('a window a quit closes ends the run as the quit’s cancel: the abort that follows in the same task wins (#910)', async () => {
-    // Measured order of a quit: the window's `destroyed` (its microtasks drain), then `will-quit`, which cancels the OCR
-    // task, then the next task. Failing the page inside `destroyed` would end the run as a failure first (an audit
-    // "failed" entry, and the task queue moving on into the quit) instead of the cancel every other quit gives.
+  it('the window-gone outcome waits one task: an abort that follows in the same task wins (#910, the X path)', async () => {
+    // Measured order of the X's quit: the window's `destroyed` (its microtasks drain), then `will-quit`, whose
+    // `cancelAllDocTasks` also empties the task queue, then the next task. An outcome raised inside `destroyed`
+    // would end the run first, and the queue would start its next task into the quit. (No `before-quit` here: the
+    // failure branch is the one whose error tells the two orders apart.)
     const controller = new AbortController()
     const rendering = parkOnFirstRender()
     const run = rasterizePdfWithHiddenWindow(PDF, { onPage: () => {}, signal: controller.signal })
@@ -463,6 +477,22 @@ describe('rasterizePdfWithHiddenWindow — failure paths destroy the window', ()
     for (let i = 0; i < 20; i++) await Promise.resolve() // every microtask of the `destroyed` turn has run
     controller.abort() // `will-quit` → `cancelAllDocTasks`, before the next task
     await expect(run).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  // #910 review SF-1: a quit the close guard holds while the main window saves (Ctrl+Q on Linux, ⌘Q or Dock Quit on
+  // macOS, File → Exit in a development build) closes this window first and reaches `will-quit` only after the save
+  // (measured: +17 ms with an instant answer, +320 ms with a 300 ms one), or never (Keep open). The run must still end
+  // as the cancel it was before #910, not as a failure (an audit "failed" entry).
+  it('a window destroyed after a quit was asked ends the run as an abort, with no cancel of its own (#910 review)', async () => {
+    const rendering = parkOnFirstRender()
+    const run = rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} }) // no signal: nothing else aborts it
+    void run.catch(() => {}) // asserted below
+    const win = await rendering
+    for (const fn of fake.state.appListeners.get('before-quit') ?? []) fn() // the quit is asked…
+    destroyUnderTheRun(win) // …and closes every window, this one first
+    await expect(run).rejects.toMatchObject({ name: 'AbortError' })
+    for (const ch of RASTER_CHANNELS) expect(fake.state.ipcListeners.get(ch) ?? [], ch).toHaveLength(0)
+    expect(fake.state.appListeners.get('before-quit') ?? []).toHaveLength(0)
   })
 
   // REL-4 (backend-audit 2026-06-27) / #687: an over-cap page PNG fails the run before it reaches recognition — the

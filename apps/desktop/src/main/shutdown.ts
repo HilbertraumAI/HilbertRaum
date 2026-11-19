@@ -373,6 +373,11 @@ export interface AppLifecycleDeps {
   /** `app.quit()`: the quit the main window's last close starts on Windows and Linux (#910). */
   quit: () => void
   /**
+   * Is a quit asked and not taken back (`trackQuitRequests(app).pending()`, read without clearing)? On macOS
+   * the main window closes through a quit (⌘Q, Dock Quit) only once its close guard let that quit go on (#910).
+   */
+  quitRequested: () => boolean
+  /**
    * `killRegisteredSidecarChildren` — reaps, synchronously and right before `exit`, whatever a
    * deadline-abandoned sidecar stop left behind (the CODE-11 crash-path reaper, reused). A no-op
    * after a teardown that completed: every stopped child unregistered itself on exit.
@@ -392,7 +397,8 @@ export interface AppLifecycleHandlers {
    * synchronously when the helper went — which cancelled the OCR run it had just finished. The
    * quit closes the helpers and goes through `before-quit` → `will-quit` like any other quit
    * (measured on Electron 43.8.6). On macOS the app stays open with no window (the platform
-   * convention); a Dock click brings the window back (`onActivate`, `mainWindowCount`).
+   * convention); a Dock click brings the window back (`onActivate`, `mainWindowCount`), except while
+   * a quit that closed the window is still closing the helper windows.
    */
   onMainWindowClosed: () => void
   /**
@@ -435,8 +441,9 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
   /** The session-end lock ran (nothing awaits; a later `will-quit` has nothing left to do). */
   let sessionEndLocked = false
   /**
-   * #910: the main window's last close started the quit (Windows, Linux). Until its `will-quit`, the quit is
-   * still closing the helper windows (a few ms, measured); a second launch then must not open a window into it.
+   * #910: the main window's last close started the quit (Windows, Linux), or closed through one (macOS ⌘Q or
+   * Dock Quit). Until its `will-quit` the quit is still closing the helper windows (a few ms, measured; longer
+   * during a print), and a second launch or a Dock click then must not open a window into it.
    */
   let quitAfterLastClose = false
   return {
@@ -483,7 +490,12 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       // #910: Windows and Linux quit when the main window closes, whatever helper windows are
       // left; the quit closes them. During a quit that is already running the call adds nothing
       // (Electron ignores a nested `app.quit()`: one `before-quit`, one `will-quit`, measured).
-      if (deps.platform === 'darwin') return
+      if (deps.platform === 'darwin') {
+        // macOS stays open after the red button. A window that closed through a quit (the guard let it go on)
+        // is not coming back: that quit runs to `will-quit`.
+        if (deps.quitRequested()) quitAfterLastClose = true
+        return
+      }
       quitAfterLastClose = true
       deps.quit()
     },

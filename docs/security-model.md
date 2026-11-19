@@ -1726,20 +1726,30 @@ re-encrypts (the bullet below).
   finished. Now the quit closes the helpers and runs `before-quit` → `will-quit` like any quit
   (measured on Electron 43.8.6): an OCR run is cancelled there and persists nothing (GAP-7), and a
   print fails through its own `before-quit` hook. `window-all-closed` stays as a fallback; Electron
-  does not emit it during a quit. A window a quit closes fails the rasterizer's page in flight one
-  task after its `destroyed` event, so a quit that is then cancelled (Keep open) fails the OCR run
-  at once instead of after its 60 s step timeout, while a quit that goes on still ends it as a
-  cancel (its `will-quit` runs first, measured). macOS stays open
-  with no window: `activate` counts the main window only (`mainWindowCount`, no longer
-  `getAllWindows()`, which counted the hidden helpers, so a Dock click during an OCR run opened
-  nothing), and a `second-instance` with no main window takes the same path once the app is ready.
-  On Windows and Linux that path opens nothing once the last close has started the quit: until its
-  `will-quit` that quit is still closing the helper windows, and no window opens into it.
+  does not emit it during a quit. When the rasterizer's window goes away mid-run
+  (`services/ocr/window-gone.ts`), the page in flight ends one task after the window's `destroyed`
+  event, not after its 60 s step timeout: as an abort when a quit was asked (`before-quit`), so the
+  OCR task ends `cancelled` and persists nothing on every quit path, and as a failure when nothing
+  asked to quit. The quits the close guard holds while the window saves (Ctrl+Q on Linux, ⌘Q or
+  Dock Quit on macOS, File → Exit in a development build) close the helper window before their
+  `will-quit` (+17 ms with an instant answer, +320 ms with a 300 ms one, measured), or never reach
+  it (Keep open); before the follow-ups wave 3 review the run ended there as a failure, with an
+  audit "failed" entry. After an X the quit's `will-quit` runs before that task (measured), so its
+  cancel, which also empties the task queue, comes first. On a held quit a task queued behind the
+  OCR run can start while the window saves; the quit's `will-quit` then cancels it (residual). macOS
+  stays open with no window after the red button: `activate` counts the main window only
+  (`mainWindowCount`, no longer `getAllWindows()`, which counted the hidden helpers, so a Dock click
+  during an OCR run opened nothing), and a `second-instance` with no main window takes the same
+  path once the app is ready. That path opens nothing once the last close has started the quit
+  (Windows, Linux) or the window closed through one (⌘Q or Dock Quit, read from the app-level quit
+  flag, `trackQuitRequests(app).pending()`): until its `will-quit` that quit is still closing the
+  helper windows, and no window opens into it.
   Pinned by `tests/unit/close-guard.test.ts`, `tests/unit/shutdown.test.ts`,
-  `tests/unit/ocr-rasterizer-harness.test.ts` and, where the Electron binary is present (not CI),
-  `tests/integration/close-guard-electron-smoke.test.ts` on real Electron (with the production quit
-  rule bundled, and a hidden helper window open at the X). Not yet checked on a Mac (the red button,
-  ⌘Q, a logout, a Dock click during an OCR run).
+  `tests/unit/ocr-rasterizer-harness.test.ts`, `tests/integration/ocr-task.test.ts` and, where the
+  Electron binary is present (not CI), `tests/integration/close-guard-electron-smoke.test.ts` on real
+  Electron (with the production quit rule and window watch bundled, and a hidden helper window open
+  at the X and at a quit the guard holds). Not yet checked on a Mac (the red button, ⌘Q, a logout,
+  a Dock click during an OCR run).
 - **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
   owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above

@@ -288,6 +288,25 @@ describe('Make searchable (OCR) end to end', () => {
     expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
   })
 
+  // #910 review SF-1: a quit the close guard holds (Ctrl+Q, ⌘Q, Dock Quit) closes the rasterizer's window before the
+  // quit's own cancel reaches the task; the rasterizer then rejects with an AbortError while the task's signal is not
+  // aborted yet. That is the quit's cancel, read by the error's name: cancelled, no "failed" audit entry, nothing kept.
+  it('an AbortError from the rasterizer ends the task cancelled: nothing persisted, no failure recorded (#910)', async () => {
+    const docId = await importScan(w)
+    const engine = fakeOcrEngine({ text: 'never persisted' })
+    const rasterize: RasterizePdf = async (_pdf, o) => {
+      o.onPageCount?.(2)
+      await o.onPage(1, Buffer.from([1]))
+      throw new DOMException('PDF rasterization aborted', 'AbortError')
+    }
+    const manager = ocrManager(engine, rasterize, { audit: dbAudit(w.db) })
+    const status = await waitTerminal(manager, manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
+    expect(status.state).toBe('cancelled')
+    expect(listAuditEvents(w.db, { limit: 50 }).map((e) => e.type)).not.toContain('document_task_failed')
+    expect(getDocumentOcrPages(w.db, docId)).toBeNull()
+    expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
+  })
+
   // GAP-7 (full-audit 2026-07-11) — the decided cancel contract, both halves:
   //   before the persist point → a calm cancel that persists NOTHING;
   //   after it (during the signal-less re-ingest) → the task completes as 'done' (the work is real).

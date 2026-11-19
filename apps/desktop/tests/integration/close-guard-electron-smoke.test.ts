@@ -199,6 +199,28 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
     ])
   }, testBudgetMs(30_000))
 
+  // #910 review SF-1: a quit the guard holds (Ctrl+Q on Linux, ⌘Q or Dock Quit on macOS, File → Exit in a development
+  // build) closes the helper window while the main window still saves, so a run there ends before `will-quit` — the
+  // quit's own cancel. It must end as an abort (the OCR task: cancelled), not as a failure (an audit "failed" entry).
+  it('a quit the guard holds with a helper window open: the run there ends as an abort before will-quit', async () => {
+    const r = await runScenario('quit-helper')
+    expect(names(r).filter((e) => !e.startsWith('helper:run-'))).toEqual([
+      'before-quit',
+      'ask',
+      'close#1:held',
+      'helper:closed',
+      'answer:saved',
+      'guard:quit',
+      'before-quit',
+      'close#2:through',
+      'closed',
+      'will-quit'
+    ])
+    const runs = names(r).filter((e) => e.startsWith('helper:run-'))
+    expect(runs).toEqual(['helper:run-aborted'])
+    expect(names(r).indexOf('helper:run-aborted')).toBeLessThan(names(r).indexOf('will-quit'))
+  }, testBudgetMs(30_000))
+
   it('another window’s answer to the same request is ignored: the main window’s “unsaved” brings the dialog', async () => {
     const r = await runScenario('other-sender')
     expect(names(r)).toEqual([

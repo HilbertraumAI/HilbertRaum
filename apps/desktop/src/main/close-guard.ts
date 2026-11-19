@@ -288,6 +288,11 @@ export function createUnsavedCloseConfirm(deps: UnsavedCloseConfirmDeps): () => 
 export interface QuitRequests {
   /** Was a quit asked since the last read? Reading clears it. */
   consume(): boolean
+  /**
+   * The same flag, read without clearing (#910, macOS): true at the main window's `closed` when the window closed
+   * through a quit (the guard's own quit after the save sets it again, and nothing reads it after that).
+   */
+  pending(): boolean
 }
 
 /**
@@ -306,7 +311,8 @@ export function trackQuitRequests(app: { on(event: 'before-quit', listener: () =
       const was = asked
       asked = false
       return was
-    }
+    },
+    pending: () => asked
   }
 }
 

@@ -154,7 +154,8 @@ if (!isPrimaryInstance) {
     } else if (app.isReady()) {
       // #910: no main window — macOS after the red button, or a quit teardown on any OS. The Dock
       // click's path brings the window back, and opens none once a quit has begun (`onActivate`).
-      // A second launch can arrive before `ready`; then the first window is still to come.
+      // Electron emits `second-instance` only after `ready` (its docs guarantee it); the check only keeps
+      // `createWindow` from ever running before `ready`, when no window can be made.
       lifecycle.onActivate()
     }
   })
@@ -1085,6 +1086,7 @@ const lifecycle = createAppLifecycleHandlers({
   mainWindowCount: () => (mainWindow === null ? 0 : 1),
   platform: process.platform,
   quit: () => app.quit(),
+  quitRequested: () => quitRequests.pending(),
   killSidecarChildren: killRegisteredSidecarChildren,
   log
 })

@@ -379,6 +379,7 @@ describe('will-quit re-entry during a parked teardown (#238, B1 inverted)', () =
       mainWindowCount: () => 0,
       platform: 'darwin',
       quit: () => order.push('quit'),
+      quitRequested: () => false,
       killSidecarChildren: () => order.push('reap'),
       log: quietLog
     })
@@ -441,6 +442,7 @@ describe('activate during a parked teardown (#238)', () => {
       mainWindowCount: () => windows,
       platform: 'darwin',
       quit: () => undefined,
+      quitRequested: () => false,
       killSidecarChildren: () => undefined,
       log: quietLog
     })
@@ -456,36 +458,43 @@ describe('activate during a parked teardown (#238)', () => {
   })
 })
 
-// #910: Electron quits on its own (`window-all-closed`) only once EVERY window is gone, and the OCR rasterizer and the PDF
-// print window are hidden windows. An X during an OCR run left the app running with no window and the workspace unlocked,
-// then quit synchronously when the run's window went, which cancelled the run it had just finished. The main window's
-// own `closed` now quits on Windows and Linux; the quit closes the helpers (real Electron:
-// close-guard-electron-smoke.test.ts, the `helper` scenario).
+// #910: Electron quits on its own (`window-all-closed`) only once EVERY window is gone, and the OCR rasterizer and
+// the PDF print window are hidden windows. An X during an OCR run left the app running with no window and the
+// workspace unlocked, then quit synchronously when the run's window went, which cancelled the run it had just
+// finished. The main window's own `closed` now quits on Windows and Linux; the quit closes the helpers (real
+// Electron: close-guard-electron-smoke.test.ts, the `helper` scenario).
 describe('the main window’s last close quits on Windows and Linux (#910)', () => {
-  it.each<[NodeJS.Platform, string[]]>([
-    ['win32', ['quit']],
-    ['linux', ['quit']],
-    ['darwin', ['createWindow']]
-  ])('the main window closed on %s, then a Dock click or a second launch: %j', (platform, expected) => {
-    const order: string[] = []
-    const handlers = createAppLifecycleHandlers({
-      performShutdown: async () => undefined,
-      emergencyLock: () => undefined,
-      exit: () => undefined,
-      createWindow: () => order.push('createWindow'),
-      mainWindowCount: () => 0, // a hidden OCR or print window may be open: it does not count
-      platform,
-      quit: () => order.push('quit'),
-      killSidecarChildren: () => undefined,
-      log: quietLog
-    })
-    handlers.onMainWindowClosed()
-    // Windows and Linux: the close quits, and a second launch while that quit still closes the helper windows (before
-    // its `will-quit`) opens nothing into it. macOS keeps the app open with no window, and the Dock click (or a second
-    // launch, which index.ts sends the same way) brings the window back.
-    handlers.onActivate()
-    expect(order).toEqual(expected)
-  })
+  it.each<[NodeJS.Platform, boolean, string[]]>([
+    ['win32', false, ['quit']],
+    ['linux', false, ['quit']],
+    ['darwin', false, ['createWindow']],
+    ['darwin', true, []]
+  ])(
+    'the main window closed on %s (through a quit: %s), then a Dock click or a second launch: %j',
+    (platform, quitAsked, expected) => {
+      const order: string[] = []
+      const handlers = createAppLifecycleHandlers({
+        performShutdown: async () => undefined,
+        emergencyLock: () => undefined,
+        exit: () => undefined,
+        createWindow: () => order.push('createWindow'),
+        mainWindowCount: () => 0, // a hidden OCR or print window may be open: it does not count
+        platform,
+        quit: () => order.push('quit'),
+        quitRequested: () => quitAsked,
+        killSidecarChildren: () => undefined,
+        log: quietLog
+      })
+      handlers.onMainWindowClosed()
+      // Windows and Linux: the close quits, and a second launch while that quit still closes the helper windows
+      // (before its `will-quit`) opens nothing into it. macOS keeps the app open with no window after the red
+      // button, and the Dock click (or a second launch, which index.ts sends the same way) brings the window back;
+      // after ⌘Q or Dock Quit the window closed through the quit, which runs on to `will-quit`, so nothing opens
+      // into it (review N-9).
+      handlers.onActivate()
+      expect(order).toEqual(expected)
+    }
+  )
 
   it('index.ts wires it: the closed handler quits, activate counts the main window only, a second launch falls back to activate', () => {
     // Source-text pin (the idiom above): index.ts cannot be imported under vitest.
@@ -496,10 +505,12 @@ describe('the main window’s last close quits on Windows and Linux (#910)', () 
     expect(src).toContain('mainWindowCount: () => (mainWindow === null ? 0 : 1),')
     expect(src).toContain('platform: process.platform,')
     expect(src).toContain('quit: () => app.quit(),')
+    expect(src).toContain('quitRequested: () => quitRequests.pending(),')
     // A hidden helper window must never count as the window a Dock click or a second launch brings back.
     expect(src).not.toMatch(/getAllWindows\(\)\.length/)
-    // With no main window (macOS after the red button, or a quit teardown), a second launch takes the Dock click's path,
-    // which opens no window once a quit has begun; before `ready` the first window is still to come.
+    // With no main window (macOS after the red button, or a quit teardown), a second launch takes the Dock
+    // click's path, which opens no window once a quit has begun. (`app.isReady()` is a belt: Electron emits the
+    // event only after `ready`.)
     expect(src).toMatch(
       /app\.on\('second-instance', \(\) => \{\n\s*if \(mainWindow\) \{[^}]*\} else if \(app\.isReady\(\)\) \{\n(?:\s*\/\/[^\n]*\n)*\s*lifecycle\.onActivate\(\)\n\s*\}\n\s*\}\)/
     )
@@ -544,6 +555,7 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       mainWindowCount: () => windows,
       platform: 'win32',
       quit: () => order.push('quit'),
+      quitRequested: () => false,
       killSidecarChildren: () => order.push('reap'),
       log: quietLog
     })

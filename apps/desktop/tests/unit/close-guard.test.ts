@@ -489,13 +489,14 @@ describe('close guard — the main window wiring (#888)', () => {
     const dialog: Pick<Dialog, 'showMessageBox'> = {
       showMessageBox: async () => ({ response: dialogResponses.shift() ?? 1, checkboxChecked: false })
     }
+    const quitRequests = trackQuitRequests(app)
     const guard = createMainWindowCloseGuard({
       window,
       app,
       ipc: w.ipc,
       dialog,
       t: (key) => key,
-      quitRequests: trackQuitRequests(app),
+      quitRequests,
       isShuttingDown: () => false,
       log: quiet
     })
@@ -506,7 +507,7 @@ describe('close guard — the main window wiring (#888)', () => {
     }
     /** The window answers request `requestId`. */
     const answer = (requestId: number, unsaved: boolean): void => w.reply({ requestId, unsaved })
-    return { steps, app, close, answer }
+    return { steps, app, close, answer, quitRequests }
   }
 
   it('a quit (File → Exit, Cmd+Q) that reached the close quits again through app.quit after the save', async () => {
@@ -536,6 +537,37 @@ describe('close guard — the main window wiring (#888)', () => {
     h.answer(2, false)
     await settle()
     expect(h.steps).toEqual(['close:held', 'close:held', 'win.close', 'close:through'])
+  })
+
+  // #910 review N-9 (macOS): the app stays open after the red button but not after ⌘Q or Dock Quit, and a Dock click
+  // between the window's `closed` and that quit's `will-quit` must open nothing. What tells the two apart at `closed`
+  // is the quit flag read without clearing: the guard's own quit after the save sets it, and nothing reads it after.
+  it.each<[string, boolean, number[], (h: ReturnType<typeof wiring>) => Promise<void>]>([
+    ['a quit the guard let go on', true, [], async (h) => {
+      h.app.emit('before-quit')
+      h.close()
+      h.answer(1, false)
+      await settle()
+    }],
+    ['an X', false, [], async (h) => {
+      h.close()
+      h.answer(1, false)
+      await settle()
+    }],
+    ['an X after a quit was kept open', false, [1], async (h) => {
+      h.app.emit('before-quit')
+      h.close()
+      h.answer(1, true)
+      await settle()
+      h.close()
+      h.answer(2, false)
+      await settle()
+    }]
+  ])('once the window closed through %s, a quit is still pending: %s', async (_what, pending, dialog, run) => {
+    const h = wiring(dialog)
+    await run(h)
+    expect(h.steps.at(-1)).toBe('close:through')
+    expect(h.quitRequests.pending()).toBe(pending)
   })
 
   it('index.ts gives every main window that guard and a `closed` reset, over one app-level quit flag', () => {

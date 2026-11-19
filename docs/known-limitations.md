@@ -2773,11 +2773,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   exits still cannot wait for the window: a Windows shutdown, restart or log-off with the app open
   (Windows ends the app; it locks at once, and a change not yet saved is lost), and a crash. A
   reload of the window, which closes nothing and so saves nothing first, exists only in a
-  development build since #912 (View → Reload or Ctrl+R); the released app has no reload. A quit
-  the app holds back to ask (Ctrl+Q on Linux or ⌘Q on macOS, then Keep open, or a slow Try again)
-  has already closed the hidden helper windows, so an OCR run in progress fails at once; and an
-  evidence-pack PDF export in progress is stopped by Ctrl+Q or ⌘Q itself (the print's own
-  `before-quit` hook), even when you then pick Keep open. Both can be started again. On
+  development build since #912 (View → Reload or Ctrl+R); the released app has no reload.
+  Quitting (Ctrl+Q on Linux, ⌘Q on macOS) closes the hidden helper windows while the window still
+  saves, so an OCR run in progress stops at once and ends as cancelled, even when you then pick Keep
+  open; and an evidence-pack PDF export in progress is stopped by Ctrl+Q or ⌘Q itself (the print's
+  own `before-quit` hook), even when you then pick Keep open. Both can be started again. On
   Windows and Linux, closing the window quits the app, so closing it during an OCR run or a PDF
   export stops that run the way quitting does (#910; before, the app went on running with no window
   and the workspace unlocked, and then threw the finished OCR run away); start it again the next
