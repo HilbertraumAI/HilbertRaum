@@ -63,12 +63,15 @@ function attachLogKey(ctx: AppContext): void {
 }
 
 /** What was lost, per cause, for the app.log line the unlock writes after a loss (#875, #892; English, content-free:
- *  app.log is for support, not translated). The audit event carries the cause itself. */
+ *  app.log is for support, not translated). The audit event carries the cause itself. `unclean-full` says what the start
+ *  measured, not the cause it suggests: a power cut on a drive that full reads the same. */
 const LOSS_LOG_TEXT: Record<WorkingCopyLossCause, string> = {
   lock: 'the working file was gone or no longer a database',
   startup: 'the working file was no longer a database',
   unclean: 'the app ended without locking the workspace',
-  'unclean-full': 'the drive was too full to lock the workspace when the app ended',
+  'unclean-full':
+    'the app ended without locking the workspace, and at the next start the free space on the drive was below the ' +
+    'size of the workspace',
   recovery: 'the recovery copy a failed lock left was no longer a database'
 }
 

@@ -1251,13 +1251,18 @@ head's own weights + KV.
   `probeDatabaseFile` reads the working file as `database`, `damaged` or `unchecked` (`not-database`,
   `unknown`, `gone` and any error raise nothing). `init()` then reads the free space through the
   controller's injected `freeBytes(path)` (default `disk-space.ts` `freeBytesSync`, statfs) BEFORE
-  the sweep, and records the loss AFTER the sweep and the rekey recovery, only while `.enc` still has
-  the IV it had before that recovery (a roll-forward that swapped it opens the staged copy of the
-  session): `lockNotice: 'session_not_closed'`, marker `"cause": "unclean"`; or
+  the sweep, and records the loss AFTER the sweep and the rekey recovery, only while `.enc` has a
+  readable frame and still the IV it had before that recovery (a roll-forward that swapped it opens
+  the staged copy of the session; an `.enc` with no readable frame names no snapshot):
+  `lockNotice: 'session_not_closed'`, marker `"cause": "unclean"`; or
   `'session_not_closed_full'` / `"unclean-full"` when the free space is below the size of `.enc` (a
   null answer is not full). The notice per cause: `lock`, `startup` → `working_copy_lost`. The reader
   maps a cause this build writes (`lock`, `startup`, `unclean`, `unclean-full`) 1:1 and **any other
-  (a later build's, or none) to `unclean`**, never to `lock`. A successful unlock consumes it: the
+  (a later build's, or none) to `unclean`**, never to `lock`. Known limits: every marker write
+  (temp + rename, the same for all four causes since #875) replaces whatever file is there, a marker
+  of another `v` included, although reading and removing leave such a marker alone; and
+  `unclean-full` is measured once, at the start that sweeps, so it stays `_full` until the unlock
+  even if space is freed before a later start. A successful unlock consumes it: the
   flag clears, this build's marker is
   removed, and `takeWorkingCopyLost() → { cause, lostAt: <marker mtime ISO> | null } | null` returns
   it once, for the unlock IPC to log ("The changes since the last saved state were lost …") and

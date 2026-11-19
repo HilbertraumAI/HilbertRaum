@@ -999,8 +999,9 @@ const MARKED_LOSS_CAUSES: readonly MarkedLossCause[] = ['lock', 'startup', 'uncl
 
 /**
  * #892: the cause a marker of this version names. One this build writes maps 1:1; any other (a cause a later build
- * added, or none) still means the changes since the last lock are lost, so it reads as the generic `unclean`, whose
- * words claim no reason. Never as `lock`: that notice says something removed or damaged the working file.
+ * added, or none) still means the changes since the last lock are lost, so it reads as the generic `unclean`: the
+ * notice that the app did not lock the workspace at its last close, whose reasons are only examples. Never as `lock`:
+ * that notice says something removed or damaged the working file.
  */
 function markedLossCause(cause: unknown): MarkedLossCause {
   return MARKED_LOSS_CAUSES.find((known) => known === cause) ?? 'unclean'
@@ -2268,11 +2269,12 @@ export class WorkspaceController {
       // the session an unclean end left, reported in its own words; recorded after the sweep, which on
       // a full drive frees the room the marker needs, and only while `.enc` is the snapshot the working
       // copy was found newer than: a recovery that swapped it (a password change cut short after its
-      // commit) opens the staged copy of that session, so no loss is proven. Then the marker a
+      // commit) opens the staged copy of that session, so no loss is proven; nor is one against an
+      // `.enc` with no readable frame, which names no snapshot to open as it was. Then the marker a
       // lock left (here or in an earlier run, against the `.enc` that is there now) — after the
       // rekey recovery, which may have swapped `.enc`.
       if (salvage === 'discarded') this.markWorkingCopyLost('startup')
-      else if (unclean !== null && frameIvOf(this.vaultPaths.encPath) === unclean.enc) {
+      else if (unclean !== null && unclean.enc !== null && frameIvOf(this.vaultPaths.encPath) === unclean.enc) {
         this.markWorkingCopyLost(unclean.cause)
       }
       this.adoptWorkingCopyLostMarker()

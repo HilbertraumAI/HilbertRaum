@@ -886,12 +886,35 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
       }
     ],
     [
+      // Newer means strictly newer: a working file and `-wal` exactly as old as `.enc` prove no change after it.
+      'a working file and -wal exactly as old as .enc',
+      (vp) => {
+        failedLockState(vp)
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        const sameTime = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000) // whole seconds: every file system keeps them
+        for (const path of [vp.dbPath, `${vp.dbPath}-wal`, vp.encPath]) utimesSync(path, sameTime, sameTime)
+      }
+    ],
+    [
       // The probe cannot read it (`unknown`: a hold, a permission error); a folder under its name stands in on every OS.
       'a working file the probe cannot read',
       (vp) => {
         mkdirSync(vp.dbPath)
         writeFileSync(`${vp.dbPath}-wal`, 'wal')
         writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        backdate(vp.encPath)
+      }
+    ],
+    [
+      // A real working copy, newer than an `.enc` cut short after its frame magic: there is no snapshot to name, and the
+      // notice's "your workspace opens as it was when it was last locked" cannot hold, so nothing is said (review N-2).
+      'a working copy whose .enc has no readable frame',
+      (vp) => {
+        failedLockState(vp)
+        writeFileSync(`${vp.dbPath}-wal`, 'wal')
+        writeFileSync(`${vp.dbPath}-shm`, 'shm')
+        writeFileSync(vp.encPath, readFileSync(vp.encPath).subarray(0, 'HRAUMEN1'.length))
         backdate(vp.encPath)
       }
     ]
@@ -931,13 +954,42 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
   })
 
+  // #892: a working copy whose structure the probe cannot read for a reason that is not damage (here a table only the
+  // session's own connection could read) is judged by its header, as at every probe site, and the start says so for the
+  // log: the same notice, and the salvage's header fallback noted.
+  it('#892: live sidecars beside a working file the probe judges by its header: the notice, and the fallback noted', () => {
+    const vp = lockedVault('vault', 'pw')
+    const { db } = unlockEncryptedVault(vp, 'pw')
+    plantProbeTrap(db)
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db.close()
+    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    backdate(vp.encPath)
+
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'session_not_closed' })
+    expect(ctl.takeProbeFallbacks()).toEqual([{ site: 'salvage', code: expect.stringMatching(/^sqlite 1\b/) }])
+  })
+
   // #892 (e): a drive with less free space than the size of `.enc` has no room for a lock to write the next snapshot
   // beside the last one, which is how a quit on a full drive ends without a lock: the notice names it, so the user frees
   // space before the next session ends the same way. A drive that cannot say how much is free is not called full.
   it.each<[string, (encSize: number) => number | null, string, string]>([
     ['one byte less than the size of .enc', (encSize) => encSize - 1, 'session_not_closed_full', 'unclean-full'],
     ['exactly the size of .enc', (encSize) => encSize, 'session_not_closed', 'unclean'],
-    ['no answer from the drive', () => null, 'session_not_closed', 'unclean']
+    ['no answer from the drive', () => null, 'session_not_closed', 'unclean'],
+    // A read that fails sits in front of the sweep: it must neither stop the start nor keep the plaintext at rest.
+    [
+      'a read that fails',
+      () => {
+        throw Object.assign(new Error('EIO: i/o error, statfs'), { code: 'EIO' })
+      },
+      'session_not_closed',
+      'unclean'
+    ]
   ])('#892: a mid-session crash on a drive whose free space is %s', (_what, free, notice, cause) => {
     const vp = lockedVault('vault', 'pw')
     failedLockState(vp)

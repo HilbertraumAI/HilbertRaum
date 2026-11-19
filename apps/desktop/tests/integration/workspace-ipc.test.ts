@@ -916,7 +916,8 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
     ['a start that swept the last session’s broken working file', discardedAtStart, 'startup', 'working_copy_lost', 'the working file was no longer a database'],
     ['an unlock that discarded a damaged recovery copy', damagedRecovery, 'recovery', null, 'the recovery copy a failed lock left was no longer a database'],
     ['a start that swept a session the app ended without locking', endedUnlocked, 'unclean', 'session_not_closed', 'the app ended without locking the workspace'],
-    ['the same on a drive too full to lock', endedUnlocked, 'unclean-full', 'session_not_closed_full', 'the drive was too full to lock the workspace when the app ended', fullDrive]
+    // What was measured, not the cause it suggests (a power cut on a drive that full logs the same, #892 review N-4).
+    ['the same on a drive too full to lock', endedUnlocked, 'unclean-full', 'session_not_closed_full', 'the app ended without locking the workspace, and at the next start the free space on the drive was below the size of the workspace', fullDrive]
   ])('after %s, the unlock records workspace_working_copy_lost and one log line, once', async (_what, lose, cause, notice, what, drive) => {
     const vp = lockedVault('wsipc', PW)
     lose(vp)
@@ -944,7 +945,7 @@ describe('the unlock after a loss of the last session’s changes (#875)', () =>
       expect(lostEvents()).toEqual([noticeAtStart ? { cause, lostAt } : { cause }])
       expect(logged()).toHaveLength(1)
       expect(logged()[0]).toContain(`"cause":"${cause}"`)
-      expect(logged()[0]).toContain(`were lost: ${what}`)
+      expect(logged()[0]).toContain(`were lost: ${what} {`) // the whole phrase, up to the metadata
 
       await invoke(handlers, IPC.lockWorkspace)
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })

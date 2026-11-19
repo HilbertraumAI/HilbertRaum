@@ -192,6 +192,25 @@ describe('the gate at start (#875)', () => {
     }
   )
 
+  // The state crosses the IPC: a value the gate has no copy for shows no banner, also one that names a member every
+  // object inherits (an own-property read, as for a failure's `reason`), instead of rendering garbage or crashing.
+  it.each(['toString', 'a-later-notice'])('shows no notice for a value it has no copy for (%s)', async (notice) => {
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(
+          async (): Promise<WorkspaceStateInfo> => ({ ...lockedState, lockNotice: notice as WorkspaceStateInfo['lockNotice'] })
+        ),
+        lockWorkspace: vi.fn(async () => lockedState),
+        perfMark: vi.fn()
+      })
+    )
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   // #860 A1: with no workspace state there is neither a gate nor a shell to show. The start says the app could not
   // start, with main's reason, instead of a blank window.
   it('shows the fatal screen with the reason when the workspace state cannot be read at start', async () => {
