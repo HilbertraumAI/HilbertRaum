@@ -272,7 +272,8 @@ fi
 # rule (commercial-drive.ts USER_DATA_DIRS / USER_DATA_CONFIG_FILES): every entry directly in these
 # folders is user data -- a file or a link by its own name (a link is never followed), a non-empty
 # folder as <dir>/<name>/* (an empty one is fine) -- and so is a vault descriptor or a
-# working-copy-lost marker in config/, exact or with a suffix, in any case. Fail closed: a folder
+# working-copy-lost marker in config/, exact or with a suffix, in any ASCII case (the TS gate's Unicode toLowerCase() also folds rare
+# characters such as the Kelvin sign; a recorded non-goal). Fail closed: a folder
 # that cannot be listed is "user data unreadable: <dir>/", a file where workspace/, logs/ or config/
 # belongs is "user data unreadable: <dir> (not a folder)"; only a missing one passes. The entries
 # come from a glob, never from parsing ls, so a name holding a newline is one entry. Bash 3.2: no
@@ -325,7 +326,8 @@ done
 if ud_lookable config; then
   for cf_path in "$TARGET/config"/*; do
     cf="${cf_path##*/}"
-    cf_lower="$(printf '%s' "$cf" | tr '[:upper:]' '[:lower:]')"
+    # A name is bytes: macOS tr refuses an invalid UTF-8 sequence in a UTF-8 locale (#919).
+    cf_lower="$(printf '%s' "$cf" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
     for udc in "${USER_DATA_CONFIG_FILES[@]}"; do
       if [[ "$cf_lower" == "$udc" || "$cf_lower" == "$udc".* ]]; then PROBLEMS+=("user data present: config/$cf"); fi
     done

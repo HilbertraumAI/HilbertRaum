@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
@@ -395,6 +395,30 @@ describe.skipIf(!toolBuilt)('assert-commercial-drive command line', () => {
     expect(Object.keys(verdict.checks)).toEqual(Object.keys(inProcess.checks))
     expect(Object.values(verdict.checks).every((v) => v === true)).toBe(true)
   })
+})
+
+// A name is bytes. BSD tr (macOS) refuses a sequence that is not valid UTF-8 in a UTF-8 locale ("Illegal byte sequence"), and
+// under `set -euo pipefail` that ended the gate with no verdict. GNU tr never refuses, so this stand-in plays BSD tr: first on
+// PATH it exits 1 on a non-UTF-8 name unless the locale is C. Whether a Mac can hold such a name at all (APFS refuses it) is owed by hand; the
+// darwin row below pins what the real tr does with the byte.
+const BSD_TR_STAND_IN = [
+  '#!/bin/bash',
+  'loc="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"',
+  'input="$(cat; echo x)"; input="${input%x}"',
+  'case "$loc" in',
+  "  C|POSIX|'') ;;",
+  '  *) if ! printf \'%s\' "$input" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then echo "tr: Illegal byte sequence" >&2; exit 1; fi ;;',
+  'esac',
+  "printf '%s' \"$input\" | /usr/bin/tr \"$@\"",
+  ''
+].join('\n')
+
+// The premise of the row below, on the real BSD tr: under LC_ALL=C a byte that is not UTF-8 passes through and the exit
+// code is 0 (the fix relies on it). od's field width differs between BSD and GNU, so the hex bytes are normalised.
+it.skipIf(process.platform !== 'darwin')('the real tr passes a non-UTF-8 byte under LC_ALL=C (#919 premise)', () => {
+  const r = spawnSync('bash', ['-c', `set -o pipefail; printf '\\377x' | LC_ALL=C tr '[:upper:]' '[:lower:]' | od -An -tx1`], { encoding: 'utf8' })
+  expect(r.status, outputOf(r)).toBe(0)
+  expect(r.stdout.trim().split(/\s+/).join(' ')).toBe('ff 78')
 })
 
 for (const leg of SCRIPT_LEGS) {
@@ -1334,6 +1358,38 @@ for (const leg of SCRIPT_LEGS) {
         expect(r.status, out).toBe(0)
         expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
       })
+
+      it.skipIf(!toolBuilt || process.platform === 'win32')(
+        'a config/ name that is not UTF-8 is one entry: the gate still gives its verdict (#919)',
+        (ctx) => {
+          const root = sellableDrive()
+          const odd = Buffer.concat([Buffer.from(join(root, 'config') + '/'), Buffer.from([0xff]), Buffer.from('x')])
+          try {
+            writeFileSync(odd, '')
+          } catch (e) {
+            // A file system that refuses a name that is not valid UTF-8 (APFS: EILSEQ; others EINVAL, ENOENT-style
+            // refusals) cannot hold the row's premise. Any other error is a real failure.
+            const code = (e as NodeJS.ErrnoException).code
+            if (code === 'EILSEQ' || code === 'EINVAL') return ctx.skip()
+            throw e
+          }
+          try {
+            const stubs = mkdtempSync(join(tmpdir(), 'hilbertraum-bsd-tr-'))
+            writeFileSync(join(stubs, 'tr'), BSD_TR_STAND_IN)
+            chmodSync(join(stubs, 'tr'), 0o755)
+            const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-x64'], {
+              env: { PATH: `${stubs}${delimiter}${process.env.PATH ?? ''}`, LANG: 'C.UTF-8', LC_ALL: '', LC_CTYPE: '' }
+            })
+            const out = outputOf(r)
+            expect(r.status, out).toBe(0)
+            expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+            expect(nativeUserData(out), out).toEqual([])
+          } finally {
+            // Unlink through the same bytes, so the scratch root can always be removed.
+            rmSync(odd, { force: true })
+          }
+        }
+      )
 
       // #766: a Kit ships its bundled set plus any model with a file on the drive, and lists every other manifest for in-app
       // download. The pre-flight and the canonical gate both leave a catalog model alone, and both refuse a drive that ships
