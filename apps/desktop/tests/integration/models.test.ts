@@ -652,6 +652,53 @@ describe('computeInstallState — vision (both files verified)', () => {
     })
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
   })
+
+  // #913 (S-913-1): a full check stops at the first damaged file, so one file of the pair can hold a cached mismatch
+  // while the other has no cache entry at all. The lazy answer must honour that mismatch; master said `installed`
+  // because it trusted the cache only when every file had an entry.
+  it.each([
+    ['the GGUF', 'models/vision/vl.gguf'],
+    ['the projector', 'models/vision/mmproj.gguf']
+  ])('skipHash reports checksum_failed when only %s has a cached mismatch (#913)', async (_file, damaged) => {
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytes')
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = visionManifest({
+      sha256: sha256('lm-bytes'),
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+    })
+    primeChecksum(join(root, ...damaged.split('/')), sha256('bytes a check found damaged'))
+    const before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, skipHash: true })).toBe('checksum_failed')
+    expect(checksumCacheStats.computed).toBe(before) // answered from the cache: nothing hashed
+  })
+
+  // #913 (S-913-1): what "Check all model files" does on the AI Model screen — the full pass, then the lazy refresh
+  // the screen fires right after it. On master the refresh flipped a damaged vision GGUF back to installed, and Images
+  // kept running it.
+  it('the lazy refresh after a full check keeps a damaged vision GGUF checksum_failed (#913)', async () => {
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytez') // same length as the real bytes: a bit flip
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const manifestsDir = manifestsDirWith(
+      rawManifest({
+        id: 'qwen2.5-vl-3b-instruct-q4',
+        role: 'vision',
+        family: 'qwen2.5-vl',
+        local_path: 'models/vision/vl.gguf',
+        sha256: sha256('lm-bytes'),
+        mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+      })
+    )
+    const opts = { manifestsDir, rootPath: root, developerMode: false, machineRamGb: PINNED_RAM_GB }
+    const before = checksumCacheStats.computed
+    const full = await buildModelList(opts)
+    expect(full.models[0].state).toBe('checksum_failed')
+    expect(checksumCacheStats.computed - before).toBe(1) // it stopped at the GGUF: the projector was never hashed
+    const lazy = await buildModelList({ ...opts, onlyVerifyModelId: null })
+    expect(lazy.models[0].state).toBe('checksum_failed')
+    expect(checksumCacheStats.computed - before).toBe(1)
+  })
 })
 
 // #310: a weight that ships as a `-00001-of-00004` shard set is FOUR files. The manifest's

@@ -174,6 +174,32 @@ describe('getVisionStatus', () => {
     writeVisionManifest(manifestsDir, zVision, 'z-vision.yaml')
     expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'a-vision' })
   })
+
+  // #913 (S-913-1): "Check all model files" found the GGUF damaged and stopped there, so the projector has no cache
+  // entry. Images must not run that model; on master the status said available and the next image question used it.
+  it('is not available once a full check found the GGUF damaged, though the projector was never hashed (#913)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    writeBinary(rootPath)
+    writeVisionManifest(manifestsDir, {
+      sha256: sha256('the real weights'),
+      mmproj: { local_path: 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf', sha256: sha256('the projector') }
+    })
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-instruct-q4.gguf', 'the real weightz') // a bit flip
+    writeDriveFile(rootPath, 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf', 'the projector')
+    const ctx = ctxFor(rootPath, manifestsDir)
+    const manifest = validManifest({
+      id: 'qwen2.5-vl-3b-instruct-q4',
+      role: 'vision',
+      local_path: 'models/vision/qwen2.5-vl-3b-instruct-q4.gguf',
+      sha256: sha256('the real weights'),
+      mmproj: { local_path: 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf', sha256: sha256('the projector') }
+    })
+    // The full check (what "Check all model files" runs): it hashes the GGUF, finds it damaged and stops.
+    expect(await computeInstallState(manifest, rootPath, { developerMode: false })).toBe('checksum_failed')
+    const status = await getVisionStatus(ctx)
+    expect(status.available).toBe(false)
+    expect(status.modelId).toBeUndefined()
+  })
 })
 
 // #890: the one vision pick the Performance row and `getVisionStatus` share. Synchronous: it checks presence and hashes

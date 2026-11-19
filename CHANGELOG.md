@@ -363,6 +363,11 @@ from its first public `1.0.0` release onward.
   newer HilbertRaum", with a note to update the app on this computer. It can't be downloaded,
   started or checked from here. It also shows under "On this drive" when its files are there
   (#847).
+- **"Check all model files" now keeps showing a damaged image or voice model.** These models
+  have more than one file. When the check found the first file damaged, it stopped there, and the
+  screen's refresh right after it showed the model as installed again; "Verify checksum" did the
+  same. Images then went on using the damaged image model. The model now stays marked as damaged
+  until you download it again (#913).
 - **The document-search model no longer depends on the order a drive lists its files in.** On a
   drive formatted like most USB sticks, a second document-search model added to the drive could
   have taken over from the current one, depending only on which file was copied first. Every

@@ -2164,7 +2164,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   Honouring a workspace choice belongs to the deferred embedder swap. The **images model** is picked by
   the same rule among the vision models whose files are all on the drive (#890); when that model's files
   fail their check, Images runs the next vision model on the drive while the Performance row still names
-  the first (the AI Model screen shows the damaged file). The running analyzer keeps the model it was
+  the first (the AI Model screen shows the damaged file). One damaged file is enough: "Check all model
+  files" stops at it and leaves the model's other file unhashed, and since #913 the screen and Images
+  keep reading it as damaged after that. The running analyzer keeps the model it was
   built with until a failed start, an engine update, a lock or quit: a vision model installed
   mid-session that becomes the pick (a flagged one, or one earlier in walk order) moves the Performance
   row and the Images status at their next update, and the analysis only at that rebuild.

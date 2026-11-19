@@ -819,16 +819,25 @@ async function sha256FileCached(
  * (honest state) and only SKIPS the multi-GB hash for genuinely un-cached weights.
  */
 function cachedHashFor(filePath: string, store?: HashStore): boolean {
+  return cachedHashOf(filePath, store) !== null
+}
+
+/**
+ * The LIVE cached digest of this file (L1 memory, then the L2 store, matching its current size+mtime), or null when
+ * there is none. Hashes nothing. #913 (S-913-1): the lazy path reads it to honour a cached MISMATCH on any one file of
+ * a model, which a full check that stopped at that file left as the only cached entry.
+ */
+function cachedHashOf(filePath: string, store?: HashStore): string | null {
   let st: ReturnType<typeof statSync>
   try {
     st = statSync(filePath)
   } catch {
-    return false
+    return null
   }
   const hit = hashCache.get(filePath)
-  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return true
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
   const persisted = store?.get(filePath)
-  return !!persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs
+  return persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs ? persisted.actual : null
 }
 
 /** Verify a weight file against its expected SHA-256 (cached by size+mtime). `label`
@@ -958,7 +967,7 @@ export interface InstallStateOptions {
    * NOT relaxed: `startModelRuntime` re-verifies the model it actually launches, and the
    * Models screen's explicit "Check all model files" action (#382) + the ship-time gates
    * (verify-models --strict / assertCommercialDrive) still hash fully. A cached hash is
-   * still used when present.
+   * still used when present: a cached mismatch on any one file reports `checksum_failed` (#913).
    */
   skipHash?: boolean
   /**
@@ -1020,10 +1029,15 @@ export async function computeInstallState(
   }
 
   // RT-3: on the lazy (chat) path, report a present weight as installed without hashing —
-  // unless a live cache hit can answer for ALL files for free. The start gate re-verifies the
-  // launched model, so an unhashed-but-present non-active model is display-only here.
-  if (opts.skipHash && !files.every((f) => cachedHashFor(f.path, opts.hashStore))) {
-    return 'installed'
+  // unless the cache can answer for free. A live cached MISMATCH on ANY file decides
+  // `checksum_failed` (#913, S-913-1): a full check stops at the first damaged file, so a damaged
+  // vision GGUF leaves its projector unhashed, and the lazy pass right after "Check all model
+  // files" must not flip it back to installed. A cached MATCH decides nothing until EVERY file
+  // has one. The chat start gate re-verifies the model it launches.
+  if (opts.skipHash) {
+    const cached = files.map((f) => cachedHashOf(f.path, opts.hashStore))
+    if (cached.some((actual, i) => actual !== null && actual !== files[i].sha)) return 'checksum_failed'
+    if (cached.some((actual) => actual === null)) return 'installed'
   }
 
   // Verify each file, accumulating the progress byte offset across files so the first-run

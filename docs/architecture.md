@@ -576,7 +576,10 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   the awaited IPC. `buildModelList` gains an additive **`onlyVerifyModelId`**: when present, only that
   model is hashed on a cold cache; other present weights are reported `installed` **without** hashing
   (display-only) — a live cached hash is still served for free, so a known `checksum_failed` still
-  surfaces. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
+  surfaces. A cached mismatch on any one file of a multi-file model is enough (#913): a full check
+  stops at the first damaged file, and before, the lazy answer trusted the cache only when every file
+  had an entry, so a vision GGUF the check had just found damaged read `installed` again on the next
+  visit. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
   (chat path) passes `true` with the active model id. **The §7.4 gate is intact** —
   `startModelRuntime` re-verifies the model it actually launches, and `verify-models --strict` /
   `assertCommercialDrive` still hash fully.
