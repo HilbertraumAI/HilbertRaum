@@ -18,6 +18,16 @@
 // must not be silently relaxed here. A test about a product timer drives the shipped constant with
 // fake timers instead (CONTRIBUTING "Pin the bound that ships"). Use this only where exceeding the bound means "it hung", never "it
 // was too slow".
+//
+// The two LIBRARY defaults are the same trap, and they are handled here too (#915). `vi.waitFor` and
+// testing-library's `waitFor` / `find*` default to 1 s, and neither follows `testTimeout`. testing-library's is
+// raised once for every jsdom file, in `tests/setup.ts`: `configure({ asyncUtilTimeout: hangBudgetMs(5_000) })`.
+// Vitest has no such config key, so every `vi.waitFor` passes `{ timeout: hangBudgetMs(n) }` itself (5000 is the usual n); a testing-library wait
+// passes one only to go above its 5000 default, never below it. A literal
+// `timeout:` on any wait never widens on CI, so it is not allowed. The repo-hygiene row "every wait takes its
+// ceiling from hang-budget" enforces those source rules; `tests/unit/hang-budget.dom.test.ts` asserts the setup
+// default itself. A HEAVY row (real hashing, process spawns) takes
+// `testBudgetMs` as its per-test timeout instead.
 
 /** Multiplier applied on CI. 4x is exactly the ratio `testTimeout` already uses: 15 s -> 60 s. */
 const CI_FACTOR = 4
@@ -108,21 +118,6 @@ const realNow = Date.now.bind(Date)
 export async function until(cond: () => boolean, what: string, localMs = 5_000): Promise<void> {
   await untilValue(() => cond() || undefined, what, localMs)
 }
-
-/**
- * The wait options for a testing-library `findBy*` / `waitFor` that has to outlast a LAZY SCREEN's
- * dynamic import — `await screen.findByRole('heading', { name }, LAZY_SCREEN_WAIT)`. App.tsx's
- * `lazyScreen` (React `lazy` + `import()`) loads a screen's module on its first mount, and the wait
- * for anything that screen renders starts before the import has settled. Alone that takes a few
- * hundred ms, but under full-suite load on a Windows desktop it landed past testing-library's 1 s
- * default (1.1-1.6 s), failing tests whose only problem was a slow import. A hang bound like the
- * rest of this module, never a timing proof.
- *
- * Use it on the first wait for a lazy screen in each test, since a test run alone (`-t`) pays the
- * import itself. It isn't needed where the screen's module is already loaded: the test file imports
- * it statically, or the same test mounted it earlier and React renders it from its lazy cache.
- */
-export const LAZY_SCREEN_WAIT: Readonly<{ timeout: number }> = { timeout: hangBudgetMs(5_000) }
 
 /**
  * Poll a (sync or async) `probe` until it yields a value (anything but `undefined`, `null` or `false`), or fail by

@@ -49,6 +49,7 @@ import {
   stubReviewApi,
   type ReviewMainCall
 } from '../helpers/evidenceReview'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // EP-1 plan §7.5 — the reviewSession module store: the repo's FIRST debounced auto-save.
 // Pins the contract the plan demands: debounce batches related writes (spec §26), the
@@ -153,7 +154,7 @@ describe('reviewSession — open', () => {
     const getEvidenceReview = vi.fn((id: string) => (id === 'r1' ? read1.promise : Promise.resolve(second)))
     stubReviewApi({ getEvidenceReview })
     const opening1 = openReviewSession({ reviewId: 'r1' })
-    await vi.waitFor(() => expect(getEvidenceReview).toHaveBeenCalledWith('r1'))
+    await vi.waitFor(() => expect(getEvidenceReview).toHaveBeenCalledWith('r1'), { timeout: hangBudgetMs(5000) })
     await openReviewSession({ reviewId: 'r2' })
     expect(getReviewSessionSnapshot().detail).toEqual(second)
 
@@ -269,9 +270,9 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
     const switching = openReviewSession({ reviewId: 'r2' }) // waits for write 1
     const secondFlush = flushReviewSession() // another flush caller, also waiting
     held[0]!.reject(new Error('disk I/O error'))
-    await vi.waitFor(() => expect(held).toHaveLength(2)) // the switch's own retry
+    await vi.waitFor(() => expect(held).toHaveLength(2), { timeout: hangBudgetMs(5000) }) // the switch's own retry
     held[1]!.reject(new Error('disk I/O error'))
-    await vi.waitFor(() => expect(held).toHaveLength(3)) // the other caller's retry, in flight as the switch decides
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: hangBudgetMs(5000) }) // the other caller's retry, in flight as the switch decides
     held[2]!.reject(new Error('disk I/O error'))
     await Promise.all([exitFlush, switching, secondFlush])
 
@@ -320,7 +321,7 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
     editReviewItem('i1', { decision: 'supported' })
 
     const switching = openReviewSession({ reviewId: 'r2' })
-    await vi.waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1)) // the switch's flush writes i1…
+    await vi.waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) }) // the switch's flush writes i1…
     purgeReviewSession() // …when the lock lands
     write.resolve(makeItem({ id: 'i1', decision: 'supported' }))
     await switching
@@ -345,13 +346,13 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
     held[0]!.reject(new Error('disk I/O error'))
     await failing
     const refusing = openReviewSession({ reviewId: 'r2' })
-    await vi.waitFor(() => expect(held).toHaveLength(2))
+    await vi.waitFor(() => expect(held).toHaveLength(2), { timeout: hangBudgetMs(5000) })
     held[1]!.reject(new Error('disk I/O error'))
     await refusing
     expect(getReviewSessionSnapshot().openError?.kind).toBe('unsaved')
 
     const writing = flushReviewSession() // a write in flight (e.g. the old screen's exit flush)…
-    await vi.waitFor(() => expect(held).toHaveLength(3))
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: hangBudgetMs(5000) })
     const discarding = discardAndSwitch() // …which Discard waits for…
     purgeReviewSession() // …when the lock lands
     held[2]!.reject(new Error('vault sealed'))
@@ -377,13 +378,13 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
     held[0]!.reject(new Error('disk I/O error'))
     await flushing
     const refusing = openReviewSession({ reviewId: 'r2' })
-    await vi.waitFor(() => expect(held).toHaveLength(2))
+    await vi.waitFor(() => expect(held).toHaveLength(2), { timeout: hangBudgetMs(5000) })
     held[1]!.reject(new Error('disk I/O error'))
     await refusing
     expect(getReviewSessionSnapshot().openError?.kind).toBe('unsaved')
 
     const retrying = retryBlockedSwitch() // its write is now in flight…
-    await vi.waitFor(() => expect(held).toHaveLength(3))
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: hangBudgetMs(5000) })
     const discarding = discardAndSwitch() // …when the user discards instead
     held[2]!.reject(new Error('disk I/O error')) // the retry's write fails AFTER the discard was asked for
     await Promise.all([retrying, discarding])
@@ -425,7 +426,7 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
 
     editReviewItem('i1', { decision: 'supported' })
     const switching = openReviewSession({ reviewId: 'r2' })
-    await vi.waitFor(() => expect(order).toEqual(['item:i1'])) // the switch's flush is writing i1
+    await vi.waitFor(() => expect(order).toEqual(['item:i1']), { timeout: hangBudgetMs(5000) }) // the switch's flush is writing i1
     editReviewItem('i2', { decision: 'not_supported' })
     firstWrite.resolve()
     await switching
@@ -459,10 +460,10 @@ describe('reviewSession — a switch never runs over a failed save (#837)', () =
 
     editReviewItem('i1', { decision: 'supported' })
     const switching = openReviewSession({ reviewId: 'r2' })
-    await vi.waitFor(() => expect(held).toHaveLength(1)) // pass 1 writes i1…
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: hangBudgetMs(5000) }) // pass 1 writes i1…
     editReviewItem('i2', { decision: 'not_supported' }) // …while i2 is decided
     held[0]!.resolve()
-    await vi.waitFor(() => expect(held).toHaveLength(2)) // pass 2 writes i2…
+    await vi.waitFor(() => expect(held).toHaveLength(2), { timeout: hangBudgetMs(5000) }) // pass 2 writes i2…
     editReviewItem('i1', { reviewerNote: 'late note' }) // …while a note lands
     held[1]!.resolve()
     await switching
@@ -883,9 +884,9 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     const sweeping = bulkClearDecisions() // waits for write 1
     const secondFlush = flushReviewSession() // another flush caller, also waiting
     held[0]!.reject(new Error('disk I/O error'))
-    await vi.waitFor(() => expect(held).toHaveLength(2)) // the sweep's own flush
+    await vi.waitFor(() => expect(held).toHaveLength(2), { timeout: hangBudgetMs(5000) }) // the sweep's own flush
     held[1]!.reject(new Error('disk I/O error'))
-    await vi.waitFor(() => expect(held).toHaveLength(3)) // the other caller's retry, in flight as the sweep decides
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: hangBudgetMs(5000) }) // the other caller's retry, in flight as the sweep decides
     held[2]!.reject(new Error('disk I/O error'))
     await Promise.all([exitFlush, sweeping, secondFlush])
 
@@ -1132,7 +1133,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
 
     const sweep = main.holdNextBulk()
     const sweeping = bulkClearDecisions()
-    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
     expect(await acknowledgeReviewFreshness()).toBe(false) // fails while the sweep is in flight
     sweep.resolve()
     await sweeping
@@ -1209,7 +1210,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     expect(getReviewSessionSnapshot().saveState).toBe('error')
 
     const sweeping = bulkClearDecisions() // nothing queued, so it runs…
-    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
     expect(getReviewSessionSnapshot().saveState).toBe('error') // …without clearing the error at its start
     sweep.resolve()
     await sweeping
@@ -1236,12 +1237,12 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
       const started: Array<Promise<unknown>> = []
       if (hung === 'sweep') {
         started.push(bulkClearDecisions())
-        await vi.waitFor(() => expect(applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+        await vi.waitFor(() => expect(applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
         editReviewItem('p1', { decision: 'supported' })
       } else {
         editReviewItem('p1', { decision: 'supported' })
         started.push(flushReviewSession())
-        await vi.waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1))
+        await vi.waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
       }
       started.push(flushReviewSession(), openReviewSession({ reviewId: 'r2' }))
       purgeReviewSession() // the lock
@@ -1271,7 +1272,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
 
     const sweep = main.holdNextBulk()
     const first = bulkClearDecisions()
-    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
     await bulkMarkHeadingsNotApplicable() // the second click
     expect(main.applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1)
     expect(getReviewSessionSnapshot().bulkRunning).toBe(true)
@@ -1309,7 +1310,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     await openWith(detail)
 
     const sweeping = bulkClearDecisions()
-    await vi.waitFor(() => expect(bulkSpy).toHaveBeenCalled())
+    await vi.waitFor(() => expect(bulkSpy).toHaveBeenCalled(), { timeout: hangBudgetMs(5000) })
     editReviewItem('p2', { decision: 'not_supported' })
     sweep.resolve()
     await sweeping
@@ -1341,7 +1342,7 @@ describe('reviewSession — conservative bulk actions (spec §14.4)', () => {
     await openWith(detail)
 
     const sweeping = bulkClearDecisions()
-    await vi.waitFor(() => expect(bulkSpy).toHaveBeenCalled())
+    await vi.waitFor(() => expect(bulkSpy).toHaveBeenCalled(), { timeout: hangBudgetMs(5000) })
     editReviewItem('p2', { reviewerNote: 'typed mid-sweep' })
     sweep.resolve()
     await sweeping
@@ -2222,7 +2223,7 @@ describe('reviewSession — lock purge', () => {
     const getEvidenceReview = vi.fn(() => read.promise)
     const { refresh } = stubReviewApi({ getEvidenceReview })
     const opening = openReviewSession({ reviewId: 'r1' })
-    await vi.waitFor(() => expect(getEvidenceReview).toHaveBeenCalledWith('r1'))
+    await vi.waitFor(() => expect(getEvidenceReview).toHaveBeenCalledWith('r1'), { timeout: hangBudgetMs(5000) })
     purgeReviewSession() // App.lockNow's purge lands while the read is in flight
     read.resolve(makeDetail())
     await opening
@@ -2244,7 +2245,7 @@ describe('reviewSession — lock purge', () => {
       stubReviewApi({ getEvidenceReview: vi.fn(async () => detail), exportEvidencePack })
       await openWith(detail)
       const pending = exportReviewPack({ format: 'html' })
-      await vi.waitFor(() => expect(exportEvidencePack).toHaveBeenCalledWith('r1', { format: 'html' }))
+      await vi.waitFor(() => expect(exportEvidencePack).toHaveBeenCalledWith('r1', { format: 'html' }), { timeout: hangBudgetMs(5000) })
       purgeReviewSession() // the lock lands while the dialog / write is in flight
       settle(exported)
       expect(await pending).toEqual(expected)
@@ -2259,7 +2260,7 @@ describe('reviewSession — P4 freshness (plan §9.1: refresh on open, acknowled
     const fresh = makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
     const { refresh } = stubReviewApi({ getEvidenceReview: vi.fn(async () => detail) }, fresh)
     await openWith(detail)
-    await vi.waitFor(() => expect(getReviewSessionSnapshot().freshness).toEqual(fresh))
+    await vi.waitFor(() => expect(getReviewSessionSnapshot().freshness).toEqual(fresh), { timeout: hangBudgetMs(5000) })
     expect(refresh).toHaveBeenCalledWith('r1')
   })
 
@@ -2285,7 +2286,7 @@ describe('reviewSession — P4 freshness (plan §9.1: refresh on open, acknowled
     expect(refreshEvidenceReviewState).toHaveBeenCalledTimes(2)
     const current = makeFreshness()
     refreshes[1]!.resolve(current)
-    await vi.waitFor(() => expect(getReviewSessionSnapshot().freshness).toEqual(current))
+    await vi.waitFor(() => expect(getReviewSessionSnapshot().freshness).toEqual(current), { timeout: hangBudgetMs(5000) })
     // The pre-lock verdict lands LAST. Same review id, so only the openToken guard can drop it.
     refreshes[0]!.resolve(makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] }))
     await refreshes[0]!.promise // the store's continuation was queued first, so it has run now

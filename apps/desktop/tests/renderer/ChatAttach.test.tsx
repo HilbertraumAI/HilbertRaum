@@ -626,9 +626,7 @@ describe('ChatScreen — a failed attachment points to Documents (#570)', () => 
     finished = true
     const scanCopy = t('en', 'chat.attach.scanned', { name: 'scan.pdf' })
     // The job settles while B is open; its done-tick reads the document list once more…
-    await waitFor(() => expect(listDocuments.mock.calls.length).toBeGreaterThan(docsReadsBefore), {
-      timeout: hangBudgetMs(3000)
-    })
+    await waitFor(() => expect(listDocuments.mock.calls.length).toBeGreaterThan(docsReadsBefore))
     // …and holds the failure synchronously after that read resolves (no wall-clock wait).
     await act(async () => {
       await listDocuments.mock.results.at(-1)!.value

@@ -1286,7 +1286,7 @@ describe('ModelsScreen — search, tasks and model variants', () => {
     render(<ModelsScreen />)
     await user.click(await screen.findByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
-    expect(await screen.findByText(t('en', shown), undefined, { timeout: 3000 })).toBeVisible()
+    expect(await screen.findByText(t('en', shown))).toBeVisible()
     expect(screen.queryByText(t('en', notShown))).not.toBeInTheDocument()
   })
 
@@ -1467,7 +1467,7 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     // (the leave-and-return resume affordance) cannot leak a live job into later tests.
     expect(await screen.findByText(/Downloading…|Verifying/)).toBeInTheDocument()
     expect(
-      await screen.findByRole('button', { name: 'Download' }, { timeout: 3000 })
+      await screen.findByRole('button', { name: 'Download' })
     ).toBeInTheDocument()
   })
 
@@ -1593,7 +1593,7 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     // "another download is running" gate); our getDownloadJob drains it on the first poll, so
     // wait for the button to enable before clicking.
     const downloadBtn = await screen.findByRole('button', { name: 'Download' })
-    await waitFor(() => expect(downloadBtn).toBeEnabled(), { timeout: 3000 })
+    await waitFor(() => expect(downloadBtn).toBeEnabled())
     await user.click(downloadBtn)
     await user.click(screen.getByRole('button', { name: 'Start download' }))
     await user.click(await screen.findByRole('button', { name: 'Cancel download' }))
@@ -1654,13 +1654,13 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
 
     // Wait out any leaked live job (see the cancel test above) so Download is clickable.
     const downloadBtn = await screen.findByRole('button', { name: 'Download' })
-    await waitFor(() => expect(downloadBtn).toBeEnabled(), { timeout: 3000 })
+    await waitFor(() => expect(downloadBtn).toBeEnabled())
     await user.click(downloadBtn)
     await user.click(screen.getByRole('button', { name: 'Start download' }))
 
     // The first poll flips the job queued→done → the completion refresh runs → listModels
     // rejects → the friendly message (transport prefix stripped) lands on the error banner.
-    expect(await screen.findByText('refresh exploded', undefined, { timeout: 3000 })).toBeInTheDocument()
+    expect(await screen.findByText('refresh exploded')).toBeInTheDocument()
     // The remembered job ends terminal ('done'), so nothing live leaks into later tests.
   })
 })
@@ -2113,7 +2113,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     current = { ...current, status: 'failed', error: 'server closed the connection' }
 
     expect(
-      await screen.findByText('refresh exploded', undefined, { timeout: 3000 })
+      await screen.findByText('refresh exploded')
     ).toBeInTheDocument()
     expect(panel().getByText('server closed the connection')).toBeVisible()
     // #315 — the failed refresh left the previous model list (and its row) in place, so the
@@ -2400,7 +2400,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     await screen.findByText(first.displayName)
     await user.click(within(cardFor(first.displayName)).getByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
-    await waitFor(() => expect(panel().getByText('late failure')).toBeVisible(), { timeout: 4000 })
+    await waitFor(() => expect(panel().getByText('late failure')).toBeVisible())
 
     await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
@@ -2436,9 +2436,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     current = { ...current, status: 'failed', error: 'failed while away' }
 
     render(<ModelsScreen />) // …and coming back resumes the remembered job and shows its result
-    await waitFor(() => expect(panel().getByText('failed while away')).toBeVisible(), {
-      timeout: 3000
-    })
+    await waitFor(() => expect(panel().getByText('failed while away')).toBeVisible())
     // #315 — Browse lists the row regardless of state, so it is on screen here too: the panel
     // does not repeat the name, the row still carries it.
     expect(panel().queryByText(entry.displayName)).toBeNull()
@@ -2548,9 +2546,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       expect(panel().queryByText(bystander.displayName)).not.toBeInTheDocument()
       expect(panel().getByRole('button', { name: t('en', 'models.download.cancel') })).toBeEnabled()
       // …and the poll resumes against the adopted id, not a remembered one.
-      await waitFor(() => expect(api.getDownloadJob).toHaveBeenCalledWith(live.jobId), {
-        timeout: 3000
-      })
+      await waitFor(() => expect(api.getDownloadJob).toHaveBeenCalledWith(live.jobId))
     })
 
     it('shows an undismissed failed result again — named, with its error and gated actions', async () => {
@@ -2565,7 +2561,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       await user.click(screen.getByRole('button', { name: 'Start download' }))
       current = { ...current, status: 'failed', error: 'connection reset' }
       expect(
-        await panel().findByText('connection reset', undefined, { timeout: 3000 })
+        await panel().findByText('connection reset')
       ).toBeVisible()
 
       mainSide = [current]
@@ -2602,7 +2598,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       await user.click(screen.getByRole('button', { name: 'Start download' }))
       current = { ...current, status: 'failed', error: 'dismissed for good' }
       mainSide = [current]
-      await user.click(await panel().findByRole('button', { name: DISMISS }, { timeout: 3000 }))
+      await user.click(await panel().findByRole('button', { name: DISMISS }))
       // Dismiss told the MAIN process too — which is why its list comes back empty.
       expect(api.dismissDownloadJob).toHaveBeenCalledWith(current.jobId)
       mainSide = []
@@ -2630,8 +2626,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
             ? { ...current, status: 'done', receivedBytes: 1000 }
             : { ...current, status: 'cancelled' }
         await waitFor(
-          () => expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument(),
-          { timeout: 3000 }
+          () => expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
         )
 
         reload(view)
@@ -2655,7 +2650,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       entry = { ...entry, state: 'installed' }
       current = { ...current, status: 'failed', error: 'verification failed' }
 
-      const retry = await panel().findByRole('button', { name: RETRY }, { timeout: 3000 })
+      const retry = await panel().findByRole('button', { name: RETRY })
       expect(retry).toBeDisabled()
       expect(retry).toHaveAttribute('title', t('en', 'models.download.retryInstalled'))
       expect(panel().getByText(t('en', 'models.download.retryInstalled'))).toBeVisible()

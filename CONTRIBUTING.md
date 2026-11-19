@@ -118,6 +118,12 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   wall-clock advance for timestamp ordering, a timeout simulation where the timer IS the semantics, a
   single-macrotask hop with no observable — must carry a comment saying so; everything else
   is a bug.
+- **Every wait's ceiling comes from `tests/helpers/hang-budget.ts`.** `vi.waitFor` takes
+  `{ timeout: hangBudgetMs(n) }` (5000 is the usual n); a bare testing-library wait inherits the default that
+  `tests/setup.ts` raises to the same budget, and passes `{ timeout: hangBudgetMs(n) }` only to go
+  above it (a number of 5000 or more; the hygiene row refuses a smaller one, which would be narrower than the default); a heavy row takes `testBudgetMs(…)` as its per-test
+  timeout. A literal `timeout:` never widens on CI, so it is not allowed. The repo-hygiene row
+  "every wait takes its ceiling from hang-budget" enforces it.
 - **Type renderer stub payloads — don't reach for `as never`.** `stubApi(overrides)` takes
   `Partial<PreloadApi>` (`tests/helpers/renderer.ts`) so a stub's shape is checked against the real
   preload bridge; a blanket `... as never` opts it out, and a later shared-type rename leaves the

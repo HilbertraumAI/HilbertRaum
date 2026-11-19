@@ -98,7 +98,7 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
       progress: { stepsDone: 3, stepsTotal: 3 },
       resultRef: { documentId: 'd1' }
     })
-    await waitFor(() => expect(previewDocument).toHaveBeenCalledWith('d1'), { timeout: hangBudgetMs(3000) })
+    await waitFor(() => expect(previewDocument).toHaveBeenCalledWith('d1'))
 
     // The preview shows the summary section: text, attribution, Regenerate.
     expect(await screen.findByText(/payment is due in 30 days/)).toBeInTheDocument()

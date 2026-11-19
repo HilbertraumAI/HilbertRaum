@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach, onTestFinished } from 'vitest'
 import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { flushReviewSession, purgeReviewSession } from '../../src/renderer/lib/reviewSession'
+import { REVIEW_SAVE_DEBOUNCE_MS, flushReviewSession, purgeReviewSession } from '../../src/renderer/lib/reviewSession'
 import { t, type MessageKey } from '../../src/shared/i18n'
 import type {
   EvidenceLinkInput,
@@ -95,6 +95,17 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
       screen.getByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') })
     ).toBeInTheDocument()
 
+    // The 600 ms autosave debounce is taken out of the picture for this row only: its timer is armed but never runs, so
+    // no amount of load can fire it before the click. Every other timer (RTL's waits, React) stays real.
+    const realSetTimeout = globalThis.setTimeout
+    const held: unknown[] = []
+    const autosave = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+      if (args[1] !== REVIEW_SAVE_DEBOUNCE_MS) return realSetTimeout(...args)
+      held.push(args[0])
+      return realSetTimeout(() => {}, 0)
+    }) as typeof setTimeout)
+    onTestFinished(() => autosave.mockRestore())
+
     // Decide both items via the radio chips.
     const items = screen.getAllByRole('listitem')
     fireEvent.click(
@@ -120,7 +131,9 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
       name: t('en', 'review.summary.markReady')
     })
     expect(readyBtn).toBeEnabled()
-    // Guard: the 600 ms autosave the edits armed has not fired yet, so the write below can only come from markReviewReady's own flush.
+    // The hold above really caught the autosave the edits armed (so it cannot silently stop holding it) ...
+    expect(held.length).toBeGreaterThan(0)
+    // ... and that autosave never ran, so the write below can only come from markReviewReady's own flush.
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
     fireEvent.click(readyBtn)
     // markReviewReady flushes before its first await (reviewSession.ts:401 → :264-289): the first pending patch (i1: decision + note,
@@ -1021,7 +1034,7 @@ describe('ReviewScreen — a failed save is never dropped silently (#837)', () =
     fireEvent.click(
       within(items[0]).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
     )
-    return screen.findByRole('button', { name: t('en', 'review.autosave.retry') }, { timeout: 3000 })
+    return screen.findByRole('button', { name: t('en', 'review.autosave.retry') })
   }
 
   // #839 U1e.
@@ -1316,7 +1329,7 @@ describe('ReviewScreen — live regions exist before their text arrives (#837)',
     )
     const saving = screen.getByText(t('en', 'review.autosave.saving'))
     expect(statusBefore).toContain(saving.closest('[role="status"]'))
-    const failure = await screen.findByText(/database or disk is full/, {}, { timeout: 3000 })
+    const failure = await screen.findByText(/database or disk is full/)
     expect(alertBefore).toContain(failure.closest('[role="alert"]'))
   })
 })

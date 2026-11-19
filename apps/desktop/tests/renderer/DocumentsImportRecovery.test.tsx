@@ -69,7 +69,7 @@ describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () 
 
     // …and the re-attached poll runs (pre-fix getImportJob was never called again after a
     // remount, so the screen never noticed the backend finishing).
-    await waitFor(() => expect(getImportJob).toHaveBeenCalledWith('j1'), { timeout: hangBudgetMs(3000) })
+    await waitFor(() => expect(getImportJob).toHaveBeenCalledWith('j1'))
     await waitFor(
       () => expect(screen.getByRole('button', { name: 'Import files' })).toBeEnabled(),
       { timeout: hangBudgetMs(5000) }

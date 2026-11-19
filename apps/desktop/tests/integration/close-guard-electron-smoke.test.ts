@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { tempRoot } from '../helpers/db-fixtures'
+import { runSmokeChild } from '../helpers/electron-smoke-child'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // #888 on real Electron: the close guard (`src/main/close-guard.ts`), bundled from source into
@@ -47,24 +47,21 @@ interface SmokeResult {
 let root = ''
 let runnerPath = ''
 
+// A row takes 2-4 s alone; under a 12-thread CPU load up to 31 s, of which the runner used up to 15 s (W8). The
+// child's bounds come from this budget (tests/helpers/electron-smoke-child.ts): deadline 60 s, runner self-timeout
+// 50 s, so a hang reports itself by name inside the row.
+const ROW_BUDGET_MS = testBudgetMs(70_000)
+
 async function runScenario(scenario: string): Promise<SmokeResult> {
-  const resultPath = join(root, `${scenario}.json`)
-  const env = { ...process.env }
-  delete env.ELECTRON_RUN_AS_NODE // must launch as Electron, never as plain node
-  // An isolated profile per child (the pdf smoke's lesson: a shared default profile's singleton lock
-  // crashes startup when another Electron runs).
-  const args = [`--user-data-dir=${join(root, `profile-${scenario}`)}`, runnerPath, resultPath, scenario]
-  if (process.platform === 'linux') args.unshift('--no-sandbox')
-  const stderr: string[] = []
-  const code = await new Promise<number>((resolve, reject) => {
-    const child = spawn(ELECTRON_BIN!, args, { env, windowsHide: true })
-    child.stderr.on('data', (d: Buffer) => stderr.push(d.toString()))
-    child.on('error', reject)
-    child.on('exit', (c) => resolve(c ?? -1))
+  const { result, stderr } = await runSmokeChild<SmokeResult>({
+    what: scenario,
+    bin: ELECTRON_BIN!,
+    runnerPath,
+    resultPath: join(root, `${scenario}.json`),
+    profileDir: join(root, `profile-${scenario}`),
+    rowBudgetMs: ROW_BUDGET_MS
   })
-  if (!existsSync(resultPath)) throw new Error(`${scenario}: no result (exit ${code})\n${stderr.join('')}`)
-  const result = JSON.parse(readFileSync(resultPath, 'utf8')) as SmokeResult
-  expect(result.outcome, `${scenario}: ${JSON.stringify(result.events)}\n${stderr.join('')}`).toBe('quit')
+  expect(result.outcome, `${scenario}: ${JSON.stringify(result.events)}\n${stderr}`).toBe('quit')
   return result
 }
 
@@ -100,7 +97,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a quit: the held close cancels it, and the guard’s quit after the save ends the app', async () => {
     const r = await runScenario('quit')
@@ -115,7 +112,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'closed',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a second X while saving is held and ignored: one save, one close', async () => {
     const r = await runScenario('xx')
@@ -130,7 +127,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a window that never answers closes at the bound', async () => {
     const r = await runScenario('hang')
@@ -145,7 +142,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'will-quit'
     ])
     expect(at(r, 'answer:none') - at(r, 'ask')).toBeGreaterThanOrEqual(1_500)
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('Keep open keeps the window; the next close asks again and closes once it is saved', async () => {
     const r = await runScenario('keep')
@@ -165,7 +162,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('a window still loading its page is not asked and closes at once', async () => {
     const r = await runScenario('loading')
@@ -180,7 +177,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'will-quit'
     ])
     expect(at(r, 'answer:none') - at(r, 'ask')).toBeLessThan(500)
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   // #910: before, the X closed the main window and the app went on running with no window (the runner timed out),
   // the workspace unlocked, until the helper went.
@@ -197,7 +194,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'helper:closed',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   // #910 review SF-1: a quit the guard holds (Ctrl+Q on Linux, ⌘Q or Dock Quit on macOS, File → Exit in a development
   // build) closes the helper window while the main window still saves, so a run there ends before `will-quit` — the
@@ -219,7 +216,7 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
     const runs = names(r).filter((e) => e.startsWith('helper:run-'))
     expect(runs).toEqual(['helper:run-aborted'])
     expect(names(r).indexOf('helper:run-aborted')).toBeLessThan(names(r).indexOf('will-quit'))
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 
   it('another window’s answer to the same request is ignored: the main window’s “unsaved” brings the dialog', async () => {
     const r = await runScenario('other-sender')
@@ -236,5 +233,5 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
       'before-quit',
       'will-quit'
     ])
-  }, testBudgetMs(30_000))
+  }, ROW_BUDGET_MS)
 })

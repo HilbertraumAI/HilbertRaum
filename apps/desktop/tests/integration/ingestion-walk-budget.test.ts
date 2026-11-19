@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testBudgetMs } from '../helpers/hang-budget'
 import {
   expandPaths,
   expandPathsBounded,
@@ -231,5 +232,5 @@ describe('walk budget — defaults, env overrides and the drop cap', () => {
     const dir = root()
     const paths = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(dir, `missing-${i}.txt`))
     expect(await summarizeImportPaths(paths)).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
-  })
+  }, testBudgetMs(30_000))
 })

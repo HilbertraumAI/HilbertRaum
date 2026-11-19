@@ -132,7 +132,7 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
       progress: { stepsDone: 4, stepsTotal: 4 },
       resultRef: { documentId: 'd2' }
     })
-    expect(await screen.findByText('contract (Deutsch).md', undefined, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
+    expect(await screen.findByText('contract (Deutsch).md')).toBeInTheDocument()
     expect(screen.getByText(/Translated from/)).toBeInTheDocument()
     expect(screen.queryByText(/Translating…/)).not.toBeInTheDocument()
   })

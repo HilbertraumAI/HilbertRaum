@@ -77,6 +77,7 @@ import {
   pinPlatform,
   seededDb
 } from '../helpers/performance-fixture'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const here = () => {
   const root = freshRoot()
@@ -393,7 +394,7 @@ describe('resident sidecars', () => {
     }
 
     service.analyze(req, emit)
-    await vi.waitFor(() => expect(emit.done).toHaveBeenCalled())
+    await vi.waitFor(() => expect(emit.done).toHaveBeenCalled(), { timeout: hangBudgetMs(5000) })
 
     expect(fire).not.toBeNull()
     fire!()

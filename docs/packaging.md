@@ -1043,7 +1043,14 @@ fails fast at the desk.
 **A hand-rolled wall-clock bound does NOT widen with them** — a `Date.now() - start > N` poll
 guard, a fixture's own `waitFor` default, or a child-process `timeout` is invisible to vitest's
 config, so each one needs its own CI headroom (the header of `tests/helpers/hang-budget.ts`
-records the case that taught it). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
+records the case that taught it). The two **library defaults** are the same trap (#915): vitest's
+`vi.waitFor` and testing-library's `waitFor` / `find*` both give up after 1 s and follow neither
+`testTimeout` nor `CI`. testing-library's is raised once for every jsdom file in `tests/setup.ts`
+(`configure({ asyncUtilTimeout: hangBudgetMs(5_000) })`, asserted by `hang-budget.dom.test.ts`);
+vitest has no such config key, so every `vi.waitFor` passes `{ timeout: hangBudgetMs(n) }` (5000 is the usual n), a testing-library
+wait passes one only to go above its default (n of 5000 or more), and a literal `timeout:` on any wait
+is refused. A repo-hygiene row enforces all of it. A heavy row (real
+hashing, process spawns, hundreds of fs calls) takes `testBudgetMs` as its per-test timeout instead. Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
 far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
 #389).
 

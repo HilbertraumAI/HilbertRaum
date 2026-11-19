@@ -97,7 +97,7 @@ describe('ModelsScreen — the engine update notice (#516)', () => {
     await confirmUpdate(user)
     expect(downloadEngine).toHaveBeenCalledWith({ families: ['llama_cpp'], update: true })
     expect(await within(notice).findByText(en('models.engine.progress', { pct: 25 }))).toBeInTheDocument()
-    expect(await screen.findByText(en('models.engineUpdate.done'), {}, { timeout: hangBudgetMs(4000) })).toBeInTheDocument()
+    expect(await screen.findByText(en('models.engineUpdate.done'))).toBeInTheDocument()
   })
 
   it('names both engines in one notice and updates both with one click', async () => {

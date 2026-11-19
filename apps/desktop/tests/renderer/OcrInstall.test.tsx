@@ -264,7 +264,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
     const progressText = translate('en', 'ocr.install.progress', { pct: 50 })
-    expect(await screen.findByText(progressText, {}, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
+    expect(await screen.findByText(progressText)).toBeInTheDocument()
     // The OCR-specific label: never the same accessible name as a model download's Cancel.
     expect(en['ocr.install.cancel']).not.toBe(en['models.download.cancel'])
     await user.click(screen.getByRole('button', { name: en['ocr.install.cancel'] }))
@@ -287,7 +287,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
-    expect(await screen.findByText(en['ocr.install.failed'], {}, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
+    expect(await screen.findByText(en['ocr.install.failed'])).toBeInTheDocument()
     expect(screen.getByText('some friendly error')).toBeInTheDocument()
     const retryBtn = screen.getByRole('button', { name: en['ocr.install.retry'] })
     await user.click(retryBtn)
@@ -310,7 +310,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
-    expect(await screen.findByText(en['ocr.install.activating'], {}, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
+    expect(await screen.findByText(en['ocr.install.activating'])).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: en['ocr.install.cancel'] })).not.toBeInTheDocument()
   })
 
@@ -364,7 +364,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
     expect(
-      await screen.findByText(en['ocr.install.outcome.activated'], {}, { timeout: hangBudgetMs(3000) })
+      await screen.findByText(en['ocr.install.outcome.activated'])
     ).toBeInTheDocument()
     expect(getAppStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(await screen.findByRole('button', { name: en['docs.makeSearchable'] })).toBeInTheDocument()
@@ -397,7 +397,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
     expect(
-      await screen.findAllByText(en['ocr.install.outcome.restartRequired'], {}, { timeout: hangBudgetMs(3000) })
+      await screen.findAllByText(en['ocr.install.outcome.restartRequired'])
     ).not.toHaveLength(0)
     // Both answers were delivered — the first (about j0) was read and dropped, polling went on to j1's end.
     expect(getOcrInstallJob.mock.calls).toEqual([['j1'], ['j1']])
@@ -491,7 +491,7 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
 
     await screen.findByRole('heading', { name: en['models.title'] })
     // The row is hidden while the status is still null, so wait for the status to land before the negative.
-    await vi.waitFor(() => expect(getOcrInstallStatus).toHaveResolved())
+    await vi.waitFor(() => expect(getOcrInstallStatus).toHaveResolved(), { timeout: hangBudgetMs(5000) })
     await act(async () => {})
     // Neither row text: with every language installed, a broken "missing" check would render rowOrientation.
     expect(screen.queryByText(en['models.ocr.row'])).not.toBeInTheDocument()
@@ -528,7 +528,7 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
     await user.click(within(dialog).getByRole('button', { name: en['ocr.install.confirm.start'] }))
 
     expect(
-      await screen.findByText(en['ocr.install.outcome.restartRequired'], {}, { timeout: hangBudgetMs(3000) })
+      await screen.findByText(en['ocr.install.outcome.restartRequired'])
     ).toBeInTheDocument()
     expect(screen.getByText(en['models.ocr.row'])).toBeInTheDocument()
   })

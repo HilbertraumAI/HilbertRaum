@@ -127,9 +127,7 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
     // The title appears on the new row AND in the auto-opened preview modal.
     expect(
       (
-        await screen.findAllByText('Comparison: contract-v1 vs contract-v2.md', undefined, {
-          timeout: hangBudgetMs(3000)
-        })
+        await screen.findAllByText('Comparison: contract-v1 vs contract-v2.md')
       ).length
     ).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText(/Comparison of/).length).toBeGreaterThanOrEqual(1)
