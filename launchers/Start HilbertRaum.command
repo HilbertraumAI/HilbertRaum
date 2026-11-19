@@ -133,11 +133,18 @@ if [ -z "$APP" ]; then
     PARTIAL="$CACHE.partial.$$"
     # mkdir without -p: a leftover of our own PID that the sweep could not remove (root-owned
     # files from a sudo start) must not be reused, or its files would be published with ours.
-    mkdir -p "$(dirname "$PARTIAL")"
-    if ! mkdir "$PARTIAL" 2>/dev/null; then
+    # #919: only a folder that is there is an earlier unpack. Otherwise it could not be made at all:
+    # a full disk, or a cache folder this user cannot write to.
+    if ! mkdir -p "$(dirname "$PARTIAL")" 2>/dev/null || ! mkdir "$PARTIAL" 2>/dev/null; then
       echo
-      echo "  An earlier unpack at '$PARTIAL' could not be removed."
-      echo "  Delete that folder, then start again."
+      if [ -e "$PARTIAL" ] || [ -L "$PARTIAL" ]; then
+        echo "  An earlier unpack at '$PARTIAL' could not be removed."
+        echo "  Delete that folder, then start again."
+      else
+        echo "  Could not create '$PARTIAL' to unpack the app into."
+        echo "  Check that this Mac's disk has free space and that you can write to"
+        echo "  '$(dirname "$PARTIAL")', then start again."
+      fi
       echo "  See docs/troubleshooting.md for help."
       echo
       exit 1

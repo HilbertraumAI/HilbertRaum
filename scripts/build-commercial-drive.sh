@@ -325,7 +325,8 @@ done
 if ud_lookable config; then
   for cf_path in "$TARGET/config"/*; do
     cf="${cf_path##*/}"
-    cf_lower="$(printf '%s' "$cf" | tr '[:upper:]' '[:lower:]')"
+    # A name is bytes: macOS tr refuses an invalid UTF-8 sequence in a UTF-8 locale (#919).
+    cf_lower="$(printf '%s' "$cf" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
     for udc in "${USER_DATA_CONFIG_FILES[@]}"; do
       if [[ "$cf_lower" == "$udc" || "$cf_lower" == "$udc".* ]]; then PROBLEMS+=("user data present: config/$cf"); fi
     done

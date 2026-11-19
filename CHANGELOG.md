@@ -166,7 +166,9 @@ from its first public `1.0.0` release onward.
   still running alone and uses whichever copy was finished first. A leftover from an unpack that
   was stopped and cannot be removed no longer stops every start, and an unpacked app that lacks
   its program file is not kept: the launcher says so, and the next start unpacks it again instead
-  of pointing you to the Gatekeeper advice each time (#887).
+  of pointing you to the Gatekeeper advice each time. A full disk, or a cache folder this Mac
+  will not let you write to, now gets its own message instead of the one about an earlier
+  unpack (#887, #919).
 - **An unlock request on a workspace that is already open no longer pretends to unlock it.** The
   lock screen never sends one, but if one arrived it answered "unlocked" whatever the password,
   wrote a "Workspace unlocked" entry to the activity log, repeated earlier lines in the

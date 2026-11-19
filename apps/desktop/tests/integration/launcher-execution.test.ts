@@ -343,6 +343,8 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
        * MV_MODE=fail it fails and publishes nothing.
        */
       stubMv(): void
+      /** Puts an `mkdir` stub first on PATH that, with MKDIR_MODE=full, fails a `mkdir` without `-p` (a full disk). */
+      stubMkdir(): void
       /** A gate file prefix for DITTO_GATE / MV_GATE: the stub writes `<gate>.started` and waits for `<gate>.go`. */
       gate(name: string): string
       reached(gate: string): Promise<void>
@@ -432,6 +434,22 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
             ].join('\n')
           )
           chmodSync(join(stubs, 'mv'), 0o755)
+        },
+        // /bin/mkdir exists on macOS, on the usrmerged Ubuntu runners and in Git Bash.
+        stubMkdir: () => {
+          writeFileSync(
+            join(stubs, 'mkdir'),
+            [
+              '#!/bin/bash',
+              'if [ "${MKDIR_MODE:-}" = full ] && [ "${1:-}" != -p ]; then',
+              '  echo "mkdir: cannot create directory: No space left on device" >&2',
+              '  exit 1',
+              'fi',
+              'exec /bin/mkdir "$@"',
+              ''
+            ].join('\n')
+          )
+          chmodSync(join(stubs, 'mkdir'), 0o755)
         },
         gate: (name) => join(stubs, `gate-${name}`),
         reached: (gate) => until(() => existsSync(`${gate}.started`), `${basename(gate)} reached its stub`, 10_000),
@@ -544,6 +562,67 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
             const locked = join(drive.caches, name, 'locked')
             if (existsSync(locked)) chmodSync(locked, 0o755)
           }
+        }
+      }
+    )
+
+    // A partial folder that cannot be created at all is no "earlier unpack": the message names the real cause (#919). The
+    // stub makes the disk full for the one `mkdir` without `-p`; a launch with it must go through `start`, because Git Bash's
+    // bash puts /usr/bin ahead of an inherited PATH and would hide the stub.
+    it('a partial unpack folder that cannot be created (a full disk) says so, not that an earlier unpack could not be removed (#919)', async () => {
+      const drive = zipDrive()
+      drive.stubMkdir()
+      const s = drive.start('ok', { MKDIR_MODE: 'full' })
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(1)
+        expect(r.out).toMatch(/Could not create '.*\.partial\.\d+'/)
+        expect(r.out).not.toMatch(/earlier unpack/)
+        expect(drive.dittoCalls()).toEqual([])
+        expect(existsSync(join(drive.caches, cached)), 'a published cache').toBe(false)
+      } finally {
+        s.kill()
+      }
+    })
+
+    // NTFS ignores the mode and root may write anywhere, so these two rows need a POSIX desk and a normal user.
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a cache folder this user cannot write to says "Could not create", not "earlier unpack" (#919)',
+      async () => {
+        const drive = zipDrive()
+        mkdirSync(drive.caches, { recursive: true })
+        chmodSync(drive.caches, 0o555)
+        const s = drive.start('ok', {})
+        try {
+          const r = await within(s.exited, 'the start ended', 10_000)
+          expect(r.status, r.out).toBe(1)
+          expect(r.out).toMatch(/Could not create '.*\.partial\.\d+'/)
+          expect(r.out).not.toMatch(/earlier unpack/)
+          expect(drive.dittoCalls()).toEqual([])
+        } finally {
+          s.kill()
+          chmodSync(drive.caches, 0o755)
+        }
+      }
+    )
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a ~/Library/Caches that cannot be written gets the launcher message, not a bare mkdir error (#919)',
+      async () => {
+        const drive = zipDrive()
+        const libraryCaches = join(drive.caches, '..')
+        mkdirSync(libraryCaches, { recursive: true })
+        chmodSync(libraryCaches, 0o555)
+        const s = drive.start('ok', {})
+        try {
+          const r = await within(s.exited, 'the start ended', 10_000)
+          expect(r.status, r.out).toBe(1)
+          expect(r.out).toMatch(/Could not create '.*\.partial\.\d+'/)
+          expect(r.out).toContain('docs/troubleshooting.md')
+          expect(drive.dittoCalls()).toEqual([])
+        } finally {
+          s.kill()
+          chmodSync(libraryCaches, 0o755)
         }
       }
     )

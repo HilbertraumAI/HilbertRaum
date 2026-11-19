@@ -688,6 +688,8 @@ right after.
   Finder: **Go → Go to Folder…**, paste the path); the next start unpacks a fresh copy. If it
   says **"An earlier unpack at … could not be removed"**, delete the folder it names the same way
   (macOS asks for an administrator password when a start with `sudo` made it), then start again.
+  If it says **"Could not create …"**, free space on this Mac's disk, or check that you can write
+  to `~/Library/Caches/HilbertRaum/`, then start again.
   Double-clicked the launcher again while it was unpacking?
   Both windows unpack, and the app opens once. An older launcher could leave an incomplete copy
   when that happened: if the app quits right away every time on this Mac, delete the folder named
