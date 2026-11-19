@@ -1,6 +1,6 @@
 // #896: the comparison behind the skills "needs a newer HilbertRaum" gate (`skillNeedsNewerApp`,
-// shared/skill-manifest.ts), the one the model gate makes (`manifestNeedsNewerApp`, shared/manifest.ts). Shared and
-// PURE (no node:, no electron, no I/O), so main, preload and renderer can all import it. Each gate keeps its own parse
+// shared/skill-manifest.ts): the same comparison the model gate makes (`manifestNeedsNewerApp`, shared/manifest.ts),
+// which keeps its own copy (below). PURE (no node:, no electron, no I/O), so main, preload and renderer can import it. Each gate keeps its own parse
 // of the two version strings and its own answer for a side it cannot read (the model gate fails safe, the skills gate
 // fails open); only the comparison of what they read is this one rule, so the two cannot drift apart again on the one
 // input where they once did: a pre-release app whose core equals the minimum.

@@ -278,12 +278,12 @@ export function parseSemverCore(v: string): [number, number, number] | null {
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
 }
 
+const SKILL_APP_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?/
 /**
  * #896: the app's own version as the §6.5 gate reads it, as leniently as `parseSemverCore`: the trimmed value's leading
  * MAJOR.MINOR.PATCH (no end anchor, so `0.1.66.4` reads as `0.1.66`), plus whether a `-pre.release` follows that core
  * directly. A `+build` suffix is not a pre-release. null = a version the gate cannot read.
  */
-const SKILL_APP_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?/
 function readSkillAppVersion(v: string): AppVersionRead | null {
   const m = SKILL_APP_VERSION_RE.exec(v.trim())
   return m ? { core: [Number(m[1]), Number(m[2]), Number(m[3])], prerelease: m[4] !== undefined } : null

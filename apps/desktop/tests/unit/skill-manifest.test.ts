@@ -474,7 +474,10 @@ describe('skillNeedsNewerApp — the §6.5 gate (#896)', () => {
     ['0.1.66-rc.1+abc', '0.1.66', true],
     ['0.1.67-beta.1', '0.1.66', false], // a pre-release of a LATER release does
     ['0.1.66+abc', '0.1.66', false], // build metadata is ignored
+    ['0.1.66+sha-1', '0.1.66', false], // …also when it holds a dash: only a "-" right after the core starts a pre-release
+    ['0.1.66.4-beta', '0.1.66', false], // the dash does not follow the core, so this is no pre-release of 0.1.66
     ['  0.1.66  ', '0.1.66', false], // lenient: trimmed
+    ['  0.1.65  ', '0.1.66', true], // …and still compared once trimmed (a trim that went would read nothing: fail-open)
     ['0.1.66.4', '0.1.66', false], // lenient: only the leading MAJOR.MINOR.PATCH is read
     ['0.1.65.4', '0.1.66', true],
     ['0.9.0', '01.0.0', true], // a leading-zero minimum passes validation and compares as numbers
@@ -491,7 +494,7 @@ describe('skillNeedsNewerApp — the §6.5 gate (#896)', () => {
   // model gate fails safe, this one fails open.)
   it('agrees with the model gate wherever both can read the versions', () => {
     const apps = ['0.0.9', '0.1.65', '0.1.66', '0.1.67', '0.1.100', '1.0.0', '0.1.66-beta.1', '0.1.66-rc.1', '0.1.66-0',
-      '0.1.66+abc', '0.1.66-beta.1+abc', '0.1.67-beta.1', '1.0.0-rc.1', '0.0.0-test']
+      '0.1.66+abc', '0.1.66+a-b', '0.1.66-beta.1+abc', '0.1.67-beta.1', '1.0.0-rc.1', '0.0.0-test']
     const mins = ['0.0.0', '0.1.9', '0.1.10', '0.1.65', '0.1.66', '0.1.67', '1.0.0']
     for (const app of apps) {
       for (const min of mins) {
