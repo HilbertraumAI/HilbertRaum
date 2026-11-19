@@ -761,7 +761,8 @@ final check: THE canonical gate — node apps/desktop/out/tools/assert-commercia
              + runtime install markers match the pin AND record a matching binary hash (#234)
              + exactly one app artifact + the launcher per declared platform (--platforms; #233)
              + no user data: nothing but empty folders in workspace/ and logs/,
-               no config/workspace.json* or config/working-copy-lost.json*, and every
+               no config/workspace.json or config/working-copy-lost.json (exact, or
+               with a .<suffix>, any case), and every
                one of those folders readable (#893)
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
              + root license/attribution artifacts present + non-empty (LIC-1)
@@ -830,7 +831,7 @@ The final automated check asserts the **commercial posture** (`policy.json`: enc
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
 but update-checks + telemetry are denied) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
 that **no user data is present** (spec §12.2: `workspace/` and `logs/` hold nothing but empty folders,
-and `config/` holds no `workspace.json*` or `working-copy-lost.json*`; the gate names each leftover,
+and `config/` holds no `workspace.json` or `working-copy-lost.json`, exact or with a `.<suffix>`, in any case; the gate names each leftover,
 OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder it cannot list or a
 file in a folder's place fails the check as unreadable, #893) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
@@ -1254,8 +1255,8 @@ run one real-model session covering the items below.
 
 These sessions create a workspace, documents and logs. Run them on a scratch drive, not the Kit
 that ships. If they ran on the Kit, wipe it afterwards (delete everything inside `workspace/` and
-`logs/` but keep the two folders, and delete `config/workspace.json*` and
-`config/working-copy-lost.json*`), then run `build-commercial-drive` with `-VerifyOnly`
+`logs/` but keep the two folders, and delete `config/workspace.json`, `config/working-copy-lost.json`
+and any `.<suffix>` copy of either), then run `build-commercial-drive` with `-VerifyOnly`
 (`--verify-only`) again: the sell gate names every file the wipe missed (#893). On a Mac, Finder
 writes a `.DS_Store` into each folder you open on the stick, and macOS writes `._<name>` companion
 files beside files it copies or tags there (exFAT keeps no extended attributes); the gate counts

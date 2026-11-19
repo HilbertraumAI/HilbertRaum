@@ -248,9 +248,11 @@ function hasUnsavedEdits(): boolean {
 
 /**
  * #888: is any review change not yet known to be written — queued, in a write still out on the
- * lane (an item flush, or a holder's call: a bulk sweep, a delete, a link or unlink, Mark ready or
- * Reopen; one the close-time save's bound gave up on may yet fail), or a bulk sweep that failed
- * (it persisted nothing)? What the window answers main before it closes.
+ * lane (an item flush, or a holder's call: a bulk sweep, a delete, Mark ready or Reopen; one the
+ * close-time save's bound gave up on may yet fail), or a bulk sweep that failed (it persisted
+ * nothing)? A link or unlink holds the lane only until its call is sent (`sendLinkCall`), so its
+ * answer is not waited for: the call is already with main. What the window answers main before it
+ * closes.
  */
 export function hasUnsavedReviewEdits(): boolean {
   return hasUnsavedEdits() || laneBusy() || sweepFailed

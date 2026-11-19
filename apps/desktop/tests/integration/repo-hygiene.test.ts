@@ -1092,8 +1092,8 @@ describe('repo hygiene — scripts/*.sh are executable in git (#512)', () => {
 // exist. The frozen archive (docs/build-log.md) keeps retired text verbatim, so it is the one exemption.
 const STALE_USE_CHANNEL = ['models', 'use'].join(':') // not written whole, so this file is not its own offender
 describe(`repo hygiene — no stale ${STALE_USE_CHANNEL} channel name (#891)`, () => {
-  it('names the use-model channel runtime:use in every tracked text file outside docs/build-log.md', () => {
-    // Every tracked text file, so a skill, a launcher, a manifest or a config comment is covered too.
+  it('names the use-model channel runtime:use in every tracked source, doc, script and config file outside docs/build-log.md', () => {
+    // Every tracked file of the text types below, so a skill, a launcher, a manifest or a config comment is covered too.
     const TEXT_FILE = /\.(tsx?|[cm]?[jt]s|json|md|ya?ml|sh|ps1|cmd|command|txt|html|css)$/
     const files = execFileSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' })
       .split('\0')
