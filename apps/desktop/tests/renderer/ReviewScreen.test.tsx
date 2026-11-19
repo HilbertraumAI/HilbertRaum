@@ -357,6 +357,40 @@ describe('ReviewScreen — ready review is read-only until reopened (FIX-1)', ()
     expect(screen.getByRole('button', { name: t('en', 'review.link.add') })).toBeDisabled()
   })
 
+  // #889 (G-4): from the end of Mark ready's save until main answers, item editing is closed in the store, and the
+  // screen shows it before the review reads Ready — without the "Marked ready" hint, since main may still say "not yet".
+  it('while Mark ready is with main, decisions and notes are read-only before the review shows Ready', async () => {
+    const detail = makeDetail({
+      items: [
+        makeItem({ id: 'i1', decision: 'supported' }),
+        makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta', decision: 'supported' })
+      ]
+    })
+    const answer = deferred<{
+      review: ReturnType<typeof makeReviewHead>
+      gate: { eligible: boolean; requiredTotal: number; decidedTotal: number }
+    }>()
+    const markEvidenceReviewReady = vi.fn(() => answer.promise)
+    await renderReview({ detail, api: { markEvidenceReviewReady } })
+    const notes = (): HTMLElement[] => screen.getAllByPlaceholderText(t('en', 'review.item.notePlaceholder'))
+    expect(notes()[0]).toBeEnabled()
+
+    const dialog = await openSummary()
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.summary.markReady') }))
+    await waitFor(() => expect(markEvidenceReviewReady).toHaveBeenCalledWith('r1'))
+    const head = within(document.querySelector('.review-head') as HTMLElement)
+    expect(head.getByText(t('en', 'review.status.draft'))).toBeInTheDocument() // not ready yet…
+    for (const note of notes()) expect(note).toBeDisabled() // …and already read-only
+    for (const radio of screen.getAllByRole('radio', { hidden: true })) expect(radio).toBeDisabled()
+    expect(screen.queryByText(t('en', 'review.readonlyHint'))).toBeNull()
+
+    answer.resolve({
+      review: makeReviewHead({ status: 'ready', completedAt: '2026-07-18T11:00:00.000Z' }),
+      gate: { eligible: true, requiredTotal: 2, decidedTotal: 2 }
+    })
+    expect(await head.findByText(t('en', 'review.status.ready'))).toBeInTheDocument()
+  })
+
   it('Reopen restores editability (hint gone, controls live again)', async () => {
     const detail = readyDetail()
     const reopenEvidenceReview = vi.fn(async () => makeReviewHead({ id: 'r1', status: 'draft', completedAt: null }))

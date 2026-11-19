@@ -220,8 +220,10 @@ export function ReviewScreen({
   const followUps = detail.items.filter((i) => i.decision === 'follow_up').length
   // Ready = read-only for ITEM-LEVEL editing (FIX-1, spec §18.4): decisions, notes, links
   // and bulk actions disable (main refuses their writes too); head edits (rename, reviewer
-  // label, general note) and the summary's Reopen stay live.
-  const readOnly = detail.status === 'ready'
+  // label, general note) and the summary's Reopen stay live. Also while Mark ready's call is
+  // with main (#889 G-4, `finishing`): the store refuses item edits then, and the screen shows
+  // it. The "Marked ready" hint below waits for the real status.
+  const readOnly = detail.status === 'ready' || session.finishing
   // P4: the freshness UI renders EXCLUSIVELY from the store's refresh result (write-path
   // returns carry a constant-false overlay and must never hide a real warning).
   const freshness = session.freshness
@@ -299,7 +301,9 @@ export function ReviewScreen({
           </span>
         )}
         {/* FIX-1: the quiet "why is everything disabled" line next to the chip. */}
-        {readOnly && <span className="hint review-readonly-hint">{t('review.readonlyHint')}</span>}
+        {detail.status === 'ready' && (
+          <span className="hint review-readonly-hint">{t('review.readonlyHint')}</span>
+        )}
         <SaveStateLine state={session.saveState} error={session.saveError} t={t} />
       </div>
 
