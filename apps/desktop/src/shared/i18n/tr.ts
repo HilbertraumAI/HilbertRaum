@@ -1274,7 +1274,8 @@ export const tr: UiCatalog<'tr'> = {
     'Uygulama bu işletim sisteminde ses motorunu henüz kuramıyor; bu yüzden bu model burada ' +
     'sesle dikteyi veya ses içe aktarmayı etkinleştirmez.',
   'models.vision.installed':
-    'Kurulu – Görseller ekranında otomatik olarak kullanılır. Burada başlatılacak bir şey yok.',
+    'Kurulu – Görseller ekranı hangi görsel modelini kullanacağını otomatik olarak seçer. Burada ' +
+    'başlatılacak bir şey yok.',
   'models.vision.notInstalled':
     'Kurulduktan sonra Görseller ekranında otomatik olarak kullanılır; ek ayar gerekmez.',
   'models.vision.goToImages': 'Görseller ekranına git',
@@ -2002,6 +2003,8 @@ export const tr: UiCatalog<'tr'> = {
   'perf.model.title': 'Modeliniz',
   'perf.model.line.one': '{model} · sürücüde {size}\u00A0GB · {context} token bağlam',
   'perf.model.line.other': '{model} · sürücüde {size}\u00A0GB · {context} token bağlam',
+  'perf.model.lineNoSize.one': '{model} · {context} token bağlam',
+  'perf.model.lineNoSize.other': '{model} · {context} token bağlam',
   'perf.model.none': 'Henüz model seçilmedi. Yapay zekâ modeli ekranında bir model seçin.',
   'perf.model.need': 'Bu bağlamla {need}\u00A0GB gerektirir.',
   'perf.model.needEstimate':
@@ -2073,6 +2076,7 @@ export const tr: UiCatalog<'tr'> = {
   'perf.models.device.processor': 'işlemci',
   'perf.models.loaded': 'şu an yüklü',
   'perf.models.notLoaded': 'yüklü değil',
+  'perf.models.notOnDrive': 'bu sürücüde yok',
   'perf.models.lifetime.session': 'yüklü kalır',
   'perf.models.lifetime.idle': 'boştayken bellekten çıkarılır',
   'perf.models.lifetime.per-use': 'yalnızca iş sırasında çalışır',

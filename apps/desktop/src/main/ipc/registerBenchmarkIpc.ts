@@ -38,7 +38,13 @@ import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { displayDevice, eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
-import { discoverManifests, graphicsBudgetMib, launchContextTokens, weightsMib } from '../services/models'
+import {
+  discoverManifests,
+  graphicsBudgetMib,
+  launchContextTokens,
+  manifestFilesPresent,
+  weightsMib
+} from '../services/models'
 import { pickVisionManifest } from '../services/vision/status'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -994,7 +1000,8 @@ function buildPlacement(
   if (activeId) {
     model = {
       id: activeId,
-      sizeOnDiskGb: gib(activeManifest ?? undefined) ?? 0,
+      // #914: a model outside the catalog has no size the app knows. Null says so; the old `0` printed "0.0 GB".
+      sizeOnDiskGb: gib(activeManifest ?? undefined),
       contextTokens: contextFor(activeId) ?? settings.contextTokens
     }
   }
@@ -1030,7 +1037,8 @@ function buildPlacement(
   const observed = mine && matchesConfig(mine) ? mine : null
   const observedMismatch =
     mine && !matchesConfig(mine) ? { contextTokens: mine.contextTokens, backend: mine.backend, at: mine.at } : null
-  // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
+  // Every model the app can hold (benchmark.md "Models on this computer"), each marked with whether its files are on
+  // this drive (#914, owner decision G-5 (c); see `onDrive` below): chat and translation
   // auto-fit onto the card; images and voice are pinned to the processor by design (contention
   // immunity; vision/runtime.ts, embeddings/e5.ts — the embedder half of "document search" is
   // pinned too). The reranker half of document search instead follows its own headroom-gated
@@ -1051,9 +1059,20 @@ function buildPlacement(
   // names the images pick (`pickVisionManifest`, the same rule over the vision models on the drive), the model
   // `getVisionStatus` runs whenever it verifies (one whose files fail their check is passed over there).
   const byRole = (role: ModelManifest['role']): ModelManifest | undefined => pickManifestForRole(manifests, role)
+  const translationManifest = byRole('translation')
+  const rerankerManifest = byRole('reranker')
   const embeddingsManifest = byRole('embeddings')
+  const transcriberManifest = byRole('transcriber')
   // With no vision model on the drive the row still names the catalog's (every model the app can hold).
   const visionManifest = pickVisionManifest(manifests, ctx.paths.rootPath) ?? byRole('vision')
+  // #914: a row still names the catalog's model when its files are not here (the planning view the docs promise), and
+  // says so: `onDrive` is `manifestFilesPresent`, presence only (1–3 `existsSync` per row, never a hash: the rows are
+  // display-only). The screen then shows "not on this drive" instead of loaded / not loaded, and `loadedAtOnceMb`
+  // leaves the row out of the processor total, because nothing will load it. The chat row asks the same of the
+  // active model: with its files gone a start is refused, and the developer fallback runs the mock runtime, which
+  // holds no weights. An active model outside the catalog names no files, so it is not on the drive either.
+  const onDrive = (m: ModelManifest | null | undefined): boolean =>
+    m != null && manifestFilesPresent(ctx.paths.rootPath, m)
   const cardEligible = nextStartUsesGpu(memory)
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
@@ -1072,6 +1091,7 @@ function buildPlacement(
       role: 'chat',
       modelId: activeId,
       sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
+      onDrive: onDrive(activeManifest),
       device: chatDevice,
       loaded: chatResident,
       lifetime: 'session',
@@ -1080,8 +1100,9 @@ function buildPlacement(
     },
     {
       role: 'translation',
-      modelId: byRole('translation')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('translation')),
+      modelId: translationManifest?.id ?? null,
+      sizeOnDiskGb: gib(translationManifest),
+      onDrive: onDrive(translationManifest),
       device: translationDevice,
       loaded: translation?.live ?? false,
       lifetime: 'idle',
@@ -1093,6 +1114,7 @@ function buildPlacement(
       role: 'vision',
       modelId: visionManifest?.id ?? null,
       sizeOnDiskGb: gib(visionManifest),
+      onDrive: onDrive(visionManifest),
       device: 'cpu',
       loaded: ctx.vision?.isLoaded?.() ?? false,
       lifetime: 'idle',
@@ -1101,8 +1123,9 @@ function buildPlacement(
     },
     {
       role: 'reranker',
-      modelId: byRole('reranker')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('reranker')),
+      modelId: rerankerManifest?.id ?? null,
+      sizeOnDiskGb: gib(rerankerManifest),
+      onDrive: onDrive(rerankerManifest),
       // Wave 8 ruling (d): the resident sidecar's ACTUAL posture, or — when nothing is resident
       // — the posture a cold start would take now (`Reranker.devicePosture()`, the `isLoaded?`
       // pattern). A `Reranker` without that optional member reports `'cpu'` here.
@@ -1116,6 +1139,7 @@ function buildPlacement(
       role: 'embeddings',
       modelId: embeddingsManifest?.id ?? null,
       sizeOnDiskGb: gib(embeddingsManifest),
+      onDrive: onDrive(embeddingsManifest),
       device: 'cpu',
       loaded: ctx.embedder?.isLoaded?.() ?? false,
       lifetime: 'session',
@@ -1124,8 +1148,9 @@ function buildPlacement(
     },
     {
       role: 'transcriber',
-      modelId: byRole('transcriber')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('transcriber')),
+      modelId: transcriberManifest?.id ?? null,
+      sizeOnDiskGb: gib(transcriberManifest),
+      onDrive: onDrive(transcriberManifest),
       device: 'cpu',
       loaded: false,
       lifetime: 'per-use',

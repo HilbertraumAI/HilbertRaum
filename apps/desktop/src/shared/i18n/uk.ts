@@ -1409,8 +1409,8 @@ export const uk: UiCatalog<'uk'> = {
     'У цій операційній системі застосунок поки що не може встановити рушій мовлення, тому тут ця ' +
     'модель не вмикає ні голосового диктування, ні імпорту аудіо.',
   'models.vision.installed':
-    'Встановлено — автоматично використовується на екрані «Зображення». Тут нічого запускати не ' +
-    'потрібно.',
+    'Встановлено — екран «Зображення» сам вибирає, яку модель для зображень використовувати. Тут ' +
+    'нічого запускати не потрібно.',
   'models.vision.notInstalled':
     'Після встановлення автоматично використовується на екрані «Зображення» — налаштовувати ' +
     'нічого не потрібно.',
@@ -2163,6 +2163,10 @@ export const uk: UiCatalog<'uk'> = {
   'perf.model.line.few': '{model} · {size}\u00A0GB на диску · контекст: {context} токени',
   'perf.model.line.many': '{model} · {size}\u00A0GB на диску · контекст: {context} токенів',
   'perf.model.line.other': '{model} · {size}\u00A0GB на диску · контекст: {context} токена',
+  'perf.model.lineNoSize.one': '{model} · контекст: {context} токен',
+  'perf.model.lineNoSize.few': '{model} · контекст: {context} токени',
+  'perf.model.lineNoSize.many': '{model} · контекст: {context} токенів',
+  'perf.model.lineNoSize.other': '{model} · контекст: {context} токена',
   'perf.model.none': 'Модель ще не вибрано. Виберіть її на екрані «ШІ-модель».',
   'perf.model.need': 'Із цим контекстом займає {need}\u00A0GB.',
   'perf.model.needEstimate':
@@ -2237,6 +2241,7 @@ export const uk: UiCatalog<'uk'> = {
   'perf.models.device.processor': 'процесор',
   'perf.models.loaded': 'запущено',
   'perf.models.notLoaded': 'не запущено',
+  'perf.models.notOnDrive': 'немає на цьому диску',
   'perf.models.lifetime.session': 'залишається запущеною',
   'perf.models.lifetime.idle': 'зупиняється під час простою',
   'perf.models.lifetime.per-use': 'запускається лише за потреби',

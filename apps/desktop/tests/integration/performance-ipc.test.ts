@@ -34,6 +34,7 @@ import {
   seededDb,
   stoppedStatus,
   stubChatRuntime,
+  withCatalogFiles,
   withLlamaBinary
 } from '../helpers/performance-fixture'
 import { runtimeStatus } from '../helpers/status'
@@ -181,8 +182,10 @@ describe('buildPerformanceSnapshot', () => {
     })
     snap = buildPerformanceSnapshot(ctxWith(root, db))
     expect(snap.placement.model?.id).toBe('some-model')
-    // Not in the catalog: size 0, context from settings.
-    expect(snap.placement.model?.sizeOnDiskGb).toBe(0)
+    // Not in the catalog: no size (#914: it was 0, which the screen printed as "0.0 GB"), context from settings. The
+    // chat row agrees, and a model with no manifest names no files on this drive.
+    expect(snap.placement.model?.sizeOnDiskGb).toBeNull()
+    expect(snap.placement.models[0]).toMatchObject({ role: 'chat', modelId: 'some-model', sizeOnDiskGb: null, onDrive: false })
     expect(snap.placement.observed?.cpuModelMb).toBe(3000)
     expect(snap.placement.verdict).toMatchObject({ kind: 'cpu', needMb: 3200, estimated: false })
 
@@ -206,8 +209,10 @@ describe('buildPerformanceSnapshot', () => {
     expect(snap.placement.verdict.kind).toBe('gpu')
   })
 
-  it('lists every model the app can hold, with liveness from each service', () => {
+  it('lists every model the app can hold, with liveness from each service and whether its files are on this drive', () => {
     const root = freshRoot()
+    // The drive holds the models whose services report live (presence-only stand-ins, #914); images and voice are not on it.
+    withCatalogFiles(root, { chat: 'qwen3.5-9b-ud-q4kxl', roles: ['translation', 'reranker', 'embeddings'] })
     const db = seededDb(root)
     updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
     const ctx = ctxWith(root, db, {
@@ -220,19 +225,51 @@ describe('buildPerformanceSnapshot', () => {
     })
     const snap = buildPerformanceSnapshot(ctx)
     const rows = snap.placement.models
-    expect(rows[0]).toMatchObject({ role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', loaded: true, lifetime: 'session' })
+    expect(rows[0]).toMatchObject({ role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', onDrive: true, loaded: true, lifetime: 'session' })
     // The catalog's translation model, live; pinned roles say cpu. Its split shows only on a row that
     // says 'gpu' (#671) — pinned in performance-gpu.test.ts.
     const tr = rows.find((r) => r.role === 'translation')
-    expect(tr).toMatchObject({ loaded: true, lifetime: 'idle' })
+    expect(tr).toMatchObject({ onDrive: true, loaded: true, lifetime: 'idle' })
     expect(tr?.modelId).toBe('translategemma-12b-it-q4')
-    // No vision file on this root: the row still names the catalog's model (#890's `?? byRole('vision')` fallback).
-    expect(rows.find((r) => r.role === 'vision')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'idle' })
+    // No vision file on this root: the row still names the catalog's model (#890's `?? byRole('vision')` fallback),
+    // marked not on this drive (#914).
+    expect(rows.find((r) => r.role === 'vision')).toMatchObject({ onDrive: false, device: 'cpu', loaded: false, lifetime: 'idle' })
     // A fake without the optional `devicePosture` member reports 'cpu' (Wave 8 ruling (d), the
     // `isLoaded?` pattern's own default) -- unchanged from before this step.
-    expect(rows.find((r) => r.role === 'reranker')).toMatchObject({ device: 'cpu', loaded: true, lifetime: 'session' })
-    expect(rows.find((r) => r.role === 'embeddings')).toMatchObject({ device: 'cpu', loaded: true })
-    expect(rows.find((r) => r.role === 'transcriber')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'per-use' })
+    expect(rows.find((r) => r.role === 'reranker')).toMatchObject({ onDrive: true, device: 'cpu', loaded: true, lifetime: 'session' })
+    expect(rows.find((r) => r.role === 'embeddings')).toMatchObject({ onDrive: true, device: 'cpu', loaded: true })
+    expect(rows.find((r) => r.role === 'transcriber')).toMatchObject({ onDrive: false, device: 'cpu', loaded: false, lifetime: 'per-use' })
+  })
+
+  // #914 (owner decision G-5 (c)): every role keeps its row, named from the catalog (the planning view the docs
+  // promise), but a model whose files are not on this drive is marked so and left out of "Everything loaded at once":
+  // nothing will load it. Before, a drive that held only the 9B counted every catalog model in the total, 17.2 GB
+  // against the 9B's 5.6 GB. The chat row follows the same rule: with the active model's files gone a start is refused
+  // (the developer fallback runs the mock runtime, which holds no weights), so nothing is left to count.
+  it('#914: a model whose files are not on this drive keeps its row, marked so, and is left out of the total', () => {
+    const placementOn = (files: 'chat' | 'none') => {
+      const root = freshRoot()
+      if (files === 'chat') withCatalogFiles(root, { chat: 'qwen3.5-9b-ud-q4kxl' })
+      const db = seededDb(root)
+      updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
+      return buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: CATALOG_MANIFESTS })).placement
+    }
+    const chatOnly = placementOn('chat')
+    expect(chatOnly.memoryClass).toBe('cpu')
+    expect(chatOnly.models.map((r) => [r.role, r.modelId != null, r.onDrive])).toEqual([
+      ['chat', true, true],
+      ['translation', true, false],
+      ['vision', true, false],
+      ['reranker', true, false],
+      ['embeddings', true, false],
+      ['transcriber', true, false]
+    ])
+    expect(chatOnly.totals.ramAllMb).toBe(Math.round((chatOnly.models[0].sizeOnDiskGb ?? 0) * 1024))
+
+    const nothing = placementOn('none')
+    expect(nothing.models[0]).toMatchObject({ role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', onDrive: false })
+    expect(nothing.models.every((r) => !r.onDrive)).toBe(true)
+    expect(nothing.totals.ramAllMb).toBeNull()
   })
 
   // #848 review: the Performance screen names a role's model by the SAME pick the app composes with (the flagged

@@ -410,7 +410,7 @@ describe('attributedGpuFigures', () => {
 
 describe('loadedAtOnceMb', () => {
   const row = (over: Partial<ResidentModelRow>): ResidentModelRow => ({
-    role: 'vision', modelId: 'm', sizeOnDiskGb: 1, device: 'cpu', loaded: false, lifetime: 'idle',
+    role: 'vision', modelId: 'm', sizeOnDiskGb: 1, onDrive: true, device: 'cpu', loaded: false, lifetime: 'idle',
     gpuLayers: null, totalLayers: null, ...over
   })
   /** A card machine: chat and translation on the card, the translation live with 20 of 49 layers offloaded. */
@@ -460,6 +460,19 @@ describe('loadedAtOnceMb', () => {
 
   it('unified: one pool — the full sum, whatever the rows say', () => {
     expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(17408)
+  })
+
+  // #914 (owner decision G-5 (c)): a row still names the catalog's model when its files are not on this drive, but
+  // nothing will load it, so it adds nothing on any class. Here the vision (3.0 GiB = 3,072 MiB) and translation rows:
+  // on cpu and unified the translation row's whole 6.8 GiB (6,963.2 MiB) goes too, on discrete (on the card) only its
+  // live spill, 4,121.1 MiB.
+  const missing = rows.map((r) => (r.role === 'vision' || r.role === 'translation' ? { ...r, onDrive: false } : r))
+  it.each([
+    ['cpu', missing.map((r) => ({ ...r, device: 'cpu' as const })), { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408 - 3072 - 6963],
+    ['discrete', missing, estimate, 9036 - 3072 - 4121],
+    ['unified', missing, { ...estimate, budgetMb: 36_864 }, 17408 - 3072 - 6963]
+  ] as const)('#914 %s: a row whose files are not on this drive adds nothing', (memoryClass, classRows, verdict, expected) => {
+    expect(loadedAtOnceMb({ memoryClass, rows: classRows, verdict })).toBe(expected)
   })
 
   // Wave 8 ruling (d)/NF-3 (step 4-8): a `'gpu'`-posture reranker row is no longer counted

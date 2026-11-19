@@ -345,7 +345,8 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
     render(<ModelsScreen />)
     await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
     expect(screen.getByText('Installed')).toBeInTheDocument()
-    expect(screen.getByText(/used automatically on the Images screen/i)).toBeVisible()
+    // #914: true whether this is the drive's only vision model or one of several (the Images screen runs one pick).
+    expect(screen.getByText(/the Images screen picks its vision model automatically/i)).toBeVisible()
     // Selecting/starting a vision model would claim the CHAT runtime slot and throw
     // (registerModelIpc rejects a non-chat role) — those actions must not exist here.
     expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()

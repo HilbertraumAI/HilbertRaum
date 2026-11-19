@@ -1404,7 +1404,8 @@ export const pl: UiCatalog<'pl'> = {
     'W tym systemie operacyjnym aplikacja nie może jeszcze zainstalować silnika mowy, więc ten ' +
     'model nie włącza tu dyktowania ani importu nagrań audio.',
   'models.vision.installed':
-    'Zainstalowany – używany automatycznie na ekranie Obrazy. Nie trzeba tu niczego uruchamiać.',
+    'Zainstalowany – ekran Obrazy sam wybiera, którego modelu wizyjnego użyć. Nie trzeba tu niczego ' +
+    'uruchamiać.',
   'models.vision.notInstalled':
     'Po zainstalowaniu jest używany automatycznie na ekranie Obrazy – nie wymaga konfiguracji.',
   'models.vision.goToImages': 'Otwórz ekran Obrazy',
@@ -2160,6 +2161,10 @@ export const pl: UiCatalog<'pl'> = {
   'perf.model.line.few': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokeny',
   'perf.model.line.many': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokenów',
   'perf.model.line.other': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokena',
+  'perf.model.lineNoSize.one': '{model} · kontekst: {context} token',
+  'perf.model.lineNoSize.few': '{model} · kontekst: {context} tokeny',
+  'perf.model.lineNoSize.many': '{model} · kontekst: {context} tokenów',
+  'perf.model.lineNoSize.other': '{model} · kontekst: {context} tokena',
   'perf.model.none': 'Nie wybrano jeszcze modelu. Wybierz model na ekranie Model AI.',
   'perf.model.need': 'Zajmuje {need}\u00A0GB przy tym rozmiarze kontekstu.',
   'perf.model.needEstimate':
@@ -2237,6 +2242,7 @@ export const pl: UiCatalog<'pl'> = {
   'perf.models.device.processor': 'procesor',
   'perf.models.loaded': 'teraz wczytany',
   'perf.models.notLoaded': 'niewczytany',
+  'perf.models.notOnDrive': 'brak na tym dysku',
   'perf.models.lifetime.session': 'zostaje w pamięci',
   'perf.models.lifetime.idle': 'zwalnia pamięć przy bezczynności',
   'perf.models.lifetime.per-use': 'działa tylko podczas pracy',

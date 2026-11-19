@@ -1356,7 +1356,8 @@ export const es: UiCatalog<'es'> = {
     'En este sistema operativo, la aplicación todavía no puede instalar el motor de voz, así que ' +
     'este modelo no habilita aquí el dictado por voz ni la importación de audio.',
   'models.vision.installed':
-    'Instalado: se usa automáticamente en la pantalla Imágenes. Aquí no hay nada que iniciar.',
+    'Instalado: la pantalla Imágenes elige automáticamente qué modelo usar. Aquí no hay nada que ' +
+    'iniciar.',
   'models.vision.notInstalled':
     'Se usa automáticamente en la pantalla Imágenes una vez instalado: no hace falta configurar ' +
     'nada.',
@@ -2115,6 +2116,9 @@ export const es: UiCatalog<'es'> = {
   'perf.model.line.one': '{model} · {size}\u00A0GB en la unidad · contexto de {context} token',
   'perf.model.line.many': '{model} · {size}\u00A0GB en la unidad · contexto de {context} de tokens',
   'perf.model.line.other': '{model} · {size}\u00A0GB en la unidad · contexto de {context} tokens',
+  'perf.model.lineNoSize.one': '{model} · contexto de {context} token',
+  'perf.model.lineNoSize.many': '{model} · contexto de {context} de tokens',
+  'perf.model.lineNoSize.other': '{model} · contexto de {context} tokens',
   'perf.model.none':
     'Todavía no hay ningún modelo seleccionado. Elige uno en la pantalla Modelo de IA.',
   'perf.model.need': 'Ocupa {need}\u00A0GB con este contexto.',
@@ -2192,6 +2196,7 @@ export const es: UiCatalog<'es'> = {
   'perf.models.device.processor': 'procesador',
   'perf.models.loaded': 'cargado ahora',
   'perf.models.notLoaded': 'sin cargar',
+  'perf.models.notOnDrive': 'no está en esta unidad',
   'perf.models.lifetime.session': 'permanece cargado',
   'perf.models.lifetime.idle': 'se libera de la memoria si está inactivo',
   'perf.models.lifetime.per-use': 'solo se ejecuta mientras se usa',

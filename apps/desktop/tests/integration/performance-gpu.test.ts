@@ -66,6 +66,7 @@ import type {
   GpuProbeResult,
   ModelPlacement,
   PerformanceSnapshot,
+  ResidentModelRow,
   RuntimeStatus,
   TranslationDeviceStatus
 } from '../../src/shared/types'
@@ -84,7 +85,9 @@ import {
   pinPlatform,
   result,
   seededDb,
-  withLlamaBinary
+  withCatalogFiles,
+  withLlamaBinary,
+  type CatalogRole
 } from '../helpers/performance-fixture'
 import { runtimeStatus } from '../helpers/status'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
@@ -547,7 +550,11 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
   })
 })
 
-/** A card machine with the 9B active and running, the translation sidecar live with 20/49 layers, and the real catalog. */
+/**
+ * A card machine with the 9B active and running, the translation sidecar live with 20/49 layers, and the real catalog.
+ * The drive holds the 9B and every role's catalog model (presence-only stand-ins, #914), so every row counts in the
+ * totals; `missing` leaves a role's files off the drive.
+ */
 function cardMachine(over: {
   settings?: Partial<AppSettings>
   translation?: TranslationDeviceStatus | null
@@ -555,11 +562,15 @@ function cardMachine(over: {
   placement?: Partial<ModelPlacement>
   /** #476: a fake `Reranker` — absent (the default) reports 'cpu', same as no reranker composed. */
   reranker?: { devicePosture?: () => 'gpu' | 'cpu'; isLoaded?: () => boolean }
+  /** #914: roles whose catalog model is not on this drive. */
+  missing?: readonly CatalogRole[]
 } = {}): { placement: PerformanceSnapshot['placement']; db: Db; ctx: AppContext } {
   // Each machine starts from a clean session latch: a placement recorded for an earlier
   // machine in the same test must not count as this one's observation.
   resetModelPlacementForTests()
   const root = freshRoot()
+  const roles: readonly CatalogRole[] = ['translation', 'vision', 'reranker', 'embeddings', 'transcriber']
+  withCatalogFiles(root, { chat: CHAT, roles: roles.filter((role) => !over.missing?.includes(role)) })
   const db = seededDb(root)
   updateSettings(db, { lastBenchmark: hereResult(), activeModelId: CHAT, gpuProbe: probe([RTX], hereKey()), ...over.settings })
   const ctx = ctxWith(root, db, {
@@ -584,7 +595,7 @@ function cardMachine(over: {
   return { placement: buildPerformanceSnapshot(ctx).placement, db, ctx }
 }
 
-const rowOf = (p: PerformanceSnapshot['placement'], role: 'chat' | 'translation' | 'reranker') =>
+const rowOf = (p: PerformanceSnapshot['placement'], role: ResidentModelRow['role']) =>
   p.models.find((r) => r.role === role)!
 
 describe('capability is not execution (DR1)', () => {
@@ -806,6 +817,22 @@ describe('everything loaded at once (DR5)', () => {
     // GPU off: every row is on the processor → the plain sum again.
     const off = cardMachine({ settings: { gpuMode: 'off' } }).placement
     expect(off.totals.ramAllMb).toBe(Math.round(off.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
+  })
+
+  // #914 (owner decision G-5 (c)): no TranslateGemma and no image model on the drive. Their rows still name the
+  // catalog's models (what translation would take on the card, before downloading it), marked not on this drive, and
+  // the total leaves them out. The images model runs on the processor by design, so on the drive it counts in full on
+  // a card machine too. Nothing composes a translator here (`translation: null`), as on a real drive without one.
+  it('#914: models not on this drive keep their rows, marked so, and add nothing to the total', () => {
+    const full = cardMachine({ translation: null }).placement
+    const { placement: p } = cardMachine({ translation: null, missing: ['translation', 'vision'] })
+    expect(p.memoryClass).toBe('discrete')
+    expect(rowOf(p, 'translation')).toMatchObject({ modelId: 'translategemma-12b-it-q4', onDrive: false })
+    expect(rowOf(p, 'vision')).toMatchObject({ modelId: 'qwen2.5-vl-3b-instruct-q4', onDrive: false, device: 'cpu' })
+    expect(p.models.filter((r) => !r.onDrive).map((r) => r.role)).toEqual(['translation', 'vision'])
+    const visionMb = (rowOf(full, 'vision').sizeOnDiskGb ?? 0) * 1024
+    expect(visionMb).toBeGreaterThan(0)
+    expect(Math.abs((full.totals.ramAllMb ?? 0) - (p.totals.ramAllMb ?? 0) - visionMb)).toBeLessThanOrEqual(1)
   })
 })
 

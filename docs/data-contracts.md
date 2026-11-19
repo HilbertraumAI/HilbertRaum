@@ -989,10 +989,20 @@ head's own weights + KV.
   backend, or the translation sidecar's posture is `--device none`; **Wave 8 ruling (a)**: for
   the reranker role, `'gpu'`/`'cpu'` follows its own headroom gate against the RUNTIME's
   committed chat model, never `settings.activeModelId` — see `rag/device-posture.ts`);
+  **#914 (owner decision G-5 (c))**: `ResidentModelRow.onDrive: boolean` is whether every file of
+  the row's model is on this drive (`manifestFilesPresent`, presence only, no hash) — false for a
+  catalog model that is not downloaded and for a row with no manifest (no model, or an active
+  model outside the catalog); every non-chat row still names the catalog's model for its role
+  (`pickManifestForRole`; images: the pick among the vision models on the drive, else the
+  catalog's) whether or not it is on the drive, and the screen shows "not on this drive"
+  (`perf.models.notOnDrive`) in place of loaded / not loaded. `placement.model.sizeOnDiskGb` and
+  the chat row's `sizeOnDiskGb` are `number | null`: null for a model outside the catalog (it was
+  `0`, shown as "0.0 GB"; "Your model" then uses `perf.model.lineNoSize`).
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget) and `totals.bothOnCard` is true when two or more of chat, translation and the
+  unified budget), on every class over the `onDrive` rows only (null when no row on the drive has
+  a size), and `totals.bothOnCard` is true when two or more of chat, translation and the
   reranker are genuinely resident on the card — chat with an observed GPU start and at least one
   layer offloaded, translation live with layers on the card, the reranker `'gpu'`-postured and
   loaded.

@@ -855,12 +855,19 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
       <div className="perf-model">
         <div className="perf-model-title">{t('perf.model.title')}</div>
         <div className="perf-model-line">
+          {/* #914: a model outside the catalog has no size (null), so the line leaves the size out
+              instead of printing "0.0 GB on disk". */}
           {p.model
-            ? tCount('perf.model.line', p.model.contextTokens, {
-                model: modelName(p.model.id, models, i18n),
-                size: fmt1(p.model.sizeOnDiskGb, lang),
-                context: p.model.contextTokens.toLocaleString(lang)
-              })
+            ? p.model.sizeOnDiskGb != null
+              ? tCount('perf.model.line', p.model.contextTokens, {
+                  model: modelName(p.model.id, models, i18n),
+                  size: fmt1(p.model.sizeOnDiskGb, lang),
+                  context: p.model.contextTokens.toLocaleString(lang)
+                })
+              : tCount('perf.model.lineNoSize', p.model.contextTokens, {
+                  model: modelName(p.model.id, models, i18n),
+                  context: p.model.contextTokens.toLocaleString(lang)
+                })
             : t('perf.model.none')}
         </div>
         {p.model && <div className="perf-model-verdict">{[need, text].filter(Boolean).join(' ')}</div>}
@@ -896,10 +903,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   }
 
   /** "Models on this computer": every model the app can hold, where it runs under the current
-   *  configuration, and whether it is resident now, then the two shared budgets (the card, the
-   *  processor's memory). The card line appears only while a row actually goes to the card;
-   *  the processor line compares the class-aware total (main-side, DR5) against RAM — on
-   *  Apple Silicon against the unified budget, and the copy says "memory", not "RAM". */
+   *  configuration, and whether it is resident now — or "not on this drive" when its files are
+   *  not here (#914) — then the two shared budgets (the card, the processor's memory). The card
+   *  line appears only while a row actually goes to the card and both of its models are on this
+   *  drive with a size; the processor line compares the class-aware total (main-side, DR5, the
+   *  rows on the drive only) against RAM — on Apple Silicon against the unified budget, and the
+   *  copy says "memory", not "RAM". */
   function modelsCard(): JSX.Element {
     const p = snap?.placement
     if (!p) return <></>
@@ -913,6 +922,11 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     // effect: it could render the chat/translation line for a chat+translation pair that were
     // both actually on the processor, whenever the reranker's own headroom check resolved 'gpu'.
     const anyOnCard = chatRow?.device === 'gpu' || trRow?.device === 'gpu'
+    // #914 (S-914-1): the chat/translation line adds two sizes against the card, so both models must be on this drive
+    // with a size. Before, no selected chat model printed "Graphics card: chat  GB + …", and a translation model named
+    // from the catalog only was counted on a card it never reaches.
+    const onDriveSized = (r: ResidentModelRow | undefined): r is ResidentModelRow =>
+      r != null && r.onDrive && r.sizeOnDiskGb != null
     const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null
     const unifiedPool = p.memoryClass === 'unified'
     const againstMb = unifiedPool ? (p.verdict.budgetMb ?? p.ramMb) : p.ramMb
@@ -959,11 +973,16 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                   .join(' · ')}
               </div>
               <div className="perf-row-side">
-                {r.modelId && (
-                  <Badge tone={r.loaded ? 'success' : 'neutral'}>
-                    {r.loaded ? t('perf.models.loaded') : t('perf.models.notLoaded')}
-                  </Badge>
-                )}
+                {/* #914: a model whose files are not on this drive cannot be loaded here: say that
+                    instead of "not loaded". */}
+                {r.modelId &&
+                  (r.onDrive ? (
+                    <Badge tone={r.loaded ? 'success' : 'neutral'}>
+                      {r.loaded ? t('perf.models.loaded') : t('perf.models.notLoaded')}
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral">{t('perf.models.notOnDrive')}</Badge>
+                  ))}
               </div>
             </div>
           ))}
@@ -971,7 +990,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         <div className="perf-models-summary">
           {/* Both card lines need a card: `discrete`, never the Metal pool, whose device also fills
               `vramMb` (#746) and whose memory the line below counts once, as one pool (#332). */}
-          {p.memoryClass === 'discrete' && vram && chatRow && trRow && anyOnCard && (
+          {p.memoryClass === 'discrete' && vram && onDriveSized(chatRow) && onDriveSized(trRow) && anyOnCard && (
             <div className="perf-models-summary-line">
               <span>
                 {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}

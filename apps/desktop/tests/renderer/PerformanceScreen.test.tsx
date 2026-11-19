@@ -11,6 +11,7 @@ import {
   type BenchmarkResult,
   type ModelInfo,
   type PerformanceSnapshot,
+  type ResidentModelRow,
   type RuntimeStatus
 } from '../../src/shared/types'
 import { t, tCount, UI_LANGUAGE_CODES, type UiLanguage } from '../../src/shared/i18n'
@@ -736,6 +737,50 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(within(ranking).getByText(/bge-reranker-v2-m3-f16/)).toBeInTheDocument()
     expect(within(ranking).queryByText(/ GB/)).not.toBeInTheDocument()
     expect(within(otherRow(/^Translation$/)).getByText(/20 of 49 layers on the card/)).toBeInTheDocument()
+  })
+
+  /** The default rows with one role's row changed. */
+  const withRow = (role: ResidentModelRow['role'], over: Partial<ResidentModelRow>): ResidentModelRow[] =>
+    placement().models.map((r) => (r.role === role ? { ...r, ...over } : r))
+
+  // #914 (owner decision G-5 (c)): a model whose files are not on this drive keeps its row, named and sized from the
+  // catalog (the planning view), and says "not on this drive" where the other rows say loaded / not loaded.
+  it('#914: a model that is not on this drive says so in place of its loaded pill', async () => {
+    install(snapshot({ placement: placement({ models: withRow('vision', { onDrive: false }) }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const images = otherRow(/^Images$/)
+    expect(within(images).getByText(/qwen2\.5-vl-3b-instruct-q4 · 3\.0 GB/)).toBeInTheDocument()
+    expect(within(images).getByText('not on this drive')).toBeInTheDocument()
+    expect(within(images).queryByText(/loaded/)).not.toBeInTheDocument()
+    expect(screen.getAllByText('not on this drive')).toHaveLength(1)
+  })
+
+  // #914: a chat model outside the catalog has no size (null from main; it was 0). The row names it alone and
+  // "Your model" leaves the size out, where both used to print "0.0 GB".
+  it('#914: a chat model with no known size prints no "0.0 GB", on its row or on Your model', async () => {
+    const rows = withRow('chat', { modelId: 'my-own-gguf', sizeOnDiskGb: null, onDrive: false })
+    install(snapshot({ placement: placement({ model: { id: 'my-own-gguf', sizeOnDiskGb: null, contextTokens: 8192 }, models: rows }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.getByText('my-own-gguf · 8,192-token context')).toBeInTheDocument()
+    expect(within(otherRow(/^Chat$/)).queryByText(/ GB/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/0\.0 GB/)).not.toBeInTheDocument()
+  })
+
+  // #914 (S-914-1): the chat/translation card line adds the two sizes against the card, so it needs both models on this
+  // drive with a size. With no chat model selected it read "Graphics card: chat  GB + translation 6.8 GB"; with
+  // TranslateGemma named from the catalog only, it counted a model that never reaches the card.
+  it.each<[string, Partial<PerformanceSnapshot['placement']>]>([
+    ['no chat model is selected', { model: null, models: withRow('chat', { modelId: null, sizeOnDiskGb: null, onDrive: false, loaded: false }) }],
+    ['the translation model is not on this drive', { models: withRow('translation', { onDrive: false }) }]
+  ])('#914: no chat/translation card line when %s', async (_case, over) => {
+    install(snapshot({ placement: placement(over) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
+    // The processor line stays.
+    expect(screen.getByText(/Everything loaded at once needs about/)).toBeInTheDocument()
   })
 })
 

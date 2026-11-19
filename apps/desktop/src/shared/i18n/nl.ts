@@ -1325,8 +1325,8 @@ export const nl: UiCatalog<'nl'> = {
     'Op dit besturingssysteem kan de app de spraakengine nog niet installeren, dus met dit model ' +
     'zijn dicteren en het importeren van audio hier niet mogelijk.',
   'models.vision.installed':
-    'Geïnstalleerd: wordt automatisch gebruikt op het scherm Afbeeldingen. Hier is niets te ' +
-    'starten.',
+    'Geïnstalleerd: het scherm Afbeeldingen kiest zelf welk beeldmodel het gebruikt. Hier is niets ' +
+    'te starten.',
   'models.vision.notInstalled':
     'Wordt na installatie automatisch gebruikt op het scherm Afbeeldingen: je hoeft niets in te ' +
     'stellen.',
@@ -2077,6 +2077,8 @@ export const nl: UiCatalog<'nl'> = {
   'perf.model.title': 'Je model',
   'perf.model.line.one': '{model} · {size}\u00A0GB op schijf · context van {context} tokens',
   'perf.model.line.other': '{model} · {size}\u00A0GB op schijf · context van {context} tokens',
+  'perf.model.lineNoSize.one': '{model} · context van {context} tokens',
+  'perf.model.lineNoSize.other': '{model} · context van {context} tokens',
   'perf.model.none': 'Nog geen model geselecteerd. Kies er een op het scherm AI-model.',
   'perf.model.need': 'Gebruikt {need}\u00A0GB met deze context.',
   'perf.model.needEstimate':
@@ -2148,6 +2150,7 @@ export const nl: UiCatalog<'nl'> = {
   'perf.models.device.processor': 'processor',
   'perf.models.loaded': 'nu geladen',
   'perf.models.notLoaded': 'niet geladen',
+  'perf.models.notOnDrive': 'niet op deze schijf',
   'perf.models.lifetime.session': 'blijft geladen',
   'perf.models.lifetime.idle': 'wordt bij inactiviteit uit het geheugen gehaald',
   'perf.models.lifetime.per-use': 'draait alleen tijdens gebruik',

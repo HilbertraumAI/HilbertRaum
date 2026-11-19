@@ -351,10 +351,13 @@ design (voice and images, always; document search's index model too). Document s
 model (the reranker) is the exception: it follows its own graphics-card headroom check against
 the model you are chatting with, so its row can say either "graphics card" or "processor"
 depending on this computer and what else is loaded — never "by design". A row reads **loaded**
-only once that service is actually running and ready, not while it is still starting. Below the
-rows: a card line for chat and translation (what each is resident on the graphics card for,
-against its memory), a second card line whenever the ranking model is also resident there, and a
-processor total (what loading everything at once would take from RAM). Whenever two or more of
+only once that service is actually running and ready, not while it is still starting. A model
+that is not on this drive keeps its row, so you can see what it would take before you download
+it, and reads **not on this drive** instead. Below the rows: a card line for chat and translation
+(what each is resident on the graphics card for, against its memory, shown only when both models
+are on this drive), a second card line whenever the ranking model is also resident there, and a
+processor total (what loading everything on this drive at once would take from RAM; a model that
+is not on this drive is not counted). Whenever two or more of
 chat, translation and the ranking model share the card at once, both lines carry a warning badge;
 the chat-and-translation line also spells out that whichever of the two loaded second got what
 was left over and runs slower, but only when chat and translation are themselves both on the
