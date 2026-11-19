@@ -2546,6 +2546,16 @@ export const nl: UiCatalog<'nl'> = {
     'maakt verbinding met deze website.',
   'main.dialog.openLink.open': 'Openen',
   'main.dialog.openLink.cancel': 'Annuleren',
+  'main.dialog.unsavedReview.title':
+    'Sommige wijzigingen in de beoordeling konden niet worden opgeslagen.',
+  'main.dialog.unsavedReview.message':
+    'Sommige wijzigingen in de beoordeling konden niet worden opgeslagen.',
+  'main.dialog.unsavedReview.detail':
+    'Als je nu sluit, gaan ze verloren. Controleer of de schijf nog is aangesloten en vrije ruimte ' +
+    'heeft, en probeer het dan opnieuw.',
+  'main.dialog.unsavedReview.tryAgain': 'Opnieuw proberen',
+  'main.dialog.unsavedReview.keepOpen': 'Open laten',
+  'main.dialog.unsavedReview.closeAnyway': 'Toch sluiten',
   'main.workspace.wrongPassword':
     'Met dat wachtwoord is je werkruimte niet ontgrendeld. Controleer het en probeer het opnieuw.',
   'main.workspace.openFailed': 'De werkruimte kon niet worden geopend.',

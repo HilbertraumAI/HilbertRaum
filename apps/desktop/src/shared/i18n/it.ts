@@ -2639,6 +2639,14 @@ export const it: UiCatalog<'it'> = {
     'tuo browser si collegherà a questo sito.',
   'main.dialog.openLink.open': 'Apri',
   'main.dialog.openLink.cancel': 'Annulla',
+  'main.dialog.unsavedReview.title': 'Non è stato possibile salvare alcune modifiche alla verifica.',
+  'main.dialog.unsavedReview.message': 'Non è stato possibile salvare alcune modifiche alla verifica.',
+  'main.dialog.unsavedReview.detail':
+    'Se chiudi ora, andranno perse. Controlla che l’unità sia ancora collegata e abbia spazio ' +
+    'libero, poi riprova.',
+  'main.dialog.unsavedReview.tryAgain': 'Riprova',
+  'main.dialog.unsavedReview.keepOpen': 'Non chiudere',
+  'main.dialog.unsavedReview.closeAnyway': 'Chiudi comunque',
   'main.workspace.wrongPassword':
     'Questa password non ha sbloccato la tua area di lavoro. Controllala e riprova.',
   'main.workspace.openFailed': 'Non è stato possibile aprire l’area di lavoro.',

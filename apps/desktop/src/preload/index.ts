@@ -78,6 +78,7 @@ import type {
   RuntimeInstallInfo,
   RunnableToolSet,
   RuntimeStatus,
+  SaveBeforeCloseResult,
   VisionStatus,
   SkillInfo,
   SkillPickResult,
@@ -103,6 +104,25 @@ const api = {
   getAppStatus: (): Promise<AppStatus> => ipcRenderer.invoke(IPC.getAppStatus),
   /** One-way timing mark for opt-in measurement runs; main enforces an event allowlist. */
   perfMark: (event: string): void => ipcRenderer.send(IPC.perfMark, event),
+  /**
+   * #888: run `cb` when the window is about to close, and answer main with its result. The
+   * preload sends the answer itself once `cb` settles, so the renderer cannot forget to answer;
+   * a `cb` that throws or rejects (or answers anything but `unsaved: false`) answers "unsaved",
+   * and main asks the user before closing. Returns an unsubscribe fn.
+   */
+  onSaveBeforeClose: (cb: () => Promise<SaveBeforeCloseResult>): (() => void) => {
+    const handler = (_e: unknown, requestId: unknown): void => {
+      void Promise.resolve()
+        .then(() => cb())
+        .then(
+          (result) => result?.unsaved !== false,
+          () => true
+        )
+        .then((unsaved) => ipcRenderer.send(IPC.saveBeforeCloseDone, { requestId, unsaved }))
+    }
+    ipcRenderer.on(EVENTS.saveBeforeClose, handler)
+    return () => ipcRenderer.removeListener(EVENTS.saveBeforeClose, handler)
+  },
   getDriveStatus: (): Promise<DriveStatus> => ipcRenderer.invoke(IPC.getDriveStatus),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
   /** Renderer-owned keys only (#868): main drops any other key from the patch, and this type makes a

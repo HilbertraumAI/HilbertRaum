@@ -2609,6 +2609,14 @@ export const ru: UiCatalog<'ru'> = {
     'браузер подключится к этому сайту.',
   'main.dialog.openLink.open': 'Открыть',
   'main.dialog.openLink.cancel': 'Отмена',
+  'main.dialog.unsavedReview.title': 'Некоторые изменения в проверке не удалось сохранить.',
+  'main.dialog.unsavedReview.message': 'Некоторые изменения в проверке не удалось сохранить.',
+  'main.dialog.unsavedReview.detail':
+    'Если закрыть сейчас, они будут потеряны. Убедитесь, что диск по-прежнему подключен и на нем ' +
+    'есть свободное место, и попробуйте еще раз.',
+  'main.dialog.unsavedReview.tryAgain': 'Повторить',
+  'main.dialog.unsavedReview.keepOpen': 'Не закрывать',
+  'main.dialog.unsavedReview.closeAnyway': 'Все равно закрыть',
   'main.workspace.wrongPassword':
     'Этот пароль не подошел к вашему рабочему пространству. Проверьте его и попробуйте еще раз.',
   'main.workspace.openFailed': 'Не удалось открыть рабочее пространство.',

@@ -2622,6 +2622,16 @@ export const de: Record<keyof typeof en, string> = {
     'Dein Browser verbindet sich mit dieser Website.',
   'main.dialog.openLink.open': 'Öffnen',
   'main.dialog.openLink.cancel': 'Abbrechen',
+  'main.dialog.unsavedReview.title':
+    'Einige Änderungen an der Prüfung konnten nicht gespeichert werden.',
+  'main.dialog.unsavedReview.message':
+    'Einige Änderungen an der Prüfung konnten nicht gespeichert werden.',
+  'main.dialog.unsavedReview.detail':
+    'Wenn du jetzt schließt, gehen sie verloren. Prüfe, ob das Laufwerk noch angeschlossen ist und ' +
+    'freien Speicherplatz hat, und versuch es dann erneut.',
+  'main.dialog.unsavedReview.tryAgain': 'Erneut versuchen',
+  'main.dialog.unsavedReview.keepOpen': 'Offen lassen',
+  'main.dialog.unsavedReview.closeAnyway': 'Trotzdem schließen',
   'main.workspace.wrongPassword':
     'Dieses Passwort hat deinen Arbeitsbereich nicht entsperrt. Prüf es und versuch es ' +
     'noch einmal.',

@@ -2591,6 +2591,14 @@ export const es: UiCatalog<'es'> = {
     'navegador se conectará a este sitio.',
   'main.dialog.openLink.open': 'Abrir',
   'main.dialog.openLink.cancel': 'Cancelar',
+  'main.dialog.unsavedReview.title': 'Algunos cambios de la revisión no se pudieron guardar.',
+  'main.dialog.unsavedReview.message': 'Algunos cambios de la revisión no se pudieron guardar.',
+  'main.dialog.unsavedReview.detail':
+    'Si cierras ahora, se perderán. Comprueba que la unidad siga conectada y tenga espacio libre, y ' +
+    'vuelve a intentarlo.',
+  'main.dialog.unsavedReview.tryAgain': 'Volver a intentarlo',
+  'main.dialog.unsavedReview.keepOpen': 'No cerrar',
+  'main.dialog.unsavedReview.closeAnyway': 'Cerrar de todos modos',
   'main.workspace.wrongPassword':
     'Esa contraseña no desbloqueó tu espacio de trabajo. Compruébala y vuelve a intentarlo.',
   'main.workspace.openFailed': 'No se pudo abrir el espacio de trabajo.',

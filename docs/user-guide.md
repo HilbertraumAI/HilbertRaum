@@ -836,8 +836,11 @@ AI model anything, and nothing touches the network — it is you, the answer, an
 
 - The answer is split into **review items** (paragraphs, list entries, headings). For each one,
   record a decision: **Reviewed — supported / partly supported / not supported**, **Needs
-  follow-up**, **Not reviewed**, or **Not applicable** (headings start there). Add a note where
-  it helps. Everything **saves automatically** as you work.
+  follow-up**, **Not reviewed**, or **Not applicable** (headings start there). Add a note where it
+  helps. Everything **saves automatically** as you work, and closing or quitting the app saves the
+  latest changes first. If a change cannot be saved (for example because the drive is full or was
+  unplugged), the app asks before it closes: **Try again**, **Keep open**, or **Close anyway**,
+  which loses that change.
 - **Review one statement separately.** When a paragraph bundles several claims, choose
   **Review a passage separately** under it: the item's *original* text appears (plain, exactly
   as generated — without formatting), you highlight the passage — with the mouse or with

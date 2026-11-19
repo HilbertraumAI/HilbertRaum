@@ -13,6 +13,7 @@ import {
 } from '../components'
 import { setThemeSetting } from '../theme'
 import { useT } from '../i18n'
+import { registerBeforeClose } from '../lib/beforeClose'
 import { PrivacyTab } from './settings/PrivacyTab'
 import { DiagnosticsTab } from './settings/DiagnosticsTab'
 import { SkillsTab } from './settings/SkillsTab'
@@ -136,20 +137,21 @@ function GeneralTab(): JSX.Element {
   const settingsRef = useRef(settings)
   const tRef = useRef(t)
 
-  function flushLanguage(): void {
+  /** Saves the pending choice now; resolves once that save has answered (never rejects). */
+  function flushLanguage(): Promise<void> {
     if (languageTimerRef.current !== null) clearTimeout(languageTimerRef.current)
     languageTimerRef.current = null
     const uiLanguage = pendingLanguageRef.current
     pendingLanguageRef.current = null
-    if (uiLanguage === null) return
+    if (uiLanguage === null) return Promise.resolve()
     // A pick and back within the pause saves nothing and toasts nothing: back to the value the
     // store holds, or will hold once the unanswered saves land. In that second case the draft
     // stays (it is that value) until the last reply drops it, so the select doesn't flash back.
     if (uiLanguage === (sentLanguageRef.current ?? settingsRef.current?.uiLanguage)) {
       if (mountedRef.current && sentLanguageRef.current === null) setLanguageDraft(null)
-      return
+      return Promise.resolve()
     }
-    void saveLanguage(uiLanguage)
+    return saveLanguage(uiLanguage)
   }
   // The timer, the unmount cleanup and a late reply read the latest committed render's values (a
   // refusal's toast its `t`), not those of the render they began in. Written after each commit, not
@@ -160,7 +162,21 @@ function GeneralTab(): JSX.Element {
     tRef.current = t
     flushLanguageRef.current = flushLanguage
   })
-  useEffect(() => () => flushLanguageRef.current(), [])
+  useEffect(() => () => void flushLanguageRef.current(), [])
+  // #888: closing the window saves a choice still inside its pause (PR #823 left that to the
+  // unmount, which a window close never runs). Best effort: a refused or unanswered save keeps the
+  // stored language and never makes main ask — the close-time dialog speaks of review changes only.
+  useEffect(
+    () =>
+      registerBeforeClose(
+        async () => {
+          await flushLanguageRef.current()
+          return { unsaved: false }
+        },
+        { bestEffort: true }
+      ),
+    []
+  )
 
   async function saveLanguage(uiLanguage: UiLanguageSetting): Promise<void> {
     sentLanguageRef.current = uiLanguage

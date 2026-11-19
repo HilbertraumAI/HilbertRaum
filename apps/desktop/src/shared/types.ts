@@ -102,6 +102,15 @@ export interface EngineRecheckResult {
   problems: EngineProblem[]
 }
 
+/**
+ * #888: the window's answer to "save before the window closes" (`EVENTS.saveBeforeClose`).
+ * `unsaved` = a change is still not written (a failed or hung write); main then asks the user
+ * before closing. Only `unsaved: false` lets the window close without asking.
+ */
+export interface SaveBeforeCloseResult {
+  unsaved: boolean
+}
+
 export interface AppStatus {
   appName: string
   appVersion: string

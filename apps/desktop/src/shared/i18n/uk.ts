@@ -2624,6 +2624,14 @@ export const uk: UiCatalog<'uk'> = {
     'браузер підключиться до цього сайту.',
   'main.dialog.openLink.open': 'Відкрити',
   'main.dialog.openLink.cancel': 'Скасувати',
+  'main.dialog.unsavedReview.title': 'Деякі зміни в перевірці не вдалося зберегти.',
+  'main.dialog.unsavedReview.message': 'Деякі зміни в перевірці не вдалося зберегти.',
+  'main.dialog.unsavedReview.detail':
+    'Якщо закрити зараз, їх буде втрачено. Переконайтеся, що диск досі підключено й на ньому є ' +
+    'вільне місце, а потім спробуйте ще раз.',
+  'main.dialog.unsavedReview.tryAgain': 'Спробувати ще раз',
+  'main.dialog.unsavedReview.keepOpen': 'Не закривати',
+  'main.dialog.unsavedReview.closeAnyway': 'Усе одно закрити',
   'main.workspace.wrongPassword':
     'Цей пароль не розблокував ваш робочий простір. Перевірте його та спробуйте ще раз.',
   'main.workspace.openFailed': 'Не вдалося відкрити робочий простір.',

@@ -5,12 +5,17 @@ import { ErrorBoundary } from './components'
 import { resolvePreUnlockLanguage } from './i18n'
 import { t } from '@shared/i18n'
 import { initTheme } from './theme'
+import { installBeforeCloseBridge } from './lib/beforeClose'
 import './tokens.css'
 import './styles.css'
 
 // Apply a theme before first paint. Settings live in the (possibly encrypted, so
 // unreadable pre-unlock) DB — until they load, follow the OS.
 initTheme()
+
+// #888: answer main's "save before the window closes" before anything renders, so a render error
+// or the workspace gate never leaves the close waiting out main's bound (lib/beforeClose.ts).
+installBeforeCloseBridge(window.api)
 
 const container = document.getElementById('root')
 if (!container) throw new Error('Root element #root not found')
