@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
@@ -1337,8 +1337,8 @@ for (const leg of SCRIPT_LEGS) {
 
       // A name is bytes. BSD tr (macOS) refuses a sequence that is not valid UTF-8 in a UTF-8 locale ("Illegal byte sequence"), and
       // under `set -euo pipefail` that ended the gate with no verdict. GNU tr never refuses, so this stand-in plays BSD tr: first on
-      // PATH it exits 1 on a non-UTF-8 name unless the locale is C. It reaches PATH through BASH_ENV, because Git Bash's bash puts
-      // /usr/bin ahead of an inherited PATH. Whether a Mac can hold such a name at all (APFS refuses it) is owed by hand.
+      // PATH it exits 1 on a non-UTF-8 name unless the locale is C. Whether a Mac can hold such a name at all (APFS refuses it) is owed by hand; the
+      // darwin row below records what the real tr does with the byte.
       const BSD_TR_STAND_IN = [
         '#!/bin/bash',
         'loc="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"',
@@ -1355,26 +1355,47 @@ for (const leg of SCRIPT_LEGS) {
         'a config/ name that is not UTF-8 is one entry: the gate still gives its verdict (#919)',
         (ctx) => {
           const root = sellableDrive()
+          const odd = Buffer.concat([Buffer.from(join(root, 'config') + '/'), Buffer.from([0xff]), Buffer.from('x')])
           try {
-            writeFileSync(Buffer.concat([Buffer.from(join(root, 'config') + '/'), Buffer.from([0xff]), Buffer.from('x')]), '')
+            writeFileSync(odd, '')
           } catch (e) {
-            // APFS refuses a name that is not valid UTF-8.
-            if ((e as NodeJS.ErrnoException).code === 'EILSEQ') return ctx.skip()
+            // A file system that refuses a name that is not valid UTF-8 (APFS: EILSEQ; others EINVAL, ENOENT-style
+            // refusals) cannot hold the row's premise. Any other error is a real failure.
+            const code = (e as NodeJS.ErrnoException).code
+            if (code === 'EILSEQ' || code === 'EINVAL') return ctx.skip()
             throw e
           }
-          const stubs = mkdtempSync(join(tmpdir(), 'hilbertraum-bsd-tr-'))
-          writeFileSync(join(stubs, 'tr'), BSD_TR_STAND_IN)
-          chmodSync(join(stubs, 'tr'), 0o755)
-          writeFileSync(join(stubs, 'env.sh'), 'PATH="$(cd "$TR_STUB_DIR" && pwd):$PATH"\n')
-          const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-x64'], {
-            env: { TR_STUB_DIR: stubs, BASH_ENV: join(stubs, 'env.sh'), LANG: 'C.UTF-8', LC_ALL: '', LC_CTYPE: '' }
-          })
-          const out = outputOf(r)
-          expect(r.status, out).toBe(0)
-          expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
-          expect(nativeUserData(out), out).toEqual([])
+          try {
+            const stubs = mkdtempSync(join(tmpdir(), 'hilbertraum-bsd-tr-'))
+            writeFileSync(join(stubs, 'tr'), BSD_TR_STAND_IN)
+            chmodSync(join(stubs, 'tr'), 0o755)
+            const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-x64'], {
+              env: { PATH: `${stubs}${delimiter}${process.env.PATH ?? ''}`, LANG: 'C.UTF-8', LC_ALL: '', LC_CTYPE: '' }
+            })
+            const out = outputOf(r)
+            expect(r.status, out).toBe(0)
+            expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+            expect(nativeUserData(out), out).toEqual([])
+          } finally {
+            // Unlink through the same bytes, so the scratch root can always be removed.
+            rmSync(odd, { force: true })
+          }
         }
       )
+
+      // The premise of the row above, on the real BSD tr: under LC_ALL=C a byte that is not UTF-8 passes through and the
+      // exit code is 0 (the fix relies on it). What the same pipe does in a UTF-8 locale is only recorded, not asserted.
+      it.skipIf(process.platform !== 'darwin')('the real tr passes a non-UTF-8 byte under LC_ALL=C (#919 premise)', () => {
+        const pipe = (locale: string) =>
+          spawnSync('bash', ['-c', `set -o pipefail; printf '\\377x' | LC_ALL=${locale} tr '[:upper:]' '[:lower:]' | od -An -tx1`], { encoding: 'utf8' })
+        const c = pipe('C')
+        expect(c.status, outputOf(c)).toBe(0)
+        expect(c.stdout.trim()).toBe('ff 78')
+        for (const locale of ['en_US.UTF-8', 'C.UTF-8']) {
+          const u = pipe(locale)
+          console.log(`[#919 premise] LC_ALL=${locale}: exit ${u.status}, bytes ${u.stdout.trim()}, stderr ${(u.stderr ?? '').trim()}`)
+        }
+      })
 
       // #766: a Kit ships its bundled set plus any model with a file on the drive, and lists every other manifest for in-app
       // download. The pre-flight and the canonical gate both leave a catalog model alone, and both refuse a drive that ships
