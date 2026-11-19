@@ -1300,7 +1300,8 @@ head's own weights + KV.
   `unclean` | `unclean-full` | `recovery`). `recovery` is a loss the unlock itself makes: `unlockEncryptedVault` shreds a
   `.recovery` newer than `.enc` whose structure is `damaged` (`UnlockedVault.recoveryDiscarded`),
   recorded with no `lostAt` (the event's own time is when); that copy is shredded only once the
-  unlock has succeeded, so a failed unlock keeps the evidence and the next one records it (review
+  unlock has succeeded, so a failed unlock keeps the evidence and the next one records it (except with `.enc` missing,
+  #911, where the right password shreds it at once: no unlock could succeed) (review
   round 2; an older damaged copy is a spent leftover: shredded, nothing recorded). `create()` removes
   a v1 marker a wiped vault left (with no vault, startup never reads one) and clears the record in
   memory; the commercial sell gate refuses a drive that carries it (`noUserData`, #893). Older builds ignore the file; the descriptor is untouched.
@@ -1308,10 +1309,12 @@ head's own weights + KV.
   sweeping it: the descriptor is encrypted, a working file is there, **no encrypted snapshot of any
   kind exists** (a stat of `.enc` says ENOENT, and no `.enc.new` is staged) and the #845 verdict
   found nothing newer. `preserveNewerPlaintext` then replays the `-wal` into the main file
-  (`checkpointLeftoverWal`), removes what is left of the sidecars, probes the file and moves a
+  (`checkpointLeftoverWal`), probes the file and moves a
   `database` (or `unchecked`, judged by its header) to `<db>.recovery`: outcome `'kept-only-copy'`,
   sweep-safe like `'preserved'`. A copy whose structure is `damaged`, a shred survivor or a file
-  gone meanwhile is `'not-needed'` (swept; no notice). `'failed'` (blocked, every file kept, as
+  gone meanwhile is `'not-needed'` (swept; no notice). The sidecars are left to the sweep that
+  follows every path that does not block (named after the working file, they never pair with the
+  `.recovery`). `'failed'` (blocked, every file kept, as
   #242): a stat of `.enc` that fails other than ENOENT, a `-wal` that still holds commits after the
   replay, a probe that cannot read the file, a rename that cannot land. The `.recovery` contract is
   unchanged and now also carries this state: no start sweeps it, and the unlock rolls it forward
@@ -1323,7 +1326,13 @@ head's own weights + KV.
   encrypted over a missing `.enc`), and `takeRestoredMissingEnc() -> boolean` returns it once for
   the unlock IPC's content-free log line (no audit type). With no `.enc` and nothing rolled forward,
   `unlockEncryptedVault` throws `VaultMissingError` after the verifier (a wrong password is still
-  `WrongPasswordError`) and before anything is written.
+  `WrongPasswordError` and touches nothing), having shredded a `.recovery` that was spent or
+  `damaged` (#875 keeps a damaged one until an unlock succeeds; with no `.enc` none can). `.enc` and
+  the working file are not written. A failed unlock re-reads the notice from the disk, so it goes
+  once no copy is kept. **A returned `.enc`:** the start never replaces a snapshot, but the unlock
+  applies the CODE-1b roll-forward rule to an `.enc` that came back after the start: the kept copy
+  replaces it unless that `.enc` is newer by mtime. A newer one wins, the kept copy is shredded as a
+  spent leftover, and nothing records the session it held.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
@@ -1337,7 +1346,8 @@ head's own weights + KV.
   error, a bug in a new step) — the failed open never rewrites `.enc`; free space and retry,
   or start the previous version after an update;
   `vault_missing` (#911) is the unlock whose password verified while `.enc` is missing and no
-  `.recovery` copy was rolled forward over it: nothing written; put the file back or restore the
+  `.recovery` copy was rolled forward over it: `.enc` and the working file not written (a spent or
+  damaged `.recovery` shredded); put the file back or restore the
   workspace folder from a backup, never create a new workspace (create's table maps it to `null`:
   never sent there);
   `vault_recovery_blocked` (#242) is the unlock refused because a held

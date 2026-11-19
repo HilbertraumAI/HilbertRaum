@@ -1105,7 +1105,8 @@ explicitly:
   nothing). So does an unlock that has to shred such a `.recovery` copy (newer than `.enc`)
   instead of rolling it forward; it records the loss at once (no notice: the workspace is already
   open), and shreds the copy only once the unlock has succeeded, so a failed unlock keeps the
-  evidence for the next. Until then an older build (0.1.65 or earlier) can still roll that kept
+  evidence for the next (with `.enc` missing, where no unlock can succeed, the right password shreds
+  it at once, #911). Until then an older build (0.1.65 or earlier) can still roll that kept
   copy forward over `.enc` on a Kit started from more than one OS with builds of different ages:
   like every build before #876, it checks only the header, and such a copy keeps its header. Since
   #892 the notice also covers an **unclean end**: when the startup sweep shreds a working file
@@ -1182,14 +1183,23 @@ explicitly:
   open, as #242 does: a stat of `.enc` that fails other than ENOENT (a delete-pending file on
   Windows used to read as missing), a `-wal` the replay cannot empty (a full drive, another program
   reading the file), a held `.recovery` name. A copy that is damaged after the replay is shredded
-  (owner decision D3), and with nothing to roll forward the unlock answers `vault_missing`
+  (owner decision D3), and so is a kept copy found damaged at the unlock, by the right password only
+  (#875 keeps such a copy until an unlock succeeds, and with no `.enc` none can; a failed unlock
+  re-reads the notice, so it goes with the file). With nothing to roll forward the unlock answers
+  `vault_missing`
   (`main.workspace.vaultMissing`: put the file back or restore the workspace folder from a backup,
   never create a new workspace) instead of a raw ENOENT. The unlock that restores the copy logs one
-  content-free line; there is no audit type (D5). **The boundary:** this never replaces an existing
-  snapshot. Wherever an `.enc` or a staged `.enc.new` is there, the rules above and below stand
-  unchanged: a mid-session crash is still shredded (the accepted trade-off below), and a replayed
-  session is never rolled forward over an existing `.enc` (that full-drive roll-forward was
-  declined by the owner). Don't read this branch as a step towards it. The probe reads only part of
+  content-free line; there is no audit type (D5). **The boundary:** the *start* never replaces a
+  snapshot. Wherever an `.enc` or a staged `.enc.new` is there when the app starts, the rules above
+  and below stand unchanged: a mid-session crash is still shredded (the accepted trade-off below),
+  and the start never rolls a replayed session forward over an existing `.enc` (that full-drive
+  roll-forward was declined by the owner; don't read this branch as a step towards it). A later
+  unlock applies the CODE-1b roll-forward rule above, which cannot tell a kept copy from a failed
+  lock's: an `.enc` that came back between the start and the unlock (a sync tool restoring it, a
+  user putting a copy back) is replaced by the kept copy unless the returned `.enc` is newer by
+  mtime. If it is newer, it wins: the kept copy is shredded as a spent leftover, the workspace opens
+  at that snapshot, and nothing reports the session the copy held (`known-limitations.md`). So the
+  lock screen's advice (`troubleshooting.md`) is to unlock first. The probe reads only part of
   a large file, so a partly damaged copy can still be kept and adopted; with no snapshot left that
   beats losing everything. Owner decision G-3 (2026-11-19) accepted the plaintext at rest in this
   state only, until the next successful unlock (the confidentiality trade of the CODE-1b bullet

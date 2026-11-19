@@ -192,10 +192,14 @@ password recovery — are documented in
     and the damage shows when the app reads those pages. With no snapshot left, that still beats
     losing everything.
   - A copy that is damaged after the `-wal` replay is shredded, and the unlock then says the file is
-    missing (owner decision D3). A kept `.recovery` that turns out damaged at the unlock is not
-    rolled forward; #875 keeps such a copy as evidence until an unlock succeeds, which with no
-    `.enc` none can, so it rests on the drive and the lock screen's notice stays, while each unlock
-    says the file is missing.
+    missing (owner decision D3). So is a kept copy that is damaged by the time of the unlock: the
+    right password shreds it (a wrong one touches nothing), and the notice goes.
+  - The start never replaces a snapshot, but the unlock judges an `.enc` that came back after the
+    start (a sync tool restoring it, a copy put back by hand) by the CODE-1b roll-forward rule: the
+    kept copy replaces it unless the returned `.enc` is newer by mtime. If it is newer, it wins: the
+    kept copy is shredded as a spent leftover, the workspace opens at that older snapshot, and
+    nothing reports the session that was lost. The lock screen's section in `troubleshooting.md`
+    says to unlock first.
   - A `-wal` the replay cannot empty (a full drive, another program reading the workspace) blocks
     the start: nothing is moved or shredded, and the unlock shows the "another program is holding a
     recovery file" message, whose words name only the holding program (owner decision D4: no copy

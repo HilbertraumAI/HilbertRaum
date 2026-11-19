@@ -55,8 +55,10 @@ import {
   FAST_KDF,
   backdate,
   damagedVault,
+  endedUnlocked,
   failedLockState,
   freshVaultPaths,
+  leaveAsKilled,
   lockedVault,
   noisePastPageOne,
   plantProbeTrap,
@@ -1356,27 +1358,6 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
 
 // ---- #911: the encrypted file missing from the drive ------------------------------
 
-/**
- * What a kill (a power cut, a pulled drive) leaves of the session open on `db`: the main file, the `-wal` that holds
- * its last commits and the `-shm`, copied while `db` is open and put back after the close (which checkpoints the
- * `-wal` in and deletes both sidecars).
- */
-function leaveAsKilled(vp: VaultPaths, db: ReturnType<typeof unlockEncryptedVault>['db']): void {
-  const files = new Map<string, Buffer>()
-  for (const path of [vp.dbPath, `${vp.dbPath}-wal`, `${vp.dbPath}-shm`]) files.set(path, readFileSync(path))
-  db.close()
-  for (const [path, bytes] of files) writeFileSync(path, bytes)
-}
-
-/** #892's unclean end, the realistic #911 state: a session that wrote `contextTokens: marker` (into the `-wal`) and
- *  ended without a lock. */
-function endedUnlocked(vp: VaultPaths, marker: number, password = 'pw'): void {
-  const { db, key } = unlockEncryptedVault(vp, password)
-  updateSettings(db, { contextTokens: marker })
-  key.fill(0)
-  leaveAsKilled(vp, db)
-}
-
 describe('the encrypted file missing from the drive (#911)', () => {
   const recoveryOf = (vp: VaultPaths): string => `${vp.dbPath}${RECOVERY_SUFFIX}`
   const sidecarsOf = (vp: VaultPaths): string[] => [`${vp.dbPath}-wal`, `${vp.dbPath}-shm`]
@@ -1491,6 +1472,73 @@ describe('the encrypted file missing from the drive (#911)', () => {
   // A v1 → v2 password change cut between the old `.enc`'s shred and the staged `.enc.new`'s rename leaves no `.enc`
   // beside a live session: the staged snapshot rolls forward and the working copy is swept, as before. A commit made
   // after the change is lost (the power-cut trade-off) instead of being rolled forward over that snapshot.
+  // Review SF-2 (D3): a kept copy that is damaged by the time of the unlock cannot be rolled forward, and with no `.enc`
+  // no unlock can ever succeed, so #875's "keep the evidence until an unlock succeeds" would leave it in plaintext for
+  // ever under a notice that says to unlock. The right password shreds it and says the file is missing, and the notice
+  // goes with the file. Only the password's owner can do that: a wrong password touches nothing (the next row).
+  it('#911: a kept copy damaged before the unlock: the right password shreds it, says the file is missing, and the notice goes', () => {
+    const vp = lockedVault('vault-911', 'pw')
+    endedUnlocked(vp, 9119)
+    rmSync(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    noisePastPageOne(recoveryOf(vp))
+    expect(ctl.getState()).toEqual({ ...LOCKED, lockNotice: 'encrypted_file_missing' })
+
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultMissingError')
+    expect(existsSync(recoveryOf(vp))).toBe(false)
+    expect(readdirSync(dirname(vp.dbPath))).toEqual([])
+    expect(ctl.getState()).toEqual(LOCKED)
+    const restarted = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    restarted.init()
+    expect(restarted.getState()).toEqual(LOCKED)
+  })
+
+  it('#911: a kept copy damaged before the unlock: a wrong password touches nothing', () => {
+    const vp = lockedVault('vault-911', 'pw')
+    endedUnlocked(vp, 9119)
+    rmSync(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    noisePastPageOne(recoveryOf(vp))
+    const damaged = readFileSync(recoveryOf(vp))
+
+    expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+    expect(readFileSync(recoveryOf(vp)).equals(damaged)).toBe(true)
+    expect(ctl.getState()).toEqual({ ...LOCKED, lockNotice: 'encrypted_file_missing' })
+  })
+
+  // Review SF-1 (orchestrator decision: documented and pinned, no behaviour change). The start never replaces a
+  // snapshot, but an `.enc` that comes back between the start and the unlock (a sync tool restoring it, a user putting
+  // an older copy back) is judged by the CODE-1b roll-forward rule, which cannot tell the kept copy from a failed lock's:
+  // the kept copy is newer, so it wins and replaces the returned file. security-model.md "Encrypted file missing" says
+  // so, and what a returned `.enc` with a newer mtime does instead (it wins, the kept copy is shredded).
+  it.each<[string, boolean]>([
+    ['in the same run', false],
+    ['after a restart', true]
+  ])('#911: an older .enc put back before the unlock (%s) is replaced by the kept copy, by the CODE-1b rule', (_when, restart) => {
+    const vp = lockedVault('vault-911', 'pw')
+    endedUnlocked(vp, 9119)
+    const encBytes = readFileSync(vp.encPath)
+    rmSync(vp.encPath)
+    let ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(recoveryOf(vp))).toBe(true)
+    writeFileSync(vp.encPath, encBytes)
+    backdate(vp.encPath) // an older copy: its own time, before the session the start kept
+    if (restart) {
+      ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(ctl.getState()).toEqual(LOCKED) // `.enc` is there: no notice
+      expect(existsSync(recoveryOf(vp))).toBe(true)
+    }
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(9119)
+    expect(readFileSync(vp.encPath).equals(encBytes)).toBe(false)
+    expect(existsSync(recoveryOf(vp))).toBe(false)
+    ctl.lock()
+  })
+
   it('#911 guard: a password change cut short with a staged .enc.new and no .enc opens the staged snapshot, not the session', () => {
     const vp = lockedVault('vault-911', 'pw', { legacyV1: true })
     const { db, key } = unlockEncryptedVault(vp, 'pw')

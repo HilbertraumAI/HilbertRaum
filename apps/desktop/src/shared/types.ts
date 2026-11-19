@@ -367,7 +367,8 @@ export interface WorkspaceStateInfo {
  *  bug in a new step). The failed open never rewrites the encrypted vault: free space and retry,
  *  or after an update start the previous version.
  *  `vault_missing` (#911): the password verified, but the encrypted workspace file is missing from
- *  the drive and no copy was left to restore it from. Nothing was written; put the file back or
+ *  the drive and no copy was left to restore it from (a damaged one is shredded at this unlock).
+ *  Neither `.enc` nor the working file was written; put the file back or
  *  restore the workspace folder from a backup, and never create a new workspace. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }

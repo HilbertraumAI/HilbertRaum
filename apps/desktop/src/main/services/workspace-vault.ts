@@ -241,7 +241,8 @@ export class VaultRecoveryBlockedError extends Error {
  * Thrown by `unlockEncryptedVault` when the password is CORRECT (the verifier is in the descriptor, so it is checked
  * without `.enc`) but the encrypted workspace file is gone (#911: a stat of it says ENOENT) and no `.recovery` copy was
  * rolled forward over it. Something outside the app removed it (a person tidying the drive, a sync tool, a disk check
- * that moved it to `FOUND.000`); the app itself never does. Nothing is written. Content-free ON PURPOSE (like
+ * that moved it to `FOUND.000`); the app itself never does. Neither `.enc` nor the working file is written (a spent or
+ * damaged `.recovery` the unlock found is shredded first: with no `.enc`, no unlock could use it). Content-free ON PURPOSE (like
  * `VaultLockError`): the IPC layer maps it to `vault_missing` + `main.workspace.vaultMissing` (put the file back or
  * restore the workspace folder from a backup; never create a new workspace). Before #911 this was the raw ENOENT of the
  * decrypt, which read "Could not open the workspace." on every try.
@@ -1024,19 +1025,23 @@ function encryptedFileState(vaultPaths: VaultPaths): 'present' | 'missing' | 'un
  * sweep, which assumes `.enc` is the source of truth, would shred all of it. So:
  *   - a staged `.enc.new` is a snapshot too (a create or a v1 to v2 password change cut short after its commit), which
  *     `recoverPendingRekey` rolls forward: `'not-needed'`, as before. Adopting the session over it would be the
- *     full-drive roll-forward over a snapshot that this branch never does (security-model.md "Encrypted file
+ *     full-drive roll-forward over a snapshot that this start never does (security-model.md "Encrypted file
  *     missing");
  *   - the `-wal` is replayed into the main file first ({@link checkpointLeftoverWal}): after an unclean end the
  *     session's last commits sit there, and the main file alone lacks them. A `-wal` that still holds commits after
  *     the replay (a full drive, another connection reading it) blocks the start, all three files kept (`'failed'`, as
  *     #242). A database SQLite calls damaged goes on to the probe;
- *   - what is left of the sidecars is removed (after a finished replay SQLite has removed both);
  *   - a file that reads as a database (`database`, or `unchecked` judged by its header) is moved to `<db>.recovery`,
  *     which the next unlock with the right password rolls forward over the missing `.enc` (every build since 0.1.47
  *     does): `'kept-only-copy'`. One whose structure is `damaged`, a shred survivor or a file gone meanwhile is
  *     nothing to keep (`'not-needed'`: the sweep shreds it, and the unlock then says the file is missing); one the
- *     probe cannot read blocks.
+ *     probe cannot read blocks, with nothing removed.
+ * The sidecars are left to the sweep that follows every path that does not block (review N-2): named after the
+ * working file, they never pair with the `.recovery`, and a start that blocks must remove nothing.
  * No marker is written: the #875 marker names a snapshot, and there is none (its format stays as it is).
+ * This start never replaces a snapshot. An `.enc` that comes back before the unlock (a sync tool restoring it, a user
+ * putting it back) is judged there by the CODE-1b roll-forward rule, which cannot tell this copy from a failed lock's:
+ * the kept copy wins unless the returned `.enc` is newer by mtime (security-model.md "Encrypted file missing").
  */
 function keepOnlyCopy(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNote): PreserveOutcome {
   if (existsSync(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) return 'not-needed'
@@ -1044,13 +1049,15 @@ function keepOnlyCopy(vaultPaths: VaultPaths, onProbeFallback?: ProbeFallbackNot
     const replay = checkpointLeftoverWal(vaultPaths.dbPath)
     if (replay.outcome !== 'damaged' && walAwaitsCheckpoint(vaultPaths.dbPath)) return 'failed'
   }
-  cleanSidecars(vaultPaths.dbPath)
   const probe = probeDatabaseFile(vaultPaths.dbPath)
   if (probe.verdict === 'not-database' || probe.verdict === 'damaged' || probe.verdict === 'gone') return 'not-needed'
   if (!readsAsDatabase(probe, 'salvage', onProbeFallback)) return 'failed'
   const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
-  // REL-1's pre-shred, as in preserveNewerPlaintext: a `.recovery` beside a working file is spent or garbage, and a
-  // target a hold keeps through the overwrite, the unlink and the rename fails the rename into the caller's catch.
+  // REL-1's pre-shred, as in preserveNewerPlaintext: any file at the `.recovery` name is replaced. Nothing in the app
+  // leaves one beside a working file while `.enc` is missing (an unlock consumes a kept copy before any session writes
+  // a working file), so one there is a spent leftover or garbage, or a kept copy beside a working file something else
+  // wrote, which whoever wrote it could as well have deleted (review N-7). A target a hold keeps through the overwrite,
+  // the unlink and the rename fails the rename into the caller's catch.
   shredFile(recoveryPath)
   renameSync(vaultPaths.dbPath, recoveryPath)
   return 'kept-only-copy'
@@ -1877,13 +1884,19 @@ export function unlockEncryptedVault(
         }
         // #875 review round 2: a broken copy that held the failed lock's session is the evidence of
         // that loss, so it is shredded only once this unlock has succeeded (below): an unlock that
-        // fails after this point keeps it, and the one that succeeds records the loss.
+        // fails after this point keeps it, and the one that succeeds records the loss. (#911: with no
+        // `.enc` no unlock can succeed, so it is shredded just below instead.)
         if (!recoveryDiscarded) shredFile(recoveryPath)
       }
     }
     // #911: the password verified, but there is no encrypted file to open and no `.recovery` was rolled forward over it.
-    // Nothing is written; the catch below zeroes the key.
-    if (encryptedFileState(vaultPaths) === 'missing') throw new VaultMissingError()
+    // A copy the block above found damaged is shredded now (owner decision D3): #875 keeps such a copy as evidence
+    // until an unlock succeeds, and with no `.enc` none can, so it would rest in plaintext for ever. Only the right
+    // password gets here. `.enc` and the working file are not written; the catch below zeroes the key.
+    if (encryptedFileState(vaultPaths) === 'missing') {
+      if (recoveryDiscarded) shredFile(recoveryPath)
+      throw new VaultMissingError()
+    }
     // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
     // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
     cleanSidecars(vaultPaths.dbPath)
@@ -2197,12 +2210,17 @@ export class WorkspaceController {
    * #911: {@link init} found the encrypted descriptor with `.enc` missing and a `.recovery` copy waiting (kept by this
    * start or an earlier one, by any build): the only copy of the workspace, unencrypted until the next unlock. Read
    * from the disk on every start, so it needs no marker and survives a restart; while set and the workspace is locked,
-   * {@link getState} reports `lockNotice: 'encrypted_file_missing'`. A successful unlock clears it.
+   * {@link getState} reports `lockNotice: 'encrypted_file_missing'`. A successful unlock clears it; a failed one
+   * re-reads it, so it goes once no copy is kept any more (review SF-2).
    */
   private _encMissingKept = false
   /** #911: the last successful unlock encrypted the kept copy as the new `.enc`, for the IPC to log once
    *  ({@link takeRestoredMissingEnc}). */
   private _restoredMissingEnc = false
+  /** #911: the disk state behind {@link _encMissingKept}: `.enc` absent (ENOENT) and a `.recovery` copy waiting. */
+  private encMissingKeptOnDisk(): boolean {
+    return encryptedFileState(this.vaultPaths) === 'missing' && existsSync(`${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+  }
   /** #875: what the last successful unlock consumed, for the IPC to record once ({@link takeWorkingCopyLost}). */
   private _lostAtPreviousLock: { cause: WorkingCopyLossCause; lostAt: string | null } | null = null
   /** #876 review round 2: sites that judged a file by its header because the probe could not read its structure (not
@@ -2388,8 +2406,7 @@ export class WorkspaceController {
       recoverPendingRekey(this.vaultPaths, this.descriptor)
       // #911: from the disk, after the rekey recovery (which may have rolled a staged `.enc.new` into place), not from
       // this start's outcome: a copy an earlier start kept, by this build or another, is the same state.
-      this._encMissingKept =
-        encryptedFileState(this.vaultPaths) === 'missing' && existsSync(`${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+      this._encMissingKept = this.encMissingKeptOnDisk()
       // #875: the sweep just shredded the last session's only fresh copy (a header over a broken
       // structure, which no shred of ours leaves), so the workspace opens at `.enc`: the same loss
       // as a lock that finished at the last snapshot, reported the same way. #892: so did a sweep of
@@ -2571,11 +2588,16 @@ export class WorkspaceController {
       this.init()
       if (this._recoveryBlocked) throw new VaultRecoveryBlockedError()
     }
-    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc } = unlockEncryptedVault(
-      this.vaultPaths,
-      password,
-      this.noteProbeFallback
-    )
+    let unlocked: UnlockedVault
+    try {
+      unlocked = unlockEncryptedVault(this.vaultPaths, password, this.noteProbeFallback)
+    } catch (err) {
+      // #911: a failed unlock can end the state the notice is about (a damaged kept copy shredded; a roll-forward that
+      // wrote `.enc` before the open failed, #844), never start it, so a notice shown is re-read from the disk.
+      if (this._encMissingKept) this._encMissingKept = this.encMissingKeptOnDisk()
+      throw err
+    }
+    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc } = unlocked
     this._db = db
     this.key = key
     this.descriptor = descriptor

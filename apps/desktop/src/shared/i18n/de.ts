@@ -2660,8 +2660,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.workspace.vaultMissing':
     'Dein Passwort ist richtig, aber die verschlüsselte Datei des Arbeitsbereichs fehlt auf dem ' +
     'Laufwerk, und es ist keine Kopie übrig, aus der sie sich wiederherstellen ließe. Lege keinen ' +
-    'neuen Arbeitsbereich an. Leg die Datei an ihren Platz zurück oder stelle den Ordner „workspace“ ' +
-    'aus einem Backup wieder her.',
+    'neuen Arbeitsbereich an. Lege die Datei an ihren Platz zurück oder stelle den Ordner ' +
+    '„workspace“ aus einem Backup wieder her.',
   'main.workspace.vaultOpenFailed':
     'Dein Passwort ist richtig, aber HilbertRaum konnte das Öffnen des Arbeitsbereichs ' +
     'nicht abschließen. Der verschlüsselte Arbeitsbereich auf dem Laufwerk ist unverändert. ' +

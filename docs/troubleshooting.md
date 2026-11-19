@@ -452,6 +452,9 @@ What to do:
 
 - Unlock with your usual password. The app encrypts the copy again as the workspace's encrypted
   file and opens the workspace with everything in it. Nothing is lost.
+- Unlock first. Don't put an older copy of the encrypted file back before you unlock: if that copy
+  carries a newer file date than the kept one, the app takes it for the newest, and the changes of
+  your last session are lost.
 - Then find out what removed the file, so it does not happen again: for example a sync tool that
   mirrors the drive, or a cleanup tool that removes large files.
 - If you can't unlock it any more (you forgot the password), the kept copy is your workspace in
