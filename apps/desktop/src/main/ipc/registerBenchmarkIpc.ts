@@ -1046,7 +1046,8 @@ function buildPlacement(
   // #848 review: a role's model is the one the app composes (`pickManifestForRole`, the function behind
   // `resolveModelByRole`: the flagged default, else the first in walk order), so a row can never name a model the
   // app does not run. #890: the embeddings row too (no composer reads `activeEmbeddingModelId`), and the images row
-  // names `getVisionStatus`'s own pick (`pickVisionManifest`, the same rule over the vision models on the drive).
+  // names the images pick (`pickVisionManifest`, the same rule over the vision models on the drive), the model
+  // `getVisionStatus` runs whenever it verifies (one whose files fail their check is passed over there).
   const byRole = (role: ModelManifest['role']): ModelManifest | undefined => pickManifestForRole(manifests, role)
   const embeddingsManifest = byRole('embeddings')
   // With no vision model on the drive the row still names the catalog's (every model the app can hold).

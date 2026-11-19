@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
-import { getVisionStatus, pickVisionManifest } from '../../src/main/services/vision/status'
+import { getVisionStatus, pickVisionManifest, visionCandidates } from '../../src/main/services/vision/status'
+import { computeInstallState, manifestFilesPresent } from '../../src/main/services/models'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import type { AppContext } from '../../src/main/services/context'
 import { sha256, validManifest } from '../helpers/manifest-fixtures'
@@ -135,10 +136,10 @@ describe('getVisionStatus', () => {
     expect(status).toEqual({ available: false, reason: 'no-model' })
   })
 
-  // #890 (G-8 (ii-a)): one pick, judged once. The flagged model's files are on the drive but cannot verify (a placeholder
-  // hash outside developer mode), so images report no-model, as a damaged flagged E5 composes the mock embedder. The
-  // status no longer falls through to another installed vision model, which the Performance row would not name.
-  it('judges only the pick: a flagged model that fails verification is not replaced by another installed one (#890)', async () => {
+  // #890: the flagged model is tried first; its files are on the drive but cannot verify (a placeholder hash outside
+  // developer mode), so Images falls through to the next vision model on the drive, as master's walk did: it never goes
+  // dark while another model would run.
+  it('tries the flagged model first and falls through to the next one on the drive when it fails verification (#890)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     writeBinary(rootPath)
     writeVisionManifest(
@@ -163,7 +164,11 @@ describe('getVisionStatus', () => {
     writeDriveFile(rootPath, 'models/vision/z-mmproj.gguf')
     const ctx = { ...ctxFor(rootPath, manifestsDir), isDev: false } as AppContext // developer mode off
 
+    expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'a-vision' })
+    // With a-vision's projector gone, the flagged z-vision is the only candidate and fails: no model.
+    rmSync(join(rootPath, 'models/vision/a-mmproj.gguf'))
     expect(await getVisionStatus(ctx)).toEqual({ available: false, reason: 'no-model' })
+    writeDriveFile(rootPath, 'models/vision/a-mmproj.gguf', 'a projector')
     // The same drive with the flag taken off z-vision: a-vision is the pick, and it is available.
     writeVisionManifest(manifestsDir, zVision, 'z-vision.yaml')
     expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'a-vision' })
@@ -206,5 +211,19 @@ describe('pickVisionManifest', () => {
       'f-flagged'
     )
     expect(pickVisionManifest([chat, absent, noProjector, newerEngine, flaggedAbsent], rootPath)).toBeUndefined()
+    // The images service tries them in that order: the pick, then the rest on the drive in walk order.
+    expect(visionCandidates([chat, absent, noProjector, newerEngine, first, flaggedAbsent, flagged], rootPath).map((m) => m.id)).toEqual([
+      'f-flagged',
+      'd-first'
+    ])
+
+    // The presence step is computeInstallState's own first two (runtime/format supported, every file there): a model
+    // it would call unsupported or missing is never a candidate, and every other one is.
+    return Promise.all(
+      [absent, noProjector, newerEngine, first, flagged].map(async (m) => {
+        const state = await computeInstallState(m, rootPath, { developerMode: true, skipHash: true })
+        expect(manifestFilesPresent(rootPath, m), `${m.id}: ${state}`).toBe(state !== 'unsupported' && state !== 'missing')
+      })
+    )
   })
 })

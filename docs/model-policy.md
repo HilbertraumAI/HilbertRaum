@@ -266,8 +266,9 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   `resolveModelByRole` (the embedder, the reranker, the transcriber, the translator) takes the first
   manifest of the role that sets it, else the first of the role in walk order. The images model applies
   the same rule to the vision manifests whose files are ALL on the drive (`pickVisionManifest`, #890): the
-  flagged one when it is there, else the first one there; a pick that is there but fails verification is
-  not replaced by another vision model. Discovery walks
+  flagged one when it is there, else the first one there. Images runs that model; when its files are there
+  but fail their check, it runs the next vision model on the drive (`visionCandidates`), so it never goes
+  dark while another model would run. Discovery walks
   `model-manifests/` depth first, each folder's entry names in code-unit order, on every OS (FAT/exFAT,
   ext4 and APFS do not list a folder sorted, NTFS does), so the order no longer depends on the drive. The
   committed embedder, `multilingual-e5-small-q8`, sets it, so an embeddings manifest a later release or a

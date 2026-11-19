@@ -922,9 +922,9 @@ the app can hold, one row per role (`PerformanceSnapshot.placement.models`, `Res
 Chat names the active model; every other row names the role's model the app composes
 (`pickManifestForRole`: the manifest flagged `default_for_role`, else the first of the role in walk
 order, #848), never a setting no composer reads (`activeEmbeddingModelId`, #890). The images row
-names the images service's own pick (`pickVisionManifest`, the same rule over the vision models
-whose files are all on the drive, the one `getVisionStatus` judges, #890), and the catalog's vision
-model when none is on the drive. Chat and translation auto-fit onto the card (`device: 'gpu'`) —
+names the images pick (`pickVisionManifest`, the same rule over the vision models whose files are
+all on the drive, the model `getVisionStatus` runs whenever it verifies, #890), and the catalog's
+vision model when none is on the drive. Chat and translation auto-fit onto the card (`device: 'gpu'`) —
 under the CURRENT configuration
 (PR #303 audit DR1; the memory class alone used to decide): the row says `'cpu'` on a machine
 without a usable card, when the GPU is switched off (`gpuMode: 'off'`) or auto-disabled, when the
