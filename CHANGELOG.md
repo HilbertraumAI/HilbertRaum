@@ -101,6 +101,17 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The lock screen says when the file with your workspace's key is missing.** If
+  `config/workspace.json` was removed from the drive or damaged while the encrypted workspace was
+  still there, every unlock said "Could not open the workspace." The lock screen now says that this
+  file is missing or can't be read, that no password can open the workspace without it, and that you
+  should put it back or restore it from a backup instead of creating a new workspace (#807).
+- **Two workspace messages now follow your language.** Changing the password while documents are
+  being imported or re-indexed said "Documents are still being imported or re-indexed …" in English
+  whatever the interface language; it is now in your language. And when setting up the workspace
+  failed because another program, such as antivirus, held one of its new files, the lock screen
+  showed the system's own English error with the full path of the file on the drive; it now says
+  "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When
   Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
   running, the next document task in line started during that wait and was stopped a moment
@@ -212,9 +223,9 @@ from its first public `1.0.0` release onward.
 - **Unlock and setup errors now appear in the language the lock screen shows.** If the language
   you chose in Settings differs from your operating system's, the lock screen was already in your
   language, but a wrong password or a problem opening or creating the workspace was reported in
-  the operating system's language. These messages now match the rest of the screen. Two rare
-  refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
-  unencrypted one) are still shown in English.
+  the operating system's language. These messages now match the rest of the screen, and so do the
+  two rare refusals when creating a workspace (one already exists on the drive, or a workspace
+  without a password isn't allowed), which were always in English (#807).
 - **Turkish dotted and dotless I now match in the text filters.** In the Documents name filter,
   the AI Model search and the review's evidence filter, typing "ısı" didn't find a name written
   "ISI", and "istanbul" didn't find "İSTANBUL". The Documents filter also compared names by the
@@ -263,7 +274,12 @@ from its first public `1.0.0` release onward.
   English message ("Invalid PDF structure."), a line in the interface language now stands above
   that message: "This file couldn't be processed." on the document's row on the Documents screen,
   and "Couldn't add report.pdf to this chat.", with the file's name, in the chat's banner for a
-  failed attachment. Messages the app recognises read as before (#807).
+  failed attachment. Translating such a file on the Translate screen now shows the same line as its
+  row. Messages the app recognises read as before. Other errors in a program's own words now come
+  after a line in your language too: on a review, "Some changes could not be saved yet." before a
+  message such as "database is locked", and "This review could not be opened." when it can't be
+  opened; and for an evidence pack, "The evidence pack export did not finish." before the reason
+  (#807).
 - **Search now finds Turkish words with "İ" and "ı", and words typed with separate accent
   marks.** In conversation search and the keyword part of document search, a word typed with the
   capital "İ" was cut at that letter: "İstanbul" looked for "i" and "stanbul", found neither

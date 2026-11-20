@@ -2494,6 +2494,10 @@ export const tr: UiCatalog<'tr'> = {
     'Parolanız doğru, ancak çalışma alanının şifreli dosyası sürücüde yok ve onu kurtarmak için ' +
     'hiçbir kopya kalmadı. Yeni bir çalışma alanı oluşturmayın. Dosyayı yerine koyun veya çalışma ' +
     'alanı klasörünü bir yedekten geri yükleyin.',
+  'main.workspace.descriptorMissing':
+    'Çalışma alanınızın anahtarını tutan dosya (config/workspace.json) sürücüde yok veya okunamıyor, ' +
+    'bu yüzden hiçbir parola çalışma alanını açamaz. Yeni bir çalışma alanı oluşturmayın. Dosyayı ' +
+    'yerine koyun veya bir yedekten geri yükleyin.',
   'main.workspace.vaultOpenFailed':
     'Parolanız doğru, ancak HilbertRaum çalışma alanını açmayı tamamlayamadı. Sürücüdeki ' +
     'şifreli çalışma alanı olduğu gibi bırakıldı. Sürücüde boş alan olduğundan emin olun ve ' +
@@ -2509,6 +2513,12 @@ export const tr: UiCatalog<'tr'> = {
     'güncelleyin. Hiçbir şey değiştirilmedi.',
   'main.workspace.createFailed': 'Çalışma alanı oluşturulamadı.',
   'main.workspace.passwordTooShort': 'Parola en az {min} karakter olmalıdır.',
+  'main.workspace.exists':
+    'Bu sürücüde zaten bir çalışma alanı var, bu yüzden yeni bir tane oluşturulmadı. Parolasıyla ' +
+    'kilidini açmak için HilbertRaum’u yeniden başlatın.',
+  'main.workspace.plaintextNotAllowed':
+    'Burada parolasız bir çalışma alanına izin verilmiyor. Çalışma alanını bunun yerine bir ' +
+    'parolayla oluşturun.',
   'main.workspace.newPasswordTooShort': 'Yeni parola en az {min} karakter olmalıdır.',
   'main.workspace.unlockBeforeChange':
     'Parolasını değiştirmeden önce çalışma alanının kilidini açın.',
@@ -2517,6 +2527,9 @@ export const tr: UiCatalog<'tr'> = {
   'main.workspace.changeFailed': 'Parola değiştirilemedi. Mevcut parolanız hâlâ geçerli.',
   'main.workspace.busyPasswordChange':
     'Çalışma alanının parolası şu anda değiştiriliyor. Biraz sonra yeniden deneyin.',
+  'main.workspace.busyDocumentWork':
+    'Belgeler hâlâ içe aktarılıyor veya yeniden dizinleniyor. Bunun bitmesini bekleyin, sonra ' +
+    'yeniden deneyin.',
   'main.workspace.lockFailed':
     'Çalışma alanı kilitlenemedi; kilidi açık kalıyor ve verileriniz güvende. Sürücüde biraz yer ' +
     'açın, sonra yeniden deneyin.',
@@ -3400,6 +3413,7 @@ export const tr: UiCatalog<'tr'> = {
   'review.rename.save': 'Kaydet',
   'review.loading': 'İnceleme açılıyor…',
   'review.notFound': 'Bu inceleme bulunamadı. Silinmiş olabilir.',
+  'review.openFailed': 'Bu inceleme açılamadı.',
   'review.question.toggle': 'Soru',
   'review.answerPane.aria': 'İncelenen yanıt',
   'review.autosave.saving': 'Kaydediliyor…',
@@ -3586,6 +3600,7 @@ export const tr: UiCatalog<'tr'> = {
   'review.export.cancel': 'Kapat',
   'review.export.done': 'Dayanak paketi dışa aktarıldı.',
   'review.export.error': 'Dayanak paketi dışa aktarılamadı. Hiçbir dosya yazılmadı.',
+  'review.export.failed': 'Dayanak paketinin dışa aktarımı tamamlanmadı.',
   'review.export.copyHash': 'SHA-256 değerini kopyala',
   'review.export.hashCopied': 'SHA-256 değeri panoya kopyalandı.'
 }

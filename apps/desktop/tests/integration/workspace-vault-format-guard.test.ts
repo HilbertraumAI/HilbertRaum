@@ -9,7 +9,9 @@ import {
   RECOVERY_SUFFIX,
   REKEY_JOURNAL_NAME,
   REKEY_SUFFIX,
+  VaultDescriptorMissingError,
   WorkspaceController,
+  WorkspaceExistsError,
   cleanSidecars,
   encryptFile,
   readVaultDescriptorChecked,
@@ -289,7 +291,7 @@ describe('a vault a newer build wrote is refused at startup and at unlock, and l
         })
       }
       // Still a vault: the create flow is refused.
-      expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+      expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
       expect(snapshot(vp.root)).toEqual(before)
     } finally {
       ctl.shutdown()
@@ -350,7 +352,7 @@ describe('a newer verdict is re-checked once the newer artifact is gone (#845)',
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     try {
-      expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+      expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
       rmSync(journal)
       rmSync(staged)
       expect(ctl.create('another-password', 'encrypted').state).toBe('unlocked')
@@ -420,7 +422,7 @@ describe('what is not newer (#845)', () => {
     ctl.init()
     try {
       expect(ctl.getState()).toMatchObject({ state: 'locked', mode: 'encrypted' })
-      expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+      expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
       expect(snapshot(vp.root)).toEqual(before)
     } finally {
       ctl.shutdown()
@@ -460,8 +462,8 @@ describe('what is not newer (#845)', () => {
     ctl.init()
     try {
       expect(ctl.getState()).toMatchObject({ state: 'locked', mode: 'encrypted' })
-      expect(() => ctl.unlock(PW)).toThrow(/missing or unreadable/)
-      expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+      expect(() => ctl.unlock(PW)).toThrow(VaultDescriptorMissingError)
+      expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
       expect(snapshot(vp.root)).toEqual(before)
     } finally {
       ctl.shutdown()

@@ -2681,6 +2681,10 @@ export const pl: UiCatalog<'pl'> = {
     'Hasło jest prawidłowe, ale na dysku brakuje zaszyfrowanego pliku obszaru roboczego i nie ' +
     'pozostała żadna kopia, z której można by go odzyskać. Nie twórz nowego obszaru roboczego. Odłóż ' +
     'plik na miejsce albo przywróć folder obszaru roboczego z kopii zapasowej.',
+  'main.workspace.descriptorMissing':
+    'Na dysku brakuje pliku z kluczem obszaru roboczego (config/workspace.json) albo nie da się go ' +
+    'odczytać, więc żadne hasło nie otworzy obszaru roboczego. Nie twórz nowego obszaru roboczego. ' +
+    'Odłóż plik na miejsce albo przywróć go z kopii zapasowej.',
   'main.workspace.vaultOpenFailed':
     'Hasło jest prawidłowe, ale aplikacja HilbertRaum nie mogła dokończyć otwierania ' +
     'obszaru roboczego. Zaszyfrowany obszar roboczy na dysku pozostał bez zmian. Upewnij ' +
@@ -2696,6 +2700,11 @@ export const pl: UiCatalog<'pl'> = {
     'aplikację, aby go otworzyć. Niczego nie zmieniono.',
   'main.workspace.createFailed': 'Nie udało się utworzyć obszaru roboczego.',
   'main.workspace.passwordTooShort': 'Hasło musi mieć co najmniej {min} znaków.',
+  'main.workspace.exists':
+    'Na tym dysku jest już obszar roboczy, więc nie utworzono nowego. Uruchom ponownie aplikację ' +
+    'HilbertRaum, aby odblokować obszar roboczy jego hasłem.',
+  'main.workspace.plaintextNotAllowed':
+    'Obszar roboczy bez hasła nie jest tu dozwolony. Zamiast tego utwórz obszar roboczy z hasłem.',
   'main.workspace.newPasswordTooShort': 'Nowe hasło musi mieć co najmniej {min} znaków.',
   'main.workspace.unlockBeforeChange': 'Odblokuj obszar roboczy, zanim zmienisz jego hasło.',
   'main.workspace.wrongCurrentPassword':
@@ -2703,6 +2712,9 @@ export const pl: UiCatalog<'pl'> = {
   'main.workspace.changeFailed': 'Nie udało się zmienić hasła. Obecne hasło nadal działa.',
   'main.workspace.busyPasswordChange':
     'Hasło obszaru roboczego jest właśnie zmieniane. Spróbuj ponownie za chwilę.',
+  'main.workspace.busyDocumentWork':
+    'Dokumenty są nadal importowane lub ponownie indeksowane. Poczekaj, aż to się skończy, i spróbuj ' +
+    'ponownie.',
   'main.workspace.lockFailed':
     'Nie udało się zablokować obszaru roboczego – nadal jest otwarty, a twoje dane są ' +
     'bezpieczne. Zwolnij trochę miejsca na dysku i spróbuj ponownie.',
@@ -3660,6 +3672,7 @@ export const pl: UiCatalog<'pl'> = {
   'review.rename.save': 'Zapisz',
   'review.loading': 'Wczytywanie weryfikacji…',
   'review.notFound': 'Nie znaleziono tej weryfikacji. Mogła zostać usunięta.',
+  'review.openFailed': 'Nie udało się otworzyć tej weryfikacji.',
   'review.question.toggle': 'Pytanie',
   'review.answerPane.aria': 'Weryfikowana odpowiedź',
   'review.autosave.saving': 'Zapisywanie…',
@@ -3890,6 +3903,7 @@ export const pl: UiCatalog<'pl'> = {
   'review.export.done': 'Wyeksportowano pakiet potwierdzeń.',
   'review.export.error':
     'Nie udało się wyeksportować pakietu potwierdzeń. Nie zapisano żadnego pliku.',
+  'review.export.failed': 'Eksport pakietu potwierdzeń nie został ukończony.',
   'review.export.copyHash': 'Kopiuj SHA-256',
   'review.export.hashCopied': 'Skopiowano SHA-256 do schowka.'
 }

@@ -2641,6 +2641,11 @@ export const es: UiCatalog<'es'> = {
     'Tu contraseña es correcta, pero el archivo cifrado del espacio de trabajo falta en la unidad y ' +
     'no quedó ninguna copia para recuperarlo. No crees un espacio de trabajo nuevo. Vuelve a poner ' +
     'el archivo en su sitio o restaura la carpeta «workspace» desde una copia de seguridad.',
+  'main.workspace.descriptorMissing':
+    'Falta en la unidad el archivo con la clave de tu espacio de trabajo (config/workspace.json), o ' +
+    'no se puede leer, así que ninguna contraseña puede abrir el espacio de trabajo. No crees un ' +
+    'espacio de trabajo nuevo. Vuelve a poner el archivo en su sitio o restáuralo desde una copia de ' +
+    'seguridad.',
   'main.workspace.vaultOpenFailed':
     'Tu contraseña es correcta, pero HilbertRaum no pudo terminar de abrir el espacio de ' +
     'trabajo. El espacio de trabajo cifrado en la unidad se dejó como estaba. Asegúrate de ' +
@@ -2656,6 +2661,12 @@ export const es: UiCatalog<'es'> = {
     'aplicación para abrirlo. No se modificó nada.',
   'main.workspace.createFailed': 'No se pudo crear el espacio de trabajo.',
   'main.workspace.passwordTooShort': 'La contraseña debe tener al menos {min} caracteres.',
+  'main.workspace.exists':
+    'Ya hay un espacio de trabajo en esta unidad, así que no se creó uno nuevo. Reinicia HilbertRaum ' +
+    'para desbloquearlo con su contraseña.',
+  'main.workspace.plaintextNotAllowed':
+    'Aquí no se permite un espacio de trabajo sin contraseña. Crea el espacio de trabajo con una ' +
+    'contraseña.',
   'main.workspace.newPasswordTooShort': 'La contraseña nueva debe tener al menos {min} caracteres.',
   'main.workspace.unlockBeforeChange':
     'Desbloquea el espacio de trabajo antes de cambiar su contraseña.',
@@ -2666,6 +2677,9 @@ export const es: UiCatalog<'es'> = {
   'main.workspace.busyPasswordChange':
     'Se está cambiando la contraseña del espacio de trabajo. Vuelve a intentarlo en unos ' +
     'instantes.',
+  'main.workspace.busyDocumentWork':
+    'Todavía se están importando o reindexando documentos. Espera a que termine y vuelve a ' +
+    'intentarlo.',
   'main.workspace.lockFailed':
     'No se pudo bloquear el espacio de trabajo: sigue abierto y tus datos están a salvo. Libera ' +
     'algo de espacio en la unidad y vuelve a intentarlo.',
@@ -3647,6 +3661,7 @@ export const es: UiCatalog<'es'> = {
   'review.rename.save': 'Guardar',
   'review.loading': 'Cargando la revisión…',
   'review.notFound': 'No se encontró esta revisión. Puede que se haya eliminado.',
+  'review.openFailed': 'No se pudo abrir esta revisión.',
   'review.question.toggle': 'Pregunta',
   'review.answerPane.aria': 'Respuesta en revisión',
   'review.autosave.saving': 'Guardando…',
@@ -3866,6 +3881,7 @@ export const es: UiCatalog<'es'> = {
   'review.export.done': 'Paquete de evidencia exportado.',
   'review.export.error':
     'No se pudo exportar el paquete de evidencia. No se escribió ningún archivo.',
+  'review.export.failed': 'La exportación del paquete de evidencia no terminó.',
   'review.export.copyHash': 'Copiar SHA-256',
   'review.export.hashCopied': 'SHA-256 copiado en el portapapeles.'
 }

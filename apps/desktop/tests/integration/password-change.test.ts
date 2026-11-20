@@ -15,6 +15,7 @@ import {
   WorkspaceController,
   WrongPasswordError,
   VaultBusyError,
+  VaultDescriptorMissingError,
   VAULT_VERSION,
   VAULT_VERSION_ENVELOPE,
   REKEY_SUFFIX,
@@ -108,7 +109,7 @@ describe('vault descriptor v2 (envelope)', () => {
     delete d.dataKey
     writeFileSync(vp.descriptorPath, JSON.stringify(d), 'utf8')
     expect(readVaultDescriptor(vp.descriptorPath)).toBeNull()
-    expect(() => unlockEncryptedVault(vp, 'pw')).toThrow(/missing or unreadable/)
+    expect(() => unlockEncryptedVault(vp, 'pw')).toThrow(VaultDescriptorMissingError)
   })
 })
 
@@ -232,8 +233,9 @@ describe('changePassword — document-work race guard (Phase 32)', () => {
     const { ctl } = unlockedVault('pw-one')
     const releaseFirst = ctl.beginDocumentWork()
     const releaseSecond = ctl.beginDocumentWork()
+    // The class is the contract here; its text is `tMain('main.workspace.busyDocumentWork')`, which
+    // workspace-ipc.test.ts checks in every language (#807).
     expect(() => ctl.changePassword('pw-one', 'pw-two', FAST_ARGON)).toThrow(VaultBusyError)
-    expect(() => ctl.changePassword('pw-one', 'pw-two', FAST_ARGON)).toThrow(/imported or re-indexed/)
 
     // A release is idempotent: releasing the first lease twice must not free the second one.
     releaseFirst()

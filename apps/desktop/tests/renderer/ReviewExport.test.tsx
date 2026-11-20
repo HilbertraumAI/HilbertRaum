@@ -188,18 +188,20 @@ describe('summary export panel (plan §8.4)', () => {
     expect(within(dialog).queryByText(t('en', 'review.summary.exports'))).not.toBeInTheDocument()
   })
 
-  it('a failed export shows the inline error and records nothing', async () => {
+  // #807 (E-a): the failed call's own message (a file write error stays as thrown, in English) comes after a lead in
+  // the interface language that is true for every failure; the flush refusal below keeps its own line.
+  it('a failed export leads with the translated sentence, then its own message, and records nothing', async () => {
     const exportEvidencePack = vi.fn(async () => {
-      throw new Error('disk full')
+      throw new Error("Error invoking remote method 'evidence:export': Error: ENOSPC: no space left on device, write")
     })
-    await renderReview({ detail: makeDetail(), api: { exportEvidencePack } })
-    const dialog = await openSummary()
-    await openExportPanel(dialog)
-    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.export.confirm') }))
+    await renderReview({ detail: makeDetail(), api: { exportEvidencePack }, lang: 'de' })
+    const dialog = await openSummary('de')
+    await openExportPanel(dialog, 'de')
+    fireEvent.click(within(dialog).getByRole('button', { name: t('de', 'review.export.confirm') }))
 
     const alert = await within(dialog).findByRole('alert')
-    expect(alert.textContent).toContain('disk full')
-    expect(within(dialog).queryByText(t('en', 'review.summary.exports'))).not.toBeInTheDocument()
+    expect(alert.textContent).toBe(`${t('de', 'review.export.failed')} ENOSPC: no space left on device, write`)
+    expect(within(dialog).queryByText(t('de', 'review.summary.exports'))).not.toBeInTheDocument()
   })
 
   it('flushes pending edits BEFORE exporting (the pack renders persisted data)', async () => {

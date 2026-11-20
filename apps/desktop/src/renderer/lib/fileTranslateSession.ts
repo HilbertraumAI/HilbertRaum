@@ -63,10 +63,15 @@ export interface FileTranslateSnapshot {
   gaps: DocTaskGaps | null
   /** A CODE the screen maps to friendly copy. */
   error: FileTranslateErrorCode | null
-  /** A backend-provided friendly failure message. Doc-task failures are persist-canonical
-   *  ENGLISH — the screen localizes at display time via `localizeServerCopy` (DR-7 parity;
-   *  full-audit 2026-07-11 CODE-42). */
+  /** A backend-provided friendly failure message: a doc-task's `status.error` (main's own `tMain` text, or its generic
+   *  failure) or a failed IPC call's message. The screen still runs it through `localizeServerCopy` (DR-7 parity;
+   *  full-audit 2026-07-11 CODE-42), which leaves text it does not know as it is. */
   errorMessage: string | null
+  /** FE-3 / #807: the failed source document's stored `error_message` (persist-canonical English, or a parser's own
+   *  words such as pdf.js's "Invalid PDF structure."). The screen shows text the display map does not know under the
+   *  translated `docs.failed.lead`, as the Documents row does for the same file. Set only by an import that ingested
+   *  nothing; `errorMessage` is null then. */
+  documentError: string | null
   /** importing || translating — the file path's contribution to the screen's single busy state. */
   busy: boolean
 }
@@ -82,6 +87,7 @@ const EMPTY: FileTranslateSnapshot = {
   gaps: null,
   error: null,
   errorMessage: null,
+  documentError: null,
   busy: false
 }
 
@@ -164,12 +170,18 @@ function stopPolling(): void {
 
 function fail(code: FileTranslateErrorCode): void {
   stopPolling()
-  set({ state: 'failed', error: code, errorMessage: null, busy: false })
+  set({ state: 'failed', error: code, errorMessage: null, documentError: null, busy: false })
 }
 
 function failWith(message: string): void {
   stopPolling()
-  set({ state: 'failed', error: null, errorMessage: message, busy: false })
+  set({ state: 'failed', error: null, errorMessage: message, documentError: null, busy: false })
+}
+
+/** #807: the import failed with the document's own stored error, which the screen shows under a lead when needed. */
+function failWithDocumentError(message: string): void {
+  stopPolling()
+  set({ state: 'failed', error: null, errorMessage: null, documentError: message, busy: false })
 }
 
 /**
@@ -365,9 +377,10 @@ async function runImport(paths: string[], token: string | undefined, choice: Tra
  * — no new IPC surface) to tell the user WHY:
  *  - a detected image-only scan (`scanDetected`, derived main-side from the exact scan notice) →
  *    the `scanned` code, whose copy points at the Documents row's "Make searchable (OCR)" action;
- *  - any other ingest failure → surface its localized `error_message` verbatim (the screen routes
- *    it through `localizeServerCopy`, like DocumentsScreen), falling back to the generic
- *    import-failed frame when the row or its message can't be read.
+ *  - any other ingest failure → surface its stored `error_message` (the screen routes it through
+ *    `classifyServerCopy` like DocRow: a message the display map knows reads alone, translated; any
+ *    other, a parser's own words, is the detail under `docs.failed.lead`, #807), falling back to the
+ *    generic import-failed frame when the row or its message can't be read.
  * The genuinely-unsupported EXTENSION path (nothing imported at all) stays `fail('unsupported')` in
  * `runImport` — this resolver is only reached once a document row exists.
  */
@@ -384,7 +397,7 @@ async function resolveImportFailure(docId: string, myGen: number): Promise<void>
   if (failed?.scanDetected) {
     fail('scanned')
   } else if (failed?.errorMessage) {
-    failWith(failed.errorMessage)
+    failWithDocumentError(failed.errorMessage)
   } else {
     fail('importFailed')
   }
