@@ -10,7 +10,8 @@ import { t } from '../../src/shared/i18n'
 import type { CoverageInfo, DocTaskStatus, DocumentCoverage, DocumentInfo } from '../../src/shared/types'
 import { makeCitations, makeMessage } from '../helpers/chat-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 import { renderTranscript } from '../helpers/transcript'
 
 // Whole-document-analysis Phase 2 renderer tests: the coverage meter's HONESTY (breadth ≠
@@ -23,6 +24,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   // Keep the UI-language / rail keys from leaking between rows.
   window.localStorage.clear()
+  assertNoUnexpectedApiCalls()
 })
 
 function meter(coverage: CoverageInfo): JSX.Element {
@@ -218,11 +220,11 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
   it('offers "Build deep index" on a fully-chunked doc with no tree, and starts a tree task that chains the extract pass (#38)', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: null })]),
       startDocTask,
       getDocTask: vi.fn(async () => task({ state: 'running' }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('report.pdf')
     // "Build deep index" now lives in the per-row "⋯" overflow (§11.6).
@@ -239,13 +241,13 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
   it('a tree-ready doc whose extract pass is missing re-offers the action and starts JUST the extract (#38)', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j2' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: null })
       ]),
       startDocTask,
       getDocTask: vi.fn(async () => task({ jobId: 'j2', kind: 'extract', state: 'running' }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('report.pdf')
     // The deep index is INCOMPLETE (tree ready, extract missing) — no "Deeply indexed" badge yet.
@@ -259,11 +261,11 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     const user = userEvent.setup()
     const reindexDocument = vi.fn(async () => doc({ fullyChunked: true }))
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({ fullyChunked: false, treeStatus: null })]),
       reindexDocument,
       startDocTask
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('report.pdf')
     await user.click(screen.getByRole('button', { name: t('en', 'docs.moreActions', { title: 'report.pdf' }) }))
@@ -280,7 +282,7 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
       coverage: { mode: 'tree', treeStatus: 'ready', chunksCovered: 40, chunksTotal: 40, tier: 1, treeLevels: 2 },
       provenance: [{ label: 'S1', sourceTitle: 'report.pdf', pageNumber: 1, snippet: 'intro' }]
     }
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({
           fullyChunked: true,
@@ -295,7 +297,7 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
         segments: [{ text: 'body', pageNumber: 1, sectionLabel: null }]
       })),
       documentCoverage: vi.fn(async () => coverage)
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('report.pdf')
     await user.click(screen.getByRole('button', { name: /^preview$/i }))

@@ -6,7 +6,8 @@ import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { t } from '../../src/shared/i18n'
 import type { AppStatus, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { appStatus as baseAppStatus } from '../helpers/status'
 
@@ -85,6 +86,7 @@ afterEach(() => {
   cleanup()
   clearDocTaskSession()
   vi.restoreAllMocks()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => {
@@ -94,12 +96,12 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
     let status = task({ state: 'running', progress: { stepsDone: 1, stepsTotal: 4 } })
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
     const getDocTask = vi.fn(async () => status)
-    stubApi({
+    stubApi(documentsScreenStubs({
       getAppStatus: vi.fn(async () => appStatus()),
       listDocuments: vi.fn(async () => docs),
       startDocTask,
       getDocTask
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -139,10 +141,10 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
 
   it('disables Translate for a same-language pair and keeps the chosen pair across a modal reopen', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       getAppStatus: vi.fn(async () => appStatus()),
       listDocuments: vi.fn(async () => [doc()])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await openTranslateModal(user)
@@ -166,10 +168,10 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
   it('model missing: Translate disables and the install item deep-links to the AI Model screen', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    stubApi({
+    stubApi(documentsScreenStubs({
       getAppStatus: vi.fn(async () => appStatus({ translationAvailable: false })),
       listDocuments: vi.fn(async () => [doc()])
-    })
+    }))
     render(<DocumentsScreen onNavigate={onNavigate} />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
@@ -185,10 +187,10 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
   it('shows the provenance line and Export only on materialized documents; Export saves', async () => {
     const user = userEvent.setup()
     const exportDocument = vi.fn(async () => 'C:/exported.md')
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc(), translatedDoc()]),
       exportDocument
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract (Deutsch).md')
     // Provenance names the source document.
@@ -206,7 +208,7 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
 
   it('the preview shows the provenance line for a translated document', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc(), translatedDoc()]),
       previewDocument: vi.fn(async () => ({
         id: 'd2',
@@ -214,7 +216,7 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
         mimeType: 'text/markdown',
         segments: [{ text: 'Maschinell übersetzt …', pageNumber: null, sectionLabel: null }]
       }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract (Deutsch).md')
     const previewButtons = screen.getAllByRole('button', { name: /^preview$/i })
@@ -225,9 +227,9 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
   })
 
   it('the source row falls back gracefully when the source document was deleted', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [translatedDoc()]) // the source d1 is gone
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract (Deutsch).md')
     expect(screen.getByText('a removed document')).toBeInTheDocument()
@@ -244,7 +246,7 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
         createdAt: '2026-06-14T00:00:00.000Z'
       }
     })
-    stubApi({ listDocuments: vi.fn(async () => [doc(), structured]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc(), structured]) }))
     render(<DocumentsScreen />)
     await screen.findByText('contract (Deutsch).md')
     expect(screen.getByText(/Translated from/)).toBeInTheDocument()
@@ -284,7 +286,7 @@ describe('Documents modal ↔ Translate screen — one language-pair memory (DOC
     const { Docs, Translate } = await freshScreens()
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
-    stubApi({ ...mountApi(), startDocTask, getDocTask: vi.fn(async () => task()) })
+    stubApi(documentsScreenStubs({ ...mountApi(), startDocTask, getDocTask: vi.fn(async () => task()) }))
     render(<Docs />)
     await screen.findByText('contract.pdf')
     await openTranslateModal(user)
@@ -301,7 +303,7 @@ describe('Documents modal ↔ Translate screen — one language-pair memory (DOC
     const { Docs, Translate } = await freshScreens()
     const user = userEvent.setup()
     const translateStart = vi.fn(() => new Promise<never>(() => {})) // the translation stays in flight
-    stubApi({ ...mountApi(), translateStart })
+    stubApi(documentsScreenStubs({ ...mountApi(), translateStart }))
     render(<Translate onNavigate={() => {}} />)
     await user.selectOptions(await screen.findByRole('combobox', { name: 'From' }), 'en')
     await user.selectOptions(screen.getByRole('combobox', { name: 'To' }), 'uk')
