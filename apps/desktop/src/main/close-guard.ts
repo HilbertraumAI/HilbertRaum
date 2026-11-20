@@ -18,7 +18,8 @@ import type { DocTaskStatus, SaveBeforeCloseResult } from '../shared/types'
 // question on the macOS red button (the app and its tasks go on), on a close a quit started (Ctrl+Q,
 // ⌘Q, Dock Quit: explicit quit commands, which stop the tasks at once), on Lock now or on a session
 // end. On the X path the OCR window lives until the main window's `closed` (measured, follow-ups
-// wave 4 research B §0), so a Keep open loses nothing.
+// wave 4 research B §0), so a Keep open loses nothing. A quit asked while the question is up (Ctrl+Q
+// or a signal on Linux) closes it and counts as Close anyway (review SF-1): explicit quits never ask.
 //
 // #936: once the guard commits to a close that quits (after that question, or at once with
 // nothing to ask), it holds the document-task queue (`holdWork`): a quit the guard holds closes
@@ -58,6 +59,7 @@ export type StoppingWork = 'ocr' | 'translation' | 'several'
 /** The user's answer to "A document task is not finished yet." */
 export type StopWorkChoice = 'keep' | 'close'
 
+/** A belt: `listActiveDocTasks()` already lists only running and queued tasks (review N-1). */
 const NOT_ACTIVE: ReadonlySet<DocTaskStatus['state']> = new Set(['done', 'failed', 'cancelled'])
 
 /**
@@ -106,8 +108,16 @@ export interface CloseGuardDeps {
   closeQuits?: boolean
   /** #935: the document work a quit would stop right now (`stoppingWorkFrom`), or null. Default: none. */
   stoppingWork?(): StoppingWork | null
-  /** #935: the native "A document task is not finished yet." dialog (`createStopWorkConfirm`). */
-  confirmStopWork?(work: StoppingWork): Promise<StopWorkChoice>
+  /**
+   * #935: the native "A document task is not finished yet." dialog (`createStopWorkConfirm`). `signal` closes it (review
+   * SF-1: a quit asked while it is up); the guard then reads the answer as Close anyway, whatever the dialog says.
+   */
+  confirmStopWork?(work: StoppingWork, signal: AbortSignal): Promise<StopWorkChoice>
+  /**
+   * #935 review SF-1: call `listener` on every quit asked from now on (`before-quit`), and at once when one is already
+   * pending; returns the unsubscribe. `QuitRequests.onRequest`. Default: no quit is ever seen.
+   */
+  onQuitRequest?(listener: () => void): () => void
   /** #936: start no new document task: a close that quits is under way (`DocTaskManager.holdQueueForQuit`). */
   holdWork?(): void
   /** #936: the quit was called off: the document-task queue goes on (`DocTaskManager.releaseQueueHold`). */
@@ -150,13 +160,28 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
       return Promise.resolve(null)
     }
   }
-  /** #935: the user's answer; a question that throws or rejects closes (as #888's dialog does), the save still runs. */
+  /**
+   * #935: the user's answer; a question that throws or rejects closes (as #888's dialog does), the save still runs.
+   * Review SF-1: an explicit quit never asks (owner call G-1), so a quit asked while the question is up (Ctrl+Q or a
+   * SIGTERM on Linux, ⌘Q on macOS) closes the dialog and counts as Close anyway: that quit has already closed the OCR
+   * window, and swallowing it would leave a signal quit waiting on someone to answer.
+   */
   const askStopSafely = async (work: StoppingWork): Promise<StopWorkChoice> => {
+    const quitAsked = new AbortController()
+    let unsubscribe: () => void = () => undefined
     try {
-      return (await deps.confirmStopWork?.(work)) ?? 'close'
+      unsubscribe = deps.onQuitRequest?.(() => quitAsked.abort()) ?? unsubscribe
+      const answer = quitAsked.signal.aborted
+        ? 'close' // a quit was already pending: nothing to ask
+        : ((await deps.confirmStopWork?.(work, quitAsked.signal)) ?? 'close')
+      if (!quitAsked.signal.aborted) return answer
+      deps.log.info('close: a quit was asked during the running-task question; closing')
+      return 'close'
     } catch (err) {
       deps.log.warn('close: the running-task question failed; closing', { error: String(err) })
       return 'close'
+    } finally {
+      unsubscribe()
     }
   }
   /** #935: the work this close would stop and that it asks about; never for a close a quit started. */
@@ -235,7 +260,9 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
             }
           }
           if (choice === 'close') {
-            // #936: committed to a close that quits: nothing new starts in the queue from here on.
+            // #936: committed to a close that quits: nothing new starts in the queue from here on. With
+            // nothing to ask this runs inside the `close` event, deliberately: on a quit the OCR window's
+            // `destroyed` comes 3-6 ms later (research B §#936.4), and the hold must come first.
             if (fromQuit || closeQuits) {
               queueHook(deps.holdWork, 'hold')
               holding = true
@@ -430,8 +457,10 @@ const STOP_WORK_DETAIL: Readonly<Record<StoppingWork, MessageKey>> = {
  * detail says what the work loses, with no count (no plural forms). A dialog that fails closes
  * (#888's rule: main cannot ask, so it falls back to the close).
  */
-export function createStopWorkConfirm(deps: UnsavedCloseConfirmDeps): (work: StoppingWork) => Promise<StopWorkChoice> {
-  return async (work) => {
+export function createStopWorkConfirm(
+  deps: UnsavedCloseConfirmDeps
+): (work: StoppingWork, signal?: AbortSignal) => Promise<StopWorkChoice> {
+  return async (work, signal) => {
     try {
       const response = await askModal(deps, {
         type: 'warning',
@@ -441,7 +470,9 @@ export function createStopWorkConfirm(deps: UnsavedCloseConfirmDeps): (work: Sto
         buttons: [deps.t('main.dialog.taskRunning.keepOpen'), deps.t('main.dialog.taskRunning.closeAnyway')],
         defaultId: STOP_KEEP_OPEN,
         cancelId: STOP_KEEP_OPEN,
-        noLink: true
+        noLink: true,
+        // Review SF-1: the guard closes it when a quit is asked (Electron answers it as cancelled: `cancelId`).
+        ...(signal ? { signal } : {})
       })
       return response === STOP_CLOSE_ANYWAY ? 'close' : 'keep'
     } catch (err) {
@@ -455,24 +486,43 @@ export function createStopWorkConfirm(deps: UnsavedCloseConfirmDeps): (work: Sto
 export interface QuitRequests {
   /** Was a quit asked since the last read? Reading clears it. */
   consume(): boolean
+  /**
+   * #935 review SF-1: call `listener` on every quit asked from now on, and at once when one is pending (asked and not
+   * read yet). Reading nothing, clearing nothing. Returns the unsubscribe.
+   */
+  onRequest(listener: () => void): () => void
 }
 
 /**
- * Records every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit): each fires `before-quit` before it
+ * Records every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit), and tells `onRequest` listeners (the
+ * running-task question, review SF-1): each fires `before-quit` before it
  * closes the windows. The quit an X starts on Windows and Linux (#910) fires it only after the main
  * window has closed, so no guard reads it. One per app (`index.ts`, module scope); every main
  * window's guard reads it. The print harness has its own `before-quit` hook (`print-pdf.ts`).
  */
 export function trackQuitRequests(app: { on(event: 'before-quit', listener: () => void): unknown }): QuitRequests {
   let asked = false
+  const listeners = new Set<() => void>()
   app.on('before-quit', () => {
     asked = true
+    for (const listener of [...listeners]) {
+      try {
+        listener()
+      } catch {
+        /* a listener that throws must not stop the others, nor the quit */
+      }
+    }
   })
   return {
     consume: () => {
       const was = asked
       asked = false
       return was
+    },
+    onRequest: (listener) => {
+      listeners.add(listener)
+      if (asked) listener()
+      return () => void listeners.delete(listener)
     }
   }
 }
@@ -539,6 +589,7 @@ export function createMainWindowCloseGuard(deps: MainWindowCloseGuardDeps): Clos
     },
     quit: () => deps.app.quit(),
     consumeQuitRequest: () => deps.quitRequests.consume(),
+    onQuitRequest: (listener) => deps.quitRequests.onRequest(listener),
     isShuttingDown: () => deps.isShuttingDown(),
     closeQuits: deps.platform !== 'darwin',
     stoppingWork: () => stoppingWorkFrom(deps.listActiveDocTasks()),

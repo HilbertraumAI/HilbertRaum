@@ -218,6 +218,9 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
     expect(names(r).indexOf('helper:run-aborted')).toBeLessThan(names(r).indexOf('will-quit'))
   }, ROW_BUDGET_MS)
 
+  // The two #935/#936 rows run the production guard, question factory, predicate and belt over a stand-in queue and a
+  // recording dialog (not DocTaskManager, not a native dialog): they prove the Electron event order and the call order.
+  // The manager's `pump` is proven in ocr-task.test.ts, the native dialog by the W2 probes (review N-3).
   // #935 (owner call G-1, (c)-P0): on Windows and Linux an X ends the app, so with an OCR run going it asks first. The
   // OCR window lives until the main window's `closed` on this path (research B §0), so it is still there at both
   // answers: Keep open closes nothing and the run goes on; Close anyway then holds the queue (#936), saves and quits.

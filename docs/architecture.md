@@ -3058,8 +3058,9 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     queued (it runs if the quit is called off); `hasActiveTask()` and `listActiveDocTasks()` are
     unchanged (a held task is still active, so the chat busy guard still sees it). Two callers set it
     (`main/close-guard.ts`): the main window's close guard, when it commits to a close that quits, and
-    `holdQueueOnQuit`, at every un-prevented `before-quit` (`main/index.ts`). Only the guard's Keep open
-    releases it. Why: a quit the guard holds while the window saves (Ctrl+Q on Linux, ⌘Q or Dock Quit
+    `holdQueueOnQuit`, at every un-prevented `before-quit` (`main/index.ts`). The guard's Keep open releases
+    it, and so does a successful unlock (`registerWorkspaceIpc.ts`; no quit is under way then, so a hold
+    still set would be stale). Why: a quit the guard holds while the window saves (Ctrl+Q on Linux, ⌘Q or Dock Quit
     on macOS) closes the OCR window first, so the run ended before `will-quit` flushed the queue and
     the next task started into the save, only to be cancelled a moment later (measured on Electron
     43.8.6). Still no permanent latch: Keep open releases it, and on a quit that goes on

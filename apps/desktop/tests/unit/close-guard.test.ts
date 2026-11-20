@@ -71,6 +71,11 @@ interface GuardHarnessOptions {
     stopping: StoppingWork | null
     /** A dep that throws: the question, the task list or the hold. */
     throws?: 'question' | 'taskList' | 'hold'
+    /**
+     * Review SF-1: a dialog its abort signal does not close (by default it answers as Electron's does: cancelled, i.e.
+     * `cancelId`, Keep open); the test answers it itself.
+     */
+    ignoresAbort?: boolean
   }
 }
 
@@ -86,6 +91,8 @@ function guardHarness(opts: GuardHarnessOptions = {}) {
   const stopDialogs: Array<Deferred<StopWorkChoice>> = []
   const asked: StoppingWork[] = []
   let quitRequested = opts.quitFirst === true
+  /** Review SF-1: who listens for a quit (`onQuitRequest`), and each abort the question saw. */
+  const quitListeners = new Set<() => void>()
   let shuttingDown = opts.shuttingDown === true
   const work = opts.work
   const workDeps = work
@@ -95,13 +102,22 @@ function guardHarness(opts: GuardHarnessOptions = {}) {
           if (work.throws === 'taskList') throw new Error('the task list is gone')
           return work.stopping
         },
-        confirmStopWork: (what: StoppingWork) => {
+        confirmStopWork: (what: StoppingWork, signal: AbortSignal) => {
           steps.push('stop-dialog')
           asked.push(what)
           if (work.throws === 'question') return Promise.reject(new Error('dialog failed'))
           const choice = deferred<StopWorkChoice>()
           stopDialogs.push(choice)
+          signal.addEventListener('abort', () => {
+            steps.push('stop-dialog:aborted')
+            if (!work.ignoresAbort) choice.resolve('keep') // Electron: "as if it was cancelled by the user"
+          })
           return choice.promise
+        },
+        onQuitRequest: (listener: () => void) => {
+          quitListeners.add(listener)
+          if (quitRequested) listener()
+          return () => void quitListeners.delete(listener)
         },
         holdWork: () => {
           steps.push('hold')
@@ -156,7 +172,11 @@ function guardHarness(opts: GuardHarnessOptions = {}) {
     /** The work each running-task question was asked about. */
     asked,
     close,
-    requestQuit: () => (quitRequested = true),
+    /** `before-quit`: the app-level flag, and every `onQuitRequest` listener (review SF-1). */
+    requestQuit: () => {
+      quitRequested = true
+      for (const listener of [...quitListeners]) listener()
+    },
     /** A session end locked the workspace (macOS `powerMonitor 'shutdown'`). */
     beginLock: () => (shuttingDown = true)
   }
@@ -482,15 +502,75 @@ describe('close guard — a close that would stop a document task asks first (#9
     expect(h.steps).toEqual(steps)
   })
 
-  it('a quit asked while the question is up, then Keep open: that quit is off too, and the queue goes on', async () => {
+  // Review SF-1: an explicit quit never asks (G-1). One asked while the question is up (Ctrl+Q or a SIGTERM on Linux)
+  // closes the dialog and counts as Close anyway: the hold, the save, then the quit again (its own close was held).
+  it('a quit asked while the question is up closes it: Close anyway, then the hold, the save and the quit', async () => {
     const h = guardHarness({ work: windows })
     h.close()
     await settle()
-    h.requestQuit() // a SIGTERM on Linux, say: before-quit…
-    h.close() // …then the close, held and ignored
+    h.requestQuit() // before-quit…
+    h.close() // …then the quit's close, held and ignored
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'stop-dialog:aborted', 'close:held', 'hold', 'ask'])
+    h.asks[0]!.resolve({ unsaved: false })
+    await settle()
+    expect(h.steps.slice(-2)).toEqual(['quit', 'close:through'])
+    expect(h.steps).not.toContain('release')
+  })
+
+  // Review SF-3: a dialog the abort does not close (a platform where the signal does nothing): whatever the user then
+  // picks, the quit already happened, so the close goes on and quits.
+  it.each<[StopWorkChoice]>([['close'], ['keep']])(
+    'a quit asked while the question is up, the dialog answered %s afterwards: the close still goes on and quits',
+    async (late) => {
+      const h = guardHarness({ work: { ...windows, ignoresAbort: true } })
+      h.close()
+      await settle()
+      h.requestQuit()
+      h.close()
+      h.stopDialogs[0]!.resolve(late)
+      await settle()
+      h.asks[0]!.resolve({ unsaved: false })
+      await settle()
+      expect(h.steps).toEqual(['close:held', 'stop-dialog', 'stop-dialog:aborted', 'close:held', 'hold', 'ask', 'quit', 'close:through'])
+    }
+  )
+
+  it('Keep open answered before any quit: a later quit is not asked about and quits after the save', async () => {
+    const h = guardHarness({ work: windows })
+    h.close()
+    await settle()
     h.stopDialogs[0]!.resolve('keep')
     await settle()
-    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'close:held', 'release'])
+    h.requestQuit() // the question is gone: nothing listens any more
+    h.close()
+    h.asks[0]!.resolve({ unsaved: false })
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'hold', 'ask', 'close:held', 'quit', 'close:through'])
+  })
+
+  it('a quit already pending when the question would open: nothing is asked', async () => {
+    const h = guardHarness({ work: windows })
+    h.close()
+    h.requestQuit() // before the question's later task
+    h.close()
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'close:held', 'hold', 'ask'])
+    expect(h.stopDialogs).toHaveLength(0)
+  })
+
+  // Review SF-3: macOS red button, then ⌘Q during the save, then Keep open on the unsaved question: the guard held
+  // nothing (a plain close), the belt did; Keep open calls that quit off, so the queue is released.
+  it('macOS: the red button, ⌘Q during the save, Keep open on the unsaved question: the belt’s hold is released', async () => {
+    const h = guardHarness({ work: { closeQuits: false, stopping: 'ocr' } })
+    h.close()
+    h.requestQuit()
+    h.close()
+    h.asks[0]!.resolve({ unsaved: true })
+    await settle()
+    h.dialogs[0]!.resolve('keep')
+    await settle()
+    expect(h.steps).toEqual(['ask', 'close:held', 'close:held', 'dialog', 'release'])
   })
 
   it.each<[string, StopWorkChoice]>([
@@ -519,6 +599,24 @@ describe('close guard — a close that would stop a document task asks first (#9
     h.asks[0]!.resolve({ unsaved: false })
     await settle()
     expect(h.steps).toEqual([...before, 'closeWindow', 'close:through'])
+  })
+})
+
+// Review SF-1: what the running-task question listens to.
+describe('close guard — the app-level quit flag tells its listeners (#935 review SF-1)', () => {
+  it('a listener hears every quit, and at once one still pending; reading the flag stays the guard’s, and an unsubscribed one hears nothing', () => {
+    const app = new EventEmitter()
+    const requests = trackQuitRequests(app)
+    const heard: string[] = []
+    const stop = requests.onRequest(() => heard.push('first'))
+    app.emit('before-quit')
+    expect(heard).toEqual(['first'])
+    requests.onRequest(() => heard.push('late')) // the quit is still pending (nobody read it)
+    expect(heard).toEqual(['first', 'late'])
+    stop()
+    expect(requests.consume()).toBe(true) // listening never read the flag
+    app.emit('before-quit')
+    expect(heard).toEqual(['first', 'late', 'late'])
   })
 })
 
@@ -641,7 +739,8 @@ describe('close guard — the "could not be saved" dialog (#888, owner call G-2)
     const deps = { dialog, window, t: (key: MessageKey) => t('de', key), log: quiet }
     const confirm = createUnsavedCloseConfirm(deps)
     /** #935: the running-task question over the same window and dialog (built per call: the #888 rows never use it). */
-    const confirmStop = (work: StoppingWork): Promise<StopWorkChoice> => createStopWorkConfirm(deps)(work)
+    const confirmStop = (work: StoppingWork, signal?: AbortSignal): Promise<StopWorkChoice> =>
+      createStopWorkConfirm(deps)(work, signal)
     return { confirm, confirmStop, steps, shown, window }
   }
 
@@ -727,6 +826,14 @@ describe('close guard — the "could not be saved" dialog (#888, owner call G-2)
     it('a dialog that fails closes (main cannot ask)', async () => {
       expect(await dialogHarness({ reject: true }).confirmStop('ocr')).toBe('close')
     })
+
+    // Review SF-1: the guard closes the dialog through its signal when a quit is asked.
+    it('hands the dialog the signal that closes it', async () => {
+      const h = dialogHarness({ response: 0 })
+      const quit = new AbortController()
+      await h.confirmStop('ocr', quit.signal)
+      expect(h.shown[0]!.options.signal).toBe(quit.signal)
+    })
   })
 })
 
@@ -736,8 +843,11 @@ describe('close guard — the main window wiring (#888)', () => {
   // and `ipcMain`; `app.quit()` fires `before-quit` and then closes the window, as Electron does.
   function wiring(
     dialogResponses: number[] = [],
-    /** #935/#936: the platform and the doc-task manager's active tasks (default: Windows, none). */
-    more: { platform?: string; tasks?: DocTaskStatus[] } = {}
+    /**
+     * #935/#936: the platform and the doc-task manager's active tasks (default: Windows, none). `dialogWaitsForAbort`:
+     * the running-task dialog stays up until its signal fires, then answers as Electron does (`cancelId`).
+     */
+    more: { platform?: string; tasks?: DocTaskStatus[]; dialogWaitsForAbort?: boolean } = {}
   ) {
     const steps: string[] = []
     /** #936: the manager's queue calls, in order. */
@@ -768,6 +878,12 @@ describe('close guard — the main window wiring (#888)', () => {
       async showMessageBox(a: BaseWindow | MessageBoxOptions, b?: MessageBoxOptions): Promise<MessageBoxReturnValue> {
         const options = b ?? (a as MessageBoxOptions)
         shown.push({ title: options.title, detail: options.detail })
+        const signal = options.signal
+        if (more.dialogWaitsForAbort && signal) {
+          await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()))
+          steps.push('dialog:aborted')
+          return { response: options.cancelId ?? 0, checkboxChecked: false }
+        }
         return { response: dialogResponses.shift() ?? 1, checkboxChecked: false }
       }
     }
@@ -825,6 +941,22 @@ describe('close guard — the main window wiring (#888)', () => {
     expect(h.shown).toEqual([])
     expect(h.steps).toEqual(['close:held', 'win.close', 'close:through'])
     expect(h.queue).toEqual(platform === 'darwin' ? [] : ['hold'])
+  })
+
+  // Review SF-1 through the composition: `trackQuitRequests`' listener, the signal `createStopWorkConfirm` hands the
+  // dialog, and Electron's answer to an aborted box (`cancelId`, Keep open) read as Close anyway.
+  it('a quit asked while the running-task question is up closes the dialog; the window saves and the app quits', async () => {
+    const h = wiring([], { tasks: [task('ocr')], dialogWaitsForAbort: true })
+    h.close()
+    await settle()
+    expect(h.shown).toHaveLength(1)
+    h.app.emit('before-quit') // Ctrl+Q or a SIGTERM on Linux…
+    h.close() // …and the quit's close, held and ignored
+    await settle()
+    h.answer(1, false)
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'close:held', 'dialog:aborted', 'app.quit', 'close:through'])
+    expect(h.queue).toEqual(['hold'])
   })
 
   it('a quit with a change it could not save, then Keep open: the queue the quit held goes on', async () => {

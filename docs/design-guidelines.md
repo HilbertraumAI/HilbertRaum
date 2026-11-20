@@ -1480,9 +1480,10 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
   open** is the default and answers Esc, **Close anyway** is never the default, and the two buttons
   read exactly as this dialog's Keep open and Close anyway. The UI voice is a quiet "Saving… /
   Saved" line in a `role="status"` region and the failure + **Try again** in a `role="alert"`
-  region beside it — no unlabeled spinner (§6), no toast spam. Both regions (and the Outdated banner's `role="status"`
-  region) are mounted EMPTY with the review and only their text changes (#837, the §6 rule; the line
-  used to be inserted already filled, and to swap status for alert on one node).
+  region beside it — no unlabeled spinner (§6), no toast spam. Both regions (and the Outdated
+  banner's `role="status"` region) are mounted EMPTY with the review and only their text changes
+  (#837, the §6 rule; the line used to be inserted already filled, and to swap status for alert on
+  one node).
 - **A failed save is never run over (#837):** while an edit a failed write left unsaved is
   waiting, **Bulk actions** is disabled (not hidden — the error line beside the title is the
   explanation) and the store refuses the sweep; any other error (a failed acknowledge, link

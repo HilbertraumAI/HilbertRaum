@@ -586,7 +586,8 @@ drive policy and **Allow internet access…** must permit it. Without internet, 
 `prepare-drive --with-assets` or `fetch-runtime --family ocr` — see the Troubleshooting guide.)
 The pages are read **on this drive** (no cloud OCR — German and English are included), with
 per-page progress and a Cancel button; the last step reads *"Finishing — making the text
-searchable…"* while the recognized text is indexed. When it finishes, the document is a normal
+searchable…"* while the recognized text is indexed. Closing the window while the pages are read asks
+first (§12). When it finishes, the document is a normal
 searchable document; answers cite it **by page**, and **Preview** shows the recognized text per
 page with a *"Text recognized on this drive (OCR)"* note that counts the pages on which text was
 found — recognition is good on clean scans but can contain errors on blurry ones. **Sideways or

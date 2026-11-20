@@ -92,6 +92,7 @@ import { SkillRunController } from '../../src/main/services/skills/run-controlle
 import { seedStoredTextDoc } from '../helpers/doc-fixtures'
 import { killableRuntime } from '../helpers/killable-runtime'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
+import { docTaskManager, docTaskRuntime, docTaskWorld, importWords, waitTerminal } from '../helpers/doctask-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const PW = 'right-password'
@@ -215,6 +216,26 @@ describe('registerWorkspaceIpc', () => {
       expect(again.result).toEqual({ ok: true, state: ctrl.getState() })
       expect(ctrl.getState().state).toBe('unlocked')
       expect(audit).not.toHaveBeenCalled()
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // #936 review SF-2: the quit hold has one more release, an unlock. No quit is under way while someone unlocks, so a
+  // hold still set then (a quit called off outside the close guard) would otherwise block every document task, and
+  // the chat busy guard with it, for the rest of the session.
+  it('an unlock clears a quit hold left set: the next document task runs (#936)', async () => {
+    const w = docTaskWorld('wsipc-hold')
+    const doc = await importWords(w, 50)
+    const manager = docTaskManager(w, { getRuntime: () => docTaskRuntime() })
+    manager.holdQueueForQuit()
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { docTasks: manager } }))
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [doc] })
+      expect(manager.getDocTask(jobId).state).toBe('running')
+      expect((await waitTerminal(manager, jobId)).state).toBe('done')
     } finally {
       ctrl.lock()
     }

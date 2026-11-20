@@ -357,6 +357,10 @@ describe('the quit hold (#936)', () => {
     const first = manager.startDocTask({ kind: 'summary', documentIds: [doc1] })
     const second = manager.startDocTask({ kind: 'summary', documentIds: [doc2] })
     await until(() => runtime.calls.length === 1, 'the first summary reaching the model')
+    manager.releaseQueueHold() // nothing held: still one task at a time
+    expect(manager.getDocTask(second.jobId).state).toBe('queued')
+    // A real quit holds twice (the before-quit belt, then the close guard): a flag, not a count.
+    manager.holdQueueForQuit()
     manager.holdQueueForQuit()
     const firstSettled = manager.awaitActiveTaskSettled() // the dispatch's `finally`, where the queue pumps
     release()
@@ -376,6 +380,31 @@ describe('the quit hold (#936)', () => {
     const names = ['a.txt', 'b.txt', 'c.txt']
     expect(runtime.calls.map((c) => names.find((n) => userPromptOf(c).includes(n)))).toEqual(names) // FIFO
     expect(runtime.maxConcurrent).toBe(1)
+  })
+
+  // Review SF-3: the path every held quit takes. Its `will-quit` flushes the queue (`performShutdown` →
+  // `cancelAllDocTasks`): the held task ends cancelled without ever starting (before the hold it started during the
+  // save and was cancelled running).
+  it('a held quit that goes on: will-quit cancels the waiting task before it ever starts', async () => {
+    const doc1 = await importWords(w, 50, { name: 'a.txt' })
+    const doc2 = await importWords(w, 50, { name: 'b.txt' })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const runtime = docTaskRuntime({ gate: () => gate })
+    const manager = docTaskManager(w, { getRuntime: () => runtime })
+
+    const first = manager.startDocTask({ kind: 'summary', documentIds: [doc1] })
+    const second = manager.startDocTask({ kind: 'summary', documentIds: [doc2] })
+    await until(() => runtime.calls.length === 1, 'the first summary reaching the model')
+    manager.holdQueueForQuit()
+    const firstSettled = manager.awaitActiveTaskSettled()
+    release()
+    await firstSettled
+    manager.cancelAllDocTasks() // will-quit
+    expect(manager.getDocTask(first.jobId).state).toBe('done')
+    expect(manager.getDocTask(second.jobId).state).toBe('cancelled')
+    expect(runtime.calls).toHaveLength(1)
+    expect(manager.hasActiveTask()).toBe(false)
   })
 })
 

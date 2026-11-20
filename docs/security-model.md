@@ -1797,8 +1797,9 @@ re-encrypts (the bullet below).
   so a task queued behind the OCR run stays queued and that quit's `will-quit` cancels it before it
   ever starts (before, it started during the save, decrypting document text to a transient and
   possibly cold-starting a sidecar, only to be cancelled a moment later). Keep open in either close
-  dialog releases the hold and the queue goes on. macOS
-  stays open with no window after the red button: `activate` counts the main window only
+  dialog releases the hold and the queue goes on, and so does an unlock (review SF-2: no quit is under
+  way then, so a hold still set is stale and must not block the session's tasks). macOS stays open
+  with no window after the red button: `activate` counts the main window only
   (`mainWindowCount`, no longer `getAllWindows()`, which counted the hidden helpers, so a Dock click
   during an OCR run opened nothing), and a `second-instance` with no main window takes the same
   path once the app is ready. That path opens nothing once the last close has started the quit
@@ -1824,14 +1825,20 @@ re-encrypts (the bullet below).
   to the save exactly as above, so the unsaved question can still follow. No question on a close a
   quit started (Ctrl+Q, ⌘Q, Dock Quit: explicit commands that stop the tasks at once, as Lock now
   does, which asks nothing either), on the macOS red button (the app and its tasks keep running), or
-  on a session end. A deep index, an extract pass, a summary, a comparison or a categorization alone
-  is not asked about. On this path the OCR window lives until the main window's `closed` (measured on
-  Electron 43.8.6, follow-ups wave 4 research B §0), so nothing is cancelled before the answer. A
-  lock that began while the dialog was up closes without the save (the unsaved dialog's rule); a
-  dialog that fails closes (#888's rule: main cannot ask). Once the guard commits to a close that
-  quits (after Close anyway, or at once with nothing to ask) it holds the doc-task queue (#936,
-  above), and Keep open on the unsaved question releases it. *Walk-away trade-off:* while the
-  dialog is up the workspace stays unlocked (it locks only once someone answers); there is
+  on a session end. A quit asked while the question is up (Ctrl+Q, ⌘Q, a Linux signal if it arrives
+  as `before-quit`) closes the dialog through its `signal` (`trackQuitRequests`' `onRequest`) and
+  counts as Close anyway, whatever the dialog then answers: an explicit quit never asks, and it has
+  already closed the OCR window (measured on Electron 43.8.6 with the real window-modal dialog: the
+  quit's close of the main window is still emitted and held, the dialog closes about 40 ms later, then
+  the hold, the save and the quit). A deep index, an extract pass, a summary, a comparison or a
+  categorization alone is not asked about. On this path the OCR window lives until the main
+  window's `closed` (measured on Electron 43.8.6, follow-ups wave 4 research B §0), so nothing is
+  cancelled before the answer. A lock that began while the dialog was up closes without the save
+  (the unsaved dialog's rule); a dialog that fails closes (#888's rule: main cannot ask). Once the
+  guard commits to a close that quits (after Close anyway, or at once with nothing to ask) it holds
+  the doc-task queue (#936, above), and Keep open on the unsaved question releases it. *Walk-away
+  trade-off:* while the dialog is up the workspace stays unlocked (it locks only once someone
+  answers or a quit arrives); there is
   deliberately no auto-answer timeout (a time limit with a destructive effect, WCAG 2.2.1). Pinned
   by `tests/unit/close-guard.test.ts` and, locally, the real-Electron smoke (`stop-keep`,
   `quit-hold`).
