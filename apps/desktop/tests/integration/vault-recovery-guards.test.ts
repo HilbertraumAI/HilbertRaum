@@ -15,12 +15,15 @@ import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import { IPC } from '../../src/shared/ipc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
+import { tMain } from '../../src/main/services/i18n'
+import { readLogTail } from '../../src/main/services/logging'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   ENCRYPTION_REQUIRED,
   backdate,
   endedUnlocked,
   failedLockState,
+  freshVaultPaths,
   lockedVault,
   unlockedController,
   workspaceIpcCtx
@@ -77,9 +80,22 @@ const failures = vi.hoisted(() => ({
   /** #911 review SF-3: openSync throws EBUSY for the working file itself (`…/hilbertraum.sqlite`, not its sidecars or
    *  temps) while armed: an antivirus hold the probe's header read hits. SQLite's own replay does not go through it. */
   openThrowOnWorkingFile: false,
+  /** #807 (C S-1): renameSync throws Node's own EPERM, with its absolute paths, for the create's last step (the staged
+   *  `.enc.new` onto `.sqlite.enc`): an antivirus or indexer holding the new file on Windows. */
+  renameThrowOnStagedEnc: false,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
-  hits: { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0, encStat: 0, openSyncWorking: 0 }
+  hits: {
+    renameSync: 0,
+    openSync: 0,
+    rmSync: 0,
+    writeSync: 0,
+    openSyncWal: 0,
+    statSync: 0,
+    encStat: 0,
+    openSyncWorking: 0,
+    renameStagedEnc: 0
+  }
 }))
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -104,6 +120,14 @@ vi.mock('node:fs', async (importOriginal) => {
       if (failures.renameThrowOnExistingRecoveryTarget && isRecovery(to) && actual.existsSync(to)) {
         failures.hits.renameSync += 1
         throw errnoError('EPERM', 'EPERM: operation not permitted, rename (held .recovery target)')
+      }
+      if (failures.renameThrowOnStagedEnc && String(from).endsWith('.enc.new') && isEnc(to)) {
+        failures.hits.renameStagedEnc += 1
+        // What Node throws: the message and `path`/`dest` carry both absolute paths.
+        throw Object.assign(
+          errnoError('EPERM', `EPERM: operation not permitted, rename '${String(from)}' -> '${String(to)}'`),
+          { errno: -4048, syscall: 'rename', path: String(from), dest: String(to) }
+        )
       }
       return actual.renameSync(from, to)
     }),
@@ -184,7 +208,18 @@ beforeEach(() => {
   failures.statThrowOnWorkingFile = false
   failures.encDeletePending = false
   failures.openThrowOnWorkingFile = false
-  failures.hits = { renameSync: 0, openSync: 0, rmSync: 0, writeSync: 0, openSyncWal: 0, statSync: 0, encStat: 0, openSyncWorking: 0 }
+  failures.renameThrowOnStagedEnc = false
+  failures.hits = {
+    renameSync: 0,
+    openSync: 0,
+    rmSync: 0,
+    writeSync: 0,
+    openSyncWal: 0,
+    statSync: 0,
+    encStat: 0,
+    openSyncWorking: 0,
+    renameStagedEnc: 0
+  }
   ipcState.handlers.clear()
 })
 
@@ -398,7 +433,8 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       openSyncWal: 0,
       statSync: 0,
       encStat: 0,
-      openSyncWorking: 0
+      openSyncWorking: 0,
+      renameStagedEnc: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -704,5 +740,46 @@ describe('the start over an encrypted file that is missing or cannot be read (#9
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(6161)
     expect(existsSync(recoveryPath)).toBe(false)
     ctl.lock()
+  })
+})
+
+// #807 (C S-1): the create IPC used to recognise its two refusals by their English wording, `/not permitted|already
+// exists/`, which also matched Node's own file errors. An `EPERM: operation not permitted, rename …` at the create's
+// last step (an antivirus or indexer holding the new file) then reached the lock screen as a "refusal": raw English
+// with the drive's absolute paths, and with no log line. Since the refusals are typed, such an error is a failed create:
+// the generic copy, and a log line that names the error's code and system call, never its paths.
+describe('a file error while a workspace is created (#807)', () => {
+  it('an EPERM on the last rename answers "could not create", with no path in the answer or the log line', async () => {
+    const vp = freshVaultPaths('recovery-guards-create')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    const linesBefore = readLogTail(100_000).length
+    failures.renameThrowOnStagedEnc = true
+    let result: unknown
+    try {
+      result = (await invoke(handlers, IPC.createWorkspace, 'long-enough-pw', 'encrypted')).result
+    } finally {
+      failures.renameThrowOnStagedEnc = false
+    }
+    expect(failures.hits.renameStagedEnc).toBe(1)
+    expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.createFailed') })
+    // Neither the root nor a vault file name, raw or as JSON escapes a Windows path, reaches the log.
+    const logged = readLogTail(100_000).slice(linesBefore)
+    const failure = logged.filter((line) => line.includes('Workspace create failed'))
+    expect(failure).toHaveLength(1)
+    expect(failure[0]).toContain('"code":"EPERM"')
+    expect(failure[0]).toContain('"syscall":"rename"')
+    const escapedRoot = JSON.stringify(vp.root).slice(1, -1)
+    for (const line of logged) {
+      expect(line).not.toContain(vp.root)
+      expect(line).not.toContain(escapedRoot)
+      expect(line).not.toContain('hilbertraum.sqlite')
+    }
+    // The create did not finish: nothing is open, and the lock screen still offers the create (a retry overwrites the
+    // staged files; a restart rolls them forward).
+    expect(ctl.isUnlocked()).toBe(false)
+    expect(ctl.getState().state).toBe('uninitialized')
+    ctl.shutdown()
   })
 })
