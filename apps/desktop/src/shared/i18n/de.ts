@@ -24,6 +24,7 @@ import type { en } from './en'
 //   lock / unlock              → sperren / entsperren
 //   password                   → Passwort
 //   settings                   → Einstellungen
+//   demo mode                  → Demo-Modus (hyphenated everywhere, #829)
 //   plaintext (developer) mode → unverschlüsselt (Entwickler)
 //
 // EP-1 review glossary (P5 native pass — MIRROR of the canonical record in
@@ -197,7 +198,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.runtime.gpu': '{model} · GPU ({name})',
   'chat.runtime.cpu': '{model} · CPU',
   'chat.runtime.cpuCompat': '{model} · CPU (Kompatibilitätsmodus)',
-  'chat.runtime.demo': '{model} · Demomodus',
+  'chat.runtime.demo': '{model} · Demo-Modus',
   'chat.runtime.title':
     'Das KI-Modell, das in diesem Chat antwortet, und ob es auf der Grafikkarte (GPU) oder ' +
     'dem Prozessor (CPU) läuft. Details: Einstellungen → Diagnose.',

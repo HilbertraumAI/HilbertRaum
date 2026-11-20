@@ -10,6 +10,7 @@ import type { DocumentInfo, DocumentLifecycle, OcrState } from '@shared/types'
 import { generatedStaleness } from '@shared/types'
 import { markDocTaskCancelRequested, type ActiveDocTask } from '../../lib/doctasks'
 import { classifyServerCopy } from '../../lib/displayMap'
+import { nameCompare } from '../../lib/collation'
 import type { I18n } from '../../i18n'
 import type { UiLanguage } from '@shared/i18n'
 import {
@@ -149,7 +150,7 @@ export const DocRow = memo(function DocRow({
   // Per-row derived values (moved inside DocRow, PERF-5) — pure functions of `d` + the stable
   // inputs (t/tCount/lang/sourcesById/ocrAvailable). Byte-identical output to the former inline map.
   const status = badgeFor(d, t)
-  const chips = rowChips(d, t)
+  const chips = rowChips(d, t, nameCompare(lang))
   const canDocTasks = d.status === 'indexed' && d.chunkCount > 0
   // #38: a deep index is COMPLETE only when both passes are done — the summary tree AND the
   // structured-extract scan. The action stays offered until both are ready (a doc whose tree
