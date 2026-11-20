@@ -27,6 +27,15 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-20 — the 2026-11-20 follow-ups wave 4 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-20, when the wave closed (PR #951 merged as `c6689dad`, the last
+of PRs #940–#946, #949 and #951); a short outcome entry with the open follow-ups (#952–#964) replaces it there.
+Its records are listed in that entry. Citations of this entry now resolve here. Text below is byte-identical
+to what was removed.
+
+_2026-11-20 — **Follow-ups wave 4 (the open issues fixable in this repo now: #930–#936 left by follow-ups wave 3, #918 item 3, the older follow-ups #807, #828, #829, #831–#834 and #564, and #939 found by the wave's research): in progress.** Nine PRs, one per work package: W1 #930/#932/#933 (model verdicts), W2 #935/#936 (closing during a document task), W3 #807/#931 (typed workspace refusals, translated leads over raw library text, the reset procedure), W4 #831/#834/#939 (whole-document skills on turns their engine doesn't take, the every-mention chip, the map step's question; #830 measured and closed with docs), W5 #828/#829, W6 #918, W7 #832/#934, W8 #833, W9 #564. Owner calls 2026-11-20, as recommended: a window close that quits asks first while an OCR run or a document translation is running or queued, explicit quits and Lock now do not (#935); a model with no checksum on record gets its own state on the AI Model card and no start gate changes (#932); #834 ships with #939; the downloaders trust the OS certificate store, then the NODE_OPTIONS fuse goes off (#564). Not in this wave: #849 (app-update plan), #800 (next pin bump), #809 parts B and C, #810, #811, #813, #814, and the feature and hardware issues. Done: W5 (#828, #829), W8 (#833), W3 (#807, #931; and a reason for a missing workspace key file)._
+
 ## 2026-11-20 — the 2026-11-19 follow-ups wave 3 entry retired verbatim (wave closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-20, when the wave closed (PR #937 merged as `968e00af`, the last
