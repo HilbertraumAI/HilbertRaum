@@ -2768,6 +2768,18 @@ export const fr: UiCatalog<'fr'> = {
   'main.dialog.unsavedReview.tryAgain': 'Réessayer',
   'main.dialog.unsavedReview.keepOpen': 'Ne pas fermer',
   'main.dialog.unsavedReview.closeAnyway': 'Fermer quand même',
+  'main.dialog.taskRunning.title': 'Une tâche sur un document n’est pas encore terminée.',
+  'main.dialog.taskRunning.message': 'Une tâche sur un document n’est pas encore terminée.',
+  'main.dialog.taskRunning.detailOcr':
+    'Si vous fermez maintenant, la lecture du document numérisé s’arrête et les pages déjà lues sont ' +
+    'perdues.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Si vous fermez maintenant, la traduction s’arrête et la partie déjà traduite est perdue.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Si vous fermez maintenant, les tâches sur les documents en cours ou en attente s’arrêtent et le ' +
+    'travail déjà fait est perdu.',
+  'main.dialog.taskRunning.keepOpen': 'Ne pas fermer',
+  'main.dialog.taskRunning.closeAnyway': 'Fermer quand même',
   'main.workspace.wrongPassword':
     'Ce mot de passe n’a pas déverrouillé votre espace de travail. Vérifiez-le et réessayez.',
   'main.workspace.openFailed': 'L’espace de travail n’a pas pu être ouvert.',

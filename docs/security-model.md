@@ -1806,9 +1806,15 @@ re-encrypts (the bullet below).
   `will-quit` (+17 ms with an instant answer, +320 ms with a 300 ms one, measured), or never reach
   it (Keep open); before the follow-ups wave 3 review the run ended there as a failure, with an
   audit "failed" entry. After an X the quit's `will-quit` runs before that task (measured), so its
-  cancel, which also empties the task queue, comes first. On a held quit a task queued behind the
-  OCR run can start while the window saves; the quit's `will-quit` then cancels it (residual). macOS
-  stays open with no window after the red button: `activate` counts the main window only
+  cancel, which also empties the task queue, comes first. Nothing starts during a held quit's save
+  (#936, follow-ups wave 4): every un-prevented `before-quit` holds the doc-task queue
+  (`holdQueueOnQuit`, `main/index.ts`), and so does the guard once it commits to a close that quits,
+  so a task queued behind the OCR run stays queued and that quit's `will-quit` cancels it before it
+  ever starts (before, it started during the save, decrypting document text to a transient and
+  possibly cold-starting a sidecar, only to be cancelled a moment later). Keep open in either close
+  dialog releases the hold and the queue goes on, and so does an unlock (review SF-2: no quit is under
+  way then, so a hold still set is stale and must not block the session's tasks). macOS stays open
+  with no window after the red button: `activate` counts the main window only
   (`mainWindowCount`, no longer `getAllWindows()`, which counted the hidden helpers, so a Dock click
   during an OCR run opened nothing), and a `second-instance` with no main window takes the same
   path once the app is ready. That path opens nothing once the last close has started the quit
@@ -1821,6 +1827,36 @@ re-encrypts (the bullet below).
   Electron (with the production quit rule and window watch bundled, and a hidden helper window open
   at the X and at a quit the guard holds). Not yet checked on a Mac (the red button, ⌘Q, a logout,
   a Dock click during an OCR run).
+- **A close that would stop a document task asks first (#935, follow-ups wave 4; owner call G-1,
+  (c)-P0).** Before the save above, a close that will quit (Windows and Linux, `closeQuits`:
+  `platform !== 'darwin'`) and that no quit started (`consumeQuitRequest()` false) reads the running
+  and queued doc tasks (`listActiveDocTasks()` → `stoppingWorkFrom`). An `ocr` or document
+  `translation` task among them brings a second native dialog first, "A document task is not
+  finished yet." (`createStopWorkConfirm`, the unsaved dialog's posture): **Keep open** (the
+  default, Enter, and the `cancelId`, Esc) and **Close anyway** (never the default), `noLink`, modal
+  to the window, a minimized window restored and focused first; the detail says what is lost (the
+  pages read so far, the part translated so far, or both), with no count. Keep open saves, holds
+  and closes nothing; the guard is `open` again and the next close asks again. Close anyway goes on
+  to the save exactly as above, so the unsaved question can still follow. No question on a close a
+  quit started (Ctrl+Q, ⌘Q, Dock Quit: explicit commands that stop the tasks at once, as Lock now
+  does, which asks nothing either), on the macOS red button (the app and its tasks keep running), or
+  on a session end. A quit asked while the question is up (Ctrl+Q, ⌘Q, a Linux signal if it arrives
+  as `before-quit`) closes the dialog through its `signal` (`trackQuitRequests`' `onRequest`) and
+  counts as Close anyway, whatever the dialog then answers: an explicit quit never asks, and it has
+  already closed the OCR window (measured on Electron 43.8.6 with the real window-modal dialog: the
+  quit's close of the main window is still emitted and held, the dialog closes about 40 ms later, then
+  the hold, the save and the quit). A deep index, an extract pass, a summary, a comparison or a
+  categorization alone is not asked about. On this path the OCR window lives until the main
+  window's `closed` (measured on Electron 43.8.6, follow-ups wave 4 research B §0), so nothing is
+  cancelled before the answer. A lock that began while the dialog was up closes without the save
+  (the unsaved dialog's rule); a dialog that fails closes (#888's rule: main cannot ask). Once the
+  guard commits to a close that quits (after Close anyway, or at once with nothing to ask) it holds
+  the doc-task queue (#936, above), and Keep open on the unsaved question releases it. *Walk-away
+  trade-off:* while the dialog is up the workspace stays unlocked (it locks only once someone
+  answers or a quit arrives); there is
+  deliberately no auto-answer timeout (a time limit with a destructive effect, WCAG 2.2.1). Pinned
+  by `tests/unit/close-guard.test.ts` and, locally, the real-Electron smoke (`stop-keep`,
+  `quit-hold`).
 - **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
   owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above

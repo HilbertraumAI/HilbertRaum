@@ -2657,6 +2657,19 @@ export const pl: UiCatalog<'pl'> = {
   'main.dialog.unsavedReview.tryAgain': 'Spróbuj ponownie',
   'main.dialog.unsavedReview.keepOpen': 'Nie zamykaj',
   'main.dialog.unsavedReview.closeAnyway': 'Zamknij mimo to',
+  'main.dialog.taskRunning.title': 'Zadanie dotyczące dokumentu nie zostało jeszcze ukończone.',
+  'main.dialog.taskRunning.message': 'Zadanie dotyczące dokumentu nie zostało jeszcze ukończone.',
+  'main.dialog.taskRunning.detailOcr':
+    'Jeśli zamkniesz teraz, odczytywanie skanu zostanie przerwane, a odczytane dotąd strony zostaną ' +
+    'utracone.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Jeśli zamkniesz teraz, tłumaczenie zostanie przerwane, a przetłumaczona dotąd część zostanie ' +
+    'utracona.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Jeśli zamkniesz teraz, trwające i oczekujące zadania dotyczące dokumentów zostaną przerwane, a ' +
+    'wykonana dotąd praca zostanie utracona.',
+  'main.dialog.taskRunning.keepOpen': 'Nie zamykaj',
+  'main.dialog.taskRunning.closeAnyway': 'Zamknij mimo to',
   'main.workspace.wrongPassword':
     'To hasło nie odblokowało twojego obszaru roboczego. Sprawdź je i spróbuj ponownie.',
   'main.workspace.openFailed': 'Nie udało się otworzyć obszaru roboczego.',

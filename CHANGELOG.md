@@ -38,6 +38,14 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Closing the window while a scan is being read or a document is being translated now asks
+  first.** On Windows and Linux, closing the window quits HilbertRaum, and that stopped text
+  recognition (OCR) or a document translation without a word, and everything it had done so far
+  was lost. Now, while one is running or waiting to start, closing the window asks first: Keep
+  open (the default) lets it finish, Close anyway stops it, and it starts over from the beginning
+  when you run it again. Until you answer, the app stays open and the workspace stays unlocked.
+  Quitting with Ctrl+Q on Linux or ⌘Q on macOS and Lock now still stop it without asking. On
+  macOS, closing the window leaves the app and the task running, as before (#935).
 - **You now choose the interface language from a drop-down list.** Settings → General → Language used to
   show System, English and Deutsch as three buttons side by side; it is now a list, with room for
   more languages. The choices are unchanged. Your choice shows at once; the interface switches to
@@ -104,6 +112,11 @@ from its first public `1.0.0` release onward.
   failed because another program, such as antivirus, held one of its new files, the lock screen
   showed the system's own English error with the full path of the file on the drive; it now says
   "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
+- **A quit that waits to save no longer starts the next document task only to stop it.** When
+  Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
+  running, the next document task in line started during that wait and was stopped a moment
+  later. Now nothing new starts while the quit waits; if you pick Keep open, the next task starts
+  as usual (#936).
 - **On Windows, audio import and voice dictation work in folders with umlauts, accents or other
   alphabets.** When the drive or the app's data folder had such a character in its path (a user
   named Jürgen, a Kit folder named `Übungen`, a folder in Cyrillic or Japanese), the voice engine
@@ -364,8 +377,9 @@ from its first public `1.0.0` release onward.
   the workspace.** On Windows and Linux, closing the window during text recognition (OCR) or a
   PDF export left the app running with no window and the workspace unlocked until the run ended,
   and the finished recognition was then thrown away. Closing the window now stops the run, the
-  same as quitting, and the workspace locks; start it again the next time. On macOS, clicking the
-  Dock icon during the run now opens the window again (#910).
+  same as quitting, and the workspace locks; start it again the next time. (During text
+  recognition, closing the window now asks first, #935.) On macOS, clicking the Dock icon during
+  the run now opens the window again (#910).
 - **A failed skill export no longer destroys the file you chose to replace.** The transactions
   and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
   straight onto the chosen file: a full drive or another failure part-way through left a

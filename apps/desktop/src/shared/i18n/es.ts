@@ -2618,6 +2618,17 @@ export const es: UiCatalog<'es'> = {
   'main.dialog.unsavedReview.tryAgain': 'Volver a intentarlo',
   'main.dialog.unsavedReview.keepOpen': 'No cerrar',
   'main.dialog.unsavedReview.closeAnyway': 'Cerrar de todos modos',
+  'main.dialog.taskRunning.title': 'Una tarea de documentos aún no ha terminado.',
+  'main.dialog.taskRunning.message': 'Una tarea de documentos aún no ha terminado.',
+  'main.dialog.taskRunning.detailOcr':
+    'Si cierras ahora, la lectura del escaneo se detiene y se pierden las páginas leídas hasta ahora.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Si cierras ahora, la traducción se detiene y se pierde la parte traducida hasta ahora.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Si cierras ahora, las tareas de documentos en curso o en espera se detienen y se pierde el ' +
+    'trabajo hecho hasta ahora.',
+  'main.dialog.taskRunning.keepOpen': 'No cerrar',
+  'main.dialog.taskRunning.closeAnyway': 'Cerrar de todos modos',
   'main.workspace.wrongPassword':
     'Esa contraseña no desbloqueó tu espacio de trabajo. Compruébala y vuelve a intentarlo.',
   'main.workspace.openFailed': 'No se pudo abrir el espacio de trabajo.',

@@ -2652,6 +2652,18 @@ export const uk: UiCatalog<'uk'> = {
   'main.dialog.unsavedReview.tryAgain': 'Спробувати ще раз',
   'main.dialog.unsavedReview.keepOpen': 'Не закривати',
   'main.dialog.unsavedReview.closeAnyway': 'Усе одно закрити',
+  'main.dialog.taskRunning.title': 'Завдання з документом ще не завершено.',
+  'main.dialog.taskRunning.message': 'Завдання з документом ще не завершено.',
+  'main.dialog.taskRunning.detailOcr':
+    'Якщо закрити зараз, розпізнавання тексту скану буде перервано, а вже розпізнані сторінки буде ' +
+    'втрачено.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Якщо закрити зараз, переклад буде перервано, а вже перекладену частину буде втрачено.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Якщо закрити зараз, завдання з документами, що виконуються або чекають у черзі, буде перервано, ' +
+    'а вже виконану роботу буде втрачено.',
+  'main.dialog.taskRunning.keepOpen': 'Не закривати',
+  'main.dialog.taskRunning.closeAnyway': 'Усе одно закрити',
   'main.workspace.wrongPassword':
     'Цей пароль не розблокував ваш робочий простір. Перевірте його та спробуйте ще раз.',
   'main.workspace.openFailed': 'Не вдалося відкрити робочий простір.',

@@ -586,7 +586,8 @@ drive policy and **Allow internet access…** must permit it. Without internet, 
 `prepare-drive --with-assets` or `fetch-runtime --family ocr` — see the Troubleshooting guide.)
 The pages are read **on this drive** (no cloud OCR — German and English are included), with
 per-page progress and a Cancel button; the last step reads *"Finishing — making the text
-searchable…"* while the recognized text is indexed. When it finishes, the document is a normal
+searchable…"* while the recognized text is indexed. Closing the window while the pages are read asks
+first (§12). When it finishes, the document is a normal
 searchable document; answers cite it **by page**, and **Preview** shows the recognized text per
 page with a *"Text recognized on this drive (OCR)"* note that counts the pages on which text was
 found — recognition is good on clean scans but can contain errors on blurry ones. **Sideways or
@@ -1360,6 +1361,12 @@ passages) is tuned for English and German — see [known-limitations](known-limi
   again automatically.
 - Closing the app stops the local model and, for encrypted workspaces, re-locks and protects
   your data automatically.
+- If a scan is being read (**Make searchable (OCR)**) or a document is being translated, or one
+  of them is waiting to start, closing the window on Windows or Linux asks first. **Keep open**
+  (the default) lets it finish. **Close anyway** stops it, and it starts over from the beginning
+  when you run it again. Until you answer, the app stays open and your workspace stays unlocked.
+  Quitting with Ctrl+Q (Linux) or ⌘Q (macOS) and **Lock now** stop these tasks without asking. On
+  macOS, closing the window leaves the app running, so the task goes on.
 
 ### Change your password
 

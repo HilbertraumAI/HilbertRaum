@@ -2668,6 +2668,17 @@ export const it: UiCatalog<'it'> = {
   'main.dialog.unsavedReview.tryAgain': 'Riprova',
   'main.dialog.unsavedReview.keepOpen': 'Non chiudere',
   'main.dialog.unsavedReview.closeAnyway': 'Chiudi comunque',
+  'main.dialog.taskRunning.title': 'Un’attività sul documento non è ancora terminata.',
+  'main.dialog.taskRunning.message': 'Un’attività sul documento non è ancora terminata.',
+  'main.dialog.taskRunning.detailOcr':
+    'Se chiudi ora, la lettura della scansione si interrompe e le pagine lette finora vanno perse.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Se chiudi ora, la traduzione si interrompe e la parte tradotta finora va persa.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Se chiudi ora, le attività sui documenti in corso o in attesa si interrompono e il lavoro ' +
+    'svolto finora va perso.',
+  'main.dialog.taskRunning.keepOpen': 'Non chiudere',
+  'main.dialog.taskRunning.closeAnyway': 'Chiudi comunque',
   'main.workspace.wrongPassword':
     'Questa password non ha sbloccato la tua area di lavoro. Controllala e riprova.',
   'main.workspace.openFailed': 'Non è stato possibile aprire l’area di lavoro.',
