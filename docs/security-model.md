@@ -1389,9 +1389,9 @@ password. Four guards close this:
   fails after the verifier passed (#860 V5b, owner decision G-3): the lock writes `.enc` by
   temp + rename, so only bit rot, a cut-short copy or tampering can fail it then, and "Could
   not open the workspace" gave no next step. Structurally it cannot
-  be a password problem, and telling the user to retype the password (or worse, follow
-  the forgotten-password advice to create a fresh workspace) destroys the evidence and
-  any recovery option. Since #844 "damaged" is SQLite's own verdict on the decrypted file
+  be a password problem, and telling the user to retype the password (or worse, to set the
+  workspace aside and start a new one in its place, the forgotten-password procedure)
+  destroys the evidence and any recovery option. Since #844 "damaged" is SQLite's own verdict on the decrypted file
   (not a database, or corrupt, read from the error's result code). Any other failure of the
   open, such as an upgrade step on a full drive, is a `VaultOpenFailedError` →
   `{ reason: 'vault_open_failed' }` with "free space and retry, or start the previous

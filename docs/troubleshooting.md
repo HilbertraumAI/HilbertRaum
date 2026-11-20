@@ -303,13 +303,49 @@ with internet to write the true `sha256` + `size_bytes` back into the manifest.
 ## I forgot my workspace password
 
 Encrypted workspaces are protected by your password, which is **never stored**. If you forget
-it, the data **cannot be recovered** — this is by design. Create a new workspace to start over
-(your old encrypted data remains on the drive but unreadable).
+it, the data **cannot be recovered** — this is by design.
 
-Before you do: read the message on the unlock screen carefully. "That password didn't unlock
-your workspace" means the password was wrong. If it instead says the workspace data is
-**damaged**, your password is fine and creating a new workspace is the wrong move — see the
-next section.
+Before you do anything: read the message on the unlock screen carefully. "That password didn't
+unlock your workspace" means the password was wrong. If it says anything else, your password may
+well be right, and starting over is the wrong move: see the sections below for "the workspace
+data on the drive is damaged", "could not finish opening", "the encrypted workspace file is
+missing" and "the file that holds your workspace's key".
+
+HilbertRaum has no reset, and it never creates a new workspace over an existing one: while a
+workspace is on the drive, the lock screen only asks for its password. To start over, you set the
+old workspace aside by hand (issue #931):
+
+1. **Quit HilbertRaum.**
+2. **On the drive, move `config/workspace.json` and the whole `workspace/` folder, together, off
+   the drive**: for example into a folder `old-workspace/` on your computer, as
+   `old-workspace/config/workspace.json` and `old-workspace/workspace/`.
+   - **Move both.** With only one of them moved, the app still shows the unlock screen, and the
+     right password then reads as a missing file.
+   - **Move, don't delete.** Together, and only together, they still open with the old password
+     if you remember it later.
+   - **Leave the rest of `config/` where it is.** `drive.json`, `policy.json` and
+     `checksums.json` belong to the drive, not to the workspace.
+3. **Start HilbertRaum.** The lock screen now offers to create a workspace: create the new one
+   with a new password.
+
+What stays on the drive and works as before: your AI models, the AI engine, knowledge packs, the
+OCR files and your skills (skills you added yourself come back switched off; switch them on in
+Settings → Skills). The first start of each model checks its file again, and the speed
+measurement runs again, as on a new drive.
+
+What stays behind in the moved folder, readable only with the old password: the old chats,
+documents and their stored copies, images, reviews, projects, settings and activity. The old
+workspace's diagnostics log is in `logs/`, encrypted under the old key: the new workspace starts
+a new log in its place, so move `logs/` along too if you want to keep the old one. Everything you
+moved is encrypted, except a `workspace/hilbertraum.sqlite.recovery` if there is one, which holds
+the old workspace in readable form (see "The encrypted workspace file was missing from the drive"
+below): moving it to a computer copies that readable file there.
+
+To go back to the old workspace (you remember its password): quit HilbertRaum, move the new
+workspace's `config/workspace.json` and `workspace/` away the same way, put the old pair back in
+their places, start the app and unlock with the old password. **Never combine one workspace's
+`config/workspace.json` with another workspace's `workspace/` folder**: neither password opens
+that pair, and with the new password the lock screen says the workspace data is damaged.
 
 ---
 
@@ -1182,6 +1218,7 @@ Everything is on the drive:
 - `workspace/` — your encrypted/plaintext database (chats, documents, embeddings).
 - `logs/app.log` (`app.log.enc` on an encrypted workspace — the diagnostics log is encrypted at
   rest, same as your data) — local logs only; never uploaded.
-- `models/` — model weights. `config/` — drive settings/policy.
+- `models/` — model weights. `config/` — drive settings/policy, and `workspace.json`, which holds
+  your encrypted workspace's key (encrypted under your password): it belongs with `workspace/`.
 
 See [`drive-layout.md`](drive-layout.md) for the full layout.

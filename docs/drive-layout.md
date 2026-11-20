@@ -352,7 +352,15 @@ carries ONLY the language data under `ocr/`:
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).
 - Path separators handled via `node:path`; works on Windows/macOS/Linux.
-- The SQLite file is self-contained, so moving the `workspace/` folder moves all data.
+- A plaintext (developer) workspace is self-contained: moving the `workspace/` folder moves all its
+  data. **An encrypted workspace is two places, always moved together:** `workspace/` holds the
+  encrypted data, and `config/workspace.json` holds the key it is encrypted with (wrapped by the
+  password-derived key, with the salt and the password verifier). No password opens `workspace/`
+  without its `config/workspace.json` (the lock screen says the key file is missing or can't be
+  read, #807), and `config/workspace.json` alone opens nothing (the lock screen says the encrypted
+  workspace file is missing, #911). The rest of `config/`
+  (`drive.json`, `policy.json`, `checksums.json`) belongs to the drive and stays (troubleshooting,
+  "I forgot my workspace password", #931).
 
 ### Filesystem
 For a kit that must be read and written on Windows, macOS **and** Linux, format the drive as

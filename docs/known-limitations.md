@@ -166,6 +166,12 @@ password recovery — are documented in
   Nothing is harmed or written; opening the drive with a current build works. Accepted: drives
   ship the app alongside the data, so version skew requires deliberately mixing an old app
   with a new workspace.
+- **No reset after a forgotten password (#931).** The app never creates a workspace over an
+  existing one, and it has no reset, so starting over is done by hand: quit, move
+  `config/workspace.json` and `workspace/` off the drive together, start and create
+  (`troubleshooting.md` "I forgot my workspace password"). The new workspace writes its own
+  diagnostics log over the old one's `logs/app.log.enc`, so the old log is lost unless `logs/` was
+  moved too, even when the old pair is put back later.
 - **Builds released before #845 (0.1.65 and earlier) cannot detect a newer vault format.** From
   #845 on, a build refuses a workspace whose descriptor, KDF, `.enc` frame or password-change
   journal a newer build wrote, before anything is written, with "This workspace was written by a
