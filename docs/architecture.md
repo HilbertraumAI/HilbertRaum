@@ -6152,9 +6152,12 @@ but English and German carries an English copy in the same paste (§5) · G-8 (a
 query is composed (NFC) and lowered without a locale, a capital «İ» to a plain "i" (`lowerCaseNfc`,
 `shared/text-fold.ts`), and a word holding «ı» is also searched with each «ı» written as "i"; the
 index, its triggers and the stored text stay as they were ([`rag-design.md`](rag-design.md) §11
-"Keyword index"); the filters' `foldCase` composes first; the conversation list orders its project
-sections with an `Intl.Collator` of the interface language instead of the system's locale
-(`ConversationList.tsx` `groupByProject`) (§5) · G-9 (a): three CSS rules for the 880×600 minimum
+"Keyword index"); the filters' `foldCase` composes first; every project list orders its names with an
+`Intl.Collator` of the interface language instead of the system's locale or SQL's code-point order:
+the conversation list's sections, the Documents rail (active and archived), the "Choose a project"
+dialog, the chat scope picker and a row's project chips (built-ins first). One renderer helper,
+`renderer/lib/collation.ts` (`nameCompare`, `inNameOrder`); main's `listCollections` order is
+unchanged (§5, #818, #828) · G-9 (a): three CSS rules for the 880×600 minimum
 window (#803), each written once its cause was confirmed in the running app: the Documents
 filter's icon padding wins over `.text-input` (`.text-input.docs-filter-input`), the chat column
 has no min-content floor (`.chat-main { min-width: 0 }`), and the rail scrolls with no visible
