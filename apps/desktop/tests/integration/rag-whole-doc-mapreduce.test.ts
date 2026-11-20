@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest'
 import { ANALYSIS_RESPONSE_RESERVE_TOKENS, CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
 import { retrieveWholeDocument, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
 import type { ChatMessage } from '../../src/main/services/runtime'
+import { buildSkillFence } from '../../src/main/services/skills/prompt'
 import { finishScriptedRuntime, recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import {
   answerWholeDoc,
@@ -101,7 +102,7 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
           expect(map).toContain('note every detail the task needs')
         } else {
           expect(map).not.toContain('User request:')
-          expect(map).toBe(asPreRequestMapPrompt(map))
+          expect(map).toBe(asPreRequestMapPrompt(map, buildSkillFence({ title: skill.title, body: skill.body }).text))
         }
       }
       // The reduce carried the request before #939 already, either way.
@@ -358,7 +359,7 @@ describe('whole-document chunk map-reduce — hierarchical fold for the large-do
         expect(step).toContain(`\nUser request:\n${WHOLE_DOC_QUESTION}\n`)
       } else {
         expect(step).not.toContain('User request:')
-        expect(step).toBe(asPreRequestMapPrompt(step))
+        expect(step).toBe(asPreRequestMapPrompt(step, null))
       }
     }
   })

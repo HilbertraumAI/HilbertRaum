@@ -42,7 +42,7 @@ import { offerableSkillCandidates } from '../services/skills/suggest'
 import { documentsInScope, scopeSectionTotals } from '../services/skills/scope-documents'
 import { getSkill, type SkillRecord } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
-import { isNeedleShaped, isSmallTalk } from '../services/skills/vocabulary'
+import { isNeedleShaped, isReportShaped, isSmallTalk } from '../services/skills/vocabulary'
 import type { SkillFenceMode } from '../services/skills/prompt'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { saveResultTable } from '../services/tables/store'
@@ -572,8 +572,9 @@ export function registerRagIpc(ctx: AppContext): void {
       // Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder) whose engine does not take
       // this turn. Three ways that happens:
       //   1. `applies()` is false because of the scope: not exactly two answerable documents for the compare
-      //      skill, not exactly one for a whole-document skill. (An in-vocabulary request at the wrong count
-      //      never gets this far: the W2 pre-pass above narrows it or answers "select two" / "pick one".)
+      //      skill, not exactly one for a whole-document skill, none included (a knowledge-pack-only scope, a
+      //      document still indexing). (An in-vocabulary request at the wrong count never gets this far: the
+      //      W2 pre-pass above narrows it or answers "select two" / "pick one".)
       //   2. `applies()` is false because the question is small talk.
       //   3. (#831) the whole-document engine applied but sent a single-fact question over a document too long
       //      to read whole to the passage search (the needle downgrade below sets the mode there).
@@ -678,12 +679,15 @@ export function registerRagIpc(ctx: AppContext): void {
                     // summary into the prompt and gates its low-risk verdict on non-truncated coverage.
                     wholeDocumentPiiScan: analysisHandler.injectPiiScan === true,
                     // #939 (owner call 2026-11-20): over a document too long for one call, the map and fold
-                    // steps take notes for a list-shaped question too (the router's own list detection,
-                    // `asksForList`: "List every deadline", the every-mention chip in every catalog), so it is
-                    // not answered from notes taken for the skill's deliverable alone. Bundled skills only;
-                    // every other question, deliverables in any language included, keeps master's prompts
-                    // (measured: Meeting Minutes lost facts when every request rode the map step).
-                    wholeDocumentNotesForRequest: turnSkillRecord?.source === 'app' && asksForList(text),
+                    // steps take notes for the question too when it asks to find or list something (the
+                    // router's own list detection, `asksForList`: "List every deadline", the every-mention chip
+                    // in every catalog; never a summary or a compare) and asks for no report (`isReportShaped`:
+                    // no summary, minutes, brief, review or summarize chip, so "Summarize all the decisions" and
+                    // «Erstelle das Protokoll mit allen Beschlüssen» keep master's prompts). Bundled skills only.
+                    // Every other question keeps master's map and fold prompts (measured: Meeting Minutes lost
+                    // facts when every request rode the map step).
+                    wholeDocumentNotesForRequest:
+                      turnSkillRecord?.source === 'app' && asksForList(text) && !isReportShaped(text),
                     onToken: sendToken,
                     // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
                     // answer with the honest scope notice (undefined ⇒ byte-unchanged). #649: a total leads with

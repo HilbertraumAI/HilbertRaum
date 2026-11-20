@@ -327,9 +327,10 @@ from its first public `1.0.0` release onward.
   from notes taken for it.** A document too long to read at once is read in parts, and the answer is
   written from notes on each part. Those notes were taken for the skill's report only, so "Find every
   mention of 'indemnity'" under Contract Brief could miss mentions, or say there were none, while the
-  answer said the whole document was read. A question that asks to find or list something now gets
-  notes for what you asked as well as for the report. Reports and other questions are read as before
-  (#939).
+  answer said the whole document was read. A request to find or list something, such as "List every
+  deadline" or the "every mention" example, now gets notes for what you asked as well as for the report.
+  A request for the report itself is read as before, even when it names a list ("Summarize all the
+  decisions", "Write the minutes with every action item"), and so is every other question (#939).
 - **The Documents filter's search icon no longer covers the text.** The magnifier in the "Filter
   by name…" box sat over the start of the placeholder and of what you typed, at every window
   size and in every language. The text now starts after the icon (#803).

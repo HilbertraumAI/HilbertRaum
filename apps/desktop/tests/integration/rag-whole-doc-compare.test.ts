@@ -37,6 +37,7 @@ import { REPO_APP_SKILLS_DIR, writeSkillPackage } from '../helpers/skill-fixture
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { asPreRequestMapPrompt } from '../helpers/whole-doc-fixtures'
+import { buildSkillFence } from '../../src/main/services/skills/prompt'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const WHAT_CHANGED_INSTALL_ID = 'app:what-changed'
@@ -581,6 +582,14 @@ const LONG_MEETING = [
   ...Array.from({ length: 600 }, (_, i) => `Item ${i + 1}: Anna Berg and Tomasz Nowak discussed the website budget and the hosting contract.`),
   'The next meeting will take place on Tuesday, 19 May 2026.'
 ].join('\n')
+/** The whole fence each skill's map calls carry (the title the registry holds: the manifest's), built by the same
+ *  `buildSkillFence` the core calls with no mode — the fence is not what #939 changes, the instruction around it is. */
+const committedTitle = (id: string): string =>
+  parseSkillMarkdown(readFileSync(join(REPO_APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8')).manifest!.title
+const wholeFenceOf = (skillId: string): string | null => {
+  const title = skillId === USER_WHOLE_DOC_INSTALL_ID ? 'Lease digest' : committedTitle(skillId.replace(/^app:/, ''))
+  return buildSkillFence({ title, body: BODIES[skillId] }).text
+}
 /** The map turns of a map-reduce answer: every call but the last (the reduce). */
 const mapTurnsOf = (rt: RecordingRuntime): string[] =>
   rt.turns.slice(0, -1).map((turn) => turn.filter((m) => m.role === 'user').at(-1)?.content ?? '')
@@ -617,7 +626,13 @@ describe('askDocuments — the map step takes notes for a list-shaped question o
     { name: 'Contract Brief, the summarize chip', skillId: 'app:contract-brief', text: LONG_LEASE, question: t('en', 'chat.example.summarize') },
     { name: 'Contract Brief, "Fasse dieses Dokument zusammen"', skillId: 'app:contract-brief', text: LONG_LEASE, question: 'Fasse dieses Dokument zusammen' },
     { name: 'Meeting Minutes, "Write the meeting minutes"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Write the meeting minutes' },
-    { name: 'a user whole-document skill, a list question', skillId: USER_WHOLE_DOC_INSTALL_ID, text: LONG_LEASE, question: 'List every deadline in this contract' }
+    { name: 'a user whole-document skill, a list question', skillId: USER_WHOLE_DOC_INSTALL_ID, text: LONG_LEASE, question: 'List every deadline in this contract' },
+    // review B1: a report request that carries a list word is still a report (the router's summary reading, or the
+    // skill-side report shapes), so its map calls stay master's
+    { name: 'Meeting Minutes, "Summarize all the decisions"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Summarize all the decisions' },
+    { name: 'Meeting Minutes, "Fasse alle Beschlüsse zusammen"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Fasse alle Beschlüsse zusammen' },
+    { name: 'Meeting Minutes, "Erstelle das Protokoll mit allen Beschlüssen"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Erstelle das Protokoll mit allen Beschlüssen' },
+    { name: 'Meeting Minutes, "Write the minutes including every action item"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Write the minutes including every action item' }
   ])('$name: every map call is the prompt as it was', async ({ skillId, text, question }) => {
     const h = await makeFenceHarness([text], 4096)
     const msg = await ask(h, question, skillId)
@@ -626,7 +641,34 @@ describe('askDocuments — the map step takes notes for a list-shaped question o
     expect(maps.length).toBeGreaterThan(1)
     for (const map of maps) {
       expect(map).not.toContain('User request:')
-      expect(map).toBe(asPreRequestMapPrompt(map))
+      expect(map).toBe(asPreRequestMapPrompt(map, wholeFenceOf(skillId)))
     }
+  })
+
+  // review B1's controls: a plain list request under Meeting Minutes keeps the request in its notes.
+  it('a list request under Meeting Minutes ("List all action items"): every map call takes notes for it', async () => {
+    const h = await makeFenceHarness([LONG_MEETING], 4096)
+    const msg = await ask(h, 'List all action items', appId('meeting-protocol'))
+    expect(msg.coverage?.mode).toBe('capped')
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) expect(map).toContain('\nUser request:\nList all action items\n')
+  })
+
+  // review S2: a document with a ready deep index takes the tree rescue (not the chunk map-reduce), which reads the
+  // flag through its own argument; the chip's map steps over the node summaries take notes for it there too.
+  it('the every-mention chip over a document with a ready deep index: the tree map steps take notes for it', async () => {
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const section = (n: number): string => `Section ${n}: ${'the tenant shall indemnify the landlord against claims '.repeat(130)}`
+    seedReadyTree(h.db, h.docIds[0], chunkIdsOf(h.db, h.docIds[0]), {
+      summary: 'Summary: a lease with three indemnity articles.',
+      sections: [section(1), section(2), section(3)]
+    })
+    const chip = t('en', 'chat.example.indemnity')
+    const msg = await ask(h, chip, appId('contract-brief'))
+    expect(msg.coverage?.mode).toBe('tree')
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) expect(map).toContain(`\nUser request:\n${chip}\n`)
   })
 })

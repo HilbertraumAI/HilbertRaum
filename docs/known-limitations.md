@@ -1634,7 +1634,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   two, and Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder read exactly
   one. A turn the engine doesn't take falls through to the ordinary answer, which reads top-k passages, or
   since #643 one document that fits whole. The engine doesn't take small talk, or a scope with another
-  number of documents; at such a count a request in the skill's routing vocabulary is narrowed to one
+  number of documents, none included (a knowledge-pack-only scope, a document still indexing); at such a
+  count a request in the skill's routing vocabulary is narrowed to one
   matching document or answered with "select exactly two" or "pick one" instead (below), so only the other
   questions fall through. A whole-document skill also sends a single-fact question over one document too
   long to read whole to the passage search (the needle downgrade above). D-P2a kept the whole skill fence
@@ -1657,7 +1658,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   known to lead with its rules (SKA-15), and a user skill has no routing vocabulary, so its real
   deliverable requests over several documents fall through too. The rule has no exception for a bundled
   skill's deliverable request over several documents that misses its vocabulary ("Summarize these
-  three"): that answer gets the first paragraph too; a brief built from top-k passages would be weak
+  three", and in the eight interface languages beyond English and German every such request, «Resume
+  estos contratos»): that answer gets the first paragraph too; a brief built from top-k passages would be weak
   anyway. Plain chat with no documents keeps the whole fence on purpose (#830). There the fence is the only
   thing that shapes a compare of two pasted versions, and measured on both models with What Changed?
   picked, plain questions were not compare-framed (0 of 6) while two pasted versions kept the format (2 of
@@ -1676,7 +1678,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   document too long to read in one call is read in parts: notes on each part, then the answer from the
   notes. The notes are taken for the question too only when a bundled whole-document skill (Contract Brief,
   Meeting Minutes, Share-Safe Review, Deadline & Obligation Finder) gets a question that asks to find or
-  list something, by the router's list words or the every-mention example chip. Everywhere else the notes
+  list something (the router's list words or the every-mention example chip) and asks for no report: a
+  summary, minutes, a brief or a review keeps the notes for the task, list word or not ("Summarize all the
+  decisions", «Erstelle das Protokoll mit allen Beschlüssen»). Everywhere else the notes
   follow the skill's task, or, with no skill, the instruction alone, so a question that isn't the
   deliverable can be answered from notes that left out what it asks: under a user skill declaring
   `analysis: whole-doc` (its question never reaches the notes), in a summary read through the deep index
@@ -1684,8 +1688,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   ("Tell me about the parking rules"). The gate is deliberate: with every question in the notes, Meeting
   Minutes lost facts in the real-model check ([`rag-design.md`](rag-design.md) §14.10). The list words are
   English and German, so a list question typed in the eight newer interface languages, other than the
-  example chip, gets no question in the notes until #809 part C adds their list words; and a deliverable
-  with a list word in it ("Write the minutes with every decision") counts as a list question. The answer
+  example chip, gets no question in the notes until #809 part C adds their list words. Each skill's own list request ("List every deadline" under Deadline & Obligation Finder, "List
+  all action items" under Meeting Minutes) takes the notes on a prompt measured only for the every-mention
+  chip under Contract Brief. The answer
   still says it read the whole document, which is true of what it read, not of what the notes kept. With no
   skill, the note step's instruction still names "the task described below" with nothing below it (a
   follow-up).

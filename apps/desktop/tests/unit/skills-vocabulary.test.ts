@@ -7,6 +7,7 @@ import {
   deriveMatch,
   entryMatches,
   isNeedleShaped,
+  isReportShaped,
   isSmallTalk,
   routeEntries,
   routeMatch,
@@ -335,5 +336,44 @@ describe('W7 — SKA-45 word-anchored needle/deliverable shapes (§3.4)', () => 
     expect(isNeedleShaped('sind das wirklich alle')).toBe(false)
     // …and does not fire inside 'alles' (word boundary before the 's').
     expect(isNeedleShaped('wie viele Positionen sind es')).toBe(true) // no 'alle' → stays a needle
+  })
+})
+
+// #939 review S1: "find a" was a substring, so "Find all deadlines" and "Find any deadline", a list, read as a
+// single-fact lookup and went to the passage search over a long document (now with only the skill's rules, #831).
+describe('isNeedleShaped — "find a" is a word (#939 review)', () => {
+  it.each([
+    ['Find all deadlines', false],
+    ['Find any deadline in this contract', false],
+    ['find all action items', false],
+    ['Find a deadline in this contract', true],
+    ['find an invoice number', true],
+    ['Can you find a clause about pets?', true]
+  ] as const)('%s → %s', (question, expected) => {
+    expect(isNeedleShaped(question)).toBe(expected)
+  })
+})
+
+// #939 review B1: a request for the skill's report keeps the whole-document map prompt as it was, even with a list
+// word in it; a plain list request and the every-mention chip are no report.
+describe('isReportShaped — a report request, list word or not (#939 review)', () => {
+  it.each([
+    ['Erstelle das Protokoll mit allen Beschlüssen', true],
+    ['Write the minutes including every action item', true],
+    ['Give me the minutes of the meeting, listing every decision', true],
+    ['Brief this contract. List all risks.', true],
+    ['Summarize all the decisions', true],
+    ['Review every clause for risks', true],
+    ['List all action items', false],
+    ['List every deadline in this contract', false],
+    ['Liste alle Fristen auf', false],
+    ['When is each payment due?', false]
+  ] as const)('%s → %s', (question, expected) => {
+    expect(isReportShaped(question)).toBe(expected)
+  })
+
+  it.each(UI_LANGUAGE_CODES)('%s: the summarize chip is a report, the every-mention chip is none', (code) => {
+    expect(isReportShaped(t(code, 'chat.example.summarize'))).toBe(true)
+    expect(isReportShaped(t(code, 'chat.example.indemnity'))).toBe(false)
   })
 })
