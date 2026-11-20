@@ -13,7 +13,12 @@ recommendation_rank: 1  # Phase-29: better RAG quality than orig 4B, but ranked 
 # qwen3.5-4b-ud-q4kxl on the 2026-11 answer-quality study (82.0 against 76.9) and on processor
 # decode (11.8 against 8.6 tok/s, Ryzen 7 5800H). No thinking mode. A slow benchmark steps to the E2B.
 recommendation_rank_cpu: 3
-cpu_step_down_to: gemma4-e2b-it-qat-q4
+step_down_to: gemma4-e2b-it-qat-q4
+# Card rank (model-benchmarks.md §6.8): the pick where RAM is under 12 GB: 82.0 on the study, 88 tok/s on the RTX 3060 Laptop.
+recommendation_rank_gpu: 2
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 4096, one slot, batch 2048; b12110, full offload 37/37 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 3275
 recommended_context_tokens: 4096
 supports_thinking_mode: false
 supports_tools: false

@@ -691,17 +691,36 @@ head's own weights + KV.
 ✅ **Processor-path rank and step-down (2026-11-20, `model-benchmarks.md` §6.7):** manifest
 `recommendation_rank_cpu` (optional; a number ≥ 0 — a wrong type or a negative value is a
 validation error, never a silent default, because the field moves a recommendation) →
-`ModelManifest.recommendationRankCpu?: number`, and manifest `cpu_step_down_to` (optional; a
-non-empty model id, trimmed; any other type or an empty string is an error) →
-`ModelManifest.cpuStepDownTo?: string`. Both are ABSENT when omitted. Read only by
+`ModelManifest.recommendationRankCpu?: number`, and manifest `step_down_to` (optional; a
+non-empty model id, trimmed; any other type or an empty string is an error; called
+`cpu_step_down_to` until §6.8 made the card path follow it too) →
+`ModelManifest.stepDownTo?: string`. Both are ABSENT when omitted. The rank is read only by
 `recommendModelIdForProcessor` (services/models.ts), which `recommendChatModelId` reaches for
-memory class `cpu`: the rank replaces `recommendation_rank` there (0 = selectable but never the
-automatic pick on a processor; absent = the ordinary rank), and `cpu_step_down_to` names the chat
+memory class `cpu`: it replaces `recommendation_rank` there (0 = selectable but never the
+automatic pick on a processor; absent = the ordinary rank). `step_down_to` names the chat
 model that a benchmark under `SLOW_PICK_TOKENS_PER_SECOND` on this one steps to (absent = the end
-of its chain). The validator does not resolve the target id. The committed values and the chain
-invariants (every target exists, is ranked on the processor, needs no more RAM than its source,
-and no chain loops) are pinned in `committed-catalog.test.ts` ("§6.7 processor path"). An older
-app ignores both keys and gives the RAM pick.
+of its chain), on the processor and, since §6.8, on a card that carries card ranks; each path
+follows a link only to a target it may pick. The validator does not resolve the target id. The
+committed values and the chain invariants (every target exists, is ranked on the processor, needs
+no more RAM than its source, and no chain loops) are pinned in `committed-catalog.test.ts` ("§6.7
+processor path"). An older app ignores both keys and gives the RAM pick.
+✅ **Card-path rank and measured need (2026-11-20, `model-benchmarks.md` §6.8):** manifest
+`recommendation_rank_gpu` (optional; a number ≥ 0, validated like `recommendation_rank_cpu`) →
+`ModelManifest.recommendationRankGpu?: number`, and manifest `projected_graphics_need_mib`
+(optional; a number ≥ 0, validated the same way; 0 is a figure, not "absent") →
+`ModelManifest.projectedGraphicsNeedMib?: number`. Both are ABSENT when omitted. When ANY chat
+manifest carries `recommendation_rank_gpu`, `recommendModelIdByVram` ranks by it (absent = the
+ordinary rank) and picks the highest-ranked model that fits the card outright, so §6.6 decision 2
+does not apply to such a catalog. `projected_graphics_need_mib` is llama.cpp's own fit projection
+("projected to use N MiB of device memory") read off a full-offload start under the app's launch
+(the manifest's context, `-np 1`, batch and ubatch 2048, its speculative decoding). Where present,
+`estimateGraphicsNeedMib` returns it plus `VRAM_FIT_MARGIN_MIB` (1,024) and the derived terms
+(weights, `host_mapped_weights_mib`, `estimated_context_cache_gib`) do not enter. That moves the
+picker's fit and the Performance screen's pre-start estimate for a discrete card. The sidecar gates'
+`chatGraphicsShareMib` does not read it. Every value is pinned to its row of
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/projected-graphics-need-b12110-20261120.tsv`,
+and every model the card path can pick must carry one (`committed-catalog.test.ts`). A pin bump
+re-reads them. An older app ignores both keys and keeps rule C on the derived estimate.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -843,7 +862,7 @@ app ignores both keys and gives the RAM pick.
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
-  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, budgetMb?, memoryClass? }`), keeping this module
+  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, budgetMb?, memoryClass?, card? }`), keeping this module
   `child_process`-free. `name` / `totalMb` are the **budget device's** (`nextStartMemory` in
   `services/performance.ts`, PR #308 audit decisions 6/9); `totalMb` is the graphics TILE's figure
   (→ `BenchmarkResult.gpuVramMb`), never the picker's input. **`budgetMb`** (P3, decision 10) is
@@ -853,24 +872,34 @@ app ignores both keys and gives the RAM pick.
   carries a usable card; the profile bump), `memoryClass` = the NEXT start's class (honours
   `gpuMode` / `gpuAutoDisabled`, names one budget device), so `{ useful: true, memoryClass: 'cpu' }`
   is a valid input — a card present, the GPU switched off.
-- **`PickerMemory`** (`services/models.ts`) — `{ memoryClass, ramGb, budgetMb: number | null }`, the
-  input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
-  `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
-  the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
-  (unrounded weights MiB − `hostMappedWeightsMib` ?? 0) × 1.15 + (`estimatedContextCacheGib` ?? 0.5)
-  × 1024 + 1,024, i.e. the OFFLOADABLE weights carry both the base and the 15 % working share
-  (§5 item 22 (e), 2026-09-08; #321 had taken them out of the share only) and the cache term is
-  computed for the app's ONE server slot since #319 — AND
-  `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
-  ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
-  confined to the eligible pool on both ends); `cpu` → **§6.7 the processor path**
+- **`PickerMemory`** (`services/models.ts`) — `{ memoryClass, ramGb, budgetMb: number | null, card?: CardEvidence | null }`,
+  the input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
+  `budgetMb` → **the card path, §6.6 rule C as amended by §6.8**
+  (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal, card)`): eligible(m) =
+  `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` = the manifest's
+  `projectedGraphicsNeedMib` + 1,024 where it carries one (§6.8; every model the card path can pick
+  does), else the derived (unrounded weights MiB − `hostMappedWeightsMib` ?? 0) × 1.15 +
+  (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024, whose OFFLOADABLE weights carry both the base
+  and the 15 % working share (§5 item 22 (e), 2026-09-08) and whose cache term is computed for the
+  app's ONE server slot since #319 — AND `recommendedMinRamGb ≤ ramGb` AND not
+  `landedPartlyOnCard(m, budgetMib, card)` (a stored start of the model on this card with layers
+  left off, at a context no larger than `launchContextTokens` gives the next start, with at least the
+  present budget free then, within `PARTIAL_EVIDENCE_TOLERANCE_MIB` = 256). With card ranks in the
+  catalog (`recommendationRankGpu` replaces `recommendationRank`) the pick is the highest-ranked
+  eligible model outright; without them the RAM pick stands where it is eligible (decision 2), else
+  the highest-RANKED eligible model; ties by tier then size, ranked-only guard, else the RAM pick of
+  the ordinary ranks (partial-offload fallback). A slow reading then moves it once inside the
+  eligible pool: with card ranks along the `stepDownTo` chain first, else (or off the chain) the
+  §6.5 step. `card` is `cardEvidenceFor(settings, machineKey)` at every seam: the stored
+  `modelPlacements` of this machine (and unstamped ones) plus the two context settings.
+  `cpu` → **§6.7 the processor path**
   (`recommendModelIdForProcessor(manifests, ramGb, signal)`: the RAM stages over a view in which
   `recommendationRankCpu` replaces `recommendationRank`, then a slow reading follows the pick's
-  `cpuStepDownTo` chain, and one off the chain is §6.5; a catalog without either field gives
+  `stepDownTo` chain, and one off the chain is §6.5; a catalog without either field gives
   exactly the RAM pick); `unified`, or `discrete` with no budget → the RAM pick,
   byte-identical to `recommendModelIdByRam`. Both seams build it from ONE decision: `pickerMemoryFor(s)`
-  (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
-  `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on
+  (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb` / `.cardEvidence`) and
+  `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb` / `.card`), each calling `graphicsBudgetMib` on
   `nextStartMemory`'s device. `weightsMib(m)` is the shared unrounded GB → MiB conversion the
   Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the eight
   cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").

@@ -11,6 +11,9 @@ size_on_disk_gb: 2.5
 recommended_min_ram_gb: 8
 recommended_ram_gb: 16
 recommendation_rank: 2  # Phase-29: the chosen 4B default (preferred over 2507 to keep Deep)
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 4096, one slot, batch 2048; b12110, full offload 37/37 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 3275
 recommended_context_tokens: 4096
 supports_thinking_mode: true
 supports_tools: false

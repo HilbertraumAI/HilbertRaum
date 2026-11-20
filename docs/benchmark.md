@@ -192,12 +192,17 @@ driver listed); on **unified memory** (Apple Silicon) it is RAM-best-fit
 acceleration switched off in Settings, or auto-disabled after a crash — it is the processor path
 (`recommendModelIdForProcessor`, `model-benchmarks.md` §6.7: the same stages with
 `recommendation_rank_cpu` in place of the rank, and a step-down that follows the manifest's
-`cpu_step_down_to` chain). The profile-based `recommendModelId(manifests, profile,
-'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). With the committed
-manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`,
-8 GB → `qwen3.5-4b-ud-q4kxl`, 12–16 GB → `qwen3.5-9b-ud-q4kxl`, 20 GB → `qwen3.8-27b-ud-q4km`, 24 GB
-and up → `qwen3.8-27b-ud-q5km` (§6.6's 30-point grid; the 6, 8, 12 and 24 GB points were verified
-on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — while the 20 GB point and the
+`step_down_to` chain). The profile-based `recommendModelId(manifests, profile,
+'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). Since
+`model-benchmarks.md` §6.8 (2026-11-20) the need is the manifest's measured
+`projected_graphics_need_mib` plus the 1 GiB margin where a manifest carries one, the order
+follows `recommendation_rank_gpu`, and a model an earlier start placed only partly on this card is
+not picked for it again. With the committed
+manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `gemma4-e4b-it-qat-q4`,
+8 GB → `qwen3.5-9b-ud-q4kxl`, 12–16 GB → `gemma4-12b-it-qat-q4`, 20 GB → `qwen3.8-27b-ud-q4km`, 24 GB
+and up → `gemma4-31b-it-qat-q4` (the 30-point grid in `committed-catalog.test.ts`; the 6, 8 and 12 GB points were verified
+on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — and the 24 GB pick loaded 61/61 on the RTX 3090 on
+2026-11-20 (§6.8), while the 20 GB point and the
 Gemma 12B / MoE estimate bands remain predicted, no such card being available); by RAM:
 
 | Measured RAM | Unified memory (RAM pick) | No usable card (processor path, §6.7) |

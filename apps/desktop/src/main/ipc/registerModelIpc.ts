@@ -28,6 +28,7 @@ import {
   machineRamGb,
   manifestFiles,
   recommendChatModelId,
+  cardEvidenceFor,
   selectModel,
   weightPath,
   type BuildModelListOptions,
@@ -71,11 +72,20 @@ import { isChatStreaming } from './inflight'
  * Models ★ and the benchmark can never name different cards. Exported for the seam test,
  * which pins what the `listModels` handler feeds `buildModelList`.
  */
-export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
-  const next = nextStartMemoryFor(s, machineKey(detectSystem()))
+export function pickerMemoryFor(
+  s: AppSettings
+): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb' | 'cardEvidence'> {
+  const here = machineKey(detectSystem())
+  const next = nextStartMemoryFor(s, here)
   // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
   // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
-  return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }
+  // §6.8: what earlier starts on this machine's card showed, so a model seen landing only partly
+  // on it is not recommended for it again.
+  return {
+    memoryClass: next.memoryClass,
+    graphicsBudgetMb: graphicsBudgetMib(next.device),
+    cardEvidence: cardEvidenceFor(s, here)
+  }
 }
 
 /**
@@ -136,7 +146,7 @@ export function liveChatRecommendation(s: AppSettings, manifests: ModelManifest[
   const basis = memory.memoryClass ?? 'cpu'
   const modelId = recommendChatModelId(
     manifests,
-    { memoryClass: basis, ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null },
+    { memoryClass: basis, ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null, card: memory.cardEvidence ?? null },
     speedSignalFor(s)
   )
   return { modelId, basis }

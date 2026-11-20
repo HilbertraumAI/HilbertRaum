@@ -171,13 +171,31 @@ export interface ModelManifest {
    */
   recommendationRankCpu?: number
   /**
-   * The model the processor path steps to when a benchmark measured THIS model under the slow
-   * line (model-benchmarks.md §6.7): the id of another chat manifest. Optional in YAML
-   * (`cpu_step_down_to`); absent → this model is the end of its chain. The chains are pinned
-   * against the committed catalog (`committed-catalog.test.ts`): every target exists, is ranked on
-   * the processor, needs no more RAM than its source, and no chain loops.
+   * The model the processor path (model-benchmarks.md §6.7) and, since §6.8, the card path step
+   * to when a benchmark measured THIS model under the slow line: the id of another chat manifest.
+   * Optional in YAML (`step_down_to`); absent → this model is the end of its chain. Each path
+   * follows a link only to a target it may pick (ranked there; on the card also eligible). The
+   * chains are pinned against the committed catalog (`committed-catalog.test.ts`): every target
+   * exists, is ranked on the processor, needs no more RAM than its source, and no chain loops.
    */
-  cpuStepDownTo?: string
+  stepDownTo?: string
+  /**
+   * The rank the picker uses INSTEAD of `recommendationRank` on a discrete graphics card (memory
+   * class `discrete`, rule C) — model-benchmarks.md §6.8. Optional in YAML
+   * (`recommendation_rank_gpu`, a non-negative number); absent → the ordinary rank applies there
+   * too. 0 keeps a model selectable but never the automatic pick on a card.
+   */
+  recommendationRankGpu?: number
+  /**
+   * What the runtime itself projects this model to take on the card under the app's launch, MiB:
+   * the figure of llama.cpp's fit line, "projected to use N MiB of device memory", read off a
+   * start with the manifest's own context, one slot, batch 2048 and the manifest's speculative
+   * decoding. Optional in YAML (`projected_graphics_need_mib`, number ≥ 0). When present it
+   * REPLACES the derived estimate in `estimateGraphicsNeedMib` (the fit margin is still added),
+   * because it is the same number the runtime compares with the card's free memory
+   * (model-benchmarks.md §6.8). Absent → the estimate, as before.
+   */
+  projectedGraphicsNeedMib?: number
   /**
    * The context cache (KV + recurrent state) the runtime allocates for this model at its
    * `recommended_context_tokens` under the app's launch (ubatch 2048 and, since issue #319,
@@ -663,13 +681,33 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendationRankCpu = rrc
     }
   }
-  let cpuStepDownTo: string | undefined
-  const csd = raw['cpu_step_down_to']
+  let stepDownTo: string | undefined
+  const csd = raw['step_down_to']
   if (csd !== undefined) {
     if (typeof csd !== 'string' || csd.trim() === '') {
-      errors.push('"cpu_step_down_to" must be a non-empty model id when present')
+      errors.push('"step_down_to" must be a non-empty model id when present')
     } else {
-      cpuStepDownTo = csd.trim()
+      stepDownTo = csd.trim()
+    }
+  }
+
+  // Optional card-path fields (model-benchmarks.md §6.8), validated like the processor ones.
+  let recommendationRankGpu: number | undefined
+  const rrg = raw['recommendation_rank_gpu']
+  if (rrg !== undefined) {
+    if (typeof rrg !== 'number' || !Number.isFinite(rrg) || rrg < 0) {
+      errors.push('"recommendation_rank_gpu" must be a non-negative number when present')
+    } else {
+      recommendationRankGpu = rrg
+    }
+  }
+  let projectedGraphicsNeedMib: number | undefined
+  const pgn = raw['projected_graphics_need_mib']
+  if (pgn !== undefined) {
+    if (typeof pgn !== 'number' || !Number.isFinite(pgn) || pgn < 0) {
+      errors.push('"projected_graphics_need_mib" must be a non-negative number when present')
+    } else {
+      projectedGraphicsNeedMib = pgn
     }
   }
 
@@ -931,7 +969,9 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendedProfiles,
       recommendationRank,
       ...(recommendationRankCpu !== undefined ? { recommendationRankCpu } : {}),
-      ...(cpuStepDownTo !== undefined ? { cpuStepDownTo } : {}),
+      ...(stepDownTo !== undefined ? { stepDownTo } : {}),
+      ...(recommendationRankGpu !== undefined ? { recommendationRankGpu } : {}),
+      ...(projectedGraphicsNeedMib !== undefined ? { projectedGraphicsNeedMib } : {}),
       ...(estimatedContextCacheGib !== undefined ? { estimatedContextCacheGib } : {}),
       ...(hostMappedWeightsMib !== undefined ? { hostMappedWeightsMib } : {}),
       licenseReview,

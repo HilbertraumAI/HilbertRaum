@@ -67,25 +67,25 @@ import {
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 // The committed catalog's answers at RAM 32 (benchmark.md table; audit §7 item 2): the RAM pick
-// is the 27B Q5. Since rule C on the free-memory basis (P3, decisions 10/11) an 8 GiB card whose
-// FREE figure is under the 9B's threshold does not hold it, so the card pick is the 4B — still
-// divergent from the RAM pick, which is what the mutation guards need.
+// is the 27B Q5. On the free-memory basis (P3, decisions 10/11) an 8 GiB card whose FREE figure
+// is under the 9B's threshold does not hold it, so the card pick is the next card-ranked model
+// that fits, the E4B (§6.8) — still divergent from the RAM pick, which is what the mutation guards need.
 // The threshold itself is pinned in `committed-catalog.test.ts`, not here; it moved 8,014 → 7,912
-// (#319, `-np 1`) → 7,830 (#321) → 7,285 (§5 item 22 (e), host-mapped weights out of the base).
+// (#319, `-np 1`) → 7,830 (#321) → 7,285 (§5 item 22 (e)) → 6,943 (§6.8, the measured projection).
 // CARD8 is an 8 GiB card with ≈ 1.3 GB in use, chosen with real HEADROOM under the threshold
 // rather than just below whichever value is current — it has been re-pinned twice already this
 // wave. The PAIR is the point: CARD8 below the threshold, CARD8_ROOMY above it.
 const RAM_PICK = 'gemma4-26b-a4b-it-qat-q4' // no usable card at 32 GB: the processor path (model-benchmarks.md §6.7)
-const CARD8_PICK = 'qwen3.5-4b-ud-q4kxl'
+const CARD8_PICK = 'gemma4-e4b-it-qat-q4'
 const CARD8_ROOMY_PICK = 'qwen3.5-9b-ud-q4kxl'
-// The 3 tok/s step from the 4B at this budget: the only ranked, eligible model under its 16 GB tier.
+// The 3 tok/s step from the E4B at this budget: the target its `step_down_to` names (§6.8).
 const CARD8_STEP = 'gemma4-e2b-it-qat-q4'
 // The hybrid fixture's discrete card (RTX 5060, 7,573 MiB free) clears the 9B's threshold since
 // §5 item 22 (e) took host-mapped weights out of the estimate's base — it was the 4B before. These
 // cases are about WHICH DEVICE the seams choose, not which model, so the model follows the card.
 const RTX5060_PICK = CARD8_ROOMY_PICK
 
-const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 6900 }
+const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 6800 }
 // The same card with 8,100 MiB free: holds the 9B — the witness that the seams feed the FREE
 // figure (by total − 1,024 it would read 7,168 and give the 4B).
 const CARD8_ROOMY: GpuDevice = { ...CARD8, freeMb: 8100 }
@@ -156,7 +156,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(getSettings(withCard.ctx.db).gpuProbe?.devices).toEqual([CARD8])
     expect(await liveStar(withCard.ctx)).toBe(CARD8_PICK)
     // The budget is the probe's FREE figure (decision 10), raw MiB — not the total the tile shows.
-    expect(pickerMemoryFor(getSettings(withCard.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: CARD8.freeMb })
+    expect(pickerMemoryFor(getSettings(withCard.ctx.db))).toMatchObject({ memoryClass: 'discrete', graphicsBudgetMb: CARD8.freeMb })
 
     const noCard = fixture({ probeReturns: [] })
     const benchNoCard = await runAndPersistBenchmark(noCard.ctx)
@@ -164,7 +164,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(benchNoCard.gpu).toBeNull()
     expect(benchNoCard.gpuVramMb).toBeNull()
     expect(await liveStar(noCard.ctx)).toBe(RAM_PICK)
-    expect(pickerMemoryFor(getSettings(noCard.ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
+    expect(pickerMemoryFor(getSettings(noCard.ctx.db))).toMatchObject({ memoryClass: 'cpu', graphicsBudgetMb: null })
   })
 
   it('the FREE figure decides on both seams: the same 8 GiB card with 8,100 MiB free holds the 9B', async () => {
@@ -173,7 +173,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(bench.recommendedModelId).toBe(CARD8_ROOMY_PICK)
     expect(bench.gpuVramMb).toBe(8192) // the tile still shows the total
     expect(await liveStar(ctx)).toBe(CARD8_ROOMY_PICK)
-    expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 8100 })
+    expect(pickerMemoryFor(getSettings(ctx.db))).toMatchObject({ memoryClass: 'discrete', graphicsBudgetMb: 8100 })
   })
 
   it('N8 gate boundary (#321): 5,921 MiB (RTX 4050 Laptop) NOW reaches the card path; 4,096 (GTX 1650) stays a RAM machine', async () => {
@@ -183,8 +183,8 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     // At 5,120 it reaches rule C and stars the 4B, which fully offloads at card speed.
     const laptop = fixture({ probeReturns: [RTX4050_LAPTOP] })
     const benchLaptop = await runAndPersistBenchmark(laptop.ctx)
-    expect(pickerMemoryFor(getSettings(laptop.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 5153 })
-    expect(benchLaptop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 3,838 MiB fits 5,153 (4,410 when #321 decided this)
+    expect(pickerMemoryFor(getSettings(laptop.ctx.db))).toMatchObject({ memoryClass: 'discrete', graphicsBudgetMb: 5153 })
+    expect(benchLaptop.recommendedModelId).toBe(CARD8_PICK) // the E4B: 4,482 MiB fits 5,153
     expect(benchLaptop.gpu).toBe(RTX4050_LAPTOP.name)
     expect(benchLaptop.gpuVramMb).toBe(5921)
     expect(await liveStar(laptop.ctx)).toBe(CARD8_PICK)
@@ -196,15 +196,15 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     // is the N8 argument for the gate. What decides THIS case is the gate itself, not the fit.
     const small = fixture({ probeReturns: [GTX1650] })
     const benchSmall = await runAndPersistBenchmark(small.ctx)
-    expect(pickerMemoryFor(getSettings(small.ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
+    expect(pickerMemoryFor(getSettings(small.ctx.db))).toMatchObject({ memoryClass: 'cpu', graphicsBudgetMb: null })
     expect(benchSmall.recommendedModelId).toBe(RAM_PICK)
     expect(benchSmall.gpu).toBeNull()
     expect(await liveStar(small.ctx)).toBe(RAM_PICK)
 
     const desktop = fixture({ probeReturns: [RTX2060] })
     const benchDesktop = await runAndPersistBenchmark(desktop.ctx)
-    expect(pickerMemoryFor(getSettings(desktop.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 5136 })
-    expect(benchDesktop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 3,838 MiB fits 5,136 (4,410 when #321 decided this)
+    expect(pickerMemoryFor(getSettings(desktop.ctx.db))).toMatchObject({ memoryClass: 'discrete', graphicsBudgetMb: 5136 })
+    expect(benchDesktop.recommendedModelId).toBe(CARD8_PICK) // the E4B: 4,482 MiB fits 5,136
     expect(benchDesktop.gpu).toBe(RTX2060.name)
     expect(benchDesktop.gpuVramMb).toBe(6144)
     expect(await liveStar(desktop.ctx)).toBe(CARD8_PICK)
@@ -262,7 +262,7 @@ describe('picker seams: the next start honours the GPU flags (decision 6)', () =
     expect(snap.placement.memoryClass).toBe('cpu')
     expect(snap.placement.vramMb).toBeNull()
     expect(snap.currentGpu).toBeNull()
-    expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
+    expect(pickerMemoryFor(getSettings(ctx.db))).toMatchObject({ memoryClass: 'cpu', graphicsBudgetMb: null })
   })
 
   it('"Try GPU again" moves the ★ and the class from the RAM pick to the card', async () => {
@@ -622,8 +622,8 @@ describe('picker seams: the speed sample carries the identity it was measured un
   const Q4 = 'qwen3.8-27b-ud-q4km'
   /** Unified memory at 32 GB keeps the RAM pick; its one-band step is Q4. */
   const UNIFIED_PICK = 'qwen3.8-27b-ud-q5km'
-  /** The processor pick (26B-A4B) after a crawl on a model that is not on its chain: one band down (§6.5 inside §6.7). */
-  const PROCESSOR_STEP = 'qwen3.5-9b-ud-q4kxl'
+  /** The processor pick (26B-A4B) after a crawl on the E4B, which lies on its chain (26B-A4B → 9B → E4B → E2B): the E4B's own target (§6.7). */
+  const PROCESSOR_STEP = 'gemma4-e2b-it-qat-q4'
 
   /** A fake ACTIVE chat runtime on the card: streams a few chunks so the speed leg reads something. */
   function runtimeOnCard(modelId: string): ModelRuntime {

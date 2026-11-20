@@ -183,20 +183,21 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
     pinRam(32)
   })
 
-  it('24 GB card → the 27B Q5 since -np 1 (#319); 8 GB card → the 4B; no card → the processor pick (§6.7)', async () => {
+  it('24 GB card → Gemma 4 31B (§6.8); 8 GB card → the 9B (§6.8); no card → the processor pick (§6.7)', async () => {
     const manifests = committedManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // RTX 3090 as the Windows rig reports it (24,822 total); a probe without a free figure →
-    // total − 1,024 = 23,798 MiB, which clears Q5's 22,877 (committed-catalog pins the threshold), so
-    // the RAM pick stands. #318 leg 1 measured this card: Q5 66/66 at 51.0 tok/s with `-np 1`.
-    // An idle 8 GB card: 7,168 MiB free is under the 9B's 7,285 → the 4B. It would hold the 9B by its
-    // total, which makes this the row that tells budget from total.
+    // total − 1,024 = 23,798 MiB, which clears Gemma 4 31B's 21,640 (its measured projection 20,616
+    // plus the 1,024 margin; committed-catalog pins the threshold), the highest card-ranked model
+    // there since §6.8. It loaded 61/61 on this card at 35 tok/s (2026-11-20).
+    // An idle 8 GB card: 7,168 MiB free holds the 9B since §6.8 (its measured projection 5,919 plus
+    // the 1,024 margin = 6,943; the derived estimate read 7,285 and landed on the 4B).
     const big = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, budgetMb: 24_822 - 1024, memoryClass: 'discrete' } })
     const small = await runBenchmark({ ...base, gpu: { name: 'RTX 3050', useful: true, totalMb: 8192, budgetMb: 7168, memoryClass: 'discrete' } })
     const none = await runBenchmark({ ...base, gpu: null })
     expect(big.ramGb).toBe(32)
-    expect(big.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
-    expect(small.recommendedModelId).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(big.recommendedModelId).toBe('gemma4-31b-it-qat-q4')
+    expect(small.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
     // No card at all is the processor path: the mixture-of-experts 26B, not the dense 27B.
     expect(none.recommendedModelId).toBe('gemma4-26b-a4b-it-qat-q4')
     expect(none.recommendedModelId).toBe(recommendModelIdForProcessor(manifests, 32))

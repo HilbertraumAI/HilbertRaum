@@ -21,6 +21,9 @@ recommended_ram_gb: 32
 # pick, and the niche got STRONGER: 21.8 GiB peak VRAM leaves 2.2 GiB headroom where the
 # withdrawn file left 1.3.
 recommendation_rank: 0
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 66/66 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 20927
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true

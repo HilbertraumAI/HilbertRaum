@@ -30,6 +30,10 @@ import {
   recommendModelId,
   recommendModelIdByRam,
   recommendModelIdByVram,
+  landedPartlyOnCard,
+  cardEvidenceFor,
+  PARTIAL_EVIDENCE_TOLERANCE_MIB,
+  type CardEvidence,
   recommendChatModelId,
   estimateGraphicsNeedMib,
   fitsGraphicsMemory,
@@ -932,6 +936,95 @@ describe('recommendModelId', () => {
 // highest-RANKED eligible model (ties by tier, then size) takes over; where nothing is eligible
 // the RAM pick stands as the documented partial-offload fallback. RAM stays a hard gate, and the
 // §6.5 step-down is confined to the eligible pool on both ends (R1/R2).
+// §6.8: the card path with a catalog that carries card ranks, the runtime's own projection as
+// the need, and the evidence of earlier starts. Fixture catalogs only; the committed catalog's
+// grid is pinned in committed-catalog.test.ts.
+describe('card path §6.8: projected need, card ranks, partial-load evidence', () => {
+  const tiny = validManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const mid = validManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const g12 = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
+  const g12Card = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2, recommendation_rank_gpu: 3 })
+  const BUDGET = 10_000
+  const seen = (over: Partial<CardEvidence['placements'][string]> = {}, override: number | null = null): CardEvidence => ({
+    placements: { g12: { backend: 'gpu', gpuLayers: 40, totalLayers: 49, contextTokens: 4096, gpuFreeAtStartMb: BUDGET, ...over } },
+    contextTokensOverride: override
+  })
+
+  it('a projected need replaces the estimate: the projection plus the fit margin, nothing else', () => {
+    const projected = validManifest({ id: 'p', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0.3, host_mapped_weights_mib: 545.62, projected_graphics_need_mib: 5856 })
+    expect(estimateGraphicsNeedMib(projected)).toBe(5856 + 1024)
+    expect(fitsGraphicsMemory(projected, 6880)).toBe(true)
+    expect(fitsGraphicsMemory(projected, 6879)).toBe(false)
+    // Zero is a figure, not "absent".
+    expect(estimateGraphicsNeedMib(validManifest({ id: 'z', size_on_disk_gb: 6.0, projected_graphics_need_mib: 0 }))).toBe(1024)
+  })
+
+  it('without card ranks it is rule C: the RAM pick stands where it fits the card', () => {
+    expect(recommendModelIdByVram([tiny, mid, g12], BUDGET, 16)).toBe('mid')
+  })
+
+  it('with card ranks the highest card-ranked model that fits is the pick outright, RAM floor kept', () => {
+    expect(recommendModelIdByVram([tiny, mid, g12Card], BUDGET, 16)).toBe('g12')
+    // g12 needs 14 GB of RAM: at 12 the next card-ranked model that fits.
+    expect(recommendModelIdByVram([tiny, mid, g12Card], BUDGET, 12)).toBe('mid')
+    // Too small a card for g12 (9,214 MiB by the estimate): the next one down.
+    expect(recommendModelIdByVram([tiny, mid, g12Card], 9000, 16)).toBe('mid')
+    // A card rank of 0 takes a model out of the card pick (the next by card rank is the rank-3 tiny,
+    // ahead of the rank-2 g12); the ordinary rank still serves the RAM path.
+    const midOff = validManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3, recommendation_rank_gpu: 0 })
+    expect(recommendModelIdByVram([tiny, midOff, g12], BUDGET, 16)).toBe('tiny')
+    expect(recommendModelIdByRam([tiny, midOff, g12], 16, 'chat')).toBe('mid')
+    // Nothing card-ranked fits: the RAM pick of the ordinary ranks, partially offloaded.
+    expect(recommendModelIdByVram([tiny, mid, g12Card], 1500, 16)).toBe('mid')
+  })
+
+  it('a model seen landing only partly on this card is not picked for it again', () => {
+    const all = [tiny, mid, g12Card]
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen())).toBe('mid')
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 16, budgetMb: BUDGET, card: seen() })).toBe('mid')
+    // A full offload, a processor start or no layer figures are no evidence against it.
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ gpuLayers: 49 }))).toBe('g12')
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ backend: 'cpu' }))).toBe('g12')
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ gpuLayers: null }))).toBe('g12')
+    // The same under rule C (no card ranks): the RAM pick that landed partly gives way.
+    const partMid: CardEvidence = { placements: { mid: { backend: 'gpu', gpuLayers: 20, totalLayers: 33, contextTokens: 4096, gpuFreeAtStartMb: BUDGET } } }
+    expect(recommendModelIdByVram([tiny, mid, g12], BUDGET, 16, 'chat', null, partMid)).toBe('tiny')
+  })
+
+  it('the evidence counts only under conditions that still hold: context no larger, card no fuller than now', () => {
+    const all = [tiny, mid, g12Card]
+    // Measured at a larger context than the next start uses: proves nothing.
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ contextTokens: 32_768 }))).toBe('g12')
+    // ...unless that larger context is what Settings now launch with.
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ contextTokens: 32_768 }, 32_768))).toBe('mid')
+    // A manifest without its own window launches with the legacy setting (`launchContextTokens`'
+    // precedence), so a partial start at a larger context than that proves nothing either.
+    const noWindow = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_context_tokens: 0, recommendation_rank_gpu: 3 })
+    expect(landedPartlyOnCard(noWindow, BUDGET, { ...seen({ contextTokens: 8192 }), contextTokens: 4096 })).toBe(false)
+    expect(landedPartlyOnCard(noWindow, BUDGET, { ...seen({ contextTokens: 4096 }), contextTokens: 4096 })).toBe(true)
+    // The card was fuller then than now (something else held it): no evidence. Inside the tolerance it counts.
+    expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: BUDGET - PARTIAL_EVIDENCE_TOLERANCE_MIB - 1 }))).toBe(false)
+    expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: BUDGET - PARTIAL_EVIDENCE_TOLERANCE_MIB }))).toBe(true)
+    // An unknown free figure counts: the layers are the evidence.
+    expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: null }))).toBe(true)
+    expect(landedPartlyOnCard(g12Card, BUDGET, null)).toBe(false)
+  })
+
+  it('cardEvidenceFor keeps this machine’s placements and unstamped ones, never another machine’s', () => {
+    const placement = (machineKey: string | null) => ({
+      modelId: 'x', contextTokens: 8192, backend: 'gpu' as const, gpuLayers: 20, totalLayers: 33, gpuModelMb: null, cpuModelMb: null,
+      gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey, at: '2026-11-20T00:00:00Z'
+    })
+    const evidence = cardEvidenceFor(
+      { modelPlacements: { here: placement('A'), legacy: placement(null), other: placement('B') }, contextTokensOverride: 16_384, contextTokens: 4096 },
+      'A'
+    )
+    expect(Object.keys(evidence.placements).sort()).toEqual(['here', 'legacy'])
+    expect(evidence.contextTokensOverride).toBe(16_384)
+    expect(evidence.contextTokens).toBe(4096)
+  })
+})
+
 describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
   const tiny = validManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
   const small12 = validManifest({ id: 'small12', size_on_disk_gb: 3.3, recommended_min_ram_gb: 8, recommended_ram_gb: 12, recommendation_rank: 3 })
