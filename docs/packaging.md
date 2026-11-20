@@ -291,7 +291,8 @@ Key config points:
   rewritten resource section: the same code sections and fuse wire (measured on 43.7.7, #551). So a
   copy of `win-unpacked` with that binary copied in as `HilbertRaum.exe` runs the packaged app's
   code against its `app.asar`, with `app.isPackaged` true. **The packaged exe's fuses differ from
-  the stock binary's** (since #562 wire `001011001`, the stock binary `101100011`), so that copy
+  the stock binary's** (wire `000011001` since #564, `001011001` from #562 to #564; the stock
+  binary `101100011`), so that copy
   runs the packaged app with Electron's default fuses. That is fine for everything except the
   fuses themselves: no asar integrity check, RunAsNode and `--inspect` still honoured. To
   reproduce the shipped fuses, first add electron-builder's integrity resource to the copy
@@ -332,18 +333,23 @@ Key config points:
   string. `third-party-notices.test.ts` pins the entry.
 - The build output goes to `apps/desktop/release/` (git-ignored).
 
-### Electron fuses (#560, #562)
+### Electron fuses (#560, #562, #564)
 `electron-builder.yml` `electronFuses` sets six fuses, measured and explained in `architecture.md`
-"Electron fuses — design record (#562)":
+"Electron fuses — design record (#562)" (§8 for #564):
 
 - `runAsNode: false`: `ELECTRON_RUN_AS_NODE` no longer turns the exe into a Node.js runtime.
 - `enableNodeCliInspectArguments: false`: `--inspect`, `--inspect-brk` and SIGUSR1 open no
   debugger. Chromium's `--remote-debugging-port`, which the CDP harnesses use, is a different
   switch and still works.
-- `enableNodeOptionsEnvironmentVariable: true`, deliberately (owner decision 2026-10-03). Off, the
-  exe drops `NODE_EXTRA_CA_CERTS`, and the in-app downloads then fail behind TLS-scanning antivirus
-  and corporate proxies (measured with Norton). A packaged app ignores `NODE_OPTIONS` itself except
-  two parser flags.
+- `enableNodeOptionsEnvironmentVariable: false` (#564): the exe reads neither `NODE_OPTIONS` nor
+  `NODE_EXTRA_CA_CERTS`. TLS-scanning antivirus and corporate proxies used to get their root trusted
+  through that variable; they also install it in the operating system's certificate store, and
+  since #564 the in-app downloads trust that store's usable roots (`src/main/services/net/trust.ts`:
+  self-signed CAs whose signature verifies with their own key, valid now, RSA ≥ 2048, P-256/P-384/
+  P-521 or Ed25519; added once before the first download's
+  first request, never at startup). A root that is only in
+  `NODE_EXTRA_CA_CERTS` no longer counts in a packaged build. Until #564 the fuse stayed on (owner
+  decision 2026-10-03), because with it off the downloads failed behind Norton (measured).
 - `enableEmbeddedAsarIntegrityValidation: true` + `onlyLoadAppFromAsar: true`: a modified `app.asar`
   ends the app, and only `app.asar` is ever loaded. They need `asar: true` and the header hash that
   electron-builder writes on every build: the exe's integrity resource on Windows, `Info.plist` on
@@ -362,7 +368,8 @@ maps every option and still writes the integrity hash, and fails on `asar: false
 `disableAsarIntegrity`.
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
-Decode it with the library, not by hand. Expected for 43.8.6 (as for 43.7.7, 43.8.0 and 43.8.3): `001011001`.
+Decode it with the library, not by hand. Expected for 43.8.6 since #564: `000011001`. Before #564
+it was `001011001` (43.7.7 through 43.8.6).
 `release.yml`'s build-win decodes the Windows exe it packages against `verify-mac-build.sh`'s
 `EXPECTED_WIRE` on every run (#769); by hand:
 
@@ -371,8 +378,8 @@ Decode it with the library, not by hand. Expected for 43.8.6 (as for 43.7.7, 43.
 node -e "require('@electron/fuses').getCurrentFuseWire(process.argv[1]).then((w) => console.log(Object.keys(w).filter((k) => /^\d+$/.test(k)).map((k) => String.fromCharCode(w[k])).join('')))" apps/desktop/release/win-unpacked/HilbertRaum.exe
 ```
 
-The nine positions on Electron 43.8.3 (unchanged since 43.7.7), as shipped: **0 RunAsNode (off, #562)**,
-1 EnableCookieEncryption (off), 2 EnableNodeOptionsEnvironmentVariable (on),
+The nine positions on Electron 43.8.6 (unchanged since 43.7.7), as shipped: **0 RunAsNode (off, #562)**,
+1 EnableCookieEncryption (off), **2 EnableNodeOptionsEnvironmentVariable (off, #564)**,
 **3 EnableNodeCliInspectArguments (off, #562)**, **4 EnableEmbeddedAsarIntegrityValidation (on,
 #562)**, **5 OnlyLoadAppFromAsar (on, #562)**, 6 LoadBrowserProcessSpecificV8Snapshot (off),
 **7 GrantFileProtocolExtraPrivileges (off, #560)**, 8 (unnamed in `@electron/fuses` 1.8.0; the
@@ -1322,6 +1329,14 @@ both. Delete them too before that final check, or do not browse `workspace/` and
    off-screen real-Electron row (`tests/integration/app-menu-electron-smoke.test.ts`) presses the
    Windows keys against the production menu with `webContents.sendInputEvent`, but only a packaged
    build and a physical keyboard prove the shipped binary.
+13. **A download behind TLS inspection, and the fuse wire (#564).** Decode the packaged binary's
+   fuse wire ("Electron fuses" above; `000011001` for 43.8.6). Then, on a computer whose antivirus or
+   proxy re-signs HTTPS (Norton's web protection does), start the packaged build with
+   `NODE_EXTRA_CA_CERTS` removed from its environment and begin one in-app download from github.com
+   or huggingface.co: the AI engine or a model, not an OCR file (jsDelivr is not re-signed by
+   Norton, so it proves nothing). It must get past the first megabytes; cancel it then. The app's
+   log then holds the line "Download trust: the system certificate store is trusted too". Before
+   #564 such a download failed with "fetch failed".
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 
@@ -1375,7 +1390,7 @@ HILBERTRAUM_OCR_DIR=/Volumes/HILBERTRAUM/ocr PROBE_ARGS='--scan ~/scan.pdf --sca
 
 It works in scratch folders under `$TMPDIR`, never on a real drive. It prints PASS / FAIL / NOTE
 lines for:
-1. **The fuse wire**, expected `001011001`.
+1. **The fuse wire**, expected `000011001` (`001011001` before #564).
 2. **The signature:** `codesign -dv` (ad hoc, and whether the hardened-runtime flag is set) and
    `codesign --verify --deep --strict`.
 3. **The entitlements:** whether `com.apple.security.device.audio-input` is present.

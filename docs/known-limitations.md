@@ -114,13 +114,21 @@ password recovery — are documented in
   check exists only on Windows and macOS; Linux has none. macOS is unmeasured. Someone who can
   change the app's files can usually replace the app outright, so this narrows a local attack; it
   does not prevent it.
-- **The app still honours `NODE_EXTRA_CA_CERTS` (#562; owner decision 2026-10-03).** Antivirus
-  products that inspect encrypted connections (Norton, measured) and corporate proxies set this
-  variable so that programs trust them. If the app ignored it, its built-in downloads of the AI
-  engine and models would fail on such computers. The flip side: a program that can set the
-  user's environment can add a certificate the app's downloads will trust. That cannot change what
-  a download installs, because every engine, model and OCR file is checked against a fixed SHA-256
-  checksum before use. Making the downloads trust the operating system's certificates instead is #564.
+- **The released app ignores `NODE_EXTRA_CA_CERTS` (#564).** Antivirus products that inspect
+  encrypted connections (Norton, measured) and corporate proxies set this variable so that programs
+  trust them, and they also add their certificate to the operating system's certificate store. The
+  app's built-in downloads trust that store, so they work on such computers without the variable.
+  A proxy whose certificate is only in the variable, and not in the operating system's store,
+  makes the downloads fail: add the certificate to the store (your IT department does this for a
+  company proxy). Trusting the store also means that an older root certificate Windows still trusts
+  but Chrome no longer does (Entrust, old DigiCert, VeriSign, Go Daddy roots) is trusted, and so is
+  a self-signed CA certificate in the store for intermediate certificates or for trusted people,
+  which Windows itself does not treat as a root. A program running as the user can add one there
+  without the confirmation Windows shows for a new root, much as it could set
+  `NODE_EXTRA_CA_CERTS` before.
+  That cannot change what a download installs, because every engine, model and OCR file is checked
+  against a fixed SHA-256 checksum before use. A development build (`npm run dev`) still reads the
+  variable.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
