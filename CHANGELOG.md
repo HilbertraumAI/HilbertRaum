@@ -330,12 +330,29 @@ from its first public `1.0.0` release onward.
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.
   Questions with "différence", "différent", "diffère" or "différencier" still compare them
   (#809).
-- **With What Changed? selected, a question that isn't a comparison gets a plain answer.** With one
-  document in scope, or three or more, a question such as "Who is the tenant?" or "How do I change
-  the rent?" was often answered in the skill's comparison layout, an executive summary and then the
-  changes between versions, instead of with the fact you asked for. Such a question is now answered
-  plainly from the documents, and the answer still shows that the skill was applied. Comparing two
-  documents works as before (#632).
+- **With a whole-document skill selected, a question the skill isn't for gets a plain answer.** With
+  What Changed? selected and one document in scope, or three or more, a question such as "Who is the
+  tenant?" or "How do I change the rent?" was often answered in the skill's comparison layout, an
+  executive summary and then the changes between versions, instead of with the fact you asked for.
+  Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder did the same
+  with their own reports for a question asked over several documents, a single fact looked up in a
+  long document, or a thank-you: "Who attended?" could get full meeting minutes. Such a question is
+  now answered plainly from the documents, and the answer still shows that the skill was applied.
+  Comparing two documents, and a skill's report on one document, work as before (#632, #831).
+- **The "every mention" example question reads a long document whole in every language.** With a
+  whole-document skill such as Contract Brief selected and one long document in scope, the German
+  example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching
+  passages and could miss mentions, while the English "Find every mention of 'indemnity'" read the
+  whole document. Every language's example now reads the whole document, whatever word you put in
+  its quotes (#834).
+- **With a whole-document skill, a request to find or list something in a long document is answered
+  from notes taken for it.** A document too long to read at once is read in parts, and the answer is
+  written from notes on each part. Those notes were taken for the skill's report only, so "Find every
+  mention of 'indemnity'" under Contract Brief could miss mentions, or say there were none, while the
+  answer said the whole document was read. A request to find or list something, such as "List every
+  deadline" or the "every mention" example, now gets notes for what you asked as well as for the report.
+  A request for the report itself is read as before, even when it names a list ("Summarize all the
+  decisions", "Write the minutes with every action item"), and so is every other question (#939).
 - **The Documents filter's search icon no longer covers the text.** The magnifier in the "Filter
   by name…" box sat over the start of the placeholder and of what you typed, at every window
   size and in every language. The text now starts after the icon (#803).

@@ -1,4 +1,5 @@
 import { foldCase } from '../../../shared/text-fold'
+import { isMentionChip, isSummarizeChip } from '../analysis/example-chips'
 import { wordIncludes } from './tools/money'
 
 // W5 — the ONE canonical bilingual trigger vocabulary per app skill (audit §3.2/§4.1/§4.2/§8.3).
@@ -576,8 +577,8 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
 //   (a) `isSmallTalk` OPTS OUT clearly off-topic chatter (greetings/thanks/assistant-meta) — a "hi"/"danke"
 //       over a document must NOT spend a whole-document read; it keeps the ordinary relevance path.
 //   (b) `isNeedleShaped` classifies a targeted single-fact lookup vs a whole-document DELIVERABLE — the
-//       chat path uses it ONLY to send a needle to top-k WHEN the whole-doc read would truncate and no
-//       deep-index tree exists (a needle past the truncation cut would be missed; top-k finds it anywhere).
+//       chat path uses it ONLY to send a needle to top-k WHEN the whole-doc read would truncate, deep-index
+//       tree or not (SKA-12; a needle past the truncation cut would be missed; top-k finds it anywhere).
 //
 // Both are deliberately conservative. `isSmallTalk` can never fire on a real document question (a question
 // with any content word is not all-filler and matches no whole-question chit-chat form). `isNeedleShaped`
@@ -746,12 +747,14 @@ export function isSmallTalk(question: string): boolean {
   return tokens.every((t) => SMALL_TALK_WORDS.has(t))
 }
 
-/** Whole-document DELIVERABLE verbs/phrases (EN+DE): a "process the whole document" ask (summary, minutes,
- *  brief, list-all, compare, review). Their presence VETOES the needle classification — a deliverable is
- *  never downgraded to top-k. Substring-matched (German compounds included). */
-const DELIVERABLE_SHAPES: string[] = [
+/** Whole-document REPORT verbs/phrases (EN+DE): a "process the whole document into the skill's report" ask
+ *  (summary, minutes, brief, compare, review, synthesis). With the list-all shapes below they VETO the needle
+ *  classification — a deliverable is never downgraded to top-k. #939: alone they also keep a report request
+ *  that carries a list word ("Summarize all the decisions", «Erstelle das Protokoll mit allen Beschlüssen»)
+ *  on the map prompt as it was (`isReportShaped`). Substring-matched (German compounds included). */
+const REPORT_SHAPES: string[] = [
   'summar', 'brief', 'overview', 'recap', 'minutes', 'walk me through', 'key point', 'main point',
-  'list all', 'list every', 'all the', 'everything', 'what changed', 'what has changed', 'compare',
+  'what changed', 'what has changed', 'compare',
   'review', 'gist', 'rundown', 'breakdown', 'analy', 'tl;dr', 'the whole', 'entire document',
   // Whole-document SYNTHESIS nouns that commonly head a "what is the …" ask (which would otherwise trip
   // the `what is the` needle stem). Vetoing them keeps a summary/gist ask on the whole-doc engine — a
@@ -765,11 +768,18 @@ const DELIVERABLE_SHAPES: string[] = [
   // "was ist das Wichtigste/die Schlussfolgerung?" (DE). Vetoing them keeps a synthesis ask on the whole-doc
   // engine (a false deliverable is safer than a false needle — the module's own rule).
   'important point', 'key insight', 'verdict', 'overall',
-  'zusammenfass', 'überblick', 'protokoll', 'sämtliche', 'liste', 'auflisten',
+  'zusammenfass', 'überblick', 'protokoll',
   'was hat sich geändert', 'vergleich', 'überprüf', 'durchgehen', 'wesentlich', 'analyse', 'ganze dokument',
   'fazit', 'kernaussage', 'kernpunkt', 'quintessenz', 'gesamteindruck', 'inhalt', 'worum geht',
   'wichtigste', 'schlussfolgerung', 'erkenntnis', 'gesamtbild'
 ]
+
+/** Whole-document LIST-ALL deliverables (EN+DE): "list every …", "all the …", «sämtliche …», «Liste …». A
+ *  deliverable for the needle veto (a list is never a single fact), but no report: #939 takes list notes for them. */
+const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'all the', 'everything', 'sämtliche', 'liste', 'auflisten']
+
+/** Every deliverable shape the needle veto reads: the report shapes and the list-all shapes. */
+const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHAPES]
 
 // SKA-45 (W7, audit §3.4) — the deliverable shapes that must be WORD-anchored, not the old dead
 // trailing-space substrings. 'alle ' could never veto a needle when 'alle' ended the question ("sind das
@@ -781,7 +791,7 @@ const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [/\balle\b/]
  *  needle is worse than a false deliverable), substring-matched. */
 const NEEDLE_SHAPES: string[] = [
   'how much', 'how many', 'how long', 'when is', 'when does', 'when did', 'when will', 'when do',
-  'where is', 'where does', 'where can i', 'find the', 'find a', 'locate', 'look up', 'is there a',
+  'where is', 'where does', 'where can i', 'find the', 'locate', 'look up', 'is there a',
   'are there any', 'does it say', 'does the document', "what's the", 'what is the', 'what was the',
   'wie viel', 'wie viele', 'wie lange', 'wann ist', 'wann muss', 'wann wird', 'wo ist', 'wo steht',
   'gibt es', 'steht im', 'steht in', 'was ist der', 'was ist die', 'was ist das'
@@ -791,17 +801,34 @@ const NEEDLE_SHAPES: string[] = [
 // substrings. 'finde ' could never match when 'finde' ended the question ("wo ich das finde?"); \bfinde\b
 // matches the bare imperative without hitting 'finden'/'findest'/'befinde' (word boundary after 'finde').
 // Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
-const NEEDLE_SHAPE_RES: readonly RegExp[] = [/\bfinde\b/]
+// #939 review (S1): "find a" / "find an" as words, so "Find all deadlines" and "Find any deadline" (a list) are no
+// needles; a letter or digit on either side ends the match, as in the module's other Unicode-safe matches.
+const NEEDLE_SHAPE_RES: readonly RegExp[] = [/\bfinde\b/, /(?<![\p{L}\p{N}])find an?(?![\p{L}\p{N}])/u]
 
 /**
  * True when the question is a targeted single-fact LOOKUP rather than a whole-document deliverable (A3
  * classify (b), audit §8.2). Used ONLY to prefer top-k over a TRUNCATED whole-doc read (a needle past the
  * cut would be missed). A deliverable verb vetoes it, so a summary/minutes/compare ask is never a needle.
- * Deterministic; the question is never logged.
+ * #834: so does the every-mention example chip, recognised by its frame in every catalog (`isMentionChip`,
+ * whatever word stands in its quotes): it asks for a list of every mention, and the German one held the
+ * needle word «finde» while the other nine held none. Deterministic; the question is never logged.
  */
 export function isNeedleShaped(question: string): boolean {
   const q = question.toLowerCase()
+  if (isMentionChip(question)) return false
   if (DELIVERABLE_SHAPES.some((s) => q.includes(s)) || DELIVERABLE_SHAPE_RES.some((re) => re.test(q)))
     return false
   return NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))
+}
+
+/**
+ * #939 (review B1): does the question ask for the skill's REPORT — a summary, minutes, a brief, a review, a
+ * compare (the report shapes above) or a summarize example chip of any catalog — even when it also carries a
+ * list word ("Summarize all the decisions", «Erstelle das Protokoll mit allen Beschlüssen», "Write the minutes
+ * including every action item")? Such a turn keeps the whole-document map prompt as it was. EN+DE words; the
+ * question is never logged.
+ */
+export function isReportShaped(question: string): boolean {
+  const q = question.toLowerCase()
+  return REPORT_SHAPES.some((s) => q.includes(s)) || isSummarizeChip(question)
 }

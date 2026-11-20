@@ -1635,32 +1635,73 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
   can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
   needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
-  **What Changed?'s fall-through turn carries only the skill's rules (skills-audit-2026-07-07 SK-3b,
-  decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1).** With What Changed?
-  selected, a turn the compare engine doesn't take falls through to the ordinary answer, which reads
-  top-k passages, or since #643 one document that fits whole. The engine doesn't take small talk or a
-  scope that doesn't hold exactly two documents; at such a count What Changed? answers a compare request
-  with "select exactly two" instead (below). D-P2a kept the whole skill fence on a fall-through turn and
-  relied on honesty rule 1 (`what-changed/SKILL.md`: ordinary passages with no A/B labels and no diff ⇒
-  simply answer the question). Its revisit condition was met: on a 4B model, most plain questions over
-  one or three lease drafts, such as "Wer ist der Mieter?", got the body's compare format (an "Executive
-  summary" and the sections after it) instead of an answer, in the real-app run for #582 (2026-10-07) and
-  again on master when #632 was measured. Since #632 the fence on such a turn carries only the skill's
+  **A bundled whole-document skill's fall-through turn carries only the skill's rules (skills-audit-2026-07-07
+  SK-3b, decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1, for What Changed?;
+  extended 2026-11-20 by #831, follow-ups wave 4 owner call G-9, to the other four).** Each of the five
+  bundled whole-document skills has an engine that reads whole documents: What Changed? compares exactly
+  two, and Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder read exactly
+  one. A turn the engine doesn't take falls through to the ordinary answer, which reads top-k passages, or
+  since #643 one document that fits whole. The engine doesn't take small talk, or a scope with another
+  number of documents, none included (a knowledge-pack-only scope, a document still indexing); at such a
+  count a request in the skill's routing vocabulary is narrowed to one
+  matching document or answered with "select exactly two" or "pick one" instead (below), so only the other
+  questions fall through. A whole-document skill also sends a single-fact question over one document too
+  long to read whole to the passage search (the needle downgrade above). D-P2a kept the whole skill fence
+  on such a turn and relied on the honesty rules (What Changed?'s rule 1: ordinary passages with no A/B
+  labels and no diff ⇒ simply answer the question). Its revisit condition was met: on a 4B model, most
+  plain questions on such turns got the skill's report format instead of an answer. For What Changed? that
+  was the compare format ("Wer ist der Mieter?" got an "Executive summary" and the sections after it, in
+  the real-app run for #582 on 2026-10-07 and again on master when #632 was measured). For the other four
+  it was their own reports, on 11 of 16 plain questions (5 of 16 on a 9B model); Meeting Minutes wrote
+  full minutes for "Who attended?". Since #632 and #831 the fence on such a turn carries only the skill's
   first paragraph, the heading and the honesty rules, which is also the minimum the fence keeps when the
   context is tight (SKA-15); the section format is left out, and the app log records the cap (skill id
   and mode, never the body). The answer still shows the skill as applied (the per-message glyph), so the
-  selection isn't silently dropped. The two-document compare turn (the exact changes, or both documents
-  read whole when one is a full rewrite) is unchanged, and so is every other skill's fence; small talk
-  over two documents is the one two-document turn whose fence is now the first paragraph. A user-imported
-  skill declaring `analysis: compare` keeps its whole fence on such a turn, as before #632: only a bundled
-  body is known to lead with its rules (SKA-15), and a user skill has no compare vocabulary, so its real
-  compare requests fall through too. Measured on a 4B and a 9B model: [`architecture.md`](architecture.md)
-  §44 SK-3b. What counts as a compare question is the skill's routing vocabulary. Until #582 a
+  selection isn't silently dropped. Every read the engine takes keeps the whole fence, as before: the
+  two-document compare (the exact changes, or both documents read whole when one is a full rewrite), and
+  a whole-document skill's read of its one document, map-reduce included. Small talk over two documents is
+  the one two-document turn whose fence is the first paragraph. A downgraded single-fact question that the
+  deterministic listing answers carries no fence at all, as before. A user-imported skill declaring
+  `analysis: compare` or `analysis: whole-doc` keeps its whole fence on such a turn: only a bundled body is
+  known to lead with its rules (SKA-15), and a user skill has no routing vocabulary, so its real
+  deliverable requests over several documents fall through too. The rule has no exception for a bundled
+  skill's deliverable request over several documents that misses its vocabulary ("Summarize these
+  three", and in the eight interface languages beyond English and German every such request, «Resume
+  estos contratos»): that answer gets the first paragraph too; a brief built from top-k passages would be weak
+  anyway. Plain chat with no documents keeps the whole fence on purpose (#830). There the fence is the only
+  thing that shapes a compare of two pasted versions, and measured on both models with What Changed?
+  picked, plain questions were not compare-framed (0 of 6) while two pasted versions kept the format (2 of
+  2). A trim keyed to the compare vocabulary would drop the format for a pasted compare in the eight
+  interface languages beyond English and German, and since the plain-chat fence sits in the system
+  message, each switch between a compare and another question would cost a fresh prompt (about 2 s on the
+  4B and 4.5 s on the 9B to the first token). Measured on a 4B and a 9B model:
+  [`architecture.md`](architecture.md) §44 SK-3b. What counts as a compare question is the skill's routing
+  vocabulary. Until #582 a
   compare request in one language could miss it while its translation matched: "summarize the
   differences" fell through while "Fasse die Unterschiede zusammen" got "select exactly two". The
   vocabulary now covers the compare and change words in both languages ([`architecture.md`](architecture.md)
   §18 "#582"). A question with any of them gets "select exactly two" at any count other than two,
   including a Library chat with What-changed still selected.
+- **A whole-document read's notes and the question (#939, follow-ups wave 4, owner call 2026-11-20).** A
+  document too long to read in one call is read in parts: notes on each part, then the answer from the
+  notes. The notes are taken for the question too only when a bundled whole-document skill (Contract Brief,
+  Meeting Minutes, Share-Safe Review, Deadline & Obligation Finder) gets a question that asks to find or
+  list something (the router's list words or the every-mention example chip) and asks for no report: a
+  summary, minutes, a brief or a review keeps the notes for the task, list word or not ("Summarize all the
+  decisions", «Erstelle das Protokoll mit allen Beschlüssen»). Everywhere else the notes
+  follow the skill's task, or, with no skill, the instruction alone, so a question that isn't the
+  deliverable can be answered from notes that left out what it asks: under a user skill declaring
+  `analysis: whole-doc` (its question never reaches the notes), in a summary read through the deep index
+  with no skill, and for a question under a bundled skill that is neither a list nor a single-fact lookup
+  ("Tell me about the parking rules"). The gate is deliberate: with every question in the notes, Meeting
+  Minutes lost facts in the real-model check ([`rag-design.md`](rag-design.md) §14.10). The list words are
+  English and German, so a list question typed in the eight newer interface languages, other than the
+  example chip, gets no question in the notes until #809 part C adds their list words. Each skill's own list request ("List every deadline" under Deadline & Obligation Finder, "List
+  all action items" under Meeting Minutes) takes the notes on a prompt measured only for the every-mention
+  chip under Contract Brief. The answer
+  still says it read the whole document, which is true of what it read, not of what the notes kept. With no
+  skill, the note step's instruction still names "the task described below" with nothing below it (a
+  follow-up).
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
   INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
   record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than
