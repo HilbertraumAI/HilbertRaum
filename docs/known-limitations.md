@@ -2820,12 +2820,21 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   Quitting (Ctrl+Q on Linux, ⌘Q on macOS) closes the hidden helper windows while the window still
   saves, so an OCR run in progress stops at once and ends as cancelled, even when you then pick Keep
   open; and an evidence-pack PDF export in progress is stopped by Ctrl+Q or ⌘Q itself (the print's
-  own `before-quit` hook), even when you then pick Keep open. Both can be started again. On
-  Windows and Linux, closing the window quits the app, so closing it during an OCR run or a PDF
-  export stops that run the way quitting does (#910; before, the app went on running with no window
-  and the workspace unlocked, and then threw the finished OCR run away); start it again the next
-  time you open the app. On macOS, a log-out or shutdown with the app open may be interrupted once
-  while the window saves: the order of the system's quit and its shutdown event is unverified
+  own `before-quit` hook), even when you then pick Keep open. Both can be started again. Nothing
+  new starts while such a quit waits: a document task waiting behind the OCR run stays waiting,
+  and goes on only if you pick Keep open (#936). On Windows and Linux, closing the window quits the
+  app (#910; before, the app went on running with no window and the workspace unlocked, and then
+  threw the finished OCR run away). While a scan is being read (OCR) or a document is being
+  translated, or one of them is waiting to start, the close asks first (#935): **Keep open** (the
+  default, and what Esc answers) leaves everything as it was, and **Close anyway** stops them the
+  way quitting does; run again, they start over from the beginning. The question does not come for
+  Ctrl+Q or ⌘Q, which stop them at once, for Lock now, for the macOS red button (the app and its
+  tasks keep running), or for a PDF export, a deep index, a summary or a comparison alone: closing
+  during a PDF export still stops it the way quitting does, and a deep index, built again, reuses
+  the parts it had already built. While the question is up, the workspace stays unlocked: a close
+  followed by walking away no longer locks within seconds, but only once someone answers (there is
+  deliberately no timer that answers for you). On macOS, a log-out or shutdown with the app open
+  may be interrupted once while the window saves: the order of the system's quit and its shutdown event is unverified
   (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF export), a Dock click during
   an OCR run (it should bring the window back, #910), and a log-out or shutdown with the app open.
 

@@ -1360,6 +1360,12 @@ passages) is tuned for English and German — see [known-limitations](known-limi
   again automatically.
 - Closing the app stops the local model and, for encrypted workspaces, re-locks and protects
   your data automatically.
+- If a scan is being read (**Make searchable (OCR)**) or a document is being translated, or one
+  of them is waiting to start, closing the window on Windows or Linux asks first. **Keep open**
+  (the default) lets it finish. **Close anyway** stops it, and it starts over from the beginning
+  when you run it again. Until you answer, the app stays open and your workspace stays unlocked.
+  Quitting with Ctrl+Q (Linux) or ⌘Q (macOS) and **Lock now** stop these tasks without asking. On
+  macOS, closing the window leaves the app running, so the task goes on.
 
 ### Change your password
 
