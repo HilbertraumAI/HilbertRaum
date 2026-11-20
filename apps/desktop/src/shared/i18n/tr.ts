@@ -2472,6 +2472,17 @@ export const tr: UiCatalog<'tr'> = {
   'main.dialog.unsavedReview.tryAgain': 'Yeniden dene',
   'main.dialog.unsavedReview.keepOpen': 'Açık bırak',
   'main.dialog.unsavedReview.closeAnyway': 'Yine de kapat',
+  'main.dialog.taskRunning.title': 'Bir belge görevi henüz bitmedi.',
+  'main.dialog.taskRunning.message': 'Bir belge görevi henüz bitmedi.',
+  'main.dialog.taskRunning.detailOcr':
+    'Şimdi kapatırsanız taramanın okunması durur ve şimdiye kadar okunan sayfalar kaybolur.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Şimdi kapatırsanız çeviri durur ve şimdiye kadar çevrilen kısım kaybolur.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Şimdi kapatırsanız çalışan ve bekleyen belge görevleri durur ve şimdiye kadar yapılan iş ' +
+    'kaybolur.',
+  'main.dialog.taskRunning.keepOpen': 'Açık bırak',
+  'main.dialog.taskRunning.closeAnyway': 'Yine de kapat',
   'main.workspace.wrongPassword':
     'Bu parola çalışma alanınızın kilidini açmadı. Parolayı kontrol edip yeniden deneyin.',
   'main.workspace.openFailed': 'Çalışma alanı açılamadı.',

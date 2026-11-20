@@ -7,18 +7,23 @@ import {
   CLOSE_SAVE_BOUND_MS,
   createCloseGuard,
   createMainWindowCloseGuard,
+  createStopWorkConfirm,
   createUnsavedCloseConfirm,
   createWindowSaveRequest,
+  holdQueueOnQuit,
+  stoppingWorkFrom,
   trackQuitRequests,
   type ConfirmWindow,
+  type StopWorkChoice,
+  type StoppingWork,
   type UnsavedCloseChoice
 } from '../../src/main/close-guard'
 import { createAppLifecycleHandlers } from '../../src/main/shutdown'
 import { REVIEW_LOCK_FLUSH_BOUND_MS } from '../../src/renderer/lib/reviewSession'
 import { BEFORE_CLOSE_SAVE_BOUND_MS } from '../../src/renderer/lib/beforeClose'
 import { EVENTS, IPC } from '../../src/shared/ipc'
-import { t } from '../../src/shared/i18n'
-import type { SaveBeforeCloseResult } from '../../src/shared/types'
+import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
+import type { DocTaskKind, DocTaskState, DocTaskStatus, SaveBeforeCloseResult } from '../../src/shared/types'
 import { deferred, type Deferred } from '../helpers/deferred'
 
 // #888: closing or quitting the app saves the window's pending edits first. Before this, the main
@@ -55,6 +60,18 @@ interface GuardHarnessOptions {
   ask?: () => Promise<SaveBeforeCloseResult | null>
   /** The save request throws instead of answering (a bug, a destroyed window). */
   askThrows?: boolean
+  /**
+   * #935/#936: wire the running-task question and the queue hold, each recorded as a step ('stop-dialog', 'hold',
+   * 'release'). Absent: the #888 guard exactly as before (the rows above pass none of these deps).
+   */
+  work?: {
+    /** Windows and Linux: this close ends the app. */
+    closeQuits: boolean
+    /** What `stoppingWork()` answers. */
+    stopping: StoppingWork | null
+    /** A dep that throws: the question, the task list or the hold. */
+    throws?: 'question' | 'taskList' | 'hold'
+  }
 }
 
 /**
@@ -66,9 +83,35 @@ function guardHarness(opts: GuardHarnessOptions = {}) {
   const steps: string[] = []
   const asks: Array<Deferred<SaveBeforeCloseResult | null>> = []
   const dialogs: Array<Deferred<UnsavedCloseChoice>> = []
+  const stopDialogs: Array<Deferred<StopWorkChoice>> = []
+  const asked: StoppingWork[] = []
   let quitRequested = opts.quitFirst === true
   let shuttingDown = opts.shuttingDown === true
+  const work = opts.work
+  const workDeps = work
+    ? {
+        closeQuits: work.closeQuits,
+        stoppingWork: () => {
+          if (work.throws === 'taskList') throw new Error('the task list is gone')
+          return work.stopping
+        },
+        confirmStopWork: (what: StoppingWork) => {
+          steps.push('stop-dialog')
+          asked.push(what)
+          if (work.throws === 'question') return Promise.reject(new Error('dialog failed'))
+          const choice = deferred<StopWorkChoice>()
+          stopDialogs.push(choice)
+          return choice.promise
+        },
+        holdWork: () => {
+          steps.push('hold')
+          if (work.throws === 'hold') throw new Error('the queue is gone')
+        },
+        releaseWork: () => void steps.push('release')
+      }
+    : {}
   const guard = createCloseGuard({
+    ...workDeps,
     askWindowToSave: () => {
       steps.push('ask')
       if (opts.askThrows) throw new Error('the window is gone')
@@ -109,6 +152,9 @@ function guardHarness(opts: GuardHarnessOptions = {}) {
     steps,
     asks,
     dialogs,
+    stopDialogs,
+    /** The work each running-task question was asked about. */
+    asked,
     close,
     requestQuit: () => (quitRequested = true),
     /** A session end locked the workspace (macOS `powerMonitor 'shutdown'`). */
@@ -316,6 +362,180 @@ describe('close guard — the window saves before it closes (#888)', () => {
   })
 })
 
+/** A task as `listActiveDocTasks()` returns it. */
+function task(kind: DocTaskKind, state: DocTaskState = 'running'): DocTaskStatus {
+  return { jobId: `${kind}-${state}`, kind, documentIds: ['doc'], state, progress: { stepsDone: 0, stepsTotal: 0 } }
+}
+
+describe('close guard — what a quitting close asks about (#935)', () => {
+  it.each<[string, StoppingWork | null, DocTaskStatus[]]>([
+    ['nothing', null, []],
+    ['an OCR run', 'ocr', [task('ocr')]],
+    ['a waiting OCR run', 'ocr', [task('summary'), task('ocr', 'queued')]],
+    ['a waiting document translation', 'translation', [task('tree'), task('translation', 'queued')]],
+    ['an OCR run and a translation', 'several', [task('ocr'), task('translation', 'queued')]],
+    ['two OCR runs', 'several', [task('ocr'), task('ocr', 'queued')]],
+    [
+      'a deep index, an extract pass, a summary, a comparison and a categorization',
+      null,
+      [task('tree'), task('extract', 'queued'), task('summary', 'queued'), task('compare', 'queued'), task('categorize', 'queued')]
+    ],
+    ['finished, failed and cancelled ones', null, [task('ocr', 'done'), task('translation', 'failed'), task('ocr', 'cancelled')]]
+  ])('%s → %s', (_what, work, tasks) => {
+    expect(stoppingWorkFrom(tasks)).toBe(work)
+  })
+})
+
+describe('close guard — a close that would stop a document task asks first (#935, #936)', () => {
+  const windows = { closeQuits: true, stopping: 'ocr' } as const
+
+  it('with no task to ask about, a close that quits holds the queue and saves as before', async () => {
+    const h = guardHarness({ work: { closeQuits: true, stopping: null } })
+    h.close()
+    h.asks[0]!.resolve({ unsaved: false })
+    await settle()
+    expect(h.steps).toEqual(['hold', 'ask', 'close:held', 'closeWindow', 'close:through'])
+  })
+
+  it('Keep open: nothing is saved, held or closed, and the next close asks again', async () => {
+    const h = guardHarness({ work: windows })
+    expect(h.close()).toBe(true)
+    // The question waits for a later task: it never opens inside the `close` event (code review round 3).
+    expect(h.steps).toEqual(['close:held'])
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog'])
+    expect(h.asked).toEqual(['ocr'])
+    h.stopDialogs[0]!.resolve('keep')
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog'])
+    h.close()
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'close:held', 'stop-dialog'])
+  })
+
+  it('Close anyway: then the queue hold, the save and the close, exactly once', async () => {
+    const h = guardHarness({ work: windows })
+    h.close()
+    await settle()
+    h.stopDialogs[0]!.resolve('close')
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'hold', 'ask'])
+    h.asks[0]!.resolve({ unsaved: false })
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'hold', 'ask', 'closeWindow', 'close:through'])
+  })
+
+  it('a second close while the question is up is held and ignored: one question', async () => {
+    const h = guardHarness({ work: windows })
+    h.close()
+    await settle()
+    expect(h.close()).toBe(true)
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'close:held'])
+    expect(h.stopDialogs).toHaveLength(1)
+  })
+
+  it('on macOS the red button asks nothing and holds nothing: the app and its tasks go on (#910)', async () => {
+    const h = guardHarness({ work: { closeQuits: false, stopping: 'ocr' } })
+    h.close()
+    h.asks[0]!.resolve({ unsaved: false })
+    await settle()
+    expect(h.steps).toEqual(['ask', 'close:held', 'closeWindow', 'close:through'])
+  })
+
+  // An explicit quit command (Ctrl+Q on Linux, ⌘Q or Dock Quit on macOS) stops the tasks without asking (G-1 (c)-P0),
+  // and its close holds the queue: the quit already closed the OCR window, and nothing may start while it saves.
+  it.each<[string, boolean]>([
+    ['Windows or Linux', true],
+    ['macOS', false]
+  ])('a close a quit started asks nothing but holds the queue before the save (%s)', async (_os, closeQuits) => {
+    const h = guardHarness({ quitFirst: true, work: { closeQuits, stopping: 'ocr' } })
+    h.close()
+    h.asks[0]!.resolve({ unsaved: false })
+    await settle()
+    expect(h.steps).toEqual(['hold', 'ask', 'close:held', 'quit', 'close:through'])
+  })
+
+  it('Close anyway, then Keep open on the unsaved question: the hold is released once and the window stays', async () => {
+    const h = guardHarness({ work: windows })
+    h.close()
+    await settle()
+    h.stopDialogs[0]!.resolve('close')
+    await settle()
+    h.asks[0]!.resolve({ unsaved: true })
+    await settle()
+    h.dialogs[0]!.resolve('keep')
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'hold', 'ask', 'dialog', 'release'])
+  })
+
+  it.each<[string, UnsavedCloseChoice, string[]]>([
+    ['Keep open releases the hold: the quit is off', 'keep', ['hold', 'ask', 'close:held', 'dialog', 'release']],
+    ['Close anyway never releases it', 'close', ['hold', 'ask', 'close:held', 'dialog', 'quit', 'close:through']]
+  ])('a close a quit started, with a change it could not save: %s', async (_what, choice, steps) => {
+    const h = guardHarness({ quitFirst: true, work: { closeQuits: false, stopping: null } })
+    h.close()
+    h.asks[0]!.resolve({ unsaved: true })
+    await settle()
+    h.dialogs[0]!.resolve(choice)
+    await settle()
+    expect(h.steps).toEqual(steps)
+  })
+
+  it('a quit asked while the question is up, then Keep open: that quit is off too, and the queue goes on', async () => {
+    const h = guardHarness({ work: windows })
+    h.close()
+    await settle()
+    h.requestQuit() // a SIGTERM on Linux, say: before-quit…
+    h.close() // …then the close, held and ignored
+    h.stopDialogs[0]!.resolve('keep')
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'close:held', 'release'])
+  })
+
+  it.each<[string, StopWorkChoice]>([
+    ['Keep open', 'keep'],
+    ['Close anyway', 'close']
+  ])('a lock that began while the question was up closes without the save (%s)', async (_answer, answer) => {
+    const h = guardHarness({ work: windows })
+    h.close()
+    await settle()
+    h.beginLock() // a session end
+    h.stopDialogs[0]!.resolve(answer)
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'stop-dialog', 'hold', 'closeWindow', 'close:through'])
+  })
+
+  // As #888's dialog: main cannot ask, so it closes; and a dep that fails never costs the review save.
+  it.each<[string, 'question' | 'taskList' | 'hold', string[]]>([
+    ['the question fails', 'question', ['close:held', 'stop-dialog', 'hold', 'ask']],
+    ['the task list cannot be read (nothing is asked)', 'taskList', ['hold', 'ask', 'close:held']],
+    ['the queue hold throws (nothing to ask about)', 'hold', ['hold', 'ask', 'close:held']]
+  ])('when %s, the window is still saved and closed once', async (_what, throws, before) => {
+    const h = guardHarness({ work: { closeQuits: true, stopping: throws === 'hold' ? null : 'ocr', throws } })
+    h.close()
+    await settle()
+    expect(h.steps).toEqual(before)
+    h.asks[0]!.resolve({ unsaved: false })
+    await settle()
+    expect(h.steps).toEqual([...before, 'closeWindow', 'close:through'])
+  })
+})
+
+describe('close guard — every quit holds the document-task queue (#936)', () => {
+  it.each<[string, number, unknown]>([
+    ['a quit nobody prevented', 1, { defaultPrevented: false }],
+    ['a quit a listener prevented (it never begins)', 0, { defaultPrevented: true }],
+    ['an event with no flag', 1, {}]
+  ])('%s: holds %i time(s)', (_what, holds, event) => {
+    const app = new EventEmitter()
+    let held = 0
+    holdQueueOnQuit(app, () => void held++)
+    app.emit('before-quit', event)
+    expect(held).toBe(holds)
+  })
+})
+
 interface FakeWindowState {
   destroyed?: boolean
   crashed?: boolean
@@ -418,8 +638,11 @@ describe('close guard — the "could not be saved" dialog (#888, owner call G-2)
         return { response: opts.response ?? 1, checkboxChecked: false }
       }
     }
-    const confirm = createUnsavedCloseConfirm({ dialog, window, t: (key) => t('de', key), log: quiet })
-    return { confirm, steps, shown, window }
+    const deps = { dialog, window, t: (key: MessageKey) => t('de', key), log: quiet }
+    const confirm = createUnsavedCloseConfirm(deps)
+    /** #935: the running-task question over the same window and dialog (built per call: the #888 rows never use it). */
+    const confirmStop = (work: StoppingWork): Promise<StopWorkChoice> => createStopWorkConfirm(deps)(work)
+    return { confirm, confirmStop, steps, shown, window }
   }
 
   it('Try again is the default, Keep open answers Esc, Close anyway is never the default; modal, in the user’s language', async () => {
@@ -459,14 +682,68 @@ describe('close guard — the "could not be saved" dialog (#888, owner call G-2)
   it('a dialog that fails closes the window rather than leaving it impossible to close', async () => {
     expect(await dialogHarness({ reject: true }).confirm()).toBe('close')
   })
+
+  describe('the "A document task is not finished yet." question (#935)', () => {
+    it.each<[StoppingWork, MessageKey]>([
+      ['ocr', 'main.dialog.taskRunning.detailOcr'],
+      ['translation', 'main.dialog.taskRunning.detailTranslation'],
+      ['several', 'main.dialog.taskRunning.detailSeveral']
+    ])('%s: Keep open is the default and answers Esc, Close anyway never is; modal, in the user’s language', async (work, detail) => {
+      const h = dialogHarness({ response: 0 })
+      await h.confirmStop(work)
+      expect(h.shown).toHaveLength(1)
+      expect(h.shown[0]!.parent).toBe(h.window)
+      expect(h.shown[0]!.options).toEqual({
+        type: 'warning',
+        title: t('de', 'main.dialog.taskRunning.title'),
+        message: t('de', 'main.dialog.taskRunning.message'),
+        detail: t('de', detail),
+        buttons: [t('de', 'main.dialog.taskRunning.keepOpen'), t('de', 'main.dialog.taskRunning.closeAnyway')],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+      })
+    })
+
+    // The two close questions read alike: the same Keep open and Close anyway in every language.
+    it.each(UI_LANGUAGE_CODES)('%s: its buttons are the unsaved question’s Keep open and Close anyway', (lang) => {
+      expect(t(lang, 'main.dialog.taskRunning.keepOpen')).toBe(t(lang, 'main.dialog.unsavedReview.keepOpen'))
+      expect(t(lang, 'main.dialog.taskRunning.closeAnyway')).toBe(t(lang, 'main.dialog.unsavedReview.closeAnyway'))
+    })
+
+    it.each<[number, StopWorkChoice]>([
+      [0, 'keep'],
+      [1, 'close']
+    ])('button %i answers %s', async (response, choice) => {
+      expect(await dialogHarness({ response }).confirmStop('ocr')).toBe(choice)
+    })
+
+    it('restores a minimized window and brings it to the front before it asks', async () => {
+      const h = dialogHarness({ minimized: true, response: 0 })
+      await h.confirmStop('translation')
+      expect(h.steps).toEqual(['restore', 'show', 'focus', 'dialog'])
+    })
+
+    it('a dialog that fails closes (main cannot ask)', async () => {
+      expect(await dialogHarness({ reject: true }).confirmStop('ocr')).toBe('close')
+    })
+  })
 })
 
 describe('close guard — the main window wiring (#888)', () => {
   // Review round 2 (S4): what `index.ts` hands every main window, driven through the same composition it calls
   // (`createMainWindowCloseGuard` over the app-level `trackQuitRequests(app)`). Fakes stand for `app`, the window
   // and `ipcMain`; `app.quit()` fires `before-quit` and then closes the window, as Electron does.
-  function wiring(dialogResponses: number[] = []) {
+  function wiring(
+    dialogResponses: number[] = [],
+    /** #935/#936: the platform and the doc-task manager's active tasks (default: Windows, none). */
+    more: { platform?: string; tasks?: DocTaskStatus[] } = {}
+  ) {
     const steps: string[] = []
+    /** #936: the manager's queue calls, in order. */
+    const queue: string[] = []
+    /** The title (a key: `t` is the identity) and detail of every dialog shown. */
+    const shown: Array<{ title?: string; detail?: string }> = []
     const w = fakeWindow()
     const app = Object.assign(new EventEmitter(), {
       quit: () => {
@@ -488,7 +765,11 @@ describe('close guard — the main window wiring (#888)', () => {
       }
     }
     const dialog: Pick<Dialog, 'showMessageBox'> = {
-      showMessageBox: async () => ({ response: dialogResponses.shift() ?? 1, checkboxChecked: false })
+      async showMessageBox(a: BaseWindow | MessageBoxOptions, b?: MessageBoxOptions): Promise<MessageBoxReturnValue> {
+        const options = b ?? (a as MessageBoxOptions)
+        shown.push({ title: options.title, detail: options.detail })
+        return { response: dialogResponses.shift() ?? 1, checkboxChecked: false }
+      }
     }
     const quitRequests = trackQuitRequests(app)
     const guard = createMainWindowCloseGuard({
@@ -499,6 +780,10 @@ describe('close guard — the main window wiring (#888)', () => {
       t: (key) => key,
       quitRequests,
       isShuttingDown: () => false,
+      platform: more.platform ?? 'win32',
+      listActiveDocTasks: () => more.tasks ?? [],
+      holdWork: () => void queue.push('hold'),
+      releaseWork: () => void queue.push('release'),
       log: quiet
     })
     function close(): void {
@@ -508,8 +793,49 @@ describe('close guard — the main window wiring (#888)', () => {
     }
     /** The window answers request `requestId`. */
     const answer = (requestId: number, unsaved: boolean): void => w.reply({ requestId, unsaved })
-    return { steps, app, close, answer, quitRequests, guard }
+    return { steps, queue, shown, app, close, answer, quitRequests, guard }
   }
+
+  // #935/#936: the composition over the manager's own task list, the platform and the queue calls (`index.ts` passes
+  // `ctx.docTasks`' methods).
+  it('an X on Windows with a document translation waiting asks first; Keep open keeps all, Close anyway holds, saves, closes', async () => {
+    const h = wiring([0, 1], { tasks: [task('summary'), task('translation', 'queued')] }) // Keep open, then Close anyway
+    h.close()
+    await settle()
+    expect(h.shown).toEqual([{ title: 'main.dialog.taskRunning.title', detail: 'main.dialog.taskRunning.detailTranslation' }])
+    expect(h.steps).toEqual(['close:held'])
+    expect(h.queue).toEqual([])
+    h.close()
+    await settle()
+    expect(h.shown).toHaveLength(2)
+    h.answer(1, false) // the save after Close anyway: the first request this window got
+    await settle()
+    expect(h.steps).toEqual(['close:held', 'close:held', 'win.close', 'close:through'])
+    expect(h.queue).toEqual(['hold'])
+  })
+
+  it.each<[string, string, DocTaskStatus[]]>([
+    ['on macOS (the red button) with an OCR run', 'darwin', [task('ocr')]],
+    ['on Windows with only a deep index running', 'win32', [task('tree'), task('extract', 'queued')]]
+  ])('an X %s asks nothing and saves at once', async (_what, platform, tasks) => {
+    const h = wiring([], { platform, tasks })
+    h.close()
+    h.answer(1, false)
+    await settle()
+    expect(h.shown).toEqual([])
+    expect(h.steps).toEqual(['close:held', 'win.close', 'close:through'])
+    expect(h.queue).toEqual(platform === 'darwin' ? [] : ['hold'])
+  })
+
+  it('a quit with a change it could not save, then Keep open: the queue the quit held goes on', async () => {
+    const h = wiring([1], { tasks: [task('ocr')] }) // Keep open on the unsaved question
+    h.app.emit('before-quit')
+    h.close()
+    h.answer(1, true)
+    await settle()
+    expect(h.shown).toEqual([{ title: 'main.dialog.unsavedReview.title', detail: 'main.dialog.unsavedReview.detail' }])
+    expect(h.queue).toEqual(['hold', 'release'])
+  })
 
   it('a quit (File → Exit, Cmd+Q) that reached the close quits again through app.quit after the save', async () => {
     const h = wiring()
@@ -601,9 +927,13 @@ describe('close guard — the main window wiring (#888)', () => {
     // Source-text pin (the shutdown.test.ts idiom) — index.ts cannot be imported under vitest.
     const src = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
     expect(src).toContain('const quitRequests = trackQuitRequests(app)')
+    // #935/#936: the platform, the manager's task list and its queue hold, read live off `ctx` (null until the backend
+    // is up, so no work then).
     expect(src).toMatch(
-      /const closeGuard = createMainWindowCloseGuard\(\{\s*window: win,\s*app,\s*ipc: ipcMain,\s*dialog,\s*t: tMain,\s*quitRequests,\s*isShuttingDown: \(\) => lifecycle\.isShuttingDown\(\),\s*log\s*\}\)/
+      /const closeGuard = createMainWindowCloseGuard\(\{\s*window: win,\s*app,\s*ipc: ipcMain,\s*dialog,\s*t: tMain,\s*quitRequests,\s*isShuttingDown: \(\) => lifecycle\.isShuttingDown\(\),\s*platform: process\.platform,\s*listActiveDocTasks: \(\) => ctx\?\.docTasks\?\.listActiveDocTasks\(\) \?\? \[\],\s*holdWork: \(\) => ctx\?\.docTasks\?\.holdQueueForQuit\(\),\s*releaseWork: \(\) => ctx\?\.docTasks\?\.releaseQueueHold\(\),\s*log\s*\}\)/
     )
+    // #936: the belt — every un-prevented quit holds the queue, once per app.
+    expect(src).toContain('holdQueueOnQuit(app, () => ctx?.docTasks?.holdQueueForQuit())')
     expect(src).toContain("win.on('close', closeGuard.onClose)")
     // S-5: a closed window's sender id is dropped and `mainWindow` stops pointing at it.
     expect(src).toMatch(/win\.on\('closed', \(\) => \{\s*trustedSenders\.delete\(senderId\)\s*if \(mainWindow === win\) mainWindow = null/)

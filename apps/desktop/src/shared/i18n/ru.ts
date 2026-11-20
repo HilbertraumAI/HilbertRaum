@@ -2639,6 +2639,17 @@ export const ru: UiCatalog<'ru'> = {
   'main.dialog.unsavedReview.tryAgain': 'Повторить',
   'main.dialog.unsavedReview.keepOpen': 'Не закрывать',
   'main.dialog.unsavedReview.closeAnyway': 'Все равно закрыть',
+  'main.dialog.taskRunning.title': 'Задача по документу еще не завершена.',
+  'main.dialog.taskRunning.message': 'Задача по документу еще не завершена.',
+  'main.dialog.taskRunning.detailOcr':
+    'Если закрыть сейчас, чтение скана прервется, а уже прочитанные страницы будут потеряны.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Если закрыть сейчас, перевод прервется, а уже переведенная часть будет потеряна.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Если закрыть сейчас, выполняемые и ожидающие задачи по документам прервутся, а уже сделанная ' +
+    'работа будет потеряна.',
+  'main.dialog.taskRunning.keepOpen': 'Не закрывать',
+  'main.dialog.taskRunning.closeAnyway': 'Все равно закрыть',
   'main.workspace.wrongPassword':
     'Этот пароль не подошел к вашему рабочему пространству. Проверьте его и попробуйте еще раз.',
   'main.workspace.openFailed': 'Не удалось открыть рабочее пространство.',

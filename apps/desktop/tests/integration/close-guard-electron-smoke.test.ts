@@ -218,6 +218,63 @@ describe.skipIf(!enabled)('close guard on real Electron (#888; skips where the E
     expect(names(r).indexOf('helper:run-aborted')).toBeLessThan(names(r).indexOf('will-quit'))
   }, ROW_BUDGET_MS)
 
+  // #935 (owner call G-1, (c)-P0): on Windows and Linux an X ends the app, so with an OCR run going it asks first. The
+  // OCR window lives until the main window's `closed` on this path (research B §0), so it is still there at both
+  // answers: Keep open closes nothing and the run goes on; Close anyway then holds the queue (#936), saves and quits.
+  it('an X with an OCR run asks first; the OCR window stays open until the answer, and Keep open closes nothing', async () => {
+    const r = await runScenario('stop-keep')
+    expect(names(r)).toEqual([
+      'close#1:held',
+      'show',
+      'focus',
+      'stop-dialog#1:helper-alive',
+      'close#2:held',
+      'show',
+      'focus',
+      'stop-dialog#2:helper-alive',
+      'guard:hold',
+      'ask',
+      'answer:saved',
+      'guard:closeWindow',
+      'close#3:through',
+      'closed',
+      'before-quit',
+      'belt:hold',
+      'helper:closed',
+      'summary:queued',
+      'will-quit'
+    ])
+  }, ROW_BUDGET_MS)
+
+  // #936: a quit the guard holds closes the OCR window while the main window saves, so the run ends before
+  // `will-quit` (the row above `quit-helper`'s). Its end pumps the queue; the holds (the `before-quit` belt, then the
+  // guard's) keep the summary waiting behind it from starting into the save, only for `will-quit` to cancel it.
+  it('a quit the guard holds with an OCR run and a summary waiting: nothing starts during the save', async () => {
+    const r = await runScenario('quit-hold')
+    const all = names(r)
+    expect(all.filter((e) => !e.startsWith('helper:run-') && e !== 'pump:held')).toEqual([
+      'before-quit',
+      'belt:hold',
+      'guard:hold',
+      'ask',
+      'close#1:held',
+      'helper:closed',
+      'answer:saved',
+      'guard:quit',
+      'before-quit',
+      'belt:hold',
+      'close#2:through',
+      'closed',
+      'summary:queued',
+      'will-quit'
+    ])
+    // The run ended (as an abort) and pumped the queue during the save; the hold kept the summary from starting.
+    expect(all.indexOf('helper:run-aborted')).toBeGreaterThan(all.indexOf('helper:closed'))
+    expect(all.indexOf('pump:held')).toBeGreaterThan(all.indexOf('helper:run-aborted'))
+    expect(all.indexOf('pump:held')).toBeLessThan(all.indexOf('will-quit'))
+    expect(all).not.toContain('summary:started')
+  }, ROW_BUDGET_MS)
+
   it('another window’s answer to the same request is ignored: the main window’s “unsaved” brings the dialog', async () => {
     const r = await runScenario('other-sender')
     expect(names(r)).toEqual([

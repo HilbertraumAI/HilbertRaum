@@ -2575,6 +2575,17 @@ export const nl: UiCatalog<'nl'> = {
   'main.dialog.unsavedReview.tryAgain': 'Opnieuw proberen',
   'main.dialog.unsavedReview.keepOpen': 'Open laten',
   'main.dialog.unsavedReview.closeAnyway': 'Toch sluiten',
+  'main.dialog.taskRunning.title': 'Een documenttaak is nog niet klaar.',
+  'main.dialog.taskRunning.message': 'Een documenttaak is nog niet klaar.',
+  'main.dialog.taskRunning.detailOcr':
+    'Als je nu sluit, stopt het lezen van de scan en gaan de al gelezen pagina’s verloren.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Als je nu sluit, stopt de vertaling en gaat het al vertaalde deel verloren.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Als je nu sluit, stoppen de documenttaken die bezig zijn of wachten, en gaat het werk tot nu ' +
+    'toe verloren.',
+  'main.dialog.taskRunning.keepOpen': 'Open laten',
+  'main.dialog.taskRunning.closeAnyway': 'Toch sluiten',
   'main.workspace.wrongPassword':
     'Met dat wachtwoord is je werkruimte niet ontgrendeld. Controleer het en probeer het opnieuw.',
   'main.workspace.openFailed': 'De werkruimte kon niet worden geopend.',

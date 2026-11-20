@@ -2697,6 +2697,21 @@ export const en = {
   'main.dialog.unsavedReview.tryAgain': 'Try again',
   'main.dialog.unsavedReview.keepOpen': 'Keep open',
   'main.dialog.unsavedReview.closeAnyway': 'Close anyway',
+  // #935: the native dialog when a window close that quits the app (Windows, Linux) would stop an
+  // OCR run or a document translation, running or waiting. Asked before the save above. No count in
+  // the copy (no plural forms). Buttons in order: Keep open (the default and Esc), Close anyway; they
+  // read as the unsaved dialog's two buttons do.
+  'main.dialog.taskRunning.title': 'A document task is not finished yet.',
+  'main.dialog.taskRunning.message': 'A document task is not finished yet.',
+  'main.dialog.taskRunning.detailOcr':
+    'If you close now, reading the scan stops, and the pages read so far are lost.',
+  'main.dialog.taskRunning.detailTranslation':
+    'If you close now, the translation stops, and the part translated so far is lost.',
+  'main.dialog.taskRunning.detailSeveral':
+    'If you close now, the document tasks that are running or waiting stop, and their work so far is ' +
+    'lost.',
+  'main.dialog.taskRunning.keepOpen': 'Keep open',
+  'main.dialog.taskRunning.closeAnyway': 'Close anyway',
   'main.workspace.wrongPassword':
     "That password didn't unlock your workspace. Check it and try again.",
   'main.workspace.openFailed': 'Could not open the workspace.',

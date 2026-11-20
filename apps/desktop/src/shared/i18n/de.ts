@@ -2653,6 +2653,19 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.unsavedReview.tryAgain': 'Erneut versuchen',
   'main.dialog.unsavedReview.keepOpen': 'Offen lassen',
   'main.dialog.unsavedReview.closeAnyway': 'Trotzdem schließen',
+  'main.dialog.taskRunning.title': 'Eine Dokumentaufgabe ist noch nicht fertig.',
+  'main.dialog.taskRunning.message': 'Eine Dokumentaufgabe ist noch nicht fertig.',
+  'main.dialog.taskRunning.detailOcr':
+    'Wenn du jetzt schließt, wird das Lesen des Scans abgebrochen, und die bisher gelesenen Seiten ' +
+    'gehen verloren.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Wenn du jetzt schließt, wird die Übersetzung abgebrochen, und der bisher übersetzte Teil geht ' +
+    'verloren.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Wenn du jetzt schließt, werden die laufenden und wartenden Dokumentaufgaben abgebrochen, und ' +
+    'ihre bisherige Arbeit geht verloren.',
+  'main.dialog.taskRunning.keepOpen': 'Offen lassen',
+  'main.dialog.taskRunning.closeAnyway': 'Trotzdem schließen',
   'main.workspace.wrongPassword':
     'Dieses Passwort hat deinen Arbeitsbereich nicht entsperrt. Prüf es und versuch es ' +
     'noch einmal.',
