@@ -463,6 +463,24 @@ a newer HilbertRaum (#847, above) is listed as `unsupported` too, display-only: 
 `'unknown'` (its declared role rides `declaredRole`), `needsNewerApp: true`, never recommended, no
 `download`, and `filesPresent` says whether every file it declares exists (existence only, no hash).
 
+`checksum_failed` covers two facts, and the screens tell them apart without a new state:
+
+- **A file failed its check** (a cached or computed digest differs from the manifest's). The AI Model
+  card says **Can't verify** and offers its Download (the repair).
+- **No checksum on record** (a placeholder hash, outside developer leniency; decided from the manifest
+  before any file is read). `buildModelList` flags the model `ModelInfo.noChecksum: true`
+  (`hasPlaceholderHash`, #932). The card says **No checksum**, with a hint that the model runs only in
+  developer mode on a drive whose policy allows unverified models, and offers no Download: a new copy
+  cannot give the manifest a checksum.
+
+`ModelState`, the start verdict (`checkModelBeforeStart`: `ok` | `damaged`) and every role's start gate
+are the same for both, so both are refused at every start. The images, translation and search copy still
+calls both "damaged" ([`known-limitations.md`](known-limitations.md)). The Performance screen reads the same two facts per row,
+from the checksum cache only (`knownFileVerdict`, never a hash; `ResidentModelRow.fileCheck`: `damaged` |
+`unverified` | `ok`, #933). Such a row's pill says **failed its file check** or **no checksum on record**
+instead of "not loaded", and the row adds nothing to "Everything loaded at once" or the graphics-card
+lines unless the model is loaded. A file nobody has checked yet reads `ok` there, as on the AI Model card.
+
 ## License review gate
 ```yaml
 license_review:

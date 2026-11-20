@@ -2914,12 +2914,16 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   bank-statement answers quote the amounts they read with a decimal point ("5.50 EUR"), whatever
   the interface language, and the tax rate in an invoice answer is written the same way, so a
   German answer reads "Steuer (5.5 %)" rather than "5,5 %".
-- **Two texts still ignore the language's own way of writing them.** In Settings → Diagnostics →
+- **One text still ignores the language's own way of writing it.** In Settings → Diagnostics →
   Activity, every entry is written "time — type: message", with a dash that Spanish, French,
-  Italian, Dutch, Polish and Turkish don't use there. And the app's refusal to start a model that needs
-  more memory than the computer has is in English, with English figures ("… needs at least 16 GB
-  RAM; this computer has about 8 GB …"), in every interface language; the AI Model screen already
-  disables Start for such a model and says why in the interface language.
+  Italian, Dutch, Polish and Turkish don't use there.
+- **A model with no checksum on record is still called damaged outside the AI Model screen.** A
+  model whose manifest has a placeholder hash instead of a real checksum (a model you added yourself
+  before capturing its hash) is refused at every start unless developer mode is on and the drive's
+  policy allows unverified models. The AI Model screen says "No checksum" for it, and the Performance
+  screen "no checksum on record". The Images and Translate screens still say that its file failed its
+  check and should be downloaded again, and the document search says to check all model files and try
+  again. Neither can help: such a model needs a real checksum in its manifest.
 - **The speed line under an answer can read "1 tokens".** In English, the line under a finished
   chat answer ("42 tok/s · 1.8 s to first token · 615 tokens") ends in "1 tokens" after a
   one-token answer. The other count sentences that read wrong at exactly 1 in English and German
