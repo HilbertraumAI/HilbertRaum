@@ -1,0 +1,53 @@
+id: qwen3.5-9b-ud-q3kxl
+display_name: Qwen3.5 9B (UD-Q3_K_XL)
+family: qwen3.5
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 5.1
+# RAM lines kept at the UD-Q4_K_XL sibling's (min 12 / comfortable 16). MEASURED 2026-11-20 on a
+# Ryzen 7 5800H laptop (16 GB, RTX 3060 Laptop 6 GB, Windows 11, b12110, ctx 8192, in-app start):
+# llama-server peak working set 6.67 GiB on CPU and 5.57 GiB with the card on, so 12 stays
+# conservative. Evidence: eval/results/hardware/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/q3kxl-manifest-20261120.md
+recommended_min_ram_gb: 12
+recommended_ram_gb: 16
+# Rank 0: selectable, never the automatic pick, until the owner decides on a rank.
+# Evidence for that decision:
+# - Quality: benchmark study 2 (hilbertraum.ai/de/benchmark/) suite score 83.2 (German 82.0,
+#   English 86.5) against 86.1 for the UD-Q4_K_XL sibling.
+# - Speed, same laptop, in-app Diagnostics benchmark (decode tok/s, three runs after a warm-up):
+#   CPU only 6.0 / 5.6 / 5.5 (sibling 5.1 / 5.1 / 5.1); time to first token on a ~6,000-character
+#   prompt 31.8 s on CPU. With the 6 GB card on: 25 of 33 layers on the card, 13.8 to 17.0 tok/s
+#   (sibling 20 of 33, 8.6 to 8.8), first token 2.0 s once the Vulkan shaders are cached (45.6 s
+#   on the very first long prompt after install). Peak card use 4,252 MiB, no spill into shared
+#   GPU memory. It does NOT fully fit a 6 GB laptop card under the app's launch (the fit keeps
+#   1 GiB of the 5,226 MiB free figure in reserve), so `host_mapped_weights_mib` is not measured
+#   yet: that figure needs a full-offload start.
+recommendation_rank: 0
+# Same architecture as the UD-Q4_K_XL sibling, so the same local runtime budget and the same
+# context-cache term: the cache is f16 and does not depend on the weight quantization (8 layers x
+# 4 heads x 256 full-attention KV plus one recurrent state at -np 1 = 0.3 GiB at 8,192).
+recommended_context_tokens: 8192
+estimated_context_cache_gib: 0.3
+supports_thinking_mode: true
+supports_tools: true
+local_path: models/chat/qwen3.5-9b-ud-q3kxl.gguf
+sha256: aae0879e1be99ce93f0d56217f8185a399e25ad68a8ebbc095f362706283062f
+# Quantization: unsloth "Dynamic 2.0" UD-Q3_K_XL from the same upstream repository as the
+# shipped UD-Q4_K_XL sibling. The Qwen org publishes no official GGUF for the 3.5 refresh, so
+# this follows the established-quantizer posture of the sibling.
+download:
+  url: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-UD-Q3_K_XL.gguf?download=true
+  sha256: aae0879e1be99ce93f0d56217f8185a399e25ad68a8ebbc095f362706283062f
+  size_bytes: 5053834464
+  license_url: https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# TEXT-ONLY USE: upstream Qwen3.5 is a vision-language model; this chat manifest ships only the
+# language GGUF and no mmproj/projector.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card/LFS verification)"
+  reviewed_at: "2026-11-20"
+  notes: "APPROVED 2026-11-20: same base model as the approved qwen3.5-9b-ud-q4kxl entry (Qwen/Qwen3.5-9B, apache-2.0), same Unsloth GGUF repository (card tag apache-2.0). Quantization provenance: Unsloth Dynamic 2.0 GGUF, a third-party quantization of Apache-2.0 Qwen weights. Apache-2.0 permits commercial redistribution; ship LICENSE/NOTICE attribution with the drive. TEXT-ONLY USE: no mmproj/projector. Hash and size checked against the Hugging Face LFS metadata (X-Linked-ETag / X-Linked-Size) and the downloaded file on 2026-11-20."
