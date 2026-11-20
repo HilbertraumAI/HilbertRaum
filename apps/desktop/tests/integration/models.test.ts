@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
-import { join, parse } from 'node:path'
+import { dirname, join, parse } from 'node:path'
 import type { Db } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
 import { log } from '../../src/main/services/logging'
@@ -25,6 +25,7 @@ import {
   checksumCacheStats,
   createSettingsHashStore,
   invalidateChecksum,
+  knownFileVerdict,
   manifestFiles,
   primeChecksum,
   recommendModelId,
@@ -34,6 +35,7 @@ import {
   cardEvidenceFor,
   PARTIAL_EVIDENCE_TOLERANCE_MIB,
   type CardEvidence,
+  type HashStore,
   recommendChatModelId,
   estimateGraphicsNeedMib,
   fitsGraphicsMemory,
@@ -79,11 +81,17 @@ function armPerfLog(): () => string[] {
   }
 }
 
-/** The parsed `checksum_done` marks: the read's own close, which lands AFTER a cancelled caller rejects. */
-function doneMarks(readLog: () => string[]): Array<{ ok: boolean }> {
+/**
+ * The parsed `checksum_done` marks of ONE read label: the read's own close, which lands AFTER a cancelled caller
+ * rejects. The perf log is process-wide, so a hash that outlives its row (a timeout under load) writes its mark into
+ * the next row's log; filtering on the label keeps a row from counting another row's read (#957). A read with no
+ * label carries `modelId: null`.
+ */
+function doneMarks(readLog: () => string[], modelId: string | null = null): Array<{ ok: boolean }> {
   return readLog()
     .filter((l) => l.includes(' checksum_done '))
-    .map((l) => JSON.parse(l.slice(l.indexOf('{'))))
+    .map((l) => JSON.parse(l.slice(l.indexOf('{'))) as { ok: boolean; modelId: string | null })
+    .filter((m) => m.modelId === modelId)
 }
 
 /** The parsed `checksum_start` marks: one per PHYSICAL read, written synchronously when the read begins. */
@@ -1652,18 +1660,34 @@ describe('cancellable verification (#420)', () => {
     const file = bigFile()
     const before = checksumCacheStats.computed
     const controller = new AbortController()
+    const store: HashStore = { get: () => null, set: vi.fn(), delete: vi.fn() }
     // The 64 MiB throttle fires once with ~6 MiB still to read — a genuine mid-read abort.
     await expect(
-      verifyChecksum(file, bigFileSha(), undefined, () => controller.abort(), undefined, controller.signal)
+      verifyChecksum(file, bigFileSha(), store, () => controller.abort(), undefined, controller.signal)
     ).rejects.toThrow(/cancelled/i)
     // The caller rejects first; the read's own catch closes the pair after it.
     await until(() => doneMarks(readLog).length > 0, 'the cancelled read closing')
     expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
     expect(checksumCacheStats.computed).toBe(before)
-    // Nothing was cached: a fresh verify hashes for real and matches.
-    expect((await verifyChecksum(file, bigFileSha())).matched).toBe(true)
-    expect(checksumCacheStats.computed).toBe(before + 1)
+    // Nothing was cached, proven without a second 70 MiB hash (#957: two hashes in one budget flaked under load).
+    // L2: the persistent store was never written. L1: the in-memory cache holds no digest for the file, so a manifest
+    // naming a DIFFERENT sha reads 'ok' (a cached digest would make it 'damaged').
+    expect(store.set).not.toHaveBeenCalled()
+    const manifest = validManifest({ local_path: 'weight.bin', sha256: sha256('not this file') })
+    expect(knownFileVerdict(manifest, dirname(file), { developerMode: false })).toBe('ok')
   }, testBudgetMs(30_000))
+
+  it('a mark from another label never counts (#957)', async () => {
+    const readLog = armPerfLog()
+    // An unlabelled read (modelId null) finishes and logs its mark; a labelled read's count must not include it.
+    await verifyChecksum(smallFile(), smallFileSha)
+    await until(() => doneMarks(readLog).length > 0, 'the unlabelled read closing')
+    expect(doneMarks(readLog, 'm')).toEqual([])
+    await verifyChecksum(smallFile(), smallFileSha, undefined, undefined, { modelId: 'm', file: 'weight' })
+    await until(() => doneMarks(readLog, 'm').length > 0, 'the labelled read closing')
+    expect(doneMarks(readLog, 'm')).toEqual([expect.objectContaining({ ok: true })])
+    expect(doneMarks(readLog)).toHaveLength(1)
+  })
 
   // ---- trap 2: single-flight sharing --------------------------------------------------
   // `inFlightHashes` makes concurrent callers of the same path share ONE physical read —
@@ -1761,8 +1785,8 @@ describe('cancellable verification (#420)', () => {
         controller.signal
       )
     ).rejects.toThrow(/cancelled/i)
-    await until(() => doneMarks(readLog).length > 0, 'the cancelled read closing')
-    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
+    await until(() => doneMarks(readLog, 'm').length > 0, 'the cancelled read closing')
+    expect(doneMarks(readLog, 'm')).toEqual([expect.objectContaining({ ok: false })])
     // Weak alone on a fast disk (under the 250 ms floor); the warm mark below carries the proof, its registration ignores the elapsed floor.
     expect(latestEffectiveReadBySource('checksum')).toBeNull()
 
