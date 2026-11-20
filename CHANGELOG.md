@@ -266,9 +266,12 @@ from its first public `1.0.0` release onward.
   the same way, is now found by neither spelling; typing the letter without its mark ("и" for
   "й") finds it. Search still doesn't add an "ı" you didn't type: "isi" doesn't find "ısı"
   (#818).
-- **Projects in the conversation list are sorted the way your interface language sorts.** The
-  project sections followed the system's language instead, so in a Turkish interface on a German
-  system "Çanta" came before "Cuma" (#818).
+- **Projects are sorted the way your interface language sorts, wherever they are listed.** The
+  conversation list's project sections followed the system's language instead, so in a Turkish
+  interface on a German system "Çanta" came before "Cuma" (#818). The Documents list, the
+  "Choose a project" window, the chat's source picker and the project tags on a document row
+  sorted by character code, which puts accented and non-Latin names at the end; they now use the
+  same order (#828).
 - **A thank-you or greeting in the new languages no longer starts a read of the whole
   document.** In a chat about one document, a short thank-you, greeting or goodbye in Spanish,
   French, Italian, Dutch, Polish, Turkish, Russian or Ukrainian ("Gracias", "Merci beaucoup",

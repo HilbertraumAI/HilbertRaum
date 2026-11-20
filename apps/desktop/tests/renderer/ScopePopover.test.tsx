@@ -8,6 +8,7 @@ import { t, UI_LANGUAGE_CODES, type UiLanguage } from '../../src/shared/i18n'
 import { makeCollection, makeDocumentInfo } from '../helpers/chat-fixtures'
 import { knowledgePack, WIKIPEDIA_EN_PACK } from '../helpers/knowledge-pack-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
+import { PROJECT_ORDER_CASES, inLanguageOrder } from '../helpers/project-order-fixtures'
 
 // Audit FE-6 — the pending-attachment chips are keyed by name+index so each chip's key is unique
 // (two cross-folder files can share a base name) AND content-aware. The teeth test below pins the
@@ -229,5 +230,27 @@ describe('ScopePopover — a failed attachment (#571)', () => {
     await userEvent.click(screen.getByRole('button'))
     await screen.findByText(t('en', 'chat.scope.filesInChatLine'))
     expect(screen.queryByText(t('en', 'chat.scope.attachmentFailedHint'))).not.toBeInTheDocument()
+  })
+})
+
+// #828: the picker lists projects in the interface language's order, not the code-point order main returns.
+describe.each(PROJECT_ORDER_CASES)('ScopePopover project order (%s)', (lang, sqlOrder) => {
+  it('lists the projects in the language order', async () => {
+    const user = userEvent.setup()
+    const expected = inLanguageOrder(lang, sqlOrder)
+    expect(expected).not.toEqual(sqlOrder)
+    expect(expected).not.toEqual(inLanguageOrder('en', sqlOrder))
+    renderPopover(
+      {
+        docs: [makeDocumentInfo()],
+        collections: sqlOrder.map((n, i) => makeCollection({ id: `s${i}`, name: n, type: 'project', builtin: false }))
+      },
+      lang
+    )
+    await user.click(screen.getByRole('button'))
+    const labels = (await screen.findAllByRole('checkbox'))
+      .map((cb) => (cb.closest('label')?.textContent ?? '').trim())
+      .filter((n) => sqlOrder.includes(n))
+    expect(labels).toEqual(expected)
   })
 })
