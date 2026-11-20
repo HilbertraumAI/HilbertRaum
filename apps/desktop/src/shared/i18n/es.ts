@@ -2946,6 +2946,16 @@ export const es: UiCatalog<'es'> = {
     'transcribirla.',
   'main.models.noManifests':
     'No se encontró ninguna lista de modelos en esta unidad: falta la carpeta «model-manifests».',
+  'main.models.unknown': 'Este modelo ya no está en la lista de modelos de esta unidad.',
+  'main.models.notChat': '«{name}» no es un modelo de chat, así que no se puede iniciar aquí.',
+  'main.models.startDamaged':
+    'El modelo «{name}» no ha superado la comprobación de sus archivos, así que no se ha iniciado. ' +
+    'Vuelve a descargarlo en la pantalla Modelo de IA.',
+  'main.models.startMissing':
+    'El modelo «{name}» no se puede iniciar: su archivo de modelo todavía no está en esta unidad.',
+  'main.models.startNeedsRam':
+    'El modelo «{name}» necesita al menos {min}\u00A0GB de RAM; este equipo tiene unos ' +
+    '{ram}\u00A0GB. Elige un modelo más pequeño: la calidad sigue siendo excelente.',
   'main.models.autoSelected':
     'Este modelo se usa automáticamente una vez instalado: no hay nada que seleccionar.',
   'main.models.locked':

@@ -2764,6 +2764,15 @@ export const tr: UiCatalog<'tr'> = {
     'Bu kayıt için henüz saklanmış bir transkript yok. Yeniden yazıya dökmek için kaydı yeniden ' +
     'dizinleyin.',
   'main.models.noManifests': 'Bu sürücüde model listesi bulunamadı: model-manifests klasörü eksik.',
+  'main.models.unknown': 'Bu model artık bu sürücünün model listesinde yok.',
+  'main.models.notChat': '“{name}” bir sohbet modeli değil, bu yüzden burada başlatılamaz.',
+  'main.models.startDamaged':
+    '“{name}” modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +
+    'yeniden indirin.',
+  'main.models.startMissing': '“{name}” modeli başlatılamıyor: model dosyası henüz bu sürücüde yok.',
+  'main.models.startNeedsRam':
+    '“{name}” modeli için en az {min}\u00A0GB RAM gerekir (bu bilgisayarda yaklaşık {ram}\u00A0GB ' +
+    'var). Daha küçük bir model seçin: kalite yine çok iyi olur.',
   'main.models.autoSelected':
     'Bu model kurulduktan sonra otomatik olarak kullanılır; seçilecek bir şey yok.',
   'main.models.locked':

@@ -3013,6 +3013,14 @@ export const en = {
     'No transcript is stored for this recording yet. Re-index it to transcribe again.',
   'main.models.noManifests':
     'No model list was found on this drive — the model-manifests folder is missing.',
+  'main.models.unknown': 'This model is no longer in this drive’s model list.',
+  'main.models.notChat': '“{name}” is not a chat model, so it can’t be started here.',
+  'main.models.startDamaged':
+    '“{name}” failed its file check, so it wasn’t started. Download it again on the AI Model screen.',
+  'main.models.startMissing': '“{name}” can’t be started: its model file isn’t on this drive yet.',
+  'main.models.startNeedsRam':
+    '“{name}” needs at least {min} GB RAM; this computer has about {ram} GB. Pick a smaller model — ' +
+    'quality stays great.',
   'main.models.autoSelected':
     'This model is used automatically once installed — there is nothing to select.',
   // F16 (audit-postmerge-2026-06-29): localized lock copy for the model / activity / settings

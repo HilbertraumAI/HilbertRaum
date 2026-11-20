@@ -5,6 +5,8 @@ import { join, parse } from 'node:path'
 import type { Db } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
 import { log } from '../../src/main/services/logging'
+import { applyUiLanguageSetting } from '../../src/main/services/i18n'
+import { t } from '../../src/shared/i18n'
 import {
   MIN_READ_SAMPLE_MS,
   latestEffectiveRead,
@@ -2107,9 +2109,16 @@ describe('selectModel', () => {
     expect(getSettings(db).activeModelId).toBe(null) // chat slot untouched
   })
 
-  it('throws on an unknown model id', () => {
+  // #930 (G-5): in the interface language, the same text as the chat start's unknown id.
+  it('throws on an unknown model id, in the interface language', () => {
     const { db, manifestsDir } = setup()
-    expect(() => selectModel(db, manifestsDir, 'nope')).toThrow()
+    expect(() => selectModel(db, manifestsDir, 'nope')).toThrow(t('en', 'main.models.unknown'))
+    applyUiLanguageSetting('de')
+    try {
+      expect(() => selectModel(db, manifestsDir, 'nope')).toThrow(t('de', 'main.models.unknown'))
+    } finally {
+      applyUiLanguageSetting('en')
+    }
   })
 
   // Phase 36 fix + TG-1: availability-driven roles have no settings slot. The old role-else-chat fallback would have

@@ -2907,6 +2907,16 @@ export const nl: UiCatalog<'nl'> = {
     'te transcriberen.',
   'main.models.noManifests':
     'Er is geen modellijst op deze schijf gevonden: de map model-manifests ontbreekt.',
+  'main.models.unknown': 'Dit model staat niet meer in de modellijst van deze schijf.',
+  'main.models.notChat': '“{name}” is geen chatmodel en kan hier dus niet worden gestart.',
+  'main.models.startDamaged':
+    'Het model “{name}” is niet door de bestandscontrole gekomen en is daarom niet gestart. Download ' +
+    'het opnieuw op het scherm AI-model.',
+  'main.models.startMissing':
+    'Het model “{name}” kan niet worden gestart: het modelbestand staat nog niet op deze schijf.',
+  'main.models.startNeedsRam':
+    'Het model “{name}” heeft minstens {min}\u00A0GB RAM nodig – deze computer heeft ongeveer ' +
+    '{ram}\u00A0GB. Kies een kleiner model: de kwaliteit blijft uitstekend.',
   'main.models.autoSelected':
     'Dit model wordt automatisch gebruikt zodra het is geïnstalleerd: er is niets te selecteren.',
   'main.models.locked':

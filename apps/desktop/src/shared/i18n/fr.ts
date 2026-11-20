@@ -3109,6 +3109,18 @@ export const fr: UiCatalog<'fr'> = {
   'main.models.noManifests':
     'Aucune liste de modèles n’a été trouvée sur ce disque\u00A0: le dossier ' +
     '«\u00A0model-manifests\u00A0» est absent.',
+  'main.models.unknown': 'Ce modèle ne figure plus dans la liste des modèles de ce disque.',
+  'main.models.notChat':
+    '«\u00A0{name}\u00A0» n’est pas un modèle du Chat, il ne peut donc pas être démarré ici.',
+  'main.models.startDamaged':
+    'Le modèle «\u00A0{name}\u00A0» n’a pas réussi la vérification de ses fichiers, il n’a donc pas ' +
+    'été démarré. Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
+  'main.models.startMissing':
+    'Le modèle «\u00A0{name}\u00A0» ne peut pas être démarré\u00A0: son fichier de modèle n’est pas ' +
+    'encore sur ce disque.',
+  'main.models.startNeedsRam':
+    'Le modèle «\u00A0{name}\u00A0» nécessite au moins {min}\u00A0GB de RAM – cet ordinateur dispose ' +
+    'd’environ {ram}\u00A0GB. Choisissez un modèle plus petit\u00A0: la qualité reste excellente.',
   'main.models.autoSelected':
     'Ce modèle est utilisé automatiquement une fois installé\u00A0: il n’y a rien à sélectionner.',
   'main.models.locked':

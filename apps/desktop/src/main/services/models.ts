@@ -1918,7 +1918,8 @@ export interface SelectResult {
 export function selectModel(db: Db, manifestsDir: string, modelId: string): SelectResult {
   const { manifests } = discoverManifests(manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
-  if (!found) throw new Error(`Unknown model id: ${modelId}`)
+  // #930: in the interface language, without the id (users never see ids; the select handler logs it).
+  if (!found) throw new Error(tMain('main.models.unknown'))
 
   if (found.manifest.role !== 'chat' && found.manifest.role !== 'embeddings') {
     throw new Error(tMain('main.models.autoSelected'))

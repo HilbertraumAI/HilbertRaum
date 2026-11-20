@@ -2961,6 +2961,16 @@ export const pl: UiCatalog<'pl'> = {
     'nową transkrypcję.',
   'main.models.noManifests':
     'Na tym dysku nie znaleziono listy modeli – brak folderu model-manifests.',
+  'main.models.unknown': 'Tego modelu nie ma już na liście modeli tego dysku.',
+  'main.models.notChat': '„{name}” nie jest modelem czatu, więc nie można go tu uruchomić.',
+  'main.models.startDamaged':
+    'Model „{name}” nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +
+    'ponownie na ekranie Model AI.',
+  'main.models.startMissing':
+    'Nie można uruchomić modelu „{name}” – jego pliku nie ma jeszcze na tym dysku.',
+  'main.models.startNeedsRam':
+    'Model „{name}” wymaga co najmniej {min}\u00A0GB pamięci RAM – ten komputer ma około ' +
+    '{ram}\u00A0GB. Wybierz mniejszy model – jakość pozostanie bardzo dobra.',
   'main.models.autoSelected':
     'Ten model jest używany automatycznie po zainstalowaniu – nie trzeba go wybierać.',
   'main.models.locked': 'Obszar roboczy jest zablokowany. Odblokuj go, aby zarządzać modelami AI.',

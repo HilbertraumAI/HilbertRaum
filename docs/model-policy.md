@@ -305,7 +305,8 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   containment rule, because their existence is checked). Everything else is ignored, since this build
   cannot know which of its own rules a later role or field follows. The entry never joins the model list
   anything selects from, so it is never recommended, verified, downloaded or started (the main process
-  answers "Unknown model id"). The Models screen lists it, with nothing to act on, in a trailing "Needs a
+  refuses it as an unknown model, `main.models.unknown`: "This model is no longer in this drive's model
+  list", in the interface language, #930). The Models screen lists it, with nothing to act on, in a trailing "Needs a
   newer HilbertRaum" section, and on "On this drive" when every declared file exists (design-guidelines
   §15). A missing, blank or non-string `role`, or a missing `id` / `display_name`, is still invalid. Such
   entries share the models' id space, and a manifest this app can use ALWAYS keeps its id, whatever the walk

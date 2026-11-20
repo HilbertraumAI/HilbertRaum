@@ -2707,7 +2707,7 @@ screen now keeps the active chat model pinned above a compact library of alterna
   compact card with the name, a NEUTRAL "Needs newer app" badge (never the error-tone "Unsupported" state
   badge: it must not look like a broken download) and one hint line ("…Update the app on this computer to
   use it."). It has no Use/Start, no Download and no technical-details disclosure (its "Verify checksum"
-  would answer "Unknown model id"). The view rule is the PRESENCE CONTRACT this section adds:
+  would be refused as an unknown model). The view rule is the PRESENCE CONTRACT this section adds:
   `filesPresent`, computed in the main process from the existence (not the hash) of every file the
   manifest declares. "On this drive" lists an entry only when it is true — the user's "my downloaded model
   vanished" case — and Browse lists every entry. `isModelOnDrive` is unchanged and still infers nothing.

@@ -3003,6 +3003,17 @@ export const de: Record<keyof typeof en, string> = {
     'noch einmal zu transkribieren.',
   'main.models.noManifests':
     'Auf diesem Laufwerk wurde keine Modellliste gefunden — der Ordner model-manifests fehlt.',
+  'main.models.unknown': 'Dieses Modell steht nicht mehr in der Modellliste dieses Laufwerks.',
+  'main.models.notChat': '„{name}“ ist kein Chat-Modell und kann hier nicht gestartet werden.',
+  'main.models.startDamaged':
+    'Das Modell „{name}“ hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es im ' +
+    'Bereich „KI-Modell“ erneut herunter.',
+  'main.models.startMissing':
+    'Das Modell „{name}“ kann nicht gestartet werden: Die Modelldatei ist noch nicht auf diesem ' +
+    'Laufwerk.',
+  'main.models.startNeedsRam':
+    'Das Modell „{name}“ braucht mindestens {min} GB RAM; dieser Computer hat etwa {ram} GB. Wähle ' +
+    'ein kleineres Modell — die Qualität bleibt top.',
   'main.models.autoSelected':
     'Dieses Modell wird automatisch verwendet, sobald es installiert ist — es gibt nichts ' +
     'auszuwählen.',
