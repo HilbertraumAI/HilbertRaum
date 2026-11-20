@@ -723,7 +723,10 @@ head's own weights + KV.
 
 ### Document storage + import model (LOCKED — Phase 4)
 - **Stored copy.** Imports are **copied into `workspace/documents/<id><ext>`** (`stored_path`);
-  `original_path` is also kept. Self-contained drive: re-index re-parses the stored copy; delete
+  `original_path` is also kept. `<ext>` is the extension of the document's `title`, which is the
+  file name without trailing spaces, and without trailing dots when a supported extension is then
+  left (#918: `report.pdf.` → `report.pdf`, "Washington, D.C." unchanged); the parser, the MIME
+  type and the export names read the same title. Self-contained drive: re-index re-parses the stored copy; delete
   removes the stored copy + chunks + embeddings + row (never the original).
 - **Async-with-polling.** `importDocuments(paths, options?: ImportOptions)` (#138 D-7: `options`
   carries `destination` — `{ kind: 'conversation', conversationId }` files a chat attachment —

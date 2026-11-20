@@ -98,6 +98,15 @@ from its first public `1.0.0` release onward.
   downloaded until you confirm. The activity log (Settings → Diagnostics → Activity) now also
   records each AI engine and OCR-file install: when it started and whether it finished or failed,
   never a file path (#843).
+- **Downloads trust the certificates installed on your computer.** Antivirus programs that check
+  secure connections, such as Norton, and company proxies re-sign those connections with a
+  certificate of their own, which they install on your computer. The downloads of models, the AI
+  engine, the knowledge-pack tools and the text-recognition (OCR) files now trust those
+  certificates, so they work behind such a program without any extra setting. The
+  released app no longer reads the `NODE_EXTRA_CA_CERTS` environment variable: if your company's
+  proxy certificate was set only there, downloads fail until it is installed on the computer,
+  which your IT department can do. Every downloaded file is still checked against a fixed checksum
+  before use (#564).
 
 ### Fixed
 
@@ -450,6 +459,13 @@ from its first public `1.0.0` release onward.
   no-break space no longer run together. A title with no letter or number left gets the plain default name,
   and a name Windows keeps for itself, such as CON or NUL, gets an `_` added. A suggested name no
   longer starts or ends with `-`, or ends with `(` (#899).
+- **A file whose name ends in a space or a dot after its extension now imports.** macOS and Linux
+  allow names such as `notes.txt ` or `report.pdf.`, and so do some Windows tools. Picked or
+  dropped, such a file was refused with "This file type isn't supported (.txt ). Try TXT, …", and a
+  folder import skipped it without a word. It now imports under its name without the trailing
+  spaces or dots, and Save original suggests that name with its extension. A name such as
+  "Washington, D.C." or "v2.1" keeps its dots, and a file of a type that isn't supported is still
+  refused, now naming its type without the trailing spaces or dots (#918).
 
 ## [0.1.65] — 2026-11-11
 

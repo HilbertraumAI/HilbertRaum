@@ -138,7 +138,7 @@ import type {
 import { MAX_DROP_PATHS } from '../../src/main/services/ingestion/limits'
 import type { AppContext } from '../../src/main/services/context'
 import { TASK_DOCUMENT_BUSY_INGESTING_MESSAGE } from '../../src/main/services/doctasks'
-import { makeScanOnlyPdf } from '../helpers/fixtures'
+import { makePdf, makeScanOnlyPdf } from '../helpers/fixtures'
 import { fakeOcrEngine, fakeRasterizer } from '../helpers/ocr-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
@@ -1198,6 +1198,49 @@ describe('registerDocsIpc — import path binding (D1)', () => {
       expect((await runImport([link])).documentIds).toEqual([])
     }
   })
+})
+
+// #918 item 3: a file whose name ends in a space or a dot after its extension (`notes.txt `, `report.pdf.`; Node
+// creates such names on NTFS too, and the temp-root teardown removes them with Node) imports under its name without
+// them, through every seam: the picker, a drop, and a picked folder's walk. Before, a picked or dropped one failed as
+// "isn't supported (.txt )" and a folder skipped it without a word. Save original then suggests the name with its
+// extension (the export reads the stored title as it is).
+describe('registerDocsIpc — names that end in a space or a dot (#918)', () => {
+  it.each(['picked', 'dropped', 'folder'] as const)(
+    'a %s file whose name ends in a space or a dot imports without them, and Save original keeps its extension',
+    async (seam) => {
+      const { db, workspacePath } = freshWorkspace()
+      registerDocsIpc(ctxWith(db, workspacePath))
+      const dir = tempRoot('docsipc-918')
+      const notes = join(dir, 'notes.txt ')
+      writeFileSync(notes, 'notes as written, with enough words to index them here')
+      const report = join(dir, 'report.pdf.')
+      writeFileSync(report, makePdf('the report as written, with enough words to index it'))
+
+      if (seam === 'dropped') {
+        await runImport([notes, report])
+      } else {
+        dialogState.result = { canceled: false, filePaths: seam === 'picked' ? [notes, report] : [dir] }
+        const picked = (await invoke(handlers, IPC.pickDocuments, seam === 'picked' ? 'files' : 'folder')).result
+        await runImport([], { pickerToken: (picked as { token: string }).token })
+      }
+
+      const rows = db.prepare('SELECT id, title, status, stored_name FROM documents ORDER BY title').all() as Array<{
+        id: string
+        title: string
+        status: string
+        stored_name: string
+      }>
+      expect(rows.map((r) => [r.title, r.status, r.stored_name])).toEqual([
+        ['notes.txt', 'indexed', `${rows[0]?.id}.txt`],
+        ['report.pdf', 'indexed', `${rows[1]?.id}.pdf`]
+      ])
+      for (const r of rows) {
+        expect((await invoke(handlers, IPC.exportDocumentOriginal, r.id)).result).toBeNull() // the default: cancelled
+        expect(String(saveDialog.lastOptions?.defaultPath)).toBe(r.title)
+      }
+    }
+  )
 })
 
 // Session 6 — Documents backend performance (DB-4, DB-6) at the handler. The service halves live
