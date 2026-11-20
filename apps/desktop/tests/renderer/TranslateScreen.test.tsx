@@ -669,6 +669,32 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     }
   }, testBudgetMs(10000))
 
+  // #807: a stored error the display map does not know (a parser's own words) read alone, in English, in every
+  // interface language. It now reads as on the Documents row for the same file: the translated lead, then the
+  // parser's text as the detail. (A known message keeps reading alone, translated: the rows above.)
+  it('#807: a parser’s own error (imported, ingestion failed) shows under the translated lead in the German UI', async () => {
+    const parserError = 'Invalid PDF structure.'
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    try {
+      stubApi({
+        ...fileStubs({ documentIds: ['d1'] }).api,
+        getImportJob: importFailedJob(),
+        listDocuments: vi.fn(async () => [failedDoc({ scanDetected: false, errorMessage: parserError })])
+      })
+      render(<I18nProvider><TranslateScreen onNavigate={() => {}} /></I18nProvider>)
+      await screen.findByLabelText(t('de', 'translate.input.label'))
+      act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })], t('de', 'translate.drop.title')))
+      const lead = await screen.findByText(t('de', 'docs.failed.lead'))
+      // One banner: the lead, then the parser's words as its detail line.
+      const banner = lead.closest('.error-banner-region') as HTMLElement
+      expect(within(banner).getByText(parserError)).toBeInTheDocument()
+      expect(banner.textContent).toContain(`${t('de', 'docs.failed.lead')}${parserError}`)
+      expect(screen.queryByText(t('de', 'translate.file.err.unsupported'))).not.toBeInTheDocument()
+    } finally {
+      window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
+    }
+  }, testBudgetMs(10000))
+
   it('FE-3 control: a genuinely-unsupported extension (nothing imported) is byte-identical', async () => {
     // main imported nothing supported — the PRE-import path (`documentIds: []`). This must stay
     // exactly the old "unsupported" copy AND never reach the failed-row resolver (no row exists).

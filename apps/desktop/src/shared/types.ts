@@ -369,7 +369,17 @@ export interface WorkspaceStateInfo {
  *  `vault_missing` (#911): the password verified, but the encrypted workspace file is missing from
  *  the drive and no copy was left to restore it from (a damaged one is shredded at this unlock).
  *  Neither `.enc` nor the working file was written; put the file back or
- *  restore the workspace folder from a backup, and never create a new workspace. */
+ *  restore the workspace folder from a backup, and never create a new workspace.
+ *  `vault_descriptor_missing` (#807, C-S2): the encrypted workspace file is on the drive, but
+ *  `config/workspace.json` (the salt, the verifier and the wrapped data key) is missing or
+ *  unreadable, so no password can open it; refused before the password is checked, nothing
+ *  written. Put the file back or restore it from a backup; never create a new workspace.
+ *  `workspace_exists` (#807): create refused, a workspace is already on the drive (an encrypted
+ *  descriptor, the `.enc`, an unreadable descriptor or a newer build's artifact); unlock it instead.
+ *  `plaintext_not_allowed` (#807): a create without a password, which the policy or the build
+ *  does not allow. `refused`: create's password under `MIN_PASSWORD_LENGTH` (or not a string);
+ *  for a password change also the workspace locked or a lock under way, or document work in
+ *  progress. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }
   | {
@@ -378,9 +388,12 @@ export type WorkspaceActionResult =
         | 'wrong_password'
         | 'vault_damaged'
         | 'vault_missing'
+        | 'vault_descriptor_missing'
         | 'vault_open_failed'
         | 'vault_recovery_blocked'
         | 'workspace_newer'
+        | 'workspace_exists'
+        | 'plaintext_not_allowed'
         | 'refused'
         | 'error'
       message: string

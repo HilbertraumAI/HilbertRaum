@@ -286,6 +286,51 @@ export class VaultBusyError extends Error {
   }
 }
 
+/**
+ * Thrown by `WorkspaceController.create()` when a workspace is already on the drive (a vault descriptor, the `.enc`, an
+ * unreadable descriptor, or a newer build's artifact), and by `createEncryptedVaultOnDisk` when `.enc` is there: a
+ * new vault would replace the user's data with an empty one. Content-free ON PURPOSE (like `VaultLockError`): the IPC
+ * layer maps it to `workspace_exists` + `main.workspace.exists`, and the lock screen renders that reason in its own
+ * language (#807; before, the IPC matched this English text and the gate showed it as it was).
+ */
+export class WorkspaceExistsError extends Error {
+  constructor() {
+    super('A workspace already exists on this drive; refusing to create a new one over it')
+    this.name = 'WorkspaceExistsError'
+  }
+}
+
+/**
+ * Thrown by `WorkspaceController.create()` for a `plaintext_dev` create that the policy or the build does not allow
+ * (`plaintextAllowed`). Content-free ON PURPOSE: the IPC layer maps it to `plaintext_not_allowed` +
+ * `main.workspace.plaintextNotAllowed` (#807). The gate offers the plaintext switch only when it is allowed, so only a
+ * direct IPC call reaches it.
+ */
+export class PlaintextNotAllowedError extends Error {
+  constructor() {
+    super('A plaintext workspace is not permitted by policy')
+    this.name = 'PlaintextNotAllowedError'
+  }
+}
+
+/**
+ * Thrown by `unlockEncryptedVault` when the encrypted workspace file is on the drive but its descriptor
+ * (`config/workspace.json`: the salt, the KDF parameters, the verifier and the wrapped data key) is missing or cannot be
+ * read, so no password can open it. Thrown before any password check (the verifier is in that file) and before anything
+ * is written. Content-free ON PURPOSE: the IPC layer maps it to `vault_descriptor_missing` +
+ * `main.workspace.descriptorMissing` (put the file back or restore it from a backup; never create a new workspace).
+ * Before #807 (C-S2) this was a plain English `Error`, which read "Could not open the workspace." on every try.
+ */
+export class VaultDescriptorMissingError extends Error {
+  constructor() {
+    super(
+      'The workspace descriptor (config/workspace.json) is missing or unreadable, so the encrypted workspace cannot be ' +
+        'unlocked'
+    )
+    this.name = 'VaultDescriptorMissingError'
+  }
+}
+
 /** Derive the vault file locations from the resolved workspace paths. */
 export function vaultPathsFrom(paths: { configPath: string; dbPath: string; logsPath?: string }): VaultPaths {
   return {
@@ -1696,14 +1741,9 @@ export function createEncryptedVaultOnDisk(
 ): void {
   // Refuse to overwrite an existing vault — `.enc` IS the user's data (chats, documents,
   // settings), and re-creating would irreversibly replace it with an empty database. A
-  // corrupt/missing descriptor is recoverable; a wiped `.enc` is not.
-  if (existsSync(vaultPaths.encPath)) {
-    throw new Error(
-      'An encrypted workspace already exists here — refusing to overwrite it. ' +
-        'Unlock it with its password instead. To really start fresh, move or delete ' +
-        `"${vaultPaths.encPath}" (and config/workspace.json) first.`
-    )
-  }
+  // corrupt/missing descriptor is recoverable; a wiped `.enc` is not. (A belt behind
+  // `WorkspaceController.create()`'s own check, which runs first.)
+  if (existsSync(vaultPaths.encPath)) throw new WorkspaceExistsError()
   let descriptor: VaultDescriptor
   /** The key the database FILE is encrypted under (v2: data key; v1: password key). */
   let fileKey: Buffer
@@ -1790,13 +1830,8 @@ export function unlockEncryptedVault(
   if (verdict.kind === 'newer') throw new VaultNewerError(verdict.what, verdict.found)
   const descriptor = readVaultDescriptor(vaultPaths.descriptorPath)
   if (!descriptor) {
-    if (existsSync(vaultPaths.encPath)) {
-      throw new Error(
-        'The workspace descriptor (config/workspace.json) is missing or unreadable, so ' +
-          'the encrypted workspace cannot be unlocked. Restore config/workspace.json ' +
-          'from a backup — do NOT create a new workspace, or the existing data is lost.'
-      )
-    }
+    // C-S2 (#807): the data is there but nothing can open it; restore the descriptor, never create a new workspace.
+    if (existsSync(vaultPaths.encPath)) throw new VaultDescriptorMissingError()
     throw new Error('No encrypted workspace to unlock')
   }
   // A crash during a password change must be resolved BEFORE any decrypt: the descriptor
@@ -2669,10 +2704,7 @@ export class WorkspaceController {
     if (this.vaultExistsOnDisk()) {
       // Reachable when a caller invokes createWorkspace while state is `locked`, or when
       // the descriptor is corrupt. Creating would wipe the existing `.enc` — refuse.
-      throw new Error(
-        'A workspace already exists on this drive — unlock it with its password instead ' +
-          'of creating a new one.'
-      )
+      throw new WorkspaceExistsError()
     }
     // #875: no vault is here, so a marker a wiped one left names no snapshot of the workspace about to be created.
     // Startup reads the marker only beside a vault, so nothing else would remove it, and a reset drive would carry it.
@@ -2681,9 +2713,7 @@ export class WorkspaceController {
     this._workingCopyLost = null
     this._lostAtPreviousLock = null
     if (mode === 'plaintext_dev') {
-      if (!this.allowPlaintext()) {
-        throw new Error('Plaintext workspace is not permitted by policy.')
-      }
+      if (!this.allowPlaintext()) throw new PlaintextNotAllowedError()
       this.openPlaintext()
     } else {
       createEncryptedVaultOnDisk(this.vaultPaths, password)
@@ -2738,9 +2768,8 @@ export class WorkspaceController {
       throw new Error('The workspace must be unlocked to change its password.')
     }
     if (this.docWork > 0) {
-      throw new VaultBusyError(
-        'Documents are still being imported or re-indexed. Wait for that to finish, then try again.'
-      )
+      // Emission (i18n record §3.3 rule 2), like `beginDocumentWork`'s twin above: user-facing, localized via tMain (#807).
+      throw new VaultBusyError(tMain('main.workspace.busyDocumentWork'))
     }
     // #845 belt: the unlock refused any newer format, so the descriptor in memory is one this build knows. The one on
     // disk is re-read before anything is derived or written: a newer build (another OS's app on a shared Kit) may

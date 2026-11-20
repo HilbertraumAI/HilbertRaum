@@ -203,11 +203,16 @@ export function ReviewScreen({
             />
           ) : (
             <>
-              <p className="hint">
-                {session.openError?.kind === 'failed'
-                  ? localizeServerCopy(t, session.openError.message)
-                  : t('review.notFound')}
-              </p>
+              {session.openError?.kind === 'failed' ? (
+                // #807: what happened in the interface language, then the failed call's own message (a locked
+                // workspace, a read error, SQLite's words) as the detail.
+                <>
+                  <p className="hint">{t('review.openFailed')}</p>
+                  <p className="hint">{localizeServerCopy(t, session.openError.message)}</p>
+                </>
+              ) : (
+                <p className="hint">{t('review.notFound')}</p>
+              )}
               <Button onClick={() => onNavigate('chat')}>‹ {t('review.back')}</Button>
             </>
           )}
@@ -712,7 +717,10 @@ function SaveStateLine({
       <span className="review-save-error" role="alert">
         {state === 'error' && (
           <>
-            {error != null ? localizeServerCopy(t, error) : t('review.autosave.error')}{' '}
+            {/* #807: always the lead (what it means: not saved yet), then the failed call's own message, whose
+                words (SQLite's "database is locked") don't say that, in any language. */}
+            {t('review.autosave.error')}{' '}
+            {error != null && <>{localizeServerCopy(t, error)} </>}
             {/* FIX-2d: retry re-flushes pending edits; with nothing pending (stale handle)
                 it reconciles with the DB instead of no-oping forever. */}
             <button

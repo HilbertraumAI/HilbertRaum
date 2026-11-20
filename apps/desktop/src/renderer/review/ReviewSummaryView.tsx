@@ -425,7 +425,16 @@ function ExportPackPanel({
       </fieldset>
       {error !== null && (
         <p className="hint review-export-error" role="alert">
-          {error.length > 0 ? localizeServerCopy(t, error) : t('review.export.error')}
+          {/* #807 (E-a): every failed export leads with a sentence true for each of them (a file that was saved but
+              not recorded included), then its own message, which main translates only for the named outcomes (a
+              file write or a PDF print error stays as thrown). A refused flush ('') says no file was written. */}
+          {error.length > 0 ? (
+            <>
+              {t('review.export.failed')} {localizeServerCopy(t, error)}
+            </>
+          ) : (
+            t('review.export.error')
+          )}
         </p>
       )}
       <div className="review-export-actions">

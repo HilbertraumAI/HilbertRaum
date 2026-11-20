@@ -16,39 +16,47 @@ import type { WorkspaceActionResult } from './types'
 // either side alone and that test goes red.
 //
 // One table per call: `error` means "couldn't open" to unlock and "couldn't create" to create.
-// `null` (and a reason missing at runtime) shows main's `message`. Create's `refused` is then
-// the vault's own sentence (plaintext not permitted, a workspace already exists), which has
-// no catalog key. Main's other create refusal, a password under MIN_PASSWORD_LENGTH, can't
-// answer the gate: its `canSubmit` holds the same floor before sending. That is decided by
-// what the gate knows, never by matching the text (i18n record §3.3 Rule 3).
+// Every reason a call sends has a key. `null` means main never sends that reason for that call;
+// it (and a reason missing at runtime) shows main's `message`. Since #807 no call sends free text:
+// create's two vault refusals have their own reasons (`workspace_exists`, `plaintext_not_allowed`),
+// and create's `refused` is only main's too-short refusal, a password under MIN_PASSWORD_LENGTH,
+// whose key the gate renders with that floor (`{ min }`). The gate's `canSubmit` holds the same
+// floor before sending, so it shouldn't get that refusal back. That is decided by what the gate
+// knows, never by matching the text (i18n record §3.3 Rule 3).
 
 /** Why an unlock or create failed: the `reason` of a failed `WorkspaceActionResult`. */
 export type WorkspaceFailureReason = Extract<WorkspaceActionResult, { ok: false }>['reason']
 
-/** The gate's copy for a failed unlock, by reason (`null`: show main's `message`). */
+/** The gate's copy for a failed unlock, by reason (`null`: main never sends it; shows main's `message`). */
 export const UNLOCK_FAILURE_KEYS = {
   wrong_password: 'main.workspace.wrongPassword',
   vault_damaged: 'main.workspace.vaultDamaged',
   vault_missing: 'main.workspace.vaultMissing',
+  vault_descriptor_missing: 'main.workspace.descriptorMissing',
   vault_open_failed: 'main.workspace.vaultOpenFailed',
   vault_recovery_blocked: 'main.workspace.recoveryBlocked',
   workspace_newer: 'main.workspace.newer',
-  // `null`: main never sends this reason for this call. If it ever does, give the entry a key:
-  // a `null` shows main's `message`, in main's language, and the screen is in two languages again.
+  // `null`: main never sends these for this call. If it ever does, give the entry a key: a
+  // `null` shows main's `message`, in main's language, and the screen is in two languages again.
+  workspace_exists: null,
+  plaintext_not_allowed: null,
   refused: null,
   error: 'main.workspace.openFailed'
 } satisfies Record<WorkspaceFailureReason, MessageKey | null>
 
-/** The gate's copy for a failed create, by reason (`null`: show main's `message`). */
+/** The gate's copy for a failed create, by reason (`null`: main never sends it; shows main's `message`). */
 export const CREATE_FAILURE_KEYS = {
-  // `null`: main never sends these five for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
+  // `null`: main never sends these six for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
   wrong_password: null,
   vault_damaged: null,
   vault_missing: null,
+  vault_descriptor_missing: null,
   vault_open_failed: null,
   vault_recovery_blocked: null,
   workspace_newer: 'main.workspace.newer',
-  // The one `null` main does send: the vault's own sentence, which has no catalog key.
-  refused: null,
+  workspace_exists: 'main.workspace.exists',
+  plaintext_not_allowed: 'main.workspace.plaintextNotAllowed',
+  // A password under MIN_PASSWORD_LENGTH, or not a string (A2, #807): rendered with `{ min }`.
+  refused: 'main.workspace.passwordTooShort',
   error: 'main.workspace.createFailed'
 } satisfies Record<WorkspaceFailureReason, MessageKey | null>

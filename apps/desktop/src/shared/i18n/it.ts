@@ -2679,6 +2679,10 @@ export const it: UiCatalog<'it'> = {
     'La tua password è corretta, ma il file crittografato dell’area di lavoro manca dall’unità e non ' +
     'è rimasta nessuna copia da cui recuperarlo. Non creare una nuova area di lavoro. Rimetti il ' +
     'file al suo posto o ripristina la cartella «workspace» da un backup.',
+  'main.workspace.descriptorMissing':
+    'Il file con la chiave della tua area di lavoro (config/workspace.json) manca dall’unità o non è ' +
+    'leggibile, quindi nessuna password può aprire l’area di lavoro. Non creare una nuova area di ' +
+    'lavoro. Rimetti il file al suo posto o ripristinalo da un backup.',
   'main.workspace.vaultOpenFailed':
     'La tua password è corretta, ma HilbertRaum non è riuscito a completare l’apertura ' +
     'dell’area di lavoro. L’area di lavoro crittografata sull’unità è rimasta com’era. ' +
@@ -2694,6 +2698,11 @@ export const it: UiCatalog<'it'> = {
     'l’app per aprirla. Non è stato modificato nulla.',
   'main.workspace.createFailed': 'Non è stato possibile creare l’area di lavoro.',
   'main.workspace.passwordTooShort': 'La password deve avere almeno {min} caratteri.',
+  'main.workspace.exists':
+    'Su questa unità esiste già un’area di lavoro, quindi non ne è stata creata una nuova. Riavvia ' +
+    'HilbertRaum per sbloccarla con la sua password.',
+  'main.workspace.plaintextNotAllowed':
+    'Qui non è consentita un’area di lavoro senza password. Crea l’area di lavoro con una password.',
   'main.workspace.newPasswordTooShort': 'La nuova password deve avere almeno {min} caratteri.',
   'main.workspace.unlockBeforeChange': 'Sblocca l’area di lavoro prima di cambiarne la password.',
   'main.workspace.wrongCurrentPassword':
@@ -2702,6 +2711,9 @@ export const it: UiCatalog<'it'> = {
     'Non è stato possibile cambiare la password. La tua password attuale funziona ancora.',
   'main.workspace.busyPasswordChange':
     'La password dell’area di lavoro è in fase di modifica. Riprova tra un momento.',
+  'main.workspace.busyDocumentWork':
+    'Alcuni documenti sono ancora in fase di importazione o reindicizzazione. Attendi che ' +
+    'l’operazione finisca, poi riprova.',
   'main.workspace.lockFailed':
     'Non è stato possibile bloccare l’area di lavoro: resta aperta e i tuoi dati sono al sicuro. ' +
     'Libera un po’ di spazio sull’unità e riprova.',
@@ -3677,6 +3689,7 @@ export const it: UiCatalog<'it'> = {
   'review.loading': 'Caricamento della verifica…',
   'review.notFound':
     'Non è stato possibile trovare questa verifica. Potrebbe essere stata eliminata.',
+  'review.openFailed': 'Non è stato possibile aprire questa verifica.',
   'review.question.toggle': 'Domanda',
   'review.answerPane.aria': 'Risposta in verifica',
   'review.autosave.saving': 'Salvataggio in corso…',
@@ -3901,6 +3914,7 @@ export const it: UiCatalog<'it'> = {
   'review.export.done': 'Pacchetto di riscontri esportato.',
   'review.export.error':
     'Non è stato possibile esportare il pacchetto di riscontri. Non è stato scritto nessun file.',
+  'review.export.failed': 'L’esportazione del pacchetto di riscontri non è stata completata.',
   'review.export.copyHash': 'Copia SHA-256',
   'review.export.hashCopied': 'SHA-256 copiato negli Appunti.'
 }
