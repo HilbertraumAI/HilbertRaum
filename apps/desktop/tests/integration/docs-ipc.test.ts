@@ -305,6 +305,10 @@ describe('registerDocsIpc', () => {
     expect(mixed.result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
   })
 
+  // Measured (#934 item 3, Windows, 12 logical CPUs, 512 missing paths, one await per path, mean of 3): idle 75 ms for
+  // 512 async failed stats; 6 busy threads 131 ms; 12 busy threads 6.4 s (about 99 ms per call at p99). Synchronous
+  // statSync stays at 51 / 48 / 152 ms and a 16-thread libuv pool changes nothing (5.8 s), so the cost is the awaited hop's
+  // scheduling on a starved CPU, not the failed open. That is why this row's budget is `testBudgetMs`, not a fixed bound.
   // #240: the renderer-supplied array is capped BEFORE any filesystem call — an unbounded array of
   // unreachable paths used to drive one `lstat`/`stat` per element on the main thread. Strings only:
   // every path here sits under a local temp root; no UNC/device form is ever handed to the real
