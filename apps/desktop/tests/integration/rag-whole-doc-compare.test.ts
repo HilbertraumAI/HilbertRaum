@@ -36,7 +36,7 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { REPO_APP_SKILLS_DIR, writeSkillPackage } from '../helpers/skill-fixtures'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
-import { asPreRequestMapPrompt } from '../helpers/whole-doc-fixtures'
+import { asNoFenceMapPrompt, asPreRequestMapPrompt } from '../helpers/whole-doc-fixtures'
 import { buildSkillFence } from '../../src/main/services/skills/prompt'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -671,4 +671,32 @@ describe('askDocuments — the map step takes notes for a list-shaped question o
     expect(maps.length).toBeGreaterThan(1)
     for (const map of maps) expect(map).toContain(`\nUser request:\n${chip}\n`)
   })
+})
+
+// ---- #952: with no skill, the whole-document notes take the request (follow-ups wave 5, owner call G-2) ----
+// A summary of one long document with a ready deep index and no skill takes the tree rescue (#642), whose map steps
+// were written for a skill: they named "the task described below" with nothing below it, and never the question.
+// With no skill there is no task, so every map step takes notes for the user's request, its only target.
+describe('askDocuments — with no skill, the whole-document map steps take notes for the request (#952)', () => {
+  it.each(['Summarize this document', 'Fasse dieses Dokument zusammen'])(
+    '%s over a ready deep index: every map step takes notes for it and names no task, no skill stamp',
+    async (question) => {
+      const h = await makeFenceHarness([LONG_LEASE], 4096)
+      const section = (n: number): string => `Section ${n}: ${'the tenant shall pay the rent and the service charges on time '.repeat(120)}`
+      seedReadyTree(h.db, h.docIds[0], chunkIdsOf(h.db, h.docIds[0]), {
+        summary: 'Summary: a lease.',
+        sections: [section(1), section(2), section(3)]
+      })
+      const msg = (await invoke(handlers, IPC.askDocuments, h.conversationId, question)).result as Message
+      expect(msg.coverage?.mode).toBe('tree')
+      expect(msg.skillId ?? null).toBeNull()
+      const maps = mapTurnsOf(h.runtime)
+      expect(maps.length).toBeGreaterThan(1)
+      for (const map of maps) {
+        expect(map).not.toContain('task described below')
+        expect(map).toContain(`\nUser request:\n${question}\n`)
+        expect(map).toBe(asNoFenceMapPrompt(map, question))
+      }
+    }
+  )
 })

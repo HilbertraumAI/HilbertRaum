@@ -72,15 +72,24 @@ function userRequestBlock(question: string): string {
   return `\nUser request:\n${question}\n`
 }
 
-/** MAP step: pull the skill-relevant material from ONE section so the reduce can assemble the
- *  deliverable. The fence (its own guard line included) rides in this USER turn after the instruction.
- *  #939 (follow-ups wave 4, owner call 2026-11-20): `request` is the user's question when the map takes
- *  notes for it too, a list-shaped question under a bundled whole-document skill (`asksForList`; the
- *  `notesForRequest` flag of `streamWholeDocMapReduce`); then the request rides before the fence and the
- *  instruction asks for every place it asks about. `null` (every other turn, deliverables included) is the
- *  prompt as it was, byte for byte. */
+/** MAP step: pull the material the answer needs from ONE section so the reduce can assemble it. The fence
+ *  (its own guard line included) rides in this USER turn after the instruction.
+ *  #939 (follow-ups wave 4, owner call 2026-11-20): under a skill, `request` is the user's question when the
+ *  map takes notes for it too (the `notesForRequest` flag of `streamWholeDocMapReduce`, set by
+ *  `registerRagIpc`); then the request rides before the fence and the instruction asks for every place it asks
+ *  about. `null` is the prompt as it was, byte for byte (a request for the skill's report among them).
+ *  #952 (follow-ups wave 5, owner call G-2): with no skill there is no task, so the core always passes the
+ *  request and it is the notes' only target: the same layout with the fence left out. */
 function mapUserPrompt(skillFence: string | null, request: string | null, part: number, total: number, text: string): string {
   const fence = skillFence ? `\n${skillFence}\n` : ''
+  if (skillFence === null && request !== null) {
+    return (
+      `You are processing part ${part} of ${total} of ONE document, section by section, to answer the user ` +
+      'request below. From THIS part only, note every detail the user request needs — keep names, numbers, ' +
+      `dates, decisions, and obligations exact. Write brief notes, not the final answer.\n${userRequestBlock(request)}\n` +
+      `Part ${part} of ${total} (section summaries):\n${text}\n\nNotes:`
+    )
+  }
   if (request === null) {
     return (
       `You are processing part ${part} of ${total} of ONE document, section by section, to complete the ` +
@@ -103,9 +112,18 @@ function mapUserPrompt(skillFence: string | null, request: string | null, part: 
  *  shorter faithful summary, so a document beyond the single map-call ceiling still folds down to notes that
  *  fit ONE final reduce (instead of dropping its tail). The fence rides this USER turn too (§2, fence at
  *  every step); the app-authored system prompt stays outside it. #939: `request` as in the map step, so the
- *  condensing keeps what a list-shaped request asks about; `null` is the prompt as it was. */
+ *  condensing keeps what the request asks about; `null` is the prompt as it was. #952: with no skill the
+ *  request is the only target, as in the map step. */
 function foldUserPrompt(skillFence: string | null, request: string | null, part: number, total: number, notes: string): string {
   const fence = skillFence ? `\n${skillFence}\n` : ''
+  if (skillFence === null && request !== null) {
+    return (
+      `You are condensing the notes from part ${part} of ${total} of ONE document into a shorter summary, to ` +
+      'answer the user request below. Keep every name, number, date, decision, and obligation exact — drop ' +
+      `only repetition and filler. Write condensed notes, not the final answer.\n${userRequestBlock(request)}\n` +
+      `Part ${part} of ${total} (section notes):\n${notes}\n\nCondensed notes:`
+    )
+  }
   if (request === null) {
     return (
       `You are condensing the notes from part ${part} of ${total} of ONE document into a shorter summary, to ` +
@@ -468,8 +486,9 @@ export interface WholeDocTreeDeps {
   skill?: TurnSkill | null
   /** How much of the skill body the fence carries (#632; absent ⇒ the whole body) — threaded to the core. */
   skillFenceMode?: SkillFenceMode
-  /** #939: the map and fold steps take notes for the user's question too (a list-shaped question under a
-   *  bundled whole-document skill, decided by `registerRagIpc`). Absent ⇒ the prompts as they were. */
+  /** #939: under a skill, the map and fold steps take notes for the user's question too (decided by
+   *  `registerRagIpc`). Absent ⇒ the prompts as they were. With no skill the core always takes notes for the
+   *  question, the only target there is (#952). */
   notesForRequest?: boolean
   /** The REAL launched context window (§L0) — sizes the per-call window budget. */
   contextTokens: number
@@ -513,8 +532,9 @@ export interface WholeDocMapReduceInput {
   skill?: TurnSkill | null
   /** How much of the skill body the fence carries (#632, `SkillFenceMode`; absent ⇒ the whole body). */
   skillFenceMode?: SkillFenceMode
-  /** #939: the map and fold steps take notes for the user's question too (a list-shaped question under a
-   *  bundled whole-document skill, decided by `registerRagIpc`). Absent ⇒ the prompts as they were. */
+  /** #939: under a skill, the map and fold steps take notes for the user's question too (decided by
+   *  `registerRagIpc`). Absent ⇒ the prompts as they were. With no skill the core always takes notes for the
+   *  question, the only target there is (#952). */
   notesForRequest?: boolean
   /** The REAL launched context window (§L0) — sizes the per-call window budget. */
   contextTokens: number
@@ -576,9 +596,11 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   const skillFence = fence?.text ?? null
   const fenceTokens = skillFence ? approxPromptTokens(skillFence) : 0
   const questionTokens = approxPromptTokens(question)
-  // #939: the question the map and fold steps take notes for, or null (their prompts as they were). Either way it
-  // is reserved per window like the fence (the reduce carries it); the 200 covers the instruction and labels.
-  const request = notesForRequest === true ? question : null
+  // #939: the question the map and fold steps take notes for, or null (their prompts as they were). #952: with no
+  // skill there is no task, so the request is always the target; deciding it here means no caller can build a
+  // "task described below" with no task below. Either way it is reserved per window like the fence (the reduce
+  // carries it); the 200 covers the instruction and labels.
+  const request = notesForRequest === true || skillFence === null ? question : null
   const reserveWords = Math.ceil((fenceTokens + questionTokens + 200) / SUMMARY_TOKENS_PER_WORD)
   const budgetWords = Math.max(200, summaryBudgetWords(contextTokens) - reserveWords)
   // Map-call HARD ceiling (follow-up #2): beyond `SUMMARY_MAP_CALL_HARD_CEILING` windows (~100 pages) the
