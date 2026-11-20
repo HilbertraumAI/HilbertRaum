@@ -68,7 +68,7 @@ a future move to Tauri/Rust is a localized swap.
   turns Electron's `GrantFileProtocolExtraPrivileges` fuse off. See
   [`security-model.md`](security-model.md) and "App scheme `hilbertraum://app/` — design record
   (#560)" below. The packaged binary's other fuses (no `ELECTRON_RUN_AS_NODE`, no `--inspect`,
-  `app.asar` integrity) are in "Electron fuses — design record (#562)".
+  no `NODE_OPTIONS` since #564, `app.asar` integrity) are in "Electron fuses — design record (#562)".
 
 ## Swappable interfaces (spec §9.2)
 - `ModelRuntime` — `MockRuntime` **or** `LlamaRuntime`, chosen per `start()` by availability (Phase 10).
@@ -16767,7 +16767,8 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
   beside the export destination (serving the print page from memory on a second host would remove
   it — #563; done, EP-1 record "#563 amendment"); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
   plus the OCR rasterizer honouring `ELECTRON_RENDERER_URL` in a packaged build (#562; done, see
-  "Electron fuses — design record (#562)" below: NODE_OPTIONS stays on by owner decision).
+  "Electron fuses — design record (#562)" below: NODE_OPTIONS stayed on by owner decision until #564
+  turned it off, §8 there).
 
 ## Electron fuses — design record (#562)
 
@@ -16778,7 +16779,9 @@ _The packaged binary turns off `RunAsNode` and `EnableNodeCliInspectArguments`, 
 Electron 43.7.7 / Node 24.21.0, app-builder-lib 26.16.1, Windows 11 with Smart App Control and a
 TLS-scanning antivirus (Norton). The analysis is a git-ignored working paper; this is the durable
 record. It follows "App scheme `hilbertraum://app/` — design record (#560)", which turned off
-`GrantFileProtocolExtraPrivileges` and named this as its follow-up._
+`GrantFileProtocolExtraPrivileges` and named this as its follow-up. **#564 amendment
+(2026-11-20, `fix/564-os-cert-store-fuse`):** the in-app downloads trust the operating system's
+certificate store, and `EnableNodeOptionsEnvironmentVariable` is off too (§8)._
 
 ### §1 Threat class
 
@@ -16794,16 +16797,19 @@ code.
 |---|---|---|---|
 | D1 | 0 `RunAsNode` | on → **off** | `ELECTRON_RUN_AS_NODE=1 HilbertRaum.exe -e …` ran Node 24.21.0; nothing in the app, launchers, drive builders or docs uses it (tesseract.js runs on `worker_threads`, which this fuse does not touch) |
 | D2 | 3 `EnableNodeCliInspectArguments` | on → **off** | `--inspect` / `--inspect-brk` opened a debugger on the main process; nothing uses it. Chromium's `--remote-debugging-port` is not covered and keeps working, so the CDP harnesses are unaffected |
-| D3 | 2 `EnableNodeOptionsEnvironmentVariable` | on → **on** (owner decision 2026-10-03) | §3: off breaks the in-app downloads behind TLS-scanning antivirus and proxies; the residual it leaves is small |
+| D3 | 2 `EnableNodeOptionsEnvironmentVariable` | on → **on** (owner decision 2026-10-03); **off since #564** | §3: off broke the in-app downloads behind TLS-scanning antivirus and proxies; the residual it left was small. §8: once the downloads trust the OS store, it goes off |
 | D4 | 4 `EnableEmbeddedAsarIntegrityValidation` | off → **on** | §4: detects a modified `app.asar`; no measurable cost |
 | D5 | 5 `OnlyLoadAppFromAsar` | off → **on** | §4: without it, removing `app.asar` and planting `resources/app/` bypasses D4 |
 | D6 | `ELECTRON_RENDERER_URL` | — | `devRendererUrl(isPackaged)` in `app-protocol.ts` is its only reader; both window loaders pass `app.isPackaged` |
 | D7 | 1 cookie encryption, 6 browser-process snapshot | unchanged (off) | no cookies; a separate snapshot needs its own build step |
 
 The wire goes `101100001` → **`001011001`** (decoded with `@electron/fuses`; index 8, unnamed in
-1.8.0, is `WasmTrapHandlersEnabled`).
+1.8.0, is `WasmTrapHandlersEnabled`), and → **`000011001`** with #564 (§8; position 2 only).
 
 ### §3 Why fuse 2 stays on
+
+_Kept as the record of the 2026-10-03 decision. #564 turned the fuse off once the downloads trusted
+the OS store (§8)._
 
 - A packaged app already drops `NODE_OPTIONS` apart from `--http-parser` and `--max-http-header-size`.
   `NODE_OPTIONS=--require=planted.cjs` did not load on master ("Most NODE_OPTIONs are not supported
@@ -16883,7 +16889,7 @@ that day (`tmp/562` harnesses):
 
 ### §6 Guards
 
-`packaging.test.ts`: the exact `electronFuses` block (fuse 2 explicitly `true`); `asar: true` and
+`packaging.test.ts`: the exact `electronFuses` block (fuse 2 explicitly `true`, `false` since #564); `asar: true` and
 no `disableAsarIntegrity`; one mapping check per option against the installed
 `platformPackager.js`; and that electron-builder still computes the hash and writes it where
 Electron reads it (the Windows resource and the macOS `Info.plist` key).
@@ -16904,7 +16910,7 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
   worker closure against the header's own per-file hashes before the worker starts. Not built.
 - Linux: no asar integrity (from source); the other fuses were not measured on Linux here.
 - macOS: unmeasured (no Mac), including `resetAdHocDarwinSignature` after the larger flip.
-- Fuse 2 on until the downloaders trust the OS store (§3, #564).
+- ~~Fuse 2 on until the downloaders trust the OS store (§3, #564).~~ Off since #564 (§8).
 - `--remote-debugging-port` has no fuse. Refusing it in a packaged build would also refuse the
   packaged smoke harnesses.
 - DevTools have no fuse either. Since #912 a packaged build turns them off on the main window
@@ -16914,6 +16920,119 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
   That makes it hardening, not a boundary: a local user who starts the exe with
   `--remote-debugging-port` reaches the renderer's `window.api` through `Runtime.evaluate` all the
   same.
+
+### §8 #564 amendment: the downloads trust the OS store, fuse 2 off
+
+**Facts** (Electron 43.8.6 / Node 24.22.1, DesktopDiT with Norton scanning TLS, 2026-11-20; probes
+under `ELECTRON_RUN_AS_NODE`, loopback only):
+- `tls.getCACertificates(type)` (Node ≥ 22.15) and `tls.setDefaultCACertificates(certs)` (Node ≥
+  24.5) exist. Bundled 118, extra 1 (Norton's root, from `NODE_EXTRA_CA_CERTS`), default 119,
+  system 120.
+- The OS store holds Norton's root too, the same certificate as the one in the variable. A
+  TLS-scanning product that exports its root through the variable installs it in the store as well.
+- Node's Windows `system` list is not a list of trusted roots. Of its 120 entries, 60 are not in the
+  default list, and many of those are no root at all: intermediates (Amazon RSA 2048 M04, RapidSSL
+  TLS RSA CA G1, Microsoft Secure Server CA 2011 …), two self-signed `CN=localhost` server
+  certificates a development tool added (`CA:FALSE`), "Root Agency", expired or 1024-bit legacy roots
+  (AddTrust External CA Root, VeriSign Class 3 PCA, Thawte Premium Server CA). Electron's bundled
+  list is curated (118 roots, where plain Node bundles 146) and leaves out roots Windows still
+  trusts, such as Entrust G2 and three old DigiCert roots.
+- With the filter below: 120 read, 94 kept (10 not self-signed, 8 outside their validity, 6 not a
+  CA, 2 RSA keys under 2048 bits left out), 17 added: six Microsoft roots (among them the TPM and
+  time-stamping roots), GlobalSign Root CA, Starfield Class 2, DigiCert Global, High Assurance EV
+  and Assured ID, thawte Primary, Entrust G2 and Entrust.net 2048, VeriSign G5 and Universal, Go
+  Daddy Class 2. The default list goes from 119 to 136.
+- Cost on the main thread: reading the system store 21–74 ms, the filter and de-duplication 12–20
+  ms, setting the list 5–12 ms. In the test workers (Node 24.13, under load) the unfiltered call
+  took 42–107 ms.
+- Electron's eMudhra block (GHSA-jr5w-w6x2-84p9) is not part of the CA list. Electron's patch
+  `patches/node/tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra
+  RSA intermediates to the SPKI blocklist that Node 24.22.1 compiles in and applies to every
+  `SSL_CTX` through `InstallCertVerifyCallback`: a check at verify time, so replacing the default
+  list cannot bypass it.
+- The main process's `fetch` honours the new list. Against a loopback TLS server whose certificate
+  came from a throwaway CA, `fetch` failed (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`); after
+  `setDefaultCACertificates([...default, thatCA])` the same request answered 200. Host Node 24.13
+  behaves the same. The connection still passes `net.Socket.prototype.connect`, which the offline
+  tripwire (`offlineGuard.ts`) patches, so the tripwire still sees every connect.
+- Node applies the list to TLS connections opened afterwards on the same thread; sessions an agent
+  cached before keep the old trust. The main process opens no remote TLS connection before the
+  first download.
+
+**Decision** (owner gate G-4 (a), 2026-11-20): route 1 of #564, then the fuse off.
+- `services/net/trust.ts` `ensureSystemTrust()` reads `tls.getCACertificates('system')` once per
+  process and **filters** it (owner decision 2026-11-20, `usableRoot`): a certificate counts only
+  when it parses (a throw anywhere, reading its key included, skips it), is a CA, is self-signed
+  (`checkIssued` against itself, which compares its issuer name with its own subject and the key
+  identifiers, so a separate name check would add nothing), is inside its validity window now, and
+  has an RSA key of at least 2048 bits or an EC or Ed25519 key.
+- It is **additive**: `tls.setDefaultCACertificates([...default, ...new roots])`, de-duplicated by
+  `fingerprint256`, so every default certificate stays as it was and a connection that verified
+  before still does. When nothing new is left, the list is not touched. It reads both `tls`
+  functions off the module at the call rather than importing them by name, so on a Node without
+  them (the repo's floor is 22.12) the call fails and is caught instead of every module that
+  imports `assets.ts` failing to load.
+- It is **lazy**. Its one caller is `downloadToFile` (`assets.ts`), after the URL check and before
+  the request. Every in-app downloader (models, the AI engine, the knowledge-pack tools, the OCR
+  files) reaches the network only through `downloadToFile`; the sidecar clients talk plain HTTP on
+  loopback and never call it. Not at startup: the 40–90 ms would land before the first paint
+  (BUILD_STATE §5 item 18(g)).
+- It **never throws into a download**. A store read that throws, an empty store (a minimal Linux),
+  a store with nothing usable or new, or a list Node refuses keeps the default trust. It logs one
+  line: counts only (certificates read, kept, added), or an error code, never a certificate or a
+  message. The process does not try again.
+- Route 2, Electron's `net.fetch` (Chromium's stack, the OS proxy), was not taken: every
+  downloader's Range, streaming and abort handling would need re-testing, and it bypasses Node's
+  `connect`, so the offline tripwire would stop seeing the downloads.
+- `electron-builder.yml` turns `EnableNodeOptionsEnvironmentVariable` off. Wire `001011001` →
+  `000011001`.
+
+**What the fuse governs now.** Off, the packaged main process reads neither `NODE_OPTIONS` (it
+ignored all but `--http-parser` and `--max-http-header-size` already, §3) nor `NODE_EXTRA_CA_CERTS`,
+which Electron unsets. An unpackaged development build is not fused and reads both as before.
+
+**What is trusted now.** Node's bundled roots plus the OS store's usable roots: roots that Electron's
+curated list leaves out, and any root that the user, an administrator or a program running as the
+user adds. The residual: a root that Windows still trusts but Chrome dropped (Entrust, the old
+DigiCert roots, VeriSign, Go Daddy) is trusted for the in-app downloads. Node reads certificates
+only, not Windows' per-root purposes, so the Microsoft TPM and time-stamping roots count as TLS
+roots here too. Every engine, model and OCR file is checked against a pinned SHA-256 before use,
+the downloads send no credentials, and the eMudhra block applies whatever the list holds, so such a
+root cannot change what gets installed. At most it lets someone who can intercept the connection
+see which public file is being fetched, or make the download fail. `NODE_EXTRA_CA_CERTS` had the
+same reach.
+
+**What stops working.** A root that reaches the app only through `NODE_EXTRA_CA_CERTS`, and is not
+in the OS store, no longer counts in a packaged build: downloads behind such a proxy fail with "fetch
+failed" until the root is in the OS store. Corporate roots are usually rolled out to the OS store
+by policy, and Norton installs into both (measured).
+
+**Guards.** `tests/integration/system-trust.test.ts`, with `node:tls` faked and fed the certificates
+in `tests/fixtures/certs/` (one per rule; certificates only, made with OpenSSL 3.5.7): the call
+keeps every default certificate as it was and adds each new usable root once (an RSA-2048, an EC
+P-256 and an Ed25519 root; the OS copy of a default root, written with other line endings, is not
+added twice); an expired root, a root not valid yet, an RSA-1024 root, a DSA root, an intermediate,
+a name twin signed by another key, a self-signed `CA:FALSE` server certificate, text that is no
+certificate and a PEM body that does not decode are each left out while the usable root beside them
+is still added; a second call reads nothing; importing the module reads no store; a store that
+throws, an empty store, one with no usable root, one whose roots Node has already, and a refused
+list each keep the default with one content-free line and no retry; `downloadToFile` sets the trust
+before its first request. `packaging.test.ts` pins fuse 2 `false` and `verify-mac-build.sh`'s
+`EXPECTED_WIRE`, which `release.yml` checks each packaged Windows exe against (#769).
+Mutation-tested (26 mutations, each red, a changed success line green): each filter clause dropped
+(CA, self-signed, either end of the validity window, the RSA size, the key type, Ed25519 refused,
+the catch), de-duplication by text instead of fingerprint, either list left out of the merge, the
+list set when nothing is new, the once-only latch, no catch around the read or the merge, the
+error's text logged, a call at import, the call dropped from `downloadToFile` or moved after the
+request; fuse 2 back on or the old wire each fail `packaging.test.ts`.
+
+**Residuals.**
+- macOS (the keychain) and Linux (OpenSSL's default paths) store reads are unmeasured.
+- Roots Windows trusts and Chrome dropped are trusted for the downloads (above); pinned SHA-256
+  keeps integrity.
+- The packaged check behind Norton (a `--win dir` build with `NODE_EXTRA_CA_CERTS` removed, an
+  in-app download from github.com or huggingface.co, before: `fetch failed`, §3) and the built
+  binary's wire are owed to the orchestrator's run.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

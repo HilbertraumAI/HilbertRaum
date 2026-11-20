@@ -200,8 +200,8 @@ not a vulnerability on its own. Now:
   `allowServiceWorkers`, `supportFetchAPI`, `corsEnabled`, `stream`, `codeCache` and
   `allowExtensions` are all `false` and pinned (`tests/unit/app-protocol.test.ts`).
 - **The fuse is off in packaged builds** (`electron-builder.yml` `electronFuses`; wire `101100011`
-  → `101100001`, and `001011001` since #562, next section). With the fuse off, `file://` pages lose
-  their extra privileges. The old layout
+  → `101100001`, `001011001` since #562 and `000011001` since #564, next section). With the fuse
+  off, `file://` pages lose their extra privileges. The old layout
   could not have survived that: its module scripts are refused by CORS from origin `null`, and a
   `file://` document loses `localStorage` (both measured). So the scheme move and the fuse flip
   belong to the same change. The scheme alone already closes the reads (measured with the fuse
@@ -216,7 +216,7 @@ not a vulnerability on its own. Now:
   `Origin: hilbertraum://app`, and `checkOrigin` refuses any `hilbertraum:` origin; the renderer
   has no reason to call the API, and its CSP already blocks the request.
 
-### The packaged binary's fuses (#560, #562)
+### The packaged binary's fuses (#560, #562, #564)
 Electron's fuses are switches compiled into the binary; `electron-builder.yml` `electronFuses` sets
 them before signing. They guard against someone who can already run programs as the user, set the
 app's environment or command line, or write into its program folder. That is a local attacker, so
@@ -229,14 +229,46 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
   debugger on the main process, which holds the unlocked workspace; now no debugger opens.
   Chromium's `--remote-debugging-port` is a different switch that no fuse covers. It still works,
   and the packaged smoke harnesses use it. It gives control of the renderer, not of Node.
-- **`EnableNodeOptionsEnvironmentVariable` stays on (owner decision).** A packaged app already
-  ignores `NODE_OPTIONS` except `--http-parser` and `--max-http-header-size` (`--require` was
-  measured not loading). What the fuse still governs is `NODE_EXTRA_CA_CERTS`. TLS-scanning
-  antivirus (Norton, measured) and corporate proxies install that variable so Node trusts their
-  root. With the fuse off, the in-app engine download from github.com failed with "fetch failed"
-  on such a machine, and models and knowledge-pack tools come from intercepted hosts too. A CA
-  added this way cannot change what a download delivers: every engine, model and OCR file is
-  checked against a pinned SHA-256.
+- **`EnableNodeOptionsEnvironmentVariable` off since #564.** The packaged main process reads
+  neither `NODE_OPTIONS` nor `NODE_EXTRA_CA_CERTS` now. It ignored `NODE_OPTIONS` already except
+  `--http-parser` and `--max-http-header-size` (`--require` was measured not loading), so what the
+  fuse took away is `NODE_EXTRA_CA_CERTS`: a program that can set the user's environment can no
+  longer add a certificate the downloads trust that way. The fuse stayed on until #564 (owner
+  decision 2026-10-03), because TLS-scanning antivirus (Norton, measured) and corporate proxies
+  get their root trusted through that variable, and with the fuse off the in-app engine download
+  from github.com failed with "fetch failed". They also install the root in the operating system's
+  certificate store, and the downloads trust that store now (next bullet).
+- **The downloads trust the OS certificate store (#564).** Node's TLS, which the main process's
+  `fetch` uses, trusted its bundled roots plus `NODE_EXTRA_CA_CERTS`, never the OS store.
+  `services/net/trust.ts` adds the store's usable roots to that list once, right before the first
+  download's first request (never at startup: the read takes 21–74 ms on the main thread), and keeps
+  every certificate that was there. It applies to the main process's TLS only; Chromium verifies
+  its own connections.
+  - **Filtered.** On Windows the store as Node reads it is not a list of roots: it also holds
+    intermediates, self-signed server certificates (`CA:FALSE`), expired and 1024-bit legacy roots,
+    and entries whose key does not decode. A certificate is added only when it parses, is a CA, is
+    self-signed, is inside its validity window, and has an RSA key of at least 2048 bits or an EC or
+    Ed25519 key, and only when Node's list does not hold it already (by fingerprint). On one
+    Windows machine that kept 94 of 120 and added 17.
+  - **What is trusted now, and the residual.** Roots that Electron's curated list leaves out but
+    Windows still trusts, and any root the user, an administrator or a program running as the user
+    adds. So a root that Chrome dropped and Windows keeps (Entrust, the old DigiCert roots,
+    VeriSign, Go Daddy) is trusted for the in-app downloads, and Windows' per-root purposes are not
+    carried over (the Microsoft TPM and time-stamping roots count as TLS roots here). That cannot
+    change what gets installed: every engine, model and OCR file is checked against a pinned SHA-256
+    before use, and the downloads send no credentials, so such a root at most lets someone who
+    intercepts the connection see which public file is fetched, or make the download fail, as a root
+    in `NODE_EXTRA_CA_CERTS` could.
+  - **The eMudhra block still applies.** Electron's patch
+    `tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra RSA
+    intermediates to the SPKI blocklist that Node 24.22.1 applies to every TLS context through its
+    certificate verify callback, independent of the CA list, so the wider list cannot bypass it.
+  - Corporate roots that policy rolls out to the OS store work without the variable. A root that
+    only `NODE_EXTRA_CA_CERTS` names, and the OS store does not hold, no longer counts in a packaged
+    build: downloads behind such a proxy fail until the root is in the OS store. A store that cannot
+    be read, is empty (a minimal Linux) or holds nothing usable leaves Node's own list, and the log
+    says so in one line of counts or an error code. Record: `architecture.md` "Electron fuses —
+    design record (#562)" §8.
 - **`EnableEmbeddedAsarIntegrityValidation` + `OnlyLoadAppFromAsar` on.** electron-builder stores
   the hash of `app.asar`'s header in the exe (a Windows resource) or in `Info.plist` (macOS), and the
   header holds a hash per file. A changed byte in `app.asar` now ends the app ("ASAR Integrity

@@ -90,6 +90,15 @@ from its first public `1.0.0` release onward.
   downloaded until you confirm. The activity log (Settings → Diagnostics → Activity) now also
   records each AI engine and OCR-file install: when it started and whether it finished or failed,
   never a file path (#843).
+- **Downloads trust the certificates installed on your computer.** Antivirus programs that check
+  secure connections, such as Norton, and company proxies re-sign those connections with a
+  certificate of their own, which they install on your computer. The downloads of models, the AI
+  engine, the knowledge-pack tools and the text-recognition (OCR) files now trust those
+  certificates, so they work behind such a program without any extra setting. The
+  released app no longer reads the `NODE_EXTRA_CA_CERTS` environment variable: if your company's
+  proxy certificate was set only there, downloads fail until it is installed on the computer,
+  which your IT department can do. Every downloaded file is still checked against a fixed checksum
+  before use (#564).
 
 ### Fixed
 
