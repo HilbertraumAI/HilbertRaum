@@ -1200,3 +1200,55 @@ describe('repo hygiene — every wait takes its ceiling from hang-budget (#915)'
     expect(violations).toEqual([])
   })
 })
+
+// #960 (from #832): every renderer row ends on the unmocked-bridge check because `tests/setup.ts` registers it once, in
+// an `afterEach` inside its jsdom branch. Nothing else fails when that hook goes: ~70 suites call their own check, so
+// dropping the shared one would silently stop covering every other renderer file. This reads the setup file's
+// structure (not its text), so reformatting, comments and renaming the import leave it green; removing the call,
+// dropping the `afterEach`, moving it out of the `window` branch or unplugging the file from `setupFiles` turn it red.
+describe('repo hygiene — the shared unmocked-api-call hook is registered (#960)', () => {
+  function hookIsInWindowBranch(sourceText: string): boolean {
+    const source = ts.createSourceFile('setup.ts', sourceText, ts.ScriptTarget.Latest, true)
+    let found = false
+    const calls = (n: ts.Node, name: string): boolean => {
+      let hit = false
+      const walk = (x: ts.Node): void => {
+        if (ts.isCallExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === name) hit = true
+        ts.forEachChild(x, walk)
+      }
+      walk(n)
+      return hit
+    }
+    const inWindowBranch = (n: ts.Node): boolean => {
+      for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
+        if (ts.isIfStatement(p) && /\bwindow\b/.test(p.expression.getText(source))) return true
+      }
+      return false
+    }
+    const visit = (n: ts.Node): void => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'afterEach') {
+        const cb = n.arguments[0]
+        const callback = cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) ? cb : undefined
+        if (callback && calls(callback.body, 'assertNoUnexpectedApiCalls') && inWindowBranch(n)) found = true
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    return found
+  }
+
+  it('tests/setup.ts runs assertNoUnexpectedApiCalls in an afterEach inside its window branch', () => {
+    expect(hookIsInWindowBranch(readFileSync(join(DESKTOP_ROOT, 'tests', 'setup.ts'), 'utf8'))).toBe(true)
+  })
+
+  it('the pin itself refuses a hook outside the branch or without the call', () => {
+    expect(hookIsInWindowBranch(`if (typeof window !== 'undefined') { afterEach(() => { assertNoUnexpectedApiCalls() }) }`)).toBe(true)
+    expect(hookIsInWindowBranch(`afterEach(() => { assertNoUnexpectedApiCalls() })`)).toBe(false)
+    expect(hookIsInWindowBranch(`if (typeof window !== 'undefined') { afterEach(() => {}) }`)).toBe(false)
+    expect(hookIsInWindowBranch(`if (typeof window !== 'undefined') { assertNoUnexpectedApiCalls() }`)).toBe(false)
+  })
+
+  it('vitest.config.ts still loads tests/setup.ts for every file', () => {
+    expect(readFileSync(join(DESKTOP_ROOT, 'vitest.config.ts'), 'utf8')).toMatch(/setupFiles:\s*\[[^\]]*'\.\/tests\/setup\.ts'/)
+  })
+})

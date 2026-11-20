@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-20 — the closed 2026-10-14 #678 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-20 (preamble budget, making room for the follow-ups wave 5 line). Its
+record is unchanged: see the "Engine load failures" §11 record it cites. Nothing in it is still open. Citations of this
+entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#678 — "Install the AI engine again" replaces what the OS refused, the `cpu/` net included; Check again checks the `cpu/` net (`fix/678-cpu-net-reinstall`).** On a Kit, rungs 1–2 dying of
+the model (a damaged weight) and rung 3 refused left a verdict only the `cpu/` net reported. The reinstall re-fetched the main build and the verdict came back with its offer (the loop); with an import done,
+the embedder on the healthy main build refused it outright; Check again checked the main build and said "runs again". Now the reinstall replaces the refused builds (owner call taken as the issue recommended),
+a helper never blocks a `cpu/`-only repair, a fresh `cpu/` copy counts for `afterInstall`, Check again checks `cpu/` when it is the only reporter, and the IPC gate refuses an `afterInstall` verdict (#670's residual).
+Real app (scratch Kit roots, b11146, a truncated 4B): master failed all three; the fix replaced `cpu/` only and closed the loop. Record: "Engine load failures" §11. Open: none (residuals there)._
+
 ## 2026-11-20 — the 2026-11-20 follow-ups wave 4 entry retired verbatim (wave closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-20, when the wave closed (PR #951 merged as `c6689dad`, the last
