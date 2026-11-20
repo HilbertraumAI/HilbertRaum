@@ -776,6 +776,9 @@ export interface WholeDocChunksDeps {
   skill?: TurnSkill | null
   /** How much of the skill body the fence carries (#632; absent ⇒ the whole body) — threaded to the core. */
   skillFenceMode?: SkillFenceMode
+  /** #939: the map and fold steps take notes for the user's question too (a list-shaped question under a
+   *  bundled whole-document skill, decided by `registerRagIpc`). Absent ⇒ the prompts as they were. */
+  notesForRequest?: boolean
   contextTokens: number
   signal?: AbortSignal
   onToken?: (token: string) => void
@@ -836,6 +839,7 @@ export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promis
     question: deps.question,
     skill: deps.skill,
     skillFenceMode: deps.skillFenceMode,
+    notesForRequest: deps.notesForRequest,
     contextTokens: deps.contextTokens,
     signal: deps.signal,
     onToken: deps.onToken,
@@ -1584,11 +1588,20 @@ export interface GroundedAnswerOptions {
   /**
    * How much of `skill`'s body its fence carries (`SkillFenceMode`), on every path this answer can take
    * (the single grounded turn and the whole-document map-reduce rescues). Absent ⇒ `'full'`.
-   * `'first-paragraph'` is set by `registerRagIpc` on the bundled compare skill's fall-through turn:
-   * #632, open-issues wave owner call G-1 (option A), owner round WB2-1. Only the fence text changes —
-   * the budgets still reserve the whole fence, and the stamp rule (fence placed + sections found) is the same.
+   * `'first-paragraph'` is set by `registerRagIpc` on a bundled whole-document skill's fall-through turn
+   * (What Changed?: #632, open-issues wave owner call G-1 (option A), owner round WB2-1; the four
+   * `grounded-whole-doc` skills, needle downgrade included: #831, follow-ups wave 4 owner call G-9). Only
+   * the fence text changes — the budgets still reserve the whole fence, and the stamp rule (fence placed +
+   * sections found) is the same.
    */
   skillFenceMode?: SkillFenceMode
+  /**
+   * #939 (follow-ups wave 4, owner call 2026-11-20): when the whole-document read below needs the map-reduce
+   * rescue, its map and fold steps take notes for the question too, not only for the skill's task. Set by
+   * `registerRagIpc` for a list-shaped question (`asksForList`) under a bundled whole-document skill. Absent ⇒
+   * the map and fold prompts as they were, byte for byte (every deliverable, user skills, a no-skill read).
+   */
+  wholeDocumentNotesForRequest?: boolean
   /**
    * Skill-aware WHOLE-DOCUMENT answer (skill-whole-doc engine, Wave 2). When set, the grounded
    * context is the named document read IN ORDER (not top-k retrieval), capped to the context
@@ -1853,6 +1866,7 @@ export async function generateGroundedAnswer(
         question,
         skill: opts.skill,
         skillFenceMode: opts.skillFenceMode,
+        notesForRequest: opts.wholeDocumentNotesForRequest,
         contextTokens,
         signal: opts.signal,
         onToken: opts.onToken,
@@ -1872,6 +1886,7 @@ export async function generateGroundedAnswer(
         question,
         skill: opts.skill,
         skillFenceMode: opts.skillFenceMode,
+        notesForRequest: opts.wholeDocumentNotesForRequest,
         contextTokens,
         signal: opts.signal,
         onToken: opts.onToken,

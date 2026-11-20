@@ -1088,10 +1088,14 @@ export const tr: UiCatalog<'tr'> = {
   'models.state.installed': 'Kurulu',
   'models.state.missing': 'İndirilmedi',
   'models.state.checksumFailed': 'Doğrulanamıyor',
+  'models.state.noChecksum': 'Sağlama toplamı yok',
   'models.state.unsupported': 'Desteklenmiyor',
   'models.state.notRecommended': 'Önerilmez',
   'models.state.ready': 'Hazır',
   'models.state.running': 'Çalışıyor',
+  'models.noChecksum.hint':
+    'Bu modelin kayıtlı bir sağlama toplamı yok; bu yüzden yalnızca, ilkesi doğrulanmamış modellere ' +
+    'izin veren bir sürücüde geliştirici modunda çalışır.',
   'models.badge.notResponding': 'Yanıt vermiyor',
   'models.notRespondingHint':
     'Yapay zekâ modeli yanıt vermeyi bıraktı. Yeniden başlatmak genellikle sorunu çözer.',
@@ -2077,6 +2081,8 @@ export const tr: UiCatalog<'tr'> = {
   'perf.models.loaded': 'şu an yüklü',
   'perf.models.notLoaded': 'yüklü değil',
   'perf.models.notOnDrive': 'bu sürücüde yok',
+  'perf.models.damaged': 'dosya denetiminden geçemedi',
+  'perf.models.noChecksum': 'kayıtlı sağlama toplamı yok',
   'perf.models.lifetime.session': 'yüklü kalır',
   'perf.models.lifetime.idle': 'boştayken bellekten çıkarılır',
   'perf.models.lifetime.per-use': 'yalnızca iş sırasında çalışır',
@@ -2472,6 +2478,17 @@ export const tr: UiCatalog<'tr'> = {
   'main.dialog.unsavedReview.tryAgain': 'Yeniden dene',
   'main.dialog.unsavedReview.keepOpen': 'Açık bırak',
   'main.dialog.unsavedReview.closeAnyway': 'Yine de kapat',
+  'main.dialog.taskRunning.title': 'Bir belge görevi henüz bitmedi.',
+  'main.dialog.taskRunning.message': 'Bir belge görevi henüz bitmedi.',
+  'main.dialog.taskRunning.detailOcr':
+    'Şimdi kapatırsanız taramanın okunması durur ve şimdiye kadar okunan sayfalar kaybolur.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Şimdi kapatırsanız çeviri durur ve şimdiye kadar çevrilen kısım kaybolur.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Şimdi kapatırsanız çalışan ve bekleyen belge görevleri durur ve şimdiye kadar yapılan iş ' +
+    'kaybolur.',
+  'main.dialog.taskRunning.keepOpen': 'Açık bırak',
+  'main.dialog.taskRunning.closeAnyway': 'Yine de kapat',
   'main.workspace.wrongPassword':
     'Bu parola çalışma alanınızın kilidini açmadı. Parolayı kontrol edip yeniden deneyin.',
   'main.workspace.openFailed': 'Çalışma alanı açılamadı.',
@@ -2777,6 +2794,15 @@ export const tr: UiCatalog<'tr'> = {
     'Bu kayıt için henüz saklanmış bir transkript yok. Yeniden yazıya dökmek için kaydı yeniden ' +
     'dizinleyin.',
   'main.models.noManifests': 'Bu sürücüde model listesi bulunamadı: model-manifests klasörü eksik.',
+  'main.models.unknown': 'Bu model artık bu sürücünün model listesinde yok.',
+  'main.models.notChat': '“{name}” bir sohbet modeli değil, bu yüzden burada başlatılamaz.',
+  'main.models.startDamaged':
+    '“{name}” modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +
+    'yeniden indirin.',
+  'main.models.startMissing': '“{name}” modeli başlatılamıyor: model dosyası henüz bu sürücüde yok.',
+  'main.models.startNeedsRam':
+    '“{name}” modeli için en az {min}\u00A0GB RAM gerekir (bu bilgisayarda yaklaşık {ram}\u00A0GB ' +
+    'var). Daha küçük bir model seçin: kalite yine çok iyi olur.',
   'main.models.autoSelected':
     'Bu model kurulduktan sonra otomatik olarak kullanılır; seçilecek bir şey yok.',
   'main.models.locked':

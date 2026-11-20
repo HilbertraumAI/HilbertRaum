@@ -10,7 +10,7 @@ import {
   subscribeDocTask
 } from '../../src/renderer/lib/doctasks'
 import type { DocTaskStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // The doc-task store's deep-index chain adoption (#38): "Build deep index" starts a 'tree'
 // task with `withExtract`; the BACKEND chains an 'extract' task over the same document after
@@ -20,6 +20,7 @@ import { stubApi } from '../helpers/renderer'
 
 afterEach(() => {
   clearDocTaskSession()
+  assertNoUnexpectedApiCalls()
 })
 
 function status(over: Partial<DocTaskStatus>): DocTaskStatus {

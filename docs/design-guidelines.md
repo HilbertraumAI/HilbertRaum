@@ -1474,11 +1474,16 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
   lock and before the window closes, #888). A change the close cannot save asks in a native dialog,
   modal to the window: **Try again** is the default (Enter), **Keep open** answers Esc, **Close
   anyway** is never the default (`main/close-guard.ts`; the `external-open.ts` dialog's posture: the
-  safe button is the default, plain buttons). The UI voice is a quiet "Saving… / Saved" line in a
-  `role="status"` region and the failure + **Try again** in a `role="alert"` region beside it — no
-  unlabeled spinner (§6), no toast spam. Both regions (and the Outdated banner's `role="status"`
-  region) are mounted EMPTY with the review and only their text changes (#837, the §6 rule; the line
-  used to be inserted already filled, and to swap status for alert on one node).
+  safe button is the default, plain buttons). A close that would stop a scan being read (OCR) or a
+  document translation asks before that save, in a second native dialog of the same posture (#935):
+  "A document task is not finished yet.", the detail saying what is lost, with no count; **Keep
+  open** is the default and answers Esc, **Close anyway** is never the default, and the two buttons
+  read exactly as this dialog's Keep open and Close anyway. The UI voice is a quiet "Saving… /
+  Saved" line in a `role="status"` region and the failure + **Try again** in a `role="alert"`
+  region beside it — no unlabeled spinner (§6), no toast spam. Both regions (and the Outdated
+  banner's `role="status"` region) are mounted EMPTY with the review and only their text changes
+  (#837, the §6 rule; the line used to be inserted already filled, and to swap status for alert on
+  one node).
 - **A failed save is never run over (#837):** while an edit a failed write left unsaved is
   waiting, **Bulk actions** is disabled (not hidden — the error line beside the title is the
   explanation) and the store refuses the sweep; any other error (a failed acknowledge, link
@@ -2691,7 +2696,11 @@ screen now keeps the active chat model pinned above a compact library of alterna
 
 - **On this drive / Browse models:** the view lists a model whose state is KNOWN to be on the
   drive — `installed`/`ready`/`running`, plus `checksum_failed` ("Can't verify"), whose files are
-  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`).
+  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`). A
+  `checksum_failed` model with no checksum on record (`ModelInfo.noChecksum`, #932) is listed the same
+  way but has no recovery action: its badge says "No checksum" (warning tone, ⚠, never the error-tone
+  "Can't verify"), one hint line says it runs only in developer mode on a drive whose policy allows
+  unverified models, and it offers no Download (nor does it count toward the downloads banner).
   Nothing here infers file presence: `unsupported` and `not_recommended` describe the machine or
   the policy, not the drive, and the renderer has no presence contract to read — widening the set
   needs one first. The INITIAL view is still chosen once from whether anything is usable right now
@@ -2707,7 +2716,7 @@ screen now keeps the active chat model pinned above a compact library of alterna
   compact card with the name, a NEUTRAL "Needs newer app" badge (never the error-tone "Unsupported" state
   badge: it must not look like a broken download) and one hint line ("…Update the app on this computer to
   use it."). It has no Use/Start, no Download and no technical-details disclosure (its "Verify checksum"
-  would answer "Unknown model id"). The view rule is the PRESENCE CONTRACT this section adds:
+  would be refused as an unknown model). The view rule is the PRESENCE CONTRACT this section adds:
   `filesPresent`, computed in the main process from the existence (not the hash) of every file the
   manifest declares. "On this drive" lists an entry only when it is true — the user's "my downloaded model
   vanished" case — and Browse lists every entry. `isModelOnDrive` is unchanged and still infers nothing.
@@ -2800,6 +2809,13 @@ screen now keeps the active chat model pinned above a compact library of alterna
   entirely, is recovered on mount (#314): the screen asks the main process which downloads still
   need the user — adopting the live job, else the most recent unresolved result — and **Dismiss**
   tells the main process too, so a dismissal made before the reload stays dismissed.
+- **#933 amendment — the Performance rows say the same.** On "Models on this computer", a model on the
+  drive that every start refuses reads, in place of its "not loaded" pill, "failed its file check" (a
+  check found a file damaged; the card's "Can't verify") or "no checksum on record" (the card's "No
+  checksum"). Both use the warning tone, lower case like the sibling pills, and both come from
+  `ResidentModelRow.fileCheck` (the checksum cache, never a hash). "loaded now" still wins over both.
+  Such a row adds nothing to the processor total or a graphics-card line, and "Your model" shows the
+  same pill instead of a fit claim, keeping its size on disk.
 
 Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face, the #847 trailing rows), `lib/modelAvailability.ts`
 (the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split

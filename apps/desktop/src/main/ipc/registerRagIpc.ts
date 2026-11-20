@@ -42,7 +42,8 @@ import { offerableSkillCandidates } from '../services/skills/suggest'
 import { documentsInScope, scopeSectionTotals } from '../services/skills/scope-documents'
 import { getSkill, type SkillRecord } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
-import { isNeedleShaped, isSmallTalk } from '../services/skills/vocabulary'
+import { isNeedleShaped, isReportShaped, isSmallTalk } from '../services/skills/vocabulary'
+import type { SkillFenceMode } from '../services/skills/prompt'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { saveResultTable } from '../services/tables/store'
 import { log } from '../services/logging'
@@ -54,7 +55,7 @@ import {
   type ClassifyCandidate
 } from '../services/analysis/classify'
 import { makeQueryExpander } from '../services/zim/expand'
-import { isAggregationShaped, isTotalAsk, routeQuestion, type RouteDecision } from '../services/analysis/router'
+import { asksForList, isAggregationShaped, isTotalAsk, routeQuestion, type RouteDecision } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -442,7 +443,8 @@ export function registerRagIpc(ctx: AppContext): void {
       //      silently gets top-k-with-fence", §6.3). Honored only for `kind:'instruction'`; a user tool
       //      skill resolves to `undefined` here (it declares no analysis engine and runs no tools — SEC-1).
       // When neither yields a handler, or `applies()` is false (off-topic / multi-doc), this whole block is
-      // skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
+      // skipped and the relevance + coverage-extract paths below run as without a handler (R5), except that a
+      // bundled whole-document skill's fence carries paragraph 1 only there (#632, #831: `skillFenceMode`).
       const turnSkillRecord = skill ? getSkill(ctx.db, skill.installId) : null
       const analysisHandler = skill ? skillAnalysisHandler(skill.installId, turnSkillRecord) : undefined
 
@@ -564,25 +566,35 @@ export function registerRagIpc(ctx: AppContext): void {
         allInScopeDocsFullyChunked(ctx.db, scope) &&
         analysisHandler.classMatches({ question: text, scope, db: ctx.db }, skill.installId)
 
-      // #632, open-issues wave owner call G-1 (option A), bundled skills only (owner round WB2-1): the ONE
-      // decision for the BUNDLED compare skill (an app skill, `source === 'app'`: What Changed?) whose engine
-      // does not engage this turn — `applies()` is false: the scope does not hold exactly two answerable
-      // documents, or the question is small talk. (Its compare REQUEST at the wrong count never gets this
-      // far: the W2 pre-pass above answers "select exactly two".) The turn falls through to the ordinary
-      // grounded answer below, where the model sees ordinary passages with no A/B labels and no diff. Its
-      // fence then carries paragraph 1 only — the heading + honesty rules, `buildSkillFence`'s guaranteed
-      // minimum, whose rule 1 says to simply answer the question — and not the compare section format, which
-      // a 4B model followed even there ("Wer ist der Mieter?" got an "Executive summary"). Bundled only,
-      // because only there is paragraph 1 KNOWN to be those rules (SKA-15, pinned by the SKILL.md parity
-      // test): a user skill declaring `analysis: compare` keeps its whole fence, as before #632 — its
-      // paragraph 1 is whatever its author wrote, and with no routing vocabulary its real compare requests
-      // fall through here too. Unchanged: the skill stamp on that answer (fence placed + sections found),
-      // the two-document compare path (it returns above and never reads this), every other skill's fence,
-      // and the budgets (they still reserve the whole fence; only the fence text is shorter).
-      const skillFenceMode =
-        turnSkillRecord?.source === 'app' && analysisHandler?.mode === 'grounded-whole-doc-compare' && !analysisApplies
-          ? ('first-paragraph' as const)
-          : undefined
+      // #632 (open-issues wave owner call G-1, option A) and #831 (follow-ups wave 4 owner call G-9), bundled
+      // skills only (owner round WB2-1): the ONE decision for a BUNDLED whole-document skill (an app skill,
+      // `source === 'app'`: What Changed?'s compare engine, or the `grounded-whole-doc` engine of Contract
+      // Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder) whose engine does not take
+      // this turn. Three ways that happens:
+      //   1. `applies()` is false because of the scope: not exactly two answerable documents for the compare
+      //      skill, not exactly one for a whole-document skill, none included (a knowledge-pack-only scope, a
+      //      document still indexing). (An in-vocabulary request at the wrong count never gets this far: the
+      //      W2 pre-pass above narrows it or answers "select two" / "pick one".)
+      //   2. `applies()` is false because the question is small talk.
+      //   3. (#831) the whole-document engine applied but sent a single-fact question over a document too long
+      //      to read whole to the passage search (the needle downgrade below sets the mode there).
+      // The turn falls through to the ordinary grounded answer, where the model sees ordinary passages, not
+      // the document the skill's format is written for. Its fence then carries paragraph 1 only — the heading
+      // + honesty rules, `buildSkillFence`'s guaranteed minimum — and not the section format, which a 4B model
+      // followed even there ("Wer ist der Mieter?" got an "Executive summary" from What Changed?, and full
+      // minutes from Meeting Minutes for "Who attended?": #831 measured 11 of 16 such answers framed on the
+      // 4B, 5 of 16 on the 9B, and 0 of 16 on both with paragraph 1 alone). Bundled only, because only there
+      // is paragraph 1 KNOWN to be those rules (SKA-15, pinned by the SKILL.md parity test): a user skill
+      // declaring `analysis: compare` or `whole-doc` keeps its whole fence, as before — its paragraph 1 is
+      // whatever its author wrote, and with no routing vocabulary its real deliverable requests over several
+      // documents fall through here too. Unchanged: the skill stamp on that answer (fence placed + sections
+      // found), every path the engine takes (the compare and whole-document reads return below with the whole
+      // fence), every other skill's fence, and the budgets (they still reserve the whole fence; only the fence
+      // text is shorter).
+      const bundledDeliverableSkill =
+        turnSkillRecord?.source === 'app' &&
+        (analysisHandler?.mode === 'grounded-whole-doc-compare' || analysisHandler?.mode === 'grounded-whole-doc')
+      let skillFenceMode: SkillFenceMode | undefined = bundledDeliverableSkill && !analysisApplies ? 'first-paragraph' : undefined
 
       if (skill && analysisHandler && (analysisApplies || toolSkillInverts)) {
         const turnSkill = skill
@@ -666,6 +678,16 @@ export function registerRagIpc(ctx: AppContext): void {
                     // U2 (audit §3.5): share-safe review injects a deterministic whole-document PII count
                     // summary into the prompt and gates its low-risk verdict on non-truncated coverage.
                     wholeDocumentPiiScan: analysisHandler.injectPiiScan === true,
+                    // #939 (owner call 2026-11-20): over a document too long for one call, the map and fold
+                    // steps take notes for the question too when it asks to find or list something (the
+                    // router's own list detection, `asksForList`: "List every deadline", the every-mention chip
+                    // in every catalog; never a summary or a compare) and asks for no report (`isReportShaped`:
+                    // no summary, minutes, brief, review or summarize chip, so "Summarize all the decisions" and
+                    // «Erstelle das Protokoll mit allen Beschlüssen» keep master's prompts). Bundled skills only.
+                    // Every other question keeps master's map and fold prompts (measured: Meeting Minutes lost
+                    // facts when every request rode the map step).
+                    wholeDocumentNotesForRequest:
+                      turnSkillRecord?.source === 'app' && asksForList(text) && !isReportShaped(text),
                     onToken: sendToken,
                     // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
                     // answer with the honest scope notice (undefined ⇒ byte-unchanged). #649: a total leads with
@@ -675,7 +697,10 @@ export function registerRagIpc(ctx: AppContext): void {
                 (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
               )
             }
-            // needleDowngrade: fall through to the relevance (top-k) path below — no refusal (SKA-23).
+            // needleDowngrade: fall through to the relevance (top-k) path below — no refusal (SKA-23). #831: the
+            // engine declined this turn, so a bundled skill's fence carries paragraph 1 only there (the decision
+            // above). A downgraded needle that lands on the coverage-extract listing carries no fence at all.
+            if (bundledDeliverableSkill) skillFenceMode = 'first-paragraph'
           }
           // Defensive: applies() requires a single in-scope doc, so a missing target is unreachable; fall
           // through to the relevance path rather than fail the turn.
@@ -1007,7 +1032,7 @@ export function registerRagIpc(ctx: AppContext): void {
           // The turn's skill: its fence rides in the grounded user turn; the assistant row is
           // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
           skill,
-          // #632 (owner call G-1, option A): paragraph 1 only for a compare skill whose engine did not run.
+          // #632 / #831: paragraph 1 only for a bundled whole-document skill whose engine did not take the turn.
           skillFenceMode,
           // #643 / #642: the one document read whole (or through its ready deep index) instead
           // of top-k — `capped`/`tree` coverage; the pack arm and the notice below are top-k only.

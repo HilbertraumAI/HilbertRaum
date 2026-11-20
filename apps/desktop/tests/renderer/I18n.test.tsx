@@ -23,7 +23,7 @@ import {
 import { LOCKED_ENCRYPTED_WORKSPACE, appShellStubs } from '../helpers/app-shell'
 import { deferred } from '../helpers/deferred'
 import { renderInLanguage } from '../helpers/render-language'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // Phase 39 — renderer language resolution (i18n record §3.2, D-L2/D-L3): the pre-unlock
 // gate resolves from the localStorage mirror (falling back to navigator.language),
@@ -34,6 +34,7 @@ afterEach(() => {
   cleanup()
   window.localStorage.clear()
   document.documentElement.lang = ''
+  assertNoUnexpectedApiCalls()
 })
 
 describe('resolvePreUnlockLanguage', () => {

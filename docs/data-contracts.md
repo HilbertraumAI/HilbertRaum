@@ -344,7 +344,11 @@ on an embeddings card) is `pickManifestForRole(all, 'embeddings')` when it fits 
 (#890) is `computeInstallState`'s synchronous first two steps (supported runtime/format, every declared file
 exists; no hashing), behind the images pick `pickVisionManifest` (`services/vision/status.ts`).
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
-`shared/types.ts`. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
+`shared/types.ts`. **#932**: `ModelInfo.noChecksum?: true` marks a `checksum_failed` model whose manifest
+carries a placeholder hash on any file (`hasPlaceholderHash`, decided from the manifest alone): no checksum on
+record, not a damaged file. The card shows "No checksum" (`models.state.noChecksum`) and `models.noChecksum.hint`,
+and offers no Download. `ModelState`, `ModelStartVerdict` and every start gate are unchanged: the model is still
+refused outside developer leniency. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
 resolved against the **drive root**.
 ✅ **A manifest for a newer HilbertRaum (#847)** — `DiscoveryResult { manifests, unsupported, errors }`:
 a `role` this build does not know, or a `min_app_version` above the app (`setManifestAppVersion`, set once
@@ -684,6 +688,20 @@ by four. Hence the three Gemma terms did not move at all and the four Qwen ones 
 figures use the MTP recurrent state (both opt into `speculative_decoding`); that does not
 double-count `MTP_VRAM_HEADROOM_MB`, which gates whether rung 1a is *attempted* and covers the draft
 head's own weights + KV.
+✅ **Processor-path rank and step-down (2026-11-20, `model-benchmarks.md` §6.7):** manifest
+`recommendation_rank_cpu` (optional; a number ≥ 0 — a wrong type or a negative value is a
+validation error, never a silent default, because the field moves a recommendation) →
+`ModelManifest.recommendationRankCpu?: number`, and manifest `cpu_step_down_to` (optional; a
+non-empty model id, trimmed; any other type or an empty string is an error) →
+`ModelManifest.cpuStepDownTo?: string`. Both are ABSENT when omitted. Read only by
+`recommendModelIdForProcessor` (services/models.ts), which `recommendChatModelId` reaches for
+memory class `cpu`: the rank replaces `recommendation_rank` there (0 = selectable but never the
+automatic pick on a processor; absent = the ordinary rank), and `cpu_step_down_to` names the chat
+model that a benchmark under `SLOW_PICK_TOKENS_PER_SECOND` on this one steps to (absent = the end
+of its chain). The validator does not resolve the target id. The committed values and the chain
+invariants (every target exists, is ranked on the processor, needs no more RAM than its source,
+and no chain loops) are pinned in `committed-catalog.test.ts` ("§6.7 processor path"). An older
+app ignores both keys and gives the RAM pick.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -719,7 +737,10 @@ head's own weights + KV.
 
 ### Document storage + import model (LOCKED — Phase 4)
 - **Stored copy.** Imports are **copied into `workspace/documents/<id><ext>`** (`stored_path`);
-  `original_path` is also kept. Self-contained drive: re-index re-parses the stored copy; delete
+  `original_path` is also kept. `<ext>` is the extension of the document's `title`, which is the
+  file name without trailing spaces, and without trailing dots when a supported extension is then
+  left (#918: `report.pdf.` → `report.pdf`, "Washington, D.C." unchanged); the parser, the MIME
+  type and the export names read the same title. Self-contained drive: re-index re-parses the stored copy; delete
   removes the stored copy + chunks + embeddings + row (never the original).
 - **Async-with-polling.** `importDocuments(paths, options?: ImportOptions)` (#138 D-7: `options`
   carries `destination` — `{ kind: 'conversation', conversationId }` files a chat attachment —
@@ -842,7 +863,11 @@ head's own weights + KV.
   computed for the app's ONE server slot since #319 — AND
   `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
   ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
-  confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,
+  confined to the eligible pool on both ends); `cpu` → **§6.7 the processor path**
+  (`recommendModelIdForProcessor(manifests, ramGb, signal)`: the RAM stages over a view in which
+  `recommendationRankCpu` replaces `recommendationRank`, then a slow reading follows the pick's
+  `cpuStepDownTo` chain, and one off the chain is §6.5; a catalog without either field gives
+  exactly the RAM pick); `unified`, or `discrete` with no budget → the RAM pick,
   byte-identical to `recommendModelIdByRam`. Both seams build it from ONE decision: `pickerMemoryFor(s)`
   (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
   `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on
@@ -1007,10 +1032,24 @@ head's own weights + KV.
   `discrete` card the chat/translation line (`perf.models.card`) needs both models here (on the
   drive or loaded) with a size; with the chat model here and on the card but no translation model
   here, the chat-only line `perf.models.cardChat` keeps the card figure.
+  **#933**: `ResidentModelRow.fileCheck: ModelFileVerdict` (`'ok' | 'damaged' | 'unverified'`) is what
+  the checksum cache already knows about the row's files (`knownFileVerdict`, services/models.ts:
+  synchronous, never a hash, over `checksumCacheView`, a read-only view of the snapshot's own
+  `settings.checksumCache`, so the getter never writes settings): `damaged` = a live cached digest
+  differs from the manifest's; `unverified` = a placeholder hash outside developer leniency
+  (`developerLeniency`); `ok` otherwise, and for a row not on the drive. Unless the row is `loaded`
+  (loaded beats it), a non-`ok` row reads `perf.models.damaged` / `perf.models.noChecksum` in place of
+  "not loaded", adds nothing to `totals.ramAllMb` and is not added to a card line.
+  `placement.model.fileCheck?: ModelFileVerdict` is the chat row's verdict, `'ok'` while the chat
+  runtime holds the model; absent reads `'ok'`. Not `'ok'` → "Your model" states no verdict, note or
+  "Choose a smaller model" (its line keeps the size on disk) and its pill says what its row says. The
+  images row names the first vision candidate whose files are `ok` (as `getVisionStatus` passes over a
+  refused one), else the first.
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget), on every class over the rows that are `onDrive` or `loaded` only (null when no
+  unified budget), on every class over the rows that are `loaded`, or `onDrive` with `fileCheck: 'ok'`
+  (#933), only (null when no
   such row has a size, i.e. nothing installed; 0 when every counted row runs on the card, an
   estimated chat spill not counted; a small value is an observed small spill — the screen leaves
   the line out while it would read 0.0 GB), and `totals.bothOnCard` is true when two or more of

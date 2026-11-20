@@ -1219,10 +1219,14 @@ export const uk: UiCatalog<'uk'> = {
   'models.state.installed': 'Встановлено',
   'models.state.missing': 'Не завантажено',
   'models.state.checksumFailed': 'Не вдалося звірити',
+  'models.state.noChecksum': 'Немає контрольної суми',
   'models.state.unsupported': 'Не підтримується',
   'models.state.notRecommended': 'Не рекомендовано',
   'models.state.ready': 'Готово',
   'models.state.running': 'Працює',
+  'models.noChecksum.hint':
+    'Для цієї моделі немає збереженої контрольної суми, тому вона працює лише в режимі для ' +
+    'розробників на диску, політика якого дозволяє неперевірені моделі.',
   'models.badge.notResponding': 'Не відповідає',
   'models.notRespondingHint': 'ШІ-модель перестала відповідати. Зазвичай це виправляє перезапуск.',
   'models.restart': 'Перезапустити',
@@ -2242,6 +2246,8 @@ export const uk: UiCatalog<'uk'> = {
   'perf.models.loaded': 'запущено',
   'perf.models.notLoaded': 'не запущено',
   'perf.models.notOnDrive': 'немає на цьому диску',
+  'perf.models.damaged': 'не пройшла перевірку файлів',
+  'perf.models.noChecksum': 'немає збереженої контрольної суми',
   'perf.models.lifetime.session': 'залишається запущеною',
   'perf.models.lifetime.idle': 'зупиняється під час простою',
   'perf.models.lifetime.per-use': 'запускається лише за потреби',
@@ -2652,6 +2658,18 @@ export const uk: UiCatalog<'uk'> = {
   'main.dialog.unsavedReview.tryAgain': 'Спробувати ще раз',
   'main.dialog.unsavedReview.keepOpen': 'Не закривати',
   'main.dialog.unsavedReview.closeAnyway': 'Усе одно закрити',
+  'main.dialog.taskRunning.title': 'Завдання з документом ще не завершено.',
+  'main.dialog.taskRunning.message': 'Завдання з документом ще не завершено.',
+  'main.dialog.taskRunning.detailOcr':
+    'Якщо закрити зараз, розпізнавання тексту скану буде перервано, а вже розпізнані сторінки буде ' +
+    'втрачено.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Якщо закрити зараз, переклад буде перервано, а вже перекладену частину буде втрачено.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Якщо закрити зараз, завдання з документами, що виконуються або чекають у черзі, буде перервано, ' +
+    'а вже виконану роботу буде втрачено.',
+  'main.dialog.taskRunning.keepOpen': 'Не закривати',
+  'main.dialog.taskRunning.closeAnyway': 'Усе одно закрити',
   'main.workspace.wrongPassword':
     'Цей пароль не розблокував ваш робочий простір. Перевірте його та спробуйте ще раз.',
   'main.workspace.openFailed': 'Не вдалося відкрити робочий простір.',
@@ -2966,6 +2984,15 @@ export const uk: UiCatalog<'uk'> = {
     'переіндексуйте його.',
   'main.models.noManifests':
     'На цьому диску не знайдено списку моделей — бракує папки model-manifests.',
+  'main.models.unknown': 'Цієї моделі більше немає у списку моделей на цьому диску.',
+  'main.models.notChat': '«{name}» — не модель чату, тому її не можна запустити тут.',
+  'main.models.startDamaged':
+    'Модель «{name}» не пройшла перевірку файлів, тому її не запущено. Завантажте її знову на екрані ' +
+    '«ШІ-модель».',
+  'main.models.startMissing': 'Модель «{name}» не можна запустити: її файлу ще немає на цьому диску.',
+  'main.models.startNeedsRam':
+    'Моделі «{name}» потрібно щонайменше {min}\u00A0GB оперативної памʼяті — цей компʼютер має ' +
+    'близько {ram}\u00A0GB. Виберіть меншу модель — якість залишиться високою.',
   'main.models.autoSelected':
     'Ця модель використовується автоматично після встановлення — вибирати нічого не потрібно.',
   'main.models.locked': 'Робочий простір заблоковано. Розблокуйте його, щоб керувати ШІ-моделями.',

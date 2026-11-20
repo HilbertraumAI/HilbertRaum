@@ -49,6 +49,8 @@ export function appShellStubs(over: Partial<PreloadApi> = {}): Partial<PreloadAp
     getPolicy: vi.fn(async () => makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })),
     getSettings: vi.fn(async () => DEFAULT_SETTINGS),
     onRuntimeNotice: vi.fn(() => () => {}),
+    // App's gate effect marks `gate_visible` on every mount (perf trace); a row that asserts the mark supplies its own spy.
+    perfMark: vi.fn(),
     ...over
   }
 }

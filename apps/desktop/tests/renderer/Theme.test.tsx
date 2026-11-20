@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { initTheme, resolveTheme, setThemeSetting } from '../../src/renderer/theme'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { fakeMatchMedia, removeMatchMedia } from '../helpers/match-media'
 
 // Phase 23 theming: the theme module owns `data-theme` on <html>; tokens.css makes
@@ -18,6 +18,7 @@ afterEach(() => {
   delete document.documentElement.dataset.theme
   // Reset module state for the next test (module-level setting survives between tests).
   setThemeSetting('system')
+  assertNoUnexpectedApiCalls()
 })
 
 describe('resolveTheme', () => {

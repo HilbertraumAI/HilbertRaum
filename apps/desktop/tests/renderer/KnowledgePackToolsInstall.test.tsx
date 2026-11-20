@@ -7,7 +7,8 @@ import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { t as tr } from '../../src/shared/i18n'
 import type { EngineDownloadJob, EngineOptionalFamily, EngineStatus, PolicyStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import type { PreloadApi } from '../../src/preload'
 import { makePolicyStatus } from '../helpers/status'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
@@ -48,7 +49,15 @@ function allowedPolicy(): PolicyStatus {
   return makePolicyStatus({ network: { allowModelDownloads: true }, allowNetworkSetting: true })
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
+
+/** The packs panel subscribes to pack changes at mount (#832); a row that emits supplies its own. `over` spreads last. */
+function packToolsStubs(over: Partial<PreloadApi>): Partial<PreloadApi> {
+  return { onKnowledgePacksChanged: vi.fn<PreloadApi['onKnowledgePacksChanged']>(() => () => {}), ...over }
+}
 
 // Keep this order: the hook's job is module state (per file under pool: 'forks'); a failed job hides Install.
 describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
@@ -93,14 +102,14 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
             error: null
           }
     })
-    stubApi({
+    stubApi(packToolsStubs({
       getKnowledgePackStatus: vi.fn(async () => ({ toolsInstalled, refreshing: false, revision: 0 })),
       listKnowledgePacks: vi.fn(async () => []),
       getEngineStatus: vi.fn(async () => engineStatusWithMissingTools()),
       getPolicy: vi.fn(async () => allowedPolicy()),
       downloadEngine,
       getEngineJob
-    })
+    }))
     render(
       <I18nProvider>
         <ToastProvider>
@@ -158,12 +167,12 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
     '#339 P8-2: the gate off (%s) disables the acknowledgement box and the confirm, and shows the same reason text as ModelsScreen',
     async (_label, policy, reasonKey) => {
       const user = userEvent.setup()
-      stubApi({
+      stubApi(packToolsStubs({
         getKnowledgePackStatus: async () => ({ toolsInstalled: false, refreshing: false, revision: 0 }),
         listKnowledgePacks: async () => [],
         getEngineStatus: async () => engineStatusWithMissingTools(),
         getPolicy: async () => policy
-      })
+      }))
       render(
         <I18nProvider>
           <PacksPanel />
@@ -184,13 +193,13 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
   // states the name and links nowhere (the gate that stays in the dialog when the https parse is shared).
   it('#894: a licence the dialog does not know is stated as text with no link', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(packToolsStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: false, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [],
       getEngineStatus: async () =>
         engineStatusWithMissingTools({ optionalFamilies: [engineOptionalFamily({ license: 'MIT' })] }),
       getPolicy: async () => allowedPolicy()
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -226,14 +235,14 @@ describe('PacksPanel — knowledge-pack tools install (#339 P8-2)', () => {
         error: 'kiwix-tools archive checksum mismatch'
       })
     )
-    stubApi({
+    stubApi(packToolsStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: false, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [],
       getEngineStatus: async () => engineStatusWithMissingTools(),
       getPolicy: async () => allowedPolicy(),
       downloadEngine,
       getEngineJob
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />

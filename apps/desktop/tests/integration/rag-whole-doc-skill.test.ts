@@ -29,7 +29,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
-import { t } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -258,6 +258,27 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     const notices = event.sender.send.mock.calls.filter((c) => c[0] === STREAM.compaction(h.conversationId))
     expect(notices.map((c) => c[1])).toEqual([{ phase: 'start', kind: 'analysis' }])
   })
+
+  // #834: the every-mention example chip asks for a list, so it keeps the whole read in every interface language.
+  // Pre-fix the German chip ("Finde jede Erwähnung …", a needle by its «finde») went to top-k here, one call, while
+  // the English one took the chunk map-reduce.
+  it.each(UI_LANGUAGE_CODES)(
+    '%s: the every-mention chip over a document too long to read whole keeps the whole read (chunk map-reduce)',
+    async (code) => {
+      const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
+      const chip = t(code, 'chat.example.indemnity')
+      const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, chip, MEETING_INSTALL_ID)
+      const msg = result as Message
+      expect(h.runtime.calls).toBeGreaterThan(1)
+      expect(msg.coverage?.mode).toBe('capped')
+      expect(msg.coverage?.truncated).toBe(false)
+      expect(msg.skillId).toBe(MEETING_INSTALL_ID)
+      // #939: and the notes are taken for the chip's question, not only for the minutes: every map call carries it.
+      for (const turn of h.runtime.turns.slice(0, -1)) {
+        expect(turn.find((m) => m.role === 'user')?.content).toContain(`\nUser request:\n${chip}\n`)
+      }
+    }
+  )
 
   it('SKA-23 (A4): a NEEDLE over a NOT-fully-chunked over-budget doc is served by top-k, NOT refused', async () => {
     // The needle downgrade is now evaluated BEFORE the D45 fully-chunked refusal: a downgraded needle takes

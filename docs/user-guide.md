@@ -91,7 +91,8 @@ The first launch walks you through a short, full-window setup:
    are not encrypted — they are public weights, not your data. The local diagnostics log is
    encrypted along with your workspace.) The password is
    **never stored** anywhere, and if you forget it the data cannot be recovered — that's
-   the point. While you type, a small strength meter offers honest advice (longer is
+   the point (to start over, see [`troubleshooting.md`](troubleshooting.md), "I forgot my
+   workspace password"). While you type, a small strength meter offers honest advice (longer is
    stronger); it never blocks you. The **eye button** reveals what you typed, and pasting
    from a password manager works normally. On developer drives a toggle offers a **plaintext
    workspace** (no password, unencrypted) instead.
@@ -170,6 +171,10 @@ blocks you.
      through the catalog; if it is one of several variants of the same model, that group opens
      automatically so the damaged version is visible straight away. (If the publisher has since
      withdrawn the file, the row explains that instead of offering a download.)
+   - **No checksum** — the file is present, but the model's manifest has no checksum on record to
+     check it against (a model you added yourself, before you captured its hash). It runs only in
+     developer mode on a drive whose policy allows unverified models, and a download can't fix it,
+     so the row offers none (see Troubleshooting).
    - **Unsupported** — this model can't run on this computer/build.
 3. Click **Use this model** on a downloaded model's row — this makes it your model *and* starts it, so
    you can go straight to chatting. The first start of a model can take a little while as it loads
@@ -354,11 +359,15 @@ the model you are chatting with, so its row can say either "graphics card" or "p
 depending on this computer and what else is loaded — never "by design". A row reads **loaded**
 only once that service is actually running and ready, not while it is still starting. A model
 that is not on this drive keeps its row, so you can see what it would take before you download
-it, and reads **not on this drive** instead. Below the rows: a card line for chat and translation
-(what each is resident on the graphics card for, against its memory, shown only when both models
-are on this drive; with only the chat model here, the line names chat alone), a second card line
-whenever the ranking model is also resident there, and a processor total (what loading everything
-on this drive at once would take from RAM; a model that is not on this drive is not counted).
+it, and reads **not on this drive** instead. A model on this drive that the app won't start reads
+**failed its file check** (Check all model files found its file damaged) or **no checksum on
+record** (see the AI Model screen's **No checksum**) instead of **not loaded**. Below the rows: a
+card line for chat and translation (what each is resident on the graphics card for, against its
+memory, shown only when both models are on this drive and can start; with only the chat model
+here, the line names chat alone), a second card line whenever the ranking model is also resident
+there, and a processor total (what loading everything on this drive at once would take from RAM;
+a model that is not on this drive, or that the app won't start, is not counted). **Your model**
+makes no fit claim for a chat model the app won't start either; its badge says why.
 Whenever two or more of chat, translation and the ranking model share the card at once, both lines
 carry a warning badge; the chat-and-translation line also spells out that whichever of the two
 loaded second got what was left over and runs slower, but only when chat and translation are
@@ -586,7 +595,8 @@ drive policy and **Allow internet access…** must permit it. Without internet, 
 `prepare-drive --with-assets` or `fetch-runtime --family ocr` — see the Troubleshooting guide.)
 The pages are read **on this drive** (no cloud OCR — German and English are included), with
 per-page progress and a Cancel button; the last step reads *"Finishing — making the text
-searchable…"* while the recognized text is indexed. When it finishes, the document is a normal
+searchable…"* while the recognized text is indexed. Closing the window while the pages are read asks
+first (§12). When it finishes, the document is a normal
 searchable document; answers cite it **by page**, and **Preview** shows the recognized text per
 page with a *"Text recognized on this drive (OCR)"* note that counts the pages on which text was
 found — recognition is good on clean scans but can contain errors on blurry ones. **Sideways or
@@ -1360,6 +1370,12 @@ passages) is tuned for English and German — see [known-limitations](known-limi
   again automatically.
 - Closing the app stops the local model and, for encrypted workspaces, re-locks and protects
   your data automatically.
+- If a scan is being read (**Make searchable (OCR)**) or a document is being translated, or one
+  of them is waiting to start, closing the window on Windows or Linux asks first. **Keep open**
+  (the default) lets it finish. **Close anyway** stops it, and it starts over from the beginning
+  when you run it again. Until you answer, the app stays open and your workspace stays unlocked.
+  Quitting with Ctrl+Q (Linux) or ⌘Q (macOS) and **Lock now** stop these tasks without asking. On
+  macOS, closing the window leaves the app running, so the task goes on.
 
 ### Change your password
 

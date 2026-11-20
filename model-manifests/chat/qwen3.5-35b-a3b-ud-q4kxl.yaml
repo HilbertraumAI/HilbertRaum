@@ -24,8 +24,12 @@ recommended_ram_gb: 32
 # legs incl. abort, stop+quit teardown, Deep on + Balanced suppressed; in-app checksum
 # verify of the 22.2 GB weight; sidecar VmHWM 22.07 GiB) — model-benchmarks.md §9.3.
 recommendation_rank: 1
-# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
-# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+# Processor path (model-benchmarks.md §6.7): never the automatic pick there. NOT measured on a
+# processor (it needs 24 GB of RAM, more than the 16 GB laptop of the speed rows). As a
+# mixture-of-experts model (~3B active) it may well be fast enough; it is held at 0 because the
+# RAM picker orders by comfortable RAM first, so a positive rank would make this unmeasured model
+# (comfortable at 32) the pick from 32 GB, ahead of the measured gemma4-26b-a4b-it-qat-q4.
+# Still selectable, and unchanged on a card and on Apple Silicon.
 recommendation_rank_cpu: 0
 # Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
 # (context 8192, one slot, batch 2048; b12110, full offload 41/41 on the RTX 3090, 2026-11-20).

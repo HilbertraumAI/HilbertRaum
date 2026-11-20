@@ -101,21 +101,24 @@ polished release is manual release testing: signed installers and a live demo ru
     [The AI engine can't run on this computer](docs/troubleshooting.md#the-ai-engine-cant-run-on-this-computer).
 - **Memory decides which model you get.** The app detects your RAM and graphics memory (VRAM)
   automatically, benchmarks your machine, and recommends the model that fits best. On a computer
-  without a usable graphics card the RAM tiers below decide directly; on a computer with one, the
-  recommendation only moves off the RAM tier when that pick would not fit in the card's free
-  memory, and it never recommends a model below the card's RAM floor either way.
+  without a usable graphics card the picks follow our 2026-11 answer-quality study and the speed
+  we measured on a processor, and a benchmark under 5 tokens per second steps the pick down
+  toward Gemma 4 E2B. Apple Silicon keeps the RAM tiers. On a computer with a usable graphics
+  card the recommendation starts from the Apple Silicon column and only moves off it when that
+  pick would not fit in the card's free memory. It never recommends a model whose minimum RAM
+  the computer does not have.
 
-  | RAM (no usable graphics card) | Recommended model |
-  |---|---|
-  | 8-11 GB | Qwen3.5 4B |
-  | 12-15 GB | Gemma 4 E2B |
-  | 16-23 GB | Qwen3.5 9B |
-  | 24 GB | Qwen3.8 27B (UD-Q4_K_M) |
-  | 32 GB and up | Qwen3.8 27B (UD-Q5_K_M) |
+  | RAM | No usable graphics card | Apple Silicon |
+  |---|---|---|
+  | 8-11 GB | Qwen3 4B Instruct 2507 | Qwen3.5 4B |
+  | 12-15 GB | Gemma 4 E4B | Gemma 4 E2B |
+  | 16-23 GB | Qwen3.5 9B | Qwen3.5 9B |
+  | 24-31 GB | Gemma 4 26B-A4B | Qwen3.8 27B (UD-Q4_K_M) |
+  | 32 GB and up | Gemma 4 26B-A4B | Qwen3.8 27B (UD-Q5_K_M) |
 
   These are best-fit recommendations, not hard minimums. Each model's actual floor is the
   **Min RAM** column in the [model table](#supported-models) below; Qwen3.5 9B, for example,
-  already runs from 12 GB. The MoE models stay opt-in.
+  already runs from 12 GB. The Qwen MoE models stay opt-in.
 - **Disk space:** about 3 GB for the smallest hand-built setup (the 4B chat model plus the
   embeddings model). The one-command `--with-assets` quick start fetches a larger default set
   (8B chat, embeddings, reranker, Whisper, the Qwen2.5-VL vision model, both sidecar runtimes,
@@ -257,7 +260,7 @@ and license policy in [`docs/model-policy.md`](docs/model-policy.md).
 
 The default set (`-WithAssets`) is enough for everyday use: a chat model plus embeddings
 (document Q&A), reranker (retrieval quality), and Whisper (audio). The benchmark
-auto-recommends the newest-generation chat model that fits your memory, following the tier
+recommends a chat model for your memory and graphics card, following the tier
 table in [What you need](#what-you-need); the **Min RAM** column below is each model's lower
 hard floor. The MoE models (Qwen3 30B-A3B, Qwen3.5 35B-A3B) are opt-in: roughly 30B quality at
 roughly 3B active parameters per token, which means near-small-model CPU speed if the 18-22 GB
@@ -268,23 +271,23 @@ of weights fits in RAM.
 | Model | Note | Size | Min RAM | License |
 |---|---|---|---|---|
 | Qwen3 4B Instruct Q4 | Bundled default on the preconfigured drive and the weak-laptop fallback; smallest ranked model that keeps the **Deep** answer mode | ~2.7 GB | 8 GB | Apache-2.0 |
-| Qwen3 4B Instruct 2507 Q4 | Better 4B quality (no Deep) | ~2.5 GB | 8 GB | Apache-2.0 |
-| Qwen3.5 4B (UD-Q4_K_XL) | **Recommended below 12 GB**: newest-generation 4B | ~2.9 GB | 8 GB | Apache-2.0 |
-| Gemma 4 E2B Instruct QAT Q4_0 | **Recommended for 12-15 GB**: fastest small-tier decode we measured; also where a slow 16-23 GB machine's recommendation steps down to | ~3.3 GB | 8 GB | Apache-2.0 |
+| Qwen3 4B Instruct 2507 Q4 | **Recommended below 12 GB without a usable graphics card**: better answers than Qwen3.5 4B in our 2026-11 study and faster on a processor (no Deep) | ~2.5 GB | 8 GB | Apache-2.0 |
+| Qwen3.5 4B (UD-Q4_K_XL) | **Recommended below 12 GB** with a graphics card and on Apple Silicon: newest-generation 4B | ~2.9 GB | 8 GB | Apache-2.0 |
+| Gemma 4 E2B Instruct QAT Q4_0 | **Recommended for 12-15 GB** with a graphics card and on Apple Silicon: fastest small-tier decode we measured; also where a slow machine's recommendation steps down to | ~3.3 GB | 8 GB | Apache-2.0 |
 | Qwen3.5 0.8B Q6_K | Fast tier, selectable but never auto-recommended. Smallest runnable chat model and the fastest CPU decode in the catalog; the surviving fast-tier candidate of our grounded-QA eval ([`docs/model-benchmarks.md`](docs/model-benchmarks.md) §9), with better F1 and unanswerable-question discipline than the 2B below | ~0.6 GB | 8 GB | Apache-2.0 |
 | Qwen3.5 2B (UD-Q4_K_XL) | Fast tier; failed its evaluation bar (scored below the 0.8B on F1 with the worst unanswerable-question discipline of the 13 models tested). Downloadable for completeness only | ~1.3 GB | 8 GB | Apache-2.0 |
 | Qwen3 8B Instruct Q4 | For laptops with 12 GB and more | ~5.0 GB | 12 GB | Apache-2.0 |
-| Ministral 3 8B Instruct (2512) Q4 | 8B benchmark winner and the DIY `--with-assets` default chat model (selectable; the 16-23 GB pick is Qwen3.5 9B) | ~5.2 GB | 12 GB | Apache-2.0 |
+| Ministral 3 8B Instruct (2512) Q4 | The DIY `--with-assets` default chat model (selectable, never auto-recommended: it scored lowest of the 8B class in our 2026-11 study; the 16-23 GB pick is Qwen3.5 9B) | ~5.2 GB | 12 GB | Apache-2.0 |
 | Qwen3.5 9B (UD-Q4_K_XL) | **Recommended for 16-23 GB**: newest-generation 9B | ~6.0 GB | 12 GB | Apache-2.0 |
 | Granite 4.1 8B Q4 | Challenger (selectable, not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 |
-| Gemma 4 E4B Instruct QAT Q4_0 | 8B-tier challenger (selectable, not auto-recommended) | ~5.2 GB | 12 GB | Apache-2.0 |
-| Gemma 4 12B Instruct QAT Q4_0 | 12-14B benchmark winner; has **Deep** (selectable; the 24 GB pick is Qwen3.8 27B) | ~7.0 GB | 14 GB | Apache-2.0 |
+| Gemma 4 E4B Instruct QAT Q4_0 | **Recommended for 12-15 GB without a usable graphics card**: better answers than Gemma 4 E2B in our 2026-11 study at about half its processor speed | ~5.2 GB | 12 GB | Apache-2.0 |
+| Gemma 4 12B Instruct QAT Q4_0 | 12-14B benchmark winner; has **Deep** (selectable; too slow on a processor to be recommended there, and the 24 GB pick is Qwen3.8 27B) | ~7.0 GB | 14 GB | Apache-2.0 |
 | Qwen3 14B Instruct Q4 | Dense, for 32 GB and more | ~9.3 GB | 14 GB | Apache-2.0 |
-| Gemma 4 26B-A4B Instruct QAT Q4_0 | MoE (~3.8B active): the 24 GB tier's ranked runner-up at about four times the pick's speed, never the auto-pick | ~14.4 GB | 20 GB | Apache-2.0 |
+| Gemma 4 26B-A4B Instruct QAT Q4_0 | MoE (~3.8B active): **Recommended from 24 GB without a usable graphics card**, level with the Qwen3.8 27B picks in our 2026-11 study at about five times a dense 27B's processor speed; with a graphics card and on Apple Silicon the 24 GB tier's ranked runner-up | ~14.4 GB | 20 GB | Apache-2.0 |
 | Qwen3.6 27B Q4_K_M | Former 24 GB pick; still ranked and selectable | ~16.8 GB | 20 GB | Apache-2.0 |
 | Qwen3.6 27B Q5_K_M | Former 32 GB pick; still holds the all-time top score of our grounded-QA eval | ~19.5 GB | 24 GB | Apache-2.0 |
-| Qwen3.8 27B UD-Q4_K_M | **Recommended for 24 GB**: newest generation, zero hallucinations in our quality eval. Decodes about 19 % slower than the withdrawn static Q4_K_M it replaces; measured and accepted | ~16.5 GB | 21 GB | Apache-2.0 |
-| Qwen3.8 27B UD-Q5_K_M | **Recommended for 32 GB and up**: the same zero-hallucination profile at a richer quant; reproduces the withdrawn Q5_K_M's envelope (4 % slower decode, same VRAM) | ~19.8 GB | 23 GB | Apache-2.0 |
+| Qwen3.8 27B UD-Q4_K_M | **Recommended for 24 GB** with a graphics card and on Apple Silicon: newest generation, zero hallucinations in our quality eval. Decodes about 19 % slower than the withdrawn static Q4_K_M it replaces; measured and accepted | ~16.5 GB | 21 GB | Apache-2.0 |
+| Qwen3.8 27B UD-Q5_K_M | **Recommended for 32 GB and up** with a graphics card and on Apple Silicon: the same zero-hallucination profile at a richer quant; reproduces the withdrawn Q5_K_M's envelope (4 % slower decode, same VRAM) | ~19.8 GB | 23 GB | Apache-2.0 |
 | Qwen3.8 27B UD-Q6_K | Quality ceiling for 24 GB GPUs (selectable, never auto-recommended; fully fits a 24 GB card at 8k context with a 21.8 GiB peak) | ~22.0 GB | 26 GB | Apache-2.0 |
 | Qwen3.8 27B Q4_K_M · Q5_K_M · Q6_K (static) | Upstream deleted these three files on 2026-08-20 ([issue #196](https://github.com/HilbertraumAI/HilbertRaum/issues/196)). Kept so a drive that already has one keeps working: it still verifies and runs, but it can no longer be downloaded, and the app says so instead of offering a Download button. Succeeded by the three UD rows above | ~17.1 / 19.8 / 22.9 GB | 21 / 23 / 26 GB | Apache-2.0 |
 | Qwen3 30B-A3B (MoE) Q4 | Roughly 30B quality at roughly 3B speed (opt-in) | ~18.6 GB | 24 GB | Apache-2.0 |

@@ -16,7 +16,8 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 //
 // Measured on this desk (follow-ups wave 3 W8): a child takes 2-7 s alone. Under a 12-thread CPU load the spawn took
 // up to 5 s before the runner's code ran (START_ALLOWANCE_MS covers that twice). Electron's teardown after the result
-// took up to 36 s; no row asserts anything after the result, so once it appears the child gets EXIT_GRACE_MS to exit
+// took up to 36 s (the print-PDF smoke, which once waited for `exit` itself, saw 10-14 s under that load and a 66-122 s
+// row: #934); no row asserts anything after the result, so once it appears the child gets EXIT_GRACE_MS to exit
 // by itself (alone it takes about 65 ms) and is then killed. ROW_MARGIN_MS covers that grace, reading the result and
 // the row's assertions.
 
@@ -37,8 +38,10 @@ export function writeSmokeResult(resultPath: string, result: unknown): void {
 }
 
 export interface SmokeChildRun {
-  /** Where the runner's argv ends: `<resultPath> <runnerTimeoutMs> <what>`. */
+  /** The label a failure names; unless `args` is set it is also where the runner's argv ends: `<resultPath> <runnerTimeoutMs> <what>`. */
   what: string
+  /** A runner with its own argv (the print-PDF smoke takes a job file that names its result path): replaces those three. */
+  args?: string[]
   bin: string
   runnerPath: string
   resultPath: string
@@ -49,23 +52,35 @@ export interface SmokeChildRun {
 
 /**
  * Test side: run one child and return its result, or throw a named error when it wrote none (`label: no result
- * (<how it ended>)`, with the child's stderr). It never outlives `childDeadlineMs`.
+ * (<how it ended>)`, with the child's stderr). It never outlives `childDeadlineMs`. `exitCode` is the child's own exit
+ * code, or null when this helper had to kill it (it did not exit within the grace).
  */
-export async function runSmokeChild<T>(run: SmokeChildRun): Promise<{ result: T; stderr: string }> {
+export async function runSmokeChild<T>(
+  run: SmokeChildRun
+): Promise<{ result: T; stderr: string; exitCode: number | null }> {
   const { childDeadlineMs, runnerTimeoutMs } = smokeBounds(run.rowBudgetMs)
   const env = { ...process.env }
   delete env.ELECTRON_RUN_AS_NODE // must launch as Electron, never as plain node
-  const args = [`--user-data-dir=${run.profileDir}`, run.runnerPath, run.resultPath, String(runnerTimeoutMs), run.what]
+  const args = [
+    `--user-data-dir=${run.profileDir}`,
+    run.runnerPath,
+    ...(run.args ?? [run.resultPath, String(runnerTimeoutMs), run.what])
+  ]
   if (process.platform === 'linux') args.unshift('--no-sandbox')
   const stderr: string[] = []
+  let exitCode: number | null = null
   const end = await new Promise<string>((resolve, reject) => {
     const child = spawn(run.bin, args, { env, windowsHide: true })
     let grace: ReturnType<typeof setTimeout> | undefined
+    let killedHere = false
     const settle = (): void => {
       clearInterval(poll)
       clearTimeout(deadline)
       clearTimeout(grace)
-      if (child.exitCode === null && child.signalCode === null) child.kill()
+      if (child.exitCode === null && child.signalCode === null) {
+        killedHere = true
+        child.kill()
+      }
     }
     const poll = setInterval(() => {
       if (!existsSync(run.resultPath)) return
@@ -86,10 +101,11 @@ export async function runSmokeChild<T>(run: SmokeChildRun): Promise<{ result: T;
       reject(err)
     })
     child.on('exit', (code) => {
+      if (!killedHere) exitCode = code ?? -1
       settle()
       resolve(`exit ${code ?? -1}`)
     })
   })
   if (!existsSync(run.resultPath)) throw new Error(`${run.what}: no result (${end})\n${stderr.join('')}`)
-  return { result: JSON.parse(readFileSync(run.resultPath, 'utf8')) as T, stderr: stderr.join('') }
+  return { result: JSON.parse(readFileSync(run.resultPath, 'utf8')) as T, stderr: stderr.join(''), exitCode }
 }
