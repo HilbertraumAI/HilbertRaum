@@ -2214,6 +2214,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.models.loaded': 'jetzt geladen',
   'perf.models.notLoaded': 'nicht geladen',
   'perf.models.notOnDrive': 'nicht auf diesem Laufwerk',
+  'perf.models.damaged': 'Dateiprüfung nicht bestanden',
+  'perf.models.noChecksum': 'keine Prüfsumme hinterlegt',
   'perf.models.lifetime.session': 'bleibt geladen',
   'perf.models.lifetime.idle': 'wird bei Leerlauf entladen',
   'perf.models.lifetime.per-use': 'läuft nur während der Arbeit',

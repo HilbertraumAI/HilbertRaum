@@ -2081,6 +2081,8 @@ export const tr: UiCatalog<'tr'> = {
   'perf.models.loaded': 'şu an yüklü',
   'perf.models.notLoaded': 'yüklü değil',
   'perf.models.notOnDrive': 'bu sürücüde yok',
+  'perf.models.damaged': 'dosya denetiminden geçemedi',
+  'perf.models.noChecksum': 'kayıtlı sağlama toplamı yok',
   'perf.models.lifetime.session': 'yüklü kalır',
   'perf.models.lifetime.idle': 'boştayken bellekten çıkarılır',
   'perf.models.lifetime.per-use': 'yalnızca iş sırasında çalışır',

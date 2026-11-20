@@ -22,6 +22,7 @@ import type {
   EffectiveReadSample,
   HardwareProfile,
   LiveRecommendation,
+  ModelFileVerdict,
   ModelInfo,
   PerformanceSnapshot,
   PlacementKind,
@@ -787,6 +788,14 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     )
   }
 
+  /** #933: the pill of a model on this drive that every start refuses: its files failed their check, or it has no
+   *  checksum on record (`ModelFileVerdict`, main-side from the checksum cache). Shared by a row and "Your model". */
+  function fileCheckBadge(verdict: Exclude<ModelFileVerdict, 'ok'>): JSX.Element {
+    return (
+      <Badge tone="warning">{t(verdict === 'damaged' ? 'perf.models.damaged' : 'perf.models.noChecksum')}</Badge>
+    )
+  }
+
   /** "Your model": the active model against this computer's memory (benchmark.md). The
    *  verdict is main-side; this only puts words and numbers to it. */
   function modelRow(): JSX.Element {
@@ -797,8 +806,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const v = p.verdict
     // #914 code review: an active model that is not here (its files are not on this drive and it is not resident;
     // main decides, `placement.model.onDrive`) gets no size on disk and no fit claim: the line leaves the size out,
-    // no verdict, note or "Choose a smaller model" is shown, and the pill says what its row says.
-    const here = p.model?.onDrive === true
+    // no verdict, note or "Choose a smaller model" is shown, and the pill says what its row says. #933: nor does one
+    // whose files a check found damaged or that has no checksum on record (`fileCheck`; main already lets a resident
+    // model pass): every start refuses it. Its files ARE on disk, so the line keeps their size.
+    const onDisk = p.model?.onDrive === true
+    const fileCheck = p.model?.fileCheck ?? 'ok'
+    const here = onDisk && fileCheck === 'ok'
     let need = ''
     let text = ''
     if (!p.model) {
@@ -855,10 +868,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const showPerDrive = here && v.estimated && !p.observedMismatch
     const runningOnCard =
       p.model != null && runtimeOnGpu && runtimeModelId === p.model.id && (p.observed ?? p.observedMismatch)?.backend === 'gpu'
-    // #914: the line says "{size} GB on disk" only for a model that is here. A model outside the catalog has no size
-    // (null; it printed "0.0 GB on disk"), and one whose files are gone would contradict its own row, which reads "not
-    // on this drive" (the size stays there, beside that badge).
-    const sizeOnDrive = here && p.model?.sizeOnDiskGb != null ? p.model.sizeOnDiskGb : null
+    // #914: the line says "{size} GB on disk" only for a model whose files are on this drive (a damaged one included,
+    // #933). A model outside the catalog has no size (null; it printed "0.0 GB on disk"), and one whose files are gone
+    // would contradict its own row, which reads "not on this drive" (the size stays there, beside that badge).
+    const sizeOnDrive = onDisk && p.model?.sizeOnDiskGb != null ? p.model.sizeOnDiskGb : null
     return (
       <div className="perf-model">
         <div className="perf-model-title">{t('perf.model.title')}</div>
@@ -897,8 +910,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             itself is untouched. */}
         {runningOnCard && <div className="perf-model-note hint">{t('perf.model.runningOnCard')}</div>}
         <div className="perf-model-side">
-          {p.model && !here ? (
+          {p.model && !onDisk ? (
             <Badge tone="neutral">{t('perf.models.notOnDrive')}</Badge>
+          ) : p.model && fileCheck !== 'ok' ? (
+            fileCheckBadge(fileCheck)
           ) : (
             <Badge tone={pill.tone}>{t(pill.key)}</Badge>
           )}
@@ -914,7 +929,8 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
 
   /** "Models on this computer": every model the app can hold, where it runs under the current
    *  configuration, and whether it is resident now — or "not on this drive" when its files are
-   *  not here (#914) — then the two shared budgets (the card, the processor's memory). The card
+   *  not here (#914), or why every start refuses it (#933: its files failed their check, or it has
+   *  no checksum on record) — then the two shared budgets (the card, the processor's memory). The card
    *  line appears only while a row actually goes to the card and both of its models are on this
    *  drive with a size; the processor line compares the class-aware total (main-side, DR5, the
    *  rows on the drive only) against RAM — on Apple Silicon against the unified budget, and the
@@ -938,8 +954,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     // the chat model here and on the card but no translation model here, the chat-only line keeps its card figure
     // (code review). The size check is a belt under main's contract (a row on the drive has a manifest, and every
     // manifest has a size); it also narrows the type for `gbOf`.
+    // #933: a model whose files a check found damaged, or that has no checksum on record, never reaches the card
+    // either (every start refuses it), unless it is resident.
     const hereSized = (r: ResidentModelRow | undefined): r is ResidentModelRow =>
-      r != null && (r.onDrive || r.loaded) && r.sizeOnDiskGb != null
+      r != null && (r.loaded || (r.onDrive && r.fileCheck === 'ok')) && r.sizeOnDiskGb != null
     const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null
     const unifiedPool = p.memoryClass === 'unified'
     const againstMb = unifiedPool ? (p.verdict.budgetMb ?? p.ramMb) : p.ramMb
@@ -995,13 +1013,16 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 {/* #914: a model whose files are not on this drive cannot be loaded here: say that
                     instead of "not loaded". A resident model says "loaded now" whatever `onDrive`
                     says (code review: loaded beats `onDrive` — a weight deleted while held open). */}
+                {/* #933: one on this drive that every start refuses (damaged, or no checksum on record) says why. */}
                 {r.modelId &&
                   (r.loaded ? (
                     <Badge tone="success">{t('perf.models.loaded')}</Badge>
-                  ) : r.onDrive ? (
-                    <Badge tone="neutral">{t('perf.models.notLoaded')}</Badge>
-                  ) : (
+                  ) : !r.onDrive ? (
                     <Badge tone="neutral">{t('perf.models.notOnDrive')}</Badge>
+                  ) : r.fileCheck !== 'ok' ? (
+                    fileCheckBadge(r.fileCheck)
+                  ) : (
+                    <Badge tone="neutral">{t('perf.models.notLoaded')}</Badge>
                   ))}
               </div>
             </div>

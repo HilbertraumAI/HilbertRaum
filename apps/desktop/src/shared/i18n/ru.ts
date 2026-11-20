@@ -2233,6 +2233,8 @@ export const ru: UiCatalog<'ru'> = {
   'perf.models.loaded': 'сейчас в памяти',
   'perf.models.notLoaded': 'не в памяти',
   'perf.models.notOnDrive': 'нет на этом диске',
+  'perf.models.damaged': 'не прошла проверку файлов',
+  'perf.models.noChecksum': 'нет сохраненной контрольной суммы',
   'perf.models.lifetime.session': 'не выгружается',
   'perf.models.lifetime.idle': 'выгружается при простое',
   'perf.models.lifetime.per-use': 'работает только во время задачи',

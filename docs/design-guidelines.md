@@ -2804,6 +2804,13 @@ screen now keeps the active chat model pinned above a compact library of alterna
   entirely, is recovered on mount (#314): the screen asks the main process which downloads still
   need the user — adopting the live job, else the most recent unresolved result — and **Dismiss**
   tells the main process too, so a dismissal made before the reload stays dismissed.
+- **#933 amendment — the Performance rows say the same.** On "Models on this computer", a model on the
+  drive that every start refuses reads, in place of its "not loaded" pill, "failed its file check" (a
+  check found a file damaged; the card's "Can't verify") or "no checksum on record" (the card's "No
+  checksum"). Both use the warning tone, lower case like the sibling pills, and both come from
+  `ResidentModelRow.fileCheck` (the checksum cache, never a hash). "loaded now" still wins over both.
+  Such a row adds nothing to the processor total or a graphics-card line, and "Your model" shows the
+  same pill instead of a fit claim, keeping its size on disk.
 
 Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face, the #847 trailing rows), `lib/modelAvailability.ts`
 (the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split

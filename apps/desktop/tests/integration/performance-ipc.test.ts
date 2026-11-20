@@ -12,6 +12,8 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
+import { statSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
 import { buildPerformanceSnapshot } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { recordAnswerSpeed } from '../../src/main/services/performance'
@@ -19,7 +21,9 @@ import { recordChecksumRead, recordModelLoadRead } from '../../src/main/services
 import { recordModelPlacement } from '../../src/main/services/runtime/placement'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
-import type { RuntimeStatus } from '../../src/shared/types'
+import { checksumCacheStats, discoverManifests, manifestFiles, primeChecksum } from '../../src/main/services/models'
+import { pickManifestForRole } from '../../src/shared/manifest'
+import type { ResidentModelRow, RuntimeStatus } from '../../src/shared/types'
 import { effectiveReadSample, modelPlacement } from '../helpers/benchmark-records'
 import {
   CATALOG_MANIFESTS,
@@ -290,6 +294,109 @@ describe('buildPerformanceSnapshot', () => {
     expect(p.models[0]).toMatchObject({ role: 'chat', onDrive: false, loaded: true })
     expect(p.model).toMatchObject({ id: 'qwen3.5-9b-ud-q4kxl', onDrive: true })
     expect(p.totals.ramAllMb).toBe(Math.round((p.models[0].sizeOnDiskGb ?? 0) * 1024))
+  })
+
+  // #933: "Check all model files" found the reranker damaged (its cached digest is not the manifest's), and every start
+  // refuses it (#913). Its row says so and "Everything loaded at once" leaves it out: before, it added its 1,126 MiB as a
+  // model that would load. The verdict comes from the checksum cache only: the snapshot hashes nothing.
+  /** The 9B, the reranker and the embedder on this drive (stand-in bytes), the 9B active, nothing loaded. */
+  function threeModelDrive(): { root: string; db: ReturnType<typeof seededDb>; ctx: ReturnType<typeof ctxWith>; rerankerFile: string } {
+    const root = freshRoot()
+    withCatalogFiles(root, { chat: 'qwen3.5-9b-ud-q4kxl', roles: ['embeddings', 'reranker'] })
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
+    const reranker = pickManifestForRole(discoverManifests(CATALOG_MANIFESTS).manifests.map((d) => d.manifest), 'reranker')
+    if (!reranker) throw new Error('the catalog has no reranker')
+    return { root, db, ctx: ctxWith(root, db, { manifestsDir: CATALOG_MANIFESTS }), rerankerFile: manifestFiles(root, reranker)[0].path }
+  }
+  /** "Everything loaded at once" for these rows on the `cpu` class: the plain sum (`loadedAtOnceMb`). */
+  const sumMb = (rows: ResidentModelRow[]): number => Math.round(rows.reduce((s, r) => s + (r.sizeOnDiskGb ?? 0) * 1024, 0))
+
+  it('#933: a model the checksum cache knows is damaged reads so and is left out of the total; nothing is hashed', () => {
+    const { ctx, rerankerFile } = threeModelDrive()
+    const before = buildPerformanceSnapshot(ctx).placement
+    expect(before.memoryClass).toBe('cpu')
+    expect(before.models.find((r) => r.role === 'reranker')).toMatchObject({ onDrive: true, fileCheck: 'ok' }) // not checked yet
+    primeChecksum(rerankerFile, 'f'.repeat(64)) // the check of this session found it damaged
+    const computed = checksumCacheStats.computed
+    const after = buildPerformanceSnapshot(ctx).placement
+    const byRole = (role: ResidentModelRow['role']): ResidentModelRow | undefined => after.models.find((r) => r.role === role)
+    expect(byRole('reranker')).toMatchObject({ onDrive: true, loaded: false, fileCheck: 'damaged' })
+    // Present and never checked: `ok`, read without a hash.
+    expect(byRole('chat')?.fileCheck).toBe('ok')
+    expect(byRole('embeddings')?.fileCheck).toBe('ok')
+    expect(after.model).toMatchObject({ id: 'qwen3.5-9b-ud-q4kxl', fileCheck: 'ok' })
+    expect(after.totals.ramAllMb).toBe(
+      sumMb([byRole('chat'), byRole('embeddings')].filter((r): r is ResidentModelRow => r != null))
+    )
+    expect(after.totals.ramAllMb).toBeLessThan(before.totals.ramAllMb ?? 0)
+    expect(checksumCacheStats.computed).toBe(computed)
+  })
+
+  // #933 (A S-A8): the next session, where the in-memory cache is empty and only the workspace settings hold the check's
+  // answer. The snapshot reads the `checksumCache` it has already read, through a view that cannot write: the settings
+  // store's `get` would move a legacy absolute key to its drive-relative one, a settings write inside a display getter.
+  it.each<[string, (root: string, file: string) => string]>([
+    ['its drive-relative key', (root, file) => relative(root, file).split(sep).join('/')],
+    ['a legacy absolute key', (_root, file) => file]
+  ])('#933: a mismatch only the workspace settings remember (%s) reads damaged; the read hashes and writes nothing', (_key, keyOf) => {
+    const { root, db, ctx, rerankerFile } = threeModelDrive()
+    const st = statSync(rerankerFile)
+    updateSettings(db, {
+      checksumCache: { [keyOf(root, rerankerFile)]: { size: st.size, mtimeMs: st.mtimeMs, sha256: 'f'.repeat(64) } }
+    })
+    const blob = JSON.stringify(getSettings(db).checksumCache)
+    const computed = checksumCacheStats.computed
+    const p = buildPerformanceSnapshot(ctx).placement
+    expect(p.models.find((r) => r.role === 'reranker')?.fileCheck).toBe('damaged')
+    expect(checksumCacheStats.computed).toBe(computed)
+    expect(JSON.stringify(getSettings(db).checksumCache)).toBe(blob)
+  })
+
+  // #933 (A 933.1 #9): a model with no checksum on record (a placeholder hash) is refused at every start outside developer
+  // leniency too (#913), so it reads `unverified` and counts nowhere; "Your model" carries the same verdict. With
+  // leniency (a dev build, no drive policy) it starts, so it is `ok` and counts.
+  it.each<[string, boolean, 'ok' | 'unverified']>([
+    ['outside developer leniency', false, 'unverified'],
+    ['with developer leniency', true, 'ok']
+  ])('#933: an active chat model with no checksum on record, %s', (_case, isDev, verdict) => {
+    const root = freshRoot()
+    writeDriveFile(root, 'models/chat/ph.gguf', 'weights')
+    const dir = manifestsDirWith(rawManifest({ id: 'ph', local_path: 'models/chat/ph.gguf' })) // the fixture's hash is the placeholder
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'ph' })
+    const p = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: dir, isDev })).placement
+    expect(p.models[0]).toMatchObject({ role: 'chat', modelId: 'ph', onDrive: true, fileCheck: verdict })
+    expect(p.model).toMatchObject({ id: 'ph', onDrive: true, fileCheck: verdict })
+    expect(p.totals.ramAllMb).toBe(verdict === 'ok' ? sumMb([p.models[0]]) : null)
+  })
+
+  // #933 (A S-A7): with two vision models, the images service passes over one whose files a check found damaged and runs
+  // the next (#890's walk). The row names the same model, read from the cache, instead of the damaged one.
+  it('#933: the images row passes over a vision model the cache knows is damaged, as the images service does', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult() })
+    withLlamaBinary(root)
+    const vision = (id: string, flagged: boolean): Record<string, unknown> => {
+      const local = `models/vision/${id}.gguf`
+      const projector = `models/vision/${id}-mmproj.gguf`
+      return rawManifest({
+        id,
+        role: 'vision',
+        input_modalities: ['text', 'image'],
+        local_path: local,
+        sha256: writeDriveFile(root, local, `${id} weights`),
+        mmproj: { local_path: projector, sha256: writeDriveFile(root, projector, `${id} projector`) },
+        ...(flagged ? { default_for_role: true } : {})
+      })
+    }
+    const dir = manifestsDirWith(vision('a-vision', true), vision('b-vision', false))
+    primeChecksum(join(root, 'models', 'vision', 'a-vision.gguf'), 'f'.repeat(64)) // the preferred one: damaged
+    const ctx = ctxWith(root, db, { manifestsDir: dir, vision: { isLoaded: () => false } })
+    const row = buildPerformanceSnapshot(ctx).placement.models.find((r) => r.role === 'vision')
+    expect(row).toMatchObject({ modelId: 'b-vision', fileCheck: 'ok' })
+    expect((await getVisionStatus(ctx)).modelId).toBe('b-vision')
   })
 
   // #848 review: the Performance screen names a role's model by the SAME pick the app composes with (the flagged

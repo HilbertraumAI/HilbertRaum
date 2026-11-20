@@ -2224,6 +2224,8 @@ export const en = {
   'perf.models.loaded': 'loaded now',
   'perf.models.notLoaded': 'not loaded',
   'perf.models.notOnDrive': 'not on this drive',
+  'perf.models.damaged': 'failed its file check',
+  'perf.models.noChecksum': 'no checksum on record',
   'perf.models.lifetime.session': 'stays loaded',
   'perf.models.lifetime.idle': 'unloads when idle',
   'perf.models.lifetime.per-use': 'runs only while working',

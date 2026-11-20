@@ -2155,6 +2155,8 @@ export const nl: UiCatalog<'nl'> = {
   'perf.models.loaded': 'nu geladen',
   'perf.models.notLoaded': 'niet geladen',
   'perf.models.notOnDrive': 'niet op deze schijf',
+  'perf.models.damaged': 'niet door de bestandscontrole',
+  'perf.models.noChecksum': 'geen controlesom bekend',
   'perf.models.lifetime.session': 'blijft geladen',
   'perf.models.lifetime.idle': 'wordt bij inactiviteit uit het geheugen gehaald',
   'perf.models.lifetime.per-use': 'draait alleen tijdens gebruik',

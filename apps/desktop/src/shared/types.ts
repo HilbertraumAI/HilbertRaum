@@ -2946,6 +2946,14 @@ export interface PlacementVerdict {
 }
 
 /**
+ * #933: what the checksum cache already knows about a model's files, read without hashing (`knownFileVerdict`):
+ * `damaged` = a cached digest differs from the manifest's (a check found the file damaged); `unverified` = the
+ * manifest has no checksum on record (a placeholder hash) outside developer leniency; `ok` = neither (verified, or
+ * not checked yet). Both non-`ok` answers are refused at every start.
+ */
+export type ModelFileVerdict = 'ok' | 'damaged' | 'unverified'
+
+/**
  * One model the app can hold in memory (benchmark.md "Models on this computer"): what it is,
  * whether its files are on this drive, where it runs under the CURRENT configuration, and
  * whether it is resident right now.
@@ -2972,6 +2980,13 @@ export interface ResidentModelRow {
    * shows "not on this drive" instead of "not loaded", and `totals.ramAllMb` leaves the row out.
    */
   onDrive: boolean
+  /**
+   * #933: what the checksum cache knows about the row's files (`ModelFileVerdict`; cache only, never a hash). `'ok'`
+   * for a row that is not on this drive. Unless the row is `loaded` (loaded beats it, as for `onDrive`), a `damaged`
+   * or `unverified` row says so instead of "not loaded", and `totals.ramAllMb` and the graphics-card lines leave it
+   * out: every start refuses it.
+   */
+  fileCheck: ModelFileVerdict
   /**
    * 'gpu' = would auto-fit onto the graphics card as things stand: chat and translation on a
    * machine with a usable card, GPU acceleration not switched off or auto-disabled, and no
@@ -3093,9 +3108,17 @@ export interface PerformanceSnapshot {
      * shown as "0.0 GB"). `onDrive` (#914 code review): its files are on this drive
      * (`manifestFilesPresent`) or it is resident right now (loaded beats `onDrive`, as on the
      * rows). False → "Your model" claims no size on disk and no fit: the line leaves the size out,
-     * no verdict is stated, and the pill says "not on this drive".
+     * no verdict is stated, and the pill says "not on this drive". `fileCheck` (#933): its row's
+     * `fileCheck`, or `'ok'` while it is resident (loaded beats it); absent reads as `'ok'`. Not
+     * `'ok'` → "Your model" claims no fit either, and the pill says what its row says.
      */
-    model: { id: string; sizeOnDiskGb: number | null; onDrive: boolean; contextTokens: number } | null
+    model: {
+      id: string
+      sizeOnDiskGb: number | null
+      onDrive: boolean
+      fileCheck?: ModelFileVerdict
+      contextTokens: number
+    } | null
     /**
      * The context the LIVE recommended model (`recommendation.modelId`, PR #308 decision 8) would
      * launch with, resolved main-side by the SAME `launchContextTokens` the start path uses; null
@@ -3134,8 +3157,9 @@ export interface PerformanceSnapshot {
        * split is tracked for it); on `unified` the full sum (one pool — the copy says "memory",
        * not "RAM", and the pill compares against the unified budget). On every class only the
        * rows on this drive count (`onDrive`, #914): a row named from the catalog whose files are
-       * not here adds nothing, unless it is loaded (its memory is in use). null only when
-       * nothing that is on the drive or loaded has a size (nothing installed). 0 means every
+       * not here adds nothing, and nor does one whose files a check found damaged or that has no
+       * checksum on record (`fileCheck`, #933), unless it is loaded (its memory is in use). null
+       * only when no counted row has a size (nothing installed, or nothing installed will start). 0 means every
        * counted row runs on the card (an estimated chat spill is not counted); a small value is an
        * observed small spill. The screen leaves the line out while it would read 0.0 GB.
        */

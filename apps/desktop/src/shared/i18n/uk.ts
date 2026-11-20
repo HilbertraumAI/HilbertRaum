@@ -2246,6 +2246,8 @@ export const uk: UiCatalog<'uk'> = {
   'perf.models.loaded': 'запущено',
   'perf.models.notLoaded': 'не запущено',
   'perf.models.notOnDrive': 'немає на цьому диску',
+  'perf.models.damaged': 'не пройшла перевірку файлів',
+  'perf.models.noChecksum': 'немає збереженої контрольної суми',
   'perf.models.lifetime.session': 'залишається запущеною',
   'perf.models.lifetime.idle': 'зупиняється під час простою',
   'perf.models.lifetime.per-use': 'запускається лише за потреби',

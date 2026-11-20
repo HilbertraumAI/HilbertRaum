@@ -2247,6 +2247,8 @@ export const pl: UiCatalog<'pl'> = {
   'perf.models.loaded': 'teraz wczytany',
   'perf.models.notLoaded': 'niewczytany',
   'perf.models.notOnDrive': 'brak na tym dysku',
+  'perf.models.damaged': 'nie przeszedł sprawdzenia plików',
+  'perf.models.noChecksum': 'brak zapisanej sumy kontrolnej',
   'perf.models.lifetime.session': 'zostaje w pamięci',
   'perf.models.lifetime.idle': 'zwalnia pamięć przy bezczynności',
   'perf.models.lifetime.per-use': 'działa tylko podczas pracy',

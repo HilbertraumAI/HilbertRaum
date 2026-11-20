@@ -2243,6 +2243,8 @@ export const it: UiCatalog<'it'> = {
   'perf.models.loaded': 'caricato ora',
   'perf.models.notLoaded': 'non caricato',
   'perf.models.notOnDrive': 'non è su questa unità',
+  'perf.models.damaged': 'controllo dei file non superato',
+  'perf.models.noChecksum': 'nessun checksum registrato',
   'perf.models.lifetime.session': 'resta caricato',
   'perf.models.lifetime.idle': 'libera la memoria quando è inattivo',
   'perf.models.lifetime.per-use': 'attivo solo mentre lavora',

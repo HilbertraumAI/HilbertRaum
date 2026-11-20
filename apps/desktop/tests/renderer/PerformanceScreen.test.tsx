@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTINGS,
   type BenchmarkProgressStep,
   type BenchmarkResult,
+  type ModelFileVerdict,
   type ModelInfo,
   type PerformanceSnapshot,
   type ResidentModelRow,
@@ -882,6 +883,60 @@ describe('PerformanceScreen: models on this computer', () => {
     install(snapshot({ placement: placement({ models: withRow('translation', { onDrive: false }) }) }))
     renderPerformanceScreen()
     expect(await screen.findByText('Graphics card: chat 5.4 GB, of 24.2 GB.')).toBeInTheDocument()
+  })
+
+  // #933: a model on this drive that every start refuses (its files failed their check, or it has no checksum on
+  // record; main reads `fileCheck` from the checksum cache) says why, where the other rows say loaded / not loaded.
+  it.each<[ModelFileVerdict, 'perf.models.damaged' | 'perf.models.noChecksum']>([
+    ['damaged', 'perf.models.damaged'],
+    ['unverified', 'perf.models.noChecksum']
+  ])('#933: a row whose fileCheck is %s says why in place of "not loaded"', async (fileCheck, key) => {
+    install(snapshot({ placement: placement({ models: withRow('vision', { fileCheck }) }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const images = otherRow(/^Images$/)
+    expect(within(images).getByText(t('en', key))).toBeInTheDocument()
+    expect(within(images).queryByText('not loaded')).not.toBeInTheDocument()
+  })
+
+  // #933: loaded beats it, as it beats `onDrive`: a resident model is in memory whatever the cache says.
+  it('#933: a resident model says "loaded now" even when the checksum cache says its files are damaged', async () => {
+    install(snapshot({ placement: placement({ models: withRow('reranker', { fileCheck: 'damaged', loaded: true }) }) }))
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const ranking = otherRow(/^Document search \(ranking\)$/)
+    expect(within(ranking).getByText('loaded now')).toBeInTheDocument()
+    expect(within(ranking).queryByText(t('en', 'perf.models.damaged'))).not.toBeInTheDocument()
+  })
+
+  // #933: a damaged translation model never reaches the card, so the pair line does not add it; the chat model keeps
+  // its own card line (the #914 rule for a translation model that is not here).
+  it('#933: a damaged translation model is left out of the graphics-card line', async () => {
+    install(snapshot({ placement: placement({ models: withRow('translation', { fileCheck: 'damaged' }) }) }))
+    renderPerformanceScreen()
+    expect(await screen.findByText('Graphics card: chat 5.4 GB, of 24.2 GB.')).toBeInTheDocument()
+    expect(screen.queryByText(/\+ translation/)).not.toBeInTheDocument()
+  })
+
+  // #933: "Your model" claims no fit for an active model every start refuses, and its pill says what its row says. Its
+  // files are on disk, so the line keeps their size.
+  it('#933: "Your model" states no fit for an active model whose files failed their check', async () => {
+    install(
+      snapshot({
+        placement: placement({
+          model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, onDrive: true, fileCheck: 'damaged', contextTokens: 8192 },
+          models: withRow('chat', { fileCheck: 'damaged', loaded: false })
+        })
+      })
+    )
+    renderPerformanceScreen()
+    await screen.findByText('Models on this computer')
+    const block = screen.getByText('Your model').closest<HTMLElement>('.perf-model')
+    if (!block) throw new Error('the Your model block has no .perf-model container')
+    expect(within(block).getByText(t('en', 'perf.models.damaged'))).toBeInTheDocument()
+    expect(within(block).queryByText(/Should fit|Needs at least|Takes /)).not.toBeInTheDocument()
+    expect(within(block).queryByText(t('en', 'perf.place.gpu'))).not.toBeInTheDocument()
+    expect(within(block).getByText(/5\.8 GB on disk/)).toBeInTheDocument()
   })
 })
 

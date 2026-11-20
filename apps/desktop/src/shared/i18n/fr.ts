@@ -2330,6 +2330,8 @@ export const fr: UiCatalog<'fr'> = {
   'perf.models.loaded': 'chargé',
   'perf.models.notLoaded': 'non chargé',
   'perf.models.notOnDrive': 'pas sur ce disque',
+  'perf.models.damaged': 'échec de la vérification des fichiers',
+  'perf.models.noChecksum': 'aucune somme de contrôle enregistrée',
   'perf.models.lifetime.session': 'reste chargé',
   'perf.models.lifetime.idle': 'se décharge en cas d’inactivité',
   'perf.models.lifetime.per-use': 'ne fonctionne que pendant une tâche',
