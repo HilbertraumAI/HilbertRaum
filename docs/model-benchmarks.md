@@ -170,16 +170,24 @@ The deliverable is **one row per model × laptop × backend**. Join the Part-A Q
 with the Part-B/C speed + RSS columns into `eval/results/<machine>-<backend>.csv`:
 
 ```
-model, backend, pp512_tps, pp2048_tps, pp8192_tps, tg_tps, peak_rss_gib,
-em_rate, mean_f1, citation_correct_rate, grounded_rate, over_abstain_rate,
-abstain_rate_unans, hallucination_rate, em_rate_de, em_rate_en, f1_de, f1_en, notes
+model, backend, pp512_tps, pp2048_tps, pp8192_tps, tg_tps, peak_rss_gib, suggested_min_ram_gb,
+em_rate, mean_f1, mean_answer_chars, citation_correct_rate, grounded_rate, over_abstain_rate,
+abstain_rate_unans, hallucination_rate, em_rate_de, em_rate_en, f1_de, f1_en
 ```
 The harness writes the QA half (`…-quality.csv`); paste the speed/RSS numbers alongside. Commit
 the combined CSVs + the per-item JSONL. `node eval/combine.mjs` builds this join from each
-`…-quality-rescored.csv` and its `…-speed.csv`. It picks the columns by name (`OUT_COLS`,
-`eval/combine.mjs:22-27`), and that list leaves `mean_answer_chars` out on purpose: #378 did not
-regenerate the combined CSVs, and adding the column means regenerating them. Read the answer
-length from the `…-quality-rescored.csv`.
+`…-quality-rescored.csv` and its `…-speed.csv`. It picks the columns by name (`OUT_COLS` in
+`eval/combine.mjs`). `mean_answer_chars` sits right after `mean_f1`, as in the rescored CSVs, so the
+F1 is never read without the answer length (#378, #833). A stem with no speed CSV is a quality-only
+run and gets no combined file.
+
+Two combined files are committed: `i7-1185G7-cpu.csv` and `i9-9900X-vulkan.csv`. The i9 speed run
+covers four Gemma 4 models (e2b, e4b, 26b-a4b, 31b) whose QA ran in a separate wave. `combine.mjs`
+joins that QA from `i9-9900X-gemma4wave-vulkan-quality-rescored.csv`. First source wins: where a model
+is in both runs (`gemma4-12b`, `qwen3.6-27b-q4`) the main run's row is kept whole. The combined CSVs
+are derived files. After `rescore.mjs` or a new speed CSV, run `node eval/combine.mjs` and commit the
+result. `apps/desktop/tests/eval/combine.test.ts` re-runs the script over the committed inputs and
+fails on any byte of difference.
 
 **The decision rule** — a challenger earns `recommended_profiles` promotion (and a default-model
 challenge) at its tier when it either (a) beats the incumbent on the German RAG metrics AND
