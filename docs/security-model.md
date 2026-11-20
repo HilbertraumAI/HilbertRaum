@@ -242,7 +242,7 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
 - **The downloads trust the OS certificate store (#564).** Node's TLS, which the main process's
   `fetch` uses, trusted its bundled roots plus `NODE_EXTRA_CA_CERTS`, never the OS store.
   `services/net/trust.ts` adds the store's usable roots to that list once, right before the first
-  download's first request (never at startup: the read takes 21–74 ms on the main thread), and keeps
+  download's first request (never at startup: read, filter and set take about 50–110 ms on the main thread), and keeps
   every certificate that was there. It applies to the main process's TLS only; Chromium verifies
   its own connections.
   - **Filtered.** On Windows the store as Node reads it is not a list of roots: it also holds

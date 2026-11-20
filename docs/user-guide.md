@@ -91,7 +91,8 @@ The first launch walks you through a short, full-window setup:
    are not encrypted — they are public weights, not your data. The local diagnostics log is
    encrypted along with your workspace.) The password is
    **never stored** anywhere, and if you forget it the data cannot be recovered — that's
-   the point. While you type, a small strength meter offers honest advice (longer is
+   the point (to start over, see [`troubleshooting.md`](troubleshooting.md), "I forgot my
+   workspace password"). While you type, a small strength meter offers honest advice (longer is
    stronger); it never blocks you. The **eye button** reveals what you typed, and pasting
    from a password manager works normally. On developer drives a toggle offers a **plaintext
    workspace** (no password, unencrypted) instead.

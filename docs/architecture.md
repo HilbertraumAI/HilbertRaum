@@ -6563,8 +6563,7 @@ one, and each glossary is pinned on top of its catalog file.
     `preview/preview.tsx`. Its limits: a join built from variables, or one in a `.ts` file, is not
     seen.
   - Left as they are: the dash typed in code between an activity line's time and its entry
-    (`DiagnosticsTab.tsx`); the main process's refusal to start a model that needs more memory than
-    the computer has, which is English (`registerModelIpc.ts`); and Spanish figures, which `Intl`
+    (`DiagnosticsTab.tsx`), and Spanish figures, which `Intl`
     writes in the Spain pattern for every Spanish-speaking user, since it is given the language
     code alone. The Spanish review decision labels put the decision in parentheses («Revisado
     (respaldado)»), so the summary's join adds the only colon (owner call of 2026-11-14 in the
@@ -16977,7 +16976,8 @@ under `ELECTRON_RUN_AS_NODE`, loopback only):
   not trust it as a root for anything, and the downloads now do (the review's measurement). The
   default list goes from 119 to 136.
 - Cost on the main thread: reading the system store 21–74 ms, the filter (signature check
-  included) and de-duplication 23–26 ms, setting the list 5–12 ms. In the test workers (Node 24.13,
+  included) and de-duplication 23–26 ms, setting the list 5–12 ms: about 50–110 ms in all (read,
+  filter and set, once, before the first download). In the test workers (Node 24.13,
   under load) the unfiltered call took 42–107 ms.
 - Electron's eMudhra block (GHSA-jr5w-w6x2-84p9) is not part of the CA list. Electron's patch
   `patches/node/tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra
@@ -17014,7 +17014,7 @@ under `ELECTRON_RUN_AS_NODE`, loopback only):
 - It is **lazy**. Its one caller is `downloadToFile` (`assets.ts`), after the URL check and before
   the request. Every in-app downloader (models, the AI engine, the knowledge-pack tools, the OCR
   files) reaches the network only through `downloadToFile`; the sidecar clients talk plain HTTP on
-  loopback and never call it. Not at startup: the 40–90 ms would land before the first paint
+  loopback and never call it. Not at startup: the 50–110 ms would land before the first paint
   (BUILD_STATE §5 item 18(g)).
 - It **never throws into a download**. A store read that throws, an empty store (a minimal Linux),
   a store with nothing usable or new, or a list Node refuses keeps the default trust. It logs one

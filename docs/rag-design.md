@@ -55,7 +55,9 @@ valid and lets the real embedder swap in unchanged (Phase 10).
    without the spaces it ends in, and without its trailing dots when a supported extension is
    then left (`importedFileTitle`, #918): `notes.txt ` and `report.pdf.` import as `notes.txt`
    and `report.pdf`, while "Washington, D.C." and "v2.1" keep their names. macOS and Linux allow
-   such names, and so do Node, Git Bash and WSL on NTFS; Explorer, cmd and PowerShell strip them. Every later
+   such names, and so do Node, Git Bash and WSL on NTFS; Explorer, cmd and PowerShell strip them. On Windows the file picker lists such a file under
+   "All files" but cannot open it (an OS limit; a typed path loses its trailing space), so a drop or a
+   folder import hands the app such a file. Every later
    reader (the parser, the MIME type, the stored copy's name, the exports) takes the extension
    from this title, so they all agree.
 3. **Extract.** `processDocument()` copies the original into the workspace
