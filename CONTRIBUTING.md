@@ -92,6 +92,10 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   spelling. Vitest does not: from `c:\…` it stops at once with a message naming the real spelling.
   Change to it (PowerShell: `Set-Location 'C:\path\to\HilbertRaum'`) and run again. The cause and the
   build-side fix: [`docs/packaging.md`](docs/packaging.md) "Build paths — design record (#646)".
+- **The app-menu smoke takes the foreground.** `tests/integration/app-menu-electron-smoke.test.ts` drives a real, shown
+  Electron window and presses keys in it, so it needs the active window: another app (or a second Electron run) taking
+  the foreground mid-run costs a key step its activation (the runner repeats such a step up to three times, then the row
+  fails). Run it alone, and do not click into another window while it runs.
 - **From `apps/desktop`** the direct forms work too: `npx vitest run tests/unit/some-file.test.ts`,
   `npx vitest run -t "a test-name substring"` and `npm run test:watch`.
 - **Window security wiring is pin-tested.** The `webPreferences` hardening flags, the CSP
