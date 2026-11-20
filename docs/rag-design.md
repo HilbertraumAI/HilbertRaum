@@ -2421,6 +2421,40 @@ join → reduce). Beyond the hard ceiling the tail stays honestly beginning-only
 lever, not unbounded — the dominant cost is one map call per window on CPU, covered by the Phase 3 progress
 notice).
 
+**A list-shaped question's map and fold steps see the question (#939, follow-ups wave 4, owner call
+2026-11-20).** The map and fold prompts carried the skill fence but never the question: `mapUserPrompt` asked
+for "every detail the task needs" for "the task described below", which is the fence. So a question the
+whole-document engine takes that is not the skill's deliverable ("Find every mention of 'indemnity'" under
+Contract Brief) was answered from notes taken for the brief, under a whole-document coverage label: over a
+19-section lease with three indemnity articles, qwen3-4b-instruct-q4 named one and qwen3.5-9b-ud-q4kxl said
+there was no mention. Now, when the question asks to find or list something, the map and fold prompts carry it
+under the reduce's own label, `User request:`, before the fence (`userRequestBlock`), and their instruction adds
+"and everything the user request asks about" (the map: "when it asks to find or list something, note each place
+with its exact wording"); the task clause stays word for word. **The gate:** `registerRagIpc` sets
+`wholeDocumentNotesForRequest` on the whole-document engine's read when the turn skill is a bundled one
+(`source === 'app'`) and `asksForList(question)` holds: the router's own list detection (`analysis/router.ts`,
+step 4b's test: a list or count request, a quantifier inside a question, or the every-mention chip in every
+catalog), shared, not copied. It reaches `streamWholeDocMapReduce` through both rescues (`notesForRequest`).
+Every other read sends the map and fold prompts as they were, byte for byte: every deliverable in any language
+("Summarize this contract", "Write the meeting minutes", the summarize chip, «Fasse dieses Dokument
+zusammen»), any other question, a user skill, and the no-skill tree summary. **Why gated (measured on the
+GTX 1070 Ti, b9849, one run per question, master `5dc4e058` against the branch; another program shared the GPU
+during the branch turns, so times are not compared):** with the request on every map call, the list-all
+question went from 1/3 to 3/3 indemnity articles on the 4B and from 0/3 to 3/3 on the 9B (and the German chip,
+read whole since #834, 3/3 on the 9B), but Meeting Minutes over a 14-section transcript lost facts, 5 → 2 of 8
+on the 4B and 8 → 6 on the 9B (the next-meeting date in its last line). Contract Brief's summary gained facts
+(4 → 7, 4 → 6). So the request rides only where it was measured to help, and a deliverable cannot regress.
+Cost of the gated case: the question was already reserved in every window (`reserveWords`, the fold's
+overhead), so window size and count stay the same; each map or fold call adds the question and about 40 tokens
+of instruction. No cache keys on these prompts or their notes (`summary_cache` holds the deep-index build's node
+summaries, which this path only reads). Tests: `rag-whole-doc-compare.test.ts` (the #939 describe: the chip in
+en, de and es and a typed list question carry the request on every map call; four deliverables and a user
+skill's list question send the prompt as it was, rebuilt by `asPreRequestMapPrompt` in
+`tests/helpers/whole-doc-fixtures.ts`), `rag-whole-doc-mapreduce.test.ts` (the flag on and off, map and fold),
+`rag-whole-doc-tree.test.ts` (the tree's map steps, with the flag and with no skill), and the chip row of
+`rag-whole-doc-skill.test.ts` (ten languages). Residuals: [`known-limitations.md`](known-limitations.md)
+("A whole-document read's notes and the question").
+
 **Residuals** (see `known-limitations.md`): a document beyond the **hard** ceiling (~100 pages) is still
 beginning-only (INPUT, tree territory); a deliverable long enough to still be cut after the 2-cap keeps the
 honest OUTPUT-truncated badge; 2–24 map calls (+ fold) of latency on a large analysis (with the Phase 3
