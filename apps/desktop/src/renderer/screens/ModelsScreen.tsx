@@ -938,8 +938,11 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   function downloadSection(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     if (m.state !== 'missing' && m.state !== 'checksum_failed') return null
-    // #932 (A S-A9): no checksum on record is not a damaged file. A download cannot give the manifest a checksum, and
-    // main refuses it anyway (`main.download.presentUnverified`): the card's hint says what the model needs instead.
+    // #932 (A S-A9): no checksum on record is not a damaged file, and a download cannot give the manifest a checksum:
+    // the model stays refused while any of its files has none, so the card's hint says what it needs instead. When no
+    // file needs fetching, main refuses the download too (`main.download.presentUnverified`). A mixed manifest (a
+    // real-hash GGUF, damaged, beside a placeholder projector) would get the GGUF planned and fetched, but the new copy
+    // still could not start, so the button stays hidden there too (#933 review N2; docs/model-policy.md "Model states").
     if (m.noChecksum) return null
     // #196: the publisher removed the pinned file. Explain instead of offering a button that
     // can only end in an HTTP 404 — the main process refuses the start regardless.

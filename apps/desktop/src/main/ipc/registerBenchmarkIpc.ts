@@ -1096,9 +1096,17 @@ function buildPlacement(
   const transcriberManifest = byRole('transcriber')
   // With no vision model on the drive the row still names the catalog's (every model the app can hold). #933 (A S-A7):
   // like `getVisionStatus`, the row passes over a candidate whose files the cache knows are damaged (or have no
-  // checksum on record) for the next one; with none that passes, it names the first, which then says so.
+  // checksum on record) for the next one; with none that passes, it names the first, which then says so. Loaded beats
+  // the verdict, as on every row (#933 review N1): while the images service holds a model, the row names THAT model
+  // (`loadedModelId`: the pick, or the next candidate when the pick was passed over at its start), so its name, size and
+  // "loaded now" describe the one in memory. A service that cannot say which (an unknown id) leaves the pick.
+  const visionLoaded = ctx.vision?.isLoaded?.() ?? false
+  const visionLoadedId = visionLoaded ? (ctx.vision?.loadedModelId?.() ?? null) : null
+  const loadedVision =
+    visionLoadedId != null ? manifests.find((m) => m.id === visionLoadedId && m.role === 'vision') : undefined
   const visionManifest =
-    visionCandidates(manifests, ctx.paths.rootPath).find((m) => fileCheck(m) === 'ok') ??
+    loadedVision ??
+    (visionLoaded ? undefined : visionCandidates(manifests, ctx.paths.rootPath).find((m) => fileCheck(m) === 'ok')) ??
     pickVisionManifest(manifests, ctx.paths.rootPath) ??
     byRole('vision')
   // Each row's `onDrive` is the presence rule defined with `model` above (#914).
@@ -1147,7 +1155,7 @@ function buildPlacement(
       onDrive: onDrive(visionManifest),
       fileCheck: fileCheck(visionManifest),
       device: 'cpu',
-      loaded: ctx.vision?.isLoaded?.() ?? false,
+      loaded: visionLoaded,
       lifetime: 'idle',
       gpuLayers: null,
       totalLayers: null

@@ -399,6 +399,87 @@ describe('buildPerformanceSnapshot', () => {
     expect((await getVisionStatus(ctx)).modelId).toBe('b-vision')
   })
 
+  // #933 review N1: loaded beats the verdict on the images row too, and the row names the model the images service
+  // holds (`loadedModelId`), so its name, size, "loaded now" and its share of the total describe the one in memory.
+  // (a) The pick was resident when the check found it damaged: the row keeps naming it, not the next candidate.
+  // (b) The pick was already damaged when Images started, so the service loaded the next candidate: the row names that.
+  it.each<[string, string, { modelId: string; fileCheck: 'ok' | 'damaged' }]>([
+    ['the pick, resident when a check found it damaged', 'a-vision', { modelId: 'a-vision', fileCheck: 'damaged' }],
+    ['the next candidate, loaded because the pick was damaged first', 'b-vision', { modelId: 'b-vision', fileCheck: 'ok' }]
+  ])('#933: while the images service holds a model, the row names the loaded model: %s', (_case, loadedId, expected) => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult() })
+    const vision = (id: string, sizeGb: number, flagged: boolean): Record<string, unknown> => {
+      const local = `models/vision/${id}.gguf`
+      const projector = `models/vision/${id}-mmproj.gguf`
+      return rawManifest({
+        id,
+        role: 'vision',
+        input_modalities: ['text', 'image'],
+        size_on_disk_gb: sizeGb,
+        local_path: local,
+        sha256: writeDriveFile(root, local, `${id} weights`),
+        mmproj: { local_path: projector, sha256: writeDriveFile(root, projector, `${id} projector`) },
+        ...(flagged ? { default_for_role: true } : {})
+      })
+    }
+    const dir = manifestsDirWith(vision('a-vision', 3.3, true), vision('b-vision', 2.2, false))
+    primeChecksum(join(root, 'models', 'vision', 'a-vision.gguf'), 'f'.repeat(64)) // the pick: damaged
+    const ctx = ctxWith(root, db, { manifestsDir: dir, vision: { isLoaded: () => true, loadedModelId: () => loadedId } })
+    const p = buildPerformanceSnapshot(ctx).placement
+    const row = p.models.find((r) => r.role === 'vision')
+    expect(row).toMatchObject({ ...expected, loaded: true, sizeOnDiskGb: loadedId === 'a-vision' ? 3.1 : 2.0 })
+    expect(p.totals.ramAllMb).toBe(sumMb(row ? [row] : []))
+  })
+
+  // #933 review N4: a check that stops at the first damaged file of a multi-file model leaves the mismatch cached for
+  // that file only (#913's S-913-1 case): a projector, or a shard of a `files:` set. The row must read it as damaged.
+  it.each<[string, 'projector' | 'shard']>([
+    ['the projector of a vision model', 'projector'],
+    ['the second shard of a split chat model', 'shard']
+  ])('#933: a mismatch cached for %s alone reads damaged', (_case, which) => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const manifest =
+      which === 'projector'
+        ? rawManifest({
+            id: 'vl',
+            role: 'vision',
+            input_modalities: ['text', 'image'],
+            local_path: 'models/vision/vl.gguf',
+            sha256: writeDriveFile(root, 'models/vision/vl.gguf', 'weights'),
+            mmproj: { local_path: 'models/vision/vl-mmproj.gguf', sha256: writeDriveFile(root, 'models/vision/vl-mmproj.gguf', 'projector') }
+          })
+        : rawManifest({
+            id: 'split',
+            local_path: 'models/chat/split-00001-of-00002.gguf',
+            sha256: writeDriveFile(root, 'models/chat/split-00001-of-00002.gguf', 'shard one'),
+            files: [{ local_path: 'models/chat/split-00002-of-00002.gguf', sha256: writeDriveFile(root, 'models/chat/split-00002-of-00002.gguf', 'shard two') }]
+          })
+    const damagedFile = which === 'projector' ? 'models/vision/vl-mmproj.gguf' : 'models/chat/split-00002-of-00002.gguf'
+    primeChecksum(join(root, ...damagedFile.split('/')), 'f'.repeat(64))
+    updateSettings(db, { lastBenchmark: hereResult(), ...(which === 'shard' ? { activeModelId: 'split' } : {}) })
+    const rows = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: manifestsDirWith(manifest), vision: { isLoaded: () => false } }))
+      .placement.models
+    expect(rows.find((r) => r.role === (which === 'projector' ? 'vision' : 'chat'))).toMatchObject({ onDrive: true, fileCheck: 'damaged' })
+  })
+
+  // #933 review N4: developer leniency needs the drive policy too (`developerLeniency`). With the toggle on and a dev
+  // build, a commercial policy (`allow_unverified_models: false`) still refuses a placeholder, so the row stays
+  // `unverified`.
+  it('#933: developer mode under a policy that forbids unverified models keeps a no-checksum model unverified', () => {
+    const root = freshRoot()
+    writeDriveFile(root, 'models/chat/ph.gguf', 'weights')
+    writeDriveFile(root, 'config/policy.json', JSON.stringify({ models: { allow_unverified_models: false, require_sha256_match: true } }))
+    const dir = manifestsDirWith(rawManifest({ id: 'ph', local_path: 'models/chat/ph.gguf' })) // the fixture's hash is the placeholder
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'ph', developerMode: true })
+    const p = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: dir, isDev: true })).placement
+    expect(p.models[0]).toMatchObject({ role: 'chat', modelId: 'ph', fileCheck: 'unverified' })
+    expect(p.totals.ramAllMb).toBeNull()
+  })
+
   // #848 review: the Performance screen names a role's model by the SAME pick the app composes with (the flagged
   // default first, `pickManifestForRole` behind `resolveModelByRole`), never simply the first file of the role, so the
   // embedder row cannot name a model the app does not run. #890: nor does the `activeEmbeddingModelId` setting move

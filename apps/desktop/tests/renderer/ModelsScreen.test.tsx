@@ -178,6 +178,18 @@ describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Se
       expect(screen.queryByText(/No longer available for download/)).not.toBeInTheDocument()
     })
   })
+
+  // #933 review N4 (#932): a model with no checksum on record has no Download, so it must not raise the network-gate
+  // banner either: the banner would blame the drive policy for a button that is not there.
+  it('does not raise the network-gate banner for a model with no checksum on record (#932)', async () => {
+    stub({
+      models: [model({ state: 'checksum_failed', noChecksum: true })],
+      policy: policyStatus({ downloadsAllowed: false, settingOn: true })
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.queryByText(/disabled by this drive’s policy/)).not.toBeInTheDocument()
+  })
 })
 
 describe('ModelsScreen — "AI Model" reframe (Phase 26, guidelines §2)', () => {

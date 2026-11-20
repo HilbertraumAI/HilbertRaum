@@ -919,13 +919,16 @@ describe('PerformanceScreen: models on this computer', () => {
   })
 
   // #933: "Your model" claims no fit for an active model every start refuses, and its pill says what its row says. Its
-  // files are on disk, so the line keeps their size.
-  it('#933: "Your model" states no fit for an active model whose files failed their check', async () => {
+  // files are on disk, so the line keeps their size. Both verdicts (#933 review N4: `unverified` was not rendered).
+  it.each<[ModelFileVerdict, 'perf.models.damaged' | 'perf.models.noChecksum']>([
+    ['damaged', 'perf.models.damaged'],
+    ['unverified', 'perf.models.noChecksum']
+  ])('#933: "Your model" states no fit for an active model that every start refuses (fileCheck %s)', async (fileCheck, key) => {
     install(
       snapshot({
         placement: placement({
-          model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, onDrive: true, fileCheck: 'damaged', contextTokens: 8192 },
-          models: withRow('chat', { fileCheck: 'damaged', loaded: false })
+          model: { id: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.8, onDrive: true, fileCheck, contextTokens: 8192 },
+          models: withRow('chat', { fileCheck, loaded: false })
         })
       })
     )
@@ -933,7 +936,7 @@ describe('PerformanceScreen: models on this computer', () => {
     await screen.findByText('Models on this computer')
     const block = screen.getByText('Your model').closest<HTMLElement>('.perf-model')
     if (!block) throw new Error('the Your model block has no .perf-model container')
-    expect(within(block).getByText(t('en', 'perf.models.damaged'))).toBeInTheDocument()
+    expect(within(block).getByText(t('en', key))).toBeInTheDocument()
     expect(within(block).queryByText(/Should fit|Needs at least|Takes /)).not.toBeInTheDocument()
     expect(within(block).queryByText(t('en', 'perf.place.gpu'))).not.toBeInTheDocument()
     expect(within(block).getByText(/5\.8 GB on disk/)).toBeInTheDocument()

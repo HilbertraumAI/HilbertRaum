@@ -471,7 +471,10 @@ a newer HilbertRaum (#847, above) is listed as `unsupported` too, display-only: 
   before any file is read). `buildModelList` flags the model `ModelInfo.noChecksum: true`
   (`hasPlaceholderHash`, #932). The card says **No checksum**, with a hint that the model runs only in
   developer mode on a drive whose policy allows unverified models, and offers no Download: a new copy
-  cannot give the manifest a checksum.
+  cannot give the manifest a checksum. A mixed manifest (a real-hash GGUF beside a placeholder
+  projector) is flagged too, even when its GGUF is damaged: the placeholder decides the state before
+  the GGUF is read, and the model stays refused until every file has a checksum, so the card hides the
+  Download that would fetch the GGUF (#933 review N2).
 
 `ModelState`, the start verdict (`checkModelBeforeStart`: `ok` | `damaged`) and every role's start gate
 are the same for both, so both are refused at every start. The images, translation and search copy still

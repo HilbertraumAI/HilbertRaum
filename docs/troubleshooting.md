@@ -296,8 +296,8 @@ its hash. There is no Download button, because a new copy cannot give the manife
 use the model, either write its real `sha256` into the manifest with `scripts/verify-models.sh
 --generate` (or the `.ps1`), or turn on Developer mode on a drive whose policy allows unverified
 models. The Performance screen says "no checksum on record" for the same model. The Images and
-Translate screens still say such a model failed its file check (see
-[`known-limitations.md`](known-limitations.md)).
+Translate screens, and the app's log when it refuses to start such a chat model on its own, still
+say it failed its file check (see [`known-limitations.md`](known-limitations.md)).
 
 **If an in-app download stalls near the end (~95%) and then "checksum failed" after Resume**, the
 manifest's fingerprint or `size_bytes` doesn't match the real upstream file — re-copying won't help

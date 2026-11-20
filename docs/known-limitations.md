@@ -2922,8 +2922,10 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   before capturing its hash) is refused at every start unless developer mode is on and the drive's
   policy allows unverified models. The AI Model screen says "No checksum" for it, and the Performance
   screen "no checksum on record". The Images and Translate screens still say that its file failed its
-  check and should be downloaded again, and the document search says to check all model files and try
-  again. Neither can help: such a model needs a real checksum in its manifest.
+  check and should be downloaded again. So does the app's log when it refuses to start such a chat
+  model on its own (at unlock, or after the AI engine is installed or checked again); no screen offers
+  to start it. The document search says to check all model files and try again. None of this can
+  help: such a model needs a real checksum in its manifest.
 - **The speed line under an answer can read "1 tokens".** In English, the line under a finished
   chat answer ("42 tok/s · 1.8 s to first token · 615 tokens") ends in "1 tokens" after a
   one-token answer. The other count sentences that read wrong at exactly 1 in English and German
