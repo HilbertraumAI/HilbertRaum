@@ -135,27 +135,47 @@ describe('validateManifest', () => {
 
   // The processor-path fields (model-benchmarks.md §6.7): optional, and validated like the other
   // fields that move a recommendation. Absent leaves the manifest shape unchanged.
-  it('parses recommendation_rank_cpu and cpu_step_down_to, leaving both undefined when omitted (§6.7)', () => {
-    const both = validateManifest(rawManifest({ recommendation_rank_cpu: 0, cpu_step_down_to: ' lighter-model ' })).manifest
+  it('parses recommendation_rank_cpu and step_down_to, leaving both undefined when omitted (§6.7)', () => {
+    const both = validateManifest(rawManifest({ recommendation_rank_cpu: 0, step_down_to: ' lighter-model ' })).manifest
     expect(both?.recommendationRankCpu).toBe(0)
-    expect(both?.cpuStepDownTo).toBe('lighter-model')
+    expect(both?.stepDownTo).toBe('lighter-model')
     expect(validateManifest(rawManifest({ recommendation_rank_cpu: 3 })).manifest?.recommendationRankCpu).toBe(3)
     const absent = validateManifest(rawManifest())
     expect(absent.ok).toBe(true)
     expect('recommendationRankCpu' in (absent.manifest ?? {})).toBe(false)
-    expect('cpuStepDownTo' in (absent.manifest ?? {})).toBe(false)
+    expect('stepDownTo' in (absent.manifest ?? {})).toBe(false)
   })
 
-  it('rejects a negative or non-numeric recommendation_rank_cpu and an empty or non-string cpu_step_down_to (§6.7)', () => {
+  it('rejects a negative or non-numeric recommendation_rank_cpu and an empty or non-string step_down_to (§6.7)', () => {
     for (const value of [-1, 'x', '3', true, Number.NaN, Number.POSITIVE_INFINITY, null]) {
       const res = validateManifest(rawManifest({ recommendation_rank_cpu: value }))
       expect(res.ok, String(value)).toBe(false)
       expect(res.errors.some((e) => e.includes('recommendation_rank_cpu')), String(value)).toBe(true)
     }
     for (const value of ['', '   ', 3, true, ['a'], null]) {
-      const res = validateManifest(rawManifest({ cpu_step_down_to: value }))
+      const res = validateManifest(rawManifest({ step_down_to: value }))
       expect(res.ok, String(value)).toBe(false)
-      expect(res.errors.some((e) => e.includes('cpu_step_down_to')), String(value)).toBe(true)
+      expect(res.errors.some((e) => e.includes('step_down_to')), String(value)).toBe(true)
+    }
+  })
+
+  // The card-path fields (model-benchmarks.md §6.8), validated the same way.
+  it('parses recommendation_rank_gpu and projected_graphics_need_mib, leaving both undefined when omitted (§6.8)', () => {
+    const both = validateManifest(rawManifest({ recommendation_rank_gpu: 0, projected_graphics_need_mib: 5919 })).manifest
+    expect(both?.recommendationRankGpu).toBe(0)
+    expect(both?.projectedGraphicsNeedMib).toBe(5919)
+    const absent = validateManifest(rawManifest())
+    expect('recommendationRankGpu' in (absent.manifest ?? {})).toBe(false)
+    expect('projectedGraphicsNeedMib' in (absent.manifest ?? {})).toBe(false)
+  })
+
+  it('rejects a negative or non-numeric recommendation_rank_gpu or projected_graphics_need_mib (§6.8)', () => {
+    for (const key of ['recommendation_rank_gpu', 'projected_graphics_need_mib']) {
+      for (const value of [-1, 'x', '3', true, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+        const res = validateManifest(rawManifest({ [key]: value }))
+        expect(res.ok, `${key}=${String(value)}`).toBe(false)
+        expect(res.errors.some((e) => e.includes(key)), `${key}=${String(value)}`).toBe(true)
+      }
     }
   })
 

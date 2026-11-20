@@ -18,6 +18,9 @@ recommendation_rank: 1  # Phase-29: ranked below the 12-14B winner Gemma 4 (slow
 # Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
 # the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
 recommendation_rank_cpu: 0
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 41/41 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 10041
 recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: false

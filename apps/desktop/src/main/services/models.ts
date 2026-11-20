@@ -1398,6 +1398,9 @@ export function weightsMib(m: ModelManifest): number {
  * catalog. That analysis retires the "GGUF header" half of §5 item 22 (e).
  */
 export function estimateGraphicsNeedMib(m: ModelManifest): number {
+  // §6.8: a manifest that carries the runtime's own projection is judged by it. It is the figure
+  // llama.cpp's fit compares with the card's free memory, so only the fit margin is added.
+  if (m.projectedGraphicsNeedMib !== undefined) return m.projectedGraphicsNeedMib + VRAM_FIT_MARGIN_MIB
   const w = weightsMib(m)
   const onCard = w - Math.min(m.hostMappedWeightsMib ?? 0, w)
   const cacheGib = m.estimatedContextCacheGib ?? VRAM_DEFAULT_CONTEXT_CACHE_GIB
@@ -1515,18 +1518,31 @@ export function recommendModelIdByVram(
   budgetMib: number,
   ramGb: number,
   role: ModelRole = 'chat',
-  speedSignal?: PickerSpeedSignal | null
+  speedSignal?: PickerSpeedSignal | null,
+  card?: CardEvidence | null
 ): string | null {
   if (!Number.isFinite(budgetMib) || budgetMib <= 0) return recommendModelIdByRam(manifests, ramGb, role, speedSignal)
-  const candidates = manifests.filter((m) => m.role === role)
+  // §6.8: a catalog that carries card ranks is ranked by them here, and then the highest-ranked
+  // model that fits the card is the pick outright (step 2 below is skipped). A catalog without
+  // them is rule C, unchanged.
+  const cardRanked = manifests.some((m) => m.role === role && m.recommendationRankGpu !== undefined)
+  const view = cardRanked
+    ? manifests.map((m) =>
+        m.recommendationRankGpu !== undefined ? { ...m, recommendationRank: m.recommendationRankGpu } : m
+      )
+    : manifests
+  const candidates = view.filter((m) => m.role === role)
   const ramKnown = Number.isFinite(ramGb) && ramGb > 0
   const eligible = (m: ModelManifest): boolean =>
-    fitsGraphicsMemory(m, budgetMib) && (!ramKnown || m.recommendedMinRamGb <= ramGb)
+    fitsGraphicsMemory(m, budgetMib) &&
+    (!ramKnown || m.recommendedMinRamGb <= ramGb) &&
+    !landedPartlyOnCard(m, budgetMib, card)
 
+  // The no-fit fallback is the RAM pick of the ordinary ranks: with nothing on the card, RAM decides.
   const baseId = recommendModelIdByRam(manifests, ramGb, role)
   const base = baseId ? candidates.find((m) => m.id === baseId) : undefined
   let candidate: ModelManifest | undefined
-  if (base && eligible(base)) {
+  if (!cardRanked && base && eligible(base)) {
     candidate = base
   } else {
     // STRICTLY ranked (owner decision 2026-09-06, issue #326): a rank-0 model is never the
@@ -1536,7 +1552,51 @@ export function recommendModelIdByVram(
     candidate = pool[0] ?? base
   }
   if (!candidate) return null
+  // §6.8: with card ranks a slow reading follows the pick's named chain first (a no-fit fallback
+  // never steps: nothing eligible exists to step to); what the chain does not cover is §6.5.
+  if (cardRanked && eligible(candidate)) {
+    const stepped = followStepDownChain(candidates, candidate.id, speedSignal, (m) => m.recommendationRank > 0 && eligible(m))
+    if (stepped !== undefined) return stepped
+  }
   return applySpeedSignal(candidates, candidate, speedSignal, eligible).id
+}
+
+/**
+ * The named step-down (model-benchmarks.md §6.7, used by the card path too since §6.8): follow
+ * each manifest's `step_down_to` from the no-signal pick `startId`, over models `usable` admits.
+ *
+ *   - no slow reading, or none on a model → `startId` (nothing moves);
+ *   - the measured model lies on the chain and has a usable target → that target;
+ *   - the measured model is the END of a chain that was followed → it stays the recommendation;
+ *   - the measured model is not on the chain, or is the start with no usable target of its own →
+ *     `undefined`: the caller's §6.5 rule decides.
+ */
+function followStepDownChain(
+  candidates: ModelManifest[],
+  startId: string,
+  signal: PickerSpeedSignal | null | undefined,
+  usable: (m: ModelManifest) => boolean
+): string | undefined {
+  const tps = signal?.tokensPerSecond
+  const measuredId = signal?.measuredModelId
+  if (tps == null || tps <= 0 || tps >= SLOW_PICK_TOKENS_PER_SECOND || !measuredId) return startId
+  const byId = new Map(candidates.map((m) => [m.id, m]))
+  const target = (m: ModelManifest): ModelManifest | undefined => {
+    const next = m.stepDownTo ? byId.get(m.stepDownTo) : undefined
+    return next && usable(next) ? next : undefined
+  }
+  const seen = new Set<string>()
+  let current = byId.get(startId)
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id)
+    const next = target(current)
+    if (current.id === measuredId) {
+      if (next) return next.id
+      return current.id === startId ? undefined : current.id
+    }
+    current = next
+  }
+  return undefined
 }
 
 /**
@@ -1551,7 +1611,7 @@ export function recommendModelIdByVram(
  *      the ranked pool, a model that suits a processor carries its own rank. A catalog without the
  *      field gives exactly the RAM pick.
  *   2. STEP-DOWN. A benchmark under `SLOW_PICK_TOKENS_PER_SECOND` on a model that lies on the
- *      pick's `cpu_step_down_to` chain recommends that model's own target. The chain is followed
+ *      pick's `step_down_to` chain recommends that model's own target. The chain is followed
  *      from the no-signal pick, so the answer is still a function of RAM and the one measurement
  *      (nothing is stored), yet a second slow benchmark on the stepped model steps again: the
  *      9B's chain ends at the fastest ranked model instead of one band below. A target the
@@ -1570,28 +1630,62 @@ export function recommendModelIdForProcessor(
   )
   const baseId = recommendModelIdByRam(view, ramGb, 'chat')
   if (baseId === null) return null
-  const tps = speedSignal?.tokensPerSecond
-  const measuredId = speedSignal?.measuredModelId
-  if (tps == null || tps <= 0 || tps >= SLOW_PICK_TOKENS_PER_SECOND || !measuredId) return baseId
-
-  const chat = new Map(view.filter((m) => m.role === 'chat').map((m) => [m.id, m]))
-  const usable = (m: ModelManifest | undefined): m is ModelManifest =>
-    m !== undefined && m.recommendationRank > 0 && m.recommendedMinRamGb <= ramGb
-  const seen = new Set<string>()
-  let current = chat.get(baseId)
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id)
-    const next = current.cpuStepDownTo ? chat.get(current.cpuStepDownTo) : undefined
-    if (current.id === measuredId) {
-      if (usable(next)) return next.id
-      // The end of a chain that was actually followed stays put. A pick with no usable target of
-      // its own was never on a chain: the §6.5 rule below decides.
-      if (current.id !== baseId) return current.id
-      break
-    }
-    current = usable(next) ? next : undefined
-  }
+  const chat = view.filter((m) => m.role === 'chat')
+  const stepped = followStepDownChain(chat, baseId, speedSignal, (m) => m.recommendationRank > 0 && m.recommendedMinRamGb <= ramGb)
+  if (stepped !== undefined) return stepped
   return recommendModelIdByRam(view, ramGb, 'chat', speedSignal)
+}
+
+/**
+ * What earlier starts on THIS computer's card showed (model-benchmarks.md §6.8): the persisted
+ * placement per model id, already limited by the caller to this machine, and the context
+ * override in force. The picker reads it to drop a model that was seen landing only partly on
+ * the card.
+ */
+export interface CardEvidence {
+  placements: Readonly<Record<string, Pick<ModelPlacement, 'backend' | 'gpuLayers' | 'totalLayers' | 'contextTokens' | 'gpuFreeAtStartMb'>>>
+  /** `AppSettings.contextTokensOverride`, or null when the manifests' own context applies. */
+  contextTokensOverride?: number | null
+}
+
+/**
+ * The card evidence the settings hold for THIS machine (`here`, a `machineKey`): a placement
+ * stamped with another machine's key supplies nothing, an unstamped one stays eligible, like the
+ * probe. One function for every seam that feeds the picker, so they cannot disagree.
+ */
+export function cardEvidenceFor(
+  s: { modelPlacements: Record<string, ModelPlacement>; contextTokensOverride: number | null },
+  here: string | null
+): CardEvidence {
+  const placements: Record<string, ModelPlacement> = {}
+  for (const [id, p] of Object.entries(s.modelPlacements ?? {})) {
+    if (here == null || p.machineKey == null || p.machineKey === here) placements[id] = p
+  }
+  return { placements, contextTokensOverride: s.contextTokensOverride ?? null }
+}
+
+/** How far below the present budget a start's free memory may lie and still count as "the same card state", MiB. */
+export const PARTIAL_EVIDENCE_TOLERANCE_MIB = 256
+
+/**
+ * Did an earlier start of this model land only PARTLY on the card, under conditions that still
+ * hold (§6.8)? The estimate says what should fit; this is what did. The record counts when
+ *   - it is a card start with fewer layers on the card than the model has,
+ *   - its context was no larger than the one the next start launches with (a partial offload at
+ *     a larger context proves nothing about a smaller one), and
+ *   - the card had at least as much free memory then as the budget offers now, within
+ *     `PARTIAL_EVIDENCE_TOLERANCE_MIB` (a start beside a game that filled the card must not
+ *     demote the model for good). An unknown free figure counts: the layers are the evidence.
+ * A later start of the same model that lands fully overwrites the record and lifts the exclusion.
+ */
+export function landedPartlyOnCard(m: ModelManifest, budgetMib: number, card: CardEvidence | null | undefined): boolean {
+  const seen = card?.placements[m.id]
+  if (!seen || seen.backend !== 'gpu') return false
+  if (seen.gpuLayers == null || seen.totalLayers == null || seen.gpuLayers >= seen.totalLayers) return false
+  const launchContext = card?.contextTokensOverride ?? (m.recommendedContextTokens || Number.POSITIVE_INFINITY)
+  if (seen.contextTokens > launchContext) return false
+  const free = seen.gpuFreeAtStartMb
+  return free == null || free >= budgetMib - PARTIAL_EVIDENCE_TOLERANCE_MIB
 }
 
 /** What the chat picker needs to know about the computer's memory (benchmark.md "Your model"). */
@@ -1605,6 +1699,8 @@ export interface PickerMemory {
    * there is no card / the figure is unknown (→ the RAM pick).
    */
   budgetMb: number | null
+  /** Earlier starts on this machine's card (§6.8); absent or null → the fit estimate alone decides. */
+  card?: CardEvidence | null
 }
 
 /**
@@ -1618,7 +1714,7 @@ export function recommendChatModelId(
   speedSignal?: PickerSpeedSignal | null
 ): string | null {
   if (memory.memoryClass === 'discrete' && memory.budgetMb != null && memory.budgetMb > 0) {
-    return recommendModelIdByVram(manifests, memory.budgetMb, memory.ramGb, 'chat', speedSignal)
+    return recommendModelIdByVram(manifests, memory.budgetMb, memory.ramGb, 'chat', speedSignal, memory.card)
   }
   if (memory.memoryClass === 'cpu') return recommendModelIdForProcessor(manifests, memory.ramGb, speedSignal)
   return recommendModelIdByRam(manifests, memory.ramGb, 'chat', speedSignal)
@@ -1717,6 +1813,8 @@ export interface BuildModelListOptions {
    */
   memoryClass?: MemoryClass
   graphicsBudgetMb?: number | null
+  /** Earlier starts on this machine's card (§6.8, `cardEvidenceFor`); omitted → the estimate alone. */
+  cardEvidence?: CardEvidence | null
   /**
    * Optional verification-progress sink. Called once per model that will be hashed (with
    * a 1-based step index + the byte-weighted overall totals), throttled within a file by
@@ -1809,7 +1907,7 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // signal applies to the chat pick only.
   const recommendedChat = recommendChatModelId(
     all,
-    { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null },
+    { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null, card: opts.cardEvidence ?? null },
     opts.speedSignal
   )
   // #848 review: an embeddings card has nothing to select (the app composes its own pick), so its ★ marks the model

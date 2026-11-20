@@ -300,7 +300,8 @@ describe('placementVerdict', () => {
       ['gemma4-12b-it-qat-q4', 8],
       ['gemma4-26b-a4b-it-qat-q4', 16],
       ['qwen3.6-27b-q5', 20],
-      ['qwen3.5-35b-a3b-ud-q4kxl', 24]
+      // (was the 35B-A3B on 24 GiB until §6.8: its measured projection, 21,244 + 1,024, fits that card)
+      ['gemma4-31b-it-qat-q4', 20]
     ])('%s on a %i GiB card: the old estimate said "gpu", the picker says no fit — the row now agrees (partial)', (id, gib) => {
       const m = byId(id)
       const v = estimate(m, gib)

@@ -39,8 +39,10 @@ import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { displayDevice, eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import {
+  cardEvidenceFor,
   discoverManifests,
   graphicsBudgetMib,
+  type CardEvidence,
   launchContextTokens,
   manifestFilesPresent,
   weightsMib
@@ -69,8 +71,9 @@ import { isModelStarting, translationRanOnProcessor } from '../../shared/runtime
  * unified with PR #303 audit M8.2 at the merge of the two) — and the bump eligibility over
  * ALL devices (`gpuUsefulForProfile`, unchanged — owner decision G4).
  */
-function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBenchmarkInput {
+function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory, card: CardEvidence | null = null): GpuBenchmarkInput {
   return {
+    card,
     name: next.device?.name ?? null,
     // The profile bump looks at the HARDWARE (every probed device); the class below looks at
     // the next START — see `GpuBenchmarkInput.useful`.
@@ -199,12 +202,16 @@ export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkI
   // machine's. On the #380 unknown path there is no answer to describe, so they ARE a read of
   // the store — deliberately, and filtered through `eligibleDevicesFor`, so a foreign-stamped
   // record still supplies nothing and the same guarantee holds.
+  // §6.8: the same card evidence `pickerMemoryFor` hands the Models ★ (`cardEvidenceFor`).
+  let card: CardEvidence | null = null
   try {
-    ;({ gpuMode, gpuAutoDisabled } = getSettings(ctx.db))
+    const s = getSettings(ctx.db)
+    ;({ gpuMode, gpuAutoDisabled } = s)
+    card = cardEvidenceFor(s, hereKey)
   } catch {
     /* defaults */
   }
-  return gpuSummary(devices, nextStartMemory({ platform: process.platform, arch: process.arch, devices, gpuMode, gpuAutoDisabled }))
+  return gpuSummary(devices, nextStartMemory({ platform: process.platform, arch: process.arch, devices, gpuMode, gpuAutoDisabled }), card)
 }
 
 /**

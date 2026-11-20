@@ -27,6 +27,9 @@ recommendation_rank: 1
 # Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
 # the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
 recommendation_rank_cpu: 0
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 41/41 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 21244
 # Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). Manifest runtime context
 # is 8192 for now — the safe local runtime budget for normal laptops, not the model maximum.
 recommended_context_tokens: 8192

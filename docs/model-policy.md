@@ -95,10 +95,17 @@ Sizes/RAM come from each manifest
 > Its picks rest on the 2026-11 answer-quality study and on measured processor speed, through the
 > optional `recommendation_rank_cpu`: **8–11 GB → Qwen3 4B 2507, 12–15 GB → Gemma 4 E4B,
 > 16–23 GB → Qwen3.5 9B, ≥24 GB → Gemma 4 26B-A4B**. A benchmark under 5 tok/s steps along the
-> manifest's `cpu_step_down_to` chain (26B-A4B → 9B → E4B → E2B, 2507 → E2B). The dense 12B to
+> manifest's `step_down_to` chain (26B-A4B → 9B → E4B → E2B, 2507 → E2B). The dense 12B to
 > 31B models carry `recommendation_rank_cpu: 0` there (selectable, never the automatic pick).
 > Ministral 3 8B went from rank 2 to 0 on every path the same day. The RAM path above now
-> describes Apple Silicon and the base of the card path only.
+> describes Apple Silicon and the no-fit fallback of the card path only.
+>
+> **Card path (2026-11-20, `model-benchmarks.md` §6.8).** On a discrete card the need is the
+> runtime's measured `projected_graphics_need_mib` plus its 1 GiB margin, and the pick is the
+> highest card-ranked model (`recommendation_rank_gpu`) that fits: **6 GB → Gemma 4 E4B, 8 GB →
+> Qwen3.5 9B, 12 and 16 GB → Gemma 4 12B, 20 GB → Qwen3.8 27B UD-Q4_K_M, 24 GB → UD-Q5_K_M**, the
+> RAM floor permitting (under 12 GB of RAM: Qwen3 4B 2507). A model that an earlier start on this
+> machine placed only partly on the card is not picked for it again.
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
 12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in
@@ -262,8 +269,10 @@ no-RAM picker), `recommendation_rank` (a finite number, default 0; higher = pref
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
 `recommendation_rank_cpu` (a number ≥ 0; replaces `recommendation_rank` when the next start runs
 from the processor, 0 = never the automatic pick there; `model-benchmarks.md` §6.7),
-`cpu_step_down_to` (the id of the chat model the processor path steps to after a slow benchmark on
-this one; §6.7),
+`step_down_to` (the id of the chat model the processor and card paths step to after a slow
+benchmark on this one; §6.7, §6.8), `recommendation_rank_gpu` (a number ≥ 0; replaces
+`recommendation_rank` on a discrete card; §6.8), `projected_graphics_need_mib` (a number ≥ 0; the
+runtime's own fit projection under the app's launch, which replaces the derived card estimate; §6.8),
 `supports_thinking_mode` (below), `bundled_on_preconfigured_drive` (below),
 `speculative_decoding` (below), `disable_prompt_cache` (below),
 a `download` block (below),

@@ -9,6 +9,9 @@ size_on_disk_gb: 18.6
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
 recommendation_rank: 0  # opt-in MoE: rank 0 keeps it from ever being auto-recommended over a winner
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 49/49 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 18660
 recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: false
