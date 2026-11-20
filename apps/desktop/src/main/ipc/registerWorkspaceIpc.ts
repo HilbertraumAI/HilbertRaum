@@ -28,6 +28,7 @@ import { isWorkspaceNewerError } from '../services/db'
 import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
+import { failureForLog } from '../services/failure-for-log'
 import { perfMark, perfMs } from '../services/perf'
 import {
   MIN_PASSWORD_LENGTH,
@@ -93,7 +94,7 @@ async function awaitActiveDocTaskSettled(ctx: AppContext): Promise<void> {
   try {
     settle = ctx.docTasks?.awaitActiveTaskSettled?.()
   } catch (err) {
-    log.error('Error awaiting doc-task settle on lock', String(err))
+    log.error('Error awaiting doc-task settle on lock', failureForLog(err))
     return
   }
   if (!settle) return
@@ -120,7 +121,7 @@ async function awaitSkillRunsSettled(ctx: AppContext): Promise<void> {
     const settled = await (ctx.skillRuns?.awaitSettled(LOCK_TASK_SETTLE_TIMEOUT_MS) ?? true)
     if (!settled) log.warn('Lock: a skill run was still running at the settle bound')
   } catch (err) {
-    log.error('Error settling skill runs on lock', String(err))
+    log.error('Error settling skill runs on lock', failureForLog(err))
   }
 }
 
@@ -143,7 +144,7 @@ async function settleAndSweepPlaintextOps(ctx: AppContext): Promise<void> {
     const swept = ops.sweepRegistered()
     if (swept > 0) log.info('Lock: swept registered plaintext transients', { swept })
   } catch (err) {
-    log.error('Error settling plaintext operations on lock', String(err))
+    log.error('Error settling plaintext operations on lock', failureForLog(err))
   }
 }
 
@@ -187,41 +188,7 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
         unconfirmedChildren: report.unconfirmedChildren
       })
   } catch (err) {
-    log.error('Error settling knowledge-pack operations on lock', String(err))
-  }
-}
-
-/**
- * What a failed create logs (#807, C S-1). A Node system error (one carrying a `syscall`, `path` or `dest`: a file
- * error) logs only its kind, code and system call: its message names the drive's absolute paths
- * (`EPERM: operation not permitted, rename 'C:\…\hilbertraum.sqlite.enc.new' -> …`). Any other error keeps its message
- * (review round: a bug in a post-create step, a `TypeError`, must still say what went wrong), with SQLite's result code
- * and fixed description, or a #844 open failure's own content-free `failure`.
- */
-function createFailureForLog(err: unknown): Record<string, unknown> {
-  const e = err as {
-    name?: unknown
-    message?: unknown
-    code?: unknown
-    syscall?: unknown
-    path?: unknown
-    dest?: unknown
-    errcode?: unknown
-    errstr?: unknown
-    failure?: object
-  } | null
-  const kind = typeof e?.name === 'string' ? e.name : typeof err
-  const code = typeof e?.code === 'string' ? e.code : null
-  const systemError = e != null && (e.syscall !== undefined || e.path !== undefined || e.dest !== undefined)
-  if (systemError) return { error: kind, code, syscall: typeof e.syscall === 'string' ? e.syscall : null }
-  const message = err instanceof Error ? err.message : String(err)
-  if (e?.failure && typeof e.failure === 'object') return { error: kind, message, ...e.failure }
-  return {
-    error: kind,
-    message,
-    code,
-    sqliteCode: typeof e?.errcode === 'number' ? e.errcode : null,
-    sqlite: typeof e?.errstr === 'string' ? e.errstr : null
+    log.error('Error settling knowledge-pack operations on lock', failureForLog(err))
   }
 }
 
@@ -463,7 +430,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
         return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
       }
-      log.error('Workspace unlock failed', String(err))
+      // #956: a file error (a roll-forward or a rekey recovery that cannot write) logs its code and system call, never
+      // its message, which names the drive's paths; any other error keeps its message (`failureForLog`).
+      log.error('Workspace unlock failed', failureForLog(err))
       ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')
       return { ok: false, reason: 'error', message: tMain('main.workspace.openFailed') }
     }
@@ -551,7 +520,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // antivirus holds the new file used to match the old `/not permitted|already exists/` wording and reach the
         // gate raw, with absolute paths, and unlogged). The log line names no path: a file error logs its code and
         // system call only; any other error keeps its message (#844's open failure adds what failed, its `failure`).
-        log.error('Workspace create failed', createFailureForLog(err))
+        log.error('Workspace create failed', failureForLog(err))
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }
@@ -621,8 +590,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // Everything else, including the #845 refusals (the descriptor on disk is a newer build's, or no
         // longer the one this session unlocked; nothing was written), reads "change failed, your current
         // password still works": true, and the gate's "update the app to open it" would be wrong on an
-        // open workspace. The log line carries the error's own content-free message.
-        log.error('Workspace password change failed', String(err))
+        // open workspace. #956: a file error (the descriptor's temp, a document sidecar or a stored copy the rekey
+        // stages) logs its code and system call, never its message, which names the path; any other error keeps its
+        // message (`failureForLog`).
+        log.error('Workspace password change failed', failureForLog(err))
         logProbeFallbacks(ctx)
         return {
           ok: false,
@@ -868,7 +839,9 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // surface for the rest of the session with nothing to explain it. One disarm point covers
     // this path and any other throw out of the teardown.
     attachLogKey(ctx)
-    log.error('Workspace lock failed — workspace stays unlocked', String(err))
+    // #956: `VaultLockError` is content-free; what caused it (`ENOSPC`, `EPERM`, …) rides along as its `failure`
+    // (S-5: before, the line named no cause at all). No path, no message of the cause.
+    log.error('Workspace lock failed — workspace stays unlocked', failureForLog(err))
     logProbeFallbacks(ctx)
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))

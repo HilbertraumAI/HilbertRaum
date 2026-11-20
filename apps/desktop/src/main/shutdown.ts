@@ -4,6 +4,7 @@ import {
   awaitInFlightStreamsSettled
 } from './ipc/inflight'
 import { endedEarlyAbortReason } from './services/chat/ended-early'
+import { failureForLog } from './services/failure-for-log'
 import { detachVaultKey as realDetachVaultKey, log as realLog } from './services/logging'
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import type { AppContext } from './services/context'
@@ -13,6 +14,9 @@ import type { AppContext } from './services/context'
 // cannot be imported under jsdom). The will-quit handler is the only caller. The SYNCHRONOUS
 // best-effort lock the crash path and the OS session-end handler share (`emergencyLock`, #248)
 // lives here too, for the same reason.
+//
+// #956: every failure line here logs `failureForLog(err)`, as the workspace lock does: a file error
+// its code and bare system call only (its message names the drive's paths), anything else its message.
 
 /** Injection seams so a unit test can drive `performShutdown` without the real singletons. */
 export interface ShutdownDeps {
@@ -167,7 +171,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
       if (!controller.signal.aborted) controller.abort(quitReason)
     }
   } catch (err) {
-    log.error('Error aborting in-flight streams on quit', String(err))
+    log.error('Error aborting in-flight streams on quit', failureForLog(err))
   }
   // #238 / #230: the five awaited steps below are bounded as a WHOLE by
   // `SHUTDOWN_OVERALL_DEADLINE_MS` (see the constant). The log flush and the lock stay OUTSIDE.
@@ -179,7 +183,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     try {
       await (ctx?.localApi?.stop() ?? Promise.resolve())
     } catch (err) {
-      log.error('Error stopping the local API on quit', String(err))
+      log.error('Error stopping the local API on quit', failureForLog(err))
     }
     try {
       await Promise.allSettled([
@@ -198,7 +202,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
         ctx?.zim?.stop() ?? Promise.resolve()
       ])
     } catch (err) {
-      log.error('Error stopping sidecars on quit', String(err))
+      log.error('Error stopping sidecars on quit', failureForLog(err))
     }
     // R1 (full-audit-2026-06-30, Phase C): deterministically await each aborted stream's SETTLE
     // (its partial-reply persistence) before lock() closes the DB — the same guarantee the lock
@@ -242,7 +246,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   try {
     ctx?.workspace.shutdown()
   } catch (err) {
-    log.error('Failed to lock workspace on quit', String(err))
+    log.error('Failed to lock workspace on quit', failureForLog(err))
   }
 }
 
@@ -269,7 +273,7 @@ async function withOverallDeadline(
   })
   // The section cannot reject today (every step is try/caught or `allSettled`); the catch makes
   // that structural, so neither a pre-deadline rejection nor an abandoned one can skip the lock.
-  const raced = section().catch((err) => log.error('quit: teardown section failed', String(err)))
+  const raced = section().catch((err) => log.error('quit: teardown section failed', failureForLog(err)))
   try {
     await Promise.race([raced, deadline])
   } finally {
@@ -324,7 +328,7 @@ export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = 
     detachVaultKey()
     ctx?.workspace.shutdown()
   } catch (err) {
-    log.error('emergency lock failed — the next launch recovers the working copy', String(err))
+    log.error('emergency lock failed — the next launch recovers the working copy', failureForLog(err))
   }
   try {
     killSidecarChildren()
@@ -467,7 +471,7 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       shuttingDown = true
       void deps
         .performShutdown()
-        .catch((err) => deps.log.error('quit: teardown failed', String(err)))
+        .catch((err) => deps.log.error('quit: teardown failed', failureForLog(err)))
         .finally(() => {
           try {
             deps.killSidecarChildren()
@@ -510,7 +514,7 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       try {
         deps.emergencyLock()
       } catch (err) {
-        deps.log.error('session-end: lock failed', String(err))
+        deps.log.error('session-end: lock failed', failureForLog(err))
       }
     },
     isShuttingDown: () => shuttingDown
@@ -533,7 +537,7 @@ async function awaitActiveDocTaskSettled(
   try {
     settle = ctx?.docTasks?.awaitActiveTaskSettled?.()
   } catch (err) {
-    log.error('Error awaiting doc-task settle on quit', String(err))
+    log.error('Error awaiting doc-task settle on quit', failureForLog(err))
     return
   }
   if (!settle) return
@@ -561,7 +565,7 @@ async function awaitSkillRunsSettled(
     const settled = await (ctx?.skillRuns?.awaitSettled(SHUTDOWN_TASK_SETTLE_TIMEOUT_MS) ?? true)
     if (!settled) log.info('quit: a skill run was still running at the settle bound')
   } catch (err) {
-    log.error('Error settling skill runs on quit', String(err))
+    log.error('Error settling skill runs on quit', failureForLog(err))
   }
 }
 
@@ -579,7 +583,7 @@ async function awaitPlaintextOpsSettled(
     const settled = await ops.awaitSettled(SHUTDOWN_TASK_SETTLE_TIMEOUT_MS)
     if (!settled) log.info('quit: plaintext operations still running at the settle bound', { live: ops.size() })
   } catch (err) {
-    log.error('Error settling plaintext operations on quit', String(err))
+    log.error('Error settling plaintext operations on quit', failureForLog(err))
   }
 }
 
@@ -618,7 +622,7 @@ async function settleAndCleanZimTransients(
         unconfirmedChildren: report.unconfirmedChildren
       })
   } catch (err) {
-    log.error('Error settling knowledge-pack operations on quit', String(err))
+    log.error('Error settling knowledge-pack operations on quit', failureForLog(err))
   }
 }
 
@@ -628,6 +632,6 @@ function sweepPlaintextOps(ctx: AppContext | null, log: Pick<typeof realLog, 'er
     const swept = ctx?.plaintextOps?.sweepRegistered() ?? 0
     if (swept > 0) log.info('quit: swept registered plaintext transients', { swept })
   } catch (err) {
-    log.error('Error sweeping plaintext transients on quit', String(err))
+    log.error('Error sweeping plaintext transients on quit', failureForLog(err))
   }
 }

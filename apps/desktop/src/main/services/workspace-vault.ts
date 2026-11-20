@@ -18,6 +18,7 @@ import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { freeBytesSync } from './disk-space'
+import { causeFailure, type CauseFailure } from './failure-for-log'
 import { tMain } from './i18n'
 import { canonicalLeafFor } from './ingestion/stored-copy-leaf'
 import { perfMark, perfMs } from './perf'
@@ -139,11 +140,21 @@ export class WrongPasswordError extends Error {
  * When this is thrown the controller has already restored itself to a consistent UNLOCKED
  * state (plaintext DB re-opened, key kept), so retrying lock after freeing space is safe.
  * full-audit 2026-07-11 CODE-1a.
+ *
+ * #956 (S-5): it keeps WHAT caused it (`failure`: where a lock that judged the working file stopped, and the cause's
+ * kind, Node code, bare system call and SQLite's fixed description), never the cause's message, which names the
+ * drive's paths. Before, the log line said only "Could not lock the workspace", and the `ENOSPC` support needs was lost.
  */
 export class VaultLockError extends Error {
-  constructor() {
+  /** What caused the refused lock, content-free, for the log (`failureForLog` spreads it into the line). */
+  readonly failure: CauseFailure & { stopped: LockStoppedError['reason'] | null }
+  constructor(cause?: unknown) {
     super('Could not lock the workspace')
     this.name = 'VaultLockError'
+    // A lock that judged the working file wraps what failed in a `LockStoppedError`: its stage, then the error inside.
+    const stopped = cause instanceof LockStoppedError ? cause : null
+    const inner = stopped !== null && stopped.cause !== undefined ? stopped.cause : cause
+    this.failure = { stopped: stopped?.reason ?? null, ...causeFailure(inner) }
   }
 }
 
@@ -3060,7 +3071,7 @@ export class WorkspaceController {
           // `.enc` over the newer working file this session, and the init() salvage
           // (CODE-1b) preserves + rolls the file forward on the next launch.
         }
-        throw new VaultLockError()
+        throw new VaultLockError(err) // #956 (S-5): what failed, content-free, for the log
       }
       this.dropKeyAndHandle()
     }

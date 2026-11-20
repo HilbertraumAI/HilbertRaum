@@ -796,6 +796,17 @@ under the **same vault key as the database and the document cache** (AES-256-GCM
 `app.1.log.enc`). On a `plaintext_dev` workspace the log stays a plain rotating `app.log`,
 matching the unencrypted dev DB.
 
+**Workspace failure lines name no path (#956).** Diagnostics → Copy and Save log hand the log out
+in readable form, so the workspace's failure lines carry no paths: the create's content-free line
+(#807) is the rule for every failure line of the unlock, the password change, the lock and the quit
+teardown (`main/shutdown.ts`), through `failureForLog` (`services/failure-for-log.ts`). A Node file
+error, one with a `syscall`, `path` or `dest`, or with an errno code alone, logs its kind, code and
+system call, never its message, which names the drive's or the user profile's paths. The system call
+is kept only as a bare name: a spawn error's names the binary's path. Any other error keeps its
+message. A refused lock's `VaultLockError` carries what caused it (`failure`: where the lock stopped
+and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. About
+25 other main-process log lines still write an error's whole text (a separate issue).
+
 ### Design record — encrypted log (2026-06-13)
 
 The wrinkle is **timing**: logging starts at app launch, *before* the vault is unlocked, so the

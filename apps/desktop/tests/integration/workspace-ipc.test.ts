@@ -1375,3 +1375,136 @@ describe('the log line of a create that failed for another reason than a file er
     expect(logged[0]).toContain(JSON.stringify(cause).slice(1, -1))
   })
 })
+
+// #956: the unlock, password-change and lock arms logged `String(err)`, and a Node file error's text names the drive's
+// or the profile's absolute paths, which Diagnostics → Copy and Save log hand out. Each arm now logs `failureForLog`
+// (its rule is failure-for-log.test.ts's): these rows hold the wiring, each with a real file error (a directory where a
+// temp file goes) or a stand-in that throws what Node throws.
+describe('a workspace failure line names no path (#956)', () => {
+  /** The log lines written after `marker` that contain `needle`. */
+  function linesAfter(marker: string, needle: string): string[] {
+    const all = readLogTail(100_000)
+    return all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes(needle))
+  }
+  /** Neither `root` nor its JSON-escaped spelling (a Windows path inside a JSON log field) is in `line`. */
+  const namesNoPath = (line: string, root: string): boolean =>
+    !line.includes(root) && !line.includes(JSON.stringify(root).slice(1, -1))
+  /** What Node throws for a file operation: code, syscall, path, and a message naming the path. */
+  const nodeFileError = (code: string, syscall: string, path: string): NodeJS.ErrnoException =>
+    Object.assign(new Error(`${code}: failed, ${syscall} '${path}'`), { code, syscall, path, errno: -1 })
+  const mark = (): string => {
+    const marker = `#956 marker ${randomUUID()}`
+    log.info(marker)
+    return marker
+  }
+
+  it('an unlock whose roll-forward meets a file error logs its code, not the path', async () => {
+    const vp = lockedVault('wsipc', PW)
+    failedLockState(vp, 7171, PW) // a working file newer than `.enc`: the start keeps it, the unlock re-encrypts it
+    const ctrl = startedOn(vp)
+    mkdirSync(`${vp.encPath}.tmp`) // encryptFile's temp: EISDIR, Node's error naming the path
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'error' })
+      const lines = linesAfter(marker, 'Workspace unlock failed')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('EISDIR')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  it('a password change whose key file write meets a file error logs its code, not the path', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const ctrl = unlockedController(vp, PW)
+    mkdirSync(`${vp.descriptorPath}.tmp`) // writeVaultDescriptor's temp: EISDIR
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      const { result } = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'another-password')
+      expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.changeFailed') })
+      const lines = linesAfter(marker, 'Workspace password change failed')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('EISDIR')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // The lock's four settle steps never throw by their callees' contracts (`awaitActiveTaskSettled` swallows,
+  // `awaitSettled` "never rejects"); a stand-in that breaks the contract with a file error reaches each arm.
+  it.each<[string, string, (error: Error) => Record<string, unknown>]>([
+    [
+      'document-task',
+      'Error awaiting doc-task settle on lock',
+      (error) => ({
+        docTasks: {
+          abortActiveBuild: () => {},
+          cancelAllDocTasks: () => {},
+          awaitActiveTaskSettled: () => {
+            throw error
+          }
+        }
+      })
+    ],
+    [
+      'skill-run',
+      'Error settling skill runs on lock',
+      (error) => ({ skillRuns: { cancelAll: () => {}, awaitSettled: async () => Promise.reject(error) } })
+    ],
+    [
+      'plaintext-operation',
+      'Error settling plaintext operations on lock',
+      (error) => ({
+        plaintextOps: { abortAll: () => {}, size: () => 0, sweepRegistered: () => 0, awaitSettled: async () => Promise.reject(error) }
+      })
+    ],
+    [
+      'knowledge-pack',
+      'Error settling knowledge-pack operations on lock',
+      (error) => ({
+        zimOps: { abortAll: () => {}, size: () => 0, sweepRegistered: () => 0, awaitSettled: async () => Promise.reject(error) }
+      })
+    ]
+  ])('a lock whose %s settle throws a file error logs its code, not the path', async (_step, needle, extra) => {
+    const vp = lockedVault('wsipc', PW)
+    const ctrl = unlockedController(vp, PW)
+    const error = nodeFileError('EBUSY', 'unlink', join(dirname(vp.dbPath), 'documents', 'held.parse'))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: extra(error) }))
+    const marker = mark()
+    expect((await invoke(handlers, IPC.lockWorkspace)).result).toMatchObject({ state: 'locked' })
+    const lines = linesAfter(marker, needle)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('EBUSY')
+    expect(namesNoPath(lines[0], vp.root)).toBe(true)
+  })
+
+  // S-5: the failed lock's line said only "Could not lock the workspace"; the cause support needs was dropped.
+  it('a failed lock logs what caused it (ENOSPC), still with no path (S-5)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const fullDrive = (_src: string, dest: string): void => {
+      throw nodeFileError('ENOSPC', 'write', `${dest}.tmp`)
+    }
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, fullDrive)
+    ctrl.init()
+    ctrl.unlock(PW)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      await expect(invoke(handlers, IPC.lockWorkspace)).rejects.toThrow(tMain('main.workspace.lockFailed'))
+      const lines = linesAfter(marker, 'Workspace lock failed')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('"code":"ENOSPC"')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      try {
+        ctrl.shutdown() // open again after the failed lock; the seam fails this lock too
+      } catch {
+        /* expected: VaultLockError */
+      }
+    }
+  })
+})

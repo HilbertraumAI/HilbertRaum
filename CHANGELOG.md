@@ -178,6 +178,11 @@ from its first public `1.0.0` release onward.
   full to lock. The changes made after the last lock were lost then too, and until now the next
   start said nothing. When the drive is too full, the message asks you to free space first, so the
   next session doesn't end the same way (#892).
+- **Error lines in the diagnostics log no longer contain your drive's or your user folder's paths.**
+  When unlocking, changing the password, locking or quitting failed on a file, the line in the
+  diagnostics log, which Copy and Save log hand out, carried the file's full path, which can include
+  your user name. It now names the error's code, such as `ENOSPC`, and a lock that fails now says what
+  caused it (#956).
 - **A workspace whose encrypted file was removed from the drive is no longer lost.** If something
   outside HilbertRaum deleted the workspace's encrypted file (a sync or cleanup tool, a disk check)
   and the app then started, it also removed the unencrypted copy your last session left, and the
