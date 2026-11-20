@@ -376,7 +376,9 @@ paths of your knowledge packs, none of your content.
 
 To go back to the old workspace (you remember its password): quit HilbertRaum, move the new
 workspace's `config/workspace.json` and `workspace/` away the same way, put the old pair back in
-their places, start the app and unlock with the old password. **Never combine one workspace's
+their places, start the app and unlock with the old password. (If you put the pair back while
+HilbertRaum is still open, it is not overwritten: **Create workspace** is refused, and the lock
+screen switches to the unlock screen, #954.) **Never combine one workspace's
 `config/workspace.json` with another workspace's `workspace/` folder**: neither password opens
 that pair, and with the new password the lock screen says the workspace data is damaged.
 
@@ -583,6 +585,51 @@ What to do:
   workspace opens nothing: the lock screen then reads it as a wrong password or as damaged data.
   One exception: a backup made before the first password change on a workspace that an older
   version created belongs only with the `workspace/` folder of that same backup.
+
+---
+
+## "The file that holds your workspace's key (config/workspace.json) can't be read, and the encrypted workspace file isn't on the drive"
+
+You see this on the unlock screen, whatever password you type, when `config/workspace.json` is on
+the drive but can't be read, and the workspace's encrypted file, `workspace/hilbertraum.sqlite.enc`,
+is not there. No password can open anything then: the key file holds the key, and the encrypted
+file holds the data. The lock screen does not offer a new workspace either, because other parts of
+the old one may still be on the drive: a `workspace/hilbertraum.sqlite.recovery` (the readable copy
+a session left, see "The encrypted workspace file was missing from the drive" above), a
+`workspace/hilbertraum.sqlite.enc.new`, or your stored documents in `workspace/documents/`. Before
+#955 this case only said "Could not open the workspace."
+
+What to do:
+
+- **Don't delete the key file**, and keep a copy of it. It can be damaged in a way that can be
+  repaired: a file saved by an editor that adds a byte-order mark (Windows PowerShell 5.1, older
+  versions of Notepad) reads as unreadable, for example.
+- Look for the encrypted file first, as "Your password is correct, but the encrypted workspace file
+  is missing from the drive" above describes: the recycle bin or trash, a sync tool's deleted or
+  conflict files, a `FOUND.000` folder. Put it back as `workspace/hilbertraum.sqlite.enc`.
+- Otherwise restore both, `config/workspace.json` and the `workspace/` folder, from a backup of this
+  workspace, and unlock with the password it had when the backup was made.
+- To start over instead, set the old workspace aside as "I forgot my workspace password" above
+  describes: quit HilbertRaum and move **both** `config/workspace.json` and the whole `workspace/`
+  folder off the drive, together. With only the key file moved, the rest of the old workspace stays
+  in `workspace/`, and the new workspace would remove parts of it as leftovers.
+
+---
+
+## "Could not create the workspace."
+
+You see this on the lock screen's "Create your password" step when the new workspace could not be
+written to the drive: the drive is full or write-protected, or another program, often an antivirus
+program, held one of the new files.
+
+What to do:
+
+- Free some space or close that program, then press **Create workspace** again.
+- If the lock screen then says "A workspace already exists on this drive, so no new one was created"
+  and shows **Unlock your workspace**, the first try got far enough to save the workspace's key file:
+  unlock with the password you just chose. Restarting HilbertRaum shows the same unlock screen.
+- If it keeps failing, check that the drive is writable on this computer (not locked, not mounted
+  read-only) and has free space.
 
 ---
 

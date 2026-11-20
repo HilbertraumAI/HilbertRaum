@@ -33,6 +33,8 @@ export const UNLOCK_FAILURE_KEYS = {
   vault_damaged: 'main.workspace.vaultDamaged',
   vault_missing: 'main.workspace.vaultMissing',
   vault_descriptor_missing: 'main.workspace.descriptorMissing',
+  // #955 item 1: the descriptor file is there but unreadable, and no `.enc` beside it.
+  vault_descriptor_unreadable: 'main.workspace.descriptorUnreadable',
   vault_open_failed: 'main.workspace.vaultOpenFailed',
   vault_recovery_blocked: 'main.workspace.recoveryBlocked',
   workspace_newer: 'main.workspace.newer',
@@ -46,11 +48,12 @@ export const UNLOCK_FAILURE_KEYS = {
 
 /** The gate's copy for a failed create, by reason (`null`: main never sends it; shows main's `message`). */
 export const CREATE_FAILURE_KEYS = {
-  // `null`: main never sends these six for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
+  // `null`: main never sends these seven for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
   wrong_password: null,
   vault_damaged: null,
   vault_missing: null,
   vault_descriptor_missing: null,
+  vault_descriptor_unreadable: null,
   vault_open_failed: null,
   vault_recovery_blocked: null,
   workspace_newer: 'main.workspace.newer',

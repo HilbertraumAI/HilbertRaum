@@ -333,6 +333,26 @@ export class VaultDescriptorMissingError extends Error {
   }
 }
 
+/**
+ * Thrown by `unlockEncryptedVault` when `config/workspace.json` is on the drive but cannot be read (not JSON, a field
+ * missing, or a UTF-8 byte-order mark in front of it) and the encrypted workspace file is NOT beside it (#955 item 1):
+ * no password can open anything here, yet the drive is not empty of a workspace either (a `.recovery` copy, a staged
+ * `.enc.new` or stored documents may be under the key that file holds), so the create flow stays refused too.
+ * Thrown before any password check and before anything is written. Content-free ON PURPOSE: the IPC layer maps it to
+ * `vault_descriptor_unreadable` + `main.workspace.descriptorUnreadable` (don't delete the key file; restore both files
+ * from a backup). Before #955 this was a plain English `Error`, which read "Could not open the workspace." on every
+ * try. With `.enc` present the same file is `VaultDescriptorMissingError`'s.
+ */
+export class VaultDescriptorUnreadableError extends Error {
+  constructor() {
+    super(
+      'The workspace descriptor (config/workspace.json) cannot be read and no encrypted workspace file is beside it, ' +
+        'so nothing can be unlocked'
+    )
+    this.name = 'VaultDescriptorUnreadableError'
+  }
+}
+
 /** Derive the vault file locations from the resolved workspace paths. */
 export function vaultPathsFrom(paths: { configPath: string; dbPath: string; logsPath?: string }): VaultPaths {
   return {
@@ -1868,6 +1888,8 @@ export function unlockEncryptedVault(
   if (!descriptor) {
     // C-S2 (#807): the data is there but nothing can open it; restore the descriptor, never create a new workspace.
     if (existsSync(vaultPaths.encPath)) throw new VaultDescriptorMissingError()
+    // #955 item 1: a descriptor FILE that cannot be read, and no `.enc`: its own refusal (a newer one was refused above).
+    if (existsSync(vaultPaths.descriptorPath)) throw new VaultDescriptorUnreadableError()
     throw new Error('No encrypted workspace to unlock')
   }
   // A crash during a password change must be resolved BEFORE any decrypt: the descriptor

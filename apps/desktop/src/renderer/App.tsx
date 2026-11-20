@@ -399,6 +399,9 @@ function AppShell(): JSX.Element {
           // optional starter step picked); a plain unlock keeps the current screen.
           if (landOn) navigate(landOn)
         }}
+        // #955 item 3: a create refused because a workspace is on the drive after all: show the gate for main's new
+        // state (its unlock form). Nothing opened, so no landing.
+        onStateChange={setWorkspace}
       />
     )
   }

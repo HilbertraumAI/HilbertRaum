@@ -48,6 +48,14 @@ interface Props {
    * omitted on a plain unlock.
    */
   onUnlocked: (next: WorkspaceStateInfo, landOn?: string) => void
+  /**
+   * #955 item 3: main's state changed under the gate without anything opening: a create was refused as
+   * `workspace_exists` (a workspace's key file put back while this create form was up) and main now reads `locked`.
+   * The parent shows the gate for the new state, which switches it to its unlock form with the refusal in its banner,
+   * so no restart is needed. Not `onUnlocked`: nothing is open, and the first run's landing must not run. Without it
+   * the gate re-reads nothing and keeps the refusal on the create form.
+   */
+  onStateChange?: (next: WorkspaceStateInfo) => void
 }
 
 /** Which screen the create flow hands off to. */
@@ -88,7 +96,7 @@ function lockNoticeKey(state: WorkspaceStateInfo): MessageKey | null {
   return notice !== undefined && Object.hasOwn(LOCK_NOTICE_COPY, notice) ? LOCK_NOTICE_COPY[notice] : null
 }
 
-export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
+export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.Element {
   const creating = state.state === 'uninitialized'
   const [phase, setPhase] = useState<CreatePhase>('welcome')
   const [password, setPassword] = useState('')
@@ -120,6 +128,15 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   // the field and `!canSubmit` disables the submit button focus was sitting on, dead-ending
   // keyboard users (autoFocus fires only at mount). The retry path re-focuses the field.
   const unlockInputRef = useRef<HTMLInputElement>(null)
+  // #955 item 3: the create refusal that switched the gate to its unlock form. It is carried across the switch and set
+  // once the unlock form's always-mounted error region is in the tree, so it reads as a text change inside a region
+  // that was already there: a region inserted already holding its text is missed by many screen readers (#436, M-U1).
+  const carriedError = useRef<string | null>(null)
+  useEffect(() => {
+    if (creating || carriedError.current === null) return
+    setError(carriedError.current)
+    carriedError.current = null
+  }, [creating])
   useEffect(() => {
     if (!creating) return // the UNLOCK path focuses its own field via autoFocus — don't disturb it.
     if (phase === 'password') passwordInputRef.current?.focus()
@@ -182,6 +199,26 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
     }
   }
 
+  /**
+   * #955 item 3: after a create refused as `workspace_exists`, re-read main's state. A workspace is on the drive after
+   * all (main reads `locked`, and has run the start's steps over it), so hand the state to the parent, which shows the
+   * unlock form; the refusal goes with it. False (the create form keeps the refusal) without a parent to tell, when the
+   * read fails, or when main still reads another state.
+   */
+  async function switchedToUnlock(refusal: string): Promise<boolean> {
+    if (!onStateChange) return false
+    let next: WorkspaceStateInfo
+    try {
+      next = await window.api.getWorkspaceState()
+    } catch {
+      return false
+    }
+    if (next?.state !== 'locked') return false
+    carriedError.current = refusal
+    onStateChange(next)
+    return true
+  }
+
   async function submit(e: React.FormEvent): Promise<void> {
     e.preventDefault()
     if (!canSubmit || busy) return
@@ -193,9 +230,11 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         if (result.ok) {
           await completeCreate(result.state)
         } else {
-          setError(failureText(CREATE_FAILURE_KEYS, result, t))
+          const refusal = failureText(CREATE_FAILURE_KEYS, result, t)
           setPassword('')
           setConfirm('')
+          if (result.reason === 'workspace_exists' && (await switchedToUnlock(refusal))) return
+          setError(refusal)
           passwordInputRef.current?.focus() // SH-12: focus back to the field for the retry
         }
       } else {
@@ -234,7 +273,9 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   if (!creating) {
     const noticeKey = lockNoticeKey(state)
     return (
-      <div className="gate-shell">
+      // #955 item 3: keyed, so a create form that switches here (a workspace was on the drive after all) is replaced,
+      // not reused: the two forms' fields sit at the same places, and a reused field takes no `autoFocus`.
+      <div className="gate-shell" key="unlock">
         <form className="gate-card card" onSubmit={(e) => void submit(e)}>
           {brand}
           <h1>{t('gate.unlock.title')}</h1>

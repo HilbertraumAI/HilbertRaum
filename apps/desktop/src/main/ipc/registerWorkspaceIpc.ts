@@ -6,6 +6,7 @@ import {
   VaultBusyError,
   VaultDamagedError,
   VaultDescriptorMissingError,
+  VaultDescriptorUnreadableError,
   VaultMissingError,
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
@@ -257,9 +258,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       const unlockT0 = performance.now()
       const state = ctx.workspace.unlock(password)
       perfMark('unlock_done', { totalMs: perfMs(unlockT0) })
-      // #936 review SF-2: no quit is under way while someone unlocks (the close guard holds the document-task queue
-      // only inside its save or behind its window-modal dialog), so a quit hold still set here is stale (a quit
-      // cancelled outside the guard): clear it, so it can never block this session's document tasks.
+      // #936 review SF-2: no quit is under way while someone unlocks, or creates the workspace (#955 item 4: the create
+      // seam below releases it too; the close guard holds the document-task queue only inside its save or behind its
+      // window-modal dialog), so a quit hold still set here is stale (a quit cancelled outside the guard): clear it, so
+      // it can never block this session's document tasks.
       ctx.docTasks?.releaseQueueHold()
       // The vault key is live now — adopt it for the diagnostics log so it is encrypted at
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
@@ -401,6 +403,23 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.descriptorMissing')
         }
       }
+      // #955 item 1: `config/workspace.json` is on the drive but cannot be read, and the encrypted workspace file is not
+      // beside it, so no password can open anything here. Before, a plain English error that read "Could not open the
+      // workspace." on every try. Its own copy says not to delete the key file (a file saved with a byte-order mark
+      // reads as unreadable and can be repaired) and never that no data is left: a `.recovery`, an `.enc.new` or
+      // stored documents may still be on the drive. The log line names no path. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultDescriptorUnreadableError ||
+        (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')
+      ) {
+        log.error('Workspace unlock failed: the workspace descriptor is unreadable and no encrypted file is beside it')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (descriptor unreadable)')
+        return {
+          ok: false,
+          reason: 'vault_descriptor_unreadable',
+          message: tMain('main.workspace.descriptorUnreadable')
+        }
+      }
       // #242: the startup salvage is blocked — another program holds the recovery file the
       // last session's newest data must be moved onto, so opening now would decrypt the
       // stale snapshot over it. Its own reason + copy (close the holder, retry; nothing is
@@ -475,6 +494,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       try {
         const state = ctx.workspace.create(password, mode)
+        // #936 review SF-2, #955 item 4: like an unlock, a create is no moment of a quit (the close guard holds the
+        // document-task queue only inside its save or behind its window-modal dialog, and `create` runs synchronously on
+        // the main thread), so a quit hold still set here is stale (a quit called off outside the guard): clear it, so
+        // it can never block this session's document tasks.
+        ctx.docTasks?.releaseQueueHold()
         // Encrypted: adopt the fresh vault key for the log. Plaintext_dev: switch the log to
         // the plain file (`attachLogKey` dispatches on the workspace mode).
         attachLogKey(ctx)

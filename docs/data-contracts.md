@@ -1436,7 +1436,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
-  'vault_damaged'|'vault_missing'|'vault_descriptor_missing'|'vault_open_failed'|'vault_recovery_blocked'|'workspace_newer'|
+  'vault_damaged'|'vault_missing'|'vault_descriptor_missing'|'vault_descriptor_unreadable'|'vault_open_failed'|
+  'vault_recovery_blocked'|'workspace_newer'|
   'workspace_exists'|'plaintext_not_allowed'|'refused'|'error', message}` — a
   wrong password / policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
   password-verified-but-undecryptable-to-a-database unlock failure, deliberately distinct from
@@ -1455,12 +1456,23 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `config/workspace.json` is missing or unreadable (`VaultDescriptorMissingError`): no password can be
   checked or open it, nothing is written; put the file back or restore it from a backup, never
   create a new workspace (before, a plain error that read "Could not open the workspace.");
+  `vault_descriptor_unreadable` (#955 item 1) is the unlock refused because `config/workspace.json`
+  is there but cannot be read and no `.enc` is beside it (`VaultDescriptorUnreadableError`): no
+  password can open anything, nothing is written; don't delete the key file, restore both files
+  from a backup (before, a plain error that read "Could not open the workspace."; create's table
+  maps it to `null`: never sent there);
   `workspace_exists` (#807) is the create refused because a workspace is already on the drive
   (`WorkspaceExistsError`: an encrypted descriptor, the `.enc`, an unreadable descriptor or a
-  newer build's artifact; also the `createEncryptedVaultOnDisk` belt over an `.enc`), and
+  newer build's artifact; since #954 any descriptor file, read live, so also one put back after the
+  start; also the `createEncryptedVaultOnDisk` belt over an `.enc` or a descriptor file, at its start
+  and right before its commit), and
   `plaintext_not_allowed` (#807) the create without a password that the policy or the build does
   not allow (`PlaintextNotAllowedError`); both used to be `refused` with the vault's English
-  sentence, matched by its wording, and nothing on the disk changes; create's `refused` is now only
+  sentence, matched by its wording, and the refusal writes nothing of its own (for a vault that
+  appeared after the start, `workspace_exists` first runs the start's steps over it, as a start
+  would). Since #955 the state then reads `locked`: the gate re-reads it after `workspace_exists`
+  and, when it reads `locked`, hands it to App (`onStateChange`), which shows the unlock form with the
+  refusal; create's `refused` is now only
   a password under `MIN_PASSWORD_LENGTH` or not a string. A Node file error during create (an
   `EPERM … rename`) is `error` (`createFailed`), logged content-free (#807: it used to match the old
   wording and reach the gate raw);

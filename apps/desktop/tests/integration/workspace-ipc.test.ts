@@ -259,6 +259,25 @@ describe('registerWorkspaceIpc', () => {
     }
   })
 
+  // #955 item 4: the create seam had no release. A first-run create is no moment of a quit either, so a hold left set
+  // before it kept every document task of the new workspace queued for the session.
+  it('a create clears a quit hold left set: the next document task runs (#955 item 4)', async () => {
+    const w = docTaskWorld('wsipc-hold')
+    const doc = await importWords(w, 50)
+    const manager = docTaskManager(w, { getRuntime: () => docTaskRuntime() })
+    manager.holdQueueForQuit()
+    const ctrl = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { docTasks: manager } }))
+    try {
+      expect((await invoke(handlers, IPC.createWorkspace, 'brand-new-pw', 'encrypted')).result).toMatchObject({ ok: true })
+      const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [doc] })
+      expect(manager.getDocTask(jobId).state).toBe('running')
+      expect((await waitTerminal(manager, jobId)).state).toBe('done')
+    } finally {
+      ctrl.lock()
+    }
+  })
+
   // M-S2: the renderer is the untrusted boundary — a non-string password must NOT throw
   // an unhandled TypeError at the IPC layer (password.length used to run before the try).
   it('handles a non-string create password as a clean refusal (no throw)', async () => {
@@ -827,6 +846,17 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         }
       }
     ],
+    // #955 item 1: the key file is there but cannot be read, and no `.enc` is beside it. Answered for any password.
+    vault_descriptor_unreadable: [
+      {
+        how: 'a config/workspace.json that is not JSON, with no .enc beside it',
+        arrange: () => {
+          const vp = freshVaultPaths('wsipc')
+          writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+          return { workspace: startedOn(vp), args: [PW] }
+        }
+      }
+    ],
     // #844: a healthy database whose open's upgrade step cannot finish is not damage.
     vault_open_failed: [
       {
@@ -888,6 +918,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     vault_damaged: NEVER_SENT,
     vault_missing: NEVER_SENT,
     vault_descriptor_missing: NEVER_SENT,
+    vault_descriptor_unreadable: NEVER_SENT,
     vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
     workspace_newer: [
@@ -1301,7 +1332,8 @@ describe('the typed workspace refusals are recognised by name too (#807)', () =>
   it.each<[string, 'create' | 'unlock', WorkspaceFailureReason, MessageKey]>([
     ['WorkspaceExistsError', 'create', 'workspace_exists', 'main.workspace.exists'],
     ['PlaintextNotAllowedError', 'create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
-    ['VaultDescriptorMissingError', 'unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing']
+    ['VaultDescriptorMissingError', 'unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing'],
+    ['VaultDescriptorUnreadableError', 'unlock', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable']
   ])('a %s from another copy of the module answers %s %s', async (name, call, reason, key) => {
     const thrower = (): never => {
       throw named(name)

@@ -135,6 +135,12 @@ from its first public `1.0.0` release onward.
   failed because another program, such as antivirus, held one of its new files, the lock screen
   showed the system's own English error with the full path of the file on the drive; it now says
   "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
+- **The lock screen says when the workspace's key file can't be read and the encrypted file is
+  gone.** With `config/workspace.json` damaged and the encrypted workspace file not on the drive,
+  every unlock said "Could not open the workspace." The lock screen now says so, and that you should
+  not delete the key file but restore both files from a backup. And when creating a workspace finds
+  one on the drive after all, the lock screen no longer asks you to restart: it switches to the
+  unlock screen for that workspace at once (#955).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When
   Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
   running, the next document task in line started during that wait and was stopped a moment

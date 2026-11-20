@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
+import { useState } from 'react'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate } from '../../src/renderer/screens/WorkspaceGate'
@@ -389,6 +390,46 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
   })
 })
 
+// #955 item 3: a create refused because a workspace is on the drive after all (its key file copied back while the
+// create form was up). The form used to stay until a restart, and its copy said "Restart HilbertRaum". Main now reads
+// `locked` (and has run the start's steps over that vault), so the gate re-reads the state and hands it to its parent,
+// which shows the unlock form. The refusal arrives in the unlock form's own always-mounted alert region, after that
+// region is in the document: a region inserted already holding its text is missed by many screen readers (#436).
+describe('WorkspaceGate — a create refused because a workspace is on the drive (#955 item 3)', () => {
+  it('re-reads the state and shows the unlock form, the refusal arriving in its alert region, focus on its field', async () => {
+    const user = userEvent.setup()
+    const createWorkspace = vi.fn(
+      async (): Promise<WorkspaceActionResult> => ({ ok: false, reason: 'workspace_exists', message: 'main’s text' })
+    )
+    const getWorkspaceState = vi.fn(async (): Promise<WorkspaceStateInfo> => LOCKED_ENCRYPTED_WORKSPACE)
+    const onUnlocked = vi.fn()
+    stubApi({ createWorkspace, getWorkspaceState })
+    function Parent(): JSX.Element {
+      const [state, setState] = useState<WorkspaceStateInfo>(UNINITIALIZED)
+      return <WorkspaceGate state={state} onUnlocked={onUnlocked} onStateChange={setState} />
+    }
+    render(<Parent />)
+    await toPasswordStep(user)
+    await user.type(screen.getByPlaceholderText('Password'), 'longenough')
+    await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+    const added: MutationRecord[] = []
+    const observer = new MutationObserver((records) => added.push(...records))
+    observer.observe(document.body, { childList: true, subtree: true })
+    await user.click(screen.getByRole('button', { name: /create workspace/i }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    const region = screen.getByRole('alert')
+    await waitFor(() => expect(region).toHaveTextContent(t('en', 'main.workspace.exists')))
+    added.push(...observer.takeRecords())
+    observer.disconnect()
+    // The text came as a change inside the region, not with the region's own insertion.
+    expect(added.some((record) => record.target === region && record.addedNodes.length > 0)).toBe(true)
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Password'))
+    expect(getWorkspaceState).toHaveBeenCalledTimes(1)
+    expect(onUnlocked).not.toHaveBeenCalled()
+  })
+})
+
 // Second UI-languages wave owner call G-6 (2026-11-13): CSS uppercases the edition line
 // (`.gate-brand-edition`), and uppercasing follows the element's language, so under a Turkish UI
 // Chromium would show "HİLBERTRAUM LİTE". jsdom renders no text-transform; the row asserts the
@@ -419,7 +460,9 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
   afterEach(() => window.localStorage.clear())
 
   /** Render the gate in German, submit once, have main answer with `failure` (or the call reject with it), and expect
-   *  `shown` on a gate that stayed up. */
+   *  `shown` on a gate that stayed up. #955 item 3: after a create's `workspace_exists` the gate re-reads main's state;
+   *  here main still reads `uninitialized`, so the create form keeps the refusal (the switch to the unlock form when main
+   *  reads `locked` is the next describe's). */
   async function failIn(call: 'unlock' | 'create', failure: Failure | Error, shown: string): Promise<void> {
     const user = userEvent.setup()
     const answer = vi.fn(async (): Promise<WorkspaceActionResult> => {
@@ -427,9 +470,18 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
       return failure
     })
     const onUnlocked = vi.fn()
-    stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
+    const onStateChange = vi.fn()
+    stubApi(
+      call === 'unlock'
+        ? { unlockWorkspace: answer }
+        : { createWorkspace: answer, getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => UNINITIALIZED) }
+    )
     renderInLanguage(
-      <WorkspaceGate state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED} onUnlocked={onUnlocked} />,
+      <WorkspaceGate
+        state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED}
+        onUnlocked={onUnlocked}
+        onStateChange={onStateChange}
+      />,
       'de'
     )
     if (call === 'unlock') {
@@ -447,6 +499,7 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     }
     expect(await screen.findByText(shown)).toBeInTheDocument()
     expect(onUnlocked).not.toHaveBeenCalled()
+    expect(onStateChange).not.toHaveBeenCalled()
     if (call === 'create' && !(failure instanceof Error)) {
       expect(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder'))).toHaveValue('')
       expect(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder'))).toHaveValue('')

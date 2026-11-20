@@ -2504,6 +2504,11 @@ export const tr: UiCatalog<'tr'> = {
     'Çalışma alanınızın anahtarını tutan dosya (config/workspace.json) sürücüde yok veya okunamıyor, ' +
     'bu yüzden hiçbir parola çalışma alanını açamaz. Yeni bir çalışma alanı oluşturmayın. Dosyayı ' +
     'yerine koyun veya bir yedekten geri yükleyin.',
+  'main.workspace.descriptorUnreadable':
+    'Çalışma alanınızın anahtarını tutan dosya (config/workspace.json) okunamıyor ve çalışma ' +
+    'alanının şifreli dosyası sürücüde yok, bu yüzden hiçbir parola çalışma alanını açamaz. Anahtar ' +
+    'dosyasını silmeyin. Her iki dosyayı da bir yedekten geri yükleyin veya baştan başlamadan önce ' +
+    'sorun giderme kılavuzuna bakın.',
   'main.workspace.vaultOpenFailed':
     'Parolanız doğru, ancak HilbertRaum çalışma alanını açmayı tamamlayamadı. Sürücüdeki ' +
     'şifreli çalışma alanı olduğu gibi bırakıldı. Sürücüde boş alan olduğundan emin olun ve ' +
@@ -2521,7 +2526,7 @@ export const tr: UiCatalog<'tr'> = {
   'main.workspace.passwordTooShort': 'Parola en az {min} karakter olmalıdır.',
   'main.workspace.exists':
     'Bu sürücüde zaten bir çalışma alanı var, bu yüzden yeni bir tane oluşturulmadı. Parolasıyla ' +
-    'kilidini açmak için HilbertRaum’u yeniden başlatın.',
+    'kilidini açın.',
   'main.workspace.plaintextNotAllowed':
     'Burada parolasız bir çalışma alanına izin verilmiyor. Çalışma alanını bunun yerine bir ' +
     'parolayla oluşturun.',
