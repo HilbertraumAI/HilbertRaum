@@ -1871,10 +1871,12 @@ fallback never steps.
 
 **Not settled.** The 20 and 24 GB picks (above). The projections come from one machine and one
 build: a pin bump re-reads them with `projected-graphics-need` in the same folder as the template.
-`chatGraphicsShareMib` (the reranker and translation headroom gates) still scales the derived
-cache term for a raised context; with a projection present it adds the scaled cache on top of a
-figure that already contains the unscaled one, which is the conservative direction. No start on a
-12, 16 or 20 GB card has been measured on this build.
+`chatGraphicsShareMib` (the reranker and translation headroom gates) does not read the projection.
+It charges the running chat model its MEASURED share from this session's load log, and only
+without one the derived estimate with the cache term scaled to the launched window. Against the
+projection plus the margin, that fallback is higher for 16 of the 24 measured models but lower for
+8, most for Gemma 4 31B (692 MiB) and the E2B (553 MiB), so before a measured start those gates can
+count the chat model short. No start on a 12, 16 or 20 GB card has been measured on this build.
 
 ## 7. Design record — catalog expansion (Phases 28–29, decisions D16–D22)
 
