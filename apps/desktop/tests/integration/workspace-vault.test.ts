@@ -899,6 +899,47 @@ describe('vault lock durability (full-audit 2026-07-11 CODE-1/10/14)', () => {
     ctl.lock()
   })
 
+  // #955 item 3, S-2: the unlock of a vault the start never saw skipped the start's salvage, so the `.enc` was
+  // decrypted over a working file newer than it (a failed lock's session). Both ways in: a whole workspace copied back
+  // under the create form, and the #807 copy's own advice ("put the file back") while the lock screen is up.
+  it.each<[string, () => { vp: FreshVaultPaths; ctl: WorkspaceController }]>([
+    [
+      'a key file, its .enc and a newer working file put back under the create form',
+      () => {
+        const src = lockedVault('vault-src', 'pw')
+        failedLockState(src, 7171, 'pw')
+        const vp = freshVaultPaths('vault')
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init() // an empty layout: the lock screen's create form
+        expect(ctl.getState().state).toBe('uninitialized')
+        copyFileSync(src.descriptorPath, vp.descriptorPath)
+        copyFileSync(src.encPath, vp.encPath)
+        backdate(vp.encPath)
+        copyFileSync(src.dbPath, vp.dbPath)
+        return { vp, ctl }
+      }
+    ],
+    [
+      'a missing key file put back while the lock screen is up, beside a newer working file',
+      () => {
+        const vp = lockedVault('vault', 'pw')
+        failedLockState(vp, 7171, 'pw')
+        const descriptor = readFileSync(vp.descriptorPath)
+        rmSync(vp.descriptorPath)
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init() // `.enc` without its key file: locked, nothing judged
+        expect(ctl.getState().state).toBe('locked')
+        writeFileSync(vp.descriptorPath, descriptor)
+        return { vp, ctl }
+      }
+    ]
+  ])('S-2: %s: the unlock in the same session keeps the newer data', (_case, arrange) => {
+    const { ctl } = arrange()
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    ctl.lock()
+  })
+
   it('CODE-1b: a mid-session crash leftover (live -wal/-shm) is still shredded — the documented power-cut trade-off', () => {
     const vp = lockedVault('vault', 'pw')
     failedLockState(vp)

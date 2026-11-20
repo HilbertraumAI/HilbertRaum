@@ -180,6 +180,11 @@ from its first public `1.0.0` release onward.
   workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
   encrypted. When no copy was left, the lock screen now says so, and that you should not create a
   new workspace (#911).
+- **A workspace file you put back while the app is open keeps your newest changes.** Putting
+  `config/workspace.json` back while the lock screen was open, as the lock screen advises when it is
+  missing, and then unlocking could open the workspace at its last saved state and drop the newer
+  changes the drive still held from a lock that had failed. The unlock now first runs the same
+  checks a start runs (#955).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;

@@ -2719,7 +2719,10 @@ export class WorkspaceController {
     // #845: likewise a newer-format verdict: startup skipped the salvage, sweep and rekey recovery
     // for it, so when the newer artifact is gone they run now, before anything is decrypted (still
     // newer → init() writes nothing and unlockEncryptedVault refuses).
-    if (this._recoveryBlocked || this._vaultNewer) {
+    // #955 item 3 (S-2): and a vault that appeared after the start (`vaultAppearedSinceStart`): its
+    // working file may be newer than its `.enc` (a failed lock's session), and unlocking without the
+    // start's salvage would decrypt the `.enc` over it.
+    if (this._recoveryBlocked || this._vaultNewer || this.vaultAppearedSinceStart()) {
       this.init()
       if (this._recoveryBlocked) throw new VaultRecoveryBlockedError()
     }
