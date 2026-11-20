@@ -344,7 +344,11 @@ on an embeddings card) is `pickManifestForRole(all, 'embeddings')` when it fits 
 (#890) is `computeInstallState`'s synchronous first two steps (supported runtime/format, every declared file
 exists; no hashing), behind the images pick `pickVisionManifest` (`services/vision/status.ts`).
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
-`shared/types.ts`. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
+`shared/types.ts`. **#932**: `ModelInfo.noChecksum?: true` marks a `checksum_failed` model whose manifest
+carries a placeholder hash on any file (`hasPlaceholderHash`, decided from the manifest alone): no checksum on
+record, not a damaged file. The card shows "No checksum" (`models.state.noChecksum`) and `models.noChecksum.hint`,
+and offers no Download. `ModelState`, `ModelStartVerdict` and every start gate are unchanged: the model is still
+refused outside developer leniency. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
 resolved against the **drive root**.
 ✅ **A manifest for a newer HilbertRaum (#847)** — `DiscoveryResult { manifests, unsupported, errors }`:
 a `role` this build does not know, or a `min_app_version` above the app (`setManifestAppVersion`, set once
@@ -1007,10 +1011,24 @@ head's own weights + KV.
   `discrete` card the chat/translation line (`perf.models.card`) needs both models here (on the
   drive or loaded) with a size; with the chat model here and on the card but no translation model
   here, the chat-only line `perf.models.cardChat` keeps the card figure.
+  **#933**: `ResidentModelRow.fileCheck: ModelFileVerdict` (`'ok' | 'damaged' | 'unverified'`) is what
+  the checksum cache already knows about the row's files (`knownFileVerdict`, services/models.ts:
+  synchronous, never a hash, over `checksumCacheView`, a read-only view of the snapshot's own
+  `settings.checksumCache`, so the getter never writes settings): `damaged` = a live cached digest
+  differs from the manifest's; `unverified` = a placeholder hash outside developer leniency
+  (`developerLeniency`); `ok` otherwise, and for a row not on the drive. Unless the row is `loaded`
+  (loaded beats it), a non-`ok` row reads `perf.models.damaged` / `perf.models.noChecksum` in place of
+  "not loaded", adds nothing to `totals.ramAllMb` and is not added to a card line.
+  `placement.model.fileCheck?: ModelFileVerdict` is the chat row's verdict, `'ok'` while the chat
+  runtime holds the model; absent reads `'ok'`. Not `'ok'` → "Your model" states no verdict, note or
+  "Choose a smaller model" (its line keeps the size on disk) and its pill says what its row says. The
+  images row names the first vision candidate whose files are `ok` (as `getVisionStatus` passes over a
+  refused one), else the first.
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget), on every class over the rows that are `onDrive` or `loaded` only (null when no
+  unified budget), on every class over the rows that are `loaded`, or `onDrive` with `fileCheck: 'ok'`
+  (#933), only (null when no
   such row has a size, i.e. nothing installed; 0 when every counted row runs on the card, an
   estimated chat spill not counted; a small value is an observed small spill — the screen leaves
   the line out while it would read 0.0 GB), and `totals.bothOnCard` is true when two or more of

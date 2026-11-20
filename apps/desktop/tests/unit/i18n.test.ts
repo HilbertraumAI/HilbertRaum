@@ -2083,6 +2083,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'ocr.install.progress',
       'models.ram.needs',
       'models.ram.machine',
+      // #930: the chat start's RAM refusal, the same two figures as the two keys above.
+      'main.models.startNeedsRam',
       'models.badge.ramNeeded',
       'common.percent',
       'perf.report.otherComputer',

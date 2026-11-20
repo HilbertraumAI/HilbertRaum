@@ -1217,10 +1217,14 @@ export const pl: UiCatalog<'pl'> = {
   'models.state.installed': 'Zainstalowany',
   'models.state.missing': 'Niepobrany',
   'models.state.checksumFailed': 'Nie można sprawdzić',
+  'models.state.noChecksum': 'Brak sumy kontrolnej',
   'models.state.unsupported': 'Nieobsługiwany',
   'models.state.notRecommended': 'Niezalecany',
   'models.state.ready': 'Gotowy',
   'models.state.running': 'Działa',
+  'models.noChecksum.hint':
+    'Ten model nie ma zapisanej sumy kontrolnej, więc działa tylko w trybie programisty na dysku, ' +
+    'którego zasady pozwalają na niesprawdzone modele.',
   'models.badge.notResponding': 'Nie odpowiada',
   'models.notRespondingHint':
     'Model AI przestał odpowiadać. Ponowne uruchomienie zwykle rozwiązuje ten problem.',
@@ -2243,6 +2247,8 @@ export const pl: UiCatalog<'pl'> = {
   'perf.models.loaded': 'teraz wczytany',
   'perf.models.notLoaded': 'niewczytany',
   'perf.models.notOnDrive': 'brak na tym dysku',
+  'perf.models.damaged': 'nie przeszedł sprawdzenia plików',
+  'perf.models.noChecksum': 'brak zapisanej sumy kontrolnej',
   'perf.models.lifetime.session': 'zostaje w pamięci',
   'perf.models.lifetime.idle': 'zwalnia pamięć przy bezczynności',
   'perf.models.lifetime.per-use': 'działa tylko podczas pracy',
@@ -2986,6 +2992,16 @@ export const pl: UiCatalog<'pl'> = {
     'nową transkrypcję.',
   'main.models.noManifests':
     'Na tym dysku nie znaleziono listy modeli – brak folderu model-manifests.',
+  'main.models.unknown': 'Tego modelu nie ma już na liście modeli tego dysku.',
+  'main.models.notChat': '„{name}” nie jest modelem czatu, więc nie można go tu uruchomić.',
+  'main.models.startDamaged':
+    'Model „{name}” nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +
+    'ponownie na ekranie Model AI.',
+  'main.models.startMissing':
+    'Nie można uruchomić modelu „{name}” – jego pliku nie ma jeszcze na tym dysku.',
+  'main.models.startNeedsRam':
+    'Model „{name}” wymaga co najmniej {min}\u00A0GB pamięci RAM – ten komputer ma około ' +
+    '{ram}\u00A0GB. Wybierz mniejszy model – jakość pozostanie bardzo dobra.',
   'main.models.autoSelected':
     'Ten model jest używany automatycznie po zainstalowaniu – nie trzeba go wybierać.',
   'main.models.locked': 'Obszar roboczy jest zablokowany. Odblokuj go, aby zarządzać modelami AI.',

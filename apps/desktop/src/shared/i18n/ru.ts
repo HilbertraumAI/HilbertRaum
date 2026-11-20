@@ -1200,10 +1200,14 @@ export const ru: UiCatalog<'ru'> = {
   'models.state.installed': 'Установлена',
   'models.state.missing': 'Не скачана',
   'models.state.checksumFailed': 'Не удается проверить',
+  'models.state.noChecksum': 'Нет контрольной суммы',
   'models.state.unsupported': 'Не поддерживается',
   'models.state.notRecommended': 'Не рекомендуется',
   'models.state.ready': 'Готова',
   'models.state.running': 'Работает',
+  'models.noChecksum.hint':
+    'Для этой модели нет сохраненной контрольной суммы, поэтому она работает только в режиме ' +
+    'разработчика на диске, политика которого разрешает непроверенные модели.',
   'models.badge.notResponding': 'Не отвечает',
   'models.notRespondingHint': 'ИИ-модель перестала отвечать. Обычно помогает перезапуск.',
   'models.restart': 'Перезапустить',
@@ -2229,6 +2233,8 @@ export const ru: UiCatalog<'ru'> = {
   'perf.models.loaded': 'сейчас в памяти',
   'perf.models.notLoaded': 'не в памяти',
   'perf.models.notOnDrive': 'нет на этом диске',
+  'perf.models.damaged': 'не прошла проверку файлов',
+  'perf.models.noChecksum': 'нет сохраненной контрольной суммы',
   'perf.models.lifetime.session': 'не выгружается',
   'perf.models.lifetime.idle': 'выгружается при простое',
   'perf.models.lifetime.per-use': 'работает только во время задачи',
@@ -2966,6 +2972,15 @@ export const ru: UiCatalog<'ru'> = {
     'преобразовать речь в текст.',
   'main.models.noManifests':
     'На этом диске не найден список моделей — нет папки «model-manifests».',
+  'main.models.unknown': 'Этой модели больше нет в списке моделей на этом диске.',
+  'main.models.notChat': '«{name}» — не модель для чата, поэтому ее нельзя запустить здесь.',
+  'main.models.startDamaged':
+    'Модель «{name}» не прошла проверку файлов, поэтому она не запущена. Скачайте ее заново на ' +
+    'экране «ИИ-модель».',
+  'main.models.startMissing': 'Модель «{name}» нельзя запустить: ее файла пока нет на этом диске.',
+  'main.models.startNeedsRam':
+    'Модели «{name}» нужно не менее {min}\u00A0GB оперативной памяти — на этом компьютере около ' +
+    '{ram}\u00A0GB. Выберите модель поменьше — качество останется отличным.',
   'main.models.autoSelected':
     'Эта модель используется автоматически после установки — выбирать ничего не нужно.',
   'main.models.locked':

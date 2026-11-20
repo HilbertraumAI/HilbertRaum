@@ -289,12 +289,17 @@ describe('VisionService on a drive with two vision models (#913 code review)', (
       return service.getJob(jobId)
     }
 
+    expect(service.loadedModelId()).toBeNull() // nothing resident yet
     expect(await analyze()).toMatchObject({ state: 'done', answer: 'answer from a-vision' })
+    // #933 review N1: the resident model, as the Performance row names it.
+    expect(service.loadedModelId()).toBe('a-vision')
     idleOut[0]() // the idle teardown: the sidecar goes, the instance stays
+    expect(service.loadedModelId()).toBeNull()
     const a = validManifest({ role: 'vision', ...vision('a-vision', true) })
     expect(await computeInstallState(a, rootPath, { developerMode: false })).toBe('checksum_failed') // Check all
     expect(await getVisionStatus(ctx)).toMatchObject({ available: true, modelId: 'b-vision' })
     expect(await analyze()).toMatchObject({ state: 'done', answer: 'answer from b-vision' })
+    expect(service.loadedModelId()).toBe('b-vision') // the next candidate, not the pick
     expect(built).toEqual(['a-vision', 'b-vision'])
     await service.stop()
   })

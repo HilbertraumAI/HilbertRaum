@@ -1130,10 +1130,14 @@ export const nl: UiCatalog<'nl'> = {
   'models.state.installed': 'Geïnstalleerd',
   'models.state.missing': 'Niet gedownload',
   'models.state.checksumFailed': 'Niet controleerbaar',
+  'models.state.noChecksum': 'Geen controlesom',
   'models.state.unsupported': 'Niet ondersteund',
   'models.state.notRecommended': 'Niet aanbevolen',
   'models.state.ready': 'Klaar',
   'models.state.running': 'Draait',
+  'models.noChecksum.hint':
+    'Van dit model is geen controlesom bekend, dus het werkt alleen in ontwikkelaarsmodus op een ' +
+    'schijf waarvan het beleid niet-gecontroleerde modellen toestaat.',
   'models.badge.notResponding': 'Reageert niet',
   'models.notRespondingHint':
     'Het AI-model antwoordt niet meer. Meestal lost opnieuw starten dit op.',
@@ -2151,6 +2155,8 @@ export const nl: UiCatalog<'nl'> = {
   'perf.models.loaded': 'nu geladen',
   'perf.models.notLoaded': 'niet geladen',
   'perf.models.notOnDrive': 'niet op deze schijf',
+  'perf.models.damaged': 'niet door de bestandscontrole',
+  'perf.models.noChecksum': 'geen controlesom bekend',
   'perf.models.lifetime.session': 'blijft geladen',
   'perf.models.lifetime.idle': 'wordt bij inactiviteit uit het geheugen gehaald',
   'perf.models.lifetime.per-use': 'draait alleen tijdens gebruik',
@@ -2931,6 +2937,16 @@ export const nl: UiCatalog<'nl'> = {
     'te transcriberen.',
   'main.models.noManifests':
     'Er is geen modellijst op deze schijf gevonden: de map model-manifests ontbreekt.',
+  'main.models.unknown': 'Dit model staat niet meer in de modellijst van deze schijf.',
+  'main.models.notChat': '“{name}” is geen chatmodel en kan hier dus niet worden gestart.',
+  'main.models.startDamaged':
+    'Het model “{name}” is niet door de bestandscontrole gekomen en is daarom niet gestart. Download ' +
+    'het opnieuw op het scherm AI-model.',
+  'main.models.startMissing':
+    'Het model “{name}” kan niet worden gestart: het modelbestand staat nog niet op deze schijf.',
+  'main.models.startNeedsRam':
+    'Het model “{name}” heeft minstens {min}\u00A0GB RAM nodig – deze computer heeft ongeveer ' +
+    '{ram}\u00A0GB. Kies een kleiner model: de kwaliteit blijft uitstekend.',
   'main.models.autoSelected':
     'Dit model wordt automatisch gebruikt zodra het is geïnstalleerd: er is niets te selecteren.',
   'main.models.locked':

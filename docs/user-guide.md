@@ -170,6 +170,10 @@ blocks you.
      through the catalog; if it is one of several variants of the same model, that group opens
      automatically so the damaged version is visible straight away. (If the publisher has since
      withdrawn the file, the row explains that instead of offering a download.)
+   - **No checksum** — the file is present, but the model's manifest has no checksum on record to
+     check it against (a model you added yourself, before you captured its hash). It runs only in
+     developer mode on a drive whose policy allows unverified models, and a download can't fix it,
+     so the row offers none (see Troubleshooting).
    - **Unsupported** — this model can't run on this computer/build.
 3. Click **Use this model** on a downloaded model's row — this makes it your model *and* starts it, so
    you can go straight to chatting. The first start of a model can take a little while as it loads
@@ -354,11 +358,15 @@ the model you are chatting with, so its row can say either "graphics card" or "p
 depending on this computer and what else is loaded — never "by design". A row reads **loaded**
 only once that service is actually running and ready, not while it is still starting. A model
 that is not on this drive keeps its row, so you can see what it would take before you download
-it, and reads **not on this drive** instead. Below the rows: a card line for chat and translation
-(what each is resident on the graphics card for, against its memory, shown only when both models
-are on this drive; with only the chat model here, the line names chat alone), a second card line
-whenever the ranking model is also resident there, and a processor total (what loading everything
-on this drive at once would take from RAM; a model that is not on this drive is not counted).
+it, and reads **not on this drive** instead. A model on this drive that the app won't start reads
+**failed its file check** (Check all model files found its file damaged) or **no checksum on
+record** (see the AI Model screen's **No checksum**) instead of **not loaded**. Below the rows: a
+card line for chat and translation (what each is resident on the graphics card for, against its
+memory, shown only when both models are on this drive and can start; with only the chat model
+here, the line names chat alone), a second card line whenever the ranking model is also resident
+there, and a processor total (what loading everything on this drive at once would take from RAM;
+a model that is not on this drive, or that the app won't start, is not counted). **Your model**
+makes no fit claim for a chat model the app won't start either; its badge says why.
 Whenever two or more of chat, translation and the ranking model share the card at once, both lines
 carry a warning badge; the chat-and-translation line also spells out that whichever of the two
 loaded second got what was left over and runs slower, but only when chat and translation are
