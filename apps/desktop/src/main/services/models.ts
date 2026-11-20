@@ -15,10 +15,12 @@ import {
   type UnsupportedManifest
 } from '../../shared/manifest'
 import type {
+  AppSettings,
   GpuDevice,
   HardwareProfile,
   MemoryClass,
   ModelDownloadInfo,
+  ModelFileVerdict,
   ModelInfo,
   ModelPlacement,
   ModelState,
@@ -441,6 +443,9 @@ export interface HashStore {
   delete(path: string): void
 }
 
+/** #933: a hash cache that can only be read (`checksumCacheView`): it has no way to write. */
+export type HashStoreReader = Pick<HashStore, 'get'>
+
 const hashCache = new Map<string, CachedHash>()
 
 /** How many full-file hashes were actually computed (`install_state_done.cacheHit` reads it; tests too). */
@@ -716,6 +721,25 @@ export function createSettingsHashStore(getDb: () => Db, rootPath: string): Hash
 }
 
 /**
+ * #933 (A S-A8): a READ-ONLY view of a `checksumCache` the caller has already read (the Performance snapshot's
+ * `settings`), keyed like `createSettingsHashStore` (drive-relative, a legacy absolute key still honoured). Unlike
+ * that store's `get`, it never reads settings again and never writes: the store adopts a legacy key with a settings
+ * write, which a display getter must not do.
+ */
+export function checksumCacheView(
+  cache: AppSettings['checksumCache'] | null | undefined,
+  rootPath: string
+): HashStoreReader {
+  return {
+    get(path) {
+      // A row corrupted to `checksumCache: null` reads as an empty cache (the store's BE-1 belt).
+      const entry = cache?.[driveRelKey(rootPath, path)] ?? cache?.[path]
+      return entry ? { size: entry.size, mtimeMs: entry.mtimeMs, actual: entry.sha256 } : null
+    }
+  }
+}
+
+/**
  * SHA-256 of a file, cached by (path, size, mtimeMs) — memory first, then `store`.
  * `onProgress` fires only on a real cache MISS (a cache hit does no I/O), so callers can
  * weight the verification bar by the bytes actually hashed. Concurrent calls for the
@@ -827,7 +851,7 @@ function cachedHashFor(filePath: string, store?: HashStore): boolean {
  * there is none. Hashes nothing. #913 (S-913-1): the lazy path reads it to honour a cached MISMATCH on any one file of
  * a model, which a full check that stopped at that file left as the only cached entry.
  */
-function cachedHashOf(filePath: string, store?: HashStore): string | null {
+function cachedHashOf(filePath: string, store?: HashStoreReader): string | null {
   let st: ReturnType<typeof statSync>
   try {
     st = statSync(filePath)
@@ -838,6 +862,33 @@ function cachedHashOf(filePath: string, store?: HashStore): string | null {
   if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
   const persisted = store?.get(filePath)
   return persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs ? persisted.actual : null
+}
+
+/**
+ * #933: what the checksum cache already knows about a model's files, synchronously and without hashing anything by
+ * construction (a `statSync`, an in-memory lookup and a `store.get` per file, never `sha256File`): a placeholder hash
+ * outside developer leniency is `unverified`; a live cached digest that differs from the manifest's is `damaged` (a
+ * check found it so); anything else is `ok` (verified, or not checked yet). The same two facts `computeInstallState`'s
+ * lazy branch turns into `checksum_failed`, so the Performance rows and the AI Model card agree. A path that escapes
+ * the drive root names no file on it: `ok` here (the presence rule already reads it as absent).
+ */
+export function knownFileVerdict(
+  manifest: ModelManifest,
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStoreReader }
+): ModelFileVerdict {
+  let files: ManifestFile[]
+  try {
+    files = manifestFiles(rootPath, manifest)
+  } catch {
+    return 'ok'
+  }
+  if (files.some((f) => !isRealSha256(f.sha))) return opts.developerMode ? 'ok' : 'unverified'
+  for (const f of files) {
+    const actual = cachedHashOf(f.path, opts.hashStore)
+    if (actual !== null && actual !== f.sha) return 'damaged'
+  }
+  return 'ok'
 }
 
 /** Verify a weight file against its expected SHA-256 (cached by size+mtime). `label`
@@ -947,6 +998,19 @@ export function manifestFiles(rootPath: string, manifest: ModelManifest): Manife
     })
   }
   return files
+}
+
+/**
+ * #932: does any file this manifest declares (the GGUF, the mmproj projector, the `files:` list: the files
+ * `manifestFiles` lists) carry a placeholder hash, so it has no checksum on record? From the manifest alone, no I/O.
+ */
+export function hasPlaceholderHash(manifest: ModelManifest): boolean {
+  const hashes = [
+    manifest.sha256,
+    ...(manifest.mmproj ? [manifest.mmproj.sha256] : []),
+    ...(manifest.files ?? []).map((f) => f.sha256)
+  ]
+  return hashes.some((sha) => !isRealSha256(sha))
 }
 
 export interface InstallStateOptions {
@@ -1869,7 +1933,12 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     const startableAsMock =
       state === 'missing' && manifest.role === 'chat' && opts.developerMode
     const insufficientRam = manifest.recommendedMinRamGb > ram
-    models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
+    const info = toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam)
+    // #932: `computeInstallState` decides a placeholder hash before any file is read, so `checksum_failed` with a
+    // placeholder in the manifest means "no checksum on record", never a file that failed its check. Only the card's
+    // words and its repair action follow this flag; the state and every start gate stay as they are.
+    if (state === 'checksum_failed' && hasPlaceholderHash(manifest)) info.noChecksum = true
+    models.push(info)
   }
   // #847: the manifests for a newer HilbertRaum, after every model this build can use. Logged apart from the
   // invalid ones (they are not broken), once per id per session rather than on every Models-screen refresh. Each
@@ -1918,7 +1987,8 @@ export interface SelectResult {
 export function selectModel(db: Db, manifestsDir: string, modelId: string): SelectResult {
   const { manifests } = discoverManifests(manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
-  if (!found) throw new Error(`Unknown model id: ${modelId}`)
+  // #930: in the interface language, without the id (users never see ids; the select handler logs it).
+  if (!found) throw new Error(tMain('main.models.unknown'))
 
   if (found.manifest.role !== 'chat' && found.manifest.role !== 'embeddings') {
     throw new Error(tMain('main.models.autoSelected'))

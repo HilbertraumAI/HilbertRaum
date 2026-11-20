@@ -65,7 +65,11 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
       if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
       const { manifests } = discoverManifests(ctx.manifestsDir)
       const found = manifests.find((m) => m.manifest.id === modelId)
-      if (!found) throw new Error(`Unknown model id: ${modelId}`)
+      // #930: in the interface language, without the id (the log keeps it).
+      if (!found) {
+        log.warn('Download refused: unknown model id', { modelId })
+        throw new Error(tMain('main.models.unknown'))
+      }
       return downloads.start({
         rootPath: ctx.paths.rootPath,
         manifest: found.manifest,

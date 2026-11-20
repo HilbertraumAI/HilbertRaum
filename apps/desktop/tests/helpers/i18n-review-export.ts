@@ -72,6 +72,8 @@ export const SECURITY_TEXT: readonly string[] = [
   'settings.changePassword',
   'settings.developer.toggle',
   'settings.developer.hint',
+  // #932: when a model with no checksum on record may run (developer mode and the drive policy).
+  'models.noChecksum.hint',
   'docs.exportOriginal.warning',
   'review.export.encryptionWarning',
   'packExport.privacy',

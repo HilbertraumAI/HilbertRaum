@@ -101,12 +101,12 @@ export function placement(over: Partial<PerformanceSnapshot['placement']> = {}):
     observedMismatch: null,
     verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
     models: [
-      { role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.4, onDrive: true, device: 'gpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
-      { role: 'translation', modelId: 'translategemma-12b-it-q4', sizeOnDiskGb: 6.8, onDrive: true, device: 'gpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
-      { role: 'vision', modelId: 'qwen2.5-vl-3b-instruct-q4', sizeOnDiskGb: 3.0, onDrive: true, device: 'cpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
-      { role: 'reranker', modelId: 'bge-reranker-v2-m3-f16', sizeOnDiskGb: 1.1, onDrive: true, device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
-      { role: 'embeddings', modelId: 'multilingual-e5-small-q8', sizeOnDiskGb: 0.2, onDrive: true, device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
-      { role: 'transcriber', modelId: 'whisper-small', sizeOnDiskGb: 0.5, onDrive: true, device: 'cpu', loaded: false, lifetime: 'per-use', gpuLayers: null, totalLayers: null }
+      { role: 'chat', modelId: 'qwen3.5-9b-ud-q4kxl', sizeOnDiskGb: 5.4, onDrive: true, fileCheck: 'ok', device: 'gpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
+      { role: 'translation', modelId: 'translategemma-12b-it-q4', sizeOnDiskGb: 6.8, onDrive: true, fileCheck: 'ok', device: 'gpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
+      { role: 'vision', modelId: 'qwen2.5-vl-3b-instruct-q4', sizeOnDiskGb: 3.0, onDrive: true, fileCheck: 'ok', device: 'cpu', loaded: false, lifetime: 'idle', gpuLayers: null, totalLayers: null },
+      { role: 'reranker', modelId: 'bge-reranker-v2-m3-f16', sizeOnDiskGb: 1.1, onDrive: true, fileCheck: 'ok', device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
+      { role: 'embeddings', modelId: 'multilingual-e5-small-q8', sizeOnDiskGb: 0.2, onDrive: true, fileCheck: 'ok', device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
+      { role: 'transcriber', modelId: 'whisper-small', sizeOnDiskGb: 0.5, onDrive: true, fileCheck: 'ok', device: 'cpu', loaded: false, lifetime: 'per-use', gpuLayers: null, totalLayers: null }
     ],
     totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false },
     ...over

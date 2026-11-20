@@ -19,9 +19,9 @@
 //
 // Either way the outcome waits one task: after an X the quit's `will-quit` runs between the window's `destroyed` and
 // that task (measured), so its cancel, which also empties the task queue, comes first, and the queue does not start its
-// next task into the quit. On a quit the guard holds the run ends before `will-quit`, so a task queued behind it can
-// start while the window saves; that quit's `will-quit` then cancels it (a residual: the queue cannot tell a quit is
-// coming).
+// next task into the quit. On a quit the guard holds the run ends before `will-quit`, while the window saves; the queue
+// starts nothing then either, because the quit holds it (#936: `holdQueueOnQuit` at `before-quit` and the close guard,
+// `close-guard.ts`; only the guard's Keep open releases it), and that quit's `will-quit` cancels what waits.
 //
 // Electron-free, so tests/helpers/closeGuardSmokeRunner.ts can bundle it into a real-Electron run; the rasterizer
 // is its production caller.

@@ -1,13 +1,18 @@
 import { app, BrowserWindow, ipcMain, session, type Dialog, type MessageBoxReturnValue } from 'electron'
 import {
   createCloseGuard,
+  createStopWorkConfirm,
   createUnsavedCloseConfirm,
   createWindowSaveRequest,
-  type ConfirmWindow
+  holdQueueOnQuit,
+  stoppingWorkFrom,
+  type ConfirmWindow,
+  type StoppingWork
 } from '../../src/main/close-guard'
 import { createAppLifecycleHandlers } from '../../src/main/shutdown'
 import { watchRunWindowGone } from '../../src/main/services/ocr/window-gone'
 import { EVENTS, IPC } from '../../src/shared/ipc'
+import type { DocTaskStatus } from '../../src/shared/types'
 import { writeSmokeResult } from './electron-smoke-child'
 
 // REAL-Electron smoke runner for #888 — NOT a test file. `tests/integration/close-guard-electron-smoke.test.ts`
@@ -45,6 +50,16 @@ import { writeSmokeResult } from './electron-smoke-child'
 //                   print window's shape, #910): the quit the close starts closes it
 //   quit-helper     as quit, with that helper open: the quit closes it while the guard still holds the main
 //                   window for its save, so the run ends before `will-quit` (review SF-1)
+//   stop-keep       #935: as helper, with an OCR run "in" the helper and a summary waiting behind it. The X asks
+//                   "A document task is not finished yet." first (Keep open), nothing closes; the runner closes again
+//                   200 ms later and answers Close anyway; then the hold, the save and the quit
+//   quit-hold       #936: as quit-helper, with that OCR run and the waiting summary: the quit's belt
+//                   (`holdQueueOnQuit`) and the guard hold the queue, so the summary does not start during the save
+//
+// In stop-keep and quit-hold a stand-in queue models DocTaskManager: the OCR run ends when the watch fails its page,
+// and its end pumps the queue, which starts the summary unless a hold is set (`manager.ts` `pump`). `will-quit` records
+// the summary's state (the teardown's `cancelAllDocTasks` would cancel it there). The guard gets the production
+// running-task predicate (`stoppingWorkFrom`) and question (`createStopWorkConfirm`, over the recording dialog).
 
 const [resultPath, selfTimeoutMs, scenario] = process.argv.slice(-3)
 const t0 = Date.now()
@@ -68,7 +83,37 @@ app.on('window-all-closed', () => {
   log('window-all-closed')
   app.quit()
 })
+/** #935/#936 scenarios: the stand-in queue (an OCR run in the helper, a summary waiting behind it). */
+const queued = scenario === 'stop-keep' || scenario === 'quit-hold'
+let ocrRun: 'running' | 'ended' = 'running'
+let summary: 'queued' | 'started' = 'queued'
+let queueHeld = false
+/** `manager.ts` `pump`: the next task starts unless a quit holds the queue. */
+function pump(): void {
+  if (queueHeld) {
+    log('pump:held')
+    return
+  }
+  if (summary !== 'queued') return
+  summary = 'started'
+  log('summary:started')
+}
+function holdQueue(by: string): void {
+  log(`${by}:hold`)
+  queueHeld = true
+}
+const activeTasks = (): DocTaskStatus[] => {
+  const status = (kind: 'ocr' | 'summary', state: DocTaskStatus['state']): DocTaskStatus => ({
+    jobId: kind,
+    kind,
+    documentIds: [kind],
+    state,
+    progress: { stepsDone: 0, stepsTotal: 0 }
+  })
+  return [...(ocrRun === 'running' ? [status('ocr', 'running')] : []), ...(summary === 'queued' ? [status('summary', 'queued')] : [])]
+}
 app.on('will-quit', () => {
+  if (queued) log(`summary:${summary}`)
   log('will-quit')
   writeResult('quit')
 })
@@ -96,9 +141,12 @@ app.whenReady().then(async () => {
   session.defaultSession.setSpellCheckerEnabled(false)
   const webPreferences = { nodeIntegration: true, contextIsolation: false, sandbox: false }
   const win = new BrowserWindow({ show: false, webPreferences })
-  if (scenario === 'helper' || scenario === 'quit-helper') {
+  const withHelper = scenario === 'helper' || scenario === 'quit-helper' || queued
+  let helperAlive = (): boolean => false
+  if (withHelper) {
     const helper = new BrowserWindow({ show: false, skipTaskbar: true, webPreferences })
     helper.on('closed', () => log('helper:closed'))
+    helperAlive = () => !helper.isDestroyed()
     await helper.loadURL(page(''))
     watchRunWindowGone({
       app,
@@ -106,6 +154,13 @@ app.whenReady().then(async () => {
       isWindowDestroyed: () => helper.isDestroyed(),
       failPage: (err) => {
         log(`helper:run-${err.name === 'AbortError' ? 'aborted' : 'failed'}`)
+        if (queued) {
+          // The OCR task unwinds and its dispatch's `finally` pumps the queue (a later microtask).
+          void Promise.resolve().then(() => {
+            ocrRun = 'ended'
+            pump()
+          })
+        }
         return true
       },
       abortError: () => new DOMException('PDF rasterization aborted', 'AbortError'),
@@ -166,6 +221,16 @@ app.whenReady().then(async () => {
       return { response: scenario === 'keep' ? 1 : 2, checkboxChecked: false }
     }
   }
+  // #935: the running-task question's dialog. stop-keep: Keep open (0) the first time, then Close anyway (1).
+  let stopDialogs = 0
+  const stopDialog: Pick<Dialog, 'showMessageBox'> = {
+    async showMessageBox(): Promise<MessageBoxReturnValue> {
+      stopDialogs += 1
+      // The OCR window is still there while the question is up: a Keep open loses nothing.
+      log(`stop-dialog#${stopDialogs}:helper-${helperAlive() ? 'alive' : 'gone'}`)
+      return { response: stopDialogs === 1 ? 0 : 1, checkboxChecked: false }
+    }
+  }
   const recordOnly: ConfirmWindow = {
     isDestroyed: () => win.isDestroyed(),
     isMinimized: () => win.isMinimized(),
@@ -204,8 +269,27 @@ app.whenReady().then(async () => {
       return asked
     },
     isShuttingDown: () => false,
+    ...(queued
+      ? {
+          closeQuits: process.platform !== 'darwin',
+          stoppingWork: () => stoppingWorkFrom(activeTasks()),
+          confirmStopWork: async (work: StoppingWork) => {
+            const choice = await createStopWorkConfirm({ dialog: stopDialog, window: recordOnly, t: (key) => key, log: console })(work)
+            if (choice === 'keep') setTimeout(() => win.close(), 200) // the user closes again later
+            return choice
+          },
+          holdWork: () => holdQueue('guard'),
+          releaseWork: () => {
+            log('guard:release')
+            queueHeld = false
+            pump()
+          }
+        }
+      : {}),
     log: console
   })
+  // #936: the belt, as index.ts wires it: every un-prevented quit holds the queue.
+  if (queued) holdQueueOnQuit(app, () => holdQueue('belt'))
   win.on('close', (e) => {
     closes += 1
     let held = false
@@ -217,7 +301,7 @@ app.whenReady().then(async () => {
     lifecycle.onMainWindowClosed(guard.closedForQuit())
   })
 
-  if (scenario === 'quit' || scenario === 'quit-helper') app.quit()
+  if (scenario === 'quit' || scenario === 'quit-helper' || scenario === 'quit-hold') app.quit()
   else win.close()
   if (scenario === 'xx') setTimeout(() => win.close(), 50)
 })

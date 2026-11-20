@@ -942,6 +942,19 @@ under a running model) reads "loaded now" and counts, whatever its files say. Th
 the same of the active model (with its files gone a start is refused); an active model outside
 the catalog has no size (`sizeOnDiskGb: null`, never `0`) and names no files, so it is not on the
 drive either.
+**A row on the drive that every start refuses is marked so and left out too** (#933;
+`ResidentModelRow.fileCheck`): `damaged` when the checksum cache holds a digest for one of its files
+that is not the manifest's ("Check all model files" found it damaged; the row reads "failed its
+file check"), `unverified` when the manifest has a placeholder hash and developer leniency is off
+(the row reads "no checksum on record", the AI Model card's "No checksum"), else `ok`. The verdict
+is the cache's only: `knownFileVerdict` (`services/models.ts`) is synchronous and hashes nothing
+(a `statSync`, the in-memory cache, a read-only view of the `checksumCache` the snapshot has
+already read; it never writes settings), so a file nobody has checked yet is `ok`. Such a row adds
+nothing to `totals.ramAllMb` and is not added to a graphics-card line; **loaded beats it**, as it
+beats `onDrive`. "Your model" carries the same verdict (`placement.model.fileCheck`, `ok` while
+resident) and makes no fit claim for a refused model; its line keeps the size on disk. The images
+row passes over a vision candidate the cache knows is refused for the next one, as
+`getVisionStatus` does.
 Chat and translation auto-fit onto the card (`device: 'gpu'`) —
 under the CURRENT configuration
 (PR #303 audit DR1; the memory class alone used to decide): the row says `'cpu'` on a machine
