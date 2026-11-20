@@ -2,11 +2,14 @@ import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
+  PlaintextNotAllowedError,
   VaultBusyError,
   VaultDamagedError,
+  VaultDescriptorMissingError,
   VaultMissingError,
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
+  WorkspaceExistsError,
   WrongPasswordError,
   isVaultNewerError,
   workspaceAdmitsWork,
@@ -344,6 +347,22 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.vaultMissing')
         }
       }
+      // #807 (C-S2): the encrypted workspace file is there, but its descriptor (`config/workspace.json`, which holds
+      // the wrapped key) is missing or unreadable, so no password can open it; refused before the password was checked.
+      // Before, this was a plain English error that read "Could not open the workspace." on every try. The copy names
+      // the file and warns against a new workspace. The log line names no path. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultDescriptorMissingError ||
+        (err instanceof Error && err.name === 'VaultDescriptorMissingError')
+      ) {
+        log.error('Workspace unlock failed: the workspace descriptor is missing or unreadable (encrypted file present)')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (descriptor missing)')
+        return {
+          ok: false,
+          reason: 'vault_descriptor_missing',
+          message: tMain('main.workspace.descriptorMissing')
+        }
+      }
       // #242: the startup salvage is blocked — another program holds the recovery file the
       // last session's newest data must be moved onto, so opening now would decrypt the
       // stale snapshot over it. Its own reason + copy (close the holder, retry; nothing is
@@ -450,6 +469,22 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           })
           return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
         }
+        // #807: the two expected refusals are typed, each with its own reason, which the gate renders in its own
+        // language (D-17). A workspace is already on the drive: a new one would replace the user's data with an empty
+        // vault. instanceof PLUS the name, the bundle-duplication quirk (see the unlock catch).
+        if (err instanceof WorkspaceExistsError || (err instanceof Error && err.name === 'WorkspaceExistsError')) {
+          log.warn('Workspace create refused: a workspace already exists on the drive')
+          return { ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') }
+        }
+        // A workspace without a password, which the policy or the build does not allow (the gate offers the switch only
+        // when it is allowed, so only a direct call gets here).
+        if (
+          err instanceof PlaintextNotAllowedError ||
+          (err instanceof Error && err.name === 'PlaintextNotAllowedError')
+        ) {
+          log.warn('Workspace create refused: a workspace without a password is not allowed')
+          return { ok: false, reason: 'plaintext_not_allowed', message: tMain('main.workspace.plaintextNotAllowed') }
+        }
         // Plaintext refused by policy, and create-over-an-existing-vault (would wipe
         // the user's data), are expected refusals — surface the real message.
         const message = err instanceof Error ? err.message : String(err)
@@ -521,6 +556,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
             message: tMain('main.workspace.wrongCurrentPassword')
           }
         }
+        // Document work holds the vault: the vault's own `tMain` text (#807: in main's language, like every refusal
+        // on the open workspace's Settings card).
         if (err instanceof VaultBusyError || (err instanceof Error && err.name === 'VaultBusyError')) {
           return { ok: false, reason: 'refused', message: err.message }
         }

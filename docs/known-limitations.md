@@ -2969,11 +2969,6 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   language the app is shown in. In any interface language but English and German, the same paste
   then holds a line "--- English ---" and the same report in English, so a report from a Russian
   interface is in Russian and in English. An English or German interface copies one report.
-- **Two rare refusals when creating a workspace are always in English:** a workspace already
-  exists there ("An encrypted workspace already exists here …", "A workspace already exists on
-  this drive …"), or the drive's policy doesn't allow an unencrypted one ("Plaintext workspace is
-  not permitted by policy."). These three messages have no translation and show in English in
-  every interface language.
 - **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as
   documented).** LLM prompts are pinned English (benchmark comparability; models
   follow the language of the user's question naturally), so a one-click summary of a German

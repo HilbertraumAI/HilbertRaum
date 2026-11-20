@@ -48,6 +48,7 @@ import {
   RECOVERY_SUFFIX,
   WorkspaceController,
   VaultRecoveryBlockedError,
+  createEncryptedVaultOnDisk,
   decryptFile,
   lockEncryptedVault,
   unlockEncryptedVault,
@@ -59,17 +60,17 @@ import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/se
 import { log, readLogTail } from '../../src/main/services/logging'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import * as settingsModule from '../../src/main/services/settings'
-import { UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
+import { UI_LANGUAGE_CODES, t, type MessageKey } from '../../src/shared/i18n'
 import {
   CREATE_FAILURE_KEYS,
   UNLOCK_FAILURE_KEYS,
   type WorkspaceFailureReason
 } from '../../src/shared/workspace-failure-keys'
-import { catalogOf } from '../helpers/i18n-catalogs'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   ENCRYPTION_REQUIRED,
+  FAST_KDF,
   backdate,
   damagedVault,
   editDescriptor,
@@ -166,18 +167,24 @@ describe('registerWorkspaceIpc', () => {
   })
 
   // #860 L4: a change while document work holds the vault (an import writing `.enc` sidecars) is refused as busy, so
-  // the user waits for the import; "change failed" would send them retrying into the same refusal.
-  it('change password while documents are being imported is refused as busy, the vault untouched', async () => {
+  // the user waits for the import; "change failed" would send them retrying into the same refusal. #807: in the
+  // language main speaks, like the busy refusal beside it (the vault threw an English literal in every language).
+  it('change password while documents are being imported is refused as busy in main’s language, the vault untouched', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)
     registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const descriptor = readFileSync(vp.descriptorPath)
     const release = ctrl.beginDocumentWork()
+    const before = mainUiLanguage()
     try {
-      const { result } = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'long-enough-pw')
-      expect(result).toMatchObject({ ok: false, reason: 'refused', message: expect.stringMatching(/imported/) })
+      for (const code of UI_LANGUAGE_CODES) {
+        applyUiLanguageSetting(code)
+        const { result } = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'long-enough-pw')
+        expect(result, code).toEqual({ ok: false, reason: 'refused', message: t(code, 'main.workspace.busyDocumentWork') })
+      }
       expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
     } finally {
+      applyUiLanguageSetting(before)
       release()
       ctrl.lock()
     }
@@ -697,11 +704,12 @@ describe('registerWorkspaceIpc', () => {
 // makes. The gate's own rows stub main's answer, so main moving a reason to another key would turn
 // nothing red there while the gate kept showing the old copy. These rows drive the REAL handlers
 // into every branch that answers each reason and hold main's `message` against the gate's table,
-// once for every language main can speak (equal text in all of them stands in for the same key).
-// Where a table holds `null` the gate shows main's `message` as it came, which keeps the screen in
-// one language only while that message is free text: the same in every language, and no catalog
-// value. Every row also leaves the workspace as it found it (still locked, still uninitialized, …):
-// a refusal is a normal result the gate re-prompts on, never a changed state.
+// once for every language main can speak (equal text in all of them stands in for the same key),
+// with the `{ min }` the gate renders every key with. Since #807 every reason a call sends has a
+// key: a table's `null` means the call never sends that reason, so a driven reason with a `null`
+// would show main's text and put the screen in two languages again. Every row also leaves the
+// workspace as it found it (still locked, still uninitialized, …): a refusal is a normal result
+// the gate re-prompts on, never a changed state.
 describe('main’s unlock/create failure copy is the copy the gate’s tables pick (UI-languages owner call D-17 (a))', () => {
   type Call = 'unlock' | 'create'
   /** One way into a branch of a handler: the workspace it sees and the arguments it gets. */
@@ -743,6 +751,26 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     // #911: the password verified, and there is no encrypted file to open and no copy to restore it from.
     vault_missing: [
       { how: 'an .enc removed with nothing left to keep', arrange: () => ({ workspace: startedOn(encRemoved()), args: [PW] }) }
+    ],
+    // #807 (C-S2): the encrypted file is there, but the descriptor that holds its wrapped key is not, or can't be read.
+    // Answered for any password: the verifier is in that file.
+    vault_descriptor_missing: [
+      {
+        how: 'an .enc whose config/workspace.json was removed',
+        arrange: () => {
+          const vp = lockedVault('wsipc', PW)
+          rmSync(vp.descriptorPath)
+          return { workspace: startedOn(vp), args: [PW] }
+        }
+      },
+      {
+        how: 'an .enc beside a config/workspace.json that is not JSON',
+        arrange: () => {
+          const vp = lockedVault('wsipc', PW)
+          writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+          return { workspace: startedOn(vp), args: ['wrong-password'] }
+        }
+      }
     ],
     // #844: a healthy database whose open's upgrade step cannot finish is not damage.
     vault_open_failed: [
@@ -794,6 +822,8 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         }
       }
     ],
+    workspace_exists: NEVER_SENT,
+    plaintext_not_allowed: NEVER_SENT,
     refused: NEVER_SENT,
     error: [{ how: 'no vault to unlock', arrange: () => ({ workspace: startedOn(freshVaultPaths('wsipc')), args: [PW] }) }]
   }
@@ -802,6 +832,7 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     wrong_password: NEVER_SENT,
     vault_damaged: NEVER_SENT,
     vault_missing: NEVER_SENT,
+    vault_descriptor_missing: NEVER_SENT,
     vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
     workspace_newer: [
@@ -813,10 +844,41 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         })
       }
     ],
-    // Not a row: main's too-short refusal (a password under MIN_PASSWORD_LENGTH, or not a string),
-    // which does carry a catalog sentence. The gate never sends one (WorkspaceGate.test.tsx,
-    // "enables Create exactly at the shared floor main enforces").
-    refused: [
+    // #807: a workspace already on the drive (before, `refused` with the vault's English sentence). The renderer reads
+    // the state once, so a vault that appears under an open create form gets here.
+    workspace_exists: [
+      {
+        how: 'a vault already on the drive',
+        arrange: () => ({ workspace: startedOn(lockedVault('wsipc', PW)), args: ['longenough', 'encrypted'] })
+      },
+      // #860 V4's state: the create flow stays away from an `.enc` whatever its descriptor holds.
+      {
+        how: 'an .enc beside a descriptor that is not JSON',
+        arrange: () => {
+          const vp = lockedVault('wsipc', PW)
+          writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+          return { workspace: startedOn(vp), args: ['longenough', 'encrypted'] }
+        }
+      },
+      // The belt behind `create()`'s own check (reached only by a race between the two): the real
+      // `createEncryptedVaultOnDisk` over an `.enc`, through the handler's mapping.
+      {
+        how: 'the on-disk belt meeting an .enc',
+        arrange: () => {
+          const vp = lockedVault('wsipc', PW)
+          return {
+            workspace: {
+              ...workspaceStandIn({ unlocked: false }),
+              create: (password: string) => createEncryptedVaultOnDisk(vp, password, FAST_KDF)
+            } as unknown as WorkspaceController,
+            args: ['longenough', 'encrypted']
+          }
+        }
+      }
+    ],
+    // #807: a create without a password that the policy, or a build outside developer mode, refuses (before, `refused`
+    // with the vault's English sentence). The gate offers the switch only when allowed.
+    plaintext_not_allowed: [
       {
         how: 'a plaintext workspace the policy forbids',
         arrange: () => ({
@@ -825,8 +887,26 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         })
       },
       {
-        how: 'a vault already on the drive',
-        arrange: () => ({ workspace: startedOn(lockedVault('wsipc', PW)), args: ['longenough', 'encrypted'] })
+        how: 'a plaintext workspace outside developer mode',
+        arrange: () => ({
+          workspace: startedOn(freshVaultPaths('wsipc'), DEFAULT_POLICY, false),
+          args: ['', 'plaintext_dev']
+        })
+      }
+    ],
+    // #807 A2: main's too-short refusal, the one `refused` create sends, rendered with `{ min }`. The gate's own floor
+    // keeps it from being sent (WorkspaceGate.test.tsx, "enables Create exactly at the shared floor main enforces").
+    refused: [
+      {
+        how: 'an encrypted password one short of the floor',
+        arrange: () => ({
+          workspace: startedOn(freshVaultPaths('wsipc')),
+          args: ['a'.repeat(MIN_PASSWORD_LENGTH - 1), 'encrypted']
+        })
+      },
+      {
+        how: 'a password that is not a string',
+        arrange: () => ({ workspace: startedOn(freshVaultPaths('wsipc')), args: [12345, 'encrypted'] })
       }
     ],
     error: [
@@ -848,36 +928,31 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     create: CREATE_FAILURE_KEYS
   }
   const CHANNELS: Record<Call, string> = { unlock: IPC.unlockWorkspace, create: IPC.createWorkspace }
-  const catalogValues = new Set(UI_LANGUAGE_CODES.flatMap((code) => Object.values(catalogOf(code))))
 
   it.each([...rows('unlock', UNLOCK), ...rows('create', CREATE)])(
     '%s %s (%s): main says what the gate shows, in every language main speaks',
     async (call, reason, _how, provocation) => {
+      // A reason a call sends needs a key (#807): a `null` would show main's text in main's language.
+      const key = TABLES[call][reason]
+      expect(key, `${call} sends ${reason}, so its table needs a key`).not.toBeNull()
       const { workspace, args } = provocation.arrange()
       registerWorkspaceIpc(workspaceIpcCtx(workspace))
-      const key = TABLES[call][reason]
-      // The recovery-blocked stand-in has no state of its own to keep.
+      // The stand-ins (recovery blocked, the create belt) have no state of their own to keep.
       const stateBefore = workspace instanceof WorkspaceController ? workspace.getState() : null
       const before = mainUiLanguage()
-      const messages: string[] = []
       try {
         for (const code of UI_LANGUAGE_CODES) {
           applyUiLanguageSetting(code)
           const { result } = await invoke(handlers, CHANNELS[call], ...args)
           expect(result).toMatchObject({ ok: false, reason })
           const { message } = result as Extract<WorkspaceActionResult, { ok: false }>
-          if (key !== null) expect(message, code).toBe(tMain(key))
-          messages.push(message)
+          // The gate renders every key with the password floor; keys without `{min}` ignore it.
+          expect(message, code).toBe(tMain(key!, { min: MIN_PASSWORD_LENGTH }))
         }
         if (stateBefore !== null) expect(workspace.getState()).toEqual(stateBefore)
       } finally {
         applyUiLanguageSetting(before)
         if (workspace instanceof WorkspaceController) workspace.shutdown()
-      }
-      if (key === null) {
-        // Free text: one sentence whatever language main speaks, and none the catalogs hold.
-        expect(new Set(messages).size).toBe(1)
-        expect(catalogValues.has(messages[0])).toBe(false)
       }
     }
   )

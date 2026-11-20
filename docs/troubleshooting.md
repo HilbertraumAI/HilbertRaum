@@ -490,6 +490,33 @@ left. Before #911 this case only ever said "Could not open the workspace."
 
 ---
 
+## "The file that holds your workspace's key (config/workspace.json) is missing from the drive or can't be read"
+
+You see this on the unlock screen, whatever password you type, when the workspace's encrypted file,
+`workspace/hilbertraum.sqlite.enc`, is on the drive, but `config/workspace.json` is not, or it is
+there and damaged (for example a copy that was cut short). That small file holds what your password
+unlocks: the key the workspace is encrypted with, itself encrypted under your password. Without it
+no password can open the workspace, and the app cannot even check whether the password is right.
+Something outside HilbertRaum removed or changed it: a sync or cleanup tool, a person tidying the
+drive, or a fresh start by hand that moved `workspace/` but not `config/workspace.json` (see "I
+forgot my workspace password" above). Before #807 this case only said "Could not open the
+workspace."
+
+What to do:
+
+- **Do not create a new workspace**, and do not delete anything: a new workspace gets a new key,
+  and the documents and data you have can then never be opened.
+- Look for the file: in the recycle bin or trash, in a sync tool's deleted or conflict files, or in
+  the folder you moved an old workspace into. Put it back as `config/workspace.json` and unlock
+  again.
+- Otherwise restore `config/workspace.json` from a backup of this same workspace, and unlock with
+  the password the workspace had when that backup was made. A `workspace.json` from another
+  workspace opens nothing: the lock screen then reads it as a wrong password or as damaged data.
+  One exception: a backup made before the first password change on a workspace that an older
+  version created belongs only with the `workspace/` folder of that same backup.
+
+---
+
 ## "Could not open the workspace yet: another program is holding a recovery file"
 
 You see this on the unlock screen when a previous session's lock did not finish (see "Could

@@ -2587,6 +2587,10 @@ export const nl: UiCatalog<'nl'> = {
     'Je wachtwoord klopt, maar het versleutelde bestand van de werkruimte ontbreekt op de schijf, en ' +
     'er is geen kopie meer waarmee het hersteld kan worden. Maak geen nieuwe werkruimte aan. Zet het ' +
     'bestand terug of herstel de map van de werkruimte vanuit een back-up.',
+  'main.workspace.descriptorMissing':
+    'Het bestand met de sleutel van je werkruimte (config/workspace.json) ontbreekt op de schijf of ' +
+    'is niet leesbaar, dus geen enkel wachtwoord kan de werkruimte openen. Maak geen nieuwe ' +
+    'werkruimte aan. Zet het bestand terug of herstel het vanuit een back-up.',
   'main.workspace.vaultOpenFailed':
     'Je wachtwoord klopt, maar HilbertRaum kon het openen van de werkruimte niet afronden. ' +
     'De versleutelde werkruimte op de schijf is ongewijzigd gebleven. Zorg dat er vrije ' +
@@ -2602,6 +2606,12 @@ export const nl: UiCatalog<'nl'> = {
     'de werkruimte te openen. Er is niets gewijzigd.',
   'main.workspace.createFailed': 'De werkruimte kon niet worden aangemaakt.',
   'main.workspace.passwordTooShort': 'Het wachtwoord moet minstens {min} tekens lang zijn.',
+  'main.workspace.exists':
+    'Op deze schijf staat al een werkruimte, dus er is geen nieuwe aangemaakt. Start HilbertRaum ' +
+    'opnieuw om de werkruimte te ontgrendelen met het wachtwoord van die werkruimte.',
+  'main.workspace.plaintextNotAllowed':
+    'Een werkruimte zonder wachtwoord is hier niet toegestaan. Maak de werkruimte in plaats daarvan ' +
+    'aan met een wachtwoord.',
   'main.workspace.newPasswordTooShort':
     'Het nieuwe wachtwoord moet minstens {min} tekens lang zijn.',
   'main.workspace.unlockBeforeChange':
@@ -2613,6 +2623,9 @@ export const nl: UiCatalog<'nl'> = {
   'main.workspace.busyPasswordChange':
     'Het wachtwoord van de werkruimte wordt op dit moment gewijzigd. Probeer het zo meteen ' +
     'opnieuw.',
+  'main.workspace.busyDocumentWork':
+    'Er worden nog documenten geïmporteerd of opnieuw geïndexeerd. Wacht tot dat klaar is en probeer ' +
+    'het dan opnieuw.',
   'main.workspace.lockFailed':
     'Vergrendelen is niet gelukt: de werkruimte blijft open en je gegevens zijn veilig. Maak wat ' +
     'ruimte vrij op de schijf en probeer het dan opnieuw.',

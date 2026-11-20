@@ -2781,6 +2781,11 @@ export const fr: UiCatalog<'fr'> = {
     'disque, et aucune copie ne permet de le récupérer. Ne créez pas de nouvel espace de travail. ' +
     'Remettez le fichier à sa place ou restaurez le dossier «\u00A0workspace\u00A0» à partir d’une ' +
     'sauvegarde.',
+  'main.workspace.descriptorMissing':
+    'Le fichier qui contient la clé de votre espace de travail (config/workspace.json) est absent du ' +
+    'disque ou illisible, et aucun mot de passe ne peut donc ouvrir l’espace de travail. Ne créez ' +
+    'pas de nouvel espace de travail. Remettez le fichier à sa place ou restaurez-le à partir d’une ' +
+    'sauvegarde.',
   'main.workspace.vaultOpenFailed':
     'Votre mot de passe est correct, mais HilbertRaum n’a pas pu terminer l’ouverture de ' +
     'l’espace de travail. L’espace de travail chiffré sur le disque est resté tel quel. ' +
@@ -2798,6 +2803,12 @@ export const fr: UiCatalog<'fr'> = {
     'mettez l’application à jour pour l’ouvrir. Rien n’a été modifié.',
   'main.workspace.createFailed': 'L’espace de travail n’a pas pu être créé.',
   'main.workspace.passwordTooShort': 'Le mot de passe doit comporter au moins {min} caractères.',
+  'main.workspace.exists':
+    'Un espace de travail existe déjà sur ce disque, aucun nouvel espace n’a donc été créé. ' +
+    'Redémarrez HilbertRaum pour le déverrouiller avec son mot de passe.',
+  'main.workspace.plaintextNotAllowed':
+    'Un espace de travail sans mot de passe n’est pas autorisé ici. Créez l’espace de travail avec ' +
+    'un mot de passe.',
   'main.workspace.newPasswordTooShort':
     'Le nouveau mot de passe doit comporter au moins {min} caractères.',
   'main.workspace.unlockBeforeChange':
@@ -2809,6 +2820,9 @@ export const fr: UiCatalog<'fr'> = {
   'main.workspace.busyPasswordChange':
     'Le mot de passe de l’espace de travail est en cours de modification. Réessayez dans un ' +
     'instant.',
+  'main.workspace.busyDocumentWork':
+    'Des documents sont encore en cours d’importation ou de réindexation. Attendez la fin de ' +
+    'l’opération, puis réessayez.',
   'main.workspace.lockFailed':
     'L’espace de travail n’a pas pu être verrouillé\u00A0: il reste ouvert et vos données sont ' +
     'en sécurité. Libérez de l’espace sur le disque, puis réessayez.',

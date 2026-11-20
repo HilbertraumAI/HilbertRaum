@@ -63,12 +63,13 @@ type Failure = Extract<WorkspaceActionResult, { ok: false }>
 function failureText(
   keys: Record<WorkspaceFailureReason, MessageKey | null>,
   failure: Failure,
-  t: (key: MessageKey) => string
+  t: (key: MessageKey, params?: { min: number }) => string
 ): string {
   // An own-property read: `reason` comes over IPC, and one naming an inherited member
   // (`toString`, `constructor`) would otherwise resolve to a function and garble the banner.
   const key = Object.hasOwn(keys, failure.reason) ? keys[failure.reason] : null
-  return key === null ? failure.message : t(key)
+  // `{ min }` for create's too-short refusal (#807 A2), the floor main refused with; other keys ignore it.
+  return key === null ? failure.message : t(key, { min: MIN_PASSWORD_LENGTH })
 }
 
 /** The lock screen's banner for each `lockNotice` (#855, #875, #892): what the changes since the last lock were lost

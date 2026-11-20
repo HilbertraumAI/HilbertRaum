@@ -199,9 +199,9 @@ from its first public `1.0.0` release onward.
 - **Unlock and setup errors now appear in the language the lock screen shows.** If the language
   you chose in Settings differs from your operating system's, the lock screen was already in your
   language, but a wrong password or a problem opening or creating the workspace was reported in
-  the operating system's language. These messages now match the rest of the screen. Two rare
-  refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
-  unencrypted one) are still shown in English.
+  the operating system's language. These messages now match the rest of the screen, and so do the
+  two rare refusals when creating a workspace (one already exists on the drive, or a workspace
+  without a password isn't allowed), which were always in English (#807).
 - **Turkish dotted and dotless I now match in the text filters.** In the Documents name filter,
   the AI Model search and the review's evidence filter, typing "ısı" didn't find a name written
   "ISI", and "istanbul" didn't find "İSTANBUL". The Documents filter also compared names by the
