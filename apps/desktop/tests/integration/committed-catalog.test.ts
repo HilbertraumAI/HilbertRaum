@@ -337,7 +337,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // §6.8: the projection each manifest carries is the rig's evidence row, digit for digit, and
   // exactly the chat models the rig holds carry one (the five that do not are the withdrawn
   // Qwen3.8 K-quants and the two local-test stubs, whose files are not there).
-  it('every projected_graphics_need_mib equals its evidence row, and only the measured models carry one (§6.8)', () => {
+  it('every projected_graphics_need_mib equals its evidence row, and every model the card path can pick carries one (§6.8)', () => {
     const tsv = readFileSync(
       join(__dirname, '../../../../eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/projected-graphics-need-b12110-20261120.tsv'),
       'utf8'
@@ -348,13 +348,14 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const carriers = chat.filter((m) => m.projectedGraphicsNeedMib !== undefined)
     expect(carriers.map((m) => m.id).sort()).toEqual([...evidence.keys()].sort())
-    expect(chat.filter((m) => m.projectedGraphicsNeedMib === undefined).map((m) => m.id).sort()).toEqual([
-      'gemma-4-26b-q4',
-      'gemma4-coding-q8',
-      'qwen3.8-27b-q4',
-      'qwen3.8-27b-q5',
-      'qwen3.8-27b-q6'
-    ])
+    // A model the card path can pick (card rank, else ordinary rank, above 0) is judged by a measured
+    // projection, never by the derived estimate. A manifest without one must be one the card path
+    // never picks, like the withdrawn Qwen3.8 K-quants, the local-test stubs or a new model added at
+    // rank 0 before it is measured. Pinning the exact list of unmeasured ids instead would break on
+    // every such addition while saying nothing about the picks.
+    const cardRank = (m: ModelManifest) => m.recommendationRankGpu ?? m.recommendationRank
+    const unmeasured = chat.filter((m) => m.projectedGraphicsNeedMib === undefined)
+    expect(unmeasured.filter((m) => cardRank(m) > 0).map((m) => m.id)).toEqual([])
     for (const m of carriers) {
       const row = evidence.get(m.id)!
       expect(m.projectedGraphicsNeedMib, `${m.id} projection`).toBe(Number(row[col('projected_mib')]))
