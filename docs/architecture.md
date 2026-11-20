@@ -16937,14 +16937,23 @@ under `ELECTRON_RUN_AS_NODE`, loopback only):
   (AddTrust External CA Root, VeriSign Class 3 PCA, Thawte Premium Server CA). Electron's bundled
   list is curated (118 roots, where plain Node bundles 146) and leaves out roots Windows still
   trusts, such as Entrust G2 and three old DigiCert roots.
+- The list does not say which Windows store a certificate came from: Node merges the Root, the
+  Intermediate Certification Authorities (`CA`) and the Trusted People stores, of the machine and
+  of the user, into one list. So the filter cannot keep only Windows' own roots. `CurrentUser\Root`
+  makes Windows ask the user before a root is added; `CurrentUser\CA` and `CurrentUser\TrustedPeople`
+  do not, so any program running as the user can put a self-signed CA there without a prompt.
 - With the filter below: 120 read, 94 kept (10 not self-signed, 8 outside their validity, 6 not a
-  CA, 2 RSA keys under 2048 bits left out), 17 added: six Microsoft roots (among them the TPM and
-  time-stamping roots), GlobalSign Root CA, Starfield Class 2, DigiCert Global, High Assurance EV
-  and Assured ID, thawte Primary, Entrust G2 and Entrust.net 2048, VeriSign G5 and Universal, Go
-  Daddy Class 2. The default list goes from 119 to 136.
-- Cost on the main thread: reading the system store 21–74 ms, the filter and de-duplication 12–20
-  ms, setting the list 5–12 ms. In the test workers (Node 24.13, under load) the unfiltered call
-  took 42–107 ms.
+  CA, 2 RSA keys under 2048 bits left out; the signature check and the EC curve list, added after
+  the review, leave out nothing more here), 17 added: GlobalSign Root CA, Starfield Class 2,
+  DigiCert Global, High Assurance EV and Assured ID, thawte Primary, Entrust G2 and Entrust.net
+  2048, VeriSign G5 and Universal, Go Daddy Class 2, five Microsoft roots (among them the
+  time-stamping root) and "Microsoft TPM Root Certificate Authority 2014". 16 of the 17 are in a
+  Windows `Root`/`AuthRoot` store. The TPM root is only in the Intermediate stores, so Windows does
+  not trust it as a root for anything, and the downloads now do (the review's measurement). The
+  default list goes from 119 to 136.
+- Cost on the main thread: reading the system store 21–74 ms, the filter (signature check
+  included) and de-duplication 23–26 ms, setting the list 5–12 ms. In the test workers (Node 24.13,
+  under load) the unfiltered call took 42–107 ms.
 - Electron's eMudhra block (GHSA-jr5w-w6x2-84p9) is not part of the CA list. Electron's patch
   `patches/node/tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra
   RSA intermediates to the SPKI blocklist that Node 24.22.1 compiles in and applies to every
@@ -16962,10 +16971,15 @@ under `ELECTRON_RUN_AS_NODE`, loopback only):
 **Decision** (owner gate G-4 (a), 2026-11-20): route 1 of #564, then the fuse off.
 - `services/net/trust.ts` `ensureSystemTrust()` reads `tls.getCACertificates('system')` once per
   process and **filters** it (owner decision 2026-11-20, `usableRoot`): a certificate counts only
-  when it parses (a throw anywhere, reading its key included, skips it), is a CA, is self-signed
-  (`checkIssued` against itself, which compares its issuer name with its own subject and the key
-  identifiers, so a separate name check would add nothing), is inside its validity window now, and
-  has an RSA key of at least 2048 bits or an EC or Ed25519 key.
+  when it parses (a throw anywhere, reading its key included, skips it), is a CA, is self-signed,
+  is inside its validity window now, and has an RSA key of at least 2048 bits, a P-256, P-384 or
+  P-521 key, or an Ed25519 key (an OpenSSL build of Node decodes weaker curves such as P-192;
+  Electron's BoringSSL does not). Self-signed takes two checks: `checkIssued` against itself (its
+  issuer name is its own subject, the key identifiers agree where both are present, its key usage
+  allows signing certificates) and `verify` with its own public key. `checkIssued` never looks at
+  the signature: a certificate that names itself as issuer, is signed by another key and carries no
+  key identifiers passes it, and as a trust anchor it then let a leaf signed by that other key
+  verify (the review's measurement). `verify` is what proves the signature.
 - It is **additive**: `tls.setDefaultCACertificates([...default, ...new roots])`, de-duplicated by
   `fingerprint256`, so every default certificate stays as it was and a connection that verified
   before still does. When nothing new is left, the list is not touched. It reads both `tls`
@@ -16991,16 +17005,23 @@ under `ELECTRON_RUN_AS_NODE`, loopback only):
 ignored all but `--http-parser` and `--max-http-header-size` already, §3) nor `NODE_EXTRA_CA_CERTS`,
 which Electron unsets. An unpackaged development build is not fused and reads both as before.
 
-**What is trusted now.** Node's bundled roots plus the OS store's usable roots: roots that Electron's
-curated list leaves out, and any root that the user, an administrator or a program running as the
-user adds. The residual: a root that Windows still trusts but Chrome dropped (Entrust, the old
-DigiCert roots, VeriSign, Go Daddy) is trusted for the in-app downloads. Node reads certificates
-only, not Windows' per-root purposes, so the Microsoft TPM and time-stamping roots count as TLS
-roots here too. Every engine, model and OCR file is checked against a pinned SHA-256 before use,
-the downloads send no credentials, and the eMudhra block applies whatever the list holds, so such a
-root cannot change what gets installed. At most it lets someone who can intercept the connection
-see which public file is being fetched, or make the download fail. `NODE_EXTRA_CA_CERTS` had the
-same reach.
+**What is trusted now.** Node's bundled roots plus every self-signed CA that passes the filter in
+any store Node reads, not only Windows' roots. The residuals:
+- A root that Windows still trusts but Chrome dropped (Entrust, the old DigiCert roots, VeriSign,
+  Go Daddy) is trusted for the in-app downloads.
+- A self-signed CA in an Intermediate or Trusted People store is trusted too, though Windows does
+  not treat it as a root: the Microsoft TPM root is the measured case. Node also reads
+  certificates only, not Windows' per-root purposes, so the time-stamping root counts as a TLS
+  root.
+- A program running as the user can add a CA to `CurrentUser\CA` without Windows' root-install
+  prompt, and the downloads then trust it. That is the same reach `NODE_EXTRA_CA_CERTS` gave such a
+  program before the fuse went off, so turning the fuse off did not close that route; it moved it.
+Every engine, model and OCR file is checked against a pinned SHA-256 before use, the downloads send
+no credentials, and the eMudhra block applies whatever the list holds, so none of these can change
+what gets installed. At most it lets someone who can intercept the connection see which public file
+is being fetched, or make the download fail. Narrowing the list to Windows' Root stores would need
+a second source for the store of origin (a `certutil` or PowerShell read in a child process at the
+first download); not done.
 
 **What stops working.** A root that reaches the app only through `NODE_EXTRA_CA_CERTS`, and is not
 in the OS store, no longer counts in a packaged build: downloads behind such a proxy fail with "fetch
@@ -17010,29 +17031,42 @@ by policy, and Norton installs into both (measured).
 **Guards.** `tests/integration/system-trust.test.ts`, with `node:tls` faked and fed the certificates
 in `tests/fixtures/certs/` (one per rule; certificates only, made with OpenSSL 3.5.7): the call
 keeps every default certificate as it was and adds each new usable root once (an RSA-2048, an EC
-P-256 and an Ed25519 root; the OS copy of a default root, written with other line endings, is not
-added twice); an expired root, a root not valid yet, an RSA-1024 root, a DSA root, an intermediate,
-a name twin signed by another key, a self-signed `CA:FALSE` server certificate, text that is no
+P-256, an EC P-384 and an Ed25519 root; the OS copy of a default root, written with other line
+endings, is not added twice); an expired root, a root not valid yet, an RSA-1024 root, a DSA root, a
+P-192 root, an intermediate, a name twin signed by another key, the same without key identifiers
+(only the signature check catches it), a certificate signed by its own key under another issuer's
+name (only `checkIssued` catches it), a self-signed `CA:FALSE` server certificate, text that is no
 certificate and a PEM body that does not decode are each left out while the usable root beside them
 is still added; a second call reads nothing; importing the module reads no store; a store that
 throws, an empty store, one with no usable root, one whose roots Node has already, and a refused
 list each keep the default with one content-free line and no retry; `downloadToFile` sets the trust
-before its first request. `packaging.test.ts` pins fuse 2 `false` and `verify-mac-build.sh`'s
-`EXPECTED_WIRE`, which `release.yml` checks each packaged Windows exe against (#769).
-Mutation-tested (26 mutations, each red, a changed success line green): each filter clause dropped
-(CA, self-signed, either end of the validity window, the RSA size, the key type, Ed25519 refused,
-the catch), de-duplication by text instead of fingerprint, either list left out of the merge, the
-list set when nothing is new, the once-only latch, no catch around the read or the merge, the
-error's text logged, a call at import, the call dropped from `downloadToFile` or moved after the
-request; fuse 2 back on or the old wire each fail `packaging.test.ts`.
+before its first request. Every other suite gets a no-op trust module (`tests/setup.ts`), so a
+downloader suite with a fake `fetch` neither reads the machine's store nor changes its worker's CA
+list. `packaging.test.ts` pins fuse 2 `false` and `verify-mac-build.sh`'s `EXPECTED_WIRE`, which
+`release.yml` checks each packaged Windows exe against (#769). Mutation-tested (28 mutations, each
+red; a changed success line and the setup mock removed stay green): each filter clause dropped (CA,
+`checkIssued`, the signature check, either end of the validity window, the RSA size, the key type,
+the EC curve list dropped or narrowed to P-256, Ed25519 refused, the catch), de-duplication by text
+instead of fingerprint, either list left out of the merge, the list set when nothing is new, the
+once-only latch, no catch around the read or the merge, the error's text logged, a call at import,
+the call dropped from `downloadToFile` or moved after the request; fuse 2 back on or the old wire
+each fail `packaging.test.ts`.
 
 **Residuals.**
-- macOS (the keychain) and Linux (OpenSSL's default paths) store reads are unmeasured.
-- Roots Windows trusts and Chrome dropped are trusted for the downloads (above); pinned SHA-256
+- macOS (the keychain) and Linux (OpenSSL's default paths) store reads are unmeasured. On a Mac
+  the read runs on the main thread at the first download; if it is slow or asks for anything, it
+  blocks there. Owed to the Mac walk, beside #887/#888.
+- The trust widening above: roots Windows trusts and Chrome dropped, self-signed CAs from the
+  Intermediate and Trusted People stores, and the silent `CurrentUser\CA` route; pinned SHA-256
   keeps integrity.
-- The packaged check behind Norton (a `--win dir` build with `NODE_EXTRA_CA_CERTS` removed, an
-  in-app download from github.com or huggingface.co, before: `fetch failed`, §3) and the built
-  binary's wire are owed to the orchestrator's run.
+- Whether Node's Windows read honours the `Disallowed` store is not verified (both are empty on the
+  measuring machine, and Node's source was not read).
+- A store read that fails is not retried in that process (by design: one log line); behind a TLS
+  scanner the downloads then fail until the app restarts.
+- **Owed:** the packaged download behind Norton (a `--win dir` build with `NODE_EXTRA_CA_CERTS`
+  removed, an in-app download from github.com or huggingface.co; before: `fetch failed`, §3). The
+  owner postponed it on 2026-11-20. Done: the packaged `--win dir` build's wire reads `000011001`
+  and `packaging.test.ts`'s real-executable rows pass on it.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

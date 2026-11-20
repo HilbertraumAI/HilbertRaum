@@ -120,9 +120,12 @@ password recovery — are documented in
   app's built-in downloads trust that store, so they work on such computers without the variable.
   A proxy whose certificate is only in the variable, and not in the operating system's store,
   makes the downloads fail: add the certificate to the store (your IT department does this for a
-  company proxy). Trusting the store also means a certificate that a program running as the user
-  adds there is trusted, and so is an older root certificate that Windows still trusts but Chrome
-  no longer does (Entrust, old DigiCert, VeriSign, Go Daddy roots).
+  company proxy). Trusting the store also means that an older root certificate Windows still trusts
+  but Chrome no longer does (Entrust, old DigiCert, VeriSign, Go Daddy roots) is trusted, and so is
+  a self-signed CA certificate in the store for intermediate certificates or for trusted people,
+  which Windows itself does not treat as a root. A program running as the user can add one there
+  without the confirmation Windows shows for a new root, much as it could set
+  `NODE_EXTRA_CA_CERTS` before.
   That cannot change what a download installs, because every engine, model and OCR file is checked
   against a fixed SHA-256 checksum before use. A development build (`npm run dev`) still reads the
   variable.

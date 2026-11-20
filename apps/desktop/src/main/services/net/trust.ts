@@ -11,16 +11,17 @@ import { log } from '../logging'
 // - Filtered: Windows' store, as Node reads it, also holds intermediates, self-signed server
 //   certificates, expired and 1024-bit roots and entries whose key does not even decode (measured
 //   on one Windows machine: 26 of 120 entries left out). Only a certificate that parses, is a CA,
-//   is self-signed, is inside its validity window and has an RSA key of at least 2048 bits or an
-//   EC or Ed25519 key is added (`usableRoot`), and only when the default list lacks it.
+//   is self-signed, is inside its validity window and has an RSA key of at least 2048 bits or a
+//   P-256/P-384/P-521 or Ed25519 key is added (`usableRoot`), and only when the default list lacks
+//   it. Node's list does not say which Windows store a certificate came from, so a self-signed CA
+//   from the Intermediate or Trusted People stores counts as well (architecture §8).
 // - Additive: every certificate of the default list (bundled + NODE_EXTRA_CA_CERTS, where a build
 //   still reads it) stays; a connection that verified before still does. Electron's SPKI blocklist
 //   (the eMudhra intermediates) is a verify-time check, independent of this list.
-// - Once, lazily: reading and filtering the OS store costs 35–90 ms on the main thread (Windows,
-//   measured), so it
-//   runs right before the first download's first request, never at startup (first paint). Its one
-//   caller is `downloadToFile` (assets.ts), which every remote request of the main process goes
-//   through; the sidecar clients talk plain HTTP on loopback.
+// - Once, lazily: reading and filtering the OS store costs 45–100 ms on the main thread (Windows,
+//   measured), so it runs right before the first download's first request, never at startup
+//   (first paint). Its one caller is `downloadToFile` (assets.ts), which every remote request of
+//   the main process goes through; the sidecar clients talk plain HTTP on loopback.
 // - Never throws into a download: a store that cannot be read, one with no usable root (an empty
 //   store on a minimal Linux) or a list Node refuses leaves today's trust as it is, with one log
 //   line that carries counts or an error code, never a certificate.
@@ -36,13 +37,17 @@ let settled = false
 
 /** RSA keys shorter than this are refused, as browsers refuse them. */
 const MIN_RSA_BITS = 2048
+/** The EC curves a root may use (P-256, P-384, P-521); an OpenSSL build of Node decodes weaker ones too. */
+const EC_CURVES: ReadonlySet<string> = new Set(['prime256v1', 'secp384r1', 'secp521r1'])
 
 /**
- * The certificate, when it may anchor a download's TLS chain: it parses, is a CA, is self-signed
- * (`checkIssued` against itself compares its issuer name with its own subject and the key
- * identifiers), is valid now, and has an RSA key of at least 2048 bits or an EC or Ed25519 key.
- * Anything that throws on the way (a body that does not parse, a key that does not decode) is
- * not usable.
+ * The certificate, when it may anchor a download's TLS chain: it parses, is a CA, is self-signed,
+ * is valid now, and has an RSA key of at least 2048 bits or a P-256/P-384/P-521 or Ed25519 key.
+ * Self-signed takes both checks: `checkIssued` against itself (its issuer name is its own subject,
+ * the key identifiers agree, the key may sign certificates) never looks at the signature, so a
+ * certificate that only names itself, signed by another key and without key identifiers, passes
+ * it; `verify` with its own key is what proves the signature. Anything that throws on the way (a
+ * body that does not parse, a key that does not decode) is not usable.
  */
 function usableRoot(pem: string, now: number): X509Certificate | null {
   try {
@@ -52,10 +57,14 @@ function usableRoot(pem: string, now: number): X509Certificate | null {
     if (now < cert.validFromDate.getTime() || now > cert.validToDate.getTime()) return null
     const key = cert.publicKey
     const type = key.asymmetricKeyType
-    if (type === 'rsa' || type === 'rsa-pss') {
-      return (key.asymmetricKeyDetails?.modulusLength ?? 0) >= MIN_RSA_BITS ? cert : null
-    }
-    return type === 'ec' || type === 'ed25519' ? cert : null
+    const strongKey =
+      type === 'rsa' || type === 'rsa-pss'
+        ? (key.asymmetricKeyDetails?.modulusLength ?? 0) >= MIN_RSA_BITS
+        : type === 'ec'
+          ? EC_CURVES.has(key.asymmetricKeyDetails?.namedCurve ?? '')
+          : type === 'ed25519'
+    if (!strongKey) return null
+    return cert.verify(key) ? cert : null
   } catch {
     return null
   }

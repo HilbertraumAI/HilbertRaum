@@ -12,6 +12,8 @@ import type { FetchFn } from '../../src/main/services/assets'
 // worker's trust, and nothing reaches the network. Each row loads the modules fresh, because the trust is set once
 // per process. That the main process's real `fetch` honours `tls.setDefaultCACertificates` was measured on Electron
 // 43.8.6's Node against a loopback TLS server (architecture.md "Electron fuses — design record (#562)" §8).
+// tests/setup.ts makes the trust module a no-op for every other suite; this one needs the real one.
+vi.unmock('../../src/main/services/net/trust')
 const tlsFake = vi.hoisted(() => {
   const stores: Record<string, string[]> = {}
   return {
@@ -39,6 +41,7 @@ const fingerprint = (pem: string): string => new X509Certificate(pem).fingerprin
 const DEFAULT_ROOT = cert('default-root')
 const RSA_ROOT = cert('root-rsa2048')
 const EC_ROOT = cert('root-ec-p256')
+const EC_P384_ROOT = cert('root-ec-p384')
 const ED25519_ROOT = cert('root-ed25519')
 /** Node's list, as a stand-in: its own root plus the RSA root the OS store holds too. */
 const DEFAULT_CERTS = [DEFAULT_ROOT, RSA_ROOT]
@@ -49,7 +52,7 @@ beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
   tlsFake.stores.default = [...DEFAULT_CERTS]
-  tlsFake.stores.system = [RSA_ROOT_FROM_OS, EC_ROOT, ED25519_ROOT]
+  tlsFake.stores.system = [RSA_ROOT_FROM_OS, EC_ROOT, EC_P384_ROOT, ED25519_ROOT]
   tlsFake.getCACertificates.mockImplementation((type: string = 'default') => [...(tlsFake.stores[type] ?? [])])
   tlsFake.setDefaultCACertificates.mockImplementation(() => undefined)
 })
@@ -73,9 +76,11 @@ describe('ensureSystemTrust: the OS store\'s usable roots join the default trust
     const trusted = tlsFake.setDefaultCACertificates.mock.calls[0]?.[0] ?? []
     expect(trusted.slice(0, DEFAULT_CERTS.length)).toEqual(DEFAULT_CERTS)
     // The RSA root the default list holds already is not added a second time, though its text differs.
-    expect(trustedFingerprints()).toEqual([DEFAULT_ROOT, RSA_ROOT, EC_ROOT, ED25519_ROOT].map(fingerprint))
+    expect(trustedFingerprints()).toEqual(
+      [DEFAULT_ROOT, RSA_ROOT, EC_ROOT, EC_P384_ROOT, ED25519_ROOT].map(fingerprint)
+    )
     // One line, counts only: certificates read from the store, usable, new.
-    expect(logged()).toEqual([[expect.any(String), { read: 3, kept: 3, added: 2 }]])
+    expect(logged()).toEqual([[expect.any(String), { read: 4, kept: 4, added: 3 }]])
   })
 
   it('reads the store once: a second download changes nothing', async () => {
@@ -94,14 +99,20 @@ describe('ensureSystemTrust: the OS store\'s usable roots join the default trust
 
   // What Windows' store holds besides usable roots (measured: intermediates, self-signed server certificates,
   // expired and 1024-bit roots, an entry whose key does not decode). Each is left out; the usable root beside it
-  // is still added, and nothing throws.
+  // is still added, and nothing throws. The two "self-signed" halves each have a certificate only they catch:
+  // the name twin without key identifiers passes `checkIssued` (only the signature check fails it), and the
+  // certificate signed by its own key under another issuer's name passes the signature check (only
+  // `checkIssued` fails it).
   it.each([
     ['an expired root', cert('root-expired')],
     ['a root that is not valid yet', cert('root-not-yet-valid')],
     ['a root with a 1024-bit RSA key', cert('root-rsa1024')],
     ['a root with a DSA key', cert('root-dsa')],
+    ['a root on the weak EC curve P-192', cert('root-ec-p192')],
     ['an intermediate', cert('intermediate')],
     ['a certificate that names itself as issuer but another key signed', cert('name-twin')],
+    ['a name twin without key identifiers, signed by another key', cert('name-twin-no-key-ids')],
+    ['a certificate signed by its own key under another issuer name', cert('own-key-other-issuer')],
     ['a self-signed server certificate (not a CA)', cert('self-signed-leaf')],
     ['text that is not a certificate', 'not a certificate'],
     ['a PEM block whose body does not decode', '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n']

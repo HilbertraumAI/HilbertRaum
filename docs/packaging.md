@@ -345,7 +345,8 @@ Key config points:
   `NODE_EXTRA_CA_CERTS`. TLS-scanning antivirus and corporate proxies used to get their root trusted
   through that variable; they also install it in the operating system's certificate store, and
   since #564 the in-app downloads trust that store's usable roots (`src/main/services/net/trust.ts`:
-  self-signed CAs, valid now, RSA ≥ 2048 or EC/Ed25519; added once before the first download's
+  self-signed CAs whose signature verifies with their own key, valid now, RSA ≥ 2048, P-256/P-384/
+  P-521 or Ed25519; added once before the first download's
   first request, never at startup). A root that is only in
   `NODE_EXTRA_CA_CERTS` no longer counts in a packaged build. Until #564 the fuse stayed on (owner
   decision 2026-10-03), because with it off the downloads failed behind Norton (measured).

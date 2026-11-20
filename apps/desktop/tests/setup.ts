@@ -2,7 +2,14 @@
 // (toBeInTheDocument, toBeDisabled, …). Harmless in node-env tests — it only augments
 // `expect`; jsdom is opted into per-file by the renderer tests' `@vitest-environment` docblock.
 import '@testing-library/jest-dom/vitest'
+import { vi } from 'vitest'
 import { hangBudgetMs } from './helpers/hang-budget'
+
+// #564: `downloadToFile` adds the OS certificate store to Node's trust before its first request. The
+// downloader suites drive it with a fake `fetch`, so the real call would only read this machine's store
+// and change the worker's CA list, and the result would depend on the machine. It is a no-op here; its
+// own suite, tests/integration/system-trust.test.ts, unmocks it and fakes `node:tls` instead.
+vi.mock('../src/main/services/net/trust', () => ({ ensureSystemTrust: () => undefined }))
 
 // jsdom gaps that Radix's positioned primitives (DropdownMenu/Popover via floating-ui)
 // rely on. Guarded so the node-env service tests are untouched.

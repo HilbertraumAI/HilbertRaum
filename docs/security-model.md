@@ -233,7 +233,8 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
   neither `NODE_OPTIONS` nor `NODE_EXTRA_CA_CERTS` now. It ignored `NODE_OPTIONS` already except
   `--http-parser` and `--max-http-header-size` (`--require` was measured not loading), so what the
   fuse took away is `NODE_EXTRA_CA_CERTS`: a program that can set the user's environment can no
-  longer add a certificate the downloads trust that way. The fuse stayed on until #564 (owner
+  longer add a certificate the downloads trust that way. An equivalent route stays open through
+  the user's own certificate stores (next bullet). The fuse stayed on until #564 (owner
   decision 2026-10-03), because TLS-scanning antivirus (Norton, measured) and corporate proxies
   get their root trusted through that variable, and with the fuse off the in-app engine download
   from github.com failed with "fetch failed". They also install the root in the operating system's
@@ -247,18 +248,29 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
   - **Filtered.** On Windows the store as Node reads it is not a list of roots: it also holds
     intermediates, self-signed server certificates (`CA:FALSE`), expired and 1024-bit legacy roots,
     and entries whose key does not decode. A certificate is added only when it parses, is a CA, is
-    self-signed, is inside its validity window, and has an RSA key of at least 2048 bits or an EC or
-    Ed25519 key, and only when Node's list does not hold it already (by fingerprint). On one
-    Windows machine that kept 94 of 120 and added 17.
-  - **What is trusted now, and the residual.** Roots that Electron's curated list leaves out but
-    Windows still trusts, and any root the user, an administrator or a program running as the user
-    adds. So a root that Chrome dropped and Windows keeps (Entrust, the old DigiCert roots,
-    VeriSign, Go Daddy) is trusted for the in-app downloads, and Windows' per-root purposes are not
-    carried over (the Microsoft TPM and time-stamping roots count as TLS roots here). That cannot
-    change what gets installed: every engine, model and OCR file is checked against a pinned SHA-256
-    before use, and the downloads send no credentials, so such a root at most lets someone who
-    intercepts the connection see which public file is fetched, or make the download fail, as a root
-    in `NODE_EXTRA_CA_CERTS` could.
+    self-signed (its issuer is itself by `checkIssued`, and its signature verifies with its own
+    key), is inside its validity window, and has an RSA key of at least 2048 bits, a P-256, P-384
+    or P-521 key, or an Ed25519 key, and only when Node's list does not hold it already (by
+    fingerprint). On one Windows machine that kept 94 of 120 and added 17.
+  - **What is trusted now, and the residual.** Node returns one list for the Root, the Intermediate
+    Certification Authorities and the Trusted People stores (the machine's and the user's) and
+    does not say which store a certificate came from, so the filter cannot keep only Windows' own
+    roots. Every self-signed CA that passes it is trusted, from any of those stores:
+    - roots that Windows still trusts and Chrome dropped (Entrust, the old DigiCert roots,
+      VeriSign, Go Daddy);
+    - self-signed CAs that sit in an Intermediate or Trusted People store, which Windows does not
+      treat as roots (measured: "Microsoft TPM Root Certificate Authority 2014" is only in the
+      Intermediate stores, and the downloads trust it); and Windows' per-root purposes are not
+      carried over, so the time-stamping root counts as a TLS root;
+    - any CA a program running as the user puts in `CurrentUser\CA` or
+      `CurrentUser\TrustedPeople`: unlike `CurrentUser\Root`, Windows shows no confirmation for
+      those, so such a program can add a CA the downloads then trust. That is the reach
+      `NODE_EXTRA_CA_CERTS` gave it before the fuse went off.
+
+    None of this can change what gets installed: every engine, model and OCR file is checked
+    against a pinned SHA-256 before use, and the downloads send no credentials, so such a CA at
+    most lets someone who intercepts the connection see which public file is fetched, or make the
+    download fail. Whether Node's read honours Windows' `Disallowed` store is not verified.
   - **The eMudhra block still applies.** Electron's patch
     `tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra RSA
     intermediates to the SPKI blocklist that Node 24.22.1 applies to every TLS context through its
