@@ -191,25 +191,34 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
 }
 
 /**
- * What a failed create logs (#807, C S-1): the error's kind, its Node code and system call, and SQLite's result code
- * and fixed description, or a #844 open failure's own `failure`; never the message. A Node file error's message names
- * the drive's absolute paths (`EPERM: operation not permitted, rename 'C:\…\hilbertraum.sqlite.enc.new' -> …`).
+ * What a failed create logs (#807, C S-1). A Node system error (one carrying a `syscall`, `path` or `dest`: a file
+ * error) logs only its kind, code and system call: its message names the drive's absolute paths
+ * (`EPERM: operation not permitted, rename 'C:\…\hilbertraum.sqlite.enc.new' -> …`). Any other error keeps its message
+ * (review round: a bug in a post-create step, a `TypeError`, must still say what went wrong), with SQLite's result code
+ * and fixed description, or a #844 open failure's own content-free `failure`.
  */
 function createFailureForLog(err: unknown): Record<string, unknown> {
   const e = err as {
     name?: unknown
+    message?: unknown
     code?: unknown
     syscall?: unknown
+    path?: unknown
+    dest?: unknown
     errcode?: unknown
     errstr?: unknown
     failure?: object
   } | null
   const kind = typeof e?.name === 'string' ? e.name : typeof err
-  if (e?.failure && typeof e.failure === 'object') return { error: kind, ...e.failure }
+  const code = typeof e?.code === 'string' ? e.code : null
+  const systemError = e != null && (e.syscall !== undefined || e.path !== undefined || e.dest !== undefined)
+  if (systemError) return { error: kind, code, syscall: typeof e.syscall === 'string' ? e.syscall : null }
+  const message = err instanceof Error ? err.message : String(err)
+  if (e?.failure && typeof e.failure === 'object') return { error: kind, message, ...e.failure }
   return {
     error: kind,
-    code: typeof e?.code === 'string' ? e.code : null,
-    syscall: typeof e?.syscall === 'string' ? e.syscall : null,
+    message,
+    code,
     sqliteCode: typeof e?.errcode === 'number' ? e.errcode : null,
     sqlite: typeof e?.errstr === 'string' ? e.errstr : null
   }
@@ -512,8 +521,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         }
         // Anything else failed the create (#807, C S-1: a Node file error such as an `EPERM … rename` while an
         // antivirus holds the new file used to match the old `/not permitted|already exists/` wording and reach the
-        // gate raw, with absolute paths, and unlogged). The log line is content-free; #844's open failure carries what
-        // failed in its `failure`.
+        // gate raw, with absolute paths, and unlogged). The log line names no path: a file error logs its code and
+        // system call only; any other error keeps its message (#844's open failure adds what failed, its `failure`).
         log.error('Workspace create failed', createFailureForLog(err))
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }

@@ -1236,3 +1236,55 @@ describe('an unlock whose open could not finish (#844)', () => {
     }
   })
 })
+
+// #807 review round. The production bundle can hold a second copy of workspace-vault, whose classes then fail
+// `instanceof` (the bundle-duplication quirk the handlers name); vitest never sees that, so each typed arm's `err.name`
+// half gets a row of its own: an error that is only named like the class maps to the same reason.
+describe('the typed workspace refusals are recognised by name too (#807)', () => {
+  const named = (name: string): Error => Object.assign(new Error('x'), { name })
+
+  it.each<[string, 'create' | 'unlock', WorkspaceFailureReason, MessageKey]>([
+    ['WorkspaceExistsError', 'create', 'workspace_exists', 'main.workspace.exists'],
+    ['PlaintextNotAllowedError', 'create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
+    ['VaultDescriptorMissingError', 'unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing']
+  ])('a %s from another copy of the module answers %s %s', async (name, call, reason, key) => {
+    const thrower = (): never => {
+      throw named(name)
+    }
+    const workspace = {
+      ...workspaceStandIn({ unlocked: false }),
+      ...(call === 'create' ? { create: thrower } : { unlock: thrower })
+    } as unknown as WorkspaceController
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    const { result } =
+      call === 'create'
+        ? await invoke(handlers, IPC.createWorkspace, 'longenough', 'encrypted')
+        : await invoke(handlers, IPC.unlockWorkspace, PW)
+    expect(result).toEqual({ ok: false, reason, message: tMain(key) })
+  })
+})
+
+// #807 review round: a failed create's log line keeps the cause of an error that is not a Node file error (a bug in a
+// post-create step, a `TypeError`), while a file error logs only its code and system call (no path: the EPERM row in
+// vault-recovery-guards.test.ts).
+describe('the log line of a create that failed for another reason than a file error (#807)', () => {
+  it('names the error and its message', async () => {
+    const cause = "Cannot read properties of undefined (reading 'lastBenchmark')"
+    const workspace = {
+      ...workspaceStandIn({ unlocked: false }),
+      create: (): never => {
+        throw new TypeError(cause)
+      }
+    } as unknown as WorkspaceController
+    registerWorkspaceIpc(workspaceIpcCtx(workspace))
+    const marker = `#807 create marker ${randomUUID()}`
+    log.info(marker)
+    const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'encrypted')
+    expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.createFailed') })
+    const all = readLogTail(100_000)
+    const logged = all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes('Workspace create failed'))
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain('"error":"TypeError"')
+    expect(logged[0]).toContain(JSON.stringify(cause).slice(1, -1))
+  })
+})

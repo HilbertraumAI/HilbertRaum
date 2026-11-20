@@ -6359,8 +6359,14 @@ build tree-shakes them).
   written") is not; a refused flush keeps `review.export.error` alone. These three take no
   `classifyServerCopy` verdict: their messages are main's `tMain` text or a library's, which the
   persist-canonical map never holds, so the lead is always shown. Everywhere else an unknown string
-  still renders as-is: a failed IPC call's own message on the Documents screen's banner (about 25
-  `setError(friendlyIpcError(e))` sites; a lead there needs copy per action, left open). The
+  still renders as-is: a failed IPC call's own message (`friendlyIpcError(e)`, which strips only the
+  transport prefix) wherever a screen reports a failed action, on its own, with no lead. That is
+  the Documents screen (21 sites), Chat (16), the AI Model screen (9), the knowledge-pack panel
+  (5), Performance (3), the OCR and knowledge-pack tool installs (3 each), the preview and article
+  modals, the sources disclosure, dictation, and the file translation's own calls
+  (`fileTranslateSession.ts` `failWith(friendlyIpcError(e))`: an import, start, poll or result
+  read that fails, as opposed to a failed source document). A lead there needs copy per action,
+  left open (counts at `88da1bc5`). The
   Documents banner for a failed summary, translation or OCR task gets app text only: the task
   manager passes its own messages on and replaces anything else with its generic failure. A
   hygiene test pins

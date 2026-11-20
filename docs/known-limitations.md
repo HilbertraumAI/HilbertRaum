@@ -2997,10 +2997,13 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   message after a line in the interface language: a review's save line ("Some changes could not be
   saved yet." then, for example, SQLite's "database is locked"), a review that could not be opened,
   and a failed evidence-pack export ("The evidence pack export did not finish." then, for example,
-  a file write error). One surface still shows such text on its own: the Documents screen's banner
-  when one of its own actions fails (a preview, a rename, a deletion and so on). It shows the
-  failed call's own message, usually the app's own words in the interface language, but a
-  database or file error as the system wrote it. A rare failure-path remnant, accepted.
+  a file write error). Wherever a screen reports that one of its own actions failed, though, the
+  failed call's own message still shows on its own: on the Documents, Chat, AI Model and
+  Performance screens, in the knowledge-pack panel and the OCR and knowledge-pack tool installs, in
+  the preview and article windows, for dictation, and on the Translate screen when a call itself
+  fails (starting the translation, reading the result) rather than the file. That message is
+  usually the app's own words in the interface language, but a database or file error reads as the
+  system wrote it (for example "database is locked"). A rare failure-path remnant, accepted.
 - **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now**, whatever
   the interface language. Translating them is content work, tracked separately from UI i18n.
 - **A conversation transcript can legitimately mix languages.** Old answers, model output,

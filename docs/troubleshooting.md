@@ -318,20 +318,26 @@ old workspace aside by hand (issue #931):
 1. **Quit HilbertRaum.**
 2. **On the drive, move `config/workspace.json` and the whole `workspace/` folder, together, off
    the drive**: for example into a folder `old-workspace/` on your computer, as
-   `old-workspace/config/workspace.json` and `old-workspace/workspace/`.
+   `old-workspace/config/workspace.json` and `old-workspace/workspace/`. If you run HilbertRaum
+   without a Kit (a release download started on its own), the two are in the app's data folder
+   instead (on Windows `%APPDATA%\@hilbertraum\desktop`; see "How the app finds its data" in
+   [`drive-layout.md`](drive-layout.md), the app-data fallback): move them out of that folder.
    - **Move both.** With only one of them moved, the app still shows the unlock screen, and the
      right password then reads as a missing file.
    - **Move, don't delete.** Together, and only together, they still open with the old password
      if you remember it later.
    - **Leave the rest of `config/` where it is.** `drive.json`, `policy.json` and
-     `checksums.json` belong to the drive, not to the workspace.
+     `checksums.json` belong to the drive, not to the workspace. A `config/working-copy-lost.json`
+     can be there too: leaving it is harmless, since creating the new workspace removes it.
 3. **Start HilbertRaum.** The lock screen now offers to create a workspace: create the new one
    with a new password.
 
-What stays on the drive and works as before: your AI models, the AI engine, knowledge packs, the
-OCR files and your skills (skills you added yourself come back switched off; switch them on in
-Settings → Skills). The first start of each model checks its file again, and the speed
-measurement runs again, as on a new drive.
+What stays on the drive and works as before: your AI models, the AI engine, the knowledge packs in
+the drive's `zim/` folder, the OCR files and your skills (skills you added yourself come back
+switched off; switch them on in Settings → Skills). A knowledge pack you added from a place
+outside the drive's `zim/` folder was recorded in the old workspace only: add it again. The
+first start of each model checks its file again, and the speed measurement runs again, as on a
+new drive.
 
 What stays behind in the moved folder, readable only with the old password: the old chats,
 documents and their stored copies, images, reviews, projects, settings and activity. The old
@@ -339,7 +345,9 @@ workspace's diagnostics log is in `logs/`, encrypted under the old key: the new 
 a new log in its place, so move `logs/` along too if you want to keep the old one. Everything you
 moved is encrypted, except a `workspace/hilbertraum.sqlite.recovery` if there is one, which holds
 the old workspace in readable form (see "The encrypted workspace file was missing from the drive"
-below): moving it to a computer copies that readable file there.
+below): moving it to a computer copies that readable file there. A `workspace/zim-transient/`
+folder is not encrypted either while it holds anything, but it lists only the titles and file
+paths of your knowledge packs, none of your content.
 
 To go back to the old workspace (you remember its password): quit HilbertRaum, move the new
 workspace's `config/workspace.json` and `workspace/` away the same way, put the old pair back in
