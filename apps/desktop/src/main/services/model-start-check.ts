@@ -1,7 +1,13 @@
 import type { AppContext } from './context'
 import type { Db } from './db'
 import type { AppSettings } from '../../shared/types'
-import { checkModelBeforeStart, createSettingsHashStore, findManifestById, type ModelStartCheck } from './models'
+import {
+  checkModelBeforeStart,
+  createSettingsHashStore,
+  findManifestById,
+  knownFileVerdict,
+  type ModelStartCheck
+} from './models'
 import { developerLeniency } from './policy'
 import { log } from './logging'
 
@@ -24,6 +30,12 @@ export interface ModelStartCheckDeps {
    * hashed once per workspace, not once per app start.
    */
   getDb: () => Db
+  /**
+   * #959: called once when a check changed what the cache knows about the model's files (a file found
+   * damaged). `main/index.ts` passes the Performance push, so the screen follows without a reopen. A
+   * check that only confirms the cache never calls it. Services never import electron: it is injected.
+   */
+  onVerdictChanged?: () => void
 }
 
 /**
@@ -40,12 +52,22 @@ export function createModelStartCheck(deps: ModelStartCheckDeps): ModelStartChec
     // reads no manifest folder; vision names its model per status read and looks it up here.
     const manifest = bound ?? findManifestById(deps.manifestsDir, modelId)
     if (!manifest) return 'ok'
-    return checkModelBeforeStart(manifest, deps.paths.rootPath, {
-      developerMode: developerLeniency(deps, deps.getSettings()?.developerMode ?? false),
-      hashStore,
-      hash,
-      signal
-    })
+    const developerMode = developerLeniency(deps, deps.getSettings()?.developerMode ?? false)
+    const verdict = (): ReturnType<typeof knownFileVerdict> | null => {
+      if (!deps.onVerdictChanged) return null
+      try {
+        return knownFileVerdict(manifest, deps.paths.rootPath, { developerMode, hashStore })
+      } catch {
+        return null // a locked workspace has no cache to read; nothing to announce
+      }
+    }
+    const before = verdict()
+    try {
+      return await checkModelBeforeStart(manifest, deps.paths.rootPath, { developerMode, hashStore, hash, signal })
+    } finally {
+      const after = before === null ? null : verdict()
+      if (after !== null && after !== before) deps.onVerdictChanged?.()
+    }
   }
 }
 

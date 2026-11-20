@@ -891,6 +891,18 @@ export function knownFileVerdict(
   return 'ok'
 }
 
+/**
+ * #959: `knownFileVerdict` for a list of manifests, keyed by manifest id: the before and after of a pass that may
+ * write the checksum cache. Same guarantees: synchronous, never hashes.
+ */
+export function knownVerdicts(
+  manifests: readonly ModelManifest[],
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStoreReader }
+): Map<string, ModelFileVerdict> {
+  return new Map(manifests.map((m) => [m.id, knownFileVerdict(m, rootPath, opts)]))
+}
+
 /** Verify a weight file against its expected SHA-256 (cached by size+mtime). `label`
  *  identifies a real hash in the #106 instrumentation (marks + app.log). */
 export async function verifyChecksum(
