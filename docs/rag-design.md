@@ -2545,6 +2545,11 @@ explicit budget is unaffected); `min()` keeps large-window models at the full 25
 small ones. Teeth: `rag-pipeline-floor.test.ts` asserts a small launched window packs strictly fewer
 excerpts than a large one.
 
+**The fence allowance is the fence that is sent (#962, 2026-11-21).** The reserve the helper subtracts for
+the turn's skill fence is the fence the turn sends: a bundled whole-document skill's fall-through turn
+(#632, #831), whose fence carries paragraph 1 only, reserves paragraph 1, and the fence placement reads the
+same `fenceMode`. Design record §15.9.
+
 ### 15.2 Token accounting + the compaction trigger (§4.2/§4.3, R9)
 
 Budgeting uses the cheap word estimate `messageTokens` (`approxTokenCount × CHAT_TOKENS_PER_WORD(1.3) ×
@@ -2798,6 +2803,74 @@ context size."* All four observations were real seams:
 `conversationId`'s history — nothing accumulates across chats), and the 5-page-PDF limit is real on a
 4096-token model: the whole-doc budget is `(window − reserve − framing) ÷ 1.5` ≈ 2–3 pages (§15.1) — the
 new context-size picker is the remedy the report asked for.
+
+### 15.9 The fence allowance is the fence that is sent (#962, follow-ups wave 5, owner call G-8, 2026-11-21)
+
+**Decision (Option 2).** Every budget of a grounded turn reserves the skill fence that the turn sends.
+`wholeDocumentBudgetTokens`, `retrievalExcerptBudgetTokens` and `wholeDocumentFitBudgetTokens`
+(`rag/index.ts`) take an optional `fenceMode`; absent means `'full'`, so every other caller is
+byte-identical. `generateGroundedAnswer` reads `opts.skillFenceMode` once, into one `fenceMode`, and uses
+it for the allowance (the relevance excerpt budget, the whole-read fit, the compare fit) and for the
+placement after retrieval. The small-document read in `registerRagIpc` (`wholeReadFor`, #643) passes the
+turn's `skillFenceMode` too, so the IPC layer and `generateGroundedAnswer` decide "fits" against the same
+number and a "fits" never turns into a truncated read and an unasked-for chunk map-reduce. The needle
+check stays sized for the whole fence, on purpose: it asks whether the engine's own read, which carries
+the whole fence, would truncate. Option 1 (rag only) was not taken: it left one fence-blind budget on the
+turn.
+
+**The facts it rests on.** Since #632 and #831 a bundled whole-document skill's fall-through turn (the
+engine declined it: a question outside the skill's vocabulary over several documents, small talk, the
+needle downgrade) sends paragraph 1 of its fence, but the allowance kept measuring the whole fence. Per
+skill, at the question "When is the notice deadline?" (units are `approxPromptTokens`, about 1.3 per
+word):
+
+| Skill | Whole fence | Paragraph 1 | Freed | Excerpt budget at 4,096 (whole → paragraph 1) | At 8,192 |
+|---|---|---|---|---|---|
+| What Changed? | 819 | 481 | 338 | 1,078 → 1,304 | 2,500 → 2,500 |
+| Contract Brief | 600 | 255 | 345 | 1,224 → 1,454 | 2,500 → 2,500 |
+| Meeting Minutes | 727 | 325 | 402 | 1,140 → 1,408 | 2,500 → 2,500 |
+| Share-Safe Review | 817 | 416 | 401 | 1,080 → 1,347 | 2,500 → 2,500 |
+| Deadline & Obligation Finder | 589 | 247 | 342 | 1,232 → 1,460 | 2,500 → 2,500 |
+
+A 500-token section costs 650 units, so on a 4,096 window one passage fit beside the whole fence and two
+fit beside paragraph 1. Above about 6,000 tokens of window the 2,500-token `ragMaxContextTokens` setting
+binds both ways, so nothing changes there. In wave 4's real-model runs (llama.cpp b9849, GTX 1070 Ti) the
+4B read 1 section of a 19-section lease (and of a 14-section meeting record) under every skill and
+stated the asked fact on none of the four single-fact turns; an emulation that sends the same prompt the
+fix now sends (a user skill whose whole body is paragraph 1) read 2 sections and stated it on 3 of 4. The
+9B, on 8,192, read 3 sections either way.
+
+**The invariant: one `fenceMode` for the allowance and the placement.** Nothing after the budgets can
+shrink the excerpts: `fitMessagesToContext` keeps the grounded turn mandatory and drops only history
+(§15.1). The placement (`skillFenceBudgetTokens`) measures the fence-less grounded turn at 1.3 tokens per
+word without the 1.5 German headroom, so it always finds room for a larger fence than the allowance
+reserved; the allowance is the only real guard on the fence's share of the window. With the placement
+built fuller than the allowance, the budget contract (everything but the excerpts at 1.3 per word, plus
+1.5 × the excerpts, plus the 1,024-token answer reserve) came to 4,114–4,118 of 4,096 tokens, and under
+German-dense text the answer is cut at the window.
+
+**What changes, as built.** Only a capped fall-through turn on a window below about 6,000 tokens: a
+single-fact question over a long document reads one more passage (two at 4,096), and one document
+between the two fit budgets (for What Changed? at 4,096 about 1,270 to 1,500 units, framing included) is
+read whole by the small-document read, where it got the passage search before (#643's rule: one
+document that fits is read whole). User skills, which keep their whole fence, turns with no skill, the
+engines' own reads and the map-reduce rescues (`whole-doc-tree.ts` already sized its reserve by the fence
+it sends) are unchanged. No KV-cache cost: in a documents chat the fence rides in the user turn, and
+`GROUNDED_SYSTEM_PROMPT` is unchanged.
+
+**Accepted cost (G-8).** On a 4,096 window the freed room goes to a passage, not to older history. Under
+Share-Safe Review and What Changed?, a follow-up's grounded turn then fills the history budget
+(`fitMessagesToContext` estimates 1.95 tokens per word: about 3,030 to 3,130 of 3,072), so it keeps no
+earlier turn, where it kept them before; Contract Brief, Meeting Minutes and Deadline & Obligation Finder
+keep them. The same rule already applied to any document turn whose passages fill the budget.
+
+**Proof.** `rag-whole-doc-compare.test.ts`, the #831 describe: per capped skill, the fall-through passage
+search over a long lease at 4,096 reads as many passages as the user twin whose body is paragraph 1
+(master: one against two, all five skills); the budget contract holds and paragraph 1 is placed
+untrimmed; the user twin with Contract Brief's whole body still reserves its whole fence; at 8,192 the
+bundled turn reads as many passages as the whole-fence reservation. The #632 describe: a document between
+the two fit budgets is read whole under What Changed? and stays on the passage search under its
+whole-body user twin.
 
 ## 16. Evidence-review snapshot read-model — how EP-1 freezes §8/§14 honestly (EP-1 Phase 1)
 

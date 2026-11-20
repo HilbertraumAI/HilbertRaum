@@ -521,14 +521,16 @@ export function registerRagIpc(ctx: AppContext): void {
 
       // #643 / #642: the one document this turn reads whole instead of top-k, or null (`wholeReadDocumentId`,
       // sized for the turn's question and skill). Every caller decides it inside the chat slot, against the
-      // document as the answer reads it — not before a wait for a yielding document task.
+      // document as the answer reads it — not before a wait for a yielding document task. #962: sized for the
+      // fence the turn sends too (`skillFenceMode`, declared below and final before any call), the same budget
+      // `generateGroundedAnswer` reads the document with, so a "fits" here never becomes a truncated read there.
       const wholeReadFor = (treeSummary: boolean): string | null =>
         wholeReadDocumentId(
           ctx.db,
           scope,
           documentsInScope(ctx.db, scope, { requireChunks: true }),
           text,
-          wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
+          wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill, skillFenceMode),
           treeSummary
         )
       // What a grounded answer leads with: the W2 scope notice, then (#649) the heads-up that a whole read of a
@@ -589,8 +591,8 @@ export function registerRagIpc(ctx: AppContext): void {
       // whatever its author wrote, and with no routing vocabulary its real deliverable requests over several
       // documents fall through here too. Unchanged: the skill stamp on that answer (fence placed + sections
       // found), every path the engine takes (the compare and whole-document reads return below with the whole
-      // fence), every other skill's fence, and the budgets (they still reserve the whole fence; only the fence
-      // text is shorter).
+      // fence), and every other skill's fence. #962: the budgets reserve the fence that is sent, so the room
+      // paragraph 1 frees goes to the passages (and to `wholeReadFor`'s whole read of one fitting document).
       const bundledDeliverableSkill =
         turnSkillRecord?.source === 'app' &&
         (analysisHandler?.mode === 'grounded-whole-doc-compare' || analysisHandler?.mode === 'grounded-whole-doc')
@@ -649,6 +651,9 @@ export function registerRagIpc(ctx: AppContext): void {
             //     takes the relevance path, which makes NO whole-document claim, so D45's premise (a partial
             //     WHOLE read passed off as complete) doesn't apply — a needle over a not-fully-chunked doc is
             //     served by top-k, not refused. A DELIVERABLE keeps the whole read and DOES hit the refusal.
+            //   - #962: this budget stays sized for the WHOLE fence (no `fenceMode`): it asks whether the engine's
+            //     own read, which carries the whole fence, would truncate. Only after a downgrade does the turn
+            //     carry paragraph 1, and the budgets of that fall-through reserve paragraph 1.
             const needleDowngrade =
               isNeedleShaped(text) &&
               !documentFitsWholeRead(

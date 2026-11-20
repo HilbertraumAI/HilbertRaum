@@ -33,11 +33,19 @@ import type { Db } from '../../src/main/services/db'
 import { t } from '../../src/shared/i18n'
 import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
-import { REPO_APP_SKILLS_DIR, writeSkillPackage } from '../helpers/skill-fixtures'
+import { REPO_APP_SKILLS_DIR, type SkillSpec, writeSkillPackage } from '../helpers/skill-fixtures'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { asPreRequestMapPrompt } from '../helpers/whole-doc-fixtures'
-import { buildSkillFence } from '../../src/main/services/skills/prompt'
+import { approxPromptTokens, buildSkillFence } from '../../src/main/services/skills/prompt'
+import {
+  documentFitsWholeRead,
+  EXCERPT_BEGIN,
+  EXCERPT_END,
+  GROUNDED_MAX_TOKENS,
+  WHOLE_READ_SECTION_FRAMING_TOKENS,
+  wholeDocumentFitBudgetTokens
+} from '../../src/main/services/rag'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const WHAT_CHANGED_INSTALL_ID = 'app:what-changed'
@@ -335,6 +343,28 @@ const BODIES: Record<string, string> = {
   [USER_WHOLE_DOC_INSTALL_ID]: USER_WHOLE_DOC_BODY
 }
 
+/** #962: the five bundled skills whose fall-through turn carries paragraph 1 of the fence (#632, #831). */
+const CAPPED_SKILLS = ['what-changed', ...WHOLE_DOC_SKILLS] as const
+/** #962: a committed skill's manifest title and body. */
+const committedSkill = (id: string): { title: string; body: string } => {
+  const parsed = parseSkillMarkdown(readFileSync(join(REPO_APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8'))
+  return { title: parsed.manifest!.title, body: parsed.body! }
+}
+/** #962: two user twins per capped skill, with its committed title and engine. `p1-<id>` installs paragraph 1 as its
+ *  whole body (wave 4's emulation): its fence is the bundled fall-through fence word for word. `full-<id>` installs
+ *  the whole body: a user skill keeps its whole fence, so it reserves what master reserved for the bundled skill. */
+const twinSpecs = (): SkillSpec[] =>
+  CAPPED_SKILLS.flatMap((id) => {
+    const { title, body } = committedSkill(id)
+    const analysis = id === 'what-changed' ? 'compare' : 'whole-doc'
+    return [
+      { id: `p1-${id}`, title, kind: 'instruction', analysis, body: paragraphsOf(body)[0] },
+      { id: `full-${id}`, title, kind: 'instruction', analysis, body }
+    ]
+  })
+const p1Twin = (id: string): string => `user:p1-${id}`
+const fullTwin = (id: string): string => `user:full-${id}`
+
 interface FenceHarness {
   db: Db
   conversationId: string
@@ -342,12 +372,13 @@ interface FenceHarness {
   runtime: RecordingRuntime
 }
 
-async function makeFenceHarness(texts: string[], contextWindow = 8192): Promise<FenceHarness> {
+async function makeFenceHarness(texts: string[], contextWindow = 8192, o: { twins?: boolean } = {}): Promise<FenceHarness> {
   const w = makeSkillsWorld('compare632', {
     seedApp: (d) => {
       for (const id of ['what-changed', ...WHOLE_DOC_SKILLS]) cpSync(join(REPO_APP_SKILLS_DIR, id), join(d, id), { recursive: true })
     },
     seedUser: (d) => {
+      if (o.twins) for (const spec of twinSpecs()) writeSkillPackage(d, spec)
       writeSkillPackage(d, {
         id: 'version-check',
         title: 'Version check',
@@ -377,6 +408,16 @@ async function makeFenceHarness(texts: string[], contextWindow = 8192): Promise<
   const conv = createConversation(w.db, { mode: 'documents', scope: { collectionIds: [], documentIds: docIds } })
   return { db: w.db, conversationId: conv.id, docIds, runtime }
 }
+
+/** #962: the budget-driven fence trims and omissions (`logSkillFenceReduction`) the local log holds for this skill. */
+const reducedLogCount = (skillId: string): number =>
+  readLogTail(100_000).filter((l) => l.includes('skill fence reduced to fit context budget') && l.includes(`"skillId":"${skillId}"`)).length
+
+/** #962: the user turn of the last model call, its excerpt block (markers included) and the passages it carried. */
+const lastUserTurn = (rt: RecordingRuntime): string => rt.lastMessages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
+const excerptBlock = (userTurn: string): string =>
+  userTurn.slice(userTurn.indexOf(EXCERPT_BEGIN), userTurn.indexOf(EXCERPT_END) + EXCERPT_END.length)
+const passagesSent = (rt: RecordingRuntime): number => (lastUserTurn(rt).match(/^\[S\d+\] File: /gm) ?? []).length
 
 /** The skill instructions each model call saw (between the fence's label and its END line), call by call. */
 function fenceBodies(rt: RecordingRuntime): string[] {
@@ -476,6 +517,38 @@ describe("askDocuments — the bundled compare skill's fall-through turn carries
     expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId]).join('\n\n')])
     expect(msg.skillId).toBe(skillId)
   })
+
+  // #962 (owner call G-8, Option 2): the small-document read (#643, `wholeReadFor`) sizes its fit by the fence the turn
+  // sends too. A document between the two fit budgets, too long to read whole beside What Changed?'s whole fence and
+  // short enough beside its paragraph 1, is read whole on the fall-through turn (#643's rule: one document that fits is
+  // read whole); master sent it to the passage search. The user twin with the whole committed body keeps its whole
+  // fence, so the same document stays on the passage search there.
+  it.each([
+    { name: 'What Changed?, whose fall-through fence is paragraph 1', skillId: WHAT_CHANGED_INSTALL_ID, mode: 'capped' },
+    { name: 'its user twin with the whole body', skillId: fullTwin('what-changed'), mode: 'relevance' }
+  ])('one document between the two fit budgets at 4,096 ($name): $mode', async ({ skillId, mode }) => {
+    const band = Array.from({ length: 62 }, (_, i) => `Clause ${i + 1}: the tenant Max Huber pays EUR 2,400 on the first day of each month.`)
+    const h = await makeFenceHarness([band.join('\n')], 4096, { twins: true })
+    const docId = h.docIds[0]
+    const sections = chunkIdsOf(h.db, docId).length
+    // The premise: with each section's `[Sn] File: …` line charged, the document fits beside paragraph 1 only.
+    const skill = { installId: WHAT_CHANGED_INSTALL_ID, ...committedSkill('what-changed') }
+    const fits = (budget: number): boolean => documentFitsWholeRead(h.db, docId, budget, WHOLE_READ_SECTION_FRAMING_TOKENS)
+    expect(fits(wholeDocumentFitBudgetTokens(4096, TENANT, skill))).toBe(false)
+    expect(fits(wholeDocumentFitBudgetTokens(4096, TENANT, skill, 'first-paragraph'))).toBe(true)
+
+    const msg = await ask(h, TENANT, skillId)
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.coverage?.mode).toBe(mode)
+    if (mode === 'capped') {
+      expect(msg.coverage).toMatchObject({ truncated: false, chunksCovered: sections })
+      expect(passagesSent(h.runtime)).toBe(sections)
+      expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[WHAT_CHANGED_INSTALL_ID])[0]])
+    } else {
+      expect(passagesSent(h.runtime)).toBeLessThan(sections)
+    }
+    expect(msg.skillId).toBe(skillId)
+  })
 })
 
 // ---- #831: a bundled whole-document skill's fall-through turn (follow-ups wave 4 owner call G-9) ----
@@ -530,6 +603,80 @@ describe("askDocuments — a bundled whole-document skill's fall-through turn ca
       expect(msg.skillId).toBe(appId(id))
     }
   )
+
+  // #962: since #962 the budgets of a fall-through turn reserve the fence it sends (paragraph 1), not the whole fence,
+  // so the room the cut frees goes to the passages. The yardstick is the user twin whose whole body IS paragraph 1: the
+  // same fence text, so the same room. On master the bundled turn read one passage of the long lease at a 4,096 window,
+  // where the twin read two. What Changed? over one document is a fall-through turn for any question.
+  const NOTICE = 'When is the notice period?'
+  /** A long lease whose sections are all full: 713 sixteen-word clauses and the notice line make 11,419 words, so every
+   *  500-token window (80 overlapping) holds about 500 words. A short last section would fit beside any fence and blur
+   *  the passage counts (LONG_LEASE ends in one of 291 words, ranked first for the notice question). */
+  const EVEN_LEASE = [
+    ...Array.from({ length: 356 }, (_, i) => `Clause ${i + 1}: the tenant Max Huber pays EUR 2,400 on the first day of each month.`),
+    'Notice period: three months, to the end of a calendar quarter.',
+    ...Array.from({ length: 357 }, (_, i) => `Clause ${i + 357}: the tenant Max Huber pays EUR 2,400 on the first day of each month.`)
+  ].join('\n')
+  const evenHarness = async (contextWindow: number, twins = true): Promise<FenceHarness> => {
+    const h = await makeFenceHarness([EVEN_LEASE], contextWindow, { twins })
+    // The premise: no short section.
+    const sizes = h.db.prepare('SELECT token_count FROM chunks WHERE document_id = ?').all(h.docIds[0]) as Array<{ token_count: number }>
+    expect(Math.min(...sizes.map((s) => s.token_count))).toBeGreaterThan(450)
+    return h
+  }
+
+  it.each(CAPPED_SKILLS)('%s, a single-fact question over a long document at 4,096: as many passages as its paragraph-1 twin', async (id) => {
+    const bundled = await evenHarness(4096)
+    const msg = await ask(bundled, NOTICE, appId(id))
+    const twin = await evenHarness(4096)
+    const twinMsg = await ask(twin, NOTICE, p1Twin(id))
+    expect([msg.coverage?.mode, twinMsg.coverage?.mode]).toEqual(['relevance', 'relevance'])
+    expect(fenceBodies(bundled.runtime)).toEqual(fenceBodies(twin.runtime))
+    expect(passagesSent(bundled.runtime)).toBe(passagesSent(twin.runtime))
+    expect(passagesSent(bundled.runtime)).toBeGreaterThan(1)
+    expect(msg.skillId).toBe(appId(id))
+  })
+
+  // #962: the reservation and the placement read one `fenceMode`. The budgets' own contract holds on the fall-through
+  // turn: everything but the excerpts at the 1.3-per-word estimate, plus the excerpts with the 1.5 German headroom, plus
+  // the answer cap, fits the window, and the fence the budgets reserved is the fence placed (paragraph 1, untrimmed). A
+  // placement fuller than the reservation came to 4,117 of 4,096 tokens when measured.
+  it.each(CAPPED_SKILLS)('%s, the fall-through turn at 4,096 keeps the budget contract and places paragraph 1 whole', async (id) => {
+    const h = await evenHarness(4096, false)
+    const reduced = reducedLogCount(appId(id))
+    const msg = await ask(h, NOTICE, appId(id))
+    const prompt = h.runtime.lastMessages.reduce((sum, m) => sum + approxPromptTokens(m.content), 0)
+    const excerpts = approxPromptTokens(excerptBlock(lastUserTurn(h.runtime)))
+    expect(prompt - excerpts + Math.ceil(1.5 * excerpts) + GROUNDED_MAX_TOKENS).toBeLessThanOrEqual(4096)
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId(id)])[0]])
+    expect(reducedLogCount(appId(id)) - reduced).toBe(0)
+  })
+
+  // #962's guard: the reservation follows the fence the turn sends, not the skill. A user skill keeps its whole fence on
+  // the needle downgrade, so it still reserves its whole body, as master did for every skill: the user twin with Contract
+  // Brief's whole committed body reads fewer passages than the paragraph-1 twin.
+  it('a user whole-document skill with a long body still reserves its whole fence on the needle downgrade', async () => {
+    const full = await evenHarness(4096)
+    await ask(full, NOTICE, fullTwin('contract-brief'))
+    const p1 = await evenHarness(4096)
+    await ask(p1, NOTICE, p1Twin('contract-brief'))
+    expect(fenceBodies(full.runtime)).toEqual([paragraphsOf(BODIES[appId('contract-brief')]).join('\n\n')])
+    expect(passagesSent(full.runtime)).toBeLessThan(passagesSent(p1.runtime))
+  })
+
+  // #962 leaves 8,192 windows as they were (the 9B's): there the `ragMaxContextTokens` setting (2,500) is smaller than
+  // what either reservation leaves, so the bundled fall-through turn reads as many passages as the whole-fence
+  // reservation, which is what master reserved for it (the user twin with the whole body), and its prompt is master's.
+  // (Which of the lease's identical clauses fill the passages is the mock search's tie order, so the count is compared.)
+  it.each(CAPPED_SKILLS)('%s at 8,192: as many passages as the whole-fence reservation', async (id) => {
+    const bundled = await evenHarness(8192)
+    await ask(bundled, NOTICE, appId(id))
+    const full = await evenHarness(8192)
+    await ask(full, NOTICE, fullTwin(id))
+    expect(passagesSent(bundled.runtime)).toBeGreaterThan(2)
+    expect(passagesSent(bundled.runtime)).toBe(passagesSent(full.runtime))
+  })
 
   // The engine's own reads: a deliverable over the same long document (the chunk map-reduce) and any question over
   // one document that fits (one whole read). Both carry the whole fence on every call, as before #831.

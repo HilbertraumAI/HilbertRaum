@@ -325,6 +325,14 @@ from its first public `1.0.0` release onward.
   document had a deep index, and "Find every mention of …" never said that the answer may miss
   items. Both now work as they do in English and German, also when you put your own word in the
   quotes (#809).
+- **With a whole-document skill selected, a single fact in a long document is looked up in more of
+  it on a small model.** With What Changed?, Contract Brief, Meeting Minutes, Share-Safe Review or
+  Deadline & Obligation Finder selected, a question such as "When is the notice deadline?" about a
+  document too long to read whole was answered from a single passage on a model with a 4,096-token
+  context, such as the 4B model, and the fact was often missed. The skill's instructions are already
+  shortened for such a question; the room that frees now goes to the document, so the answer reads two
+  passages instead of one, and a document that now fits is read whole. With a larger context nothing
+  changes (#962).
 - **A French question about a dispute is no longer read as a comparison.** With two documents in
   the chat, a question with "différend" (a dispute), "différé" (deferred) or "différer" (to
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.

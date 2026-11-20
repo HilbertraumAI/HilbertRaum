@@ -1590,9 +1590,9 @@ export interface GroundedAnswerOptions {
    * (the single grounded turn and the whole-document map-reduce rescues). Absent ⇒ `'full'`.
    * `'first-paragraph'` is set by `registerRagIpc` on a bundled whole-document skill's fall-through turn
    * (What Changed?: #632, open-issues wave owner call G-1 (option A), owner round WB2-1; the four
-   * `grounded-whole-doc` skills, needle downgrade included: #831, follow-ups wave 4 owner call G-9). Only
-   * the fence text changes — the budgets still reserve the whole fence, and the stamp rule (fence placed +
-   * sections found) is the same.
+   * `grounded-whole-doc` skills, needle downgrade included: #831, follow-ups wave 4 owner call G-9). Since
+   * #962 the budgets reserve the fence this mode sends, so the room paragraph 1 frees goes to the passages;
+   * the stamp rule (fence placed + sections found) is the same.
    */
   skillFenceMode?: SkillFenceMode
   /**
@@ -1672,16 +1672,24 @@ const EXCERPT_FRAMING_TOKENS = approxPromptTokens(`${EXCERPT_BEGIN}\n${EXCERPT_E
 /**
  * Token budget for the whole-document chunk block (skill-whole-doc engine). The real launched
  * context window minus the answer reserve, the grounded system prompt, the question scaffolding,
- * and an allowance for the skill fence (the fence's precise placement/trim is still done downstream
- * in `generateGroundedAnswer`). Never below a small floor so a tiny window still includes something.
+ * and an allowance for the skill fence that will be sent (the fence's precise placement/trim is still
+ * done downstream in `generateGroundedAnswer`). Never below a small floor so a tiny window still
+ * includes something.
+ *
+ * `fenceMode` (#962) is the `SkillFenceMode` the turn's fence is built with; absent ⇒ `'full'`. A
+ * fall-through turn whose fence carries paragraph 1 only reserves paragraph 1, so the room the cut
+ * frees goes to the excerpts. The caller must build the placed fence with the SAME mode: the
+ * placement (`skillFenceBudgetTokens`) charges the excerpts without the German headroom, so it always
+ * finds room for a larger fence than this allowance reserved, and a mismatch overflows the window.
  */
 export function wholeDocumentBudgetTokens(
   contextTokens: number,
   question: string,
-  skill: TurnSkill | null | undefined
+  skill: TurnSkill | null | undefined,
+  fenceMode?: SkillFenceMode
 ): number {
   const fenceAllowance = skill
-    ? approxPromptTokens(buildSkillFence({ title: skill.title, body: skill.body }).text ?? '')
+    ? approxPromptTokens(buildSkillFence({ title: skill.title, body: skill.body, mode: fenceMode }).text ?? '')
     : 0
   // question + "Question:/Answer:" framing, plus the fixed excerpt framing (#228: markers + guard line)
   const questionScaffold = approxPromptTokens(question) + 64 + EXCERPT_FRAMING_TOKENS
@@ -1727,10 +1735,11 @@ function retrievalExcerptBudgetTokens(
   contextTokens: number,
   question: string,
   skill: TurnSkill | null | undefined,
-  topKFinal: number
+  topKFinal: number,
+  fenceMode?: SkillFenceMode
 ): number {
   const perExcerptFraming = EXCERPT_LINE_FRAMING_TOKENS * Math.max(1, topKFinal)
-  const usable = wholeDocumentBudgetTokens(contextTokens, question, skill) - perExcerptFraming
+  const usable = wholeDocumentBudgetTokens(contextTokens, question, skill, fenceMode) - perExcerptFraming
   return Math.max(256, Math.floor(usable / RETRIEVAL_FIT_SAFETY))
 }
 
@@ -1742,13 +1751,18 @@ function retrievalExcerptBudgetTokens(
  * flow) could exceed n_ctx and fail with a raw runtime HTTP 400. Dividing by the safety factor keeps
  * the assembled grounded turn under the launched window even worst-case. Used by BOTH the single
  * whole-doc read and the 2-document compare split (which further divides this across the two documents).
+ * `fenceMode` as in `wholeDocumentBudgetTokens` (#962).
  */
 export function wholeDocumentFitBudgetTokens(
   contextTokens: number,
   question: string,
-  skill: TurnSkill | null | undefined
+  skill: TurnSkill | null | undefined,
+  fenceMode?: SkillFenceMode
 ): number {
-  return Math.max(512, Math.floor(wholeDocumentBudgetTokens(contextTokens, question, skill) / RETRIEVAL_FIT_SAFETY))
+  return Math.max(
+    512,
+    Math.floor(wholeDocumentBudgetTokens(contextTokens, question, skill, fenceMode) / RETRIEVAL_FIT_SAFETY)
+  )
 }
 
 /**
@@ -1805,6 +1819,10 @@ export async function generateGroundedAnswer(
   // The REAL launched context window the runtime reports (§L0) — needed up-front for the
   // whole-document budget, and reused below for fence sizing + compaction.
   const contextTokens = effectiveContextWindow(runtime, getSettings(db))
+  // #962: how much of the skill's body the fence carries — read ONCE, and used both by the budgets below
+  // (the fence allowance they reserve) and by the fence placement after retrieval. The two must agree:
+  // a placement fuller than the allowance overflows the window (`wholeDocumentBudgetTokens`).
+  const fenceMode = opts.skillFenceMode
 
   // Skill-aware WHOLE-DOCUMENT answer (Wave 2): read the named document in order (capped to the
   // context budget) instead of top-k retrieval, and stamp honest `capped` coverage. The relevance
@@ -1845,7 +1863,7 @@ export async function generateGroundedAnswer(
     packOutcomes = modePackOutcomes(db, scopePackIds)
   }
   if (opts.wholeDocument) {
-    const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
+    const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill, fenceMode)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
     // U2 (audit §3.5): the deterministic whole-document PII pre-scan (share-safe handler) — COUNTS only
     // (§6). Computed once here so both the chunk map-reduce (extraReduceBlock) and the capped/fit grounded
@@ -1922,7 +1940,7 @@ export async function generateGroundedAnswer(
     // map-reduce above, whose reduce turn carries the untruncated scan block.)
     if (scan) shareSafeScanBlock = buildShareSafeScanBlock(scan, whole.truncated)
   } else if (opts.wholeDocumentCompare) {
-    const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill)
+    const budget = wholeDocumentFitBudgetTokens(contextTokens, question, opts.skill, fenceMode)
     const ids = opts.wholeDocumentCompare.documentIds
     // Mode (d) — DIFF-DRIVEN compare (compare-diff record, architecture.md §20). A deterministic
     // word-level diff over BOTH whole documents is the primary path for a version pair: it examines
@@ -1966,7 +1984,7 @@ export async function generateGroundedAnswer(
     // the full setting and only constrains small ones. Mirrors the whole-document path.
     const excerptBudget = Math.min(
       settings.maxContextTokens,
-      retrievalExcerptBudgetTokens(contextTokens, question, opts.skill, settings.topKFinal)
+      retrievalExcerptBudgetTokens(contextTokens, question, opts.skill, settings.topKFinal, fenceMode)
     )
     const fitted =
       excerptBudget < settings.maxContextTokens
@@ -2078,13 +2096,12 @@ export async function generateGroundedAnswer(
       reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
       fixedTokens
     })
-    const fence = buildSkillFence(
-      { title: opts.skill.title, body: opts.skill.body, mode: opts.skillFenceMode },
-      budget
-    )
+    // #962: the same `fenceMode` the budgets above reserved for, so the placed fence is never fuller than
+    // the allowance the excerpts were sized against.
+    const fence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body, mode: fenceMode }, budget)
     // U1 (audit §3.6): log a budget-driven trim/omit (ids/counts only) — was silently discarded before.
     // #632: and a first-paragraph cap, so a turn that carried only the rules is visible in the log.
-    logSkillFenceReduction(opts.skill.installId, fence, opts.skillFenceMode)
+    logSkillFenceReduction(opts.skill.installId, fence, fenceMode)
     skillFence = fence.text
   }
   const grounded = skillFence

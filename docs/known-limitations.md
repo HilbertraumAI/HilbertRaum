@@ -1661,7 +1661,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   full minutes for "Who attended?". Since #632 and #831 the fence on such a turn carries only the skill's
   first paragraph, the heading and the honesty rules, which is also the minimum the fence keeps when the
   context is tight (SKA-15); the section format is left out, and the app log records the cap (skill id
-  and mode, never the body). The answer still shows the skill as applied (the per-message glyph), so the
+  and mode, never the body). Since #962 the room the shorter fence frees goes to the document: on a
+  4,096-token window, such as the 4B model's, a single-fact question over a long document reads two
+  passages instead of one, and one document short enough to read whole beside the first paragraph is
+  read whole; a larger window is unchanged. In exchange, on that window a follow-up under Share-Safe
+  Review or What Changed? can keep none of the earlier conversation ([`rag-design.md`](rag-design.md)
+  §15.9). The answer still shows the skill as applied (the per-message glyph), so the
   selection isn't silently dropped. Every read the engine takes keeps the whole fence, as before: the
   two-document compare (the exact changes, or both documents read whole when one is a full rewrite), and
   a whole-document skill's read of its one document, map-reduce included. Small talk over two documents is
