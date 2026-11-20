@@ -110,6 +110,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
+  source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
+  letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the
+  order your language uses, as the project list already does. Answers still search packs in the same
+  order as before (#958).
 - **The lock screen says when the file with your workspace's key is missing.** If
   `config/workspace.json` was removed from the drive or damaged while the encrypted workspace was
   still there, every unlock said "Could not open the workspace." The lock screen now says that this

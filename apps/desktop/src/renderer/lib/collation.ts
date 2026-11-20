@@ -17,8 +17,17 @@ export function nameCompare(lang: UiLanguage): (a: string, b: string) => number 
   return compare
 }
 
-/** A sorted copy in the language's name order. Stable: equal names keep their incoming order. */
-export function inNameOrder<T extends { name: string }>(items: readonly T[], lang: UiLanguage): T[] {
+/**
+ * A sorted copy in the language's name order. Stable: equal names keep their incoming order.
+ * Items that do not carry a `name` pass a key (#958: knowledge packs sort by `title`).
+ */
+export function inNameOrder<T extends { name: string }>(items: readonly T[], lang: UiLanguage): T[]
+export function inNameOrder<T>(items: readonly T[], lang: UiLanguage, key: (item: T) => string): T[]
+export function inNameOrder<T>(
+  items: readonly T[],
+  lang: UiLanguage,
+  key: (item: T) => string = (item) => (item as { name: string }).name
+): T[] {
   const compare = nameCompare(lang)
-  return [...items].sort((a, b) => compare(a.name, b.name))
+  return [...items].sort((a, b) => compare(key(a), key(b)))
 }

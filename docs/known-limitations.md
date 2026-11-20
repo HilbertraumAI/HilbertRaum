@@ -3725,7 +3725,9 @@ reports and phase plans were working papers; their full text lives in git histor
 - **At most twelve packs take part in one ask, and not every candidate they find is
   used.** Ticking a 13th pack is refused; an older or hand-edited selection above the
   12-pack limit is trimmed in title order, with a per-answer note that it was not
-  searched. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
+  searched. "Title order" here is the plain code-point order (A to Z, then accented and non-Latin
+  initials); the chat picker and the Packs panel list packs in the interface language's own order
+  (#958), so for such titles the two can differ. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
   is decided round-robin, in title order, only after every pack has finished searching —
   a short or empty pack's unused share goes to the others — and at most two packs are
   searched at a time, under a twenty-second limit for the whole question (a pack cut off

@@ -90,6 +90,35 @@ describe('knowledge-pack registry', () => {
     expect(listPacks(db)).toHaveLength(1)
   })
 
+  // #958 pin: main's order is SQLite NOCASE (A-Z folding only, then id). The arm's quota and round-robin
+  // are defined over it, so it must not drift; the renderer re-sorts for display only.
+  it('lists and selects packs in title COLLATE NOCASE, id order (#958: main keeps the code-point order)', async () => {
+    const { db, deps, zimDir } = makeHarness()
+    const C = String.fromCharCode
+    const titles: Record<string, string> = {
+      'zebra.zim': 'Zebra',
+      'aerzte.zim': `${C(0xc4)}rzteblatt`,
+      'wikipedia.zim': `Wikip${C(0xe9)}dia`,
+      'cyrillic.zim': C(0x412, 0x438, 0x43a, 0x438, 0x43f, 0x435, 0x434, 0x438, 0x44f),
+      'twin-b.zim': 'Twin',
+      'twin-a.zim': 'twin'
+    }
+    const ids: Record<string, string> = {}
+    const manage = manageAddFromHeader({ book: (zimPath) => ({ title: titles[basename(zimPath)] }) })
+    const order = ['zebra.zim', 'aerzte.zim', 'wikipedia.zim', 'cyrillic.zim', 'twin-b.zim', 'twin-a.zim']
+    for (const [i, leaf] of order.entries()) {
+      // Equal titles (Twin / twin fold equal): twin-b gets the smaller id so id is the visible tiebreak.
+      const uuid = packUuid(leaf === 'twin-a.zim' ? '99999999' : String(i + 1).repeat(8), leaf)
+      ids[leaf] = uuid
+      await registerPack(db, { ...deps, manageAdd: manage }, addZimFile(zimDir, leaf, uuid))
+    }
+    // 'Twin' / 'twin' fold equal under NOCASE, so the id breaks the tie. The accented and Cyrillic
+    // initials sort after Z (code-point order): that is the order the renderer must not inherit.
+    const sqlOrder = ['twin-b.zim', 'twin-a.zim', 'wikipedia.zim', 'zebra.zim', 'aerzte.zim', 'cyrillic.zim']
+    expect(listPacks(db).map((p) => p.id)).toEqual(sqlOrder.map((l) => ids[l]))
+    expect(retrievablePacks(db, zimDir, Object.values(ids)).map((p) => p.id)).toEqual(sqlOrder.map((l) => ids[l]))
+  })
+
   it('re-registering the same archive upserts (one row, addedAt preserved)', async () => {
     const { db, deps, zimDir } = makeHarness()
     const file = addZimFile(zimDir, 'a.zim', U.alpha)

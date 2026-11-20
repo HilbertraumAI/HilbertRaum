@@ -254,3 +254,37 @@ describe.each(PROJECT_ORDER_CASES)('ScopePopover project order (%s)', (lang, sql
     expect(labels).toEqual(expected)
   })
 })
+
+// #958: the same for knowledge packs (sorted by title). Main's SQL order is NOCASE (A-Z folding only).
+describe('ScopePopover pack order (#958)', () => {
+  const C = String.fromCharCode
+  const packCases: Array<[UiLanguage, string[]]> = [
+    ...PROJECT_ORDER_CASES,
+    // The issue's own case: SQL order puts the accented and Cyrillic initials after Zebra.
+    ['de', ['Wikip' + C(0xe9) + 'dia', 'Zebra', C(0xc4) + 'rzteblatt', C(0x412, 0x438, 0x43a, 0x438)]]
+  ]
+  const packsOf = (names: string[]) => names.map((n, i) => knowledgePack({ id: `p${i}`, title: n, description: null }))
+  const packLabels = async (user: ReturnType<typeof userEvent.setup>, names: string[]): Promise<string[]> => {
+    await user.click(screen.getByRole('button'))
+    const labels = (await screen.findAllByRole('checkbox'))
+      .map((cb) => (cb.closest('label')?.textContent ?? '').trim())
+      .map((text) => names.find((n) => text.includes(n)))
+    return labels.filter((n): n is string => n !== undefined)
+  }
+
+  it.each(packCases)('lists the packs in the %s order, not the SQL order', async (lang, sqlOrder) => {
+    const expected = inLanguageOrder(lang, sqlOrder)
+    expect(expected).not.toEqual(sqlOrder)
+    renderPopover({ docs: [makeDocumentInfo()], packs: packsOf(sqlOrder) }, lang)
+    expect(await packLabels(userEvent.setup(), sqlOrder)).toEqual(expected)
+  })
+
+  it('keeps packs with equal titles in their incoming (id) order', async () => {
+    const composed = 'Caf' + C(0xe9)
+    const decomposed = 'Cafe' + C(0x301)
+    // Collator-equal, but a code-point tiebreak would put the decomposed title first.
+    const names = [composed, decomposed, 'Atlas']
+    renderPopover({ docs: [makeDocumentInfo()], packs: packsOf(names) }, 'en')
+    expect(await packLabels(userEvent.setup(), names)).toEqual(['Atlas', composed, decomposed])
+  })
+})
