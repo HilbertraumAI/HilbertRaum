@@ -28,6 +28,9 @@ recommended_ram_gb: 24
 # gemma4-12b. Rank 1 2026-08-16..2026-08-20 (the §9.4 generational handover). Rank 3 again
 # 2026-08-20, the §9.5 interim after upstream deleted the qwen3.8 files.
 recommendation_rank: 1
+# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
+# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 0
 # Safe LOCAL runtime budget (catalog convention for the big additions, not the native window).
 # The earlier local-test value 16384 assumed a 24 GB RTX 3090; 8192 is the honest default for
 # a generic 24 GB machine (KV cache + sidecars need headroom). Raise per-machine in Settings.

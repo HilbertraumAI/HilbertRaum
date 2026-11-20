@@ -11,6 +11,7 @@ import {
   manifestFiles,
   recommendChatModelId,
   recommendModelIdByRam,
+  recommendModelIdForProcessor,
   weightsMib
 } from '../../src/main/services/models'
 import { isRealSha256, type ModelManifest } from '../../src/shared/manifest'
@@ -62,12 +63,12 @@ interface ChatFacts {
 
 const CHAT_FACTS: Record<string, ChatFacts> = {
   'gemma4-12b-it-qat-q4': { family: 'gemma4', rank: 2, minRam: 14, recRam: 24, ctx: 8192, thinking: true, displayName: 'Gemma 4 12B Instruct QAT Q4' },
-  'gemma4-26b-a4b-it-qat-q4': { family: 'gemma4', rank: 2, minRam: 20, recRam: 32, ctx: 8192, thinking: true, displayName: 'Gemma 4 26B-A4B Instruct QAT Q4' },
+  'gemma4-26b-a4b-it-qat-q4': { family: 'gemma4', rank: 2, minRam: 20, recRam: 24, ctx: 8192, thinking: true, displayName: 'Gemma 4 26B-A4B Instruct QAT Q4' },
   'gemma4-31b-it-qat-q4': { family: 'gemma4', rank: 0, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Gemma 4 31B Instruct QAT Q4' },
   'gemma4-e2b-it-qat-q4': { family: 'gemma4', rank: 3, minRam: 8, recRam: 12, ctx: 8192, thinking: true, displayName: 'Gemma 4 E2B Instruct QAT Q4' },
-  'gemma4-e4b-it-qat-q4': { family: 'gemma4', rank: 0, minRam: 12, recRam: 16, ctx: 8192, thinking: true, displayName: 'Gemma 4 E4B Instruct QAT Q4' },
+  'gemma4-e4b-it-qat-q4': { family: 'gemma4', rank: 0, minRam: 12, recRam: 12, ctx: 8192, thinking: true, displayName: 'Gemma 4 E4B Instruct QAT Q4' },
   'granite-4.1-8b-q4': { family: 'granite', rank: 0, minRam: 12, recRam: 16, ctx: 8192, thinking: false, displayName: 'Granite 4.1 8B Q4' },
-  'ministral3-8b-instruct-2512-q4': { family: 'ministral3', rank: 2, minRam: 12, recRam: 16, ctx: 8192, thinking: false, displayName: 'Ministral 3 8B Instruct (2512) Q4' },
+  'ministral3-8b-instruct-2512-q4': { family: 'ministral3', rank: 0, minRam: 12, recRam: 16, ctx: 8192, thinking: false, displayName: 'Ministral 3 8B Instruct (2512) Q4' },
   'qwen3-14b-instruct-q4': { family: 'qwen3', rank: 1, minRam: 14, recRam: 24, ctx: 8192, thinking: true, displayName: 'Qwen3 14B Instruct Q4', profiles: ['PRO'] },
   'qwen3-30b-a3b-q4': { family: 'qwen3', rank: 0, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3 30B-A3B (MoE) Q4' },
   'qwen3-4b-instruct-2507-q4': { family: 'qwen3', rank: 1, minRam: 8, recRam: 16, ctx: 4096, thinking: false, displayName: 'Qwen3 4B Instruct 2507 Q4' },
@@ -274,8 +275,8 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // the RTX 3090, the only card that holds it). Those seven include all five RANK-3 models, so
   // every model rule C can ever star carries one: the E2B's threshold (2,271, next 3,838) and RAM
   // floor are both the lowest of any ranked model, so a rank-3 model is eligible whenever any
-  // ranked model is, and `eligibleOrder` sorts rank first. NOT every ranked model, though — 8 of
-  // the 15 ranked manifests carry none (rank 2: qwen3-4b-instruct-q4, ministral3-8b-instruct-2512-q4;
+  // ranked model is, and `eligibleOrder` sorts rank first. NOT every ranked model, though — 7 of
+  // the 14 ranked manifests carry none (rank 2: qwen3-4b-instruct-q4;
   // rank 1: qwen3-4b-instruct-2507-q4, qwen3-8b-instruct-q4, qwen3-14b-instruct-q4, qwen3.6-27b-q4,
   // qwen3.6-27b-q5, qwen3.5-35b-a3b-ud-q4kxl) and keep the whole-file base, which "Your model" uses
   // for one a user installs by hand. The assertion below pins that set exactly, so a future
@@ -356,7 +357,6 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.5-4b-ud-q4kxl': 3838, // was 4,410 until its host-mapped 497.31 was measured (#391)
     'gemma4-e2b-it-qat-q4': 2271,
     'qwen3-8b-instruct-q4': 7020,
-    'ministral3-8b-instruct-2512-q4': 7239,
     'qwen3.5-9b-ud-q4kxl': 7285,
     'gemma4-12b-it-qat-q4': 10254,
     'qwen3-14b-instruct-q4': 11407,
@@ -667,17 +667,20 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(recommendModelIdByRam(chat, 12, 'chat')).toBe('gemma4-e2b-it-qat-q4')
   })
 
-  // (g) Unified / cpu with a KNOWN budget, and a legacy call without a class: the RAM pick,
-  // byte-identical to the RAM picker (T-item 4).
-  it('cpu / unified with a known 24 GiB budget, and no class at all, return the RAM pick', async () => {
+  // (g) Unified with a KNOWN budget: the RAM pick, byte-identical to the RAM picker (T-item 4).
+  // A cpu class, and a legacy call without a class, take the processor path (§6.7) whatever
+  // budget they carry; its own mapping is pinned in the §6.7 block below.
+  it('unified with a known 24 GiB budget returns the RAM pick; cpu and no class at all the processor pick', async () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     for (const ram of [8, 12, 16, 24, 32, 64]) {
       const ramPick = recommendModelIdByRam(chat, ram, 'chat')
-      expect(recommendChatModelId(chat, { memoryClass: 'cpu', ramGb: ram, budgetMb: 24 * 1024 }), `cpu ram=${ram}`).toBe(ramPick)
       expect(recommendChatModelId(chat, { memoryClass: 'unified', ramGb: ram, budgetMb: 24 * 1024 }), `unified ram=${ram}`).toBe(ramPick)
       const slow = { tokensPerSecond: 4, measuredModelId: ramPick }
-      expect(recommendChatModelId(chat, { memoryClass: 'cpu', ramGb: ram, budgetMb: 24 * 1024 }, slow), `cpu slow ram=${ram}`).toBe(
+      expect(recommendChatModelId(chat, { memoryClass: 'unified', ramGb: ram, budgetMb: 24 * 1024 }, slow), `unified slow ram=${ram}`).toBe(
         recommendModelIdByRam(chat, ram, 'chat', slow)
+      )
+      expect(recommendChatModelId(chat, { memoryClass: 'cpu', ramGb: ram, budgetMb: 24 * 1024 }), `cpu ram=${ram}`).toBe(
+        recommendModelIdForProcessor(chat, ram)
       )
     }
     const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-catalog-rulec-'))
@@ -686,8 +689,9 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
         const { models } = await buildModelList({ manifestsDir: CATALOG_MANIFESTS, rootPath, developerMode: false, machineRamGb: 32, ...extra })
         return models.find((m) => m.role === 'chat' && m.recommended)?.id
       }
-      expect(await star({})).toBe('qwen3.8-27b-ud-q5km')
-      expect(await star({ memoryClass: 'cpu', graphicsBudgetMb: 24 * 1024 })).toBe('qwen3.8-27b-ud-q5km')
+      expect(await star({})).toBe('gemma4-26b-a4b-it-qat-q4')
+      expect(await star({ memoryClass: 'cpu', graphicsBudgetMb: 24 * 1024 })).toBe('gemma4-26b-a4b-it-qat-q4')
+      expect(await star({ memoryClass: 'unified' })).toBe('qwen3.8-27b-ud-q5km')
       expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 7168 })).toBe('qwen3.5-4b-ud-q4kxl')
       expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 23_332 })).toBe('qwen3.8-27b-ud-q5km')
     } finally {
@@ -749,8 +753,11 @@ describe('committed catalog — Qwen3.8 wave (2026-08-16 promotion, §9.4)', () 
   // The general rule, not just this wave: a model the app cannot obtain or verify must never be the auto-pick. Rank 0 is the
   // established "selectable, never recommended" convention; a legacy profile is the other road to a recommendation.
   it('no committed manifest is both recommended and unobtainable', () => {
-    const recommended = committedManifests().filter((m) => m.recommendationRank > 0 || m.recommendedProfiles.length > 0)
-    expect(recommended.length, '15 ranked chat models + the embedder, reranker and transcriber').toBeGreaterThanOrEqual(18)
+    // A processor-only rank (§6.7) recommends a model as surely as the ordinary one does.
+    const recommended = committedManifests().filter(
+      (m) => m.recommendationRank > 0 || (m.recommendationRankCpu ?? 0) > 0 || m.recommendedProfiles.length > 0
+    )
+    expect(recommended.length, '15 ranked chat models (one on the processor only) + the embedder, reranker and transcriber').toBeGreaterThanOrEqual(18)
     const offenders = recommended
       .filter(
         (m) =>
@@ -849,6 +856,128 @@ describe('committed catalog — §6.5 speed-signal stepped picks (issue #95)', (
       }
     }
     expect(picks).toBe(242)
+  })
+})
+
+// §6.7 processor path against the REAL committed catalog: the picks of a computer whose next
+// start runs from RAM without a graphics card (memory class `cpu`), and their step-down chains.
+// The unified (Apple Silicon) mapping is the RAM-bands table above and must not move with it.
+describe('committed catalog — §6.7 processor path (2026-11 answer-quality study + processor speed)', () => {
+  const chat = () => committedManifests().filter((m) => m.role === 'chat')
+  const fourB2507 = 'qwen3-4b-instruct-2507-q4'
+  const e2b = 'gemma4-e2b-it-qat-q4'
+  const e4b = 'gemma4-e4b-it-qat-q4'
+  const nineB = 'qwen3.5-9b-ud-q4kxl'
+  const moe = 'gemma4-26b-a4b-it-qat-q4'
+  const crawl = (id: string | null) => ({ tokensPerSecond: 2.0, measuredModelId: id })
+
+  it('hands each RAM band to its processor pick (no-signal mapping)', () => {
+    const bands: Array<[ramGb: number, pick: string | null]> = [
+      [7, null], [8, fourB2507], [11, fourB2507], [12, e4b], [14, e4b], [15, e4b], [16, nineB], [20, nineB], [23, nineB],
+      [24, moe], [31, moe], [32, moe], [48, moe], [64, moe], [128, moe]
+    ]
+    for (const [ram, pick] of bands) {
+      expect(recommendModelIdForProcessor(chat(), ram), `ram=${ram}`).toBe(pick)
+      expect(recommendChatModelId(chat(), { memoryClass: 'cpu', ramGb: ram, budgetMb: null }), `class cpu ram=${ram}`).toBe(pick)
+    }
+  })
+
+  it('a slow benchmark on the pick steps along its chain, and a second one on the stepped model steps again', () => {
+    const c = chat()
+    // 8 GB: the runnable-stage pick steps too: its target is named, not inferred.
+    expect(recommendModelIdForProcessor(c, 8, crawl(fourB2507))).toBe(e2b)
+    expect(recommendModelIdForProcessor(c, 12, crawl(e4b))).toBe(e2b)
+    // 16 GB: 9B -> E4B -> E2B, and the E2B is the end of the chain.
+    expect(recommendModelIdForProcessor(c, 16, crawl(nineB))).toBe(e4b)
+    expect(recommendModelIdForProcessor(c, 16, crawl(e4b))).toBe(e2b)
+    expect(recommendModelIdForProcessor(c, 16, crawl(e2b))).toBe(e2b)
+    // 32 GB: 26B-A4B -> 9B -> E4B -> E2B.
+    expect(recommendModelIdForProcessor(c, 32, crawl(moe))).toBe(nineB)
+    expect(recommendModelIdForProcessor(c, 32, crawl(nineB))).toBe(e4b)
+    expect(recommendModelIdForProcessor(c, 32, crawl(e4b))).toBe(e2b)
+    // At or above the slow line nothing moves.
+    expect(recommendModelIdForProcessor(c, 16, { tokensPerSecond: 5, measuredModelId: nineB })).toBe(nineB)
+  })
+
+  it('a crawl on a model off the chain is the §6.5 rule: an oversized model is no signal', () => {
+    const c = chat()
+    expect(recommendModelIdForProcessor(c, 16, crawl('gemma4-12b-it-qat-q4'))).toBe(nineB)
+    expect(recommendModelIdForProcessor(c, 16, crawl('qwen3.6-27b-q4'))).toBe(nineB)
+    expect(recommendModelIdForProcessor(c, 16, crawl('no-such-model'))).toBe(nineB)
+  })
+
+  it('every chain target exists, is ranked on the processor, needs no more RAM than its source, and no chain loops', () => {
+    const byId = new Map(chat().map((m) => [m.id, m]))
+    const cpuRank = (m: ModelManifest) => m.recommendationRankCpu ?? m.recommendationRank
+    const sources = chat().filter((m) => m.cpuStepDownTo !== undefined)
+    expect(sources.map((m) => `${m.id} -> ${m.cpuStepDownTo}`).sort()).toEqual([
+      `${moe} -> ${nineB}`,
+      `${e4b} -> ${e2b}`,
+      `${fourB2507} -> ${e2b}`,
+      `${nineB} -> ${e4b}`
+    ])
+    for (const source of sources) {
+      const seen = new Set<string>([source.id])
+      let current: ModelManifest | undefined = source
+      while (current?.cpuStepDownTo !== undefined) {
+        const target = byId.get(current.cpuStepDownTo)
+        expect(target, `${current.id} target exists`).toBeDefined()
+        expect(cpuRank(target!), `${target!.id} ranked on the processor`).toBeGreaterThan(0)
+        expect(target!.recommendedMinRamGb, `${target!.id} RAM floor`).toBeLessThanOrEqual(current.recommendedMinRamGb)
+        expect(seen.has(target!.id), `${source.id} chain loops at ${target!.id}`).toBe(false)
+        seen.add(target!.id)
+        current = target
+      }
+    }
+  })
+
+  it('every RAM size from 1 to 128 GB picks a processor-ranked model that the RAM floor allows, with or without a crawl', () => {
+    const c = chat()
+    const byId = new Map(c.map((m) => [m.id, m]))
+    for (let ram = 1; ram <= 128; ram++) {
+      const base = recommendModelIdForProcessor(c, ram)
+      if (base === null) {
+        expect(ram, 'nothing runs only under the 8 GB floor').toBeLessThan(8)
+        continue
+      }
+      for (const id of [base, recommendModelIdForProcessor(c, ram, crawl(base))]) {
+        const m = byId.get(id ?? '')
+        expect(m, `ram=${ram} picked=${id}`).toBeDefined()
+        expect(m!.recommendationRankCpu ?? m!.recommendationRank, `ram=${ram} picked=${id}`).toBeGreaterThan(0)
+        expect(m!.recommendedMinRamGb, `ram=${ram} picked=${id}`).toBeLessThanOrEqual(ram)
+      }
+    }
+  })
+
+  it('pins which manifests carry a processor rank, and its value', () => {
+    const carried = Object.fromEntries(
+      chat().filter((m) => m.recommendationRankCpu !== undefined).map((m) => [m.id, m.recommendationRankCpu])
+    )
+    expect(carried).toEqual({
+      'gemma4-12b-it-qat-q4': 0,
+      'gemma4-26b-a4b-it-qat-q4': 3,
+      'gemma4-e2b-it-qat-q4': 2,
+      'gemma4-e4b-it-qat-q4': 3,
+      'qwen3-14b-instruct-q4': 0,
+      'qwen3-4b-instruct-2507-q4': 3,
+      'qwen3.5-35b-a3b-ud-q4kxl': 0,
+      'qwen3.5-4b-ud-q4kxl': 1,
+      'qwen3.6-27b-q4': 0,
+      'qwen3.6-27b-q5': 0,
+      'qwen3.8-27b-ud-q4km': 0,
+      'qwen3.8-27b-ud-q5km': 0
+    })
+  })
+
+  it('a catalog without the processor fields gives exactly the RAM pick, crawl or not', () => {
+    const plain = chat().map(({ recommendationRankCpu: _r, cpuStepDownTo: _s, ...m }) => m as ModelManifest)
+    for (let ram = 1; ram <= 128; ram++) {
+      const base = recommendModelIdByRam(plain, ram, 'chat')
+      expect(recommendModelIdForProcessor(plain, ram), `ram=${ram}`).toBe(base)
+      expect(recommendModelIdForProcessor(plain, ram, crawl(base)), `crawl ram=${ram}`).toBe(
+        recommendModelIdByRam(plain, ram, 'chat', crawl(base))
+      )
+    }
   })
 })
 

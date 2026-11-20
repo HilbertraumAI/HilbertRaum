@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import { recommendModelId, recommendModelIdByRam } from '../../src/main/services/models'
+import { recommendModelId, recommendModelIdByRam, recommendModelIdForProcessor } from '../../src/main/services/models'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
   detectSystem,
@@ -183,7 +183,7 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
     pinRam(32)
   })
 
-  it('24 GB card → the 27B Q5 since -np 1 (#319); 8 GB card → the 4B; no class → the RAM pick', async () => {
+  it('24 GB card → the 27B Q5 since -np 1 (#319); 8 GB card → the 4B; no card → the processor pick (§6.7)', async () => {
     const manifests = committedManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // RTX 3090 as the Windows rig reports it (24,822 total); a probe without a free figure →
@@ -197,21 +197,22 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
     expect(big.ramGb).toBe(32)
     expect(big.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
     expect(small.recommendedModelId).toBe('qwen3.5-4b-ud-q4kxl')
-    expect(none.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
-    expect(none.recommendedModelId).toBe(recommendModelIdByRam(manifests, 32, 'chat'))
+    // No card at all is the processor path: the mixture-of-experts 26B, not the dense 27B.
+    expect(none.recommendedModelId).toBe('gemma4-26b-a4b-it-qat-q4')
+    expect(none.recommendedModelId).toBe(recommendModelIdForProcessor(manifests, 32))
     // The tile keeps the TOTAL; the pick used the budget.
     expect(big.gpuVramMb).toBe(24_822)
     expect(small.gpuVramMb).toBe(8192)
   })
 
-  it('a discrete class without a budget figure, or a cpu class with one, is the RAM pick (byte-identical)', async () => {
+  it('a discrete class without a budget figure is the RAM pick (byte-identical); a cpu class with one is the processor pick', async () => {
     const manifests = committedManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // An 8 GiB card, because the 3090's card pick is the RAM pick since #319 and could not tell the two apart.
     const noBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, memoryClass: 'discrete' } })
     const cpuWithBudget = await runBenchmark({ ...base, gpu: { name: 'RTX 3070', useful: true, totalMb: 8192, budgetMb: 7168, memoryClass: 'cpu' } })
     expect(noBudget.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
-    expect(cpuWithBudget.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
+    expect(cpuWithBudget.recommendedModelId).toBe('gemma4-26b-a4b-it-qat-q4')
     expect(noBudget.gpuVramMb).toBe(8192)
   })
 })
@@ -669,15 +670,22 @@ describe('runBenchmark', () => {
   it('applies the §6.5 speed signal to its own recommendation, consistently with the picker (issue #95)', async () => {
     const manifests = committedManifests()
     pinRam(32)
+    // Unified memory keeps the §6.5 rule: a crawl on the ≥32 GB pick steps one band down.
     const q5 = 'qwen3.8-27b-ud-q5km'
-    const moved = await runBenchmark({ workspacePath: workspace(), manifests, runtime: stubChatRuntime({ modelId: q5, perSecond: 2.2 }) })
+    const unified = { name: 'Apple M2 Max', useful: true, totalMb: 32_768, memoryClass: 'unified' as const }
+    const moved = await runBenchmark({ workspacePath: workspace(), manifests, gpu: unified, runtime: stubChatRuntime({ modelId: q5, perSecond: 2.2 }) })
     expect(moved.recommendedModelId).toBe('qwen3.8-27b-ud-q4km')
     expect(moved.warnings).toContain(t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: q5 }))
-    // No lower ranked tier at 8 GB: the pick keeps, and the warning stays away.
+    // No card is the processor path (§6.7): a crawl on its pick follows the pick's chain.
+    const moe = 'gemma4-26b-a4b-it-qat-q4'
+    const chained = await runBenchmark({ workspacePath: workspace(), manifests, runtime: stubChatRuntime({ modelId: moe, perSecond: 2.2 }) })
+    expect(chained.recommendedModelId).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(chained.warnings).toContain(t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: moe }))
+    // 8 GB, a crawl on a model that is not on the pick's chain: the pick keeps, and the warning stays away.
     pinRam(8)
     const fourB = 'qwen3.5-4b-ud-q4kxl'
     const kept = await runBenchmark({ workspacePath: workspace(), manifests, runtime: stubChatRuntime({ modelId: fourB, perSecond: 2.2 }) })
-    expect(kept.recommendedModelId).toBe(fourB)
+    expect(kept.recommendedModelId).toBe('qwen3-4b-instruct-2507-q4')
     expect(kept.warnings).not.toContain(t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: fourB }))
   })
 
@@ -688,7 +696,7 @@ describe('runBenchmark', () => {
       manifests: committedManifests(),
       runtime: stubChatRuntime({ modelId: 'mock-not-in-catalog', perSecond: 2.2 })
     })
-    expect(result.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
+    expect(result.recommendedModelId).toBe('gemma4-26b-a4b-it-qat-q4')
     expect(result.warnings).not.toContain(
       t('en', 'main.benchmark.warnRecommendationLowered', { tps: 2.2, model: 'mock-not-in-catalog' })
     )

@@ -75,7 +75,7 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 // CARD8 is an 8 GiB card with ≈ 1.3 GB in use, chosen with real HEADROOM under the threshold
 // rather than just below whichever value is current — it has been re-pinned twice already this
 // wave. The PAIR is the point: CARD8 below the threshold, CARD8_ROOMY above it.
-const RAM_PICK = 'qwen3.8-27b-ud-q5km'
+const RAM_PICK = 'gemma4-26b-a4b-it-qat-q4' // no usable card at 32 GB: the processor path (model-benchmarks.md §6.7)
 const CARD8_PICK = 'qwen3.5-4b-ud-q4kxl'
 const CARD8_ROOMY_PICK = 'qwen3.5-9b-ud-q4kxl'
 // The 3 tok/s step from the 4B at this budget: the only ranked, eligible model under its 16 GB tier.
@@ -620,6 +620,10 @@ describe('picker seams: the speed sample carries the identity it was measured un
   const STALE_AT = '2026-08-20T00:00:00Z'
   const ON_CARD8 = { memoryClass: 'discrete' as const, deviceName: CARD8.name, contextTokens: 8192, backend: 'gpu' as const }
   const Q4 = 'qwen3.8-27b-ud-q4km'
+  /** Unified memory at 32 GB keeps the RAM pick; its one-band step is Q4. */
+  const UNIFIED_PICK = 'qwen3.8-27b-ud-q5km'
+  /** The processor pick (26B-A4B) after a crawl on a model that is not on its chain: one band down (§6.5 inside §6.7). */
+  const PROCESSOR_STEP = 'qwen3.5-9b-ud-q4kxl'
 
   /** A fake ACTIVE chat runtime on the card: streams a few chunks so the speed leg reads something. */
   function runtimeOnCard(modelId: string): ModelRuntime {
@@ -688,10 +692,10 @@ describe('picker seams: the speed sample carries the identity it was measured un
     ['the GPU switched off since', { gpuMode: 'off' }],
     ['auto-disabled after a crash', { gpuAutoDisabled: true }]
   ])('%s: a crawl measured on the card is an upper bound for the processor start — the RAM pick still steps down', async (_label, settings) => {
-    // Dropping the sample here would move the pick UP (to the 27B Q5) on the slowest path the
-    // machine has, for a model that crawled at 3 tok/s even on the card.
+    // Dropping the sample here would move the pick UP (to the processor pick, the 26B-A4B) on the
+    // slowest path the machine has, for a model that crawled at 3 tok/s even on the card.
     const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings }))
-    expect(await both(f)).toBe(Q4)
+    expect(await both(f)).toBe(PROCESSOR_STEP)
   })
 
   it('a crawl measured on the processor rung (the ladder fell to CPU under a card class) says nothing about the card: the card pick, not the step', async () => {
@@ -709,8 +713,8 @@ describe('picker seams: the speed sample carries the identity it was measured un
 
   it('a crawl measured on the processor with no card counts for a processor start, and for nothing faster', async () => {
     const onCpu = { memoryClass: 'cpu' as const, deviceName: null, contextTokens: 8192, backend: 'cpu' as const }
-    // No card now either: the processor is not faster than the processor → the RAM pick steps.
-    expect(await both(savedCrawl(fixture({ probeReturns: [], persisted: [] }), { identity: onCpu }))).toBe(Q4)
+    // No card now either: the processor is not faster than the processor → the processor pick steps.
+    expect(await both(savedCrawl(fixture({ probeReturns: [], persisted: [] }), { identity: onCpu }))).toBe(PROCESSOR_STEP)
     // A card was added since: the processor crawl is no evidence about it → the card pick.
     expect(await both(savedCrawl(fixture({ probeReturns: [], persisted: [CARD8] }), { identity: onCpu }))).toBe(CARD8_PICK)
   })
@@ -722,7 +726,7 @@ describe('picker seams: the speed sample carries the identity it was measured un
 
   it('a legacy sample without identity keeps steering as before (GPU off: the RAM pick still steps down)', async () => {
     const f = savedCrawl(fixture({ probeReturns: [], persisted: [CARD8], settings: { gpuMode: 'off' } }), { legacy: true })
-    expect(await both(f)).toBe(Q4)
+    expect(await both(f)).toBe(PROCESSOR_STEP)
   })
 
   it('a different card of the same size: no signal — the card pick, not the step', async () => {
@@ -744,7 +748,7 @@ describe('picker seams: the speed sample carries the identity it was measured un
 
     it('GPU on: a processor crawl says nothing about Metal (the control)', async () => {
       const f = savedCrawl(fixture({ probeReturns: [], persisted: [M2] }), { identity: ON_PROCESSOR })
-      expect(await both(f)).toBe(RAM_PICK)
+      expect(await both(f)).toBe(UNIFIED_PICK)
     })
 
     it.each<[string, Partial<AppSettings>]>([

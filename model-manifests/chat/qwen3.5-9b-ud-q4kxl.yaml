@@ -27,6 +27,9 @@ recommended_ram_gb: 16
 # promotion set): wins 16-20 GB from Ministral (rank 2); within the promoted pair at this tier
 # (the 4B carries the same rank 3 and recommended_ram_gb 16) it wins on the disk-size tiebreak.
 recommendation_rank: 3
+# Processor path (model-benchmarks.md §6.7): still the 16 to 23 GB pick (86.1 on the 2026-11 study,
+# 5.1 tok/s on a Ryzen 7 5800H, at the slow line). A slow benchmark steps to the E4B, then the E2B.
+cpu_step_down_to: gemma4-e4b-it-qat-q4
 # Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). HilbertRaum recommends
 # 8192 here because this field is the SAFE LOCAL RUNTIME context budget for normal laptops, not
 # the theoretical model maximum. Revisit only after KV-cache/RAM budgeting + a long-context eval.

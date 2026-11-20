@@ -133,6 +133,32 @@ describe('validateManifest', () => {
     }
   })
 
+  // The processor-path fields (model-benchmarks.md §6.7): optional, and validated like the other
+  // fields that move a recommendation. Absent leaves the manifest shape unchanged.
+  it('parses recommendation_rank_cpu and cpu_step_down_to, leaving both undefined when omitted (§6.7)', () => {
+    const both = validateManifest(rawManifest({ recommendation_rank_cpu: 0, cpu_step_down_to: ' lighter-model ' })).manifest
+    expect(both?.recommendationRankCpu).toBe(0)
+    expect(both?.cpuStepDownTo).toBe('lighter-model')
+    expect(validateManifest(rawManifest({ recommendation_rank_cpu: 3 })).manifest?.recommendationRankCpu).toBe(3)
+    const absent = validateManifest(rawManifest())
+    expect(absent.ok).toBe(true)
+    expect('recommendationRankCpu' in (absent.manifest ?? {})).toBe(false)
+    expect('cpuStepDownTo' in (absent.manifest ?? {})).toBe(false)
+  })
+
+  it('rejects a negative or non-numeric recommendation_rank_cpu and an empty or non-string cpu_step_down_to (§6.7)', () => {
+    for (const value of [-1, 'x', '3', true, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      const res = validateManifest(rawManifest({ recommendation_rank_cpu: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('recommendation_rank_cpu')), String(value)).toBe(true)
+    }
+    for (const value of ['', '   ', 3, true, ['a'], null]) {
+      const res = validateManifest(rawManifest({ cpu_step_down_to: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('cpu_step_down_to')), String(value)).toBe(true)
+    }
+  })
+
   // Issue #182: `speculative_decoding` is a CLOSED enum on purpose — a free-form argument list
   // would let a hand-edited on-drive manifest inject any llama-server flag (`--host 0.0.0.0`
   // defeats the loopback-only invariant, since extras are appended last and a later flag wins).

@@ -24,6 +24,9 @@ recommended_ram_gb: 32
 # legs incl. abort, stop+quit teardown, Deep on + Balanced suppressed; in-app checksum
 # verify of the 22.2 GB weight; sidecar VmHWM 22.07 GiB) — model-benchmarks.md §9.3.
 recommendation_rank: 1
+# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
+# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 0
 # Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). Manifest runtime context
 # is 8192 for now — the safe local runtime budget for normal laptops, not the model maximum.
 recommended_context_tokens: 8192

@@ -12,6 +12,9 @@ recommended_min_ram_gb: 14
 # machines were stuck on the 8B tier because nothing was tuned between 16 and 32.
 recommended_ram_gb: 24
 recommendation_rank: 2  # Phase-29 12-14B WINNER (beats Qwen3 14B on every axis) — preferred at tier
+# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
+# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 0
 recommended_context_tokens: 8192
 # Context cache at 8k under the app launch (ubatch 2048): 512 MiB full-attention + 1,920 MiB
 # sliding-window cells (40 layers x 6,144 cells) = 2.375 GiB; the picker's graphics-fit cache term

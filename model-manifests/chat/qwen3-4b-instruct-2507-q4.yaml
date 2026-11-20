@@ -9,6 +9,11 @@ size_on_disk_gb: 2.5
 recommended_min_ram_gb: 8
 recommended_ram_gb: 16
 recommendation_rank: 1  # Phase-29: better RAG quality than orig 4B, but ranked below it (no thinking)
+# Processor path (model-benchmarks.md §6.7): the 8 to 11 GB pick without a graphics card. Ahead of
+# qwen3.5-4b-ud-q4kxl on the 2026-11 answer-quality study (82.0 against 76.9) and on processor
+# decode (11.8 against 8.6 tok/s, Ryzen 7 5800H). No thinking mode. A slow benchmark steps to the E2B.
+recommendation_rank_cpu: 3
+cpu_step_down_to: gemma4-e2b-it-qat-q4
 recommended_context_tokens: 4096
 supports_thinking_mode: false
 supports_tools: false

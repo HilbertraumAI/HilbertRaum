@@ -21,6 +21,9 @@ recommended_ram_gb: 32
 # VRAM identical, 4 percent decode cost) and its URL is live. qwen3.6-27b-q5 returns to
 # rank 1 (it keeps the all-time F1 record .3573, recorded honestly there).
 recommendation_rank: 3
+# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
+# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 0
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 # Context cache at 8k under the app launch, recomputed 2026-09-07 for ONE server slot (issue #319:
