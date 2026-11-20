@@ -1710,10 +1710,15 @@ dense 27B on the same machine), not a figure for a laptop.
   runs the unchanged `recommendModelIdByRam` stages (capacity first, rank inside a band, ranked
   models only) over a view of the catalog in which `recommendation_rank_cpu`, where a manifest
   carries it, replaces `recommendation_rank`.
-- `recommendation_rank_cpu: 0` marks a model measured too slow on a processor: selectable, never
-  the automatic pick there. Seven manifests carry it (Gemma 4 12B, Qwen3 14B, both Qwen3.6 27B,
-  both ranked Qwen3.8 27B, Qwen3.5 35B-A3B). Five carry a positive value (the four picks above and
-  the E2B at 2, under the E4B). `qwen3.5-4b-ud-q4kxl` carries 1.
+- `recommendation_rank_cpu: 0` keeps a model selectable but never the automatic pick on a
+  processor. Seven manifests carry it. Six were measured too slow there: Gemma 4 12B and Qwen3 14B
+  in the table above, and the dense 27B models from the i9-9900X rows. The seventh, Qwen3.5
+  35B-A3B, was **not** measured on a processor (it needs 24 GB of RAM, more than the 16 GB
+  laptop). As a mixture-of-experts model it may be fast enough. It carries 0 because the stages
+  order by comfortable RAM first: a positive rank would make this unmeasured model, comfortable at
+  32, the pick from 32 GB ahead of the measured 26B-A4B. A processor measurement can lift it. Five
+  carry a positive value: three of the four picks above at 3 (the 9B carries no processor rank
+  and keeps its ordinary 3), the E2B at 2, under the E4B, and `qwen3.5-4b-ud-q4kxl` at 1.
 - Two comfortable-RAM figures moved with it, both from measurement: `gemma4-e4b-it-qat-q4`
   16 to 12 (5.48 GiB peak on the 14 GB machine) and `gemma4-26b-a4b-it-qat-q4` 32 to 24 (in-app
   peak RSS 14.28 GiB, §9.3, under the 16.8 GB Qwen3.6 27B Q4 that already sits at 24). Neither
