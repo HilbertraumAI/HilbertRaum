@@ -314,13 +314,57 @@ with internet to write the true `sha256` + `size_bytes` back into the manifest.
 ## I forgot my workspace password
 
 Encrypted workspaces are protected by your password, which is **never stored**. If you forget
-it, the data **cannot be recovered** — this is by design. Create a new workspace to start over
-(your old encrypted data remains on the drive but unreadable).
+it, the data **cannot be recovered** — this is by design.
 
-Before you do: read the message on the unlock screen carefully. "That password didn't unlock
-your workspace" means the password was wrong. If it instead says the workspace data is
-**damaged**, your password is fine and creating a new workspace is the wrong move — see the
-next section.
+Before you do anything: read the message on the unlock screen carefully. "That password didn't
+unlock your workspace" means the password was wrong. If it says anything else, your password may
+well be right, and starting over is the wrong move: see the sections below for "the workspace
+data on the drive is damaged", "could not finish opening", "the encrypted workspace file is
+missing" and "the file that holds your workspace's key".
+
+HilbertRaum has no reset, and it never creates a new workspace over an existing one: while a
+workspace is on the drive, the lock screen only asks for its password. To start over, you set the
+old workspace aside by hand (issue #931):
+
+1. **Quit HilbertRaum.**
+2. **On the drive, move `config/workspace.json` and the whole `workspace/` folder, together, off
+   the drive**: for example into a folder `old-workspace/` on your computer, as
+   `old-workspace/config/workspace.json` and `old-workspace/workspace/`. If you run HilbertRaum
+   without a Kit (a release download started on its own), the two are in the app's data folder
+   instead (on Windows `%APPDATA%\@hilbertraum\desktop`; see "How the app finds its data" in
+   [`drive-layout.md`](drive-layout.md), the app-data fallback): move them out of that folder.
+   - **Move both.** With only one of them moved, the app still shows the unlock screen, and the
+     right password then reads as a missing file.
+   - **Move, don't delete.** Together, and only together, they still open with the old password
+     if you remember it later.
+   - **Leave the rest of `config/` where it is.** `drive.json`, `policy.json` and
+     `checksums.json` belong to the drive, not to the workspace. A `config/working-copy-lost.json`
+     can be there too: leaving it is harmless, since creating the new workspace removes it.
+3. **Start HilbertRaum.** The lock screen now offers to create a workspace: create the new one
+   with a new password.
+
+What stays on the drive and works as before: your AI models, the AI engine, the knowledge packs in
+the drive's `zim/` folder, the OCR files and your skills (skills you added yourself come back
+switched off; switch them on in Settings → Skills). A knowledge pack you added from a place
+outside the drive's `zim/` folder was recorded in the old workspace only: add it again. The
+first start of each model checks its file again, and the speed measurement runs again, as on a
+new drive.
+
+What stays behind in the moved folder, readable only with the old password: the old chats,
+documents and their stored copies, images, reviews, projects, settings and activity. The old
+workspace's diagnostics log is in `logs/`, encrypted under the old key: the new workspace starts
+a new log in its place, so move `logs/` along too if you want to keep the old one. Everything you
+moved is encrypted, except a `workspace/hilbertraum.sqlite.recovery` if there is one, which holds
+the old workspace in readable form (see "The encrypted workspace file was missing from the drive"
+below): moving it to a computer copies that readable file there. A `workspace/zim-transient/`
+folder is not encrypted either while it holds anything, but it lists only the titles and file
+paths of your knowledge packs, none of your content.
+
+To go back to the old workspace (you remember its password): quit HilbertRaum, move the new
+workspace's `config/workspace.json` and `workspace/` away the same way, put the old pair back in
+their places, start the app and unlock with the old password. **Never combine one workspace's
+`config/workspace.json` with another workspace's `workspace/` folder**: neither password opens
+that pair, and with the new password the lock screen says the workspace data is damaged.
 
 ---
 
@@ -498,6 +542,33 @@ What to do:
 You can also see this message when an older version of HilbertRaum (0.1.65 or earlier) started on
 the drive after the encrypted file went missing: those versions removed the copy the last session
 left. Before #911 this case only ever said "Could not open the workspace."
+
+---
+
+## "The file that holds your workspace's key (config/workspace.json) is missing from the drive or can't be read"
+
+You see this on the unlock screen, whatever password you type, when the workspace's encrypted file,
+`workspace/hilbertraum.sqlite.enc`, is on the drive, but `config/workspace.json` is not, or it is
+there and damaged (for example a copy that was cut short). That small file holds what your password
+unlocks: the key the workspace is encrypted with, itself encrypted under your password. Without it
+no password can open the workspace, and the app cannot even check whether the password is right.
+Something outside HilbertRaum removed or changed it: a sync or cleanup tool, a person tidying the
+drive, or a fresh start by hand that moved `workspace/` but not `config/workspace.json` (see "I
+forgot my workspace password" above). Before #807 this case only said "Could not open the
+workspace."
+
+What to do:
+
+- **Do not create a new workspace**, and do not delete anything: a new workspace gets a new key,
+  and the documents and data you have can then never be opened.
+- Look for the file: in the recycle bin or trash, in a sync tool's deleted or conflict files, or in
+  the folder you moved an old workspace into. Put it back as `config/workspace.json` and unlock
+  again.
+- Otherwise restore `config/workspace.json` from a backup of this same workspace, and unlock with
+  the password the workspace had when that backup was made. A `workspace.json` from another
+  workspace opens nothing: the lock screen then reads it as a wrong password or as damaged data.
+  One exception: a backup made before the first password change on a workspace that an older
+  version created belongs only with the `workspace/` folder of that same backup.
 
 ---
 
@@ -1166,6 +1237,7 @@ Everything is on the drive:
 - `workspace/` — your encrypted/plaintext database (chats, documents, embeddings).
 - `logs/app.log` (`app.log.enc` on an encrypted workspace — the diagnostics log is encrypted at
   rest, same as your data) — local logs only; never uploaded.
-- `models/` — model weights. `config/` — drive settings/policy.
+- `models/` — model weights. `config/` — drive settings/policy, and `workspace.json`, which holds
+  your encrypted workspace's key (encrypted under your password): it belongs with `workspace/`.
 
 See [`drive-layout.md`](drive-layout.md) for the full layout.

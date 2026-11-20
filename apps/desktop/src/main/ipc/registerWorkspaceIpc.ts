@@ -2,11 +2,14 @@ import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
+  PlaintextNotAllowedError,
   VaultBusyError,
   VaultDamagedError,
+  VaultDescriptorMissingError,
   VaultMissingError,
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
+  WorkspaceExistsError,
   WrongPasswordError,
   isVaultNewerError,
   workspaceAdmitsWork,
@@ -188,6 +191,40 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
 }
 
 /**
+ * What a failed create logs (#807, C S-1). A Node system error (one carrying a `syscall`, `path` or `dest`: a file
+ * error) logs only its kind, code and system call: its message names the drive's absolute paths
+ * (`EPERM: operation not permitted, rename 'C:\…\hilbertraum.sqlite.enc.new' -> …`). Any other error keeps its message
+ * (review round: a bug in a post-create step, a `TypeError`, must still say what went wrong), with SQLite's result code
+ * and fixed description, or a #844 open failure's own content-free `failure`.
+ */
+function createFailureForLog(err: unknown): Record<string, unknown> {
+  const e = err as {
+    name?: unknown
+    message?: unknown
+    code?: unknown
+    syscall?: unknown
+    path?: unknown
+    dest?: unknown
+    errcode?: unknown
+    errstr?: unknown
+    failure?: object
+  } | null
+  const kind = typeof e?.name === 'string' ? e.name : typeof err
+  const code = typeof e?.code === 'string' ? e.code : null
+  const systemError = e != null && (e.syscall !== undefined || e.path !== undefined || e.dest !== undefined)
+  if (systemError) return { error: kind, code, syscall: typeof e.syscall === 'string' ? e.syscall : null }
+  const message = err instanceof Error ? err.message : String(err)
+  if (e?.failure && typeof e.failure === 'object') return { error: kind, message, ...e.failure }
+  return {
+    error: kind,
+    message,
+    code,
+    sqliteCode: typeof e?.errcode === 'number' ? e.errcode : null,
+    sqlite: typeof e?.errstr === 'string' ? e.errstr : null
+  }
+}
+
+/**
  * #876 review round 2: log each site that judged a workspace file by its SQLite header because the probe could not read
  * its structure for a reason that is not damage (the file was then treated as before the probe existed). Which site and
  * SQLite's code only; the controller keeps them until a handler that can log (a lock, an unlock, a password change).
@@ -344,6 +381,22 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.vaultMissing')
         }
       }
+      // #807 (C-S2): the encrypted workspace file is there, but its descriptor (`config/workspace.json`, which holds
+      // the wrapped key) is missing or unreadable, so no password can open it; refused before the password was checked.
+      // Before, this was a plain English error that read "Could not open the workspace." on every try. The copy names
+      // the file and warns against a new workspace. The log line names no path. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultDescriptorMissingError ||
+        (err instanceof Error && err.name === 'VaultDescriptorMissingError')
+      ) {
+        log.error('Workspace unlock failed: the workspace descriptor is missing or unreadable (encrypted file present)')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (descriptor missing)')
+        return {
+          ok: false,
+          reason: 'vault_descriptor_missing',
+          message: tMain('main.workspace.descriptorMissing')
+        }
+      }
       // #242: the startup salvage is blocked — another program holds the recovery file the
       // last session's newest data must be moved onto, so opening now would decrypt the
       // stale snapshot over it. Its own reason + copy (close the holder, retry; nothing is
@@ -450,16 +503,27 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           })
           return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
         }
-        // Plaintext refused by policy, and create-over-an-existing-vault (would wipe
-        // the user's data), are expected refusals — surface the real message.
-        const message = err instanceof Error ? err.message : String(err)
-        if (/not permitted|already exists/i.test(message)) {
-          return { ok: false, reason: 'refused', message }
+        // #807: the two expected refusals are typed, each with its own reason, which the gate renders in its own
+        // language (D-17). A workspace is already on the drive: a new one would replace the user's data with an empty
+        // vault. instanceof PLUS the name, the bundle-duplication quirk (see the unlock catch).
+        if (err instanceof WorkspaceExistsError || (err instanceof Error && err.name === 'WorkspaceExistsError')) {
+          log.warn('Workspace create refused: a workspace already exists on the drive')
+          return { ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') }
         }
-        // #844: a first open that could not finish carries only a fixed message; what failed is
-        // in its `failure` (content-free).
-        const failure = (err as { failure?: object } | null)?.failure
-        log.error('Workspace create failed', failure ? { message, ...failure } : message)
+        // A workspace without a password, which the policy or the build does not allow (the gate offers the switch only
+        // when it is allowed, so only a direct call gets here).
+        if (
+          err instanceof PlaintextNotAllowedError ||
+          (err instanceof Error && err.name === 'PlaintextNotAllowedError')
+        ) {
+          log.warn('Workspace create refused: a workspace without a password is not allowed')
+          return { ok: false, reason: 'plaintext_not_allowed', message: tMain('main.workspace.plaintextNotAllowed') }
+        }
+        // Anything else failed the create (#807, C S-1: a Node file error such as an `EPERM … rename` while an
+        // antivirus holds the new file used to match the old `/not permitted|already exists/` wording and reach the
+        // gate raw, with absolute paths, and unlogged). The log line names no path: a file error logs its code and
+        // system call only; any other error keeps its message (#844's open failure adds what failed, its `failure`).
+        log.error('Workspace create failed', createFailureForLog(err))
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }
@@ -521,6 +585,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
             message: tMain('main.workspace.wrongCurrentPassword')
           }
         }
+        // Document work holds the vault: the vault's own `tMain` text (#807: in main's language, like every refusal
+        // on the open workspace's Settings card).
         if (err instanceof VaultBusyError || (err instanceof Error && err.name === 'VaultBusyError')) {
           return { ok: false, reason: 'refused', message: err.message }
         }

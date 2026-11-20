@@ -2716,6 +2716,12 @@ export const en = {
     'Your password is correct, but the encrypted workspace file is missing from the drive, and no ' +
     'copy was left to recover it from. Do not create a new workspace. Put the file back, or restore ' +
     'the workspace folder from a backup.',
+  // #807 (C-S2): `.enc` is on the drive, but the descriptor that holds the wrapped key (and the password verifier) is
+  // missing or unreadable, so no password can be checked or open it. A new workspace would replace that key for good.
+  'main.workspace.descriptorMissing':
+    "The file that holds your workspace's key (config/workspace.json) is missing from the drive or " +
+    "can't be read, so no password can open the workspace. Do not create a new workspace. Put the " +
+    'file back, or restore it from a backup.',
   // #844: the password verified and the data is a database, but opening it could not finish (an
   // upgrade step: a full drive, an I/O error, a bug in a new step). Not damage: the failed open never
   // rewrites `.enc`.
@@ -2736,6 +2742,15 @@ export const en = {
     'was changed.',
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
+  // #807: create's two refusals, each its own `reason`. A workspace appeared on the drive after the lock screen read it
+  // (the create form stays up until a restart, which shows the unlock screen); a create without a password that the
+  // policy or the build doesn't allow (only a direct call can send one: the gate offers the switch only when allowed).
+  'main.workspace.exists':
+    'A workspace already exists on this drive, so no new one was created. Restart HilbertRaum to ' +
+    'unlock it with its password.',
+  'main.workspace.plaintextNotAllowed':
+    "A workspace without a password isn't allowed here. Create the workspace with a password " +
+    'instead.',
   'main.workspace.newPasswordTooShort': 'The new password must be at least {min} characters.',
   'main.workspace.unlockBeforeChange': 'Unlock the workspace before changing its password.',
   'main.workspace.wrongCurrentPassword':
@@ -2744,6 +2759,9 @@ export const en = {
     'Could not change the password. Your current password still works.',
   'main.workspace.busyPasswordChange':
     'The workspace password is being changed right now. Try again in a moment.',
+  // #807: a password change while an import or re-index holds the vault (the other direction of busyPasswordChange).
+  'main.workspace.busyDocumentWork':
+    'Documents are still being imported or re-indexed. Wait for that to finish, then try again.',
   // full-audit 2026-07-11 CODE-1a: the lock re-encrypt failed (typically a full drive).
   // The workspace stays unlocked and usable; nothing is lost.
   'main.workspace.lockFailed':
@@ -3741,6 +3759,8 @@ export const en = {
   'review.rename.save': 'Save',
   'review.loading': 'Loading review…',
   'review.notFound': 'This review could not be found. It may have been deleted.',
+  // #807: the lead above a failed open's own message (a locked workspace, a read error), which shows as the detail.
+  'review.openFailed': 'This review could not be opened.',
   'review.question.toggle': 'Question',
   'review.answerPane.aria': 'Answer under review',
   // Auto-save status (plan §7.5) — quiet text, never an unlabeled spinner (guidelines §6).
@@ -3961,6 +3981,9 @@ export const en = {
   'review.export.cancel': 'Close',
   'review.export.done': 'Evidence pack exported.',
   'review.export.error': 'The evidence pack could not be exported. No file was written.',
+  // #807: the lead above every failed export's own message (true for each, including a file that was saved but not
+  // recorded, which review.export.error's "No file was written" is not); a refused flush keeps review.export.error.
+  'review.export.failed': 'The evidence pack export did not finish.',
   'review.export.copyHash': 'Copy SHA-256',
   'review.export.hashCopied': 'SHA-256 copied to the clipboard.',
 

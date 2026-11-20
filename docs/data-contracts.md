@@ -1384,7 +1384,8 @@ head's own weights + KV.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
-  'vault_damaged'|'vault_missing'|'vault_open_failed'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
+  'vault_damaged'|'vault_missing'|'vault_descriptor_missing'|'vault_open_failed'|'vault_recovery_blocked'|'workspace_newer'|
+  'workspace_exists'|'plaintext_not_allowed'|'refused'|'error', message}` — a
   wrong password / policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
   password-verified-but-undecryptable-to-a-database unlock failure, deliberately distinct from
   `wrong_password`, and since #844 only what SQLite itself calls not a database or corrupt, plus
@@ -1398,6 +1399,19 @@ head's own weights + KV.
   damaged `.recovery` shredded); put the file back or restore the
   workspace folder from a backup, never create a new workspace (create's table maps it to `null`:
   never sent there);
+  `vault_descriptor_missing` (#807, C-S2) is the unlock refused because `.enc` is there but
+  `config/workspace.json` is missing or unreadable (`VaultDescriptorMissingError`): no password can be
+  checked or open it, nothing is written; put the file back or restore it from a backup, never
+  create a new workspace (before, a plain error that read "Could not open the workspace.");
+  `workspace_exists` (#807) is the create refused because a workspace is already on the drive
+  (`WorkspaceExistsError`: an encrypted descriptor, the `.enc`, an unreadable descriptor or a
+  newer build's artifact; also the `createEncryptedVaultOnDisk` belt over an `.enc`), and
+  `plaintext_not_allowed` (#807) the create without a password that the policy or the build does
+  not allow (`PlaintextNotAllowedError`); both used to be `refused` with the vault's English
+  sentence, matched by its wording, and nothing on the disk changes; create's `refused` is now only
+  a password under `MIN_PASSWORD_LENGTH` or not a string. A Node file error during create (an
+  `EPERM … rename`) is `error` (`createFailed`), logged content-free (#807: it used to match the old
+  wording and reach the gate raw);
   `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
   other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing) — retry once the hold clears, nothing lost;
@@ -1406,8 +1420,9 @@ head's own weights + KV.
   because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages
   wave the lock screen renders a failed unlock or create from `reason` in its own language
   (`shared/workspace-failure-keys.ts`, one table per call; architecture.md i18n record D-L3);
-  `message` is shown only for a reason a table maps to `null` (create's free-text `refused`) or
-  doesn't know. `MIN_PASSWORD_LENGTH` (`shared/types.ts`) is the one password floor for main, the
+  every reason a call sends has a key (create's `refused` renders `main.workspace.passwordTooShort`
+  with `{ min }`, #807 A2), so `message` is shown only for a reason a table maps to `null` (one the
+  call never sends) or doesn't know. `MIN_PASSWORD_LENGTH` (`shared/types.ts`) is the one password floor for main, the
   gate, the change-password card and the strength meter;
   **Schema stamp (#247):** the workspace database carries `PRAGMA user_version` =
   `SCHEMA_VERSION` (`services/db.ts`; `1` since PR #289). `openDatabase` reads it before any
@@ -1427,7 +1442,7 @@ head's own weights + KV.
   unlock (see "Encrypted file missing" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
   `WorkspaceActionResult`: `wrong_password` (a wrong or non-string current password), `refused`
   (a new password under `MIN_PASSWORD_LENGTH` or not a string, the workspace locked or a lock under
-  way, or document work in progress: `VaultBusyError`), `error` (anything else, #845's refusals
+  way, or document work in progress: `VaultBusyError`, whose message is `tMain` text since #807), `error` (anything else, #845's refusals
   included: the current password still works). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),

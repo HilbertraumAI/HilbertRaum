@@ -2674,6 +2674,11 @@ export const de: Record<keyof typeof en, string> = {
     'Laufwerk, und es ist keine Kopie übrig, aus der sie sich wiederherstellen ließe. Lege keinen ' +
     'neuen Arbeitsbereich an. Lege die Datei an ihren Platz zurück oder stelle den Ordner ' +
     '„workspace“ aus einem Backup wieder her.',
+  'main.workspace.descriptorMissing':
+    'Die Datei mit dem Schlüssel deines Arbeitsbereichs (config/workspace.json) fehlt auf dem ' +
+    'Laufwerk oder lässt sich nicht lesen, deshalb kann kein Passwort den Arbeitsbereich öffnen. ' +
+    'Lege keinen neuen Arbeitsbereich an. Lege die Datei an ihren Platz zurück oder stelle sie aus ' +
+    'einem Backup wieder her.',
   'main.workspace.vaultOpenFailed':
     'Dein Passwort ist richtig, aber HilbertRaum konnte das Öffnen des Arbeitsbereichs ' +
     'nicht abschließen. Der verschlüsselte Arbeitsbereich auf dem Laufwerk ist unverändert. ' +
@@ -2691,6 +2696,12 @@ export const de: Record<keyof typeof en, string> = {
     'aktualisiere die App, um ihn zu öffnen. Es wurde nichts verändert.',
   'main.workspace.createFailed': 'Der Arbeitsbereich konnte nicht erstellt werden.',
   'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
+  'main.workspace.exists':
+    'Auf diesem Laufwerk gibt es bereits einen Arbeitsbereich, deshalb wurde kein neuer angelegt. ' +
+    'Starte HilbertRaum neu, um ihn mit seinem Passwort zu entsperren.',
+  'main.workspace.plaintextNotAllowed':
+    'Ein Arbeitsbereich ohne Passwort ist hier nicht erlaubt. Lege den Arbeitsbereich stattdessen ' +
+    'mit einem Passwort an.',
   'main.workspace.newPasswordTooShort':
     'Das neue Passwort muss mindestens {min} Zeichen lang sein.',
   'main.workspace.unlockBeforeChange':
@@ -2701,6 +2712,9 @@ export const de: Record<keyof typeof en, string> = {
     'Das Passwort konnte nicht geändert werden. Dein aktuelles Passwort funktioniert weiterhin.',
   'main.workspace.busyPasswordChange':
     'Das Passwort des Arbeitsbereichs wird gerade geändert. Versuch es gleich noch einmal.',
+  'main.workspace.busyDocumentWork':
+    'Es werden noch Dokumente importiert oder neu indexiert. Warte, bis das fertig ist, und versuch ' +
+    'es dann noch einmal.',
   // full-audit 2026-07-11 CODE-1a: the lock re-encrypt failed (typically a full drive).
   'main.workspace.lockFailed':
     'Der Arbeitsbereich konnte nicht gesperrt werden — er bleibt geöffnet und deine Daten ' +
@@ -3688,6 +3702,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.rename.save': 'Speichern',
   'review.loading': 'Prüfung wird geladen…',
   'review.notFound': 'Diese Prüfung wurde nicht gefunden. Möglicherweise wurde sie gelöscht.',
+  'review.openFailed': 'Diese Prüfung konnte nicht geöffnet werden.',
   'review.question.toggle': 'Frage',
   'review.answerPane.aria': 'Zu prüfende Antwort',
   'review.autosave.saving': 'Wird gespeichert…',
@@ -3884,6 +3899,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.done': 'Nachweispaket exportiert.',
   'review.export.error':
     'Das Nachweispaket konnte nicht exportiert werden. Es wurde keine Datei geschrieben.',
+  'review.export.failed': 'Der Export des Nachweispakets wurde nicht abgeschlossen.',
   'review.export.copyHash': 'SHA-256 kopieren',
   'review.export.hashCopied': 'SHA-256 in die Zwischenablage kopiert.',
 
