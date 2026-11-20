@@ -21,7 +21,7 @@
 // that task (measured), so its cancel, which also empties the task queue, comes first, and the queue does not start its
 // next task into the quit. On a quit the guard holds the run ends before `will-quit`, while the window saves; the queue
 // starts nothing then either, because the quit holds it (#936: `holdQueueOnQuit` at `before-quit` and the close guard,
-// `close-guard.ts`; only the guard's Keep open releases it), and that quit's `will-quit` cancels what waits.
+// `close-guard.ts`; only the guard's Keep open and a successful unlock release it), and that quit's `will-quit` cancels what waits.
 //
 // Electron-free, so tests/helpers/closeGuardSmokeRunner.ts can bundle it into a real-Electron run; the rasterizer
 // is its production caller.

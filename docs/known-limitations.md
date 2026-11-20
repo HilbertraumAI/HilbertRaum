@@ -62,6 +62,9 @@ password recovery — are documented in
   (the drag-drop bullet above), and the app will not reject such paths lexically because that
   would change the drop contract for network-share users. Managed Windows fleets can block
   outbound 445/WebDAV at the host firewall.
+- **On Windows, the file picker cannot open a file whose name ends in a space or a dot (#918).** The
+  Open dialog lists `notes.txt ` under "All files" but cannot open it (an OS limit; a typed path
+  loses its trailing space). Drop the file onto the app or import its folder instead.
 - **A large drop is slow on a fully busy machine (#934).** Checking a drop of up to 512 paths asks the file system once per path; when every CPU is busy with other work, that can take seconds instead of a fraction of a second. Nothing is lost, and the import carries on.
 - **On macOS and Linux, quit the app before shutting down or logging off (#248).** On Windows
   the app locks the workspace itself as the session ends (PR #285; best effort — a very large
@@ -126,7 +129,8 @@ password recovery — are documented in
   a self-signed CA certificate in the store for intermediate certificates or for trusted people,
   which Windows itself does not treat as a root. A program running as the user can add one there
   without the confirmation Windows shows for a new root, much as it could set
-  `NODE_EXTRA_CA_CERTS` before.
+  `NODE_EXTRA_CA_CERTS` before. See
+  [`troubleshooting.md`](troubleshooting.md), "Downloads fail on a company network or behind antivirus".
   That cannot change what a download installs, because every engine, model and OCR file is checked
   against a fixed SHA-256 checksum before use. A development build (`npm run dev`) still reads the
   variable.
@@ -1697,12 +1701,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   ("Tell me about the parking rules"). The gate is deliberate: with every question in the notes, Meeting
   Minutes lost facts in the real-model check ([`rag-design.md`](rag-design.md) §14.10). The list words are
   English and German, so a list question typed in the eight newer interface languages, other than the
-  example chip, gets no question in the notes until #809 part C adds their list words. Each skill's own list request ("List every deadline" under Deadline & Obligation Finder, "List
-  all action items" under Meeting Minutes) takes the notes on a prompt measured only for the every-mention
-  chip under Contract Brief. The answer
-  still says it read the whole document, which is true of what it read, not of what the notes kept. With no
-  skill, the note step's instruction still names "the task described below" with nothing below it (a
-  follow-up).
+  example chip, gets no question in the notes until #809 part C adds their list words. Each skill's
+  own list request ("List every deadline" under Deadline & Obligation Finder, "List all action
+  items" under Meeting Minutes) takes the notes on a prompt measured only for the every-mention chip
+  under Contract Brief. The answer still says it read the whole document, which is true of what it
+  read, not of what the notes kept. With no skill, the note step's instruction still names "the
+  task described below" with nothing below it (#952).
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
   INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
   record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than

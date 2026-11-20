@@ -14,12 +14,12 @@ import { log } from '../logging'
 //   is self-signed, is inside its validity window and has an RSA key of at least 2048 bits or a
 //   P-256/P-384/P-521 or Ed25519 key is added (`usableRoot`), and only when the default list lacks
 //   it. Node's list does not say which Windows store a certificate came from, so a self-signed CA
-//   from the Intermediate or Trusted People stores counts as well (architecture §8).
+//   from the Intermediate or Trusted People stores counts as well (architecture.md "Electron fuses — design record (#562)" §8).
 // - Additive: every certificate of the default list (bundled + NODE_EXTRA_CA_CERTS, where a build
 //   still reads it) stays; a connection that verified before still does. Electron's SPKI blocklist
 //   (the eMudhra intermediates) is a verify-time check, independent of this list.
-// - Once, lazily: reading and filtering the OS store costs 45–100 ms on the main thread (Windows,
-//   measured), so it runs right before the first download's first request, never at startup
+// - Once, lazily: reading and filtering the OS store costs about 50–110 ms on the main thread
+//   (Windows, measured: read, filter and set), so it runs right before the first download's first request, never at startup
 //   (first paint). Its one caller is `downloadToFile` (assets.ts), which every remote request of
 //   the main process goes through; the sidecar clients talk plain HTTP on loopback.
 // - Never throws into a download: a store that cannot be read, one with no usable root (an empty

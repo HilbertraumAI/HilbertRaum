@@ -535,8 +535,8 @@ export interface BeforeQuitEventLike {
 /**
  * #936, the belt: every `before-quit` nobody prevented holds the document-task queue, so a quit no
  * guard holds (macOS ⌘Q with no window) or one asked while a guard is already saving (the red
- * button, then ⌘Q) starts no new task either. One-way: only a guard's Keep open releases the hold
- * (the one place a begun quit is called off), and `will-quit` cancels every task anyway. Nothing
+ * button, then ⌘Q) starts no new task either. One-way: only a guard's Keep open and a successful unlock
+ * release the hold (the places a begun quit is called off), and `will-quit` cancels every task anyway. Nothing
  * prevents `before-quit` today; a quit that is prevented never begins, so it holds nothing.
  */
 export function holdQueueOnQuit(

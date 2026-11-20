@@ -228,6 +228,20 @@ and restart the app. On a **prepared drive** this message is genuine drive polic
 
 ---
 
+## Downloads fail on a company network or behind antivirus
+
+Since #564 the in-app downloads trust the certificates installed on the computer (the operating
+system's store, usable roots only) as well as the app's own. A released build no longer reads
+`NODE_EXTRA_CA_CERTS`. A proxy or an antivirus product that inspects encrypted connections works
+when it also put its root certificate in the operating system's store, which most do. If it only
+set the variable, every download fails.
+
+Install the proxy's or the antivirus product's root certificate in the operating system's store
+(your IT department usually does this). A download is still checked against its SHA-256, so
+nothing unverified installs. See [`known-limitations.md`](known-limitations.md) for the details.
+
+---
+
 ## "Offline Mode is ON — is something wrong?"
 
 **No. That is the intended state.** HilbertRaum runs the AI model on this computer and
@@ -299,7 +313,7 @@ models. The Performance screen says "no checksum on record" for the same model. 
 Translate screens, and the app's log when it refuses to start such a chat model on its own, still
 say it failed its file check (see [`known-limitations.md`](known-limitations.md)).
 
-**If an in-app download stalls near the end (~95%) and then "checksum failed" after Resume**, the
+**If an in-app download stalls near the end (~95%) and then shows "Can't verify" after Resume**, the
 manifest's fingerprint or `size_bytes` doesn't match the real upstream file — re-copying won't help
 (BUG dl-size-cap-2026-07-03). This affected the manually-selectable **Qwen3.5 27B / 35B-A3B** entries,
 whose hashes were wrong and whose `size_bytes` were understated by ~5–8%, so the (then-exact) download
