@@ -345,14 +345,21 @@ from its first public `1.0.0` release onward.
   passages and could miss mentions, while the English "Find every mention of 'indemnity'" read the
   whole document. Every language's example now reads the whole document, whatever word you put in
   its quotes (#834).
-- **With a whole-document skill, a request to find or list something in a long document is answered
-  from notes taken for it.** A document too long to read at once is read in parts, and the answer is
-  written from notes on each part. Those notes were taken for the skill's report only, so "Find every
-  mention of 'indemnity'" under Contract Brief could miss mentions, or say there were none, while the
-  answer said the whole document was read. A request to find or list something, such as "List every
-  deadline" or the "every mention" example, now gets notes for what you asked as well as for the report.
-  A request for the report itself is read as before, even when it names a list ("Summarize all the
-  decisions", "Write the minutes with every action item"), and so is every other question (#939).
+- **With a whole-document skill, a question about a long document is answered from notes taken for
+  it.** A document too long to read at once is read in parts, and the answer is written from notes on
+  each part. Those notes were taken for the skill's report only, so "Find every mention of 'indemnity'"
+  under Contract Brief could miss mentions, or say there were none, and "Tell me about the parking
+  rules" could say the document had nothing more on parking, while the answer said the whole document
+  was read. Any question that doesn't ask for the skill's report, such as "List every deadline", the
+  "every mention" example or "Tell me about the parking rules", now gets notes for what you asked as
+  well as for the report. This holds for the bundled whole-document skills and for your own. A request
+  for the report itself is read as before, even when it names a list ("Summarize all the decisions",
+  "Write the minutes with every action item") (#939, #953).
+- **A summary of a long document with no skill selected follows your request.** With the document's
+  deep index built and no skill selected, a summary of a long document is written from notes on each
+  part. Each note step was told to follow a task that wasn't given, so a focused summary such as
+  "Summarize the rent and the notice deadline of each lease" could leave out what you asked for. The
+  notes are now taken for your request (#952).
 - **The Documents filter's search icon no longer covers the text.** The magnifier in the "Filter
   by name…" box sat over the start of the placeholder and of what you typed, at every window
   size and in every language. The text now starts after the icon (#803).

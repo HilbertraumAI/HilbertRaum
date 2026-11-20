@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import {
-  asksForList,
   isAggregationShaped,
   isTotalAsk,
   routeQuestion,
@@ -927,42 +926,5 @@ describe('isAggregationShaped (#54)', () => {
     ]) {
       expect(isAggregationShaped(q), q).toBe(false)
     }
-  })
-})
-
-// #939: `asksForList` decides, with the skill-side report veto, whether a bundled whole-document skill's map and fold
-// steps take notes for the question. It is step 4b's list test (a list or count request, a quantifier inside a
-// question, the every-mention chip by its frame), minus what the router reads as a summary or a compare first.
-describe('asksForList — the list detection the whole-document notes follow (#939)', () => {
-  it.each(UI_LANGUAGE_CODES)('%s: the every-mention chip asks for a list, with any word in its quotes', (code) => {
-    const chip = t(code, 'chat.example.indemnity')
-    const ownTerm = chip.replace(/(['„«“])[^'„«“”»]*(['“”»])/u, '$1force majeure$2')
-    for (const question of [chip, ownTerm, `${chip}.`]) expect(asksForList(question), question).toBe(true)
-  })
-
-  it.each(UI_LANGUAGE_CODES)('%s: the summarize chip asks for no list', (code) => {
-    expect(asksForList(t(code, 'chat.example.summarize'))).toBe(false)
-  })
-
-  it.each([
-    // a list or count request, a quantifier inside a question
-    ['List every deadline in this contract', true],
-    ['List all action items', true],
-    ['Liste alle Fristen auf', true],
-    ['When is each payment due?', true],
-    ['How many deadlines are there?', true],
-    // a summary or a compare is read as such first (review B1), whatever list word it carries
-    ['Summarize all the decisions', false],
-    ['Summarize every section of this contract', false],
-    ['Fasse alle Beschlüsse zusammen', false],
-    ['Zusammenfassung aller Fristen', false],
-    ['Compare all the clauses of both contracts', false],
-    // no list word, or a yes/no question
-    ['Summarize this contract', false],
-    ['Write the meeting minutes', false],
-    ['Is every page signed?', false],
-    ['What does it say about parking?', false]
-  ] as const)('%s → %s', (question, expected) => {
-    expect(asksForList(question)).toBe(expected)
   })
 })

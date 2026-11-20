@@ -570,12 +570,12 @@ describe("askDocuments — a bundled whole-document skill's fall-through turn ca
   })
 })
 
-// ---- #939: which whole-document reads take notes for the question (follow-ups wave 4, owner call 2026-11-20) ----
+// ---- #939, #953: which whole-document reads take notes for the question (follow-ups waves 4 and 5) ----
 // Over a document too long for one call, the map step used to take notes for the skill's task only, so "Find every
 // mention of 'indemnity'" under Contract Brief was answered from notes for a brief (master: 1 of 3 and 0 of 3 indemnity
-// articles). A list-shaped question (the router's own list detection, `asksForList`) under a bundled whole-document
-// skill now rides every map call; every other question keeps the map prompt as it was, byte for byte, because the
-// ungated version cost Meeting Minutes facts in the real-model check.
+// articles). #939 let a list question under a bundled skill ride every map call; #953 (wave 5 owner call G-2): every
+// question under a whole-document skill, bundled or the user's own, now rides them unless it asks for the skill's
+// report (`isReportShaped`). A report request keeps the map prompt as it was, byte for byte, list word or not.
 
 /** A meeting record too long to read whole at a 4,096 window, with the next meeting in its last line. */
 const LONG_MEETING = [
@@ -594,7 +594,7 @@ const wholeFenceOf = (skillId: string): string | null => {
 const mapTurnsOf = (rt: RecordingRuntime): string[] =>
   rt.turns.slice(0, -1).map((turn) => turn.filter((m) => m.role === 'user').at(-1)?.content ?? '')
 
-describe('askDocuments — the map step takes notes for a list-shaped question only (#939)', () => {
+describe('askDocuments — the map step takes notes for every question but a request for the report (#939, #953)', () => {
   it.each(['en', 'de', 'es'] as const)(
     '%s: the every-mention chip under Contract Brief: every map call takes notes for it',
     async (code) => {
@@ -621,12 +621,36 @@ describe('askDocuments — the map step takes notes for a list-shaped question o
     for (const map of maps) expect(map).toContain(`\nUser request:\n${question}\n`)
   })
 
+  // #953: a question that asks for no report takes the notes under any whole-document skill, on #939's wording: a user
+  // skill's list question (shape 2), a bundled skill's question that is neither a list nor a single-fact lookup
+  // (shape 3), and a list typed in one of the newer interface languages, which #939's English and German list words
+  // missed (#809 part C).
+  it.each([
+    { name: 'a user whole-document skill, a list question', skillId: USER_WHOLE_DOC_INSTALL_ID, question: 'List every deadline in this contract' },
+    { name: 'Contract Brief, "Tell me about the parking rules"', skillId: 'app:contract-brief', question: 'Tell me about the parking rules' },
+    { name: 'Deadline & Obligation Finder, "Explain the termination rules"', skillId: 'app:deadline-obligation-finder', question: 'Explain the termination rules' },
+    { name: 'Deadline & Obligation Finder, "Enumera todos los plazos" (es)', skillId: 'app:deadline-obligation-finder', question: 'Enumera todos los plazos' }
+  ])('$name: every map call takes notes for it, before the fence, and keeps the task (#953)', async ({ skillId, question }) => {
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const msg = await ask(h, question, skillId)
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.skillId).toBe(skillId)
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) {
+      expect(map).toContain(`\nUser request:\n${question}\n`)
+      expect(map.indexOf('User request:')).toBeLessThan(map.indexOf('Skill instructions:'))
+      expect(map).toContain('note every detail the task needs')
+    }
+  })
+
   it.each([
     { name: 'Contract Brief, "Summarize this contract"', skillId: 'app:contract-brief', text: LONG_LEASE, question: 'Summarize this contract' },
     { name: 'Contract Brief, the summarize chip', skillId: 'app:contract-brief', text: LONG_LEASE, question: t('en', 'chat.example.summarize') },
     { name: 'Contract Brief, "Fasse dieses Dokument zusammen"', skillId: 'app:contract-brief', text: LONG_LEASE, question: 'Fasse dieses Dokument zusammen' },
     { name: 'Meeting Minutes, "Write the meeting minutes"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Write the meeting minutes' },
-    { name: 'a user whole-document skill, a list question', skillId: USER_WHOLE_DOC_INSTALL_ID, text: LONG_LEASE, question: 'List every deadline in this contract' },
+    // #953: a user whole-document skill's report request keeps it too, like a bundled skill's
+    { name: 'a user whole-document skill, "Summarize this lease"', skillId: USER_WHOLE_DOC_INSTALL_ID, text: LONG_LEASE, question: 'Summarize this lease' },
     // review B1: a report request that carries a list word is still a report (the router's summary reading, or the
     // skill-side report shapes), so its map calls stay master's
     { name: 'Meeting Minutes, "Summarize all the decisions"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Summarize all the decisions' },

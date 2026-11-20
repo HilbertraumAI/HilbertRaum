@@ -1687,26 +1687,23 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   vocabulary now covers the compare and change words in both languages ([`architecture.md`](architecture.md)
   §18 "#582"). A question with any of them gets "select exactly two" at any count other than two,
   including a Library chat with What-changed still selected.
-- **A whole-document read's notes and the question (#939, follow-ups wave 4, owner call 2026-11-20).** A
+- **A whole-document read's notes and the question (#939, #952, #953; follow-ups waves 4 and 5).** A
   document too long to read in one call is read in parts: notes on each part, then the answer from the
-  notes. The notes are taken for the question too only when a bundled whole-document skill (Contract Brief,
-  Meeting Minutes, Share-Safe Review, Deadline & Obligation Finder) gets a question that asks to find or
-  list something (the router's list words or the every-mention example chip) and asks for no report: a
-  summary, minutes, a brief or a review keeps the notes for the task, list word or not ("Summarize all the
-  decisions", «Erstelle das Protokoll mit allen Beschlüssen»). Everywhere else the notes
-  follow the skill's task, or, with no skill, the instruction alone, so a question that isn't the
-  deliverable can be answered from notes that left out what it asks: under a user skill declaring
-  `analysis: whole-doc` (its question never reaches the notes), in a summary read through the deep index
-  with no skill, and for a question under a bundled skill that is neither a list nor a single-fact lookup
-  ("Tell me about the parking rules"). The gate is deliberate: with every question in the notes, Meeting
-  Minutes lost facts in the real-model check ([`rag-design.md`](rag-design.md) §14.10). The list words are
-  English and German, so a list question typed in the eight newer interface languages, other than the
-  example chip, gets no question in the notes until #809 part C adds their list words. Each skill's
-  own list request ("List every deadline" under Deadline & Obligation Finder, "List all action
-  items" under Meeting Minutes) takes the notes on a prompt measured only for the every-mention chip
-  under Contract Brief. The answer still says it read the whole document, which is true of what it
-  read, not of what the notes kept. With no skill, the note step's instruction still names "the
-  task described below" with nothing below it (#952).
+  notes. The notes are taken for the question, with no skill and under any whole-document skill, bundled
+  or your own, unless the question asks for the skill's report: a summary, minutes, a brief or a review
+  keeps the notes for the skill's task, list word or not, so "Summarize all the decisions" is answered
+  from notes shaped like minutes. The report words are English and German (and the summarize example
+  chip in every language), so a report request typed in the eight newer interface languages gets notes
+  for the question as well; the skill's instructions still set the report's format. Measured residuals
+  ([`rag-design.md`](rag-design.md) §14.10): on a 4B model, items buried in repetitive text can still be
+  lost ("List all action items" over a transcript where twenty near-identical commitments surround the
+  three real ones found none of them, with or without the question in the notes); on a 9B model, a list
+  request over a document whose clauses repeat can fill the notes with the repeated clause and miss the
+  real items (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12 with the
+  question in the notes, 11 and 10 without, two runs each; left for a separate fix); and when the notes
+  had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
+  The answer still says it read the whole document, which is true of what it read, not of what the notes
+  kept.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
   INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
   record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than

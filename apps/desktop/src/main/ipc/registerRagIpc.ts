@@ -55,7 +55,7 @@ import {
   type ClassifyCandidate
 } from '../services/analysis/classify'
 import { makeQueryExpander } from '../services/zim/expand'
-import { asksForList, isAggregationShaped, isTotalAsk, routeQuestion, type RouteDecision } from '../services/analysis/router'
+import { asksForSummary, isAggregationShaped, isTotalAsk, routeQuestion, type RouteDecision } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -678,16 +678,16 @@ export function registerRagIpc(ctx: AppContext): void {
                     // U2 (audit §3.5): share-safe review injects a deterministic whole-document PII count
                     // summary into the prompt and gates its low-risk verdict on non-truncated coverage.
                     wholeDocumentPiiScan: analysisHandler.injectPiiScan === true,
-                    // #939 (owner call 2026-11-20): over a document too long for one call, the map and fold
-                    // steps take notes for the question too when it asks to find or list something (the
-                    // router's own list detection, `asksForList`: "List every deadline", the every-mention chip
-                    // in every catalog; never a summary or a compare) and asks for no report (`isReportShaped`:
-                    // no summary, minutes, brief, review or summarize chip, so "Summarize all the decisions" and
-                    // «Erstelle das Protokoll mit allen Beschlüssen» keep master's prompts). Bundled skills only.
-                    // Every other question keeps master's map and fold prompts (measured: Meeting Minutes lost
-                    // facts when every request rode the map step).
-                    wholeDocumentNotesForRequest:
-                      turnSkillRecord?.source === 'app' && asksForList(text) && !isReportShaped(text),
+                    // #939, #953 (owner calls 2026-11-20, waves 4 and 5 G-2): over a document too long for one
+                    // call, the map and fold steps take notes for the question too, under a bundled skill and
+                    // the user's own alike, unless it asks for the skill's report: a summary, minutes, a brief, a
+                    // review or the summarize chip, list word or not (`isReportShaped`), or what the router reads
+                    // as a summary (`asksForSummary`: the split verb of «Fasse alle Beschlüsse zusammen»). Those
+                    // keep master's prompts, byte for byte. The skill's fence already writes its report in every
+                    // map step; the question keeps a non-report one ("Tell me about the parking rules", a user
+                    // skill's "List every deadline") from being answered from notes for the report
+                    // (rag-design §14.10).
+                    wholeDocumentNotesForRequest: !isReportShaped(text) && !asksForSummary(text),
                     onToken: sendToken,
                     // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
                     // answer with the honest scope notice (undefined ⇒ byte-unchanged). #649: a total leads with
