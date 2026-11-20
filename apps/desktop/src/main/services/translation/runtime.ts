@@ -303,7 +303,7 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
    * reranker yields the card and before any rung spawns). The composition passes the cache-only check: a file a check
    * found damaged latches a `TranslationStartError` with `modelDamaged`, which the consumers show as their own copy;
    * the translator-slot refresh replaces the latched instance after a re-download or a clean check
-   * (`rearmCheckedModels`). Absent ⇒ no check.
+   * (`rearmStartRefusals`). Absent ⇒ no check.
    */
   checkModel?: BoundModelStartCheck
 }

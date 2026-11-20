@@ -227,5 +227,8 @@ database exists on disk (and a transient decrypted copy of a document or image e
 re-indexing, when you open an image-analysis entry, or while a document is being translated); these
 are shredded on lock/quit, and any
 crash leftovers under `workspace/documents/` and `workspace/images/` are shredded at next startup.
+One exception: if the encrypted database file is missing at startup, the app keeps the unencrypted
+working copy, the only copy left of the workspace, as `hilbertraum.sqlite.recovery` until the next
+unlock encrypts it again.
 Documents imported **before** encryption support existed (or into a plaintext workspace) remain
 plaintext until re-indexed. See [`docs/security-model.md`](docs/security-model.md).

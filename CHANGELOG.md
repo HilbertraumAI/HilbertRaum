@@ -67,12 +67,12 @@ from its first public `1.0.0` release onward.
   get one report, as before (#812).
 - **Ctrl+R no longer reloads the window, and the menu bar is gone on Windows and Linux.** Ctrl+R
   and Ctrl+Shift+R reloaded the window, which could lose a review change that was not saved yet,
-  and Ctrl+Shift+I opened the developer tools. Neither does anything in the released app now. On
-  Windows and Linux the English menu bar (File, Edit, View, Window) no longer shows, which leaves
-  a little more room in the window. Its shortcuts still work: zoom in (Ctrl+Plus), zoom out
-  (Ctrl+Minus), actual size (Ctrl+0), full screen (F11), minimize (Ctrl+M) and close (Ctrl+W).
-  Ctrl+= now zooms in too. To quit on Windows, close the window (the X or Alt+F4); on Linux,
-  Ctrl+Q still quits (#912).
+  and Ctrl+Shift+I opened the developer tools. None of the three does anything in the released
+  app now. On Windows and Linux the English menu bar (File, Edit, View, Window) no longer shows,
+  which leaves a little more room in the window. Its shortcuts still work: zoom in (Ctrl+Plus),
+  zoom out (Ctrl+Minus), actual size (Ctrl+0), full screen (F11), minimize (Ctrl+M) and close
+  (Ctrl+W). Ctrl+= now zooms in too. To quit on Windows, close the window (the X or Alt+F4); on
+  Linux, Ctrl+Q still quits (#912).
 - **An encrypted workspace written by a newer HilbertRaum is left untouched.** If the workspace's
   own files (`config/workspace.json`, the encrypted data, an interrupted password change) are in a
   format a newer version of the app wrote, for example on a drive where only one computer's copy
@@ -129,9 +129,10 @@ from its first public `1.0.0` release onward.
   outside HilbertRaum deleted the workspace's encrypted file (a sync or cleanup tool, a disk check)
   and the app then started, it also removed the unencrypted copy your last session left, and the
   lock screen answered every correct password with "Could not open the workspace." Now the app keeps
-  that copy, the lock screen says the encrypted file was missing, and your password brings the whole
-  workspace back, encrypted again. Until you unlock, that copy is not encrypted. When no copy was
-  left, the lock screen now says so, and that you should not create a new workspace (#911).
+  that copy, the lock screen says the encrypted file was missing, and your password brings the
+  workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
+  encrypted. When no copy was left, the lock screen now says so, and that you should not create a
+  new workspace (#911).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;
@@ -306,13 +307,13 @@ from its first public `1.0.0` release onward.
   Russian, the placeholder of the empty message box in document mode is shorter («Interrogez vos
   documents…», «Вопрос по документам…»), so it fits the narrower message box on one line
   (#803).
-- **The navigation rail scrolls in a short window.** In a window less than about 696 pixels high
-  (636 for a workspace without encryption, which has no Lock now button; about 15 more in
-  Turkish, whose "AI Model" label takes two lines), the foot of the rail,
-  Lock now and the network indicator, sat below the window, and the whole window scrolled to
-  reach it. The rail now scrolls on its own, with the mouse wheel or by moving to its buttons
-  with the Tab key. It shows no scrollbar, so the labels keep their width, and its buttons keep
-  their size (#803).
+- **The navigation rail scrolls in a short window.** In a window less than about 670 pixels high
+  (610 for a workspace without encryption, which has no Lock now button; about 15 more in
+  Turkish, whose "AI Model" label takes two lines; 26 more where the menu bar shows), the foot of
+  the rail, Lock now and the network indicator, sat below the window, and the whole window
+  scrolled to reach it. The rail now scrolls on its own, with the mouse wheel or by moving to its
+  buttons with the Tab key. It shows no scrollbar, so the labels keep their width, and its buttons
+  keep their size (#803).
 - **A change in an evidence review that could not be saved is no longer lost or hidden.** If
   saving a decision or a note failed, for example because the drive was full, opening another
   review dropped the change without a word, and opening the same review again showed the old
@@ -404,7 +405,7 @@ from its first public `1.0.0` release onward.
   translations of one document no longer get the same name. Words separated by a line break or a
   no-break space no longer run together. A title with no letter or number left gets the plain default name,
   and a name Windows keeps for itself, such as CON or NUL, gets an `_` added. A suggested name no
-  longer starts with `-` (#899).
+  longer starts or ends with `-`, or ends with `(` (#899).
 
 ## [0.1.65] — 2026-11-11
 
