@@ -110,6 +110,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
+  workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
+  a password, creating the workspace replaced that file, and with it the only key that opens that
+  workspace. Creating is now refused. A setup that failed partway also no longer leaves a file
+  behind that the next start would write over a workspace you put back into the same folder (#954).
 - **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
   source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
   letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the

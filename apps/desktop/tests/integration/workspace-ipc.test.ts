@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
 
 // IPC-layer tests for registerWorkspaceIpc — the exception→result mapping the unlock gate
 // depends on (a wrong password / policy refusal / weak password must be a NORMAL
@@ -715,6 +726,29 @@ describe('registerWorkspaceIpc', () => {
       expect(ctrl.requireDb().prepare('SELECT status FROM skill_runs').all()).toEqual([{ status: 'cancelled' }])
     } finally {
       ctrl.lock()
+    }
+  })
+})
+
+describe('a workspace put back under the create form (#954)', () => {
+  // #954, #955 item 3 (main side): a key file copied back under an open create form. The create is refused, and the
+  // state the lock screen re-reads says `locked`, so it shows its unlock form; that form then tells the truth: the
+  // workspace's `.enc` is still elsewhere (the #911 copy), and once it is back the same session opens it.
+  it('a key file put back under the create form: create refused, the state locked, and the workspace opens once complete (#954)', async () => {
+    const vp = freshVaultPaths('wsipc')
+    const ctrl = startedOn(vp)
+    const other = lockedVault('wsipc', PW)
+    copyFileSync(other.descriptorPath, vp.descriptorPath)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    try {
+      const { result } = await invoke(handlers, IPC.createWorkspace, 'brand-new-pw', 'encrypted')
+      expect(result).toEqual({ ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') })
+      expect(((await invoke(handlers, IPC.getWorkspaceState)).result as WorkspaceStateInfo).state).toBe('locked')
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'vault_missing' })
+      copyFileSync(other.encPath, vp.encPath)
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+    } finally {
+      ctrl.shutdown()
     }
   })
 })

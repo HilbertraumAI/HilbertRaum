@@ -288,8 +288,10 @@ export class VaultBusyError extends Error {
 
 /**
  * Thrown by `WorkspaceController.create()` when a workspace is already on the drive (a vault descriptor, the `.enc`, an
- * unreadable descriptor, or a newer build's artifact), and by `createEncryptedVaultOnDisk` when `.enc` is there: a
- * new vault would replace the user's data with an empty one. Content-free ON PURPOSE (like `VaultLockError`): the IPC
+ * unreadable descriptor, or a newer build's artifact; #954: any `config/workspace.json` file, read live, so one put back
+ * while the lock screen was open counts too), and by `createEncryptedVaultOnDisk` when `.enc` or a descriptor file is
+ * there, at its start and again right before its commit: a new vault would replace the user's data, or the key file
+ * that opens it, with an empty one. Content-free ON PURPOSE (like `VaultLockError`): the IPC
  * layer maps it to `workspace_exists` + `main.workspace.exists`, and the lock screen renders that reason in its own
  * language (#807; before, the IPC matched this English text and the gate showed it as it was).
  */
@@ -1741,9 +1743,12 @@ export function createEncryptedVaultOnDisk(
 ): void {
   // Refuse to overwrite an existing vault — `.enc` IS the user's data (chats, documents,
   // settings), and re-creating would irreversibly replace it with an empty database. A
-  // corrupt/missing descriptor is recoverable; a wiped `.enc` is not. (A belt behind
-  // `WorkspaceController.create()`'s own check, which runs first.)
-  if (existsSync(vaultPaths.encPath)) throw new WorkspaceExistsError()
+  // corrupt/missing descriptor is recoverable; a wiped `.enc` is not. #954: nor a descriptor
+  // file without its `.enc` (put back while the app was open, its `.enc` still elsewhere):
+  // it holds the only wrapped copy of that workspace's data key, which the commit below would
+  // replace. (A belt behind `WorkspaceController.create()`'s own check, which runs first, and
+  // re-checked right before the commit.)
+  if (existsSync(vaultPaths.encPath) || existsSync(vaultPaths.descriptorPath)) throw new WorkspaceExistsError()
   let descriptor: VaultDescriptor
   /** The key the database FILE is encrypted under (v2: data key; v1: password key). */
   let fileKey: Buffer
@@ -1767,14 +1772,28 @@ export function createEncryptedVaultOnDisk(
   // journal's own suffix), and only then write the descriptor — the single atomic COMMIT
   // POINT (writeVaultDescriptor is fsync + rename). A crash BEFORE it leaves neither a
   // descriptor nor an `.enc`, so init() still reports `uninitialized` and onboarding
-  // retries cleanly (the stray staged file is simply overwritten by the retry). A crash
-  // AFTER it is the committed-rekey crash state: `recoverPendingRekey` rolls the staged
-  // file forward on the next init()/unlock. The descriptor used to be written FIRST — a
-  // crash mid-create then bricked onboarding behind the misleading "restore
-  // workspace.json" hint (the actual repair was deleting it). NB the `legacyV1` fixture
-  // path shares this ordering but not the roll-forward (recovery is v2-gated); it exists
-  // only so tests can build migration fixtures — the app never passes it.
+  // retries (a crash leaves the staged file behind: the retry overwrites it, but a
+  // workspace put back into the same folder first would have it rolled over its `.enc` —
+  // the crash variant of #954's S-1, open as its own issue). A crash AFTER it is the
+  // committed-rekey crash state: `recoverPendingRekey` rolls the staged file forward on the
+  // next init()/unlock. The descriptor used to be written FIRST — a crash mid-create then
+  // bricked onboarding behind the misleading "restore workspace.json" hint (the actual
+  // repair was deleting it). NB the `legacyV1` fixture path shares this ordering but not
+  // the roll-forward (recovery is v2-gated); it exists only so tests can build migration
+  // fixtures — the app never passes it.
+  //
+  // #954 S-1: a create that FAILS before the commit (the descriptor's temp cannot be written
+  // or renamed, a full drive, the re-check below) removes what it staged before it rethrows:
+  // `.enc.new` is ciphertext under a key nothing holds, and the next start's rekey recovery
+  // rolls ANY `.enc.new` forward under a v2 descriptor, so a workspace put back later into
+  // the same folder would have its `.enc` shredded and replaced by this empty one. Removed:
+  // the staged file and the two write temps (`.enc.new.tmp`, `workspace.json.tmp`: temps
+  // nothing reads), once the create has reached its encrypt; a failure
+  // before that (the open, #247) leaves a staged file already there alone, as it is not this
+  // create's. After the commit nothing is removed: the workspace exists, and a retry is refused.
   const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  let staging = false
+  let committed = false
   try {
     // #247: a leftover plaintext file at `dbPath` stamped by a NEWER build makes this open
     // throw (handled: the create IPC reports `workspace_newer`) — the key is zeroed either way.
@@ -1783,11 +1802,28 @@ export function createEncryptedVaultOnDisk(
     updateSettings(db, { workspaceMode: 'encrypted' })
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
     db.close()
+    staging = true
     encryptFile(vaultPaths.dbPath, staged, fileKey)
     shredFile(vaultPaths.dbPath)
     cleanSidecars(vaultPaths.dbPath)
+    // #954: the commit replaces whatever is at the descriptor's name, and the key derivation and
+    // the stage above take a while (about half a second): a key file or `.enc` that appeared in
+    // that window (copied back while the lock screen was open) is refused here, as at the start.
+    if (existsSync(vaultPaths.descriptorPath) || existsSync(vaultPaths.encPath)) throw new WorkspaceExistsError()
     writeVaultDescriptor(vaultPaths.descriptorPath, descriptor) // COMMIT POINT
+    committed = true
     renameSync(staged, vaultPaths.encPath)
+  } catch (err) {
+    if (staging && !committed) {
+      for (const leftover of [staged, `${staged}.tmp`, `${vaultPaths.descriptorPath}.tmp`]) {
+        try {
+          rmSync(leftover, { force: true })
+        } catch {
+          /* best-effort: the failure being reported is the create's own */
+        }
+      }
+    }
+    throw err
   } finally {
     fileKey.fill(0)
   }
@@ -2416,14 +2452,32 @@ export class WorkspaceController {
    * a newer build's), OR startup found any other artifact a newer build wrote (#845).
    * In every one of those cases the create flow must be refused — it would overwrite
    * the user's data with an empty vault.
+   *
+   * #954: the descriptor FILE is read live too, so a valid `config/workspace.json` put back
+   * after the start (while the lock screen's create form was open) counts, and `getState()`
+   * reports `locked` for it. The descriptor read at the start still counts on its own: a
+   * vault seen then stays a vault for the session, so a drive that drops out never turns
+   * the lock screen into the create form.
    */
   private vaultExistsOnDisk(): boolean {
     return (
       this.descriptor?.mode === 'encrypted' ||
+      existsSync(this.vaultPaths.descriptorPath) ||
       existsSync(this.vaultPaths.encPath) ||
       isDescriptorUnreadable(this.vaultPaths.descriptorPath) ||
       this._vaultNewer !== null
     )
+  }
+
+  /**
+   * #954, #955 item 3 (S-2): a descriptor file is on the drive that the last {@link init} did not adopt: put back after
+   * the start (the #807 "put the file back" step, a whole workspace copied back, a create that failed after its
+   * commit), or one it could not read. The start's decisions over a vault (the salvage of a newer working file, the
+   * sweep, the rekey recovery, the lock notices) were skipped for it, so `unlock()` and a refused `create()` run them
+   * now, before anything is decrypted. For a file that still cannot be read, `init()` writes nothing.
+   */
+  private vaultAppearedSinceStart(): boolean {
+    return this.descriptor === null && existsSync(this.vaultPaths.descriptorPath)
   }
 
   private openPlaintext(): void {
@@ -2704,6 +2758,18 @@ export class WorkspaceController {
     if (this.vaultExistsOnDisk()) {
       // Reachable when a caller invokes createWorkspace while state is `locked`, or when
       // the descriptor is corrupt. Creating would wipe the existing `.enc` — refuse.
+      // #954, #955 item 3: or when a key file was put back after the start, under a create form
+      // the lock screen still shows. The state now reads `locked` and the gate switches to its
+      // unlock form, so first run the start's steps over that vault, as a start would have
+      // (best-effort: nothing on the way out may replace the refusal; the next unlock re-runs
+      // them anyway).
+      if (this.vaultAppearedSinceStart()) {
+        try {
+          this.init()
+        } catch {
+          /* the state stays `locked` by the live check; unlock() retries the start's steps */
+        }
+      }
       throw new WorkspaceExistsError()
     }
     // #875: no vault is here, so a marker a wiped one left names no snapshot of the workspace about to be created.
