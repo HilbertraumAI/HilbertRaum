@@ -182,3 +182,25 @@ export function selectParser(filePath: string): DocumentParser | null {
   const ext = extname(filePath).toLowerCase()
   return PARSERS.find((p) => p.extensions.includes(ext)) ?? null
 }
+
+/**
+ * #918: the title a file imports under, from its name. A name can end in spaces or dots after its extension
+ * (`notes.txt `, `report.pdf.`): macOS and Linux allow it, and so do Node, Git Bash and WSL on NTFS, while Explorer,
+ * cmd and PowerShell strip them. Every reader takes the extension from the title (the parser, the MIME type, the
+ * stored copy's name, the export), so the title drops them: trailing spaces always, trailing dots (mixed with spaces,
+ * the set Windows strips) only when a supported extension is then left. So "Washington, D.C." and "v2.1" keep their
+ * names, and an unsupported `photo.heic ` is refused as `.heic`. A name of spaces only is kept: a title is never empty.
+ */
+export function importedFileTitle(fileName: string): string {
+  const bare = fileName.replace(/[ .]+$/u, '')
+  if (selectParser(bare)) return bare
+  return fileName.replace(/ +$/u, '') || fileName
+}
+
+/**
+ * #918: the extension an unsupported-type refusal names (`{ext}`), read without the trailing spaces and dots, so
+ * `photo.heic.` is refused as `.heic`, not `.`; '' when nothing is left (the caller shows "(none)").
+ */
+export function refusedTypeExtension(title: string): string {
+  return extname(title.replace(/[ .]+$/u, ''))
+}

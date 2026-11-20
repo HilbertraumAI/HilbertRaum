@@ -1466,7 +1466,19 @@ every imported document readable on a lost drive.
   same vault key, fresh IV per file). `sha256`/`size_bytes` on the document row describe the
   plaintext content in both modes.
 - **Import:** the original file (still on disk at import time) is parsed directly; only the
-  encrypted copy is written to the workspace — no plaintext copy lands there, with one exception:
+  encrypted copy is written to the workspace — no plaintext copy lands there, with two exceptions.
+  **#918 (any OS):** a file whose name ends in a space or a dot after its extension (`people.tsv `)
+  imports under the title without them, so the original's own extension is not the one the parser
+  reads (a TSV would split by commas). Its first parse reads the re-index transient below instead,
+  decrypted from the just-written `.enc`: `<id>.parse<ext>` in `workspace/documents/`, registered
+  for the lock/quit sweep before it is written, shredded in the same `finally` on every outcome
+  (success, failure, cancel), and under the crash sweep by its `.parse` infix. The stored copy is
+  recorded on the row before that decrypt, so a decrypt that fails (a full drive) still leaves a
+  `.enc` that removing the document deletes; such a file needs its size once more in free space
+  while it is parsed. A file refused as an unsupported type gets no such copy. The preview of such
+  a document, when its stored copy is gone and it falls back to the original, reads a copy of the
+  original named after the title instead (`<id>.parse-preview-<uuid><ext>`, the preview's own
+  transient name, tracked and shredded the same way). The other exception:
   **#869 (Windows, audio only):** the pinned whisper-cli reads its command line in the system's
   code page, so a recording whose name or folder has characters outside that code page (Cyrillic
   or Chinese on a Western-European Windows) cannot be named to it; umlauts on such a Windows read
