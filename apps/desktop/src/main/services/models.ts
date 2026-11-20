@@ -1421,7 +1421,14 @@ export function weightsMib(m: ModelManifest): number {
 }
 
 /**
- * What the runtime needs ON THE CARD to hold every layer of this model, MiB:
+ * What the runtime needs ON THE CARD to hold every layer of this model, MiB.
+ *
+ * **Since model-benchmarks.md §6.8 (2026-11-20) a manifest's `projected_graphics_need_mib` decides
+ * when it is present:** the figure llama.cpp's own fit prints ("projected to use N MiB of device
+ * memory") under the app's launch, plus the same 1 GiB margin. Every manifest the card path can
+ * pick carries one (pinned in `committed-catalog.test.ts`). The DERIVED estimate below is the
+ * fallback for a manifest without one (a model added before it is measured, or installed by hand),
+ * and the rest of this comment is its history:
  *
  *     (weights − hostMapped) × 1.15  +  contextCache  +  1 GiB fit margin
  *
@@ -1451,8 +1458,10 @@ export function weightsMib(m: ModelManifest): number {
  * too-large one costs a smaller recommendation. What is NOT modelled well is the 15 % share itself:
  * the measured compute buffers run 416–569 MiB across models from 3.3 to 19.8 GB (they scale with
  * ubatch and hidden width, not with file size), so the share reads 149 MiB on the E2B and 2,730 on
- * Q5. Replacing it with a flat term was considered and REJECTED for now: it flips the 8 GB row to
- * the 9B, against #318 leg 2's measured 31/33 partial offload there.
+ * Q5. Replacing it with a flat term was considered and REJECTED (2026-09): it flipped the 8 GB row
+ * to the 9B, against #318 leg 2's measured 31/33 partial offload there. §6.8 settled that row
+ * differently: on the 9B's measured projection the 8 GB row IS the 9B, which #391 leg 2 measured at
+ * 33/33 on that card, and a partial start there now demotes it (`landedPartlyOnCard`).
  *
  * `hostMappedWeightsMib` is measured per model (see the field's doc comment: read off a FULL-OFFLOAD
  * start's `CPU_Mapped model buffer size`), optional, and clamped to the weight total — a manifest
@@ -1553,25 +1562,34 @@ function eligibleOrder(a: ModelManifest, b: ModelManifest): number {
 
 /**
  * Graphics-memory-aware recommendation — RULE C (model-benchmarks.md §6.6 as amended by the
- * PR #308 audit, decision 1). On a computer whose next start uses a discrete card:
+ * PR #308 audit, decision 1), and since §6.8 (2026-11-20) the card path. On a computer whose next
+ * start uses a discrete card:
  *
- *   1. `base` = the RAM pick, computed WITHOUT the speed signal (`recommendModelIdByRam`, its
- *      stage logic untouched — the tier ratifications are the RAM picker's).
- *   2. eligible(m) = fits the card (`fitsGraphicsMemory` at `budgetMib`) AND passes the RAM floor
- *      (`recommended_min_ram_gb` ≤ RAM; the Models screen refuses to start a model over it, and
- *      the pick must never point at a refused model). Unknown RAM keeps the floor open, as the
- *      pre-rule-C card path did. `candidate = base` when base is eligible — the established
- *      recommendation stands wherever the card can hold it (decision 2: the 9B, not Gemma 12B,
- *      where both fit). Otherwise `candidate` = the highest-RANKED eligible model, ties by
- *      comfortable tier then size — ranked models ONLY (a rank-0 model is never the automatic
- *      pick, #326). Otherwise (no ranked model eligible: a small or nearly full card beside a big
- *      catalog) `candidate = base` — the documented no-fit fallback:
- *      the RAM pick partially offloads, which is still the catalog's best answer.
- *   3. The §6.5 speed step-down applies ONCE, to `candidate`, restricted to the eligible pool on
- *      both ends (`applySpeedSignal` with `eligible`): a crawl measured on a model the card cannot
- *      hold never lowers a fitting pick (R2), and the step never lands on a model that fails the
- *      RAM floor or the card (R1). A no-fit fallback therefore never steps — nothing eligible
- *      exists to step to.
+ *   1. `base` = the RAM pick of the ORDINARY ranks, computed WITHOUT the speed signal
+ *      (`recommendModelIdByRam`, its stage logic untouched — the tier ratifications are the RAM
+ *      picker's). It is the no-fit fallback in both modes below.
+ *   2. eligible(m) = fits the card (`fitsGraphicsMemory` at `budgetMib`, the manifest's measured
+ *      projection where it carries one) AND passes the RAM floor (`recommended_min_ram_gb` ≤ RAM;
+ *      the Models screen refuses to start a model over it, and the pick must never point at a
+ *      refused model; unknown RAM keeps the floor open, as the pre-rule-C card path did) AND was
+ *      not seen landing only partly on this card (`landedPartlyOnCard`, §6.8 point 3).
+ *      - **With card ranks** (any manifest of the role carries `recommendation_rank_gpu`, §6.8):
+ *        they replace the ordinary ranks here, and `candidate` = the highest-ranked eligible
+ *        model outright. §6.6 decision 2 ("the RAM pick stands wherever the card can hold it")
+ *        is retired for such a catalog.
+ *      - **Without card ranks** (rule C unchanged): `candidate = base` when base is eligible
+ *        (decision 2: the 9B, not Gemma 12B, where both fit); otherwise the highest-ranked
+ *        eligible model.
+ *      Either way ties go by comfortable tier then size, ranked models ONLY (a rank-0 model is
+ *      never the automatic pick, #326), and with no ranked model eligible (a small or nearly full
+ *      card beside a big catalog) `candidate = base`: the RAM pick partially offloads, which is
+ *      still the catalog's best answer.
+ *   3. A slow speed reading moves `candidate` once, restricted to the eligible pool on both ends:
+ *      with card ranks first along its `step_down_to` chain (`followStepDownChain`, §6.8 point 4);
+ *      otherwise, or off the chain, the §6.5 step (`applySpeedSignal` with `eligible`). A crawl
+ *      measured on a model the card cannot hold never lowers a fitting pick (R2), and the step
+ *      never lands on a model that fails the RAM floor or the card (R1). A no-fit fallback
+ *      therefore never steps — nothing eligible exists to step to.
  *
  * Unknown / non-positive budget → the RAM path with the signal, exactly as before. Unified and
  * cpu classes never reach this function (`recommendChatModelId`): unified takes the RAM pick, cpu
@@ -1587,8 +1605,8 @@ export function recommendModelIdByVram(
 ): string | null {
   if (!Number.isFinite(budgetMib) || budgetMib <= 0) return recommendModelIdByRam(manifests, ramGb, role, speedSignal)
   // §6.8: a catalog that carries card ranks is ranked by them here, and then the highest-ranked
-  // model that fits the card is the pick outright (step 2 below is skipped). A catalog without
-  // them is rule C, unchanged.
+  // model that fits the card is the pick outright (the "base stands" branch below is skipped). A
+  // catalog without them is rule C, unchanged.
   const cardRanked = manifests.some((m) => m.role === role && m.recommendationRankGpu !== undefined)
   const view = cardRanked
     ? manifests.map((m) =>
@@ -1702,14 +1720,20 @@ export function recommendModelIdForProcessor(
 
 /**
  * What earlier starts on THIS computer's card showed (model-benchmarks.md §6.8): the persisted
- * placement per model id, already limited by the caller to this machine, and the context
- * override in force. The picker reads it to drop a model that was seen landing only partly on
- * the card.
+ * placement per model id, already limited by the caller to this machine, and the two context
+ * settings `launchContextTokens` reads. The picker reads it to drop a model that was seen landing
+ * only partly on the card.
  */
 export interface CardEvidence {
   placements: Readonly<Record<string, Pick<ModelPlacement, 'backend' | 'gpuLayers' | 'totalLayers' | 'contextTokens' | 'gpuFreeAtStartMb'>>>
   /** `AppSettings.contextTokensOverride`, or null when the manifests' own context applies. */
   contextTokensOverride?: number | null
+  /**
+   * `AppSettings.contextTokens`, the legacy window a manifest without its own
+   * (`recommended_context_tokens: 0`) launches with. Absent → unknown, and such a manifest's
+   * next window is unbounded for the evidence rule.
+   */
+  contextTokens?: number
 }
 
 /**
@@ -1718,14 +1742,14 @@ export interface CardEvidence {
  * probe. One function for every seam that feeds the picker, so they cannot disagree.
  */
 export function cardEvidenceFor(
-  s: { modelPlacements: Record<string, ModelPlacement>; contextTokensOverride: number | null },
+  s: { modelPlacements: Record<string, ModelPlacement>; contextTokensOverride: number | null; contextTokens: number },
   here: string | null
 ): CardEvidence {
   const placements: Record<string, ModelPlacement> = {}
   for (const [id, p] of Object.entries(s.modelPlacements ?? {})) {
     if (here == null || p.machineKey == null || p.machineKey === here) placements[id] = p
   }
-  return { placements, contextTokensOverride: s.contextTokensOverride ?? null }
+  return { placements, contextTokensOverride: s.contextTokensOverride ?? null, contextTokens: s.contextTokens }
 }
 
 /** How far below the present budget a start's free memory may lie and still count as "the same card state", MiB. */
@@ -1736,7 +1760,8 @@ export const PARTIAL_EVIDENCE_TOLERANCE_MIB = 256
  * hold (§6.8)? The estimate says what should fit; this is what did. The record counts when
  *   - it is a card start with fewer layers on the card than the model has,
  *   - its context was no larger than the one the next start launches with (a partial offload at
- *     a larger context proves nothing about a smaller one), and
+ *     a larger context proves nothing about a smaller one; the next window is
+ *     `launchContextTokens`', the one precedence `startModelRuntime` launches with), and
  *   - the card had at least as much free memory then as the budget offers now, within
  *     `PARTIAL_EVIDENCE_TOLERANCE_MIB` (a start beside a game that filled the card must not
  *     demote the model for good). An unknown free figure counts: the layers are the evidence.
@@ -1746,7 +1771,10 @@ export function landedPartlyOnCard(m: ModelManifest, budgetMib: number, card: Ca
   const seen = card?.placements[m.id]
   if (!seen || seen.backend !== 'gpu') return false
   if (seen.gpuLayers == null || seen.totalLayers == null || seen.gpuLayers >= seen.totalLayers) return false
-  const launchContext = card?.contextTokensOverride ?? (m.recommendedContextTokens || Number.POSITIVE_INFINITY)
+  const launchContext = launchContextTokens(
+    { contextTokens: card?.contextTokens ?? Number.POSITIVE_INFINITY, contextTokensOverride: card?.contextTokensOverride },
+    m
+  )
   if (seen.contextTokens > launchContext) return false
   const free = seen.gpuFreeAtStartMb
   return free == null || free >= budgetMib - PARTIAL_EVIDENCE_TOLERANCE_MIB

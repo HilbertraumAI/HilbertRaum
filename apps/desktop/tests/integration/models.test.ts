@@ -997,6 +997,11 @@ describe('card path §6.8: projected need, card ranks, partial-load evidence', (
     expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ contextTokens: 32_768 }))).toBe('g12')
     // ...unless that larger context is what Settings now launch with.
     expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ contextTokens: 32_768 }, 32_768))).toBe('mid')
+    // A manifest without its own window launches with the legacy setting (`launchContextTokens`'
+    // precedence), so a partial start at a larger context than that proves nothing either.
+    const noWindow = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_context_tokens: 0, recommendation_rank_gpu: 3 })
+    expect(landedPartlyOnCard(noWindow, BUDGET, { ...seen({ contextTokens: 8192 }), contextTokens: 4096 })).toBe(false)
+    expect(landedPartlyOnCard(noWindow, BUDGET, { ...seen({ contextTokens: 4096 }), contextTokens: 4096 })).toBe(true)
     // The card was fuller then than now (something else held it): no evidence. Inside the tolerance it counts.
     expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: BUDGET - PARTIAL_EVIDENCE_TOLERANCE_MIB - 1 }))).toBe(false)
     expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: BUDGET - PARTIAL_EVIDENCE_TOLERANCE_MIB }))).toBe(true)
@@ -1011,11 +1016,12 @@ describe('card path §6.8: projected need, card ranks, partial-load evidence', (
       gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey, at: '2026-11-20T00:00:00Z'
     })
     const evidence = cardEvidenceFor(
-      { modelPlacements: { here: placement('A'), legacy: placement(null), other: placement('B') }, contextTokensOverride: 16_384 },
+      { modelPlacements: { here: placement('A'), legacy: placement(null), other: placement('B') }, contextTokensOverride: 16_384, contextTokens: 4096 },
       'A'
     )
     expect(Object.keys(evidence.placements).sort()).toEqual(['here', 'legacy'])
     expect(evidence.contextTokensOverride).toBe(16_384)
+    expect(evidence.contextTokens).toBe(4096)
   })
 })
 

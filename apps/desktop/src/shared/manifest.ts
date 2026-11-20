@@ -171,11 +171,12 @@ export interface ModelManifest {
    */
   recommendationRankCpu?: number
   /**
-   * The model the processor path steps to when a benchmark measured THIS model under the slow
-   * line (model-benchmarks.md §6.7): the id of another chat manifest. Optional in YAML
-   * (`step_down_to`); absent → this model is the end of its chain. The chains are pinned
-   * against the committed catalog (`committed-catalog.test.ts`): every target exists, is ranked on
-   * the processor, needs no more RAM than its source, and no chain loops.
+   * The model the processor path (model-benchmarks.md §6.7) and, since §6.8, the card path step
+   * to when a benchmark measured THIS model under the slow line: the id of another chat manifest.
+   * Optional in YAML (`step_down_to`); absent → this model is the end of its chain. Each path
+   * follows a link only to a target it may pick (ranked there; on the card also eligible). The
+   * chains are pinned against the committed catalog (`committed-catalog.test.ts`): every target
+   * exists, is ranked on the processor, needs no more RAM than its source, and no chain loops.
    */
   stepDownTo?: string
   /**
