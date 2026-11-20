@@ -186,10 +186,13 @@ model's own context-cache estimate (a per-model manifest field, default 0.5 GiB)
 1,024 MiB), RAM always a hard gate. `budgetMb` comes from the **budget device**
 (`selectBudgetDevice` / `nextStartMemory` in `services/performance.ts`: the largest probed card at
 or above the runtime's own 5,120 MiB gate and not integrated by name — never the first device the
-driver listed); on **unified memory** (Apple Silicon) and on a machine **without a usable card**
-— including one with graphics acceleration switched off in Settings, or auto-disabled after a
-crash — it is RAM-best-fit (`recommendModelIdByRam`: the largest model whose comfortable RAM
-fits, ties on `recommendation_rank`). The profile-based `recommendModelId(manifests, profile,
+driver listed); on **unified memory** (Apple Silicon) it is RAM-best-fit
+(`recommendModelIdByRam`: the largest model whose comfortable RAM fits, ties on
+`recommendation_rank`); on a machine **without a usable card** — including one with graphics
+acceleration switched off in Settings, or auto-disabled after a crash — it is the processor path
+(`recommendModelIdForProcessor`, `model-benchmarks.md` §6.7: the same stages with
+`recommendation_rank_cpu` in place of the rank, and a step-down that follows the manifest's
+`cpu_step_down_to` chain). The profile-based `recommendModelId(manifests, profile,
 'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). With the committed
 manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`,
 8 GB → `qwen3.5-4b-ud-q4kxl`, 12–16 GB → `qwen3.5-9b-ud-q4kxl`, 20 GB → `qwen3.8-27b-ud-q4km`, 24 GB
@@ -197,13 +200,13 @@ and up → `qwen3.8-27b-ud-q5km` (§6.6's 30-point grid; the 6, 8, 12 and 24 GB 
 on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — while the 20 GB point and the
 Gemma 12B / MoE estimate bands remain predicted, no such card being available); by RAM:
 
-| Measured RAM | Chat model |
-|---|---|
-| < 12 GB | `qwen3.5-4b-ud-q4kxl` |
-| 12–15 GB | `gemma4-e2b-it-qat-q4` |
-| 16–23 GB | `qwen3.5-9b-ud-q4kxl` |
-| 24 GB | `qwen3.8-27b-ud-q4km` |
-| ≥ 32 GB | `qwen3.8-27b-ud-q5km` |
+| Measured RAM | Unified memory (RAM pick) | No usable card (processor path, §6.7) |
+|---|---|---|
+| < 12 GB | `qwen3.5-4b-ud-q4kxl` | `qwen3-4b-instruct-2507-q4` |
+| 12–15 GB | `gemma4-e2b-it-qat-q4` | `gemma4-e4b-it-qat-q4` |
+| 16–23 GB | `qwen3.5-9b-ud-q4kxl` | `qwen3.5-9b-ud-q4kxl` |
+| 24 GB | `qwen3.8-27b-ud-q4km` | `gemma4-26b-a4b-it-qat-q4` |
+| ≥ 32 GB | `qwen3.8-27b-ud-q5km` | `gemma4-26b-a4b-it-qat-q4` |
 
 (This is the newest-Qwen promotion, owner decision 2026-07-12; handed to the Qwen3.8 pair 2026-08-16;
 handed BACK on 2026-08-20 when upstream deleted the Qwen3.8 files; and RESTORED the same day to

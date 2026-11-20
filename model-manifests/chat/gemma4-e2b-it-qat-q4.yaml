@@ -30,6 +30,9 @@ recommended_ram_gb: 12
 # effective-2B slice (~5B raw params, ~2B-class memory/compute footprint), 140+ languages —
 # on a machine where tok/s is the binding constraint it is the ratified speed/quality pick.
 recommendation_rank: 3
+# Processor path (model-benchmarks.md §6.7): the fast end of every step-down chain (19.9 tok/s on a
+# Ryzen 7 5800H), ranked under the E4B there. Unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 2
 recommended_context_tokens: 8192
 # Context cache at 8k under the app launch (ubatch 2048): 24 MiB full-attention + 48 MiB
 # sliding-window (only 15 of 35 layers own a cache) = 0.07 GiB, rounded up to the 0.1 floor; the

@@ -24,6 +24,9 @@ recommended_ram_gb: 32
 # 2026-08-16..2026-08-20 (the §9.4 generational handover). Rank 3 again 2026-08-20, the §9.5
 # interim after upstream deleted the qwen3.8 files (this rank block's previous revision).
 recommendation_rank: 1
+# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
+# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 0
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 supports_thinking_mode: true

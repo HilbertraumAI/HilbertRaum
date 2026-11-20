@@ -1629,10 +1629,146 @@ their raw needs are pinned alongside these in the same test. Rank-0 models — `
 Both consumers build the picker's `PickerMemory` from ONE decision — `pickerMemoryFor` in
 `registerModelIpc.ts` and `probeAndPersistGpu` in `registerBenchmarkIpc.ts`, both calling
 `nextStartMemory` + `graphicsBudgetMib` — so the AI Model ★ and the Performance check can never
-disagree. Legacy callers that pass no memory class get the RAM pick, byte-identical to
-`recommendModelIdByRam`.
+disagree. Legacy callers that pass no memory class are treated as class `cpu` and get the
+processor pick of §6.7 (until 2026-11-20: the RAM pick).
 
 **Not changed here.** The `insufficientRam` gate and its copy still speak of RAM only.
+
+### 6.7 Processor path: picks for a computer without a usable graphics card (2026-11-20)
+
+**Scope.** This section governs the chat recommendation for the memory class `cpu` only: a
+computer whose next start runs from RAM on the processor, because it has no usable graphics card
+(an integrated chip included) or because the GPU is switched off or auto-disabled
+(`nextStartMemory`). Apple Silicon (`unified`) keeps the RAM pick of §6.2 to §6.5, a discrete card
+keeps rule C of §6.6. Both are unchanged by this section, on purpose: their picks wait for
+measurements on those machines.
+
+**Why a separate path.** Until now the processor shared the RAM pick, which ranks by capacity and
+knows nothing about decode speed. Two measurements showed that this serves processor-only
+machines badly: the picks for 24 GB and more (dense 27B models) decode near 3 tok/s on a
+processor, and the picks for 8 to 15 GB were not the best-scoring models that run there at a
+usable speed.
+
+**Decision basis.** A pick on this path has to be justified on two axes, in this order:
+
+1. **Answer quality:** the suite score of the 2026-11 answer-quality study (29 model variants,
+   seven tasks in German and English, llama.cpp b12110, context 32,768, one run per model,
+   finished 2026-11-15; all results on <https://hilbertraum.ai/en/benchmark/>). It replaces the
+   "newer generation is expected to be better" prior of §6.4 where the two disagree. Differences
+   under 3 points count as level: there is one run per model and no agreed margin of error yet.
+2. **Processor speed:** decode tok/s and the wait for the first token on a document-sized prompt,
+   measured through the app on a processor (below). A model under the slow line
+   (`SLOW_PICK_TOKENS_PER_SECOND`, 5 tok/s) is not a pick, however well it scores.
+
+Memory is a gate, not an axis: every pick must clear its own `recommended_min_ram_gb`, and its
+measured peak has to fit the band it is recommended for. The §2 grounded-QA harness is not
+re-run for this decision; where its earlier verdict and the study disagree (the E4B), the
+ordinary rank keeps the harness verdict and only the processor rank moves.
+
+**Processor measurements (2026-11-20).** Lenovo Legion, Ryzen 7 5800H (8 cores), 16 GB installed
+(13.9 GB usable, the app reads 14), Windows 11, mains power, GPU acceleration off and every start
+confirmed `backend=cpu`, dev build of `master` 5dc4e058 on llama.cpp b12110. Per model: one
+warm-up and three in-app Diagnostics benchmarks (decode-only, #291), then one Fast-mode answer to
+a prompt of about 1,400 tokens. Memory is the llama-server peak working set. Raw rows:
+`eval/results/hardware/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/cpu-speed-2026-11-20.jsonl`.
+
+| Model | Study score | tok/s (median of 3) | First token, long prompt | Peak working set |
+|---|---|---|---|---|
+| `qwen3.5-0.8b-q6` | 39.4 | 37.2 | 3.7 s | 1.25 GiB |
+| `gemma4-e2b-it-qat-q4` | 73.7 | 19.9 | 5.0 s | 2.83 GiB |
+| `qwen3.5-2b-ud-q4kxl` | 56.7 | 19.5 | 7.3 s | 2.21 GiB |
+| `qwen3-4b-instruct-q4` | 76.2 | 12.0 | 18.7 s | 4.94 GiB |
+| `qwen3-4b-instruct-2507-q4` | 82.0 | 11.8 | 18.4 s | 4.32 GiB |
+| `gemma4-e4b-it-qat-q4` | 82.9 | 9.9 | 17.6 s | 5.48 GiB |
+| `qwen3.5-4b-ud-q4kxl` | 76.9 | 8.6 | 18.7 s | 4.74 GiB |
+| `qwen3-8b-instruct-q4` | 77.2 | 6.4 | 31.1 s | 6.99 GiB |
+| `granite-4.1-8b-q4` | 79.0 | 5.9 | 35.2 s | 6.53 GiB |
+| `ministral3-8b-instruct-2512-q4` | 64.7 | 5.9 | 33.4 s | 7.01 GiB |
+| `qwen3.5-9b-ud-q4kxl` | 86.1 | 5.1 | 32.4 s | 6.06 GiB |
+| `gemma4-12b-it-qat-q4` | 89.5 | 4.5 | 75.8 s | 8.15 GiB |
+| `qwen3.5-9b-q8` | 85.9 | 3.4 | 60.5 s | 8.73 GiB |
+| `qwen3-14b-instruct-q4` | 87.4 | 3.4 | 58.4 s | 9.26 GiB |
+
+The models from 20 GB up do not start on this machine. Their processor figures are the §9.3 and
+§9.4 rows of the i9-9900X: `gemma4-26b-a4b-it-qat-q4` 15.6 tok/s (a mixture-of-experts model,
+about 3.8B parameters active per token), the dense `qwen3.6-27b-q4` 2.8 and `qwen3.8-27b-q4` 2.83.
+The two machines are not the same processor, so the 15.6 is evidence of the class (five times a
+dense 27B on the same machine), not a figure for a laptop.
+
+**The picks.**
+
+| RAM | Pick on the processor | Study score | Was (RAM pick) | Why |
+|---|---|---|---|---|
+| 8 to 11 GB | `qwen3-4b-instruct-2507-q4` | 82.0 | `qwen3.5-4b-ud-q4kxl`, 76.9 | Ahead on both axes (11.8 against 8.6 tok/s). Cost: no thinking mode, so Deep does nothing on it. |
+| 12 to 15 GB | `gemma4-e4b-it-qat-q4` | 82.9 | `gemma4-e2b-it-qat-q4`, 73.7 | 9 points for half the speed, which still leaves 9.9 tok/s. Level with the 2507 on quality, and it keeps a thinking mode. |
+| 16 to 23 GB | `qwen3.5-9b-ud-q4kxl` | 86.1 | the same | Every other 8B-class model runs at the same speed and scores lower. It sits at the slow line, which is what the chain below is for. Gemma 4 12B scores higher (89.5) and is under the line. |
+| 24 GB and more | `gemma4-26b-a4b-it-qat-q4` | 90.5 | `qwen3.8-27b-ud-q4km` 89.9 / `-q5km` 90.0 | Level on quality, about five times the processor speed of a dense 27B. The best-scoring models of the study (Gemma 4 31B 94.6, Qwen3.6 27B 92.8) are dense and stay card and Apple Silicon candidates. |
+
+**How it is built (decision: data in the catalog, no model names in code).**
+
+- `recommendChatModelId` sends the `cpu` class to `recommendModelIdForProcessor`. That function
+  runs the unchanged `recommendModelIdByRam` stages (capacity first, rank inside a band, ranked
+  models only) over a view of the catalog in which `recommendation_rank_cpu`, where a manifest
+  carries it, replaces `recommendation_rank`.
+- `recommendation_rank_cpu: 0` keeps a model selectable but never the automatic pick on a
+  processor. Seven manifests carry it. Six were measured too slow there: Gemma 4 12B and Qwen3 14B
+  in the table above, and the dense 27B models from the i9-9900X rows. The seventh, Qwen3.5
+  35B-A3B, was **not** measured on a processor (it needs 24 GB of RAM, more than the 16 GB
+  laptop). As a mixture-of-experts model it may be fast enough. It carries 0 because the stages
+  order by comfortable RAM first: a positive rank would make this unmeasured model, comfortable at
+  32, the pick from 32 GB ahead of the measured 26B-A4B. A processor measurement can lift it. Five
+  carry a positive value: three of the four picks above at 3 (the 9B carries no processor rank
+  and keeps its ordinary 3), the E2B at 2, under the E4B, and `qwen3.5-4b-ud-q4kxl` at 1.
+- Two comfortable-RAM figures moved with it, both from measurement: `gemma4-e4b-it-qat-q4`
+  16 to 12 (5.48 GiB peak on the 14 GB machine) and `gemma4-26b-a4b-it-qat-q4` 32 to 24 (in-app
+  peak RSS 14.28 GiB, §9.3, under the 16.8 GB Qwen3.6 27B Q4 that already sits at 24). Neither
+  changes a pick outside this path: the E4B's ordinary rank is 0 and the 26B-A4B's is 2, under the
+  rank-3 holder of its band.
+- `ministral3-8b-instruct-2512-q4` goes from rank 2 to 0 on every path: lowest study score of the
+  8B class (64.7 against 79.0 and 77.2) and the slowest start. It never was an automatic pick.
+- A catalog without the two fields gives exactly the RAM pick, with or without a speed signal
+  (pinned in `committed-catalog.test.ts`).
+
+**Step-down (replaces §6.5 on this path).** §6.5 moves a crawling pick one capacity band down,
+once. On a processor that was not enough: the 9B's single step would end on the model one band
+below, and a machine too slow for that one stayed there. Here each manifest names its own
+target, `cpu_step_down_to`, and the chains are:
+
+```
+gemma4-26b-a4b-it-qat-q4 -> qwen3.5-9b-ud-q4kxl -> gemma4-e4b-it-qat-q4 -> gemma4-e2b-it-qat-q4
+qwen3-4b-instruct-2507-q4 -> gemma4-e2b-it-qat-q4
+```
+
+Rules, all in `recommendModelIdForProcessor`:
+
+1. The no-signal pick is computed from RAM alone on every call. Nothing is stored.
+2. A benchmark strictly under 5 tok/s on a model that lies on the pick's chain recommends that
+   model's target. So a slow reading on the pick steps once, and a later slow reading on the
+   stepped model steps again, down to the E2B (19.9 tok/s above, the fastest ranked model).
+3. A target that the machine's RAM floor refuses, or that is not ranked on the processor, ends
+   the chain. The end of a chain that was followed stays the recommendation.
+4. A slow reading on a model that is not on the chain is judged by §6.5 unchanged: an oversized
+   model is no signal, anything else moves the pick one band down at most.
+5. Unlike §6.5, a runnable-stage pick (8 to 11 GB) steps too, because its target is named.
+
+The chain tests pin that every target exists, is ranked on the processor, needs no more RAM than
+its source, and that no chain loops.
+
+**What this does not settle.**
+
+- The card path and Apple Silicon. Card memory was measured for the study's models on the RTX 3090
+  on 2026-11-20 and shows the §6.6 estimate 1.6 to 6 GiB above the measured need at a context of
+  8,192; speed on small cards is being measured. Rule C's picks are reviewed when that is in.
+- The 26B-A4B on a processor other than the i9-9900X, and any processor pick on a machine weaker
+  than the 5800H (the #153 class). The chain is the safety net for both.
+- One study run per model and no margin of error: the 24 GB row rests on "level on quality", not
+  on a measured gain.
+- The legacy `recommended_profiles` picker and the profile step-down are untouched.
+
+**Changing a pick later.** Bring both axes: the study score (or its successor) and an in-app
+processor measurement filed under `eval/results/hardware/`. Then edit `recommendation_rank_cpu`
+and, if the model should be a step-down source or target, `cpu_step_down_to`, and update the
+pinned mapping, chain list and rank table in `committed-catalog.test.ts` with this section.
 
 ## 7. Design record — catalog expansion (Phases 28–29, decisions D16–D22)
 

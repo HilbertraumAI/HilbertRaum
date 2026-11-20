@@ -1571,7 +1571,8 @@ function eligibleOrder(a: ModelManifest, b: ModelManifest): number {
  *      exists to step to.
  *
  * Unknown / non-positive budget → the RAM path with the signal, exactly as before. Unified and
- * cpu classes never reach this function (`recommendChatModelId`), so their picks are unchanged.
+ * cpu classes never reach this function (`recommendChatModelId`): unified takes the RAM pick, cpu
+ * the processor path (§6.7).
  */
 export function recommendModelIdByVram(
   manifests: ModelManifest[],
@@ -1602,6 +1603,61 @@ export function recommendModelIdByVram(
   return applySpeedSignal(candidates, candidate, speedSignal, eligible).id
 }
 
+/**
+ * The chat recommendation for a computer whose next start runs from the PROCESSOR (memory class
+ * `cpu`: no usable graphics card, or the GPU switched off) — model-benchmarks.md §6.7.
+ *
+ * Two differences from the plain RAM pick, both carried by the catalog and not by this code:
+ *
+ *   1. RANK. A manifest's `recommendation_rank_cpu` replaces its `recommendation_rank` here. The
+ *      stage logic is `recommendModelIdByRam`'s, untouched (capacity first, rank inside a band,
+ *      ranked models only): a model measured too slow on a processor carries 0 and drops out of
+ *      the ranked pool, a model that suits a processor carries its own rank. A catalog without the
+ *      field gives exactly the RAM pick.
+ *   2. STEP-DOWN. A benchmark under `SLOW_PICK_TOKENS_PER_SECOND` on a model that lies on the
+ *      pick's `cpu_step_down_to` chain recommends that model's own target. The chain is followed
+ *      from the no-signal pick, so the answer is still a function of RAM and the one measurement
+ *      (nothing is stored), yet a second slow benchmark on the stepped model steps again: the
+ *      9B's chain ends at the fastest ranked model instead of one band below. A target the
+ *      machine's RAM floor refuses, or one that is not ranked here, ends the chain. A crawl on a
+ *      model that is NOT on the chain falls back to the §6.5 rule (one band below the pick, and an
+ *      oversized model is no signal), so a catalog without chains behaves as before. Unlike §6.5
+ *      the chain also applies to a runnable-stage pick: its targets are named, not inferred.
+ */
+export function recommendModelIdForProcessor(
+  manifests: ModelManifest[],
+  ramGb: number,
+  speedSignal?: PickerSpeedSignal | null
+): string | null {
+  const view = manifests.map((m) =>
+    m.recommendationRankCpu !== undefined ? { ...m, recommendationRank: m.recommendationRankCpu } : m
+  )
+  const baseId = recommendModelIdByRam(view, ramGb, 'chat')
+  if (baseId === null) return null
+  const tps = speedSignal?.tokensPerSecond
+  const measuredId = speedSignal?.measuredModelId
+  if (tps == null || tps <= 0 || tps >= SLOW_PICK_TOKENS_PER_SECOND || !measuredId) return baseId
+
+  const chat = new Map(view.filter((m) => m.role === 'chat').map((m) => [m.id, m]))
+  const usable = (m: ModelManifest | undefined): m is ModelManifest =>
+    m !== undefined && m.recommendationRank > 0 && m.recommendedMinRamGb <= ramGb
+  const seen = new Set<string>()
+  let current = chat.get(baseId)
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id)
+    const next = current.cpuStepDownTo ? chat.get(current.cpuStepDownTo) : undefined
+    if (current.id === measuredId) {
+      if (usable(next)) return next.id
+      // The end of a chain that was actually followed stays put. A pick with no usable target of
+      // its own was never on a chain: the §6.5 rule below decides.
+      if (current.id !== baseId) return current.id
+      break
+    }
+    current = usable(next) ? next : undefined
+  }
+  return recommendModelIdByRam(view, ramGb, 'chat', speedSignal)
+}
+
 /** What the chat picker needs to know about the computer's memory (benchmark.md "Your model"). */
 export interface PickerMemory {
   memoryClass: MemoryClass
@@ -1617,7 +1673,8 @@ export interface PickerMemory {
 
 /**
  * The chat recommendation for this computer: rule C against the card's budget on a discrete
- * card, by RAM on unified memory (one pool) and on a machine without a usable card.
+ * card, the processor path (§6.7) on a machine whose next start runs from RAM without a card,
+ * and by RAM on unified memory (one pool) and on a discrete class whose budget is unknown.
  */
 export function recommendChatModelId(
   manifests: ModelManifest[],
@@ -1627,6 +1684,7 @@ export function recommendChatModelId(
   if (memory.memoryClass === 'discrete' && memory.budgetMb != null && memory.budgetMb > 0) {
     return recommendModelIdByVram(manifests, memory.budgetMb, memory.ramGb, 'chat', speedSignal)
   }
+  if (memory.memoryClass === 'cpu') return recommendModelIdForProcessor(manifests, memory.ramGb, speedSignal)
   return recommendModelIdByRam(manifests, memory.ramGb, 'chat', speedSignal)
 }
 

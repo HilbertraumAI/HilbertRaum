@@ -688,6 +688,20 @@ by four. Hence the three Gemma terms did not move at all and the four Qwen ones 
 figures use the MTP recurrent state (both opt into `speculative_decoding`); that does not
 double-count `MTP_VRAM_HEADROOM_MB`, which gates whether rung 1a is *attempted* and covers the draft
 head's own weights + KV.
+✅ **Processor-path rank and step-down (2026-11-20, `model-benchmarks.md` §6.7):** manifest
+`recommendation_rank_cpu` (optional; a number ≥ 0 — a wrong type or a negative value is a
+validation error, never a silent default, because the field moves a recommendation) →
+`ModelManifest.recommendationRankCpu?: number`, and manifest `cpu_step_down_to` (optional; a
+non-empty model id, trimmed; any other type or an empty string is an error) →
+`ModelManifest.cpuStepDownTo?: string`. Both are ABSENT when omitted. Read only by
+`recommendModelIdForProcessor` (services/models.ts), which `recommendChatModelId` reaches for
+memory class `cpu`: the rank replaces `recommendation_rank` there (0 = selectable but never the
+automatic pick on a processor; absent = the ordinary rank), and `cpu_step_down_to` names the chat
+model that a benchmark under `SLOW_PICK_TOKENS_PER_SECOND` on this one steps to (absent = the end
+of its chain). The validator does not resolve the target id. The committed values and the chain
+invariants (every target exists, is ranked on the processor, needs no more RAM than its source,
+and no chain loops) are pinned in `committed-catalog.test.ts` ("§6.7 processor path"). An older
+app ignores both keys and gives the RAM pick.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -849,7 +863,11 @@ head's own weights + KV.
   computed for the app's ONE server slot since #319 — AND
   `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
   ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
-  confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,
+  confined to the eligible pool on both ends); `cpu` → **§6.7 the processor path**
+  (`recommendModelIdForProcessor(manifests, ramGb, signal)`: the RAM stages over a view in which
+  `recommendationRankCpu` replaces `recommendationRank`, then a slow reading follows the pick's
+  `cpuStepDownTo` chain, and one off the chain is §6.5; a catalog without either field gives
+  exactly the RAM pick); `unified`, or `discrete` with no budget → the RAM pick,
   byte-identical to `recommendModelIdByRam`. Both seams build it from ONE decision: `pickerMemoryFor(s)`
   (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
   `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on

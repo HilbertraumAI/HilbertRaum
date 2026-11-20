@@ -163,6 +163,22 @@ export interface ModelManifest {
    */
   recommendationRank: number
   /**
+   * The rank the picker uses INSTEAD of `recommendationRank` when the next start runs from the
+   * processor (memory class `cpu`: no usable graphics card, or the GPU switched off) —
+   * model-benchmarks.md §6.7. Optional in YAML (`recommendation_rank_cpu`, a non-negative
+   * number); absent → the ordinary rank applies there too. 0 keeps a model selectable but never
+   * the automatic pick on a processor: the value for a model measured too slow without a card.
+   */
+  recommendationRankCpu?: number
+  /**
+   * The model the processor path steps to when a benchmark measured THIS model under the slow
+   * line (model-benchmarks.md §6.7): the id of another chat manifest. Optional in YAML
+   * (`cpu_step_down_to`); absent → this model is the end of its chain. The chains are pinned
+   * against the committed catalog (`committed-catalog.test.ts`): every target exists, is ranked on
+   * the processor, needs no more RAM than its source, and no chain loops.
+   */
+  cpuStepDownTo?: string
+  /**
    * The context cache (KV + recurrent state) the runtime allocates for this model at its
    * `recommended_context_tokens` under the app's launch (ubatch 2048 and, since issue #319,
    * ONE server slot), in GiB — the per-model cache term of the graphics-memory fit estimate
@@ -636,6 +652,27 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
+  // Optional processor-path fields (model-benchmarks.md §6.7). Both move a recommendation, so a
+  // wrong type fails the manifest instead of silently falling back to the ordinary rank.
+  let recommendationRankCpu: number | undefined
+  const rrc = raw['recommendation_rank_cpu']
+  if (rrc !== undefined) {
+    if (typeof rrc !== 'number' || !Number.isFinite(rrc) || rrc < 0) {
+      errors.push('"recommendation_rank_cpu" must be a non-negative number when present')
+    } else {
+      recommendationRankCpu = rrc
+    }
+  }
+  let cpuStepDownTo: string | undefined
+  const csd = raw['cpu_step_down_to']
+  if (csd !== undefined) {
+    if (typeof csd !== 'string' || csd.trim() === '') {
+      errors.push('"cpu_step_down_to" must be a non-empty model id when present')
+    } else {
+      cpuStepDownTo = csd.trim()
+    }
+  }
+
   // Optional per-model context-cache estimate for the graphics-memory fit (decision 11): a
   // non-negative number of GiB when present. Wrong type or a negative value is an error, not a
   // silent default — the field moves a recommendation, so a typo must fail the manifest.
@@ -893,6 +930,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       sha256,
       recommendedProfiles,
       recommendationRank,
+      ...(recommendationRankCpu !== undefined ? { recommendationRankCpu } : {}),
+      ...(cpuStepDownTo !== undefined ? { cpuStepDownTo } : {}),
       ...(estimatedContextCacheGib !== undefined ? { estimatedContextCacheGib } : {}),
       ...(hostMappedWeightsMib !== undefined ? { hostMappedWeightsMib } : {}),
       licenseReview,

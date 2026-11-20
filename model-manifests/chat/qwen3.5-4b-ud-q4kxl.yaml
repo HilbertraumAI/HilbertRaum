@@ -26,6 +26,9 @@ recommended_ram_gb: 16
 # CORRECTION 2026-11-03 (#770): since #153 (2026-08-09) gemma4-e2b-it-qat-q4 (recommended_ram_gb 12)
 # takes 12-15 GB, so this model's auto-pick band is 8-11 GB.
 recommendation_rank: 3
+# Processor path (model-benchmarks.md §6.7): ranked under qwen3-4b-instruct-2507-q4 there (76.9
+# against 82.0 on the 2026-11 study, 8.6 against 11.8 tok/s). Unchanged on a card and Apple Silicon.
+recommendation_rank_cpu: 1
 recommended_context_tokens: 4096
 # Context cache at the 4,096-token window above, recomputed 2026-09-07 for ONE server slot
 # (issue #319: CHAT_SERVER_ARGS now passes `-np 1`; the b9849 default of 4 unified slots is gone).

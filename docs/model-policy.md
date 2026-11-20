@@ -89,6 +89,16 @@ Sizes/RAM come from each manifest
 > partially offloads (`model-benchmarks.md` §6.6 rule 6). The "Auto-tier" column above is the declared
 > `recommended_profiles` (kept as-is); the live recommendation is `recommendation_rank` +
 > RAM-best-fit (or the card's free-memory-best-fit on a discrete GPU).
+>
+> **Processor path (2026-11-20, `model-benchmarks.md` §6.7).** A computer whose next start runs
+> from RAM without a usable graphics card (memory class `cpu`) no longer takes the RAM path above.
+> Its picks rest on the 2026-11 answer-quality study and on measured processor speed, through the
+> optional `recommendation_rank_cpu`: **8–11 GB → Qwen3 4B 2507, 12–15 GB → Gemma 4 E4B,
+> 16–23 GB → Qwen3.5 9B, ≥24 GB → Gemma 4 26B-A4B**. A benchmark under 5 tok/s steps along the
+> manifest's `cpu_step_down_to` chain (26B-A4B → 9B → E4B → E2B, 2507 → E2B). The dense 12B to
+> 31B models carry `recommendation_rank_cpu: 0` there (selectable, never the automatic pick).
+> Ministral 3 8B went from rank 2 to 0 on every path the same day. The RAM path above now
+> describes Apple Silicon and the base of the card path only.
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
 12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in
@@ -250,6 +260,10 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
 no-RAM picker), `recommendation_rank` (a finite number, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
+`recommendation_rank_cpu` (a number ≥ 0; replaces `recommendation_rank` when the next start runs
+from the processor, 0 = never the automatic pick there; `model-benchmarks.md` §6.7),
+`cpu_step_down_to` (the id of the chat model the processor path steps to after a slow benchmark on
+this one; §6.7),
 `supports_thinking_mode` (below), `bundled_on_preconfigured_drive` (below),
 `speculative_decoding` (below), `disable_prompt_cache` (below),
 a `download` block (below),
