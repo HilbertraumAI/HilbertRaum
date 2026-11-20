@@ -1812,15 +1812,28 @@ Decision basis, as in §6.7: the 2026-11 answer-quality study first, then speed 
 | 8 GB | `qwen3.5-9b-ud-q4kxl` | 86.1 | `qwen3.5-4b-ud-q4kxl`, 76.9 | 29 tok/s, 33/33, GTX 1070 Ti (#391 leg 2) |
 | 12 and 16 GB | `gemma4-12b-it-qat-q4` | 89.5 | `qwen3.5-9b-ud-q4kxl`, 86.1 | 73 tok/s on the RTX 3090 (the 9B: 94) |
 | 20 GB | `qwen3.8-27b-ud-q4km` | 89.9 | the same | 48 tok/s with MTP, RTX 3090 |
-| 24 GB | `qwen3.8-27b-ud-q5km` | 90.0 | the same | 50 tok/s with MTP, RTX 3090 |
+| 24 GB | `gemma4-31b-it-qat-q4` | 94.6 | `qwen3.8-27b-ud-q5km`, 90.0 | 35 tok/s, 61/61 layers, RTX 3090 (the UD-Q5_K_M: 50 with MTP) |
 
 Under 12 GB of RAM the pick is `qwen3-4b-instruct-2507-q4` on every card (82.0; 88 tok/s on the
 RTX 3060 Laptop), at 12 and 13 GB the 9B where the card holds it. Card ranks: Gemma 4 12B and the
-E4B 3, the 2507 2, Qwen3.5 4B and the E2B 1; the 9B and the Qwen3.8 pair keep their ordinary 3.
-The 20 and 24 GB rows are deliberately unchanged: the study's leaders there, Gemma 4 31B (94.6)
-and Qwen3.6 27B Q4 (92.8), ran at 35 and 39 tok/s on the RTX 3090 against 50 and 48 for the
-current picks, and whether that trade is taken is an open owner call
-(`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/card-speed-b12110-20261120.tsv`).
+E4B and Gemma 4 31B 3, the 2507 and the Qwen3.8 27B UD-Q5_K_M 2, Qwen3.5 4B and the E2B 1; the 9B
+and the Qwen3.8 27B UD-Q4_K_M keep their ordinary 3.
+
+The 20 and 24 GB rows (owner call 2026-11-20, speeds in
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/card-speed-b12110-20261120.tsv`):
+
+- **24 GB: Gemma 4 31B.** It leads the study by 4.6 points over the UD-Q5_K_M, more than the
+  study's 3-point threshold for calling two models apart, and 35 tok/s on the card is far above
+  reading speed. Its need with the margin is 21,640 MiB, so it is the pick from that much free
+  memory. This sets the card rank only. Its ordinary rank stays 0, so the §9 ruling "rank 0
+  forever" (made on the grounded-answer F1, where it tied the 26B-A4B at a quarter of the speed)
+  still holds without a card and on Apple Silicon; on a card that holds it completely the speed
+  objection does not apply, and the study gives it the quality lead that F1 did not show.
+- **The UD-Q5_K_M steps behind its UD-Q4_K_M sibling on the card** (card rank 2). The two are
+  level on the study (90.0 and 89.9), the UD-Q4_K_M needs 3 GiB less, and a card just short of
+  the 31B (21,340 to 21,639 MiB free) is better served by the model with room to spare.
+- **20 GB: unchanged, the UD-Q4_K_M.** Gemma 4 31B does not fit. Qwen3.6 27B Q4 leads by 2.9
+  points (92.8), under the threshold, and is slower (39 tok/s against 48 with MTP).
 
 What partial offload costs, from the same laptop: the 9B at 20 of 33 layers ran at 8.7 tok/s
 (5.1 on the processor alone, 94 fully on a card), its UD-Q3 variant at 25 of 33 at 15. A model
@@ -2304,7 +2317,7 @@ recorded next to the rank in its manifest:
 | Candidate | Decision | Basis (rescored numbers) |
 |---|---|---|
 | `gemma4-26b-a4b-it-qat-q4` | **rank 2** — ranked runner-up / MoE speed alternative | EM parity with the 24 GB pick `qwen3.6-27b-q4` (.9765 both), ZERO audited hallucinations (both), ~4× its decode (tg 155.8 vs 40.1 t/s vulkan; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick (both families share the terse house style, so the §9 length confound does not explain the gap). Never the auto-pick while a rank-3 model fits (pinned in `committed-catalog.test.ts`). *(#378: the quality part of this basis is an F1 delta; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
-| `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). |
+| `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). **Amended 2026-11-20 (§6.8):** the ordinary rank stays 0, but it carries card rank 3 and is the pick on a 24 GB card, on the 2026-11 answer-quality study (94.6). |
 | `gemma4-e4b-it-qat-q4` | **rank 0** — missed the 8B bar | F1 .2999 vs Ministral .3111 / `qwen3.5-9b` .3152 / `qwen3-8b` .3262; hallucination-honest after audit (1 real). *(#378: an F1-delta basis; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
 | `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint *(resolved 2026-08-09: the #153 leg landed and promoted it to **rank 3** — see §6.5 "#153 amendment")* | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). *(#378: the quality part of this basis is an F1 delta; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
 | `qwen3.5-35b-a3b-ud-q4kxl` *(§9's deferred-to-speed rank)* | **rank 1** — ranked MoE alternative | The §9 bar ("beat `qwen3-30b-a3b-q4` on speed OR quality by enough") is met on both axes: 0 real hallucinations vs the incumbent MoE's 2 at EM parity (quality), and the 3B-active speed case confirmed (tg 140.9 t/s vulkan / 12.1 cpu vs the dense 27B-Q4's 40.1 / 2.8). *(Residual settled: its §9.1 in-app smoke PASSED 2026-08-09 — see the smokes record below.)* |

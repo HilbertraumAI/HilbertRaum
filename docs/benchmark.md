@@ -200,8 +200,9 @@ follows `recommendation_rank_gpu`, and a model an earlier start placed only part
 not picked for it again. With the committed
 manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `gemma4-e4b-it-qat-q4`,
 8 GB → `qwen3.5-9b-ud-q4kxl`, 12–16 GB → `gemma4-12b-it-qat-q4`, 20 GB → `qwen3.8-27b-ud-q4km`, 24 GB
-and up → `qwen3.8-27b-ud-q5km` (the 30-point grid in `committed-catalog.test.ts`; the 6, 8, 12 and 24 GB points were verified
-on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — while the 20 GB point and the
+and up → `gemma4-31b-it-qat-q4` (the 30-point grid in `committed-catalog.test.ts`; the 6, 8 and 12 GB points were verified
+on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — and the 24 GB pick loaded 61/61 on the RTX 3090 on
+2026-11-20 (§6.8), while the 20 GB point and the
 Gemma 12B / MoE estimate bands remain predicted, no such card being available); by RAM:
 
 | Measured RAM | Unified memory (RAM pick) | No usable card (processor path, §6.7) |

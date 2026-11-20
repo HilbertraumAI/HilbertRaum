@@ -103,7 +103,7 @@ Sizes/RAM come from each manifest
 > **Card path (2026-11-20, `model-benchmarks.md` §6.8).** On a discrete card the need is the
 > runtime's measured `projected_graphics_need_mib` plus its 1 GiB margin, and the pick is the
 > highest card-ranked model (`recommendation_rank_gpu`) that fits: **6 GB → Gemma 4 E4B, 8 GB →
-> Qwen3.5 9B, 12 and 16 GB → Gemma 4 12B, 20 GB → Qwen3.8 27B UD-Q4_K_M, 24 GB → UD-Q5_K_M**, the
+> Qwen3.5 9B, 12 and 16 GB → Gemma 4 12B, 20 GB → Qwen3.8 27B UD-Q4_K_M, 24 GB → Gemma 4 31B**, the
 > RAM floor permitting (under 12 GB of RAM: Qwen3 4B 2507). A model that an earlier start on this
 > machine placed only partly on the card is not picked for it again.
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,

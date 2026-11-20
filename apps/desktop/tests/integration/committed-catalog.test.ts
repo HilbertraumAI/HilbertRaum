@@ -232,7 +232,8 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'gemma4-12b-it-qat-q4': 'G12',
     'gemma4-26b-a4b-it-qat-q4': 'MoE',
     'qwen3.8-27b-ud-q4km': 'Q4',
-    'qwen3.8-27b-ud-q5km': 'Q5'
+    'qwen3.8-27b-ud-q5km': 'Q5',
+    'gemma4-31b-it-qat-q4': 'G31'
   }
   const RAM_COLUMNS = [8, 12, 16, 24, 32]
   /** The grid's free-memory convention: nominal GiB × 1024 − 1,024 MiB of idle desktop use (D3 median). */
@@ -395,6 +396,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.8-27b-ud-q4km': 18186,
     'qwen3.6-27b-q5': 20087,
     'qwen3.8-27b-ud-q5km': 21340,
+    'gemma4-31b-it-qat-q4': 21640,
     'qwen3.5-35b-a3b-ud-q4kxl': 22268
   }
   it('pins every card-ranked chat model\'s graphics-memory threshold in raw MiB (boundary on both sides)', () => {
@@ -455,15 +457,16 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // `freeMb` = nominal × 1024 − 1,024 (idle desktop use; also what a probe without a free figure
   // yields for a card reporting its nominal total) × RAM {8, 12, 16, 24, 32}. Since §6.8 the pick
   // is the highest card-ranked model that fits the card and clears the RAM floor: the E4B on a
-  // 6 GB card, the 9B from 8 GB, Gemma 12B from 12 GB where RAM allows its 14 GB floor, the 27B
-  // pair unchanged at 20 and 24 GB; under 12 GB of RAM the 2507, and at 12 the 9B.
+  // 6 GB card, the 9B from 8 GB, Gemma 12B from 12 GB where RAM allows its 14 GB floor, the Qwen3.8
+  // 27B UD-Q4_K_M at 20 GB and Gemma 4 31B at 24 GB (owner call 2026-11-20); under 12 GB of RAM
+  // the 2507, and at 12 the 9B.
   const GRID: Array<[cardGb: number, picks: string]> = [
     [6, '2507 / E4B / E4B / E4B / E4B'],
     [8, '2507 / 9B / 9B / 9B / 9B'],
     [12, '2507 / 9B / G12 / G12 / G12'],
     [16, '2507 / 9B / G12 / G12 / G12'],
     [20, '2507 / 9B / G12 / Q4 / Q4'],
-    [24, '2507 / 9B / G12 / Q5 / Q5']
+    [24, '2507 / 9B / G12 / G31 / G31']
   ]
   it('pins the 30-point card grid on the free-memory basis (RAM 8 / 12 / 16 / 24 / 32)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
@@ -515,12 +518,16 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(onCard(chat, 6943, 16)).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 6942, 16)).toBe('gemma4-e4b-it-qat-q4')
     // Public lines: RTX 5060 8,151 / 7,573 free (Linux Vulkan) → 9B; RTX 3080 Ti 11,912 / 11,640
-    // (CUDA) → Gemma 12B (9,273 fits, card rank 3); RTX 3090 24,575 / 23,332 (CUDA) → Q5 at RAM 32;
+    // (CUDA) → Gemma 12B (9,273 fits, card rank 3); RTX 3090 24,575 / 23,332 (CUDA) → Gemma 4 31B at RAM 32;
     // RTX 2060 6,144 / 5,136 → the E4B. The RTX 3060 Laptop of the 2026-11-20 check (5,226 free,
     // the app reads 14 GB of RAM) → the E4B, which landed 43/43 there.
     expect(onCard(chat, 7573, 32)).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 11_640, 32)).toBe('gemma4-12b-it-qat-q4')
-    expect(onCard(chat, 23_332, 32)).toBe('qwen3.8-27b-ud-q5km')
+    expect(onCard(chat, 23_332, 32)).toBe('gemma4-31b-it-qat-q4')
+    // The 31B's boundary: 21,640 holds it; one MiB less and the pick is the UD-Q4_K_M, not the
+    // UD-Q5_K_M (card rank 2), although the UD-Q5_K_M would still fit (21,340).
+    expect(onCard(chat, 21_640, 32)).toBe('gemma4-31b-it-qat-q4')
+    expect(onCard(chat, 21_639, 32)).toBe('qwen3.8-27b-ud-q4km')
     expect(onCard(chat, 5136, 32)).toBe('gemma4-e4b-it-qat-q4')
     expect(onCard(chat, 5226, 14)).toBe('gemma4-e4b-it-qat-q4')
   })
@@ -570,10 +577,12 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     const chat = committedManifests().filter((m) => m.role === 'chat')
     expect(Object.fromEntries(chat.filter((m) => m.recommendationRankGpu !== undefined).map((m) => [m.id, m.recommendationRankGpu]))).toEqual({
       'gemma4-12b-it-qat-q4': 3,
+      'gemma4-31b-it-qat-q4': 3,
       'gemma4-e2b-it-qat-q4': 1,
       'gemma4-e4b-it-qat-q4': 3,
       'qwen3-4b-instruct-2507-q4': 2,
-      'qwen3.5-4b-ud-q4kxl': 1
+      'qwen3.5-4b-ud-q4kxl': 1,
+      'qwen3.8-27b-ud-q5km': 2
     })
     const g12 = 'gemma4-12b-it-qat-q4'
     const nineB = 'qwen3.5-9b-ud-q4kxl'
@@ -635,7 +644,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     const chat = committedManifests().filter((m) => m.role === 'chat')
     for (const ram of [Number.NaN, 0]) {
       expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram} RAM pick`).toBeNull()
-      expect(onCard(chat, 24_000, ram), `ram=${ram} 24,000`).toBe('qwen3.8-27b-ud-q5km')
+      expect(onCard(chat, 24_000, ram), `ram=${ram} 24,000`).toBe('gemma4-31b-it-qat-q4')
       expect(onCard(chat, 7168, ram), `ram=${ram} 7,168`).toBe('qwen3.5-9b-ud-q4kxl')
       // 4,000 MiB holds the E2B (2,823) and nothing else that is card-ranked (the 4B class needs 4,299).
       expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBe('gemma4-e2b-it-qat-q4')
@@ -719,7 +728,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       expect(await star({ memoryClass: 'cpu', graphicsBudgetMb: 24 * 1024 })).toBe('gemma4-26b-a4b-it-qat-q4')
       expect(await star({ memoryClass: 'unified' })).toBe('qwen3.8-27b-ud-q5km')
       expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 7168 })).toBe('qwen3.5-9b-ud-q4kxl')
-      expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 23_332 })).toBe('qwen3.8-27b-ud-q5km')
+      expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 23_332 })).toBe('gemma4-31b-it-qat-q4')
     } finally {
       rmSync(rootPath, { recursive: true, force: true })
     }
