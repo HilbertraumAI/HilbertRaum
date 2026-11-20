@@ -134,15 +134,27 @@ export function provenanceLine(d: DocumentInfo, sourcesById: ReadonlyMap<string,
  * badge or a blue pill. Deduped, in a stable order. Returns plain labels; the caller renders
  * them as <Chip>. Module-scope (PERF-5) so {@link DocRow} can call it with `t`.
  */
-export function rowChips(d: DocumentInfo, t: I18n['t']): string[] {
+export function rowChips(
+  d: DocumentInfo,
+  t: I18n['t'],
+  compareNames: (a: string, b: string) => number
+): string[] {
   const labels: string[] = []
   const push = (s: string): void => {
     if (s && !labels.includes(s)) labels.push(s)
   }
-  for (const c of d.collections ?? []) {
+  // Built-ins first, then the projects in the interface language's name order (#828); main's join
+  // returns them in the order the document was added, which reads as random.
+  const memberships = d.collections ?? []
+  for (const c of memberships) {
     if (c.type === 'library') push(t('docs.chip.library'))
     else if (c.type === 'temporary') push(t('docs.chip.temporary'))
-    else push(c.name)
+  }
+  for (const name of memberships
+    .filter((c) => c.type !== 'library' && c.type !== 'temporary')
+    .map((c) => c.name)
+    .sort(compareNames)) {
+    push(name)
   }
   if ((d.lifecycle ?? 'permanent') === 'temporary') push(t('docs.chip.temporary'))
   if ((d.lifecycle ?? 'permanent') === 'archived') push(t('docs.chip.archived'))

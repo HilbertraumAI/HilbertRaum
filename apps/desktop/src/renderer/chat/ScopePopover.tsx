@@ -4,6 +4,7 @@ import type { Collection, DocumentInfo, DocumentScope, KnowledgePack } from '@sh
 import { MAX_SELECTED_PACKS } from '@shared/types'
 import { Button, Chip, Icon } from '../components'
 import { useT, type I18n } from '../i18n'
+import { inNameOrder } from '../lib/collation'
 
 // "📄 Answering from: Library + Project: Tax 2025 ▾" (guidelines §3): the composer-footer affordance
 // for the documents-mode retrieval scope. The popover is a MULTI-SELECT source picker
@@ -131,7 +132,7 @@ export function ScopePopover({
   packs = [],
   onAddPacks
 }: ScopePopoverProps): JSX.Element {
-  const { t, tCount } = useT()
+  const { t, tCount, lang } = useT()
   const [showDocs, setShowDocs] = useState(false)
   // #301 P6 (plan §9.23 (b)3/(b)4/(b)5): ids for the group labels, the Documents toggle's
   // DESCRIPTION, and the cap line every cap-disabled checkbox points at. Hoisted above the
@@ -159,8 +160,12 @@ export function ScopePopover({
   // Pickable sources: Library + non-archived projects (archived projects drop out — C1).
   const library = useMemo(() => collections.find((c) => c.type === 'library'), [collections])
   const projects = useMemo(
-    () => collections.filter((c) => c.type === 'project' && c.archivedAt == null),
-    [collections]
+    () =>
+      inNameOrder(
+        collections.filter((c) => c.type === 'project' && c.archivedAt == null),
+        lang
+      ),
+    [collections, lang]
   )
   // Hoisted above the empty-corpus early return below — hooks must run unconditionally.
   const addableDocs = useMemo(() => indexed.filter((d) => !docIds.includes(d.id)), [indexed, docIds])

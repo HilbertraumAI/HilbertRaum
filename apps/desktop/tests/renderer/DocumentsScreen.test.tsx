@@ -19,6 +19,7 @@ import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { appStatus as appStatusFixture } from '../helpers/status'
 import { renderInLanguage } from '../helpers/render-language'
+import { PROJECT_ORDER_CASES, inLanguageOrder } from '../helpers/project-order-fixtures'
 
 // PERF-5: count DocRow renders test-side — production's memo object, inner component wrapped (no src seam).
 const rowRenders = vi.hoisted(() => new Map<string, number>())
@@ -2277,5 +2278,76 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
       await screen.findByText('contract.pdf: The document file is no longer present.')
     ).toBeInTheDocument()
     expect(screen.queryByText('“contract.pdf” re-indexed.')).not.toBeInTheDocument()
+  })
+})
+
+// #828: every project list follows the interface language's collation, not the code-point order
+// main returns. The fixtures are handed over in code-point order, as `listCollections` returns them.
+describe.each(PROJECT_ORDER_CASES)('DocumentsScreen project order (%s)', (lang, sqlOrder) => {
+  const expected = inLanguageOrder(lang, sqlOrder)
+  // The screen's mount-time reads, answered with nothing in flight.
+  const quiet = {
+    getAppStatus: vi.fn(async () => appStatusFixture()),
+    getReindexAllJob: vi.fn(async () => null),
+    getActiveImportJob: vi.fn(async () => null)
+  }
+
+  afterEach(() => {
+    cleanup()
+    clearDocTaskSession()
+  })
+
+  it('the fixture order differs from the code-point order and from the en order', () => {
+    expect(expected).not.toEqual(sqlOrder)
+    expect(expected).not.toEqual(inLanguageOrder('en', sqlOrder))
+  })
+
+  it('lists the rail projects in the language order', async () => {
+    stubApi({
+      ...quiet,
+      listCollections: vi.fn(async () => sqlOrder.map((n, i) => coll({ id: `a${i}`, name: n }))),
+      listDocuments: vi.fn(async () => [doc({})])
+    })
+    const { container } = renderInLanguage(<DocumentsScreen />, lang)
+    await screen.findByRole('button', { name: new RegExp(sqlOrder[0]!) })
+    const names = [...container.querySelectorAll('.docs-rail-project:not(.archived) .docs-rail-item')].map((b) =>
+      (b.textContent ?? '').replace(/\d+$/, '').trim()
+    )
+    expect(names).toEqual(expected)
+  })
+
+  it('lists the archived rail projects in the language order', async () => {
+    stubApi({
+      ...quiet,
+      listCollections: vi.fn(async () =>
+        sqlOrder.map((n, i) => coll({ id: `r${i}`, name: n, archivedAt: '2026-02-01T00:00:00Z' }))
+      ),
+      listDocuments: vi.fn(async () => [doc({})])
+    })
+    const { container } = renderInLanguage(<DocumentsScreen />, lang)
+    await screen.findByRole('button', { name: new RegExp(sqlOrder[0]!) })
+    const names = [...container.querySelectorAll('.docs-rail-project.archived .docs-rail-item')].map((b) =>
+      (b.textContent ?? '').replace(/\d+$/, '').trim()
+    )
+    expect(names).toEqual(expected)
+  })
+
+  it('lists the projects of the "Choose a project" window in the language order', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      ...quiet,
+      listCollections: vi.fn(async () => sqlOrder.map((n, i) => coll({ id: `m${i}`, name: n }))),
+      listDocuments: vi.fn(async () => [doc({})])
+    })
+    renderInLanguage(<DocumentsScreen />, lang)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: translate(lang, 'docs.moreActions', { title: 'contract.pdf' }) }))
+    await user.click(await screen.findByRole('menuitem', { name: translate(lang, 'docs.action.moveToProject') }))
+    const dialog = await screen.findByRole('dialog')
+    const names = within(dialog)
+      .getAllByRole('button')
+      .map((b) => (b.textContent ?? '').trim())
+      .filter((n) => sqlOrder.includes(n))
+    expect(names).toEqual(expected)
   })
 })

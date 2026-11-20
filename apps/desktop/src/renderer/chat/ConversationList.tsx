@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   SEARCH_MARK_END,
@@ -9,6 +9,7 @@ import {
 } from '@shared/types'
 import { Button, ConfirmDialog, Icon } from '../components'
 import { useT, type I18n } from '../i18n'
+import { nameCompare } from '../lib/collation'
 import { localizeServerCopy } from '../lib/displayMap'
 import type { MessageKey } from '@shared/i18n'
 
@@ -163,7 +164,7 @@ export const ConversationList = memo(function ConversationList({
 }: Props): JSX.Element {
   const { t, tCount, lang } = useT()
   // One collator per interface language for the project sections' name order (`groupByProject`).
-  const compareNames = useMemo(() => new Intl.Collator(lang).compare, [lang])
+  const compareNames = nameCompare(lang)
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   // D-2 (EP-1 plan §7.6, spec §25.4): how many evidence reviews the delete would cascade
   // away. null = not fetched / none pending; 'unknown' = the count could not be read —
