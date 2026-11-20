@@ -40,7 +40,8 @@ valid and lets the real embedder swap in unchanged (Phase 10).
 1. **Select / expand.** `expandPathsWithSource()` turns a user selection into a flat file list
    through the asynchronous, budget-bounded walk `expandPathsBoundedAsync` (#274; the synchronous
    `expandPaths` stays only as the tests' reference walk, #687):
-   folders are walked recursively (supported extensions only); explicitly-picked files are
+   folders are walked recursively (supported extensions only, read from the title the file will
+   import under, step 2); explicitly-picked files are
    always included (an unsupported one surfaces later as `failed`). The walk **follows
    symlinked directories** (intended — ING-4), but guards against a **symlink cycle**
    (`a/loop -> ..`): it tracks the real path of every directory on the *current recursion
@@ -50,10 +51,21 @@ valid and lets the real embedder swap in unchanged (Phase 10).
    leaving every acyclic walk's expansion set byte-identical — a symlink to a *distinct*
    directory is not an ancestor, so it is still followed.
 2. **Queue.** `createQueuedDocument()` inserts a `documents` row (`status = queued`,
-   `original_path`, guessed `mime_type`, `size_bytes`).
+   `title`, `original_path`, guessed `mime_type`, `size_bytes`). The `title` is the file name
+   without the spaces it ends in, and without its trailing dots when a supported extension is
+   then left (`importedFileTitle`, #918): `notes.txt ` and `report.pdf.` import as `notes.txt`
+   and `report.pdf`, while "Washington, D.C." and "v2.1" keep their names. macOS and Linux allow
+   such names, and so do Node, Git Bash and WSL on NTFS; Explorer, cmd and PowerShell strip them. Every later
+   reader (the parser, the MIME type, the stored copy's name, the exports) takes the extension
+   from this title, so they all agree.
 3. **Extract.** `processDocument()` copies the original into the workspace
-   (`workspace/documents/<id><ext>` → `stored_path`), records `sha256` + `size_bytes`,
-   selects a `DocumentParser` by extension, and extracts ordered text **segments**.
+   (`workspace/documents/<id><ext>` → `stored_path`, `<ext>` from the title), records `sha256` +
+   `size_bytes`, selects a `DocumentParser` by the title's extension, and extracts ordered text
+   **segments**. In an encrypted workspace the first parse reads the original directly, unless the
+   original's own extension is not the title's (its name ended in a space or a dot): then it reads
+   a decrypted `<id>.parse<ext>` copy, the re-index transient, shredded the same way (#918). The
+   preview, when the stored copy is gone and it falls back to the original, does the same in both
+   modes: it reads a `<id>.parse-preview-<uuid><ext>` copy of that original, shredded on the way out.
 4. **Chunk.** `chunkSegments()` splits each segment into overlapping token windows.
 5. **Persist.** Old chunks + embeddings (if re-indexing) are removed, new chunks inserted
    into `chunks`.
