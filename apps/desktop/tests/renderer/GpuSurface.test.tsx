@@ -12,7 +12,8 @@ import {
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { diagnosticsEngineStubs } from '../helpers/settings-diagnostics'
 import { performanceSnapshot } from '../helpers/status'
 
 // Phase 16 GPU surface (architecture.md GPU record §8), re-homed by Phase 26: the Diagnostics
@@ -70,7 +71,7 @@ function stubDiagnostics(opts: {
   /** Replaces the whole `performance:get` stub — for the rejecting case. */
   getPerformance?: Mock
 }): void {
-  stubApi({
+  stubApi(diagnosticsEngineStubs({
     getAppStatus: vi.fn(async () => appStatus),
     getDriveStatus: vi.fn(async () => driveStatus),
     getRuntimeStatus: vi.fn(async () => opts.runtime ?? runtimeStatus()),
@@ -85,7 +86,7 @@ function stubDiagnostics(opts: {
       vi.fn(async () => settings({ gpuAutoDisabled: false, gpuLastError: null }))),
     getLogTail: vi.fn(async () => []),
     runBenchmark: vi.fn()
-  })
+  }))
 }
 
 /** The Diagnostics surfaces now live on the Settings "Diagnostics (advanced)" tab. */
@@ -93,7 +94,10 @@ function renderDiagnostics(): void {
   render(<SettingsScreen tab="diagnostics" />)
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () => {
   it('shows the GPU name while a model runs on the GPU backend', async () => {

@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { Db } from '../../src/main/services/db'
 import {
   createQueuedDocument,
+  deleteDocument,
   processDocument,
   reindexDocument,
   documentsDir,
@@ -12,15 +13,20 @@ import {
   readStoredDocumentText,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
+import { createPlaintextOps, type PlaintextOpsRegistry } from '../../src/main/services/ingestion/plaintext-ops'
 import {
   vaultPathsFrom,
   createEncryptedVaultOnDisk,
-  WorkspaceController
+  shredStalePlaintext,
+  WorkspaceController,
+  type DocumentCipher
 } from '../../src/main/services/workspace-vault'
+import type { Transcriber } from '../../src/main/services/transcriber'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import { recordingCipher, testCipher } from '../helpers/test-cipher'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { until, within } from '../helpers/hang-budget'
 
 // H1 (audit round 4): spec §3.5 requires encrypting the workspace database AND the
 // document cache. The vault used to cover only the DB — every imported file's raw bytes
@@ -296,5 +302,213 @@ describe('original-bytes export from an encrypted store (#90)', () => {
     await expect(readStoredDocumentBytes(db, store, doc.id)).rejects.toThrow(
       /unlock the workspace/i
     )
+  })
+})
+
+// #918 item 3: the import title drops a trailing space or dot from the file name ("people.tsv " imports as
+// "people.tsv"), but the first parse of an encrypted import used to read the user's original, whose own name still
+// carries them: the TSV was split by commas, and the voice engine would get a name Windows strips to another file.
+// That parse now reads a decrypted copy named after the title: the re-index transient `<id>.parse<ext>` in the store,
+// tracked for the lock/quit sweep, under the startup sweep's `.parse` match, shredded in prepare's `finally`.
+describe('an encrypted import of a name that ends in a space or a dot (#918)', () => {
+  const TSV = `name\tnote\nLovelace, Ada\t${SECRET_TEXT}\n`
+
+  it('parses a decrypted copy named after the title, as the same file without the space, and shreds it', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const rec = recordingCipher()
+    const ops = createPlaintextOps()
+    const odd = createQueuedDocument(db, writeSource('people.tsv ', TSV))
+    const info = await processDocument(db, store, odd.id, { cipher: rec.cipher, plaintextOps: ops })
+    expect(info.status).toBe('indexed')
+    expect(info.title).toBe('people.tsv')
+
+    // Split by tabs, exactly as the same file without the space (whose first parse reads the original: no decrypt).
+    const plain = createQueuedDocument(db, writeSource('people.tsv', TSV))
+    await processDocument(db, store, plain.id, { cipher: rec.cipher })
+    const text = (id: string): string =>
+      (db.prepare('SELECT text FROM chunks WHERE document_id = ?').get(id) as { text: string }).text
+    expect(text(odd.id)).toContain('name: Lovelace, Ada')
+    expect(text(odd.id)).toBe(text(plain.id))
+    // Only the odd name was decrypted, into the store's `.parse` transient.
+    expect(rec.asyncDecrypts).toEqual([join(store, `${odd.id}.parse.tsv`)])
+
+    expect(readdirSync(store).sort()).toEqual([`${odd.id}.tsv${ENCRYPTED_DOC_SUFFIX}`, `${plain.id}.tsv${ENCRYPTED_DOC_SUFFIX}`].sort())
+    expect(plaintextLeaks(store)).toEqual([])
+    expect(ops.size()).toBe(0)
+  })
+
+  it('a parse that fails shreds the copy too, failing as the same file without the dot', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const rec = recordingCipher()
+    const broken = `not a pdf at all: ${SECRET_TEXT}`
+    const doc = createQueuedDocument(db, writeSource('broken.pdf ', broken))
+    const info = await processDocument(db, store, doc.id, { cipher: rec.cipher })
+    expect(info.status).toBe('failed')
+    expect(rec.asyncDecrypts).toEqual([join(store, `${doc.id}.parse.pdf`)])
+    expect(readdirSync(store)).toEqual([`${doc.id}.pdf${ENCRYPTED_DOC_SUFFIX}`])
+    expect(plaintextLeaks(store)).toEqual([])
+    const control = createQueuedDocument(db, writeSource('broken.pdf', broken))
+    expect((await processDocument(db, store, control.id, { cipher: rec.cipher })).errorMessage).toBe(info.errorMessage)
+  })
+
+  // #918 review: the row records the stored copy before that decrypt, so a decrypt that fails (a full drive, a lock
+  // shredding its `.tmp`) leaves a `.enc` the row names, and removing the document deletes it.
+  it('a decrypt that fails leaves the row naming its encrypted copy, and removing the document deletes it', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const cipher: DocumentCipher = {
+      ...testCipher(),
+      decryptFileAsync: async () => {
+        throw new Error('ENOSPC: no space left on device, write')
+      }
+    }
+    const doc = createQueuedDocument(db, writeSource('people.tsv ', TSV))
+    expect((await processDocument(db, store, doc.id, { cipher })).status).toBe('failed')
+    const row = db.prepare('SELECT stored_name, sha256 FROM documents WHERE id = ?').get(doc.id) as {
+      stored_name: string | null
+      sha256: string | null
+    }
+    expect(row.stored_name).toBe(`${doc.id}.tsv${ENCRYPTED_DOC_SUFFIX}`)
+    expect(row.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(readdirSync(store)).toEqual([row.stored_name]) // no transient either
+    deleteDocument(db, store, doc.id)
+    expect(readdirSync(store)).toEqual([])
+  })
+
+  it('an unsupported type is refused without a decrypted copy', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const rec = recordingCipher()
+    const doc = createQueuedDocument(db, writeSource('photo.heic ', SECRET_TEXT))
+    const info = await processDocument(db, store, doc.id, { cipher: rec.cipher })
+    expect(info.status).toBe('failed')
+    expect(info.errorMessage).toContain("isn't supported (.heic)")
+    expect(rec.asyncDecrypts).toEqual([])
+    expect(plaintextLeaks(store)).toEqual([])
+  })
+
+  it('a cancelled import ends the transcription of "memo.mp3 ", whose voice engine got the named copy, and shreds it', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const ops = createPlaintextOps()
+    const source = writeSource('memo.mp3 ', SECRET_TEXT)
+    let handed: string | null = null
+    let bytes: Buffer | null = null
+    const parked: Transcriber = {
+      id: 'parked',
+      transcribe: (filePath, opts) =>
+        new Promise<never>((_resolve, reject) => {
+          handed = filePath
+          bytes = readFileSync(filePath)
+          const cancelled = (): void => reject(new Error('Transcription was cancelled.'))
+          if (opts.signal?.aborted) cancelled()
+          else opts.signal?.addEventListener('abort', cancelled, { once: true })
+        })
+    }
+    const job = new AbortController()
+    const doc = createQueuedDocument(db, source)
+    const run = processDocument(db, store, doc.id, {
+      cipher: testCipher(),
+      transcriber: parked,
+      plaintextOps: ops,
+      signal: job.signal
+    })
+    await until(() => handed !== null, 'the import reaching the voice engine')
+    expect(handed).toBe(join(store, `${doc.id}.parse.mp3`))
+    expect(bytes!.equals(readFileSync(source))).toBe(true)
+
+    job.abort()
+    expect((await within(run, 'the cancelled import settling')).status).toBe('failed')
+    expect(existsSync(handed!)).toBe(false)
+    expect(readdirSync(store)).toEqual([`${doc.id}.mp3${ENCRYPTED_DOC_SUFFIX}`])
+    expect(ops.size()).toBe(0)
+  })
+
+  // The copy is decrypted for real, then the parse is held while it sits on the drive: the state a parse that
+  // outlives the lock's settle bound leaves, or a crash leaves. The crash case pins the copy's name: the startup
+  // sweep matched `.parse` before #918 too.
+  it.each([
+    ['the lock and quit sweep of the registry', false],
+    ['the startup crash sweep', true]
+  ])('while the parse holds the copy, %s shreds it', async (_sweep, crash) => {
+    const db = freshDb()
+    const root = tempRoot('encdoc-ws')
+    const store = documentsDir(root)
+    const inner = testCipher()
+    let copy: string | null = null
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const cipher: DocumentCipher = {
+      ...inner,
+      decryptFileAsync: async (src, dest) => {
+        await inner.decryptFileAsync(src, dest)
+        copy = dest
+        await gate
+      }
+    }
+    const ops = createPlaintextOps()
+    const doc = createQueuedDocument(db, writeSource('people.tsv ', TSV))
+    const run = processDocument(db, store, doc.id, { cipher, plaintextOps: ops })
+    await until(() => copy !== null, 'the import decrypting its copy')
+    expect(copy).toBe(join(store, `${doc.id}.parse.tsv`))
+    expect(plaintextLeaks(store)).toEqual([`${doc.id}.parse.tsv`])
+
+    if (crash) {
+      // The next start sweeps the workspace's documents folder by the `.parse` infix (the vault DB itself is absent here).
+      shredStalePlaintext(vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'hilbertraum.sqlite') }))
+    } else {
+      ops.abortAll()
+      expect(ops.sweepRegistered()).toBe(1)
+    }
+    expect(existsSync(copy!)).toBe(false)
+
+    release()
+    expect((await within(run, 'the held import settling')).status).toBe('failed')
+    expect(ops.size()).toBe(0)
+    expect(readdirSync(store)).toEqual([`${doc.id}.tsv${ENCRYPTED_DOC_SUFFIX}`])
+  })
+})
+
+// #918 review: with the stored copy gone the preview (and the segment readers and doc tasks that read through it)
+// falls back to the user's original, whose name still ends in the space. It now reads a copy named after the title,
+// in both modes, under the preview's own transient name: tracked for the lock/quit sweep, shredded on the way out.
+describe('the preview of a name that ends in a space, without its stored copy (#918)', () => {
+  const TSV = `name\tnote\nLovelace, Ada\t${SECRET_TEXT}\n`
+
+  it.each([
+    ['a plaintext', false],
+    ['an encrypted', true]
+  ])('in %s workspace, the preview reads a copy of the original named after the title', async (_mode, encrypted) => {
+    const db = freshDb()
+    const store = freshStore()
+    const cipher = encrypted ? testCipher() : null
+    const doc = createQueuedDocument(db, writeSource('people.tsv ', TSV))
+    expect((await processDocument(db, store, doc.id, { cipher })).status).toBe('indexed')
+    for (const name of readdirSync(store)) rmSync(join(store, name)) // the stored copy is gone, the original is not
+
+    const ops = createPlaintextOps()
+    const tracked: string[] = []
+    const recording: PlaintextOpsRegistry = {
+      ...ops,
+      register: (kind, parent) => {
+        const op = ops.register(kind, parent)
+        return {
+          ...op,
+          track: (path) => {
+            tracked.push(path)
+            op.track(path)
+          }
+        }
+      }
+    }
+    const preview = await extractDocumentPreview(db, store, doc.id, { cipher, plaintextOps: recording })
+    expect(preview.segments.map((s) => s.text).join('\n')).toContain('name: Lovelace, Ada')
+    expect(tracked).toHaveLength(1)
+    expect(dirname(tracked[0]!)).toBe(store)
+    expect(basename(tracked[0]!)).toMatch(new RegExp(`^${doc.id}\\.parse-preview-[0-9a-f-]+\\.tsv$`))
+    expect(readdirSync(store)).toEqual([])
+    expect(ops.size()).toBe(0)
   })
 })

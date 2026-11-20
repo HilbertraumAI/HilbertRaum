@@ -306,7 +306,8 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
   containment rule, because their existence is checked). Everything else is ignored, since this build
   cannot know which of its own rules a later role or field follows. The entry never joins the model list
   anything selects from, so it is never recommended, verified, downloaded or started (the main process
-  answers "Unknown model id"). The Models screen lists it, with nothing to act on, in a trailing "Needs a
+  refuses it as an unknown model, `main.models.unknown`: "This model is no longer in this drive's model
+  list", in the interface language, #930). The Models screen lists it, with nothing to act on, in a trailing "Needs a
   newer HilbertRaum" section, and on "On this drive" when every declared file exists (design-guidelines
   §15). A missing, blank or non-string `role`, or a missing `id` / `display_name`, is still invalid. Such
   entries share the models' id space, and a manifest this app can use ALWAYS keeps its id, whatever the walk
@@ -383,7 +384,9 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
 - **`sha256`** is lower-case hex (64 chars). A non-hex placeholder (e.g. `REPLACE_WITH_REAL_HASH`)
-  marks a model whose hash is not yet known; such a file is only usable in developer mode.
+  marks a model whose hash is not yet known; such a file is only usable in developer mode on a drive
+  whose policy allows unverified models. The AI Model screen shows such a model as **No checksum**
+  (#932, "Model states" below).
 - **`runtime`/`format`**: the supported pairs are `llama_cpp`/`gguf` (chat, embeddings, reranker,
   vision) and `whisper_cpp`/`ggml` (the transcriber); any other runtime/format pair yields the
   `unsupported` state.
@@ -460,6 +463,27 @@ every entry `manifestFiles()` enumerates — the weight, a vision model's mmproj
 a newer HilbertRaum (#847, above) is listed as `unsupported` too, display-only: `ModelInfo.role` is
 `'unknown'` (its declared role rides `declaredRole`), `needsNewerApp: true`, never recommended, no
 `download`, and `filesPresent` says whether every file it declares exists (existence only, no hash).
+
+`checksum_failed` covers two facts, and the screens tell them apart without a new state:
+
+- **A file failed its check** (a cached or computed digest differs from the manifest's). The AI Model
+  card says **Can't verify** and offers its Download (the repair).
+- **No checksum on record** (a placeholder hash, outside developer leniency; decided from the manifest
+  before any file is read). `buildModelList` flags the model `ModelInfo.noChecksum: true`
+  (`hasPlaceholderHash`, #932). The card says **No checksum**, with a hint that the model runs only in
+  developer mode on a drive whose policy allows unverified models, and offers no Download: a new copy
+  cannot give the manifest a checksum. A mixed manifest (a real-hash GGUF beside a placeholder
+  projector) is flagged too, even when its GGUF is damaged: the placeholder decides the state before
+  the GGUF is read, and the model stays refused until every file has a checksum, so the card hides the
+  Download that would fetch the GGUF (#933 review N2).
+
+`ModelState`, the start verdict (`checkModelBeforeStart`: `ok` | `damaged`) and every role's start gate
+are the same for both, so both are refused at every start. The images, translation and search copy still
+calls both "damaged" ([`known-limitations.md`](known-limitations.md)). The Performance screen reads the same two facts per row,
+from the checksum cache only (`knownFileVerdict`, never a hash; `ResidentModelRow.fileCheck`: `damaged` |
+`unverified` | `ok`, #933). Such a row's pill says **failed its file check** or **no checksum on record**
+instead of "not loaded", and the row adds nothing to "Everything loaded at once" or the graphics-card
+lines unless the model is loaded. A file nobody has checked yet reads `ok` there, as on the AI Model card.
 
 ## License review gate
 ```yaml

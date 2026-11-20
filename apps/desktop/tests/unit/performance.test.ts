@@ -410,7 +410,7 @@ describe('attributedGpuFigures', () => {
 
 describe('loadedAtOnceMb', () => {
   const row = (over: Partial<ResidentModelRow>): ResidentModelRow => ({
-    role: 'vision', modelId: 'm', sizeOnDiskGb: 1, onDrive: true, device: 'cpu', loaded: false, lifetime: 'idle',
+    role: 'vision', modelId: 'm', sizeOnDiskGb: 1, onDrive: true, fileCheck: 'ok', device: 'cpu', loaded: false, lifetime: 'idle',
     gpuLayers: null, totalLayers: null, ...over
   })
   /** A card machine: chat and translation on the card, the translation live with 20 of 49 layers offloaded. */
@@ -516,6 +516,26 @@ describe('loadedAtOnceMb', () => {
       ...(r.role === role ? { onDrive: false, loaded: true } : {})
     }))
     expect(loadedAtOnceMb({ memoryClass, rows: classRows, verdict })).toBe(expected)
+  })
+
+  // #933: a row on the drive whose files the checksum cache knows are damaged, or that has no checksum on record, will
+  // not load either (every start refuses it), so it adds nothing on any class; loaded beats it, as for `onDrive`. Here
+  // the vision row (3.0 GiB = 3,072 MiB), not loaded, then loaded.
+  it.each([
+    ['cpu', { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408],
+    ['discrete', estimate, 9036],
+    ['unified', { ...estimate, budgetMb: 36_864 }, 17408]
+  ] as const)('#933 %s: a damaged or no-checksum row adds nothing unless it is loaded', (memoryClass, verdict, all) => {
+    const classRows = (over: Partial<ResidentModelRow>): ResidentModelRow[] =>
+      rows.map((r) => ({
+        ...r,
+        ...(memoryClass === 'cpu' ? { device: 'cpu' as const } : {}),
+        ...(r.role === 'vision' ? over : {})
+      }))
+    for (const fileCheck of ['damaged', 'unverified'] as const) {
+      expect(loadedAtOnceMb({ memoryClass, rows: classRows({ fileCheck }), verdict })).toBe(all - 3072)
+      expect(loadedAtOnceMb({ memoryClass, rows: classRows({ fileCheck, loaded: true }), verdict })).toBe(all)
+    }
   })
 
   // Wave 8 ruling (d)/NF-3 (step 4-8): a `'gpu'`-posture reranker row is no longer counted

@@ -5,6 +5,7 @@ import { printEvidencePackHtmlToPdf } from '../../src/main/services/evidence-pac
 import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
 import { installAppProtocol, registerAppSchemePrivileges } from '../../src/main/install-app-protocol'
 import { printPages } from '../../src/main/app-protocol'
+import { writeSmokeResult } from './electron-smoke-child'
 
 // REAL-Electron smoke runner (EP-1 plan §11 tests) — NOT a test file. The pdf-smoke suite
 // bundles this entry with esbuild and spawns it under the locally installed Electron
@@ -156,12 +157,11 @@ async function main(): Promise<void> {
   } catch (e) {
     fatal = e instanceof Error ? (e.stack ?? e.message) : String(e)
   }
-  writeFileSync(
-    resultPath,
-    JSON.stringify({ fatal, results, requestedUrls, offlineViolations }, null, 2),
-    'utf8'
-  )
-  app.exit(fatal ? 1 : 0)
+  // Atomic (.part + rename): the test polls for this file (tests/helpers/electron-smoke-child.ts) and ends the child a
+  // grace after it appears, so it must never read half a file. `exitCode` is what the runner is about to exit with.
+  const exitCode = fatal ? 1 : 0
+  writeSmokeResult(resultPath, { fatal, exitCode, results, requestedUrls, offlineViolations })
+  app.exit(exitCode)
 }
 
 void main()

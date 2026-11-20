@@ -38,6 +38,14 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Closing the window while a scan is being read or a document is being translated now asks
+  first.** On Windows and Linux, closing the window quits HilbertRaum, and that stopped text
+  recognition (OCR) or a document translation without a word, and everything it had done so far
+  was lost. Now, while one is running or waiting to start, closing the window asks first: Keep
+  open (the default) lets it finish, Close anyway stops it, and it starts over from the beginning
+  when you run it again. Until you answer, the app stays open and the workspace stays unlocked.
+  Quitting with Ctrl+Q on Linux or ⌘Q on macOS and Lock now still stop it without asking. On
+  macOS, closing the window leaves the app and the task running, as before (#935).
 - **You now choose the interface language from a drop-down list.** Settings → General → Language used to
   show System, English and Deutsch as three buttons side by side; it is now a list, with room for
   more languages. The choices are unchanged. Your choice shows at once; the interface switches to
@@ -90,6 +98,15 @@ from its first public `1.0.0` release onward.
   downloaded until you confirm. The activity log (Settings → Diagnostics → Activity) now also
   records each AI engine and OCR-file install: when it started and whether it finished or failed,
   never a file path (#843).
+- **Downloads trust the certificates installed on your computer.** Antivirus programs that check
+  secure connections, such as Norton, and company proxies re-sign those connections with a
+  certificate of their own, which they install on your computer. The downloads of models, the AI
+  engine, the knowledge-pack tools and the text-recognition (OCR) files now trust those
+  certificates, so they work behind such a program without any extra setting. The
+  released app no longer reads the `NODE_EXTRA_CA_CERTS` environment variable: if your company's
+  proxy certificate was set only there, downloads fail until it is installed on the computer,
+  which your IT department can do. Every downloaded file is still checked against a fixed checksum
+  before use (#564).
 
 ### Fixed
 
@@ -104,6 +121,11 @@ from its first public `1.0.0` release onward.
   failed because another program, such as antivirus, held one of its new files, the lock screen
   showed the system's own English error with the full path of the file on the drive; it now says
   "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
+- **A quit that waits to save no longer starts the next document task only to stop it.** When
+  Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
+  running, the next document task in line started during that wait and was stopped a moment
+  later. Now nothing new starts while the quit waits; if you pick Keep open, the next task starts
+  as usual (#936).
 - **On Windows, audio import and voice dictation work in folders with umlauts, accents or other
   alphabets.** When the drive or the app's data folder had such a character in its path (a user
   named Jürgen, a Kit folder named `Übungen`, a folder in Cyrillic or Japanese), the voice engine
@@ -308,12 +330,29 @@ from its first public `1.0.0` release onward.
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.
   Questions with "différence", "différent", "diffère" or "différencier" still compare them
   (#809).
-- **With What Changed? selected, a question that isn't a comparison gets a plain answer.** With one
-  document in scope, or three or more, a question such as "Who is the tenant?" or "How do I change
-  the rent?" was often answered in the skill's comparison layout, an executive summary and then the
-  changes between versions, instead of with the fact you asked for. Such a question is now answered
-  plainly from the documents, and the answer still shows that the skill was applied. Comparing two
-  documents works as before (#632).
+- **With a whole-document skill selected, a question the skill isn't for gets a plain answer.** With
+  What Changed? selected and one document in scope, or three or more, a question such as "Who is the
+  tenant?" or "How do I change the rent?" was often answered in the skill's comparison layout, an
+  executive summary and then the changes between versions, instead of with the fact you asked for.
+  Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder did the same
+  with their own reports for a question asked over several documents, a single fact looked up in a
+  long document, or a thank-you: "Who attended?" could get full meeting minutes. Such a question is
+  now answered plainly from the documents, and the answer still shows that the skill was applied.
+  Comparing two documents, and a skill's report on one document, work as before (#632, #831).
+- **The "every mention" example question reads a long document whole in every language.** With a
+  whole-document skill such as Contract Brief selected and one long document in scope, the German
+  example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching
+  passages and could miss mentions, while the English "Find every mention of 'indemnity'" read the
+  whole document. Every language's example now reads the whole document, whatever word you put in
+  its quotes (#834).
+- **With a whole-document skill, a request to find or list something in a long document is answered
+  from notes taken for it.** A document too long to read at once is read in parts, and the answer is
+  written from notes on each part. Those notes were taken for the skill's report only, so "Find every
+  mention of 'indemnity'" under Contract Brief could miss mentions, or say there were none, while the
+  answer said the whole document was read. A request to find or list something, such as "List every
+  deadline" or the "every mention" example, now gets notes for what you asked as well as for the report.
+  A request for the report itself is read as before, even when it names a list ("Summarize all the
+  decisions", "Write the minutes with every action item"), and so is every other question (#939).
 - **The Documents filter's search icon no longer covers the text.** The magnifier in the "Filter
   by name…" box sat over the start of the placeholder and of what you typed, at every window
   size and in every language. The text now starts after the icon (#803).
@@ -364,8 +403,9 @@ from its first public `1.0.0` release onward.
   the workspace.** On Windows and Linux, closing the window during text recognition (OCR) or a
   PDF export left the app running with no window and the workspace unlocked until the run ended,
   and the finished recognition was then thrown away. Closing the window now stops the run, the
-  same as quitting, and the workspace locks; start it again the next time. On macOS, clicking the
-  Dock icon during the run now opens the window again (#910).
+  same as quitting, and the workspace locks; start it again the next time. (During text
+  recognition, closing the window now asks first, #935.) On macOS, clicking the Dock icon during
+  the run now opens the window again (#910).
 - **A failed skill export no longer destroys the file you chose to replace.** The transactions
   and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
   straight onto the chosen file: a full drive or another failure part-way through left a
@@ -403,11 +443,20 @@ from its first public `1.0.0` release onward.
   when it started. The image, translation, voice and both document-search models started from
   whatever file was on the drive, even one that "Check all model files" had just found damaged.
   Now each of them refuses such a file, and Images and Translate say so and point to the AI Model
-  screen, where you can download it again. The voice model and the document-search model that
+  screen, where you can download it again. The Performance screen agrees: such a model says
+  "failed its file check" and "Everything loaded at once" no longer counts it, nor do the
+  graphics-card lines (#933). The voice model and the document-search model that
   indexes your documents are also checked once before their first use in a workspace, which takes
   a few seconds, because a damaged one would put wrong results into the index. A model from your
   own manifest that has no real checksum now needs developer mode in every role, as the chat model
-  already did; for the document-search model, imports fail without it (#913).
+  already did; for the document-search model, imports fail without it. The AI Model screen now says
+  "No checksum" for such a model and what it needs, instead of "Can't verify" with a Download that
+  could not help (#913, #932).
+- **Refusals to start a chat model are now in your language.** When "Use this model" or the
+  Performance screen could not start a chat model (its file failed its check, it is not on the
+  drive yet, it needs more memory than the computer has, or it is no longer in the drive's model
+  list), the message was in English in every language, with English figures. It is now in the
+  interface language and names the model (#930).
 - **The document-search model no longer depends on the order a drive lists its files in.** On a
   drive formatted like most USB sticks, a second document-search model added to the drive could
   have taken over from the current one, depending only on which file was copied first. Every
@@ -427,6 +476,13 @@ from its first public `1.0.0` release onward.
   no-break space no longer run together. A title with no letter or number left gets the plain default name,
   and a name Windows keeps for itself, such as CON or NUL, gets an `_` added. A suggested name no
   longer starts or ends with `-`, or ends with `(` (#899).
+- **A file whose name ends in a space or a dot after its extension now imports.** macOS and Linux
+  allow names such as `notes.txt ` or `report.pdf.`, and so do some Windows tools. Picked or
+  dropped, such a file was refused with "This file type isn't supported (.txt ). Try TXT, …", and a
+  folder import skipped it without a word. It now imports under its name without the trailing
+  spaces or dots, and Save original suggests that name with its extension. A name such as
+  "Washington, D.C." or "v2.1" keeps its dots, and a file of a type that isn't supported is still
+  refused, now naming its type without the trailing spaces or dots (#918).
 
 ## [0.1.65] — 2026-11-11
 

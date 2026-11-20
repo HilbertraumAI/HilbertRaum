@@ -1,6 +1,5 @@
 import type { ExtractRecordType } from '../../../shared/types'
-import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../../shared/i18n'
-import { lowerCaseNfc } from '../../../shared/text-fold'
+import { isMentionChip, isSummarizeChip } from './example-chips'
 
 // The task router (whole-document-analysis plan §4.4, Phase 3) — a PURE function that maps a
 // free-text question to an answer engine. No DB, no model, no I/O: the caller passes the facts
@@ -118,62 +117,9 @@ const SUMMARY_RE =
 const COMPARE_RE =
   /(?<![\p{L}\p{N}_])(compare|comparison|difference|differences|différences?|différente?s?|diffère(?:nt)?|différenci\p{L}+|versus|vs\.?|diff)(?![\p{L}\p{N}_])|\b(vergleich|unterschied)/iu
 
-// #809 (open-issues wave owner call G-11): the document-mode example chips (`ChatScreen.tsx`) fill the composer
-// with a catalog question in the interface language, while the words above are English and German. So the two
-// chips the router serves are recognised in every registered catalog (i18n record §3.3 rule 3, like the bank
-// skill's routed questions): read at run time, never copied, composed, lowered and trimmed on both sides, and
-// without the sentence end either side may close with (`chipText`). The summarize chip, by its whole text, is a
-// summary ask. The every-mention chip is recognised by its FRAME, the text around its quoted example word,
-// whatever stands in the quotes ("Busca cada mención de «fianza»"), and gets the labelled answer the English and
-// German chips get by their own words (step 4b); a catalog value with no quoted segment is recognised by its
-// whole text.
-// The sentence ends stripped from the end of a chip and of a question: the catalogs close their sentences with
-// ".", "…" and "?", and a user may add "!" ("Resume este documento.", "Résumez ce document !").
-const SENTENCE_END = '.!?…'
-
-/** `text` composed, lowered and trimmed, without the sentence end (and the spaces) it closes with. */
-function chipText(text: string): string {
-  const lowered = lowerCaseNfc(text).trim()
-  let end = lowered.length
-  while (end > 0 && (SENTENCE_END.includes(lowered[end - 1]!) || /\s/u.test(lowered[end - 1]!))) end--
-  return lowered.slice(0, end)
-}
-
-const catalogValues = (key: MessageKey): string[] => UI_LANGUAGE_CODES.map((code) => chipText(t(code, key)))
-const SUMMARIZE_CHIPS = new Set(catalogValues('chat.example.summarize'))
-// An opening quote and the quotes that close it: ' ', „ “ (German) or „ ” (Polish), « », “ ”.
-const CLOSING_QUOTES: Readonly<Record<string, string>> = { "'": "'", '„': '“”', '«': '»', '“': '”' }
-
-/** A catalog value's text up to and including its opening quote and from its closing quote on, or null when
- *  it quotes nothing. An apostrophe inside a word ("tenant's") opens no quote, and an opening quote that no
- *  quote closes gives way to the next one. */
-function quoteFrame(value: string): { before: string; after: string } | null {
-  for (let i = 0; i < value.length; i++) {
-    const closers = CLOSING_QUOTES[value[i]!]
-    if (closers === undefined || /\p{L}/u.test(value[i - 1] ?? '')) continue
-    for (let j = i + 1; j < value.length; j++) {
-      if (closers.includes(value[j]!)) return { before: value.slice(0, i + 1), after: value.slice(j) }
-    }
-  }
-  return null
-}
-
-const MENTION_CHIPS = catalogValues('chat.example.indemnity').map((value) => quoteFrame(value) ?? value)
-
-/** Is the question one of the catalogs' summarize chips? */
-function isSummarizeChip(question: string): boolean {
-  return SUMMARIZE_CHIPS.has(chipText(question))
-}
-
-/** Is the question one of the catalogs' every-mention chips, with any text in its quotes? */
-function isMentionChip(question: string): boolean {
-  const q = chipText(question)
-  return MENTION_CHIPS.some((chip) => {
-    if (typeof chip === 'string') return q === chip
-    const inQuotes = q.slice(chip.before.length, q.length - chip.after.length)
-    return q.startsWith(chip.before) && q.endsWith(chip.after) && inQuotes.trim() !== ''
-  })
-}
+// #809 (open-issues wave owner call G-11): the document-mode example chips are recognised in every registered
+// catalog, by their whole text (summarize) or by the frame around their quoted word (every mention):
+// `isSummarizeChip` / `isMentionChip` in `example-chips.ts`, shared with the skill classifier since #834.
 
 /** A summary ask: the summary words, or a summarize chip (#809). */
 function isSummaryAsk(text: string): boolean {
@@ -787,6 +733,27 @@ export function mapQuestionToRecordType(question: string): ExtractRecordType {
   return namedRecordType(question) ?? 'generic'
 }
 
+/** Step 4b's test, in one place: a list or count request, a quantifier inside a question (#644), or the
+ *  every-mention chip of any catalog (#809). `q` is the question composed (NFC). */
+function isListAsk(shape: 'list' | 'modifier' | null, q: string): boolean {
+  return shape === 'list' || shape === 'modifier' || isMentionChip(q)
+}
+
+/**
+ * #939 (follow-ups wave 4, owner call 2026-11-20): does the question ask to find or list items, by the
+ * router's own list detection (step 4b's test: "List every deadline", "When is each payment due?", the
+ * every-mention chip in every catalog)? A summary ask or a compare never counts (review B1: "Summarize all
+ * the decisions" and «Fasse alle Beschlüsse zusammen» carry a quantifier, but the router reads them as
+ * summaries before step 4b). With the skill-side report veto (`isReportShaped`) it decides whether a bundled
+ * whole-document skill's map and fold steps take notes for the question too. The list words are English and
+ * German (the chip excepted). Pure; the question is never logged.
+ */
+export function asksForList(question: string): boolean {
+  const q = (question ?? '').normalize('NFC')
+  if (isSummaryAsk(q) || COMPARE_RE.test(q)) return false
+  return isListAsk(listRequestShape(q).shape, q)
+}
+
 /** Classify a question into an engine choice (pure; plan §4.4). */
 export function routeQuestion(input: RouteInput): RouteDecision {
   // #809: composed once (NFC), so every check below reads a letter typed with a separate accent ("e" + U+0301)
@@ -858,7 +825,7 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   //     the deep index, which would not answer it either. #644: a quantifier inside a question
   //     ("When is each payment due?") is labelled the same way: the answer covers several items. #809: so is
   //     the every-mention chip of any catalog, which reaches this step by its frame.
-  if (triggerShape === 'list' || triggerShape === 'modifier' || isMentionChip(q)) {
+  if (isListAsk(triggerShape, q)) {
     return { engine: 'relevance', confidence: 'low', fallback: 'partial' }
   }
 

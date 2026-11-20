@@ -52,7 +52,7 @@ import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchma
 import type { Db } from '../services/db'
 import { developerLeniency } from '../services/policy'
 import { rearmStartRefusals } from '../services/model-start-check'
-import { tMain } from '../services/i18n'
+import { mainUiLanguage, tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
@@ -169,11 +169,16 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
   const { manifests } = discoverManifests(ctx.manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
-  if (!found) throw new Error(`Unknown model id: ${modelId}`)
+  // #930: every refusal below is in the interface language and names the model by its display name; an id or a role
+  // code is never shown (the log keeps the id).
+  if (!found) {
+    log.warn('Model start refused: unknown model id', { modelId })
+    throw new Error(tMain('main.models.unknown'))
+  }
   // The chat runtime loads chat models only; an embeddings model here would start
   // llama-server in chat mode over a 384-dim embedder and produce garbage.
   if (found.manifest.role !== 'chat') {
-    throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
+    throw new Error(tMain('main.models.notChat', { name: found.manifest.displayName }))
   }
 
   const s = getSettings(ctx.db)
@@ -207,12 +212,11 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   const mockFallback = state === 'missing' && lenient
   if (state !== 'installed' && !mockFallback) {
     // §7 voice: the problem and the next step; the raw state code stays in Diagnostics/logs.
+    const name = found.manifest.displayName
     throw new Error(
       state === 'checksum_failed'
-        ? `"${found.manifest.displayName}" can't be started — we couldn't verify its file. ` +
-          'It may be incomplete; try downloading it again.'
-        : `"${found.manifest.displayName}" can't be started — its model file isn't installed ` +
-          'on this drive yet.'
+        ? tMain('main.models.startDamaged', { name })
+        : tMain('main.models.startMissing', { name })
     )
   }
 
@@ -220,9 +224,14 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // thrash or OOM mid-chat — refuse with a friendly, spec §11.4-toned message. Only
   // real weights are gated; the zero-weights mock fallback uses no real memory.
   if (state === 'installed' && found.manifest.recommendedMinRamGb > machineRamGb()) {
+    // #930: both figures in the interface language's number format, as the AI Model card's RAM hint writes them.
+    const lang = mainUiLanguage()
     throw new Error(
-      `"${found.manifest.displayName}" needs at least ${found.manifest.recommendedMinRamGb} GB RAM; ` +
-        `this computer has about ${machineRamGb()} GB. Pick a smaller model — quality stays great.`
+      tMain('main.models.startNeedsRam', {
+        name: found.manifest.displayName,
+        min: found.manifest.recommendedMinRamGb.toLocaleString(lang),
+        ram: machineRamGb().toLocaleString(lang)
+      })
     )
   }
 
@@ -645,7 +654,10 @@ export function registerModelIpc(ctx: AppContext): void {
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
-    if (!found) throw new Error(`Unknown model id: ${modelId}`)
+    if (!found) {
+      log.warn('Verify model: unknown model id', { modelId })
+      throw new Error(tMain('main.models.unknown')) // #930
+    }
     const store = createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
     // Invalidate EVERY file the manifest carries (#106 adjacent fix): this used to drop
     // only the GGUF's cache entry, so "Verify checksum" on a vision model re-hashed the
@@ -698,9 +710,13 @@ export function registerModelIpc(ctx: AppContext): void {
     // reaches this for those roles, but the handler stays honest for non-UI callers.
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
-    if (!found) throw new Error(`Unknown model id: ${modelId}`)
+    // #930: the same catalog text as startModelRuntime's guards.
+    if (!found) {
+      log.warn('Use model: unknown model id', { modelId })
+      throw new Error(tMain('main.models.unknown'))
+    }
     if (found.manifest.role !== 'chat') {
-      throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
+      throw new Error(tMain('main.models.notChat', { name: found.manifest.displayName }))
     }
     // Select first so a refresh mid-load reflects the choice on the Active badge; selectModel
     // persists the active slot + emits its own `model_selected` audit event.

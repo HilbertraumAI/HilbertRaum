@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, sep } from 'node:path'
 import { t } from '../../src/shared/i18n'
 import { ensureDomMatrixPolyfill } from '../../src/main/services/ingestion/parsers/dommatrix-polyfill'
 import { tempRoot } from '../helpers/db-fixtures'
+import { runSmokeChild } from '../helpers/electron-smoke-child'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // EP-1 plan §11 — the REAL-Electron PDF smoke: the actual `printEvidencePackHtmlToPdf`
@@ -115,6 +115,8 @@ interface SmokeJobResult {
 }
 interface SmokeResult {
   fatal: string | null
+  /** What the runner exits with (0 unless fatal). */
+  exitCode: number
   results: SmokeJobResult[]
   requestedUrls: string[]
   offlineViolations: string[]
@@ -183,6 +185,7 @@ async function readPdfFacts(pdfPath: string): Promise<PdfFacts> {
 
 let root = ''
 let result: SmokeResult | null = null
+const PDF_ROW_BUDGET_MS = testBudgetMs(240_000)
 let enPdf = ''
 let dePdf = ''
 let arEnPdf = ''
@@ -306,33 +309,23 @@ describe.skipIf(!enabled)(
       // ISOLATED profile dir is load-bearing: the default %APPDATA%/Electron profile is
       // shared by every default-named Electron instance — a stale/foreign singleton lock
       // crashes startup with 0xFFFF7003 (and the owner runs concurrent sessions).
-      const env = { ...process.env }
-      delete env.ELECTRON_RUN_AS_NODE // must launch as Electron, never as plain node
-      const args = [`--user-data-dir=${join(root, 'electron-profile')}`, runnerPath, jobFile]
-      if (process.platform === 'linux') args.unshift('--no-sandbox') // screenshot-script posture
-      const stderr: string[] = []
-      const code = await new Promise<number>((resolve, reject) => {
-        const child = spawn(ELECTRON_BIN!, args, { env, windowsHide: true })
-        child.stderr.on('data', (d: Buffer) => stderr.push(d.toString()))
-        const timer = setTimeout(() => {
-          child.kill()
-          reject(new Error(`electron smoke child timed out\n${stderr.join('')}`))
-        }, 150_000)
-        child.on('error', (e) => {
-          clearTimeout(timer)
-          reject(e)
-        })
-        child.on('exit', (c) => {
-          clearTimeout(timer)
-          resolve(c ?? -1)
-        })
+      // The shared smoke helper ends the child a grace after the result appears: under CPU load Electron's own
+      // teardown took 10-14 s after it (#934) and nothing here asserts after the result.
+      const run = await runSmokeChild<SmokeResult>({
+        what: 'print-pdf',
+        bin: ELECTRON_BIN!,
+        runnerPath,
+        args: [jobFile],
+        resultPath,
+        profileDir: join(root, 'electron-profile'),
+        rowBudgetMs: PDF_ROW_BUDGET_MS
       })
-      if (!existsSync(resultPath)) {
-        throw new Error(`smoke child wrote no result (exit ${code})\n${stderr.join('')}`)
-      }
-      result = JSON.parse(readFileSync(resultPath, 'utf8')) as SmokeResult
-      expect(result.fatal, `runner fatal: ${result.fatal}\n${stderr.join('')}`).toBeNull()
-      expect(code).toBe(0)
+      result = run.result
+      const stderr = run.stderr
+      expect(result.fatal, `runner fatal: ${result.fatal}\n${stderr}`).toBeNull()
+      expect(result.exitCode).toBe(0)
+      // The child's own exit, when it exited within the grace; null when the helper had to end it.
+      if (run.exitCode !== null) expect(run.exitCode).toBe(0)
       en = await readPdfFacts(enPdf)
       de = await readPdfFacts(dePdf)
       arEn = await readPdfFacts(arEnPdf)
@@ -344,7 +337,7 @@ describe.skipIf(!enabled)(
           `[pdf-smoke] ${r.name}: ${r.ms} ms, html ${r.htmlBytes} B, peak browser ${r.peakBrowserKiB} KiB, peak renderer ${r.peakRendererKiB} KiB`
         )
       }
-    }, testBudgetMs(240_000))
+    }, PDF_ROW_BUDGET_MS)
 
     afterAll(() => {
       if (root) rmSync(root, { recursive: true, force: true })

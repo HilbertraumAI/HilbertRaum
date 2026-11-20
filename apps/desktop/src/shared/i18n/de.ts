@@ -1280,10 +1280,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.state.installed': 'Installiert',
   'models.state.missing': 'Nicht heruntergeladen',
   'models.state.checksumFailed': 'Nicht prüfbar',
+  'models.state.noChecksum': 'Keine Prüfsumme',
   'models.state.unsupported': 'Nicht unterstützt',
   'models.state.notRecommended': 'Nicht empfohlen',
   'models.state.ready': 'Bereit',
   'models.state.running': 'Läuft',
+  'models.noChecksum.hint':
+    'Für dieses Modell ist keine Prüfsumme hinterlegt. Es läuft deshalb nur im Entwicklermodus auf ' +
+    'einem Laufwerk, dessen Richtlinie ungeprüfte Modelle erlaubt.',
   'models.badge.notResponding': 'Reagiert nicht',
   'models.notRespondingHint': 'Das KI-Modell antwortet nicht mehr. Ein Neustart behebt das meistens.',
   'models.restart': 'Neu starten',
@@ -2211,6 +2215,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.models.loaded': 'jetzt geladen',
   'perf.models.notLoaded': 'nicht geladen',
   'perf.models.notOnDrive': 'nicht auf diesem Laufwerk',
+  'perf.models.damaged': 'Dateiprüfung nicht bestanden',
+  'perf.models.noChecksum': 'keine Prüfsumme hinterlegt',
   'perf.models.lifetime.session': 'bleibt geladen',
   'perf.models.lifetime.idle': 'wird bei Leerlauf entladen',
   'perf.models.lifetime.per-use': 'läuft nur während der Arbeit',
@@ -2654,6 +2660,19 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.unsavedReview.tryAgain': 'Erneut versuchen',
   'main.dialog.unsavedReview.keepOpen': 'Offen lassen',
   'main.dialog.unsavedReview.closeAnyway': 'Trotzdem schließen',
+  'main.dialog.taskRunning.title': 'Eine Dokumentaufgabe ist noch nicht fertig.',
+  'main.dialog.taskRunning.message': 'Eine Dokumentaufgabe ist noch nicht fertig.',
+  'main.dialog.taskRunning.detailOcr':
+    'Wenn du jetzt schließt, wird das Lesen des Scans abgebrochen, und die bisher gelesenen Seiten ' +
+    'gehen verloren.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Wenn du jetzt schließt, wird die Übersetzung abgebrochen, und der bisher übersetzte Teil geht ' +
+    'verloren.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Wenn du jetzt schließt, werden die laufenden und wartenden Dokumentaufgaben abgebrochen, und ' +
+    'ihre bisherige Arbeit geht verloren.',
+  'main.dialog.taskRunning.keepOpen': 'Offen lassen',
+  'main.dialog.taskRunning.closeAnyway': 'Trotzdem schließen',
   'main.workspace.wrongPassword':
     'Dieses Passwort hat deinen Arbeitsbereich nicht entsperrt. Prüf es und versuch es ' +
     'noch einmal.',
@@ -3018,6 +3037,17 @@ export const de: Record<keyof typeof en, string> = {
     'noch einmal zu transkribieren.',
   'main.models.noManifests':
     'Auf diesem Laufwerk wurde keine Modellliste gefunden — der Ordner model-manifests fehlt.',
+  'main.models.unknown': 'Dieses Modell steht nicht mehr in der Modellliste dieses Laufwerks.',
+  'main.models.notChat': '„{name}“ ist kein Chat-Modell und kann hier nicht gestartet werden.',
+  'main.models.startDamaged':
+    'Das Modell „{name}“ hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es im ' +
+    'Bereich „KI-Modell“ erneut herunter.',
+  'main.models.startMissing':
+    'Das Modell „{name}“ kann nicht gestartet werden: Die Modelldatei ist noch nicht auf diesem ' +
+    'Laufwerk.',
+  'main.models.startNeedsRam':
+    'Das Modell „{name}“ braucht mindestens {min} GB RAM; dieser Computer hat etwa {ram} GB. Wähle ' +
+    'ein kleineres Modell — die Qualität bleibt top.',
   'main.models.autoSelected':
     'Dieses Modell wird automatisch verwendet, sobald es installiert ist — es gibt nichts ' +
     'auszuwählen.',

@@ -38,10 +38,12 @@ import { purgeSkillDataForDocument } from '../skills/run'
 import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
 import {
+  importedFileTitle,
   isAudioPath,
   isImagePath,
   isPdfPath,
   readsWholeFileToString,
+  refusedTypeExtension,
   selectParser,
   supportedExtensions,
   type DocumentParser,
@@ -576,7 +578,8 @@ function insertQueuedRow(
   now: string
 ): string {
   const id = randomUUID()
-  const title = o.displayTitle ?? basename(filePath)
+  // #918: a generated document names itself; an imported file imports without the spaces or dots its name ends in.
+  const title = o.displayTitle ?? importedFileTitle(basename(filePath))
   // CODE-20 rider (full audit 2026-07-11): constant SQL on a per-file loop path
   // (createQueuedDocuments runs this once per queued file) — compile once per connection.
   prepareCached(
@@ -805,21 +808,34 @@ export async function prepareDocument(
         // PERF-1: async encrypt yields to the event loop between 8 MiB chunks, so a large import
         // (paid twice in an encrypted workspace) no longer blocks the main process + IPC.
         await cipher.encryptFileAsync(origin, storedPath)
-        // Parse the original directly (it is still on disk) — no decrypt round-trip.
-        parseSource = origin
       } else {
         storedPath = join(storeDir, documentId + ext)
         // PERF-1: async whole-file copy off the main event loop (was synchronous copyFileSync).
         await copyFile(origin, storedPath)
-        parseSource = storedPath
       }
       // #188: record the portable leaf alongside the absolute path. `stored_name` is what the
-      // resolver trusts; `stored_path` is kept for legacy readers and provenance.
+      // resolver trusts; `stored_path` is kept for legacy readers and provenance. Recorded as soon as
+      // the copy exists (#918 review): a step below that fails still leaves a row Delete can clean up.
       db.prepare(
         'UPDATE documents SET stored_path = ?, stored_name = ?, sha256 = ?, size_bytes = ? WHERE id = ?'
       ).run(storedPath, basename(storedPath), sha, size, documentId)
       // Covers the source hash + the copy (encrypted or plain) into the workspace.
       perfMark('ingest_copy_done', { docId: documentId, bytes: size, ms: perfMs(copyT0) })
+      if (!cipher) {
+        parseSource = storedPath
+      } else if (extname(origin).toLowerCase() === ext || !selectParser(row.title)) {
+        // Parse the original directly (it is still on disk) — no decrypt round-trip.
+        parseSource = origin
+      } else {
+        // #918: the title dropped the spaces or dots the file name ends in (`people.tsv `), so the original's own
+        // extension is not the title's: a TSV read under it splits by commas, and the voice engine would get a name
+        // Windows strips to another file. Parse a decrypted copy named after the title instead: the re-index
+        // transient below, under the same rules (tracked first, shredded in the `finally`, `.parse` for the sweep).
+        parseSource = join(storeDir, `${documentId}.parse${ext}`)
+        op?.track(parseSource) // registered BEFORE the write (#237)
+        await cipher.decryptFileAsync(storedPath, parseSource) // PERF-1: yields between chunks
+        transients.push(parseSource)
+      }
     } else if (cipher && !storedPath.endsWith(ENCRYPTED_DOC_SUFFIX)) {
       // Legacy migration: this document was imported before the encrypted document cache
       // existed (or in plaintext mode). Re-indexing in an encrypted workspace upgrades
@@ -864,7 +880,7 @@ export async function prepareDocument(
     if (!parser) {
       // Persist-canonical English (i18n record §3.3 rule 1): the catch writes it into
       // documents.error_message; the renderer display map localizes it (interpolated {ext}).
-      throw new Error(t('en', 'main.ingest.unsupportedType', { ext: extname(row.title) || '(none)' }))
+      throw new Error(t('en', 'main.ingest.unsupportedType', { ext: refusedTypeExtension(row.title) || '(none)' }))
     }
     // Prefer the per-extension MIME (identical to parser.mimeType for the text formats;
     // gives audio its real type — audio/wav vs the AudioParser's `audio/*` fallback).
@@ -1211,7 +1227,7 @@ export async function extractDocumentPreview(
   const parser = selectParser(row.title)
   if (!parser) {
     // Emission (§3.3 rule 2): an IPC throw, never persisted — localized via tMain.
-    throw new Error(tMain('main.ingest.unsupportedType', { ext: extname(row.title) || '(none)' }))
+    throw new Error(tMain('main.ingest.unsupportedType', { ext: refusedTypeExtension(row.title) || '(none)' }))
   }
 
   // Audio: re-extraction reads the stored CHUNKS, not the file — re-parsing
@@ -1265,7 +1281,19 @@ export async function extractDocumentPreview(
       const original = await locateOriginal(row)
       if (!original) throw new Error(tMain('main.docs.previewGone'))
       if (original.contentMatchesImport === false) warnOriginalChanged(documentId)
-      parseSource = original.path
+      const ext = extname(row.title).toLowerCase()
+      if (extname(original.path).toLowerCase() === ext) {
+        parseSource = original.path
+      } else {
+        // #918: the original's name ends in a space or a dot its title dropped, so its own extension is not the
+        // one the parser reads (a TSV would split by commas). Read a copy named after the title: the encrypted
+        // preview's transient name (`.parse` for the sweep), tracked first and listed for the `finally` before the
+        // copy starts, so a partial copy is shredded too.
+        parseSource = join(storeDir, `${documentId}.parse-preview-${randomUUID()}${ext}`)
+        op?.track(parseSource) // registered BEFORE the write (#237)
+        transients.push(parseSource)
+        await copyFile(original.path, parseSource)
+      }
     }
 
     // An OCR'd PDF previews its STORED recognition (the same ocrPages hook
@@ -1387,7 +1415,8 @@ export async function summarizeImportPaths(paths: string[]): Promise<ImportPrefl
   let audioFileCount = 0
   let audioBytes = 0
   for (const f of files) {
-    if (!isAudioPath(f)) continue
+    // #918: by the title the file imports under, so `song.mp3 ` still asks before its transcription.
+    if (!isAudioPath(importedFileTitle(basename(f)))) continue
     audioFileCount += 1
     try {
       audioBytes += (await stat(f)).size
@@ -2156,7 +2185,8 @@ export function expandPathsBounded(
         if (entry.isDirectory()) {
           walk(full, depth + 1)
         } else if (entry.isFile()) {
-          if (supported.has(extname(full).toLowerCase())) add(full)
+          // #918: judged by the title the file will import under, so `notes.txt ` is kept as a `.txt`.
+          if (supported.has(extname(importedFileTitle(entry.name)).toLowerCase())) add(full)
         } else {
           // Symlink or special entry — resolve it the old (link-following) way so the expanded
           // set is byte-identical to the pre-ING-4 statSync walk.
@@ -2167,7 +2197,7 @@ export function expandPathsBounded(
             continue
           }
           if (st.isDirectory()) walk(full, depth + 1)
-          else if (supported.has(extname(full).toLowerCase())) add(full)
+          else if (supported.has(extname(importedFileTitle(entry.name)).toLowerCase())) add(full)
         }
       }
     } finally {
@@ -2260,7 +2290,7 @@ export async function expandPathsBoundedAsync(
         if (entry.isDirectory()) {
           await walk(full, depth + 1)
         } else if (entry.isFile()) {
-          if (supported.has(extname(full).toLowerCase())) add(full)
+          if (supported.has(extname(importedFileTitle(entry.name)).toLowerCase())) add(full)
         } else {
           let st
           try {
@@ -2269,7 +2299,7 @@ export async function expandPathsBoundedAsync(
             continue
           }
           if (st.isDirectory()) await walk(full, depth + 1)
-          else if (supported.has(extname(full).toLowerCase())) add(full)
+          else if (supported.has(extname(importedFileTitle(entry.name)).toLowerCase())) add(full)
         }
       }
     } finally {

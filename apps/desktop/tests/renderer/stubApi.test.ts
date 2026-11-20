@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls, forgetUnexpectedApiCalls } from '../helpers/renderer'
 
 // TS-4 (full-audit 2026-07-10): the stubApi auto-stub must hand out ONE stable spy per
 // accessed name. The old Proxy minted a fresh `vi.fn()` per property access, so an
@@ -13,6 +13,8 @@ const api = (): AnyApi => (window as unknown as { api: AnyApi }).api
 
 afterEach(() => {
   vi.restoreAllMocks()
+  // These rows call unmocked methods on purpose; the shared renderer hook (tests/setup.ts) must not fail them.
+  forgetUnexpectedApiCalls()
 })
 
 describe('stubApi auto-stub (TS-4)', () => {
@@ -55,11 +57,15 @@ describe('stubApi auto-stub (TS-4)', () => {
     expect(() => assertNoUnexpectedApiCalls()).toThrow(/listDocuments \(2 calls\)/)
   })
 
-  it('a fresh stubApi() resets the unexpected-call record (per-test bookkeeping)', () => {
+  it('a re-install keeps the record of earlier unmocked calls; a check or forgetUnexpectedApiCalls() clears it (#832)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     stubApi({})
     void api().listDocuments()
-    stubApi({})
+    stubApi({}) // a row that mounts again must not hide what the first install let through
+    expect(() => assertNoUnexpectedApiCalls()).toThrow("listDocuments (1 call)")
+    expect(() => assertNoUnexpectedApiCalls()).not.toThrow() // reported once
+    void api().listDocuments()
+    forgetUnexpectedApiCalls()
     expect(() => assertNoUnexpectedApiCalls()).not.toThrow()
   })
 })

@@ -27,7 +27,8 @@ import { deferred } from '../helpers/deferred'
 import { stubHomeApi } from '../helpers/home-screen'
 import { ENGINE_INSTALLED, engineJob, enginePreview, modelsScreenStubs, stubModelsApi } from '../helpers/model-fixtures'
 import { laptopResult } from '../helpers/performance-screen'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { diagnosticsEngineStubs } from '../helpers/settings-diagnostics'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { STOPPED_RUNTIME, appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
@@ -38,7 +39,10 @@ import { STOPPED_RUNTIME, appStatus, driveStatus, makePolicyStatus, performanceS
 // Diagnostics (line + copy report), Performance's graphics tile and the Images error-code copy.
 // Copy is asserted against the catalog (`t('en', key)`), not hard-coded English.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 const en = (key: Parameters<typeof t>[1], params?: Record<string, string | number>): string =>
   t('en', key, params)
@@ -537,7 +541,9 @@ describe('App — runtime notice target (#530)', () => {
         : vi.fn(async () => status()),
       getDriveStatus: vi.fn(async () => driveStatus()),
       getRuntimeInstall: vi.fn(async () => null),
-      getLogTail: vi.fn(async () => [])
+      getLogTail: vi.fn(async () => []),
+      // The 'Details' row navigates on to Settings → Diagnostics, which reads the snapshot.
+      getPerformance: vi.fn(async () => performanceSnapshot())
     })
     stubApi(shell)
     render(<App />)
@@ -618,20 +624,19 @@ describe('Settings → Diagnostics — engine problem line (#530)', () => {
 
   function stubDiagnostics(problems: EngineProblem[]): void {
     lastCopied = null
-    stubApi({
+    stubApi(diagnosticsEngineStubs({
       getAppStatus: vi.fn(async () => appStatus({ appVersion: '0.1.20', engineProblems: problems })),
       getDriveStatus: vi.fn(async () => driveStatus()),
       getRuntimeStatus: vi.fn(async () => STOPPED_RUNTIME),
       getRuntimeInstall: vi.fn(async () => null),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getPerformance: vi.fn(async () => performanceSnapshot()),
-      onEngineProblemsChanged: vi.fn(() => () => {}),
       getLogTail: vi.fn(async () => []),
       copyToClipboard: vi.fn(async (text: string) => {
         lastCopied = text
         return true
       })
-    })
+    }))
   }
 
   const renderDiagnostics = (): void => {

@@ -257,6 +257,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       const unlockT0 = performance.now()
       const state = ctx.workspace.unlock(password)
       perfMark('unlock_done', { totalMs: perfMs(unlockT0) })
+      // #936 review SF-2: no quit is under way while someone unlocks (the close guard holds the document-task queue
+      // only inside its save or behind its window-modal dialog), so a quit hold still set here is stale (a quit
+      // cancelled outside the guard): clear it, so it can never block this session's document tasks.
+      ctx.docTasks?.releaseQueueHold()
       // The vault key is live now — adopt it for the diagnostics log so it is encrypted at
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
       attachLogKey(ctx)

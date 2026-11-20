@@ -5,7 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AuditEvent, type RuntimeStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { diagnosticsEngineStubs } from '../helpers/settings-diagnostics'
 import { appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
 // Phase 19: the "Activity" panel over the audit log — on-demand load, the client-side
@@ -32,7 +33,7 @@ function event(n: number, type: AuditEvent['type'], message: string): AuditEvent
 }
 
 function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>>): void {
-  stubApi({
+  stubApi(diagnosticsEngineStubs({
     getAppStatus: vi.fn(async () => appStatus()),
     getDriveStatus: vi.fn(async () => driveStatus()),
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
@@ -41,10 +42,13 @@ function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>>): v
     // #327: the Acceleration line reads its device from the snapshot, not settings.gpuProbe.
     getPerformance: vi.fn(async () => performanceSnapshot()),
     ...overrides
-  })
+  }))
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 describe('Settings → Diagnostics (advanced) — Activity panel (Phase 19)', () => {
   it('loads activity on demand and filters by type', async () => {
