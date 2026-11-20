@@ -2804,6 +2804,32 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
     ).toBeVisible()
   })
 
+  // #932 (G-2 (d), A S-A9): a model with no checksum on record (`noChecksum`, decided main-side from the manifest) is
+  // not a damaged file. Its card says "No checksum" and what the model needs, and offers no Download even with a
+  // download block: a download cannot give the manifest a checksum, and main refuses it. A damaged file keeps both.
+  it('a no-checksum card names what it needs and offers no Download; a damaged card keeps "Can’t verify" and Download (#932)', async () => {
+    const healthy = variant('healthy', 'Healthy model', { state: 'installed' })
+    const placeholder = variant('placeholder', 'Placeholder model', {
+      family: 'gemma4',
+      state: 'checksum_failed',
+      noChecksum: true
+    })
+    const damaged = variant('damaged', 'Damaged model', { family: 'llama3', state: 'checksum_failed' })
+    stubLibrary({ models: () => [healthy, placeholder, damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(placeholder.displayName)
+
+    const card = within(cardFor(placeholder.displayName))
+    expect(card.getByText(t('en', 'models.state.noChecksum'))).toBeVisible()
+    expect(card.getByText(t('en', 'models.noChecksum.hint'))).toBeVisible()
+    expect(card.queryByText(t('en', 'models.state.checksumFailed'))).not.toBeInTheDocument()
+    expect(card.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+    const control = within(cardFor(damaged.displayName))
+    expect(control.getByText(t('en', 'models.state.checksumFailed'))).toBeVisible()
+    expect(control.queryByText(t('en', 'models.noChecksum.hint'))).not.toBeInTheDocument()
+    expect(control.getByRole('button', { name: 'Download' })).toBeEnabled()
+  })
+
   it('a damaged-only drive still starts in Browse, and On this drive lists the damaged row', async () => {
     const damaged = variant('damaged-only', 'Only damaged model', { state: 'checksum_failed' })
     stubLibrary({ models: () => [damaged] })

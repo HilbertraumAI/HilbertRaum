@@ -1162,10 +1162,14 @@ export const es: UiCatalog<'es'> = {
   'models.state.installed': 'Instalado',
   'models.state.missing': 'Sin descargar',
   'models.state.checksumFailed': 'No verificable',
+  'models.state.noChecksum': 'Sin suma de comprobación',
   'models.state.unsupported': 'No compatible',
   'models.state.notRecommended': 'No recomendado',
   'models.state.ready': 'Listo',
   'models.state.running': 'En ejecución',
+  'models.noChecksum.hint':
+    'Este modelo no tiene ninguna suma de comprobación registrada, así que solo funciona en modo de ' +
+    'desarrollo en una unidad cuya política permita modelos sin verificar.',
   'models.badge.notResponding': 'No responde',
   'models.notRespondingHint': 'El modelo de IA dejó de responder. Reiniciarlo suele solucionarlo.',
   'models.restart': 'Reiniciar',

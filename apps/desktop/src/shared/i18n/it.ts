@@ -1194,10 +1194,14 @@ export const it: UiCatalog<'it'> = {
   'models.state.installed': 'Installato',
   'models.state.missing': 'Non scaricato',
   'models.state.checksumFailed': 'Controllo non riuscito',
+  'models.state.noChecksum': 'Nessun checksum',
   'models.state.unsupported': 'Non supportato',
   'models.state.notRecommended': 'Non consigliato',
   'models.state.ready': 'Pronto',
   'models.state.running': 'Avviato',
+  'models.noChecksum.hint':
+    'Questo modello non ha un checksum registrato, quindi funziona solo in modalità sviluppatori su ' +
+    'un’unità i cui criteri consentono modelli non controllati.',
   'models.badge.notResponding': 'Non risponde',
   'models.notRespondingHint':
     'Il modello IA ha smesso di rispondere. Di solito riavviarlo risolve il problema.',

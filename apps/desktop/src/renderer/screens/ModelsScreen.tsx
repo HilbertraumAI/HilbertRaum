@@ -85,6 +85,13 @@ const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; i
   running: { labelKey: 'models.state.running', tone: 'accent', icon: '▶' }
 }
 
+/** #932: a `checksum_failed` model whose manifest has no checksum on record (`ModelInfo.noChecksum`): not damaged. */
+const NO_CHECKSUM_BADGE: { labelKey: MessageKey; tone: BadgeTone; icon: string } = {
+  labelKey: 'models.state.noChecksum',
+  tone: 'warning',
+  icon: '⚠'
+}
+
 /**
  * A disk size → "14.4 GB": the declared bytes when known, else the manifest's `size_on_disk_gb`.
  * Decimal GB with one decimal, the separator from the UI language (#768: it divided by 1024³ and
@@ -893,7 +900,11 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   // A withdrawn source (#196) is NOT downloadable — the network-gate banner above the list
   // must not appear for a screen whose only "missing" models can never be fetched anyway.
   const anyDownloadable = models.some(
-    (m) => m.download && !m.download.withdrawn && (m.state === 'missing' || m.state === 'checksum_failed')
+    (m) =>
+      m.download &&
+      !m.download.withdrawn &&
+      !m.noChecksum &&
+      (m.state === 'missing' || m.state === 'checksum_failed')
   )
 
   // #339 P8-2: the knowledge-pack tools install job's download percentage, same shape as the
@@ -927,6 +938,9 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   function downloadSection(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     if (m.state !== 'missing' && m.state !== 'checksum_failed') return null
+    // #932 (A S-A9): no checksum on record is not a damaged file. A download cannot give the manifest a checksum, and
+    // main refuses it anyway (`main.download.presentUnverified`): the card's hint says what the model needs instead.
+    if (m.noChecksum) return null
     // #196: the publisher removed the pinned file. Explain instead of offering a button that
     // can only end in an HTTP 404 — the main process refuses the start regardless.
     if (m.download.withdrawn) {
@@ -1068,6 +1082,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     const thisStarting = runtime?.startingModelId === m.id
     const anyStarting = runtime?.startingModelId != null
     const taskLabel = TASKS.find((entry) => entry.value === modelTask(m))?.label ?? null
+    const stateBadge = m.noChecksum ? NO_CHECKSUM_BADGE : STATE_BADGE[m.state]
     return (
       // #35: not-yet-downloaded cards render visually quieter (`.model-card-missing`) so
       // the models that are usable right now stand out when scanning the list.
@@ -1100,8 +1115,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
                 {t('models.badge.ramNeeded', { min: minRam })}
               </Badge>
             )}
-            <Badge tone={STATE_BADGE[m.state].tone} icon={STATE_BADGE[m.state].icon}>
-              {t(STATE_BADGE[m.state].labelKey)}
+            <Badge tone={stateBadge.tone} icon={stateBadge.icon}>
+              {t(stateBadge.labelKey)}
             </Badge>
             {m.state === 'running' && runtime?.unresponsive && (
               <Badge tone="warning" icon="⚠">
@@ -1111,6 +1126,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           </div>
         </div>
 
+        {/* #932: what a model with no checksum on record needs, in place of a repair it cannot have. */}
+        {m.noChecksum && <p className="hint">{t('models.noChecksum.hint')}</p>}
         {m.role === 'transcriber' && voiceEngineUnsupported && (
           <p className="hint">{t('models.transcriber.engineUnsupported')}</p>
         )}

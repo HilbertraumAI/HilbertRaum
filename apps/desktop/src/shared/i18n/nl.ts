@@ -1130,10 +1130,14 @@ export const nl: UiCatalog<'nl'> = {
   'models.state.installed': 'Geïnstalleerd',
   'models.state.missing': 'Niet gedownload',
   'models.state.checksumFailed': 'Niet controleerbaar',
+  'models.state.noChecksum': 'Geen controlesom',
   'models.state.unsupported': 'Niet ondersteund',
   'models.state.notRecommended': 'Niet aanbevolen',
   'models.state.ready': 'Klaar',
   'models.state.running': 'Draait',
+  'models.noChecksum.hint':
+    'Van dit model is geen controlesom bekend, dus het werkt alleen in ontwikkelaarsmodus op een ' +
+    'schijf waarvan het beleid niet-gecontroleerde modellen toestaat.',
   'models.badge.notResponding': 'Reageert niet',
   'models.notRespondingHint':
     'Het AI-model antwoordt niet meer. Meestal lost opnieuw starten dit op.',

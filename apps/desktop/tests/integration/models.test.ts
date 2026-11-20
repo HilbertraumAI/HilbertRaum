@@ -46,7 +46,7 @@ import {
   weightPath
 } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
-import type { ModelVerifyProgress } from '../../src/shared/types'
+import type { ModelInfo, ModelVerifyProgress } from '../../src/shared/types'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seededFreshDb } from '../helpers/seeded-db'
 import { testBudgetMs, until } from '../helpers/hang-budget'
@@ -1368,6 +1368,45 @@ describe('buildModelList — RT-3 lazy verification', () => {
     expect(checksumCacheStats.computed).toBe(before)
     expect(models.find((m) => m.id === 'a')?.state).toBe('installed')
     expect(models.find((m) => m.id === 'b')?.state).toBe('checksum_failed')
+  })
+
+  // #932 (G-2 (d)): outside developer leniency a placeholder hash reads `checksum_failed`, decided from the manifest
+  // alone, the same state as a file that failed its check. The card must tell the two apart ("No checksum", and no
+  // Download that cannot help), so the list flags it `noChecksum`, a placeholder on the projector alone included. A
+  // cached mismatch on a real hash is not flagged; with leniency the placeholder model is simply installed.
+  it('flags a present model with no checksum on record noChecksum; a cached mismatch and a lenient list do not (#932)', async () => {
+    const root = tempRoot('root')
+    writeDriveFile(root, 'models/chat/ph.gguf', 'PH')
+    const hB = writeDriveFile(root, 'models/chat/b.gguf', 'BBBB')
+    const hV = writeDriveFile(root, 'models/vision/v.gguf', 'VV')
+    writeDriveFile(root, 'models/vision/v-mmproj.gguf', 'PROJ')
+    const dir = manifestsDirWith(
+      rawManifest({ id: 'ph', local_path: 'models/chat/ph.gguf' }), // the fixture's hash is the placeholder
+      rawManifest({ id: 'b', local_path: 'models/chat/b.gguf', sha256: hB }),
+      rawManifest({
+        id: 'v',
+        role: 'vision',
+        family: 'qwen2.5-vl',
+        local_path: 'models/vision/v.gguf',
+        sha256: hV,
+        mmproj: { local_path: 'models/vision/v-mmproj.gguf', sha256: 'REPLACE_WITH_REAL_HASH' }
+      })
+    )
+    primeChecksum(join(root, 'models', 'chat', 'b.gguf'), 'a'.repeat(64)) // "Check all model files" found it damaged
+    const list = async (developerMode: boolean): Promise<Record<string, ModelInfo>> =>
+      Object.fromEntries(
+        (
+          await buildModelList({ manifestsDir: dir, rootPath: root, developerMode, machineRamGb: PINNED_RAM_GB, onlyVerifyModelId: null })
+        ).models.map((m) => [m.id, m])
+      )
+    const strict = await list(false)
+    expect(strict['ph']).toMatchObject({ state: 'checksum_failed', noChecksum: true })
+    expect(strict['v']).toMatchObject({ state: 'checksum_failed', noChecksum: true })
+    expect(strict['b'].state).toBe('checksum_failed')
+    expect(strict['b'].noChecksum).toBeUndefined()
+    const lenient = await list(true)
+    expect(lenient['ph'].state).toBe('installed')
+    expect(lenient['ph'].noChecksum).toBeUndefined()
   })
 })
 

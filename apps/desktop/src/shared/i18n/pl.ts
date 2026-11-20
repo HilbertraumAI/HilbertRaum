@@ -1217,10 +1217,14 @@ export const pl: UiCatalog<'pl'> = {
   'models.state.installed': 'Zainstalowany',
   'models.state.missing': 'Niepobrany',
   'models.state.checksumFailed': 'Nie można sprawdzić',
+  'models.state.noChecksum': 'Brak sumy kontrolnej',
   'models.state.unsupported': 'Nieobsługiwany',
   'models.state.notRecommended': 'Niezalecany',
   'models.state.ready': 'Gotowy',
   'models.state.running': 'Działa',
+  'models.noChecksum.hint':
+    'Ten model nie ma zapisanej sumy kontrolnej, więc działa tylko w trybie programisty na dysku, ' +
+    'którego zasady pozwalają na niesprawdzone modele.',
   'models.badge.notResponding': 'Nie odpowiada',
   'models.notRespondingHint':
     'Model AI przestał odpowiadać. Ponowne uruchomienie zwykle rozwiązuje ten problem.',

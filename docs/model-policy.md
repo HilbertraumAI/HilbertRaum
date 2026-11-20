@@ -383,7 +383,9 @@ vision role + mmproj projector" below), an optional **`files:` list** (below, #3
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
 - **`sha256`** is lower-case hex (64 chars). A non-hex placeholder (e.g. `REPLACE_WITH_REAL_HASH`)
-  marks a model whose hash is not yet known; such a file is only usable in developer mode.
+  marks a model whose hash is not yet known; such a file is only usable in developer mode on a drive
+  whose policy allows unverified models. The AI Model screen shows such a model as **No checksum**
+  (#932, "Model states" below).
 - **`runtime`/`format`**: the supported pairs are `llama_cpp`/`gguf` (chat, embeddings, reranker,
   vision) and `whisper_cpp`/`ggml` (the transcriber); any other runtime/format pair yields the
   `unsupported` state.

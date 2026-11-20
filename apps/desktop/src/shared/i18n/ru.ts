@@ -1200,10 +1200,14 @@ export const ru: UiCatalog<'ru'> = {
   'models.state.installed': 'Установлена',
   'models.state.missing': 'Не скачана',
   'models.state.checksumFailed': 'Не удается проверить',
+  'models.state.noChecksum': 'Нет контрольной суммы',
   'models.state.unsupported': 'Не поддерживается',
   'models.state.notRecommended': 'Не рекомендуется',
   'models.state.ready': 'Готова',
   'models.state.running': 'Работает',
+  'models.noChecksum.hint':
+    'Для этой модели нет сохраненной контрольной суммы, поэтому она работает только в режиме ' +
+    'разработчика на диске, политика которого разрешает непроверенные модели.',
   'models.badge.notResponding': 'Не отвечает',
   'models.notRespondingHint': 'ИИ-модель перестала отвечать. Обычно помогает перезапуск.',
   'models.restart': 'Перезапустить',

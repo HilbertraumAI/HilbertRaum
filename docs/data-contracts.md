@@ -344,7 +344,11 @@ on an embeddings card) is `pickManifestForRole(all, 'embeddings')` when it fits 
 (#890) is `computeInstallState`'s synchronous first two steps (supported runtime/format, every declared file
 exists; no hashing), behind the images pick `pickVisionManifest` (`services/vision/status.ts`).
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
-`shared/types.ts`. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
+`shared/types.ts`. **#932**: `ModelInfo.noChecksum?: true` marks a `checksum_failed` model whose manifest
+carries a placeholder hash on any file (`hasPlaceholderHash`, decided from the manifest alone): no checksum on
+record, not a damaged file. The card shows "No checksum" (`models.state.noChecksum`) and `models.noChecksum.hint`,
+and offers no Download. `ModelState`, `ModelStartVerdict` and every start gate are unchanged: the model is still
+refused outside developer leniency. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
 resolved against the **drive root**.
 ✅ **A manifest for a newer HilbertRaum (#847)** — `DiscoveryResult { manifests, unsupported, errors }`:
 a `role` this build does not know, or a `min_app_version` above the app (`setManifestAppVersion`, set once

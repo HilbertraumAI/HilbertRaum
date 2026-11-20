@@ -1262,10 +1262,14 @@ export const en = {
   'models.state.installed': 'Installed',
   'models.state.missing': 'Not downloaded',
   'models.state.checksumFailed': 'Can’t verify',
+  'models.state.noChecksum': 'No checksum',
   'models.state.unsupported': 'Unsupported',
   'models.state.notRecommended': 'Not recommended',
   'models.state.ready': 'Ready',
   'models.state.running': 'Running',
+  'models.noChecksum.hint':
+    'This model has no checksum on record, so it runs only in developer mode on a drive whose policy ' +
+    'allows unverified models.',
   // #599: the running model failed a health re-check, or an answer on it timed out.
   'models.badge.notResponding': 'Not responding',
   'models.notRespondingHint': 'The AI model has stopped answering. Restarting it usually fixes this.',

@@ -1232,10 +1232,14 @@ export const fr: UiCatalog<'fr'> = {
   'models.state.installed': 'Installé',
   'models.state.missing': 'Non téléchargé',
   'models.state.checksumFailed': 'Non vérifiable',
+  'models.state.noChecksum': 'Pas de somme de contrôle',
   'models.state.unsupported': 'Non pris en charge',
   'models.state.notRecommended': 'Déconseillé',
   'models.state.ready': 'Prêt',
   'models.state.running': 'En marche',
+  'models.noChecksum.hint':
+    'Ce modèle n’a aucune somme de contrôle enregistrée\u00A0: il ne fonctionne qu’en mode ' +
+    'développeur, sur un disque dont la politique autorise les modèles non vérifiés.',
   'models.badge.notResponding': 'Ne répond pas',
   'models.notRespondingHint':
     'Le modèle d’IA a cessé de répondre. Un redémarrage règle généralement le problème.',

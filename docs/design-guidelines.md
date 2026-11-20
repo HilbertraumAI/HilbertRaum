@@ -2691,7 +2691,11 @@ screen now keeps the active chat model pinned above a compact library of alterna
 
 - **On this drive / Browse models:** the view lists a model whose state is KNOWN to be on the
   drive — `installed`/`ready`/`running`, plus `checksum_failed` ("Can't verify"), whose files are
-  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`).
+  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`). A
+  `checksum_failed` model with no checksum on record (`ModelInfo.noChecksum`, #932) is listed the same
+  way but has no recovery action: its badge says "No checksum" (warning tone, ⚠, never the error-tone
+  "Can't verify"), one hint line says it runs only in developer mode on a drive whose policy allows
+  unverified models, and it offers no Download (nor does it count toward the downloads banner).
   Nothing here infers file presence: `unsupported` and `not_recommended` describe the machine or
   the policy, not the drive, and the renderer has no presence contract to read — widening the set
   needs one first. The INITIAL view is still chosen once from whether anything is usable right now

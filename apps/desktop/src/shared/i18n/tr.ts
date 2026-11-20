@@ -1088,10 +1088,14 @@ export const tr: UiCatalog<'tr'> = {
   'models.state.installed': 'Kurulu',
   'models.state.missing': 'İndirilmedi',
   'models.state.checksumFailed': 'Doğrulanamıyor',
+  'models.state.noChecksum': 'Sağlama toplamı yok',
   'models.state.unsupported': 'Desteklenmiyor',
   'models.state.notRecommended': 'Önerilmez',
   'models.state.ready': 'Hazır',
   'models.state.running': 'Çalışıyor',
+  'models.noChecksum.hint':
+    'Bu modelin kayıtlı bir sağlama toplamı yok; bu yüzden yalnızca, ilkesi doğrulanmamış modellere ' +
+    'izin veren bir sürücüde geliştirici modunda çalışır.',
   'models.badge.notResponding': 'Yanıt vermiyor',
   'models.notRespondingHint':
     'Yapay zekâ modeli yanıt vermeyi bıraktı. Yeniden başlatmak genellikle sorunu çözer.',

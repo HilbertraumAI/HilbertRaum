@@ -729,6 +729,13 @@ export interface ModelInfo {
    */
   download?: ModelDownloadInfo
   /**
+   * #932: the `checksum_failed` state comes from a placeholder hash in the manifest (a file with no checksum on
+   * record), not from a file that failed its check. Decided from the manifest alone. The card says "No checksum" and
+   * what the model needs (developer mode on a drive whose policy allows unverified models), and offers no Download,
+   * because a download cannot give it a checksum. `state` and every start gate are unchanged: the model is refused.
+   */
+  noChecksum?: true
+  /**
    * #847: this entry is a manifest for a newer HilbertRaum (a role this build does not know, or a
    * `min_app_version` above this app): `role: 'unknown'`, `state: 'unsupported'`, never recommended, never a
    * `download`. The main process refuses it on every path (an unknown id), whatever the renderer asks.

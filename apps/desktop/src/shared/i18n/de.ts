@@ -1279,10 +1279,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.state.installed': 'Installiert',
   'models.state.missing': 'Nicht heruntergeladen',
   'models.state.checksumFailed': 'Nicht prüfbar',
+  'models.state.noChecksum': 'Keine Prüfsumme',
   'models.state.unsupported': 'Nicht unterstützt',
   'models.state.notRecommended': 'Nicht empfohlen',
   'models.state.ready': 'Bereit',
   'models.state.running': 'Läuft',
+  'models.noChecksum.hint':
+    'Für dieses Modell ist keine Prüfsumme hinterlegt. Es läuft deshalb nur im Entwicklermodus auf ' +
+    'einem Laufwerk, dessen Richtlinie ungeprüfte Modelle erlaubt.',
   'models.badge.notResponding': 'Reagiert nicht',
   'models.notRespondingHint': 'Das KI-Modell antwortet nicht mehr. Ein Neustart behebt das meistens.',
   'models.restart': 'Neu starten',

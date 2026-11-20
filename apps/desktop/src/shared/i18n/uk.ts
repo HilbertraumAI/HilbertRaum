@@ -1219,10 +1219,14 @@ export const uk: UiCatalog<'uk'> = {
   'models.state.installed': 'Встановлено',
   'models.state.missing': 'Не завантажено',
   'models.state.checksumFailed': 'Не вдалося звірити',
+  'models.state.noChecksum': 'Немає контрольної суми',
   'models.state.unsupported': 'Не підтримується',
   'models.state.notRecommended': 'Не рекомендовано',
   'models.state.ready': 'Готово',
   'models.state.running': 'Працює',
+  'models.noChecksum.hint':
+    'Для цієї моделі немає збереженої контрольної суми, тому вона працює лише в режимі для ' +
+    'розробників на диску, політика якого дозволяє неперевірені моделі.',
   'models.badge.notResponding': 'Не відповідає',
   'models.notRespondingHint': 'ШІ-модель перестала відповідати. Зазвичай це виправляє перезапуск.',
   'models.restart': 'Перезапустити',

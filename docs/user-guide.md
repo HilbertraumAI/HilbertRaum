@@ -170,6 +170,10 @@ blocks you.
      through the catalog; if it is one of several variants of the same model, that group opens
      automatically so the damaged version is visible straight away. (If the publisher has since
      withdrawn the file, the row explains that instead of offering a download.)
+   - **No checksum** — the file is present, but the model's manifest has no checksum on record to
+     check it against (a model you added yourself, before you captured its hash). It runs only in
+     developer mode on a drive whose policy allows unverified models, and a download can't fix it,
+     so the row offers none (see Troubleshooting).
    - **Unsupported** — this model can't run on this computer/build.
 3. Click **Use this model** on a downloaded model's row — this makes it your model *and* starts it, so
    you can go straight to chatting. The first start of a model can take a little while as it loads

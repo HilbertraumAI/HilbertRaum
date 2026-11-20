@@ -949,6 +949,19 @@ export function manifestFiles(rootPath: string, manifest: ModelManifest): Manife
   return files
 }
 
+/**
+ * #932: does any file this manifest declares (the GGUF, the mmproj projector, the `files:` list: the files
+ * `manifestFiles` lists) carry a placeholder hash, so it has no checksum on record? From the manifest alone, no I/O.
+ */
+export function hasPlaceholderHash(manifest: ModelManifest): boolean {
+  const hashes = [
+    manifest.sha256,
+    ...(manifest.mmproj ? [manifest.mmproj.sha256] : []),
+    ...(manifest.files ?? []).map((f) => f.sha256)
+  ]
+  return hashes.some((sha) => !isRealSha256(sha))
+}
+
 export interface InstallStateOptions {
   /** When true, skip checksum verification for placeholder/dev hashes. */
   developerMode: boolean
@@ -1869,7 +1882,12 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     const startableAsMock =
       state === 'missing' && manifest.role === 'chat' && opts.developerMode
     const insufficientRam = manifest.recommendedMinRamGb > ram
-    models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
+    const info = toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam)
+    // #932: `computeInstallState` decides a placeholder hash before any file is read, so `checksum_failed` with a
+    // placeholder in the manifest means "no checksum on record", never a file that failed its check. Only the card's
+    // words and its repair action follow this flag; the state and every start gate stay as they are.
+    if (state === 'checksum_failed' && hasPlaceholderHash(manifest)) info.noChecksum = true
+    models.push(info)
   }
   // #847: the manifests for a newer HilbertRaum, after every model this build can use. Logged apart from the
   // invalid ones (they are not broken), once per id per session rather than on every Models-screen refresh. Each
