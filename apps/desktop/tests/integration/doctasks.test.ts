@@ -342,6 +342,43 @@ describe('state machine guards (D26)', () => {
   })
 })
 
+// #936: a quit the close guard holds closes the OCR window while the main window saves, and `will-quit` flushes the
+// queue only after the save. The hold keeps the queue from starting anything in between; Keep open releases it.
+describe('the quit hold (#936)', () => {
+  it('the running task finishes; the waiting one and one started meanwhile stay queued until the release, then run in order', async () => {
+    const doc1 = await importWords(w, 50, { name: 'a.txt' })
+    const doc2 = await importWords(w, 50, { name: 'b.txt' })
+    const doc3 = await importWords(w, 50, { name: 'c.txt' })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const runtime = docTaskRuntime({ gate: () => gate })
+    const manager = docTaskManager(w, { getRuntime: () => runtime })
+
+    const first = manager.startDocTask({ kind: 'summary', documentIds: [doc1] })
+    const second = manager.startDocTask({ kind: 'summary', documentIds: [doc2] })
+    await until(() => runtime.calls.length === 1, 'the first summary reaching the model')
+    manager.holdQueueForQuit()
+    const firstSettled = manager.awaitActiveTaskSettled() // the dispatch's `finally`, where the queue pumps
+    release()
+    await firstSettled
+    expect(manager.getDocTask(first.jobId).state).toBe('done')
+    expect(manager.getDocTask(second.jobId).state).toBe('queued')
+    // A task the user starts during the save is queued, not refused: it runs if the quit is called off.
+    const third = manager.startDocTask({ kind: 'summary', documentIds: [doc3] })
+    expect(manager.getDocTask(third.jobId).state).toBe('queued')
+    expect(runtime.calls).toHaveLength(1)
+    expect(manager.hasActiveTask()).toBe(true) // still busy for the chat guard: the work is only paused
+
+    manager.releaseQueueHold() // Keep open
+    expect(manager.getDocTask(second.jobId).state).toBe('running')
+    expect((await waitTerminal(manager, second.jobId)).state).toBe('done')
+    expect((await waitTerminal(manager, third.jobId)).state).toBe('done')
+    const names = ['a.txt', 'b.txt', 'c.txt']
+    expect(runtime.calls.map((c) => names.find((n) => userPromptOf(c).includes(n)))).toEqual(names) // FIFO
+    expect(runtime.maxConcurrent).toBe(1)
+  })
+})
+
 describe('summary persistence lifecycle (D25)', () => {
   it('re-index clears the summary (content may have changed); delete removes it with the document row', async () => {
     const docId = await importWords(w, 100)
