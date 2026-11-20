@@ -6346,9 +6346,24 @@ build tree-shakes them).
   exact map, the five interpolated families or the doc-task-busy substring), and only a string it
   does not recognise gets a lead; `localizeServerCopy()` keeps its signature and returns the
   text alone. Stored data is unchanged, so rows stored before the change get the lead too.
-  Everywhere else an unknown string
-  still renders as-is, the Documents banner for a failed summary, translation or OCR task, the
-  file translation's banner and the evidence-pack export error among them. A hygiene test pins
+  **Amended 2026-11-20 (follow-ups wave 4, #807; owner call G-7 E-a):** four more surfaces show a
+  failed call's or a library's own words as the detail under a translated lead. The file
+  translation's banner reads a failed source document's stored error exactly as `DocRow` does
+  (`classifyServerCopy`: a recognised message alone, any other under `docs.failed.lead`; the
+  session keeps that error apart from doc-task and IPC messages, `documentError`). The review's
+  save line always leads with `review.autosave.error` and shows the failed write's message after it
+  (SQLite's "database is locked" says nothing about the edit), and a review that fails to open
+  leads with `review.openFailed`. The evidence-pack export error leads with `review.export.failed`
+  ("The evidence pack export did not finish."), true for every failure, including the named
+  outcome whose file was saved but not recorded, which `review.export.error` ("No file was
+  written") is not; a refused flush keeps `review.export.error` alone. These three take no
+  `classifyServerCopy` verdict: their messages are main's `tMain` text or a library's, which the
+  persist-canonical map never holds, so the lead is always shown. Everywhere else an unknown string
+  still renders as-is: a failed IPC call's own message on the Documents screen's banner (about 25
+  `setError(friendlyIpcError(e))` sites; a lead there needs copy per action, left open). The
+  Documents banner for a failed summary, translation or OCR task gets app text only: the task
+  manager passes its own messages on and replaces anything else with its generic failure. A
+  hygiene test pins
   `DISPLAY_MAP_KEYS` +
   `INTERPOLATED_MAP_KEYS` ↔ the persist-canonical section key-for-key.
 - **Rule 2 — emit localized (D-L5).** Anything ephemeral (IPC guard throws, task-status

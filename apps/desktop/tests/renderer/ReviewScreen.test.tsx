@@ -25,6 +25,7 @@ import {
 } from '../helpers/evidenceReview'
 import { fakeMatchMedia, removeMatchMedia } from '../helpers/match-media'
 import { openSummary, renderReview } from '../helpers/review-screen'
+import { renderInLanguage } from '../helpers/render-language'
 
 // EP-1 plan §7.3/§7.4/§7.6 — the review workspace itself: the create→decide→note→
 // summary→ready journey over stubApi, the whole-document honesty wording (asserted by
@@ -1331,6 +1332,44 @@ describe('ReviewScreen — live regions exist before their text arrives (#837)',
     expect(statusBefore).toContain(saving.closest('[role="status"]'))
     const failure = await screen.findByText(/database or disk is full/)
     expect(alertBefore).toContain(failure.closest('[role="alert"]'))
+  })
+})
+
+// #807: a failed call's own message (SQLite's "database is locked", the same in every language) used to stand alone on
+// the save line and on the open card. Each now leads with what happened in the interface language, the message after it.
+describe('ReviewScreen: a failed call’s own words come after a translated lead (#807)', () => {
+  it('the save line reads the lead, then the failed write’s message, then Try again, in the German UI', async () => {
+    onTestFinished(() => window.localStorage.clear())
+    const updateEvidenceReviewItem = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'evidence:updateItem': Error: database is locked")
+    })
+    await renderReview({ api: { updateEvidenceReviewItem }, lang: 'de' })
+    fireEvent.click(
+      within(screen.getAllByRole('listitem')[0]).getByRole('radio', {
+        name: new RegExp(t('de', 'review.decision.supported'))
+      })
+    )
+    const retry = await screen.findByRole('button', { name: t('de', 'review.autosave.retry') })
+    const line = retry.closest('[role="alert"]') as HTMLElement
+    expect(line.textContent).toBe(
+      `${t('de', 'review.autosave.error')} database is locked ${t('de', 'review.autosave.retry')}`
+    )
+  })
+
+  it('a review that fails to open says so in the German UI, with the failed read’s message under it', async () => {
+    onTestFinished(() => window.localStorage.clear())
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'evidence:get': Error: database is locked")
+      })
+    })
+    renderInLanguage(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />, 'de')
+    const lead = await screen.findByText(t('de', 'review.openFailed'))
+    const card = lead.closest('.card') as HTMLElement
+    const detail = within(card).getByText('database is locked')
+    // The lead comes first, then the detail.
+    expect(lead.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(card).getByRole('button', { name: new RegExp(t('de', 'review.back')) })).toBeInTheDocument()
   })
 })
 

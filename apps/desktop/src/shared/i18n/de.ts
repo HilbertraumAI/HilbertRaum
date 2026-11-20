@@ -3684,6 +3684,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.rename.save': 'Speichern',
   'review.loading': 'Prüfung wird geladen…',
   'review.notFound': 'Diese Prüfung wurde nicht gefunden. Möglicherweise wurde sie gelöscht.',
+  'review.openFailed': 'Diese Prüfung konnte nicht geöffnet werden.',
   'review.question.toggle': 'Frage',
   'review.answerPane.aria': 'Zu prüfende Antwort',
   'review.autosave.saving': 'Wird gespeichert…',
@@ -3880,6 +3881,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.done': 'Nachweispaket exportiert.',
   'review.export.error':
     'Das Nachweispaket konnte nicht exportiert werden. Es wurde keine Datei geschrieben.',
+  'review.export.failed': 'Der Export des Nachweispakets wurde nicht abgeschlossen.',
   'review.export.copyHash': 'SHA-256 kopieren',
   'review.export.hashCopied': 'SHA-256 in die Zwischenablage kopiert.',
 

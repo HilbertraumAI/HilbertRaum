@@ -3650,6 +3650,7 @@ export const es: UiCatalog<'es'> = {
   'review.rename.save': 'Guardar',
   'review.loading': 'Cargando la revisión…',
   'review.notFound': 'No se encontró esta revisión. Puede que se haya eliminado.',
+  'review.openFailed': 'No se pudo abrir esta revisión.',
   'review.question.toggle': 'Pregunta',
   'review.answerPane.aria': 'Respuesta en revisión',
   'review.autosave.saving': 'Guardando…',
@@ -3869,6 +3870,7 @@ export const es: UiCatalog<'es'> = {
   'review.export.done': 'Paquete de evidencia exportado.',
   'review.export.error':
     'No se pudo exportar el paquete de evidencia. No se escribió ningún archivo.',
+  'review.export.failed': 'La exportación del paquete de evidencia no terminó.',
   'review.export.copyHash': 'Copiar SHA-256',
   'review.export.hashCopied': 'SHA-256 copiado en el portapapeles.'
 }

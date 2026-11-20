@@ -3745,6 +3745,8 @@ export const en = {
   'review.rename.save': 'Save',
   'review.loading': 'Loading review…',
   'review.notFound': 'This review could not be found. It may have been deleted.',
+  // #807: the lead above a failed open's own message (a locked workspace, a read error), which shows as the detail.
+  'review.openFailed': 'This review could not be opened.',
   'review.question.toggle': 'Question',
   'review.answerPane.aria': 'Answer under review',
   // Auto-save status (plan §7.5) — quiet text, never an unlabeled spinner (guidelines §6).
@@ -3965,6 +3967,9 @@ export const en = {
   'review.export.cancel': 'Close',
   'review.export.done': 'Evidence pack exported.',
   'review.export.error': 'The evidence pack could not be exported. No file was written.',
+  // #807: the lead above every failed export's own message (true for each, including a file that was saved but not
+  // recorded, which review.export.error's "No file was written" is not); a refused flush keeps review.export.error.
+  'review.export.failed': 'The evidence pack export did not finish.',
   'review.export.copyHash': 'Copy SHA-256',
   'review.export.hashCopied': 'SHA-256 copied to the clipboard.',
 

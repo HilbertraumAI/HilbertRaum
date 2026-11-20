@@ -3659,6 +3659,7 @@ export const pl: UiCatalog<'pl'> = {
   'review.rename.save': 'Zapisz',
   'review.loading': 'Wczytywanie weryfikacji…',
   'review.notFound': 'Nie znaleziono tej weryfikacji. Mogła zostać usunięta.',
+  'review.openFailed': 'Nie udało się otworzyć tej weryfikacji.',
   'review.question.toggle': 'Pytanie',
   'review.answerPane.aria': 'Weryfikowana odpowiedź',
   'review.autosave.saving': 'Zapisywanie…',
@@ -3889,6 +3890,7 @@ export const pl: UiCatalog<'pl'> = {
   'review.export.done': 'Wyeksportowano pakiet potwierdzeń.',
   'review.export.error':
     'Nie udało się wyeksportować pakietu potwierdzeń. Nie zapisano żadnego pliku.',
+  'review.export.failed': 'Eksport pakietu potwierdzeń nie został ukończony.',
   'review.export.copyHash': 'Kopiuj SHA-256',
   'review.export.hashCopied': 'Skopiowano SHA-256 do schowka.'
 }

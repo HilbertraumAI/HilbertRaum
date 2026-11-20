@@ -3402,6 +3402,7 @@ export const tr: UiCatalog<'tr'> = {
   'review.rename.save': 'Kaydet',
   'review.loading': 'İnceleme açılıyor…',
   'review.notFound': 'Bu inceleme bulunamadı. Silinmiş olabilir.',
+  'review.openFailed': 'Bu inceleme açılamadı.',
   'review.question.toggle': 'Soru',
   'review.answerPane.aria': 'İncelenen yanıt',
   'review.autosave.saving': 'Kaydediliyor…',
@@ -3588,6 +3589,7 @@ export const tr: UiCatalog<'tr'> = {
   'review.export.cancel': 'Kapat',
   'review.export.done': 'Dayanak paketi dışa aktarıldı.',
   'review.export.error': 'Dayanak paketi dışa aktarılamadı. Hiçbir dosya yazılmadı.',
+  'review.export.failed': 'Dayanak paketinin dışa aktarımı tamamlanmadı.',
   'review.export.copyHash': 'SHA-256 değerini kopyala',
   'review.export.hashCopied': 'SHA-256 değeri panoya kopyalandı.'
 }

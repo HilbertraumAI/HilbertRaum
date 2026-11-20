@@ -3652,6 +3652,7 @@ export const ru: UiCatalog<'ru'> = {
   'review.rename.save': 'Сохранить',
   'review.loading': 'Загрузка проверки…',
   'review.notFound': 'Эта проверка не найдена. Возможно, она была удалена.',
+  'review.openFailed': 'Не удалось открыть эту проверку.',
   'review.question.toggle': 'Вопрос',
   'review.answerPane.aria': 'Проверяемый ответ',
   'review.autosave.saving': 'Сохранение…',
@@ -3875,6 +3876,7 @@ export const ru: UiCatalog<'ru'> = {
   'review.export.cancel': 'Закрыть',
   'review.export.done': 'Пакет подтверждений экспортирован.',
   'review.export.error': 'Не удалось экспортировать пакет подтверждений. Файл не записан.',
+  'review.export.failed': 'Экспорт пакета подтверждений не завершен.',
   'review.export.copyHash': 'Копировать SHA-256',
   'review.export.hashCopied': 'Хеш SHA-256 скопирован в буфер обмена.'
 }

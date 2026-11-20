@@ -261,7 +261,12 @@ from its first public `1.0.0` release onward.
   English message ("Invalid PDF structure."), a line in the interface language now stands above
   that message: "This file couldn't be processed." on the document's row on the Documents screen,
   and "Couldn't add report.pdf to this chat.", with the file's name, in the chat's banner for a
-  failed attachment. Messages the app recognises read as before (#807).
+  failed attachment. Translating such a file on the Translate screen now shows the same line as its
+  row. Messages the app recognises read as before. Other errors in a program's own words now come
+  after a line in your language too: on a review, "Some changes could not be saved yet." before a
+  message such as "database is locked", and "This review could not be opened." when it can't be
+  opened; and for an evidence pack, "The evidence pack export did not finish." before the reason
+  (#807).
 - **Search now finds Turkish words with "İ" and "ı", and words typed with separate accent
   marks.** In conversation search and the keyword part of document search, a word typed with the
   capital "İ" was cut at that letter: "İstanbul" looked for "i" and "stanbul", found neither

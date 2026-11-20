@@ -3689,6 +3689,7 @@ export const it: UiCatalog<'it'> = {
   'review.loading': 'Caricamento della verifica…',
   'review.notFound':
     'Non è stato possibile trovare questa verifica. Potrebbe essere stata eliminata.',
+  'review.openFailed': 'Non è stato possibile aprire questa verifica.',
   'review.question.toggle': 'Domanda',
   'review.answerPane.aria': 'Risposta in verifica',
   'review.autosave.saving': 'Salvataggio in corso…',
@@ -3913,6 +3914,7 @@ export const it: UiCatalog<'it'> = {
   'review.export.done': 'Pacchetto di riscontri esportato.',
   'review.export.error':
     'Non è stato possibile esportare il pacchetto di riscontri. Non è stato scritto nessun file.',
+  'review.export.failed': 'L’esportazione del pacchetto di riscontri non è stata completata.',
   'review.export.copyHash': 'Copia SHA-256',
   'review.export.hashCopied': 'SHA-256 copiato negli Appunti.'
 }

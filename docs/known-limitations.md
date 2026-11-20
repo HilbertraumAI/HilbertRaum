@@ -2986,10 +2986,15 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   `documents.error_message`, such as a raw parser-library error (a pdfjs exception message), is
   shown as it was written. A line in the interface language stands above it: "This file couldn't
   be processed." on a failed document's row, and "Couldn't add report.pdf to this chat." (with
-  the file's name) in the chat's banner for a failed attachment.
-  The Documents banner for a failed summary, translation or text-recognition task, the file
-  translation's banner and the evidence-pack export error show such text on its own. Rare
-  failure-path remnants, accepted.
+  the file's name) in the chat's banner for a failed attachment, and the file translation's banner
+  says the same as the row for the same file. Other failures read the same way, with the
+  message after a line in the interface language: a review's save line ("Some changes could not be
+  saved yet." then, for example, SQLite's "database is locked"), a review that could not be opened,
+  and a failed evidence-pack export ("The evidence pack export did not finish." then, for example,
+  a file write error). One surface still shows such text on its own: the Documents screen's banner
+  when one of its own actions fails (a preview, a rename, a deletion and so on). It shows the
+  failed call's own message, usually the app's own words in the interface language, but a
+  database or file error as the system wrote it. A rare failure-path remnant, accepted.
 - **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now**, whatever
   the interface language. Translating them is content work, tracked separately from UI i18n.
 - **A conversation transcript can legitimately mix languages.** Old answers, model output,

@@ -3843,6 +3843,7 @@ export const fr: UiCatalog<'fr'> = {
   'review.rename.save': 'Enregistrer',
   'review.loading': 'Chargement de la vérification…',
   'review.notFound': 'Cette vérification est introuvable. Elle a peut-être été supprimée.',
+  'review.openFailed': 'Cette vérification n’a pas pu être ouverte.',
   'review.question.toggle': 'Question',
   'review.answerPane.aria': 'Réponse en cours de vérification',
   'review.autosave.saving': 'Enregistrement…',
@@ -4065,6 +4066,7 @@ export const fr: UiCatalog<'fr'> = {
   'review.export.done': 'Pack de justificatifs exporté.',
   'review.export.error':
     'Le pack de justificatifs n’a pas pu être exporté. Aucun fichier n’a été écrit.',
+  'review.export.failed': 'L’exportation du pack de justificatifs n’a pas abouti.',
   'review.export.copyHash': 'Copier la somme SHA-256',
   'review.export.hashCopied': 'Somme SHA-256 copiée dans le presse-papiers.'
 }

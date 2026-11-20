@@ -3651,6 +3651,7 @@ export const uk: UiCatalog<'uk'> = {
   'review.rename.save': 'Зберегти',
   'review.loading': 'Відкриття перевірки…',
   'review.notFound': 'Цю перевірку не знайдено. Можливо, її видалено.',
+  'review.openFailed': 'Не вдалося відкрити цю перевірку.',
   'review.question.toggle': 'Запитання',
   'review.answerPane.aria': 'Відповідь, що перевіряється',
   'review.autosave.saving': 'Збереження…',
@@ -3872,6 +3873,7 @@ export const uk: UiCatalog<'uk'> = {
   'review.export.cancel': 'Закрити',
   'review.export.done': 'Пакет обґрунтування експортовано.',
   'review.export.error': 'Не вдалося експортувати пакет обґрунтування. Жодного файлу не записано.',
+  'review.export.failed': 'Експорт пакета обґрунтування не завершено.',
   'review.export.copyHash': 'Скопіювати SHA-256',
   'review.export.hashCopied': 'SHA-256 скопійовано в буфер обміну.'
 }

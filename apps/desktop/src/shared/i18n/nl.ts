@@ -3590,6 +3590,7 @@ export const nl: UiCatalog<'nl'> = {
   'review.rename.save': 'Opslaan',
   'review.loading': 'Beoordeling laden…',
   'review.notFound': 'Deze beoordeling is niet gevonden. Mogelijk is de beoordeling verwijderd.',
+  'review.openFailed': 'Deze beoordeling kon niet worden geopend.',
   'review.question.toggle': 'Vraag',
   'review.answerPane.aria': 'Antwoord dat wordt beoordeeld',
   'review.autosave.saving': 'Opslaan…',
@@ -3798,6 +3799,7 @@ export const nl: UiCatalog<'nl'> = {
   'review.export.done': 'Onderbouwingspakket geëxporteerd.',
   'review.export.error':
     'Het onderbouwingspakket kon niet worden geëxporteerd. Er is geen bestand geschreven.',
+  'review.export.failed': 'Het exporteren van het onderbouwingspakket is niet voltooid.',
   'review.export.copyHash': 'SHA-256 kopiëren',
   'review.export.hashCopied': 'SHA-256 gekopieerd naar het klembord.'
 }
