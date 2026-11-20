@@ -22,14 +22,15 @@ import type { PreloadApi } from '../../src/preload'
 
 /** Auto-stubs handed out for names NOT supplied to `stubApi` — one stable spy per name. */
 let autoStubs = new Map<PropertyKey, ReturnType<typeof vi.fn>>()
-/** Unmocked names that were actually CALLED (not merely looked up) since the last stubApi(). */
+/** Unmocked names that were actually CALLED (not merely looked up) since the last check. */
 let unexpectedCalls = new Map<string, number>()
 let warnedNames = new Set<string>()
 
 export function stubApi(overrides: Partial<PreloadApi>): void {
-  // Fresh bookkeeping per install (tests call stubApi in their setup, so this is per-test).
+  // Fresh spies and warn-once bookkeeping per install. The record of unmocked CALLS is NOT reset here: a row
+  // that installs again mid-row (a re-mount, a language switch) must not hide what the first install let through.
+  // The check clears it (pass or throw), as does forgetUnexpectedApiCalls().
   autoStubs = new Map()
-  unexpectedCalls = new Map()
   warnedNames = new Set()
   const fallback = new Proxy(overrides, {
     get(target, prop) {
@@ -58,7 +59,7 @@ export function stubApi(overrides: Partial<PreloadApi>): void {
 
 /**
  * Teeth: fail if any auto-stubbed (i.e. not supplied to `stubApi`) method was
- * CALLED since the last `stubApi()` install. Names that were only looked up but never
+ * CALLED since the last check (a re-install does not clear it). Names that were only looked up but never
  * invoked don't count — existence probes are harmless.
  */
 export function assertNoUnexpectedApiCalls(): void {

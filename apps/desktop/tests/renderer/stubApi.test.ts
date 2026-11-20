@@ -57,11 +57,15 @@ describe('stubApi auto-stub (TS-4)', () => {
     expect(() => assertNoUnexpectedApiCalls()).toThrow(/listDocuments \(2 calls\)/)
   })
 
-  it('a fresh stubApi() resets the unexpected-call record (per-test bookkeeping)', () => {
+  it('a re-install keeps the record of earlier unmocked calls; a check or forgetUnexpectedApiCalls() clears it (#832)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     stubApi({})
     void api().listDocuments()
-    stubApi({})
+    stubApi({}) // a row that mounts again must not hide what the first install let through
+    expect(() => assertNoUnexpectedApiCalls()).toThrow("listDocuments (1 call)")
+    expect(() => assertNoUnexpectedApiCalls()).not.toThrow() // reported once
+    void api().listDocuments()
+    forgetUnexpectedApiCalls()
     expect(() => assertNoUnexpectedApiCalls()).not.toThrow()
   })
 })

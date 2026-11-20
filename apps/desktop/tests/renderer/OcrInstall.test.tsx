@@ -613,12 +613,12 @@ describe('useOcrInstall — onFinished fires once per job (#687)', () => {
 describe('OcrInstall — German (#410)', () => {
   it('17: DocumentsScreen and ModelsScreen render the German copy, and the dialog states German facts with a comma decimal', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy())
-    })
+    }))
     render(german(<DocumentsScreen />))
 
     await screen.findByText('scan.pdf')

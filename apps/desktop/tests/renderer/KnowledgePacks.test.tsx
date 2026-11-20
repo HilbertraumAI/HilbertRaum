@@ -29,6 +29,7 @@ import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import type { PreloadApi } from '../../src/preload'
 import { knowledgePack, packsEventEmitter } from '../helpers/knowledge-pack-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
+import { chatScreenStubs } from '../helpers/chat-screen'
 import { ENGINE_INSTALLED } from '../helpers/model-fixtures'
 import { makePolicyStatus } from '../helpers/status'
 
@@ -1653,7 +1654,7 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
         listCalls++
         return listCalls === 1 ? [pack()] : [pack({ searchable: 'no' })]
       })
-      stubApi(packsPanelStubs({
+      stubApi(chatScreenStubs({
         listConversations: vi.fn(async () => [t18Conversation()]),
         getRuntimeStatus: vi.fn(async () => T18_RUNTIME),
         listMessages: vi.fn(async () => []),
