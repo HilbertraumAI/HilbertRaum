@@ -53,7 +53,8 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
-import { checksumCacheStats, primeChecksum } from '../../src/main/services/models'
+import { checksumCacheStats, discoverManifests, machineRamGb, primeChecksum } from '../../src/main/services/models'
+import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import type { Db } from '../../src/main/services/db'
 import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
@@ -61,7 +62,7 @@ import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, AppStatus, ModelInfo, RuntimeStatus, WorkspaceStateInfo } from '../../src/shared/types'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
-import { t } from '../../src/shared/i18n'
+import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import { reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { CARDS, CATALOG_MANIFESTS, committingRuntime, START_READS, writeChatManifest } from '../helpers/performance-fixture'
@@ -590,6 +591,39 @@ describe('registerModelIpc', () => {
     return dir
   }
 
+  // #930: a chat start refusal is the catalog's text in the interface language, and names the model by its display
+  // name. Main's language is module state, so every row that sets it gets English back here. `expectRefusalInEnAndDe`
+  // makes the same refused call in English, then in German: a refusal that falls back to English fails the German half.
+  afterEach(() => applyUiLanguageSetting('en'))
+  const refusalOf = (call: Promise<unknown>): Promise<string> =>
+    call.then(
+      () => 'started',
+      (e: unknown) => (e instanceof Error ? e.message : String(e))
+    )
+  async function expectRefusalInEnAndDe(
+    call: () => Promise<unknown>,
+    key: MessageKey,
+    params: (lang: 'en' | 'de') => MessageParams = () => ({})
+  ): Promise<void> {
+    applyUiLanguageSetting('en')
+    expect(await refusalOf(call())).toBe(t('en', key, params('en')))
+    applyUiLanguageSetting('de')
+    const german = await refusalOf(call())
+    expect(german).toBe(t('de', key, params('de')))
+    expect(german).not.toBe(t('en', key, params('en')))
+  }
+  const catalogName = (id: string): string => {
+    const found = discoverManifests(CATALOG_MANIFESTS).manifests.find((m) => m.manifest.id === id)
+    if (!found) throw new Error(`no catalog manifest ${id}`)
+    return found.manifest.displayName
+  }
+  /** The RAM refusal's figures, written as the interface language writes numbers (the AI Model card's RAM hint). */
+  const hugeModelRam = (lang: 'en' | 'de'): MessageParams => ({
+    name: 'Huge Model',
+    min: (9999).toLocaleString(lang),
+    ram: machineRamGb().toLocaleString(lang)
+  })
+
   it('returns an empty model list when no manifests directory is configured', async () => {
     const ctx = { db: seededDb(), manifestsDir: null } as unknown as AppContext
     reg(ctx)
@@ -1042,9 +1076,37 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model')).rejects.toThrow(
-      /Unknown model id/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model'), 'main.models.unknown')
+  })
+
+  // #930 (A S-A1): the refusal a user really sees (Use on a model whose file differs from its checksum: the lazy list
+  // showed it installed, the start's full hash finds the mismatch). No row covered it.
+  it('startRuntime refuses a chat model whose file failed its check, in the interface language (#930)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-damaged-chat-'))
+    const manifestsDir = join(root, 'model-manifests')
+    writeChatManifest(manifestsDir, {
+      id: 'damaged-chat',
+      display_name: 'Damaged Chat',
+      recommended_min_ram_gb: 1,
+      recommended_ram_gb: 1,
+      local_path: 'models/chat/damaged.gguf',
+      sha256: createHash('sha256').update('the bytes the manifest expects').digest('hex')
+    })
+    mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+    writeFileSync(join(root, 'models', 'chat', 'damaged.gguf'), 'other bytes')
+    const runtime = committingRuntime() // commits the model `start` is given: nothing committed = never started
+    const ctx = {
+      db: seededDb(),
+      manifestsDir,
+      paths: { rootPath: root, configPath: bogusConfigDir() },
+      isDev: false,
+      runtime
+    } as unknown as AppContext
+    reg(ctx)
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'damaged-chat'), 'main.models.startDamaged', () => ({
+      name: 'Damaged Chat'
+    }))
+    expect(runtime.activeModelId()).toBeNull()
   })
 
   // H6 (audit round 4): the zero-weights first-run journey — a MISSING chat model may be
@@ -1207,9 +1269,9 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /can't be started/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+      name: catalogName('qwen3-4b-instruct-q4')
+    }))
   })
 
   it('a dev build counts as developer even with the toggle off (isDev)', async () => {
@@ -1242,9 +1304,9 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /can't be started/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+      name: catalogName('qwen3-4b-instruct-q4')
+    }))
   })
 
   // M10: the drive POLICY is authoritative — a commercial policy.json disables developer
@@ -1268,9 +1330,9 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /can't be started/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+      name: catalogName('qwen3-4b-instruct-q4')
+    }))
   })
 
   it('startRuntime rejects an embeddings model (the chat runtime loads chat models only)', async () => {
@@ -1282,9 +1344,10 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
-      /not a chat model/
-    )
+    // #930: by its display name, without the role code ("a embeddings model" was never English either).
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8'), 'main.models.notChat', () => ({
+      name: catalogName('multilingual-e5-small-q8')
+    }))
   })
 
   // Post-MVP RAM gate: installed weights that exceed this machine's memory are refused
@@ -1306,9 +1369,7 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'huge-model')).rejects.toThrow(
-      /needs at least 9999 GB RAM/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'huge-model'), 'main.models.startNeedsRam', hugeModelRam)
   })
 
   // Phase 20: getRuntimeStatus enriches the running model with its manifest's
@@ -1440,7 +1501,7 @@ describe('registerModelIpc', () => {
     reg(ctx)
     const { result } = await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
     expect(result).toBe('missing') // no weights on disk in this fixture
-    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.verifyModel, 'nope'), 'main.models.unknown') // #930
   })
 
   it('verifyModel re-arms the #372 unloadable-model latch for THAT model only (a re-verified file is a new file)', async () => {
@@ -1459,7 +1520,7 @@ describe('registerModelIpc', () => {
     expect(modelLoadLatchReason('other-model')).toBe('unknown model architecture')
     // An unknown id throws BEFORE the clear — nothing else is re-armed by a bad request.
     latchModelLoad('qwen3-4b-instruct-q4', 'again')
-    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(t('en', 'main.models.unknown'))
     expect(modelLoadLatchReason('qwen3-4b-instruct-q4')).toBe('again')
     clearModelLoadLatches()
   })
@@ -1610,9 +1671,9 @@ describe('registerModelIpc', () => {
         runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
-      await expect(invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-        /can't be started/
-      )
+      await expectRefusalInEnAndDe(() => invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+        name: catalogName('qwen3-4b-instruct-q4')
+      }))
       expect(started).toBe(false)
     })
 
@@ -1632,9 +1693,7 @@ describe('registerModelIpc', () => {
         runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
-      await expect(invoke(handlers, IPC.useModel, 'huge-model')).rejects.toThrow(
-        /needs at least 9999 GB RAM/
-      )
+      await expectRefusalInEnAndDe(() => invoke(handlers, IPC.useModel, 'huge-model'), 'main.models.startNeedsRam', hugeModelRam)
       expect(started).toBe(false)
     })
 
@@ -1649,9 +1708,9 @@ describe('registerModelIpc', () => {
         runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
-      await expect(invoke(handlers, IPC.useModel, 'multilingual-e5-small-q8')).rejects.toThrow(
-        /not a chat model/
-      )
+      await expectRefusalInEnAndDe(() => invoke(handlers, IPC.useModel, 'multilingual-e5-small-q8'), 'main.models.notChat', () => ({
+        name: catalogName('multilingual-e5-small-q8')
+      }))
       expect(started).toBe(false)
       // The upfront role guard runs before selectModel — the chat slot is untouched (no embeddings
       // slot side effect either).

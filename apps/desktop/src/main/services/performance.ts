@@ -377,11 +377,13 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
  *    and the pill compares against the unified budget, not RAM.
  *
  * On every class, a row whose files are not on this drive (`onDrive: false`, #914) adds nothing:
- * the row still names the catalog's model, but nothing will load it. A row that is LOADED counts
- * whatever `onDrive` says (#914 code review: a weight deleted while the runtime holds it open, a
- * manifest removed under a running model): its memory is in use.
+ * the row still names the catalog's model, but nothing will load it. Nor does a row whose files the
+ * checksum cache knows are damaged or have no checksum on record (`fileCheck`, #933): every start
+ * refuses it. A row that is LOADED counts whatever `onDrive` and `fileCheck` say (#914 code review:
+ * a weight deleted while the runtime holds it open, a manifest removed under a running model): its
+ * memory is in use.
  *
- * null only when nothing that is on the drive or loaded has a size (nothing installed). A drive
+ * null only when no counted row has a size (nothing installed, or nothing installed will start). A drive
  * whose every counted row runs on the card gives 0, the honest number (the screen leaves the line
  * out when it would read 0.0 GB). An ESTIMATED chat spill is not counted until a start is
  * observed (`!verdict.estimated`).
@@ -394,7 +396,9 @@ export function loadedAtOnceMb(input: {
   const { memoryClass, rows, verdict } = input
   let total: number | null = null
   for (const row of rows) {
-    if ((!row.onDrive && !row.loaded) || row.sizeOnDiskGb == null) continue
+    // #933: a row on the drive whose files a check found damaged, or that has no checksum on record, will not load
+    // either (every start refuses it): out, unless it is loaded.
+    if ((!row.loaded && (!row.onDrive || row.fileCheck !== 'ok')) || row.sizeOnDiskGb == null) continue
     const sizeMb = row.sizeOnDiskGb * 1024
     let mb: number
     if (memoryClass === 'unified' || row.device === 'cpu') {

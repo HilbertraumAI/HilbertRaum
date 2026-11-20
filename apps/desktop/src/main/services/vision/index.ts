@@ -90,6 +90,14 @@ export class VisionService {
     return this.runtime?.isLoaded?.() ?? false
   }
   /**
+   * #933 review N1: the id of the model the resident sidecar holds (the one its runtime was built for), or null when
+   * nothing is resident. Read-only, for the Performance row, which names this model while it is loaded: it is not
+   * always the pick (a pick a check found damaged is passed over at the next cold start).
+   */
+  loadedModelId(): string | null {
+    return this.isLoaded() ? this.runtimeModelId : null
+  }
+  /**
    * Set WHILE `stop()` (workspace LOCK / quit) tears the runtime down, cleared in its `finally` —
    * the VisionService-level analogue of the e5/reranker `tearingDown` latch (F19, GPU §5.5c).
    * VisionService has NO orchestrator-level `stopped` latch and the per-`VisionRuntime` `stopped`

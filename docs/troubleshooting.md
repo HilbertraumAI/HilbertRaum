@@ -263,20 +263,22 @@ can't run on this computer"**, a file is not missing — see the entry of that n
 
 ---
 
-## "… can't be started — its model file isn't installed on this drive yet."
+## "… can't be started: its model file isn't on this drive yet."
 
 The model's weight file is missing from the `models/` folder (the AI Model screen shows it as
 **Not downloaded**). Add the file (above), or choose a model already shown as **Installed**. The app
-only downloads a model when you explicitly ask it to on the AI Model screen.
+only downloads a model when you explicitly ask it to on the AI Model screen. The message is in your
+interface language.
 
 ---
 
-## A model shows "checksum failed"
+## A model shows "Can't verify"
 
-A required file on the drive doesn't match the expected fingerprint in its manifest — for a
-model whose weight is more than one file (#310), `verify-models` names the specific offending
-file (with a `(mmproj)` or `(file N/M)` label) rather than just the model. The file may be
-incomplete or corrupted. Re-copy the named weight file, then run the verifier:
+A required file on the drive doesn't match the expected fingerprint in its manifest. Starting it
+says it "failed its file check". For a model whose weight is more than one file (#310),
+`verify-models` names the specific offending file (with a `(mmproj)` or `(file N/M)` label) rather
+than just the model. The file may be incomplete or corrupted. Re-copy the named weight file, then
+run the verifier:
 
 ```powershell
 .\scripts\verify-models.ps1 -Target E:\         # Windows
@@ -287,6 +289,15 @@ scripts/verify-models.sh --target /Volumes/HILBERTRAUM   # macOS/Linux
 
 On a developer drive, unverified models are allowed; a commercial drive requires a matching
 checksum.
+
+**If the card says "No checksum" instead**, nothing is wrong with the file: the model's manifest
+has a placeholder in place of a real checksum, as a model you add yourself does until you capture
+its hash. There is no Download button, because a new copy cannot give the manifest a checksum. To
+use the model, either write its real `sha256` into the manifest with `scripts/verify-models.sh
+--generate` (or the `.ps1`), or turn on Developer mode on a drive whose policy allows unverified
+models. The Performance screen says "no checksum on record" for the same model. The Images and
+Translate screens, and the app's log when it refuses to start such a chat model on its own, still
+say it failed its file check (see [`known-limitations.md`](known-limitations.md)).
 
 **If an in-app download stalls near the end (~95%) and then "checksum failed" after Resume**, the
 manifest's fingerprint or `size_bytes` doesn't match the real upstream file — re-copying won't help

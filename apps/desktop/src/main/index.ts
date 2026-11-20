@@ -7,7 +7,7 @@ import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
 import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
-import { createMainWindowCloseGuard, trackQuitRequests } from './close-guard'
+import { createMainWindowCloseGuard, holdQueueOnQuit, trackQuitRequests } from './close-guard'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
 import { appPageUrl, createMainWindowNavigationPredicate, devRendererUrl } from './app-protocol'
@@ -1038,6 +1038,9 @@ function createWindow(): void {
   // the answer or the bound; a change that could not be saved asks the user first. A close that
   // came from a quit quits again (`close-guard.ts`). One guard per window: a macOS `activate`
   // window gets its own; the quit flag is the app's (`quitRequests`, below).
+  // #935: on Windows and Linux (where this close quits) a close no quit started first asks while an
+  // OCR run or a document translation is running or waiting. #936: a close that quits holds the
+  // document-task queue (nothing new starts while the window saves); Keep open releases it.
   const closeGuard = createMainWindowCloseGuard({
     window: win,
     app,
@@ -1046,6 +1049,10 @@ function createWindow(): void {
     t: tMain,
     quitRequests,
     isShuttingDown: () => lifecycle.isShuttingDown(),
+    platform: process.platform,
+    listActiveDocTasks: () => ctx?.docTasks?.listActiveDocTasks() ?? [],
+    holdWork: () => ctx?.docTasks?.holdQueueForQuit(),
+    releaseWork: () => ctx?.docTasks?.releaseQueueHold(),
     log
   })
   win.on('close', closeGuard.onClose)
@@ -1157,6 +1164,9 @@ app.whenReady().then(() => {
 // cancels that quit, so the guard quits again after the save. The quit an X starts on Windows and
 // Linux (#910) comes after the main window has closed, so no guard reads it.
 const quitRequests = trackQuitRequests(app)
+// #936: from the moment a quit begins, the document-task queue starts nothing new (a quit the guard
+// holds closes the OCR window while the main window saves). A guard's Keep open releases it.
+holdQueueOnQuit(app, () => ctx?.docTasks?.holdQueueForQuit())
 
 app.on('will-quit', lifecycle.onWillQuit)
 

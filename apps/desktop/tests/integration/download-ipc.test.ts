@@ -22,7 +22,8 @@ vi.mock('electron', () => ({
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
-import { tMain } from '../../src/main/services/i18n'
+import { applyUiLanguageSetting, tMain } from '../../src/main/services/i18n'
+import { t } from '../../src/shared/i18n'
 import { DownloadManager } from '../../src/main/services/downloads'
 import { setManifestAppVersion } from '../../src/main/services/models'
 import type { FetchFn } from '../../src/main/services/assets'
@@ -166,12 +167,17 @@ describe('downloadModel gates (offline guarantee — closed gates never reach th
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('throws on an unknown model id', async () => {
+  // #930 (G-5): in the interface language, the same text as the chat start's unknown id.
+  it('throws on an unknown model id, in the interface language', async () => {
     const { ctx } = makeCtx({ allowNetwork: true })
     registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
-    await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(
-      /Unknown model id/
-    )
+    await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(t('en', 'main.models.unknown'))
+    applyUiLanguageSetting('de')
+    try {
+      await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(t('de', 'main.models.unknown'))
+    } finally {
+      applyUiLanguageSetting('en')
+    }
   })
 
   // #847: a manifest for a newer HilbertRaum is listed for display only. Its `download` block is never offered, and
@@ -196,7 +202,7 @@ describe('downloadModel gates (offline guarantee — closed gates never reach th
     try {
       registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: fetchSpy }))
       await expect(invoke(handlers, IPC.downloadModel, 'future-model', { licenseAccepted: true })).rejects.toThrow(
-        /Unknown model id/
+        t('en', 'main.models.unknown')
       )
     } finally {
       setManifestAppVersion('')
