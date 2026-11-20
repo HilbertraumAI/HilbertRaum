@@ -422,7 +422,7 @@ Qualität bleibt top.").
   KI-Modell) · document → Dokument · re-index → neu indexieren · offline → offline ·
   "Ask my documents" → „Meine Dokumente fragen“ · lock/unlock → sperren/entsperren ·
   password → Passwort · settings → Einstellungen · plaintext (developer) mode →
-  unverschlüsselt (Entwickler).
+  unverschlüsselt (Entwickler) · demo mode → Demo-Modus (one spelling, #829).
 - **EP-1 review glossary** (native pass, P5 2026-07-18 — the legal-adjacent register for the
   evidence-review surface; the CANONICAL record — the `de.ts` header comment mirrors it):
   evidence → **Nachweis(e)** — the NOUN „Beleg“ is banned; the verb „belegen“ is the
