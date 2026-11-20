@@ -1406,6 +1406,21 @@ password. Four guards close this:
   The damaged-vault unlock path now shreds the working file + sidecars before throwing
   (`openDatabase` also closes its native handle when the open fails, so the shred's
   unlink is not blocked by the app's own leaked fd).
+- **The create refusals and a missing descriptor are typed (#807).** `create()` refuses over any
+  vault on the drive with `WorkspaceExistsError` (so does the `createEncryptedVaultOnDisk` belt
+  over an `.enc`), and a create without a password that the policy or the build does not allow
+  with `PlaintextNotAllowedError`. The create IPC answers `workspace_exists` /
+  `plaintext_not_allowed` by class, never by wording. It used to match their English text with
+  `/not permitted|already exists/`, which also caught Node's own file errors: an `EPERM … rename`
+  while an antivirus held the new `.enc.new` reached the lock screen raw, with the drive's absolute
+  paths, and nothing was logged. Such an error is now a failed create (`createFailed`), logged
+  content-free (the error's kind, code and system call, never its message). An `.enc` beside a
+  missing or unreadable descriptor throws `VaultDescriptorMissingError` before any password check
+  (the verifier is in the descriptor) → `vault_descriptor_missing`, whose copy names
+  `config/workspace.json` and warns against a new workspace. Every refusal stays a refusal, and
+  nothing new creates over a vault. With no reset in the app, the way to start over after a
+  forgotten password is by hand: `config/workspace.json` and `workspace/` set aside together
+  (troubleshooting, "I forgot my workspace password", #931).
 
 ### Vault format versions (#845)
 

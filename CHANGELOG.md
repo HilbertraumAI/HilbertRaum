@@ -93,6 +93,17 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The lock screen says when the file with your workspace's key is missing.** If
+  `config/workspace.json` was removed from the drive or damaged while the encrypted workspace was
+  still there, every unlock said "Could not open the workspace." The lock screen now says that this
+  file is missing or can't be read, that no password can open the workspace without it, and that you
+  should put it back or restore it from a backup instead of creating a new workspace (#807).
+- **Two workspace messages now follow your language.** Changing the password while documents are
+  being imported or re-indexed said "Documents are still being imported or re-indexed …" in English
+  whatever the interface language; it is now in your language. And when setting up the workspace
+  failed because another program, such as antivirus, held one of its new files, the lock screen
+  showed the system's own English error with the full path of the file on the drive; it now says
+  "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
 - **On Windows, audio import and voice dictation work in folders with umlauts, accents or other
   alphabets.** When the drive or the app's data folder had such a character in its path (a user
   named Jürgen, a Kit folder named `Übungen`, a folder in Cyrillic or Japanese), the voice engine

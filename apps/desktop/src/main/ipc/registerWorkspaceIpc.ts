@@ -191,6 +191,31 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
 }
 
 /**
+ * What a failed create logs (#807, C S-1): the error's kind, its Node code and system call, and SQLite's result code
+ * and fixed description, or a #844 open failure's own `failure`; never the message. A Node file error's message names
+ * the drive's absolute paths (`EPERM: operation not permitted, rename 'C:\…\hilbertraum.sqlite.enc.new' -> …`).
+ */
+function createFailureForLog(err: unknown): Record<string, unknown> {
+  const e = err as {
+    name?: unknown
+    code?: unknown
+    syscall?: unknown
+    errcode?: unknown
+    errstr?: unknown
+    failure?: object
+  } | null
+  const kind = typeof e?.name === 'string' ? e.name : typeof err
+  if (e?.failure && typeof e.failure === 'object') return { error: kind, ...e.failure }
+  return {
+    error: kind,
+    code: typeof e?.code === 'string' ? e.code : null,
+    syscall: typeof e?.syscall === 'string' ? e.syscall : null,
+    sqliteCode: typeof e?.errcode === 'number' ? e.errcode : null,
+    sqlite: typeof e?.errstr === 'string' ? e.errstr : null
+  }
+}
+
+/**
  * #876 review round 2: log each site that judged a workspace file by its SQLite header because the probe could not read
  * its structure for a reason that is not damage (the file was then treated as before the probe existed). Which site and
  * SQLite's code only; the controller keeps them until a handler that can log (a lock, an unlock, a password change).
@@ -485,16 +510,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           log.warn('Workspace create refused: a workspace without a password is not allowed')
           return { ok: false, reason: 'plaintext_not_allowed', message: tMain('main.workspace.plaintextNotAllowed') }
         }
-        // Plaintext refused by policy, and create-over-an-existing-vault (would wipe
-        // the user's data), are expected refusals — surface the real message.
-        const message = err instanceof Error ? err.message : String(err)
-        if (/not permitted|already exists/i.test(message)) {
-          return { ok: false, reason: 'refused', message }
-        }
-        // #844: a first open that could not finish carries only a fixed message; what failed is
-        // in its `failure` (content-free).
-        const failure = (err as { failure?: object } | null)?.failure
-        log.error('Workspace create failed', failure ? { message, ...failure } : message)
+        // Anything else failed the create (#807, C S-1: a Node file error such as an `EPERM … rename` while an
+        // antivirus holds the new file used to match the old `/not permitted|already exists/` wording and reach the
+        // gate raw, with absolute paths, and unlogged). The log line is content-free; #844's open failure carries what
+        // failed in its `failure`.
+        log.error('Workspace create failed', createFailureForLog(err))
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }
