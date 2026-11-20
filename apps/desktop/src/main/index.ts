@@ -590,7 +590,9 @@ function initBackend(): void {
     paths,
     isDev,
     getSettings: readSettingsOrNull,
-    getDb: () => workspace.requireDb()
+    getDb: () => workspace.requireDb(),
+    // #959: a start check that finds a file damaged tells the Performance screen.
+    onVerdictChanged: notifyPerformanceChanged
   })
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU

@@ -110,6 +110,15 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
+  source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
+  letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the
+  order your language uses, as the project list already does. Answers still search packs in the same
+  order as before (#958).
+- **The Performance screen now notices when a file check finds a model damaged.** If checking a model's
+  files (Check all model files, Verify checksum, or the check before a model starts) changed the
+  result, the screen kept showing the old one until you left it and came back. Its row now turns
+  to "failed its file check" as soon as the check finishes (#959).
 - **The lock screen says when the file with your workspace's key is missing.** If
   `config/workspace.json` was removed from the drive or damaged while the encrypted workspace was
   still there, every unlock said "Could not open the workspace." The lock screen now says that this

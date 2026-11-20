@@ -12,6 +12,7 @@ import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { t as tr, tCount as trCount, type UiLanguage } from '../../src/shared/i18n'
+import { PROJECT_ORDER_CASES } from '../helpers/project-order-fixtures'
 import type {
   Citation,
   Collection,
@@ -672,11 +673,12 @@ describe('PacksPanel', () => {
     expect(screen.getByText('4 packs · 3 enabled · 2.5 GB on this drive')).toBeInTheDocument()
     const asks = screen.getAllByRole('button', { name: 'Ask this pack' })
     expect(asks).toHaveLength(4)
-    expect(asks[0]).toBeEnabled()
-    expect(asks[1]).toBeDisabled()
+    // Listed in title order (#958): Gone pack, Klimawandel, No index, Off pack.
+    expect(asks[0]).toBeDisabled()
+    expect(asks[1]).toBeEnabled()
     expect(asks[2]).toBeDisabled()
     expect(asks[3]).toBeDisabled()
-    await user.click(asks[0])
+    await user.click(asks[1])
     expect(onAskPack).toHaveBeenCalledWith('uuid-climate')
   })
 
@@ -2032,5 +2034,39 @@ describe('SourcesDisclosure — save an article from the citation card (#418)', 
     expect(save).toHaveTextContent(tr('de', 'chat.article.save'))
     await userEvent.click(save)
     expect(await screen.findByText(tr('de', 'chat.article.saved', { title: filed }))).toBeInTheDocument()
+  })
+})
+
+// #958: the management list shows packs in the interface language's order (main's SQL order is NOCASE, A-Z only).
+describe('PacksPanel pack order (#958)', () => {
+  const C = String.fromCharCode
+  const packCases: Array<[UiLanguage, string[]]> = [
+    ...PROJECT_ORDER_CASES,
+    ['de', ['Wikip' + C(0xe9) + 'dia', 'Zebra', C(0xc4) + 'rzteblatt', C(0x412, 0x438, 0x43a, 0x438)]]
+  ]
+  const renderListed = async (lang: UiLanguage, names: string[]): Promise<string[]> => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, lang)
+    stubApi(packsPanelStubs({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => names.map((n, i) => pack({ id: `p${i}`, title: n, description: null }))
+    }))
+    render(<PacksPanel />, { wrapper: I18nProvider })
+    await screen.findByText(names[0])
+    return screen
+      .getAllByRole('listitem')
+      .map((li) => names.find((n) => (li.textContent ?? '').includes(n)))
+      .filter((n): n is string => n !== undefined)
+  }
+
+  it.each(packCases)('lists the packs in the %s order, not the SQL order', async (lang, sqlOrder) => {
+    const expected = [...sqlOrder].sort(new Intl.Collator(lang).compare)
+    expect(expected).not.toEqual(sqlOrder)
+    expect(await renderListed(lang, sqlOrder)).toEqual(expected)
+  })
+
+  it('keeps packs with equal titles in their incoming (id) order', async () => {
+    const composed = 'Caf' + C(0xe9)
+    const decomposed = 'Cafe' + C(0x301)
+    expect(await renderListed('en', [composed, decomposed, 'Atlas'])).toEqual(['Atlas', composed, decomposed])
   })
 })
