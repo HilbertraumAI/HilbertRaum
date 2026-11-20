@@ -343,10 +343,16 @@ from its first public `1.0.0` release onward.
   tenant?" or "How do I change the rent?" was often answered in the skill's comparison layout, an
   executive summary and then the changes between versions, instead of with the fact you asked for.
   Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder did the same
-  with their own reports for a question asked over several documents, a single fact looked up in a
-  long document, or a thank-you: "Who attended?" could get full meeting minutes. Such a question is
+  with their own reports for a question asked over several documents or a single fact looked up in a
+  long document: "Who attended?" could get full meeting minutes. Such a question is
   now answered plainly from the documents, and the answer still shows that the skill was applied.
   Comparing two documents, and a skill's report on one document, work as before (#632, #831).
+- **A thank-you or greeting in a chat about your documents gets a short reply.** "Danke!",
+  "Thanks!", "Merci !" or "How are you?" in a chat with documents was answered with a summary of the
+  documents, with sources and the coverage line under it, and with a skill selected, in that skill's
+  layout. It now gets a short reply in the language you wrote in, without sources, and nothing is read
+  for it: not the documents, not the knowledge packs in the chat. A short question about the last
+  answer, such as "Sure?" or "Alles?", is still answered from the documents (#963).
 - **The "every mention" example question reads a long document whole in every language.** With a
   whole-document skill such as Contract Brief selected and one long document in scope, the German
   example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching

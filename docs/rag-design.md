@@ -1896,8 +1896,9 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   answer, the turn is labelled as top-k since #736 — see the next bullet.)
   Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
   read (since #649, for list asks: an aggregation ask over one fitting document is read whole). **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
-  knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
-  (top-k answers it at zero model calls when nothing matches); a legacy, partly chunked document (its
+  knowledge packs (the whole read never queries them, so it would silently drop the packs); a filler
+  question about the last answer such as "Sure?" or «Alles?» (since #963 other small talk gets the short
+  small-talk reply before any of this, §19); a legacy, partly chunked document (its
   sections are not its whole text). The #80 classification is unchanged (decided before retrieval); the
   #641 notices are relevance-only — a whole read has every section in the prompt, so neither can be
   true. The answer's sources keep their `[Sn]` (§14.4 "#643 amendment"). Owner calls, all as
@@ -6219,3 +6220,70 @@ replaced with a mechanical citation check.
 This closes the retrieval-research effort described above; nothing in it changes what the app
 ships today, and everything in it describes one internal question bank, one archive and one
 machine — not the app in general and not any other product.
+
+## 19. Small talk in a documents chat — design record (#963, follow-ups wave 5, owner call G-1, 2026-11-21)
+
+**Decision (option a2).** A small-talk message in a documents chat ("Danke!", "Thanks!", «Merci !», "How
+are you?") gets one short model reply that reads nothing. `isSmallTalkReply` (`skills/vocabulary.ts`)
+decides, and `generateSmallTalkReply` (`rag/index.ts`) answers. The branch sits in the ask handler of
+`registerRagIpc`, right after the refusal of an explicit skill that no longer resolves (#132) and before
+any scope, skill-engine, router, classifier or knowledge-pack work.
+
+**The facts it rests on.** `isSmallTalk` only opted small talk out of the whole-document reads (A3): the
+engines of the five bundled whole-document skills, the small-document read (#643), the tool-skill
+inversion and the offer gate. The turn then took the passage search, whose prompt frames any message as a
+question over the excerpts ("Question: Danke!" and the passages), and the models summarized them. In wave
+4's runs (llama.cpp b9849, GTX 1070 Ti, qwen3-4b-instruct-q4 and qwen3.5-9b-ud-q4kxl) 3 of the 4
+thank-yous with no skill (two per model) got a summary of the document, and none of the 8 under a skill
+got an acknowledgement: each was a summary of 79 to 231 words, in 7.6 to 13.6 s on the 4B and 21.7 to
+31.6 s on the 9B. The persisted reply carried 1 or 2 citations, `relevance` coverage and
+the skill stamp, so Sources and the coverage meter sat under a thank-you; with no passage above the
+similarity floor it got "I couldn't find this in your documents"; with knowledge packs in scope it ran the
+pack arm (a query-expansion model call, then the archive search) and answered from articles.
+
+**The gate.** `isSmallTalkReply` holds for a whole-message chit-chat form (`SMALL_TALK_EXACT`, with or
+without its question mark: "How are you?", «Wie geht's?», "What can you do?"), or for a message made only
+of filler words (`SMALL_TALK_WORDS`) with no "?" after its last letter or digit. It is stricter than
+`isSmallTalk` on purpose: a one- or two-word question about the last answer is made of fillers too
+("Sure?", «Alles?», «Bitte?» for "pardon?", "So much?"), and it still reads the documents. The opt-outs
+keep `isSmallTalk` (G-11 kept «Alles gut?» as small talk for them). The tail check is one greedy pass, so
+a run of punctuation cannot make it backtrack.
+
+**The reply, as built.** The system prompt `SMALL_TALK_SYSTEM_PROMPT` is `BASE_SYSTEM_PROMPT` and two fixed
+English lines (model-facing, like `GROUNDING_RULES`; no catalog): the message is small talk in a chat about
+the user's documents, no document text comes with it, reply briefly in one or two sentences in the
+message's language without summarizing, quoting or citing a document. The user turn is the message alone:
+no history (an "ok" after an offer must not continue from it without the documents), no fence, no
+excerpts, no compaction pre-pass. `temperature` is `GROUNDED_TEMPERATURE` (0) and the cap
+`SMALL_TALK_MAX_TOKENS` (200); a reply cut there is badged as cut off. The reply is persisted with no
+citations, coverage, knowledge-pack outcomes or skill stamp, so it renders as a plain bubble with no
+Sources, no coverage meter, no skill glyph and no pack notice, and the composer's selected skill stays
+selected. It runs through `withChatStream`, `withRegenerateGuard` and the chat slot like every answer: Stop
+keeps the partial marked "Reply stopped", lock and quit end it, a failure leaves the message unanswered for
+"Send again", a failed regenerate brings the previous reply back, and a stream that completed with no
+token throws `EmptyCompletionError` (CB-4). The meter gets the real usage (the two messages).
+
+**What stays unchanged.** Every grounded prompt, `GROUNDED_SYSTEM_PROMPT` included, byte for byte; the
+renderer, IPC, preload, the `Message` shape and the catalogs. The knowledge-pack acceptance set holds no
+small talk (0 of the 100 questions of `eval/rag_de_en.jsonl`), so the §17 shipping rule is not triggered.
+The local API has no route to the documents, so it is not affected.
+
+**Residuals (accepted).** An offer the assistant made and the user accepts with "ok", "sure" or «bitte»
+gets the short reply, not the offer (before it got a summary). A whole-message form typed with a question
+mark that asks something («Passt?», «Vale?») takes the reply too. The reply sees no earlier turn. "Review"
+still shows under it, as under every answer in a documents chat (a separate product call).
+
+**Not taken.** (a1) a plain chat turn (`generateAssistantMessage`): its prompt tells the model to answer
+from its own knowledge, so "ok" after an offer could continue from the history without the documents, and
+it can run the compaction pre-pass. (a3) a2 with the history: the same continuation risk. (b) a grounding
+rule: it changes every grounded turn's system prompt, still runs the search and still persists Sources and
+coverage under the reply. (c) a canned reply: a new key in ten catalogs, one line for "hi", "bye" and "tell
+me a joke", in the interface language rather than the message's.
+
+**Proof.** `rag-whole-doc-compare.test.ts` (the #963 describe: «Danke!», "Thanks!", «Merci !» and "How are
+you?" with no skill, under Contract Brief, What Changed? over two documents and a user skill with no
+engine; no earlier turn after an answer; "Sure?", «Alles?» and a real question still read the documents;
+the rewritten small-talk rows of the #632 and #831 describes), `rag-whole-doc-skill.test.ts` and
+`rag-whole-read.test.ts` (the rewritten small-talk rows; knowledge packs in scope: no pack search, no pack
+outcome), `rag-regenerate-ipc.test.ts` (Stop, "Send again", regenerate), `skills-vocabulary.test.ts`
+(`isSmallTalkReply`).

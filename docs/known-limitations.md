@@ -1337,7 +1337,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   launched context window (about 3 pages at the 4B's 4,096 tokens, about 7 at 8,192) hands the model
   the whole document in order instead of the best-matching passages. Everything else is still answered
   from the most relevant passages: a chat with several documents (there is no multi-document whole
-  read), a chat with knowledge packs selected (the whole read never searches a pack), small talk, a
+  read), a chat with knowledge packs selected (the whole read never searches a pack), a short question
+  about the last answer ("Sure?"; other small talk gets a short reply that reads no document, #963), a
   legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
   window. A summary question over such a longer document uses its deep index when one is built (#642);
   without one it is still answered from the most relevant passages, with no hint to build the index,
@@ -1349,6 +1350,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   prefill, for every question about a 30-page document. An off-topic question about a document read
   whole now costs a model call (the model says the document does not cover it) where the passage search
   could answer "not found" without one. Answers given before #643 keep their old source display.
+- **Small talk in a chat about documents gets a short reply that reads no document (#963, follow-ups
+  wave 5, owner call G-1; [`rag-design.md`](rag-design.md) §19).** A thank-you, a greeting, a goodbye or
+  "How are you?" gets one short reply from the model, which sees only the message: no document, no
+  earlier turn, no skill instructions and no knowledge pack. The reply has no sources, no coverage line
+  and no skill mark. What counts is a short list of whole messages ("How are you?", «Wie geht's?») and
+  of thanks, greeting and acknowledgement words in the ten interface languages, so three things follow.
+  A message of such words with a question mark at the end ("Sure?", «Alles?», «Bitte?» for "pardon?")
+  is a question about the last answer and is answered from the documents. A whole-message form typed
+  as a question («Passt?», «Vale?») gets the short reply. And an offer the assistant made ("Shall I list
+  the other deadlines?") that you accept with "ok", "sure" or «bitte» gets a short reply, not the list:
+  ask for it in words ("List the other deadlines"). A thank-you longer than the lists is still taken for
+  a question about the documents (below).
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
@@ -1640,6 +1653,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
   can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
   needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
+  Since #963 most small talk never reaches the opt-out: it gets the short small-talk reply first (above);
+  what still reaches it is a short question about the last answer ("Sure?", «Alles?»), which keeps the
+  passage search.
   **A bundled whole-document skill's fall-through turn carries only the skill's rules (skills-audit-2026-07-07
   SK-3b, decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1, for What Changed?;
   extended 2026-11-20 by #831, follow-ups wave 4 owner call G-9, to the other four).** Each of the five

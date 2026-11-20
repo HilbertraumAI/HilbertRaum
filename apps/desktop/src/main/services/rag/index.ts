@@ -42,6 +42,7 @@ import {
   compactionSummaryPair,
   effectiveContextWindow,
   emptyAssistantMessage,
+  EmptyCompletionError,
   fitMessagesToContext,
   getLatestCheckpoint,
   isAbortError,
@@ -2388,5 +2389,82 @@ export async function generateGroundedDataAnswer(
     truncated: finishReason === 'length',
     // #498: one pass, one cap — attribute the cut instead of blaming the window by default.
     truncatedCause: truncationCause(finishReason, GROUNDED_MAX_TOKENS, timings)
+  }, opts.signal)
+}
+
+/**
+ * #963 (follow-ups wave 5 owner call G-1, option a2): the SYSTEM prompt of the short reply a small-talk message gets in
+ * a documents chat (`isSmallTalkReply`: thanks, a greeting, a goodbye, "How are you?"). Model-facing, fixed English and
+ * app-authored, like `GROUNDING_RULES`; `BASE_SYSTEM_PROMPT` already asks for the user's language. No document text, no
+ * earlier turn and no skill fence ride with it, so the reply has nothing to summarize or cite.
+ */
+export const SMALL_TALK_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}
+
+This chat is about the user's local documents, but this message is small talk (thanks, a greeting, a goodbye, a short acknowledgement or a question about you), and no document text is provided with it.
+Reply briefly and naturally in one or two sentences, in the language of the message, without summarizing, quoting or citing any document.`
+
+/** #963: the small-talk reply's output cap. Two sentences fit with room to spare; a reply cut here is badged as cut off. */
+export const SMALL_TALK_MAX_TOKENS = 200
+
+/**
+ * #963: answer a small-talk message in a documents chat with one short model turn: `SMALL_TALK_SYSTEM_PROMPT` and the
+ * message itself, nothing else. No history (an "ok" after an offer must not continue from it without the documents), no
+ * fence, no excerpts and no compaction pre-pass. Persisted as a plain assistant turn: no citations, no coverage, no
+ * knowledge-pack outcomes and no skill stamp, because it read nothing and no skill shaped it. Stop, lock and quit end it
+ * through `signal` like any answer (`persistAssistantMessage` marks a partial "Reply stopped"); a stream that completed
+ * with no token throws `EmptyCompletionError` (CB-4), so the message stays unanswered for "Send again".
+ */
+export async function generateSmallTalkReply(
+  db: Db,
+  runtime: ModelRuntime,
+  conversationId: string,
+  message: string,
+  opts: { signal?: AbortSignal; onToken?: (token: string) => void; onPromptUsage?: (usage: ContextUsage) => void } = {}
+): Promise<Message> {
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SMALL_TALK_SYSTEM_PROMPT },
+    { role: 'user', content: message }
+  ]
+  // Meter honesty: this turn sends the message alone, not the visible history the composer would estimate from.
+  opts.onPromptUsage?.({
+    usedTokens: messages.reduce((sum, m) => sum + messageTokens(m), 0),
+    window: effectiveContextWindow(runtime, getSettings(db))
+  })
+  let content = ''
+  let aborted = false
+  let finishReason: string | null = null
+  let timings: RuntimeTimings | null = null
+  const stream = runtime.chatStream(messages, {
+    signal: opts.signal,
+    onFinish: (reason, tm) => {
+      finishReason = reason
+      timings = tm ?? null
+    },
+    temperature: GROUNDED_TEMPERATURE,
+    maxTokens: SMALL_TALK_MAX_TOKENS
+  })
+  try {
+    for await (const token of stream) {
+      content += token
+      opts.onToken?.(token)
+    }
+  } catch (err) {
+    if (!isAbortError(err, opts.signal)) throw err
+    aborted = true
+  }
+  const receivedAnyToken = content !== ''
+  content = stripThinkBlocks(content)
+  if (content === '') {
+    // A stop before the first token, or a reply that was only reasoning: nothing to persist. A stream that completed
+    // with no token at all is an empty completion (CB-4), surfaced as an error instead of a silent unanswered message.
+    if (aborted || opts.signal?.aborted === true || receivedAnyToken) return emptyAssistantMessage(conversationId)
+    throw new EmptyCompletionError()
+  }
+  return persistAssistantMessage(db, {
+    conversationId,
+    role: 'assistant',
+    content,
+    truncated: finishReason === 'length',
+    truncatedCause: truncationCause(finishReason, SMALL_TALK_MAX_TOKENS, timings)
   }, opts.signal)
 }

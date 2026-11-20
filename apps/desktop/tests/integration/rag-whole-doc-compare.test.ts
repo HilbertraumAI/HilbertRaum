@@ -4,9 +4,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // routes a compare-shaped question for the `grounded-whole-doc-compare` skill (what-changed) to a
 // MODEL answer over BOTH documents read whole (budget split, capped coverage, fence applied), REFUSES
 // when either doc is not fully chunked (a 1- or 3-doc scope gets the "select exactly two" answer in
-// rag-skill-analysis.test.ts). #632: any other question at a 1- or 3-doc scope falls through to the
-// ordinary grounded answer with paragraph 1 of the compare skill's fence only (the second describe below).
-// #831: so does a fall-through turn of the four bundled whole-document skills (the third).
+// rag-skill-analysis.test.ts). #963: small talk gets the short small-talk reply, which reads no document (the
+// second describe below). #632: any other question at a 1- or 3-doc scope falls through to the ordinary grounded
+// answer with paragraph 1 of the compare skill's fence only (the third). #831: so does a fall-through turn of the
+// four bundled whole-document skills (the fourth).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -432,23 +433,83 @@ function fenceBodies(rt: RecordingRuntime): string[] {
 const capLogCount = (skillId: string): number =>
   readLogTail(100_000).filter((l) => l.includes('capped to its first paragraph') && l.includes(`"skillId":"${skillId}"`)).length
 
-async function ask(h: FenceHarness, question: string, skillId: string): Promise<Message> {
+async function ask(h: FenceHarness, question: string, skillId: string | null): Promise<Message> {
   return (await invoke(handlers, IPC.askDocuments, h.conversationId, question, skillId)).result as Message
 }
 
 const ONE_DRAFT = LEASE_DRAFTS.slice(0, 1)
 const TWO_DRAFTS = LEASE_DRAFTS.slice(0, 2)
 const TENANT = 'Wer ist der Mieter?'
-// Two drafts that close with thanks, so top-k finds a passage for a thank-you and the model is called.
-const THANKING_DRAFTS = TWO_DRAFTS.map((d) => `${d}\nVielen Dank für Ihre Zusammenarbeit.`)
+// Two drafts that close with thanks, so the passage search finds a passage for a thank-you (before #963 the model was
+// called with it and summarized the draft).
+const THANKING_DRAFTS = TWO_DRAFTS.map((d) => `${d}\nVielen Dank für Ihre Zusammenarbeit. Thanks for your cooperation. Merci beaucoup.`)
+
+// ---- #963: small talk in a documents chat gets a short reply that reads nothing (follow-ups wave 5 owner call G-1) ----
+// A thank-you, a greeting or "How are you?" in a chat about documents used to take the passage search under any skill or
+// none: the model saw "Question: Danke!" over the excerpts and summarized them, and the reply carried Sources, the
+// coverage meter and the skill stamp. Now it gets one short model turn, a fixed small-talk system prompt and the message
+// alone (`generateSmallTalkReply`), and the reply carries none of them. A filler QUESTION ("Sure?", «Alles?») still reads
+// the documents (`isSmallTalkReply`).
+
+/** #963: the short reply's contract: one call with a system prompt and the message alone (no earlier turn, no fence, no
+ *  excerpt, no document text), a cap below a grounded answer's, and a plain reply (no citations, coverage, pack outcomes
+ *  or stamp). */
+function expectSmallTalkReply(rt: RecordingRuntime, msg: Message, message: string): void {
+  expect(rt.calls).toBe(1)
+  expect(rt.lastMessages.map((m) => m.role)).toEqual(['system', 'user'])
+  expect(rt.lastMessages[1].content).toBe(message)
+  for (const sent of [EXCERPT_BEGIN, 'LOCAL SKILL', 'Max Huber']) expect(rt.lastMessages[0].content).not.toContain(sent)
+  expect(rt.options.at(-1)?.maxTokens).toBeLessThan(GROUNDED_MAX_TOKENS)
+  expect(msg.content).toBe('The tenant is Max Huber.')
+  expect(msg.citations ?? []).toEqual([])
+  expect(msg.coverage).toBeUndefined()
+  expect(msg.packOutcomes).toBeUndefined()
+  expect(msg.skillId ?? null).toBeNull()
+}
+
+const SMALL_TALK_SCOPES = [
+  { name: 'no skill, one document', skillId: null, texts: THANKING_DRAFTS.slice(0, 1) },
+  { name: 'Contract Brief, one document', skillId: 'app:contract-brief', texts: THANKING_DRAFTS.slice(0, 1) },
+  { name: 'What Changed?, two documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: THANKING_DRAFTS },
+  { name: 'a user skill with no analysis engine, one document', skillId: USER_PLAIN_INSTALL_ID, texts: THANKING_DRAFTS.slice(0, 1) }
+]
+
+describe('askDocuments — small talk gets the short small-talk reply, which reads no document (#963)', () => {
+  it.each(SMALL_TALK_SCOPES.flatMap((scope) => ['Danke!', 'Thanks!', 'Merci !', 'How are you?'].map((message) => ({ ...scope, message }))))(
+    '$name, "$message": the short small-talk reply',
+    async ({ skillId, texts, message }) => {
+      const h = await makeFenceHarness(texts)
+      const msg = await ask(h, message, skillId)
+      expectSmallTalkReply(h.runtime, msg, message)
+    }
+  )
+
+  // No earlier turn rides along (owner call G-1): after a document answer, the thank-you's call carries the message alone.
+  it('after an answer from the documents, «Danke!» gets the short reply to the message alone', async () => {
+    const h = await makeFenceHarness(THANKING_DRAFTS.slice(0, 1))
+    await ask(h, TENANT, null)
+    const calls = h.runtime.calls
+    const msg = await ask(h, 'Danke!', null)
+    expect(h.runtime.calls - calls).toBe(1)
+    expect(h.runtime.lastMessages.map((m) => m.role)).toEqual(['system', 'user'])
+    expect(h.runtime.lastMessages[1].content).toBe('Danke!')
+    expect(msg.citations ?? []).toEqual([])
+  })
+
+  // The gate: a filler question about the last answer and a real question still read the documents (a draft that holds
+  // their words, so the passage search finds a passage for each).
+  it.each(['Sure?', 'Alles?', TENANT])('"%s" in the same scope still reads the documents', async (question) => {
+    const h = await makeFenceHarness([`${LEASE_DRAFTS[0]}\nAlles inklusive: heating and water. Make sure the keys are returned.`])
+    const msg = await ask(h, question, null)
+    expect(lastUserTurn(h.runtime)).toContain(EXCERPT_BEGIN)
+    expect(msg.citations?.length ?? 0).toBeGreaterThan(0)
+  })
+})
 
 describe("askDocuments — the bundled compare skill's fall-through turn carries paragraph 1 of its fence (#632)", () => {
-  // Small talk over two documents falls through too (`applies()` opts small talk out of the compare engine), so
-  // its top-k answer also gets paragraph 1: the one two-document prompt #632 changes.
   it.each([
     { name: 'what-changed over one document', skillId: WHAT_CHANGED_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },
-    { name: 'what-changed over three documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: LEASE_DRAFTS, question: TENANT },
-    { name: 'what-changed, small talk over two documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: THANKING_DRAFTS, question: 'Vielen Dank!' }
+    { name: 'what-changed over three documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: LEASE_DRAFTS, question: TENANT }
   ])('$name: the heading + honesty rules only, and the answer is still stamped', async ({ skillId, texts, question }) => {
     const h = await makeFenceHarness(texts)
     const logged = capLogCount(skillId)
@@ -459,6 +520,17 @@ describe("askDocuments — the bundled compare skill's fall-through turn carries
     expect(fenceBodies(h.runtime).join('\n')).not.toContain('Produce ')
     expect(msg.content).toBe('The tenant is Max Huber.')
     expect(msg.skillId).toBe(skillId)
+  })
+
+  // Small talk over two documents used to fall through here too (`applies()` opts small talk out of the compare engine),
+  // so its top-k answer got paragraph 1, the one two-document prompt #632 changed. Since #963 it gets the short
+  // small-talk reply before any skill engine runs: no fence, no passage, no stamp.
+  it('what-changed, small talk over two documents: the short small-talk reply, no fence, not stamped', async () => {
+    const h = await makeFenceHarness(THANKING_DRAFTS)
+    const logged = capLogCount(WHAT_CHANGED_INSTALL_ID)
+    const msg = await ask(h, 'Vielen Dank!', WHAT_CHANGED_INSTALL_ID)
+    expectSmallTalkReply(h.runtime, msg, 'Vielen Dank!')
+    expect(capLogCount(WHAT_CHANGED_INSTALL_ID) - logged).toBe(0)
   })
 
   // The other place a fall-through answer builds the fence: a summary ask over one document too large to read
@@ -580,14 +652,14 @@ describe("askDocuments — a bundled whole-document skill's fall-through turn ca
     expect(msg.skillId).toBe(appId(id))
   })
 
-  it.each(WHOLE_DOC_SKILLS)('%s, small talk over one document: paragraph 1 only, stamped', async (id) => {
+  // #963: small talk over one document used to fall through with paragraph 1 and a stamp; it now gets the short
+  // small-talk reply before any skill engine runs: no fence, no passage, no stamp.
+  it.each(WHOLE_DOC_SKILLS)('%s, small talk over one document: the short small-talk reply, no fence, not stamped', async (id) => {
     const h = await makeFenceHarness(THANKING_DRAFTS.slice(0, 1))
     const logged = capLogCount(appId(id))
     const msg = await ask(h, 'Vielen Dank!', appId(id))
-    expect(h.runtime.calls).toBe(1)
-    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId(id)])[0]])
-    expect(capLogCount(appId(id)) - logged).toBe(1)
-    expect(msg.skillId).toBe(appId(id))
+    expectSmallTalkReply(h.runtime, msg, 'Vielen Dank!')
+    expect(capLogCount(appId(id)) - logged).toBe(0)
   })
 
   it.each(WHOLE_DOC_SKILLS)(

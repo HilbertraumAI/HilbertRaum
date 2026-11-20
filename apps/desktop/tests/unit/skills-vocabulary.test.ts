@@ -9,6 +9,7 @@ import {
   isNeedleShaped,
   isReportShaped,
   isSmallTalk,
+  isSmallTalkReply,
   routeEntries,
   routeMatch,
   suggestTerms,
@@ -307,6 +308,35 @@ describe('isSmallTalk — the ten interface languages (#809)', () => {
     'Ok, почему?'
   ])('%s → a real question, not small talk', (q) => {
     expect(isSmallTalk(q)).toBe(false)
+  })
+})
+
+// #963 (follow-ups wave 5 owner call G-1): which messages in a documents chat get the short small-talk reply instead of
+// an answer from the documents. Stricter than `isSmallTalk`: a filler QUESTION about the last answer reads the documents.
+describe('isSmallTalkReply — the short small-talk reply (#963)', () => {
+  it.each([
+    'Danke!', 'Thanks!', 'Merci !', 'Vielen Dank!', 'Thank you very much', 'Grazie mille!', 'Dziękuję!', 'Спасибо!', 'Дякую!',
+    'Hi', 'Hallo', 'Bye', 'Tschüss', 'Thanks a lot, bye!',
+    // Whole-question forms take the reply with their question mark.
+    'How are you?', 'What can you do?', "Wie geht's?", 'Who are you?', 'Tell me a joke', 'Comment ça va ?',
+    // An acknowledgement that can accept an offer takes it too: the documented residual.
+    'ok', 'Sure', 'Bitte', 'Alles klar'
+  ])('%s → the short reply', (q) => {
+    expect(isSmallTalkReply(q)).toBe(true)
+  })
+
+  it.each([
+    // A filler question about the last answer: small talk to the whole-document opt-outs, a question here.
+    'Sure?', 'Alles?', 'All?', 'Alles gut?', 'All good?', 'So much?', 'Genau?', 'Bitte?', 'Klar?', 'Okay?', 'Merci ?',
+    'Sure?!', 'Alles? 🙂', '¿Bien?',
+    // Real questions, and the yes-words the lists leave out.
+    'Ok, and the deposit?', 'Danke, was ist mit der Kaution?', 'Wer ist der Mieter?', 'Yes', 'Gerne', 'Weiter', '', '   '
+  ])('%s → reads the documents', (q) => {
+    expect(isSmallTalkReply(q)).toBe(false)
+  })
+
+  it('a filler question stays small talk to the whole-document opt-outs', () => {
+    for (const q of ['Sure?', 'Alles?', 'Bitte?', 'Alles gut?']) expect(isSmallTalk(q), q).toBe(true)
   })
 })
 

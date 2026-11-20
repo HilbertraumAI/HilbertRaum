@@ -575,7 +575,9 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
 // active over a matching fully-chunked scope, the whole-doc engine is the DEFAULT. Keywords now play only
 // two NARROW roles, and both are skill-agnostic (no per-skill list):
 //   (a) `isSmallTalk` OPTS OUT clearly off-topic chatter (greetings/thanks/assistant-meta) — a "hi"/"danke"
-//       over a document must NOT spend a whole-document read; it keeps the ordinary relevance path.
+//       over a document must NOT spend a whole-document read. Since #963 such a message never reaches the
+//       engines when the stricter `isSmallTalkReply` holds (a short reply, no documents read); the rest of
+//       it (a filler question such as "Sure?") keeps the ordinary relevance path.
 //   (b) `isNeedleShaped` classifies a targeted single-fact lookup vs a whole-document DELIVERABLE — the
 //       chat path uses it ONLY to send a needle to top-k WHEN the whole-doc read would truncate, deep-index
 //       tree or not (SKA-12; a needle past the truncation cut would be missed; top-k finds it anywhere).
@@ -744,6 +746,25 @@ export function isSmallTalk(question: string): boolean {
   const tokens = smallTalkTokens(question)
   if (tokens.length === 0) return false
   if (SMALL_TALK_EXACT.has(tokens.join(' '))) return true
+  return tokens.every((t) => SMALL_TALK_WORDS.has(t))
+}
+
+/**
+ * #963 (follow-ups wave 5 owner call G-1): true when a message in a documents chat gets the short small-talk reply
+ * instead of an answer from the documents (`registerRagIpc` → `generateSmallTalkReply`). Stricter than `isSmallTalk`,
+ * which only keeps chatter off the whole-document reads: a whole-question chit-chat form ("How are you?", «Wie geht's?»,
+ * "What can you do?"), or a message of filler words only that does NOT end in a question mark. A one- or two-word
+ * question about the last answer ("Sure?", «Alles?», «Bitte?» for "pardon?", "So much?") is made of fillers too, so
+ * it still reads the documents. An acknowledgement that accepts an offer ("ok", «bitte») takes the reply: a documented
+ * residual. Deterministic; the message is never logged.
+ */
+export function isSmallTalkReply(question: string): boolean {
+  const tokens = smallTalkTokens(question)
+  if (tokens.length === 0) return false
+  if (SMALL_TALK_EXACT.has(tokens.join(' '))) return true
+  // A "?" after the last letter or digit ("Sure?", "Merci ?", «Alles?!») makes the message a question. The tail is
+  // cut with one greedy pass (linear), never a pattern that backtracks over a run of punctuation.
+  if (question.replace(/^[\s\S]*[\p{L}\p{N}]/u, '').includes('?')) return false
   return tokens.every((t) => SMALL_TALK_WORDS.has(t))
 }
 

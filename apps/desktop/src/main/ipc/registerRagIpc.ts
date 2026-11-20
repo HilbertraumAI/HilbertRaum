@@ -23,6 +23,7 @@ import {
   documentFitsWholeRead,
   generateGroundedAnswer,
   generateGroundedDataAnswer,
+  generateSmallTalkReply,
   type GroundedAnswerOptions,
   isNoContextAnswer,
   modePackOutcomes,
@@ -42,7 +43,7 @@ import { offerableSkillCandidates } from '../services/skills/suggest'
 import { documentsInScope, scopeSectionTotals } from '../services/skills/scope-documents'
 import { getSkill, type SkillRecord } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
-import { isNeedleShaped, isReportShaped, isSmallTalk } from '../services/skills/vocabulary'
+import { isNeedleShaped, isReportShaped, isSmallTalk, isSmallTalkReply } from '../services/skills/vocabulary'
 import type { SkillFenceMode } from '../services/skills/prompt'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { saveResultTable } from '../services/tables/store'
@@ -232,7 +233,8 @@ function skillAnalysisHandler(
  * document fits: the listing can only list the values, the whole read can add them up.
  *
  * Stays top-k: a multi-document scope; a chat with knowledge packs (the whole read never queries
- * them); small talk (top-k answers it without a model call when nothing matches); a legacy, partly
+ * them); small talk (#963: the short small-talk reply takes most of it before any of this, so what
+ * reaches here is a filler question such as "Sure?", which reads passages); a legacy, partly
  * chunked document (its sections are not its whole text, so "covers the whole document" would lie).
  */
 function wholeReadDocumentId(
@@ -367,6 +369,25 @@ export function registerRagIpc(ctx: AppContext): void {
       // prior answer is untouched. `null`/`''` (a deliberate skill-free re-run) stays allowed.
       if (typeof skillInstallId === 'string' && skillInstallId.length > 0 && skill == null) {
         throw new Error(tMain('main.chat.skillUnavailable'))
+      }
+
+      // #963 (follow-ups wave 5 owner call G-1): small talk ("Danke!", "Thanks!", «Merci !», "How are you?") gets one
+      // short model reply that reads nothing: no scope narrowing, no skill engine, no router, no knowledge-pack search
+      // and no grounded prompt, so no Sources, coverage meter or skill stamp sit under a thank-you. `isSmallTalkReply`
+      // is stricter than the `isSmallTalk` opt-outs below, so a filler question ("Sure?", «Alles?») still reads the
+      // documents, and an accepted offer ("ok", «bitte») gets the short reply (a documented residual). The turn runs
+      // through the stream, the regenerate guard and the chat slot every answer uses, so Stop, lock, quit, "Send again"
+      // and regenerate behave as on any turn.
+      if (isSmallTalkReply(text)) {
+        return withChatStream(
+          event,
+          conversationId,
+          'Small-talk reply failed',
+          withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, _sendCompaction, sendUsage) =>
+            generateSmallTalkReply(ctx.db, runtime, conversationId, text, { signal, onToken: sendToken, onPromptUsage: sendUsage })
+          ),
+          (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
+        )
       }
 
       const rawSettings = getSettings(ctx.db)
