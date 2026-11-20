@@ -166,6 +166,12 @@ password recovery — are documented in
   Nothing is harmed or written; opening the drive with a current build works. Accepted: drives
   ship the app alongside the data, so version skew requires deliberately mixing an old app
   with a new workspace.
+- **No reset after a forgotten password (#931).** The app never creates a workspace over an
+  existing one, and it has no reset, so starting over is done by hand: quit, move
+  `config/workspace.json` and `workspace/` off the drive together, start and create
+  (`troubleshooting.md` "I forgot my workspace password"). The new workspace writes its own
+  diagnostics log over the old one's `logs/app.log.enc`, so the old log is lost unless `logs/` was
+  moved too, even when the old pair is put back later.
 - **Builds released before #845 (0.1.65 and earlier) cannot detect a newer vault format.** From
   #845 on, a build refuses a workspace whose descriptor, KDF, `.enc` frame or password-change
   journal a newer build wrote, before anything is written, with "This workspace was written by a
@@ -3005,11 +3011,6 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   language the app is shown in. In any interface language but English and German, the same paste
   then holds a line "--- English ---" and the same report in English, so a report from a Russian
   interface is in Russian and in English. An English or German interface copies one report.
-- **Two rare refusals when creating a workspace are always in English:** a workspace already
-  exists there ("An encrypted workspace already exists here …", "A workspace already exists on
-  this drive …"), or the drive's policy doesn't allow an unencrypted one ("Plaintext workspace is
-  not permitted by policy."). These three messages have no translation and show in English in
-  every interface language.
 - **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as
   documented).** LLM prompts are pinned English (benchmark comparability; models
   follow the language of the user's question naturally), so a one-click summary of a German
@@ -3027,10 +3028,18 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   `documents.error_message`, such as a raw parser-library error (a pdfjs exception message), is
   shown as it was written. A line in the interface language stands above it: "This file couldn't
   be processed." on a failed document's row, and "Couldn't add report.pdf to this chat." (with
-  the file's name) in the chat's banner for a failed attachment.
-  The Documents banner for a failed summary, translation or text-recognition task, the file
-  translation's banner and the evidence-pack export error show such text on its own. Rare
-  failure-path remnants, accepted.
+  the file's name) in the chat's banner for a failed attachment, and the file translation's banner
+  says the same as the row for the same file. Other failures read the same way, with the
+  message after a line in the interface language: a review's save line ("Some changes could not be
+  saved yet." then, for example, SQLite's "database is locked"), a review that could not be opened,
+  and a failed evidence-pack export ("The evidence pack export did not finish." then, for example,
+  a file write error). Wherever a screen reports that one of its own actions failed, though, the
+  failed call's own message still shows on its own: on the Documents, Chat, AI Model and
+  Performance screens, in the knowledge-pack panel and the OCR and knowledge-pack tool installs, in
+  the preview and article windows, for dictation, and on the Translate screen when a call itself
+  fails (starting the translation, reading the result) rather than the file. That message is
+  usually the app's own words in the interface language, but a database or file error reads as the
+  system wrote it (for example "database is locked"). A rare failure-path remnant, accepted.
 - **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now**, whatever
   the interface language. Translating them is content work, tracked separately from UI i18n.
 - **A conversation transcript can legitimately mix languages.** Old answers, model output,

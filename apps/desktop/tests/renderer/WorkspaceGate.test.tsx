@@ -436,8 +436,8 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
       await user.type(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder')), 'nope')
       await user.click(screen.getByRole('button', { name: t('de', 'gate.unlock.submit') }))
     } else {
-      // A valid encrypted password, as the gate always sends: main's too-short refusal can't
-      // be the answer, so a `refused` here is the vault's own sentence.
+      // A valid encrypted password, as the gate always sends. Main's too-short refusal can't be the
+      // answer to it, but a stubbed `refused` row still checks the copy the gate would show for one.
       await user.click(screen.getByRole('button', { name: t('de', 'gate.welcome.start') }))
       const password = await screen.findByPlaceholderText(t('de', 'gate.passwordPlaceholder'))
       await user.type(password, 'longenough')
@@ -456,17 +456,22 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
   // The lookup itself, the most common failure, and one row per table (`error` reads "couldn't open" to unlock and
   // "couldn't create" to create). Which key every other reason maps to is tied to main's real handlers, in every
   // language, by workspace-ipc.test.ts's cross-check ("main says what the gate shows"), the D-17 record's guard.
+  // #807: the reasons that replaced create's free-text `refused` (the vault's English sentence, shown as it came), the
+  // too-short refusal that `refused` now only is, with the floor in its text (A2), and the missing descriptor (C-S2).
   it.each([
     ['unlock', 'wrong_password', 'main.workspace.wrongPassword'],
     ['unlock', 'error', 'main.workspace.openFailed'],
-    ['create', 'error', 'main.workspace.createFailed']
+    ['create', 'error', 'main.workspace.createFailed'],
+    ['create', 'workspace_exists', 'main.workspace.exists'],
+    ['create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
+    ['create', 'refused', 'main.workspace.passwordTooShort'],
+    ['unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing']
   ] as const)('%s %s shows %s in German although main said it in English', async (call, reason, key) => {
-    await failIn(call, { ok: false, reason, message: t('en', key) }, t('de', key))
+    const params = { min: MIN_PASSWORD_LENGTH }
+    await failIn(call, { ok: false, reason, message: t('en', key, params) }, t('de', key, params))
   })
 
   it.each([
-    // The vault's own refusal sentence: no catalog key, raw English in every UI language today.
-    ['create', 'refused', 'An encrypted workspace already exists here — refusing to overwrite it.'],
     // A reason neither table has. The tables are typecheck-complete, so only a cast gets here;
     // the gate still says what main said instead of showing an empty banner.
     ['unlock', 'not_in_the_tables' as string as Failure['reason'], 'Something new went wrong.'],

@@ -38,9 +38,12 @@ import {
   stageRekey,
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
+  PlaintextNotAllowedError,
+  VaultDescriptorMissingError,
   VaultOpenFailedError,
   WORKING_COPY_LOST_MARKER,
   WorkspaceController,
+  WorkspaceExistsError,
   WrongPasswordError,
   vaultPathsFrom,
   type VaultPaths
@@ -239,7 +242,7 @@ describe('encrypted vault lifecycle', () => {
   it('refuses to create over an existing .enc (the data must never be wiped)', () => {
     const vp = lockedVault('vault', 'pw')
     const encBefore = readFileSync(vp.encPath)
-    expect(() => createEncryptedVaultOnDisk(vp, 'other-pw', FAST_KDF)).toThrow(/already exists/)
+    expect(() => createEncryptedVaultOnDisk(vp, 'other-pw', FAST_KDF)).toThrow(WorkspaceExistsError)
     // The original encrypted database is untouched.
     expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
     const opened = unlockEncryptedVault(vp, 'pw')
@@ -270,7 +273,7 @@ describe('encrypted vault lifecycle', () => {
   it('a corrupt descriptor with an intact .enc gives a restore hint, not "no workspace"', () => {
     const vp = lockedVault('vault', 'pw')
     writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
-    expect(() => unlockEncryptedVault(vp, 'pw')).toThrow(/missing or unreadable/)
+    expect(() => unlockEncryptedVault(vp, 'pw')).toThrow(VaultDescriptorMissingError)
   })
 })
 
@@ -494,7 +497,7 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     expect(ctl.getState().state).toBe('locked')
-    expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+    expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
     expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
     expect(ctl.isUnlocked()).toBe(false)
   })
@@ -507,8 +510,8 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
     expect(ctl.getState().state).toBe('locked')
     expect(ctl.getState().mode).toBe('encrypted')
 
-    expect(() => ctl.create('new-password', 'encrypted')).toThrow(/already exists/)
-    expect(() => ctl.create('', 'plaintext_dev')).toThrow(/already exists/)
+    expect(() => ctl.create('new-password', 'encrypted')).toThrow(WorkspaceExistsError)
+    expect(() => ctl.create('', 'plaintext_dev')).toThrow(WorkspaceExistsError)
 
     // The original vault still unlocks with its original password.
     const state = ctl.unlock('pw')
@@ -687,7 +690,7 @@ describe('WorkspaceController', () => {
     const vp = freshVaultPaths('vault')
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, true)
     ctrl.init()
-    expect(() => ctrl.create('x', 'plaintext_dev')).toThrow(/not permitted/i)
+    expect(() => ctrl.create('x', 'plaintext_dev')).toThrow(PlaintextNotAllowedError)
   })
 
   it('shreds a leftover plaintext DB from a crash on startup, staying LOCKED (H1)', () => {
@@ -1420,7 +1423,7 @@ describe('the encrypted file missing from the drive (#911)', () => {
     expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultMissingError')
     expect(readdirSync(dirname(vp.dbPath))).toEqual([])
     expect(ctl.getState()).toEqual(LOCKED)
-    expect(() => ctl.create('another-password', 'encrypted')).toThrow(/already exists/)
+    expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
     expect(ctl.discardedOnlyCopy()).toBe(false) // nothing was there to discard
   })
 
