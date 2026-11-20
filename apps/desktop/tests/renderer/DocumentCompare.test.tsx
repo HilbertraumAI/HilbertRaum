@@ -5,7 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { DocTaskStatus, DocumentInfo } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 35 renderer tests: the "Compare (2)" action on the Phase-17 multi-select
@@ -62,12 +63,13 @@ afterEach(() => {
   cleanup()
   clearDocTaskSession()
   vi.restoreAllMocks()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('DocumentsScreen — Compare action (Phase 35)', () => {
   it('offers "Compare (2)" at EXACTLY two selections', async () => {
     const user = userEvent.setup()
-    stubApi({ listDocuments: vi.fn(async () => [doc(), DOC_B, DOC_C]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc(), DOC_B, DOC_C]) }))
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('contract-v1.pdf')
 
@@ -93,12 +95,12 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
       mimeType: 'text/markdown',
       segments: [{ text: 'What both documents share …', pageNumber: null, sectionLabel: null }]
     }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => docs),
       startDocTask,
       getDocTask: vi.fn(async () => status),
       previewDocument
-    })
+    }))
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('contract-v1.pdf')
 
@@ -139,10 +141,10 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
   it('shows the both-sources provenance line and Export on the materialized report', async () => {
     const user = userEvent.setup()
     const exportDocument = vi.fn(async () => 'C:/exported.md')
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc(), DOC_B, comparisonDoc()]),
       exportDocument
-    })
+    }))
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('Comparison: contract-v1 vs contract-v2.md')
     expect(screen.getByText(/Comparison of/)).toBeInTheDocument()
@@ -155,9 +157,9 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
   })
 
   it('falls back gracefully when a compared source was deleted', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [DOC_B, comparisonDoc()]) // d1 is gone
-    })
+    }))
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('Comparison: contract-v1 vs contract-v2.md')
     expect(screen.getByText('a removed document')).toBeInTheDocument()

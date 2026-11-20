@@ -11165,7 +11165,7 @@ Per-finding disposition (fixed → phase@commit / deferred·watch → where regi
 | **TS-1** | MED | P10 `9f044d8` | **fixed** — fixed-sleep sweep: the six remaining raw sleep sync points converted to deterministic gates (`reached()` probes, `seenSignal` polls, a positive-control sentinel, an empty-`act` flush); every surviving sleep comment-justified; full suite run 3× — zero flakes; CONTRIBUTING gains the no-fixed-sleeps rule. |
 | **TS-2** | MED | P9 `d6846d1` | **fixed** — webPreferences flags, prod/dev CSP, and the window-open policy extracted verbatim to `window-security.ts` and pin-tested by name/value (a deliberate `sandbox: false` reddens — verified + reverted); a source-level scan keeps the literals from being re-inlined at the call sites. |
 | **TS-3** | MED | — | **deferred → owner design** — the real-model quality gate is human-remembered (opt-in `HILBERTRAUM_*` runs), not mechanical; the proposed release-workflow smoke-record gate (fail unless a smoke record is newer than the last model/runtime-affecting commit) needs the owner's design call. Registered in BUILD_STATE §5. |
-| **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes opt-in `assertNoUnexpectedApiCalls()`; renderer-tier sweep found zero fresh-spy reliance. |
+| **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes `assertNoUnexpectedApiCalls()` (opt-in when fixed; since #832 the DEFAULT: `tests/setup.ts` runs it in an `afterEach` for every renderer row, and suites that call unmocked methods on purpose end on `forgetUnexpectedApiCalls()`); renderer-tier sweep found zero fresh-spy reliance. |
 | **TS-5** | LOW | P9 `d6846d1` | **fixed** — EXPLAIN QUERY PLAN assertions match index NAMES, never planner phrasing (the Node-pinned-SQLite coupling is commented); the teeth counterfactuals kept. |
 | **TS-6** | LOW | P13 `19dfbc9` | **fixed** — optional `test:coverage` (v8 provider, `@vitest/coverage-v8` devDep) + root passthrough; deliberately not CI-wired, no threshold; `coverage/` gitignored; documented in CONTRIBUTING. |
 | **TS-7** | LOW | — | **decided 2026-11-01 (#753): a per-PR `macos 24.x` leg (`macos-15`), packaging.md CI section** (was deferred → owner call) — no macOS CI leg despite first-class macOS support and a history of cross-platform path bugs; a `macos-latest` entry is cheap (the suite is offline and Electron-binary-free) but costs CI minutes. Registered in BUILD_STATE §5. |
@@ -14552,7 +14552,9 @@ Each renderer file named above, apart from the legs and `CitationMarkers` (which
 bridge), runs `assertNoUnexpectedApiCalls()` in an `afterEach` (inside try/finally, after
 any cleanup); review-screen mounts stub through `stubReviewApi` (directly or through
 `renderReview`), every other mount (the EvidencePane, the transcript entry points,
-ChatScreen's chip batch, the gate a11y components) through `stubApi`.
+ChatScreen's chip batch, the gate a11y components) through `stubApi`. Since #832 the check is the default, not a per-file
+choice: `tests/setup.ts` registers the same check as an `afterEach` for every renderer file (it runs after the file's own
+`afterEach(cleanup)`, so an unmount call counts), so the per-file call is a better error site, not the guard.
 
 ### §8 Decision ladder + phase dispositions
 

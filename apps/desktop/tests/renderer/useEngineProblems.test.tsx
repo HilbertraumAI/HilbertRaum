@@ -2,10 +2,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, renderHook, waitFor } from '@testing-library/react'
 import { useEngineProblemsRead } from '../../src/renderer/lib/useEngineProblems'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { appStatus } from '../helpers/status'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 // The read's own contract. What the screens do with a verdict is pinned in EngineProblem.test.tsx; a row there cannot fail
 // this read alone, because ModelsScreen's refresh reads the same channel and a rejection would stop that too.

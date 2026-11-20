@@ -14,7 +14,7 @@ import {
   type EngineVersionInfo
 } from '../../src/shared/types'
 import { engineJob, enginePreview, enginePreviewItem, stubModelsApi } from '../helpers/model-fixtures'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { STOPPED_RUNTIME, appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
@@ -22,7 +22,10 @@ import { STOPPED_RUNTIME, appStatus, driveStatus, performanceSnapshot } from '..
 // the AI Model screen (one Update for every outdated engine, the shared engine-job controls), and
 // Diagnostics names every engine that is not the pinned build. Copy is asserted against the catalog.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 const en = (key: Parameters<typeof t>[1], params?: Record<string, string | number>): string => t('en', key, params)
 

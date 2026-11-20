@@ -12,7 +12,7 @@ import { clearFileTranslate, getFileTranslate, translateDroppedFiles } from '../
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { TranslateJob } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
 // (no `as never` erasure) — a rename of any mocked method or of TranslateJob reddens typecheck.
@@ -29,6 +29,7 @@ afterEach(() => {
   // translate()'s cross-session start guard (L6a) reads the file + doc-task stores — reset them too.
   clearFileTranslate()
   clearDocTaskSession()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('translateSession — remount recovery + guards', () => {

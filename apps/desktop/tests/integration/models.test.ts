@@ -82,6 +82,11 @@ function doneMarks(readLog: () => string[]): Array<{ ok: boolean }> {
     .map((l) => JSON.parse(l.slice(l.indexOf('{'))))
 }
 
+/** The parsed `checksum_start` marks: one per PHYSICAL read, written synchronously when the read begins. */
+function startMarks(readLog: () => string[]): string[] {
+  return readLog().filter((l) => l.includes(' checksum_start '))
+}
+
 describe('checksum verification', () => {
   it('hashes a file and matches its own SHA-256', async () => {
     const dir = tempRoot('hash')
@@ -1573,6 +1578,7 @@ describe('cancellable verification (#420)', () => {
   // same weight. The rule: the shared read is aborted only when EVERY waiter has abandoned
   // it, so an uncancellable caller can never be collateral damage.
   it('a cancelled screen pass does not abort the hash an uncancellable caller joined', async () => {
+    const readLog = armPerfLog()
     const file = smallFile()
     const expected = smallFileSha
     const before = checksumCacheStats.computed
@@ -1581,25 +1587,33 @@ describe('cancellable verification (#420)', () => {
     // JOINS it rather than starting a second multi-GB read.
     const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
     const gate = verifyChecksum(file, expected) // the §7.4 start gate — no signal
+    expect(startMarks(readLog)).toHaveLength(1) // the gate joined: ONE physical read began
     controller.abort()
 
     await expect(screen).rejects.toThrow(/cancelled/i)
     expect((await gate).matched).toBe(true) // the shared read ran to the end for the gate
-    expect(checksumCacheStats.computed).toBe(before + 1) // and it was ONE physical hash
+    expect(checksumCacheStats.computed).toBe(before + 1)
+    // The one read closed ok:true; a failed join would also leave the screen's own ok:false read.
+    await until(() => doneMarks(readLog).length > 0, 'the shared read closing')
+    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: true })])
   })
 
   it('…and the other way round: a cancelled JOINER leaves the uncancellable leader alone', async () => {
+    const readLog = armPerfLog()
     const file = smallFile()
     const expected = smallFileSha
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     const gate = verifyChecksum(file, expected) // leads, uncancellable
     const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
+    expect(startMarks(readLog)).toHaveLength(1) // the screen joined the gate's read
     controller.abort()
 
     await expect(screen).rejects.toThrow(/cancelled/i)
     expect((await gate).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1)
+    await until(() => doneMarks(readLog).length > 0, 'the shared read closing')
+    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: true })])
   })
 
   it('the physical read DOES stop once every waiter has cancelled', async () => {

@@ -62,6 +62,7 @@ password recovery — are documented in
   (the drag-drop bullet above), and the app will not reject such paths lexically because that
   would change the drop contract for network-share users. Managed Windows fleets can block
   outbound 445/WebDAV at the host firewall.
+- **A large drop is slow on a fully busy machine (#934).** Checking a drop of up to 512 paths asks the file system once per path; when every CPU is busy with other work, that can take seconds instead of a fraction of a second. Nothing is lost, and the import carries on.
 - **On macOS and Linux, quit the app before shutting down or logging off (#248).** On Windows
   the app locks the workspace itself as the session ends (PR #285; best effort — a very large
   workspace may not finish in the time Windows allows, so quitting first is still the sure way).

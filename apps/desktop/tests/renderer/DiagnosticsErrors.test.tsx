@@ -6,14 +6,18 @@ import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsT
 import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { diagnosticsEngineStubs } from '../helpers/settings-diagnostics'
 import { driveStatus, performanceSnapshot } from '../helpers/status'
 
 // Audit FE-8 — diagnostics copy must be fully localized: a benchmark failure routes through
 // friendlyIpcError (no raw Electron transport / Error-class prefix in the localized line), and
 // a missing hardware profile shows the localized t('diag.app.unknown'), not the literal 'UNKNOWN'.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 function renderTab(): void {
   render(
@@ -46,7 +50,7 @@ function stubDiag(
     tryGpuAgain?: Mock
   } = {}
 ): void {
-  stubApi({
+  stubApi(diagnosticsEngineStubs({
     getDriveStatus: vi.fn(async () => driveStatus()),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => over.settings ?? DEFAULT_SETTINGS),
@@ -62,7 +66,7 @@ function stubDiag(
     getPerformance: vi.fn(async () => performanceSnapshot()),
     runBenchmark: (over.runBenchmark ?? vi.fn()),
     tryGpuAgain: (over.tryGpuAgain ?? vi.fn())
-  })
+  }))
 }
 
 describe('DiagnosticsTab — localized errors (FE-8)', () => {

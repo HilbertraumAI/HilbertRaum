@@ -9,14 +9,17 @@ import {
   localIndicatorDetail
 } from '../../src/renderer/components/LocalIndicator'
 import type { PolicyStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { makePolicyStatus } from '../helpers/status'
 
 // Phase 27 ambient trust signal (guidelines §7): the quiet "Local · Offline" status,
 // its honest downloads-allowed variant, the hover/focus reassurance tooltip, and the
 // click-through to Settings → Privacy & data (the Phase-26 settings:privacy route).
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 function policy(offlineMode: boolean): PolicyStatus {
   return makePolicyStatus({
