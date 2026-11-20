@@ -2,6 +2,7 @@
 // (toBeInTheDocument, toBeDisabled, …). Harmless in node-env tests — it only augments
 // `expect`; jsdom is opted into per-file by the renderer tests' `@vitest-environment` docblock.
 import '@testing-library/jest-dom/vitest'
+import { afterEach } from 'vitest'
 import { hangBudgetMs } from './helpers/hang-budget'
 
 // jsdom gaps that Radix's positioned primitives (DropdownMenu/Popover via floating-ui)
@@ -36,4 +37,12 @@ if (typeof window !== 'undefined') {
   // loads the DOM library; RTL's own `configure` merges and keeps this value.
   const { configure } = await import('@testing-library/dom')
   configure({ asyncUtilTimeout: hangBudgetMs(5_000) })
+
+  // #832: every renderer row ends on the unmocked-bridge check. Registered here, before any file's own hooks, so it
+  // runs AFTER the file's `afterEach(cleanup)` (reverse order) and a screen's unmount calls count. A node-env file
+  // never installs the Proxy, so its record is empty and the hook does nothing.
+  const { assertNoUnexpectedApiCalls } = await import('./helpers/renderer')
+  afterEach(() => {
+    assertNoUnexpectedApiCalls()
+  })
 }

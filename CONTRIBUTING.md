@@ -375,8 +375,17 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **A positive row must reach the branch its title names.** chat-compaction's "still fits the context window after
   compaction" used a 1,500-token window the compacted history never exceeded, so the trim it claimed never ran.
   Size the input past the branch's threshold and break the branch once to watch the row go red.
+- **A renderer row fails on an unmocked `window.api` call (#832).** `tests/setup.ts` runs `assertNoUnexpectedApiCalls()` in an
+  `afterEach` for every renderer file, after the file's own `afterEach(cleanup)`; a suite does not opt in. Supply what the
+  screen reads at mount through a shared stub set: `chatScreenStubs` (below), `documentsScreenStubs`
+  (`tests/helpers/documents-screen.ts`: DocumentsScreen and the suites that mount it), `appShellStubs` (App and Home),
+  `diagnosticsEngineStubs` (`tests/helpers/settings-diagnostics.ts`) and `stubModelsApi`; a row-only read goes in that
+  row's own stubs. A suite that calls unmocked methods on purpose (`stubApi.test.ts`) ends each row with
+  `forgetUnexpectedApiCalls()`. `tests/unit/lazy-wrapper-specifier.test.ts` fails when a source file imports
+  `AssistantMarkdownLazy` by a spelling the vitest alias does not rewrite (the regex lives in
+  `tests/helpers/lazy-wrapper-alias.ts`).
 - **ChatScreen suites start from `tests/helpers/chat-screen.tsx`** and call `assertNoUnexpectedApiCalls()` in
-  `afterEach`. `chatScreenStubs` gives every call an idle chat screen makes a typed answer; `renderChatScreen`,
+  `afterEach` (the shared hook covers it, but the per-file call names the row sooner). `chatScreenStubs` gives every call an idle chat screen makes a typed answer; `renderChatScreen`,
   `fakeChatStream`, `deferred`, `chatDropBridge` and `flushFakeTimers` replace the per-suite copies. Before it each
   suite stubbed its own subset, the chat structure suites printed 495 unmocked-call warnings per run, and an unmocked
   read resolving `undefined` quietly decided which branch a row reached. The renderer factories sit beside it:

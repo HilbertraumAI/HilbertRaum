@@ -11,7 +11,14 @@ import type { PreloadApi } from '../../src/preload'
 // and a repeat-lookup spy assertion (`expect(window.api.x).not.toHaveBeenCalled()`) passed
 // vacuously against a spy nobody had ever held. Now each accessed name gets ONE cached
 // spy (stable identity across lookups), every call to an unmocked method warns once per
-// name, and `assertNoUnexpectedApiCalls()` lets a test opt into failing on them.
+// name, and `assertNoUnexpectedApiCalls()` fails a test that made one.
+//
+// #832: the check is the DEFAULT for every renderer suite. `tests/setup.ts` registers an `afterEach` that
+// runs it, after the file's own `afterEach(cleanup)` (hooks run in reverse registration order), so a
+// screen's unmount calls are covered and a new suite is safe without remembering to opt in. A suite may
+// still call it itself (a better error site; a throw consumes the record, so the shared hook stays quiet).
+// A suite that calls unmocked methods ON PURPOSE (`stubApi.test.ts`) ends each row with
+// `forgetUnexpectedApiCalls()`.
 
 /** Auto-stubs handed out for names NOT supplied to `stubApi` — one stable spy per name. */
 let autoStubs = new Map<PropertyKey, ReturnType<typeof vi.fn>>()
@@ -50,7 +57,7 @@ export function stubApi(overrides: Partial<PreloadApi>): void {
 }
 
 /**
- * Opt-in teeth: fail if any auto-stubbed (i.e. not supplied to `stubApi`) method was
+ * Teeth: fail if any auto-stubbed (i.e. not supplied to `stubApi`) method was
  * CALLED since the last `stubApi()` install. Names that were only looked up but never
  * invoked don't count — existence probes are harmless.
  */
@@ -59,7 +66,13 @@ export function assertNoUnexpectedApiCalls(): void {
   const list = [...unexpectedCalls.entries()]
     .map(([name, count]) => `${name} (${count} call${count === 1 ? '' : 's'})`)
     .join(', ')
+  unexpectedCalls = new Map() // reported once: a later check (the shared hook, the next row) starts clean
   throw new Error(
     `Unmocked window.api methods were called: ${list}. Supply them in stubApi({ … }).`
   )
+}
+
+/** Drop the record of unmocked calls: only for a suite that makes them on purpose (`stubApi.test.ts`). */
+export function forgetUnexpectedApiCalls(): void {
+  unexpectedCalls = new Map()
 }

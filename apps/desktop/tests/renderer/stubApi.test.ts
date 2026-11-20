@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls, forgetUnexpectedApiCalls } from '../helpers/renderer'
 
 // TS-4 (full-audit 2026-07-10): the stubApi auto-stub must hand out ONE stable spy per
 // accessed name. The old Proxy minted a fresh `vi.fn()` per property access, so an
@@ -13,6 +13,8 @@ const api = (): AnyApi => (window as unknown as { api: AnyApi }).api
 
 afterEach(() => {
   vi.restoreAllMocks()
+  // These rows call unmocked methods on purpose; the shared renderer hook (tests/setup.ts) must not fail them.
+  forgetUnexpectedApiCalls()
 })
 
 describe('stubApi auto-stub (TS-4)', () => {
