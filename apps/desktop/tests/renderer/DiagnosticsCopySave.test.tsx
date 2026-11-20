@@ -9,7 +9,8 @@ import { normalizeBenchmarkResult } from '../../src/shared/benchmark-schema'
 import { t, tCount, UI_LANGUAGE_CODES, type MessageKey, type UiLanguage } from '../../src/shared/i18n'
 import { fmt1 } from '../../src/shared/format'
 import { renderInLanguage } from '../helpers/render-language'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { diagnosticsEngineStubs } from '../helpers/settings-diagnostics'
 import { appStatus, driveStatus, performanceSnapshot } from '../helpers/status'
 
 // Diagnostics copy/save: the per-card "Copy" buttons (App & runtime, Hardware benchmark,
@@ -76,7 +77,7 @@ function stubDiagnostics(
   bench: BenchmarkResult = benchmark
 ): void {
   lastCopied = null
-  stubApi({
+  stubApi(diagnosticsEngineStubs({
     getAppStatus: vi.fn(async () =>
       appStatus({ appVersion: '0.1.20', activeModelId: 'qwen3-4b', hardwareProfile: 'BALANCED' })
     ),
@@ -92,7 +93,7 @@ function stubDiagnostics(
       return true
     }),
     ...overrides
-  })
+  }))
 }
 
 /** The tab under its ToastProvider; `lang` goes through `renderInLanguage` (English when omitted). */
@@ -108,6 +109,7 @@ function renderDiagnostics(lang?: UiLanguage) {
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('Settings → Diagnostics (advanced) — the local API row', () => {

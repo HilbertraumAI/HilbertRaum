@@ -19,11 +19,18 @@ import {
   expandPaths,
   expandPathsBoundedAsync,
   expandPathsWithSource,
-  documentsDir
+  documentsDir,
+  summarizeImportPaths
 } from '../../src/main/services/ingestion'
 import { getBuiltinCollection } from '../../src/main/services/collections'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
-import { isImagePath, isPdfPath, selectParser, supportedExtensions } from '../../src/main/services/ingestion/parsers'
+import {
+  importedFileTitle,
+  isImagePath,
+  isPdfPath,
+  selectParser,
+  supportedExtensions
+} from '../../src/main/services/ingestion/parsers'
 import { TxtParser } from '../../src/main/services/ingestion/parsers/txt'
 import { MarkdownParser } from '../../src/main/services/ingestion/parsers/markdown'
 import { CsvParser } from '../../src/main/services/ingestion/parsers/csv'
@@ -32,6 +39,7 @@ import { DocxParser } from '../../src/main/services/ingestion/parsers/docx'
 import type { DocumentInfo, DocumentOrigin, GeneratedProvenance } from '../../src/shared/types'
 import { makePdf, makeDocx, makeDocxFromBody } from '../helpers/fixtures'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { testCipher } from '../helpers/test-cipher'
 import { documentIdsInCollection, seedMixedCorpus } from '../helpers/doc-fixtures'
 import { countPrepares } from '../helpers/db-spy'
 
@@ -974,5 +982,93 @@ describe('expandPaths', () => {
     const async = await expandPathsBoundedAsync([root])
     expect(async.files.filter((f) => f.endsWith('real.txt'))).toHaveLength(1)
     expect(async.exhausted).toBeNull()
+  })
+})
+
+// #918 item 3: a file name can end in spaces or dots after its extension (`notes.txt `, `report.pdf.`). macOS and Linux
+// allow it, and so do Node, Git Bash and WSL on NTFS (only Explorer, cmd and PowerShell strip them), so these files are
+// created through Node on every CI leg; the temp-root teardown removes them with Node too. The import title drops the
+// trailing characters, so the extension every reader takes from the title is the real one. The pick, drop and folder
+// seams end to end are docs-ipc.test.ts's rows; the encrypted first parse is encrypted-documents.test.ts's.
+describe('import names that end in a space or a dot (#918)', () => {
+  it.each([
+    ['notes.txt ', 'notes.txt'],
+    ['report.pdf.', 'report.pdf'],
+    ['a.txt..', 'a.txt'],
+    ['b.md . ', 'b.md'],
+    ['notes.TXT  ', 'notes.TXT'],
+    // Trailing spaces go even when no supported extension is left; trailing dots only when one is.
+    ['Washington, D.C. ', 'Washington, D.C.'],
+    ['photo.heic.', 'photo.heic.'],
+    // A name of spaces only keeps them: a title is never empty.
+    ['   ', '   '],
+    ['a..txt', 'a..txt'],
+    ['x.TXT. ', 'x.TXT'],
+    ['.env ', '.env'],
+    ['...', '...'],
+    ['. ', '.']
+  ])('the import title of %j is %j', (name, title) => {
+    expect(importedFileTitle(name)).toBe(title)
+  })
+
+  it('both walks keep a name that ends in a space or a dot after a supported extension, and skip the rest as before', async () => {
+    const root = join(dir(), 'odd-names')
+    mkdirSync(root)
+    for (const name of ['notes.txt ', 'report.pdf.', 'Washington, D.C.', 'v2.1', 'README', 'photo.heic ']) {
+      writeFileSync(join(root, name), 'x')
+    }
+    const files = expandPaths([root])
+    // The walk hands on the file's real path; the title is set when it is queued.
+    expect(files.map((f) => basename(f)).sort()).toEqual(['notes.txt ', 'report.pdf.'])
+    expect((await expandPathsBoundedAsync([root])).files).toEqual(files)
+  })
+
+  // Controls: the dots of "Washington, D.C." and "v2.1" are part of the name (no supported extension is left without
+  // them). The refusal of an unsupported type, on import and in the preview, names its extension read without the
+  // trailing spaces and dots: "Washington, D.C." is then `.C`, as Windows itself would read that name.
+  it.each([
+    ['photo.heic ', 'photo.heic', '(.heic)'],
+    ['photo.heic.', 'photo.heic.', '(.heic)'],
+    ['Washington, D.C.', 'Washington, D.C.', '(.C)'],
+    ['v2.1', 'v2.1', '(.1)'],
+    ['README', 'README', '((none))']
+  ])('an unsupported %j still fails, imported as %j, and the refusal names %s', async (name, title, shown) => {
+    const db = freshDb()
+    const storeDir = store()
+    const info = await processDocument(db, storeDir, createQueuedDocument(db, write(name, 'some words to index')).id)
+    expect(info.status).toBe('failed')
+    expect(info.title).toBe(title)
+    expect(info.errorMessage).toContain(`isn't supported ${shown}.`)
+    await expect(extractDocumentPreview(db, storeDir, info.id)).rejects.toThrow(`isn't supported ${shown}.`)
+  })
+
+  // The stored copy is named after the title (`<id>.tsv`), so a plain import and a re-index from the stored copy alone
+  // read the TSV by tabs; the encrypted import's first parse is encrypted-documents.test.ts's row.
+  it.each([
+    ['a plaintext', false],
+    ['an encrypted', true]
+  ])('in %s workspace, "people.tsv " imports and re-indexes split by tabs, the original gone', async (_mode, encrypted) => {
+    const db = freshDb()
+    const storeDir = store()
+    const cipher = encrypted ? testCipher() : null
+    const src = write('people.tsv ', 'name\tcity\nLovelace, Ada\tLondon\n')
+    const doc = createQueuedDocument(db, src)
+    const firstChunk = (): string =>
+      (db.prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index').get(doc.id) as { text: string }).text
+    expect((await processDocument(db, storeDir, doc.id, { cipher })).status).toBe('indexed')
+    expect(firstChunk()).toContain('name: Lovelace, Ada')
+    rmSync(src)
+    expect((await reindexDocument(db, storeDir, doc.id, { cipher })).status).toBe('indexed')
+    expect(firstChunk()).toContain('name: Lovelace, Ada')
+    expect(firstChunk()).toContain('city: London')
+  })
+
+  it('the audio pre-flight counts a recording whose name ends in a space, picked or in a folder', async () => {
+    const picked = write('song.mp3 ', Buffer.alloc(100))
+    expect(await summarizeImportPaths([picked])).toEqual({ fileCount: 1, audioFileCount: 1, audioBytes: 100 })
+    const folder = join(dir(), 'recordings')
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'memo.mp3 '), Buffer.alloc(50))
+    expect(await summarizeImportPaths([folder])).toEqual({ fileCount: 1, audioFileCount: 1, audioBytes: 50 })
   })
 })

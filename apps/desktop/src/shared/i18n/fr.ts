@@ -1232,10 +1232,14 @@ export const fr: UiCatalog<'fr'> = {
   'models.state.installed': 'Installé',
   'models.state.missing': 'Non téléchargé',
   'models.state.checksumFailed': 'Non vérifiable',
+  'models.state.noChecksum': 'Pas de somme de contrôle',
   'models.state.unsupported': 'Non pris en charge',
   'models.state.notRecommended': 'Déconseillé',
   'models.state.ready': 'Prêt',
   'models.state.running': 'En marche',
+  'models.noChecksum.hint':
+    'Ce modèle n’a aucune somme de contrôle enregistrée\u00A0: il ne fonctionne qu’en mode ' +
+    'développeur, sur un disque dont la politique autorise les modèles non vérifiés.',
   'models.badge.notResponding': 'Ne répond pas',
   'models.notRespondingHint':
     'Le modèle d’IA a cessé de répondre. Un redémarrage règle généralement le problème.',
@@ -2326,6 +2330,8 @@ export const fr: UiCatalog<'fr'> = {
   'perf.models.loaded': 'chargé',
   'perf.models.notLoaded': 'non chargé',
   'perf.models.notOnDrive': 'pas sur ce disque',
+  'perf.models.damaged': 'échec de la vérification des fichiers',
+  'perf.models.noChecksum': 'aucune somme de contrôle enregistrée',
   'perf.models.lifetime.session': 'reste chargé',
   'perf.models.lifetime.idle': 'se décharge en cas d’inactivité',
   'perf.models.lifetime.per-use': 'ne fonctionne que pendant une tâche',
@@ -2768,6 +2774,18 @@ export const fr: UiCatalog<'fr'> = {
   'main.dialog.unsavedReview.tryAgain': 'Réessayer',
   'main.dialog.unsavedReview.keepOpen': 'Ne pas fermer',
   'main.dialog.unsavedReview.closeAnyway': 'Fermer quand même',
+  'main.dialog.taskRunning.title': 'Une tâche sur un document n’est pas encore terminée.',
+  'main.dialog.taskRunning.message': 'Une tâche sur un document n’est pas encore terminée.',
+  'main.dialog.taskRunning.detailOcr':
+    'Si vous fermez maintenant, la lecture du document numérisé s’arrête et les pages déjà lues sont ' +
+    'perdues.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Si vous fermez maintenant, la traduction s’arrête et la partie déjà traduite est perdue.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Si vous fermez maintenant, les tâches sur les documents en cours ou en attente s’arrêtent et le ' +
+    'travail déjà fait est perdu.',
+  'main.dialog.taskRunning.keepOpen': 'Ne pas fermer',
+  'main.dialog.taskRunning.closeAnyway': 'Fermer quand même',
   'main.workspace.wrongPassword':
     'Ce mot de passe n’a pas déverrouillé votre espace de travail. Vérifiez-le et réessayez.',
   'main.workspace.openFailed': 'L’espace de travail n’a pas pu être ouvert.',
@@ -3123,6 +3141,18 @@ export const fr: UiCatalog<'fr'> = {
   'main.models.noManifests':
     'Aucune liste de modèles n’a été trouvée sur ce disque\u00A0: le dossier ' +
     '«\u00A0model-manifests\u00A0» est absent.',
+  'main.models.unknown': 'Ce modèle ne figure plus dans la liste des modèles de ce disque.',
+  'main.models.notChat':
+    '«\u00A0{name}\u00A0» n’est pas un modèle du Chat, il ne peut donc pas être démarré ici.',
+  'main.models.startDamaged':
+    'Le modèle «\u00A0{name}\u00A0» n’a pas réussi la vérification de ses fichiers, il n’a donc pas ' +
+    'été démarré. Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
+  'main.models.startMissing':
+    'Le modèle «\u00A0{name}\u00A0» ne peut pas être démarré\u00A0: son fichier de modèle n’est pas ' +
+    'encore sur ce disque.',
+  'main.models.startNeedsRam':
+    'Le modèle «\u00A0{name}\u00A0» nécessite au moins {min}\u00A0GB de RAM – cet ordinateur dispose ' +
+    'd’environ {ram}\u00A0GB. Choisissez un modèle plus petit\u00A0: la qualité reste excellente.',
   'main.models.autoSelected':
     'Ce modèle est utilisé automatiquement une fois installé\u00A0: il n’y a rien à sélectionner.',
   'main.models.locked':

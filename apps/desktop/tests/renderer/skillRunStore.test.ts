@@ -13,6 +13,7 @@ import {
   type SkillRunEntry
 } from '../../src/renderer/lib/skillruns'
 import type { SkillRunState } from '../../src/shared/types'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // SKA-6/SKA-17/SKA-39/SKA-40 (skills audit 2026-07-03, U6): the per-run store keyed by runHandle. It
 // was a single module-level slot: a second run silently abandoned the first and the run bar rendered
@@ -38,10 +39,11 @@ function mkRun(over: Partial<SkillRunState> = {}): SkillRunState {
 
 // T-2 (frontend audit 2026-08-09, #147): typed against the real bridge contract — the old
 // `Record<string, unknown>` bag meant a startSkillRun/getSkillRun/listSkillRuns/clearSkillRun
-// rename (or a signature change) reddened NOTHING here. Same shape as stubApi's overrides.
+// rename (or a signature change) reddened NOTHING here. Installed through `stubApi` (#832), so a bridge call a row
+// did not stub is recorded and fails the row in the `afterEach` below.
 type Api = Partial<import('../../src/preload').PreloadApi>
 function setApi(api: Api): void {
-  ;(window as unknown as { api: Api }).api = api
+  stubApi(api)
 }
 
 // The one test that subscribes keeps its unsubscribe here so the clear below notifies no listener.
@@ -55,6 +57,7 @@ afterEach(() => {
   unsubscribe = null
   clearSkillRunSession()
   vi.useRealTimers()
+  assertNoUnexpectedApiCalls()
   delete (window as unknown as { api?: unknown }).api
 })
 

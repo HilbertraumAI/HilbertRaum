@@ -385,9 +385,10 @@ describe('electron-builder.yml electronFuses (#560, #562)', () => {
       // #562: ELECTRON_RUN_AS_NODE and --inspect no longer reach the main process.
       runAsNode: false,
       enableNodeCliInspectArguments: false,
-      // #562, owner decision: stays ON — off, NODE_EXTRA_CA_CERTS is dropped and the in-app
-      // downloads fail behind TLS-scanning antivirus / proxies (measured).
-      enableNodeOptionsEnvironmentVariable: true,
+      // #564: OFF — NODE_OPTIONS and NODE_EXTRA_CA_CERTS no longer reach the main process. The
+      // in-app downloads trust the OS certificate store instead (services/net/trust.ts), where
+      // TLS-scanning antivirus and proxies install their root; on until #564 (owner decision, #562).
+      enableNodeOptionsEnvironmentVariable: false,
       // #562: a modified app.asar ends the app; only app.asar is ever loaded.
       enableEmbeddedAsarIntegrityValidation: true,
       onlyLoadAppFromAsar: true,

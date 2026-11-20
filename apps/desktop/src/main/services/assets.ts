@@ -15,6 +15,7 @@ import {
   type ChecksumLabel,
   type HashStore
 } from './models'
+import { ensureSystemTrust } from './net/trust'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
 // (see docs/packaging.md).
@@ -930,6 +931,10 @@ function assertSafeDownloadUrl(raw: string): void {
  * D3: redirects are followed MANUALLY (`redirect: 'manual'`) so every hop is re-validated by
  * `assertSafeDownloadUrl` (no auto-follow to http:// or a LAN/loopback address), and the body is
  * capped so a hostile endpoint can't stream unbounded bytes onto the drive.
+ *
+ * #564: every in-app downloader (models, the AI engine, the knowledge-pack tools, the OCR files)
+ * reaches the network only through here, so this is where the OS certificate store joins Node's
+ * trust (`ensureSystemTrust`, net/trust.ts), before the first request.
  */
 export async function downloadToFile(
   url: string,
@@ -942,6 +947,8 @@ export async function downloadToFile(
   for (let hop = 0; ; hop++) {
     // Re-validate scheme + host on the INITIAL URL and on EACH redirect target before fetching.
     assertSafeDownloadUrl(currentUrl)
+    // #564: the OS certificate store joins Node's trust before the first request leaves (once per process).
+    ensureSystemTrust()
     res = await doFetch(currentUrl, {
       redirect: 'manual',
       ...(deps.headers ? { headers: deps.headers } : {}),

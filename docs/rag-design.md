@@ -40,7 +40,8 @@ valid and lets the real embedder swap in unchanged (Phase 10).
 1. **Select / expand.** `expandPathsWithSource()` turns a user selection into a flat file list
    through the asynchronous, budget-bounded walk `expandPathsBoundedAsync` (#274; the synchronous
    `expandPaths` stays only as the tests' reference walk, #687):
-   folders are walked recursively (supported extensions only); explicitly-picked files are
+   folders are walked recursively (supported extensions only, read from the title the file will
+   import under, step 2); explicitly-picked files are
    always included (an unsupported one surfaces later as `failed`). The walk **follows
    symlinked directories** (intended — ING-4), but guards against a **symlink cycle**
    (`a/loop -> ..`): it tracks the real path of every directory on the *current recursion
@@ -50,10 +51,23 @@ valid and lets the real embedder swap in unchanged (Phase 10).
    leaving every acyclic walk's expansion set byte-identical — a symlink to a *distinct*
    directory is not an ancestor, so it is still followed.
 2. **Queue.** `createQueuedDocument()` inserts a `documents` row (`status = queued`,
-   `original_path`, guessed `mime_type`, `size_bytes`).
+   `title`, `original_path`, guessed `mime_type`, `size_bytes`). The `title` is the file name
+   without the spaces it ends in, and without its trailing dots when a supported extension is
+   then left (`importedFileTitle`, #918): `notes.txt ` and `report.pdf.` import as `notes.txt`
+   and `report.pdf`, while "Washington, D.C." and "v2.1" keep their names. macOS and Linux allow
+   such names, and so do Node, Git Bash and WSL on NTFS; Explorer, cmd and PowerShell strip them. On Windows the file picker lists such a file under
+   "All files" but cannot open it (an OS limit; a typed path loses its trailing space), so a drop or a
+   folder import hands the app such a file. Every later
+   reader (the parser, the MIME type, the stored copy's name, the exports) takes the extension
+   from this title, so they all agree.
 3. **Extract.** `processDocument()` copies the original into the workspace
-   (`workspace/documents/<id><ext>` → `stored_path`), records `sha256` + `size_bytes`,
-   selects a `DocumentParser` by extension, and extracts ordered text **segments**.
+   (`workspace/documents/<id><ext>` → `stored_path`, `<ext>` from the title), records `sha256` +
+   `size_bytes`, selects a `DocumentParser` by the title's extension, and extracts ordered text
+   **segments**. In an encrypted workspace the first parse reads the original directly, unless the
+   original's own extension is not the title's (its name ended in a space or a dot): then it reads
+   a decrypted `<id>.parse<ext>` copy, the re-index transient, shredded the same way (#918). The
+   preview, when the stored copy is gone and it falls back to the original, does the same in both
+   modes: it reads a `<id>.parse-preview-<uuid><ext>` copy of that original, shredded on the way out.
 4. **Chunk.** `chunkSegments()` splits each segment into overlapping token windows.
 5. **Persist.** Old chunks + embeddings (if re-indexing) are removed, new chunks inserted
    into `chunks`.
@@ -2420,6 +2434,51 @@ join → reduce). Beyond the hard ceiling the tail stays honestly beginning-only
 (the tree auto-builds at ~this size and is the designed rescue; the fold is a deliberately-bounded query-time
 lever, not unbounded — the dominant cost is one map call per window on CPU, covered by the Phase 3 progress
 notice).
+
+**A list request's map and fold steps see the question (#939, follow-ups wave 4, owner call 2026-11-20).**
+The map and fold prompts carried the skill fence but never the question: `mapUserPrompt` asked for "every
+detail the task needs" for "the task described below", which is the fence. So a question the whole-document
+engine takes that is not the skill's deliverable ("Find every mention of 'indemnity'" under Contract Brief) was
+answered from notes taken for the brief, under a whole-document coverage label: over a 19-section lease with
+three indemnity articles, qwen3-4b-instruct-q4 named one and qwen3.5-9b-ud-q4kxl said there was no mention.
+Now, for a list request, the map and fold prompts carry the question under the reduce's own label, `User
+request:`, before the fence (`userRequestBlock`), and their instruction adds "and everything the user request
+asks about" (the map: "when it asks to find or list something, note each place with its exact wording"); the
+task clause stays word for word. **The rule:** `registerRagIpc` sets `wholeDocumentNotesForRequest` on the
+whole-document engine's read when all three hold: the turn skill is a bundled one (`source === 'app'`);
+`asksForList(question)` (`analysis/router.ts`, the router's own list detection, step 4b's test: a list or count
+request, a quantifier inside a question, or the every-mention chip in every catalog, and never a question the
+router reads as a summary or a compare first, so "Summarize all the decisions" and «Fasse alle Beschlüsse
+zusammen» are none); and not `isReportShaped(question)` (`skills/vocabulary.ts`: the report half of the needle
+veto's deliverable shapes, "summar", "minutes", "brief", "review", «Protokoll» and the rest, or a summarize chip,
+so «Erstelle das Protokoll mit allen Beschlüssen» and "Write the minutes including every action item" are
+none). Both predicates are shared, not copied: the deliverable shapes are now the report shapes plus the list-all
+shapes ("list every", «sämtliche», …), the same words as before. The flag reaches `streamWholeDocMapReduce`
+through both rescues (`notesForRequest`). Every other read sends the map and fold prompts as they were, byte for
+byte: every report request, list word or not ("Summarize this contract", "Write the meeting minutes", the
+summarize chip, «Fasse dieses Dokument zusammen»), any other question, a user skill, and the no-skill tree
+summary. A plain list request takes the notes: "List every deadline", "List all action items", the chip. **Why
+gated (measured on the GTX 1070 Ti, b9849, one run per question, master `5dc4e058` against the branch BEFORE the
+gate, every question on the map step; the gated build was not re-run, since its chip prompts are the measured
+ones and its other prompts are master's; another program shared the GPU from the master 4B turns on, so no time is
+compared):** the English chip under Contract Brief went from 1/3 to 3/3 indemnity articles on the 4B and from 0/3
+to 3/3 on the 9B; the German chip, read whole since #834, found 3/3 on the 9B and 0/3 on the 4B on both builds
+(a German term in an English lease). Meeting Minutes over a 14-section transcript lost facts, 5 → 2 of 8 on the
+4B (master's answer itself was cut by a repetition loop) and 8 → 6 of 8 on the 9B (the next-meeting date in its
+last line). Contract Brief's summary gained facts, 4 → 7 of 11 on the 4B (but lost the one indemnity article
+master listed) and 4 → 6 of 11 on the 9B. So the question rides only where a list is asked for, measured on the
+every-mention chip under Contract Brief, and a report request cannot regress. Cost of the flagged case: the
+question was already reserved in every window (`reserveWords`, the fold's overhead), so window size and count stay
+the same; each map or fold call adds the question and about 40 tokens of instruction. No cache keys on these
+prompts or their notes (`summary_cache` holds the deep-index build's node summaries, which this path only reads).
+Tests: `rag-whole-doc-compare.test.ts` (the #939 describe: the chip in en, de and es, "List every deadline" and
+"List all action items" carry the request on every map call, the chip over a ready deep index too; four report
+requests, four report requests with a list word and a user skill's list question send master's prompt for the
+skill's own fence, `asPreRequestMapPrompt`), `rag-whole-doc-tree.test.ts` (master's whole map and fold prompts,
+byte for byte, for known windows: `masterMapPrompt`, a frozen copy of master's template in
+`tests/helpers/whole-doc-fixtures.ts`), `rag-whole-doc-mapreduce.test.ts` (the flag on and off, map and fold),
+`extract-router.test.ts` (`asksForList`) and `skills-vocabulary.test.ts` (`isReportShaped`). Residuals:
+[`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
 
 **Residuals** (see `known-limitations.md`): a document beyond the **hard** ceiling (~100 pages) is still
 beginning-only (INPUT, tree territory); a deliverable long enough to still be cut after the 2-cap keeps the

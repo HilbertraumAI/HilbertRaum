@@ -11,18 +11,26 @@ import type { PreloadApi } from '../../src/preload'
 // and a repeat-lookup spy assertion (`expect(window.api.x).not.toHaveBeenCalled()`) passed
 // vacuously against a spy nobody had ever held. Now each accessed name gets ONE cached
 // spy (stable identity across lookups), every call to an unmocked method warns once per
-// name, and `assertNoUnexpectedApiCalls()` lets a test opt into failing on them.
+// name, and `assertNoUnexpectedApiCalls()` fails a test that made one.
+//
+// #832: the check is the DEFAULT for every renderer suite. `tests/setup.ts` registers an `afterEach` that
+// runs it, after the file's own `afterEach(cleanup)` (hooks run in reverse registration order), so a
+// screen's unmount calls are covered and a new suite is safe without remembering to opt in. A suite may
+// still call it itself (a better error site; a throw consumes the record, so the shared hook stays quiet).
+// A suite that calls unmocked methods ON PURPOSE (`stubApi.test.ts`) ends each row with
+// `forgetUnexpectedApiCalls()`.
 
 /** Auto-stubs handed out for names NOT supplied to `stubApi` — one stable spy per name. */
 let autoStubs = new Map<PropertyKey, ReturnType<typeof vi.fn>>()
-/** Unmocked names that were actually CALLED (not merely looked up) since the last stubApi(). */
+/** Unmocked names that were actually CALLED (not merely looked up) since the last check. */
 let unexpectedCalls = new Map<string, number>()
 let warnedNames = new Set<string>()
 
 export function stubApi(overrides: Partial<PreloadApi>): void {
-  // Fresh bookkeeping per install (tests call stubApi in their setup, so this is per-test).
+  // Fresh spies and warn-once bookkeeping per install. The record of unmocked CALLS is NOT reset here: a row
+  // that installs again mid-row (a re-mount, a language switch) must not hide what the first install let through.
+  // The check clears it (pass or throw), as does forgetUnexpectedApiCalls().
   autoStubs = new Map()
-  unexpectedCalls = new Map()
   warnedNames = new Set()
   const fallback = new Proxy(overrides, {
     get(target, prop) {
@@ -50,8 +58,8 @@ export function stubApi(overrides: Partial<PreloadApi>): void {
 }
 
 /**
- * Opt-in teeth: fail if any auto-stubbed (i.e. not supplied to `stubApi`) method was
- * CALLED since the last `stubApi()` install. Names that were only looked up but never
+ * Teeth: fail if any auto-stubbed (i.e. not supplied to `stubApi`) method was
+ * CALLED since the last check (a re-install does not clear it). Names that were only looked up but never
  * invoked don't count — existence probes are harmless.
  */
 export function assertNoUnexpectedApiCalls(): void {
@@ -59,7 +67,13 @@ export function assertNoUnexpectedApiCalls(): void {
   const list = [...unexpectedCalls.entries()]
     .map(([name, count]) => `${name} (${count} call${count === 1 ? '' : 's'})`)
     .join(', ')
+  unexpectedCalls = new Map() // reported once: a later check (the shared hook, the next row) starts clean
   throw new Error(
     `Unmocked window.api methods were called: ${list}. Supply them in stubApi({ … }).`
   )
+}
+
+/** Drop the record of unmocked calls: only for a suite that makes them on purpose (`stubApi.test.ts`). */
+export function forgetUnexpectedApiCalls(): void {
+  unexpectedCalls = new Map()
 }

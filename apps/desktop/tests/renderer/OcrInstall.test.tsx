@@ -23,6 +23,7 @@ import {
 } from '../../src/shared/types'
 import { stubModelsApi } from '../helpers/model-fixtures'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 import { appStatus as appStatusFixture, makePolicyStatus } from '../helpers/status'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
@@ -133,20 +134,21 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('OcrInstall — Documents rows (#410)', () => {
   it('1: a scan row with the files missing offers the download; the dialog states facts and confirming installs with no arguments', async () => {
     const user = userEvent.setup()
     const installOcr = vi.fn(async () => queuedJob())
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy()),
       installOcr,
       getOcrInstallJob: vi.fn(async () => queuedJob())
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('scan.pdf')
@@ -172,12 +174,12 @@ describe('OcrInstall — Documents rows (#410)', () => {
   })
 
   it('2: a failed photo row keeps its stored error, appends the missing-files copy, offers the download, and still offers Try again', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [photoDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy())
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('photo.jpg')
@@ -188,10 +190,10 @@ describe('OcrInstall — Documents rows (#410)', () => {
   })
 
   it('3: once OCR is available a photo row reads "ready" and offers no download button', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [photoDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: true, ocrState: 'available' }))
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('photo.jpg')
@@ -200,12 +202,12 @@ describe('OcrInstall — Documents rows (#410)', () => {
   })
 
   it('4: an ordinary failed row gets no OCR copy and no download button', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({ id: 'd9', title: 'broken.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 })
       ]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' }))
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('broken.pdf')
@@ -216,12 +218,12 @@ describe('OcrInstall — Documents rows (#410)', () => {
 
   // The Settings-toggle branch of the shared gate is owned by KnowledgePackToolsInstall.test.tsx (#339 P8-2 it.each).
   it('5: gates closed (the drive policy denies downloads) disable the download button and show why', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => blockedByPolicy())
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('scan.pdf')
@@ -231,12 +233,12 @@ describe('OcrInstall — Documents rows (#410)', () => {
   })
 
   it('6: with no usable source list on this drive the rows point at the offline path and offer no button', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc(), photoDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus(undefined, { available: false, sourceHost: null })),
       getPolicy: vi.fn(async () => allowedPolicy())
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('scan.pdf')
@@ -248,7 +250,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
   it('7: a live job shows progress and Cancel calls cancelOcrInstall with the job id', async () => {
     const user = userEvent.setup()
     const cancelOcrInstall = vi.fn(async () => ({ ...queuedJob(), status: 'cancelled' as const }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
@@ -256,7 +258,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
       installOcr: vi.fn(async () => queuedJob()),
       getOcrInstallJob: vi.fn(async () => queuedJob({ status: 'downloading', receivedBytes: 50, totalBytes: 100 })),
       cancelOcrInstall
-    })
+    }))
     render(<DocumentsScreen />)
 
     await user.click(await screen.findByRole('button', { name: en['ocr.install.action'] }))
@@ -273,14 +275,14 @@ describe('OcrInstall — Documents rows (#410)', () => {
 
   it('8: a failed job shows the friendly failure and Retry re-opens the dialog', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy()),
       installOcr: vi.fn(async () => queuedJob()),
       getOcrInstallJob: vi.fn(async () => queuedJob({ status: 'failed', error: 'some friendly error', outcome: null }))
-    })
+    }))
     render(<DocumentsScreen />)
 
     await user.click(await screen.findByRole('button', { name: en['ocr.install.action'] }))
@@ -296,14 +298,14 @@ describe('OcrInstall — Documents rows (#410)', () => {
 
   it('8b: while the engine is being started (activating) there is no Cancel — the files are already in place', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy()),
       installOcr: vi.fn(async () => queuedJob()),
       getOcrInstallJob: vi.fn(async () => queuedJob({ status: 'activating', receivedBytes: DEU_SIZE + ENG_SIZE }))
-    })
+    }))
     render(<DocumentsScreen />)
 
     await user.click(await screen.findByRole('button', { name: en['ocr.install.action'] }))
@@ -316,7 +318,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
 
   it('8c: files already on the drive but OCR not started (copied by hand): the row names the restart, not a dead-end download', async () => {
     const installOcr = vi.fn(async () => queuedJob())
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc(), photoDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () =>
@@ -327,7 +329,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
       ),
       getPolicy: vi.fn(async () => allowedPolicy()),
       installOcr
-    })
+    }))
     render(<DocumentsScreen />)
 
     // One restart hint per remedy row (the scan and the photo), and nothing to download.
@@ -345,14 +347,14 @@ describe('OcrInstall — Documents rows (#410)', () => {
       .fn()
       .mockResolvedValueOnce(appStatusFixture({ ocrAvailable: false, ocrState: 'missing' }))
       .mockResolvedValue(appStatusFixture({ ocrAvailable: true, ocrState: 'available' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus,
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy()),
       installOcr: vi.fn(async () => queuedJob()),
       getOcrInstallJob: vi.fn(async () => queuedJob({ status: 'done', outcome: 'activated' }))
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -378,14 +380,14 @@ describe('OcrInstall — Documents rows (#410)', () => {
       .fn()
       .mockResolvedValueOnce(queuedJob({ jobId: 'j0', status: 'done', outcome: 'activated' }))
       .mockResolvedValue(queuedJob({ status: 'done', outcome: 'restartRequired' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy()),
       installOcr: vi.fn(async () => queuedJob()),
       getOcrInstallJob
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -406,12 +408,12 @@ describe('OcrInstall — Documents rows (#410)', () => {
 
   it('10: a window focus re-reads app status and the offer appears without a remount', async () => {
     const getAppStatus = vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus,
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy())
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('scan.pdf')
@@ -429,7 +431,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
 
   it('11: with no failed scan/photo row on screen the OCR install status is never fetched', async () => {
     const getOcrInstallStatus = vi.fn(async () => ocrStatus())
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({})]),
       getAppStatus: vi.fn(async () => appStatusFixture()),
       getOcrInstallStatus,
@@ -438,7 +440,7 @@ describe('OcrInstall — Documents rows (#410)', () => {
       listCollections: vi.fn(async () => []),
       getReindexAllJob: vi.fn(async () => null),
       getActiveImportJob: vi.fn(async () => null)
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -611,12 +613,12 @@ describe('useOcrInstall — onFinished fires once per job (#687)', () => {
 describe('OcrInstall — German (#410)', () => {
   it('17: DocumentsScreen and ModelsScreen render the German copy, and the dialog states German facts with a comma decimal', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () => ocrStatus()),
       getPolicy: vi.fn(async () => allowedPolicy())
-    })
+    }))
     render(german(<DocumentsScreen />))
 
     await screen.findByText('scan.pdf')

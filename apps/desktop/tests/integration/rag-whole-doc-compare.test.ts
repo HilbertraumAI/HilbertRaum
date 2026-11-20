@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // MODEL answer over BOTH documents read whole (budget split, capped coverage, fence applied), REFUSES
 // when either doc is not fully chunked (a 1- or 3-doc scope gets the "select exactly two" answer in
 // rag-skill-analysis.test.ts). #632: any other question at a 1- or 3-doc scope falls through to the
-// ordinary grounded answer with paragraph 1 of the compare skill's fence only (the last describe below).
+// ordinary grounded answer with paragraph 1 of the compare skill's fence only (the second describe below).
+// #831: so does a fall-through turn of the four bundled whole-document skills (the third).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -35,6 +36,8 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { REPO_APP_SKILLS_DIR, writeSkillPackage } from '../helpers/skill-fixtures'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
+import { asPreRequestMapPrompt } from '../helpers/whole-doc-fixtures'
+import { buildSkillFence } from '../../src/main/services/skills/prompt'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const WHAT_CHANGED_INSTALL_ID = 'app:what-changed'
@@ -295,6 +298,15 @@ const USER_PLAIN_INSTALL_ID = 'user:plain-notes'
 const USER_PLAIN_BODY = ['# Plain notes\nRules: quote the documents.', 'Produce three bullet points.', 'End with a question.'].join(
   '\n\n'
 )
+/** #831: a user instruction skill declaring `analysis: whole-doc` (the manifest fallback, no vocabulary). */
+const USER_WHOLE_DOC_INSTALL_ID = 'user:lease-digest'
+const USER_WHOLE_DOC_BODY = [
+  '# Lease digest\nRules: answer only from the document.',
+  'Produce a digest with five headings.',
+  'End with the open points.'
+].join('\n\n')
+/** #831: the four bundled skills with the `grounded-whole-doc` engine. */
+const WHOLE_DOC_SKILLS = ['contract-brief', 'meeting-protocol', 'share-safe-review', 'deadline-obligation-finder'] as const
 
 const lease = (version: number, months: number, rent: string): string =>
   [
@@ -317,9 +329,10 @@ const committedBody = (id: string): string =>
   parseSkillMarkdown(readFileSync(join(REPO_APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8')).body!
 const BODIES: Record<string, string> = {
   [WHAT_CHANGED_INSTALL_ID]: committedBody('what-changed'),
-  'app:contract-brief': committedBody('contract-brief'),
+  ...Object.fromEntries(WHOLE_DOC_SKILLS.map((id) => [`app:${id}`, committedBody(id)])),
   [USER_COMPARE_INSTALL_ID]: USER_COMPARE_BODY,
-  [USER_PLAIN_INSTALL_ID]: USER_PLAIN_BODY
+  [USER_PLAIN_INSTALL_ID]: USER_PLAIN_BODY,
+  [USER_WHOLE_DOC_INSTALL_ID]: USER_WHOLE_DOC_BODY
 }
 
 interface FenceHarness {
@@ -332,7 +345,7 @@ interface FenceHarness {
 async function makeFenceHarness(texts: string[], contextWindow = 8192): Promise<FenceHarness> {
   const w = makeSkillsWorld('compare632', {
     seedApp: (d) => {
-      for (const id of ['what-changed', 'contract-brief']) cpSync(join(REPO_APP_SKILLS_DIR, id), join(d, id), { recursive: true })
+      for (const id of ['what-changed', ...WHOLE_DOC_SKILLS]) cpSync(join(REPO_APP_SKILLS_DIR, id), join(d, id), { recursive: true })
     },
     seedUser: (d) => {
       writeSkillPackage(d, {
@@ -343,6 +356,13 @@ async function makeFenceHarness(texts: string[], contextWindow = 8192): Promise<
         body: USER_COMPARE_BODY
       })
       writeSkillPackage(d, { id: 'plain-notes', title: 'Plain notes', kind: 'instruction', body: USER_PLAIN_BODY })
+      writeSkillPackage(d, {
+        id: 'lease-digest',
+        title: 'Lease digest',
+        kind: 'instruction',
+        analysis: 'whole-doc',
+        body: USER_WHOLE_DOC_BODY
+      })
     },
     // No appVersion: the committed SKILL.md files declare a minAppVersion the test version would fail.
     reconcile: true
@@ -440,11 +460,12 @@ describe("askDocuments — the bundled compare skill's fall-through turn carries
     expect(msg.skillId).toBe(WHAT_CHANGED_INSTALL_ID)
   })
 
-  // A skill with a non-compare handler, one with no handler at all (fence only), and a user compare skill: the
-  // reduction is for the bundled compare skill only (owner round WB2-1), so a user one keeps its whole fence.
+  // A user compare skill, a user whole-document skill and one with no handler at all (fence only): the reduction is
+  // for the bundled skills only (owner round WB2-1), so a user one keeps its whole fence. (#831 gave the four bundled
+  // whole-document skills the reduction too: the describe below.)
   it.each([
-    { name: 'contract-brief over three documents', skillId: 'app:contract-brief', texts: LEASE_DRAFTS, mode: 'relevance' },
     { name: 'a user skill declaring analysis: compare, one document', skillId: USER_COMPARE_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped' },
+    { name: 'a user skill declaring analysis: whole-doc, three documents', skillId: USER_WHOLE_DOC_INSTALL_ID, texts: LEASE_DRAFTS, mode: 'relevance' },
     { name: 'a user skill with no analysis engine, one document', skillId: USER_PLAIN_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped' }
   ])("another skill's fall-through keeps its whole fence ($name)", async ({ skillId, texts, mode }) => {
     const h = await makeFenceHarness(texts)
@@ -454,5 +475,200 @@ describe("askDocuments — the bundled compare skill's fall-through turn carries
     expect(capLogCount(skillId) - logged).toBe(0)
     expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId]).join('\n\n')])
     expect(msg.skillId).toBe(skillId)
+  })
+})
+
+// ---- #831: a bundled whole-document skill's fall-through turn (follow-ups wave 4 owner call G-9) ----
+// Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder read ONE document whole. Three
+// kinds of turn go to the ordinary grounded answer instead: a question outside the skill's vocabulary over several
+// documents, small talk, and a single-fact question over a document too long to read whole (the needle downgrade:
+// the engine applied, then sent the question to the passage search). Like What Changed? since #632, each gets
+// paragraph 1 of the fence only, the heading + rules, and not the section format that a 4B followed there on 11 of
+// 16 plain questions. The engine's own reads keep the whole fence. Run on the COMMITTED SKILL.md bodies, each of
+// which carries "Produce the … in this order" after paragraph 1.
+
+/** A lease too long to read whole at a 4,096 window, with its notice period in the last line. */
+const LONG_LEASE = [
+  ...Array.from({ length: 700 }, (_, i) => `Clause ${i + 1}: the tenant Max Huber pays EUR 2,400 on the first day of each month.`),
+  'Notice period: three months, to the end of a calendar quarter.'
+].join('\n')
+const appId = (id: string): string => `app:${id}`
+
+describe("askDocuments — a bundled whole-document skill's fall-through turn carries paragraph 1 of its fence (#831)", () => {
+  it.each(WHOLE_DOC_SKILLS)('%s over three documents, a question outside its vocabulary: paragraph 1 only, stamped', async (id) => {
+    const h = await makeFenceHarness(LEASE_DRAFTS)
+    const logged = capLogCount(appId(id))
+    const msg = await ask(h, TENANT, appId(id))
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId(id)])[0]])
+    expect(fenceBodies(h.runtime).join('\n')).not.toContain('Produce ')
+    expect(capLogCount(appId(id)) - logged).toBe(1)
+    expect(msg.skillId).toBe(appId(id))
+  })
+
+  it.each(WHOLE_DOC_SKILLS)('%s, small talk over one document: paragraph 1 only, stamped', async (id) => {
+    const h = await makeFenceHarness(THANKING_DRAFTS.slice(0, 1))
+    const logged = capLogCount(appId(id))
+    const msg = await ask(h, 'Vielen Dank!', appId(id))
+    expect(h.runtime.calls).toBe(1)
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId(id)])[0]])
+    expect(capLogCount(appId(id)) - logged).toBe(1)
+    expect(msg.skillId).toBe(appId(id))
+  })
+
+  it.each(WHOLE_DOC_SKILLS)(
+    '%s, a single-fact question over a document too long to read whole: the passage search, paragraph 1 only',
+    async (id) => {
+      const h = await makeFenceHarness([LONG_LEASE], 4096)
+      const logged = capLogCount(appId(id))
+      const msg = await ask(h, 'When is the notice period?', appId(id))
+      expect(h.runtime.calls).toBe(1)
+      expect(msg.coverage?.mode).toBe('relevance')
+      expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId(id)])[0]])
+      expect(capLogCount(appId(id)) - logged).toBe(1)
+      expect(msg.skillId).toBe(appId(id))
+    }
+  )
+
+  // The engine's own reads: a deliverable over the same long document (the chunk map-reduce) and any question over
+  // one document that fits (one whole read). Both carry the whole fence on every call, as before #831.
+  it('contract-brief, a summary of a document too long to read whole: the whole fence on every map and reduce call', async () => {
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const logged = capLogCount(appId('contract-brief'))
+    const msg = await ask(h, 'Summarize this contract', appId('contract-brief'))
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(false)
+    expect(h.runtime.calls).toBeGreaterThan(2)
+    const wholeFence = paragraphsOf(BODIES[appId('contract-brief')]).join('\n\n')
+    expect(fenceBodies(h.runtime)).toEqual(Array(h.runtime.calls).fill(wholeFence))
+    expect(capLogCount(appId('contract-brief')) - logged).toBe(0)
+    expect(msg.skillId).toBe(appId('contract-brief'))
+  })
+
+  it('contract-brief, one document that fits: the whole-document read, with the whole fence', async () => {
+    const h = await makeFenceHarness(ONE_DRAFT)
+    const logged = capLogCount(appId('contract-brief'))
+    const msg = await ask(h, TENANT, appId('contract-brief'))
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId('contract-brief')]).join('\n\n')])
+    expect(capLogCount(appId('contract-brief')) - logged).toBe(0)
+    expect(msg.skillId).toBe(appId('contract-brief'))
+  })
+
+  // A user skill declaring `analysis: whole-doc` keeps its whole fence on the needle downgrade too (bundled only).
+  it('a user whole-document skill, a single-fact question over a document too long to read whole: the whole fence', async () => {
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const logged = capLogCount(USER_WHOLE_DOC_INSTALL_ID)
+    const msg = await ask(h, 'When is the notice period?', USER_WHOLE_DOC_INSTALL_ID)
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(USER_WHOLE_DOC_BODY).join('\n\n')])
+    expect(capLogCount(USER_WHOLE_DOC_INSTALL_ID) - logged).toBe(0)
+    expect(msg.skillId).toBe(USER_WHOLE_DOC_INSTALL_ID)
+  })
+})
+
+// ---- #939: which whole-document reads take notes for the question (follow-ups wave 4, owner call 2026-11-20) ----
+// Over a document too long for one call, the map step used to take notes for the skill's task only, so "Find every
+// mention of 'indemnity'" under Contract Brief was answered from notes for a brief (master: 1 of 3 and 0 of 3 indemnity
+// articles). A list-shaped question (the router's own list detection, `asksForList`) under a bundled whole-document
+// skill now rides every map call; every other question keeps the map prompt as it was, byte for byte, because the
+// ungated version cost Meeting Minutes facts in the real-model check.
+
+/** A meeting record too long to read whole at a 4,096 window, with the next meeting in its last line. */
+const LONG_MEETING = [
+  ...Array.from({ length: 600 }, (_, i) => `Item ${i + 1}: Anna Berg and Tomasz Nowak discussed the website budget and the hosting contract.`),
+  'The next meeting will take place on Tuesday, 19 May 2026.'
+].join('\n')
+/** The whole fence each skill's map calls carry (the title the registry holds: the manifest's), built by the same
+ *  `buildSkillFence` the core calls with no mode — the fence is not what #939 changes, the instruction around it is. */
+const committedTitle = (id: string): string =>
+  parseSkillMarkdown(readFileSync(join(REPO_APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8')).manifest!.title
+const wholeFenceOf = (skillId: string): string | null => {
+  const title = skillId === USER_WHOLE_DOC_INSTALL_ID ? 'Lease digest' : committedTitle(skillId.replace(/^app:/, ''))
+  return buildSkillFence({ title, body: BODIES[skillId] }).text
+}
+/** The map turns of a map-reduce answer: every call but the last (the reduce). */
+const mapTurnsOf = (rt: RecordingRuntime): string[] =>
+  rt.turns.slice(0, -1).map((turn) => turn.filter((m) => m.role === 'user').at(-1)?.content ?? '')
+
+describe('askDocuments — the map step takes notes for a list-shaped question only (#939)', () => {
+  it.each(['en', 'de', 'es'] as const)(
+    '%s: the every-mention chip under Contract Brief: every map call takes notes for it',
+    async (code) => {
+      const h = await makeFenceHarness([LONG_LEASE], 4096)
+      const chip = t(code, 'chat.example.indemnity')
+      const msg = await ask(h, chip, appId('contract-brief'))
+      expect(msg.coverage?.mode).toBe('capped')
+      const maps = mapTurnsOf(h.runtime)
+      expect(maps.length).toBeGreaterThan(1)
+      for (const map of maps) {
+        expect(map).toContain(`\nUser request:\n${chip}\n`)
+        expect(map.indexOf('User request:')).toBeLessThan(map.indexOf('Skill instructions:'))
+      }
+    }
+  )
+
+  it('a typed list question under Contract Brief: every map call takes notes for it', async () => {
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const question = 'List every deadline in this contract'
+    const msg = await ask(h, question, appId('contract-brief'))
+    expect(msg.coverage?.mode).toBe('capped')
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) expect(map).toContain(`\nUser request:\n${question}\n`)
+  })
+
+  it.each([
+    { name: 'Contract Brief, "Summarize this contract"', skillId: 'app:contract-brief', text: LONG_LEASE, question: 'Summarize this contract' },
+    { name: 'Contract Brief, the summarize chip', skillId: 'app:contract-brief', text: LONG_LEASE, question: t('en', 'chat.example.summarize') },
+    { name: 'Contract Brief, "Fasse dieses Dokument zusammen"', skillId: 'app:contract-brief', text: LONG_LEASE, question: 'Fasse dieses Dokument zusammen' },
+    { name: 'Meeting Minutes, "Write the meeting minutes"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Write the meeting minutes' },
+    { name: 'a user whole-document skill, a list question', skillId: USER_WHOLE_DOC_INSTALL_ID, text: LONG_LEASE, question: 'List every deadline in this contract' },
+    // review B1: a report request that carries a list word is still a report (the router's summary reading, or the
+    // skill-side report shapes), so its map calls stay master's
+    { name: 'Meeting Minutes, "Summarize all the decisions"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Summarize all the decisions' },
+    { name: 'Meeting Minutes, "Fasse alle Beschlüsse zusammen"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Fasse alle Beschlüsse zusammen' },
+    { name: 'Meeting Minutes, "Erstelle das Protokoll mit allen Beschlüssen"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Erstelle das Protokoll mit allen Beschlüssen' },
+    { name: 'Meeting Minutes, "Write the minutes including every action item"', skillId: 'app:meeting-protocol', text: LONG_MEETING, question: 'Write the minutes including every action item' }
+  ])('$name: every map call is the prompt as it was', async ({ skillId, text, question }) => {
+    const h = await makeFenceHarness([text], 4096)
+    const msg = await ask(h, question, skillId)
+    expect(msg.coverage?.mode).toBe('capped')
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) {
+      expect(map).not.toContain('User request:')
+      expect(map).toBe(asPreRequestMapPrompt(map, wholeFenceOf(skillId)))
+    }
+  })
+
+  // review B1's controls: a plain list request under Meeting Minutes keeps the request in its notes.
+  it('a list request under Meeting Minutes ("List all action items"): every map call takes notes for it', async () => {
+    const h = await makeFenceHarness([LONG_MEETING], 4096)
+    const msg = await ask(h, 'List all action items', appId('meeting-protocol'))
+    expect(msg.coverage?.mode).toBe('capped')
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) expect(map).toContain('\nUser request:\nList all action items\n')
+  })
+
+  // review S2: a document with a ready deep index takes the tree rescue (not the chunk map-reduce), which reads the
+  // flag through its own argument; the chip's map steps over the node summaries take notes for it there too.
+  it('the every-mention chip over a document with a ready deep index: the tree map steps take notes for it', async () => {
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const section = (n: number): string => `Section ${n}: ${'the tenant shall indemnify the landlord against claims '.repeat(130)}`
+    seedReadyTree(h.db, h.docIds[0], chunkIdsOf(h.db, h.docIds[0]), {
+      summary: 'Summary: a lease with three indemnity articles.',
+      sections: [section(1), section(2), section(3)]
+    })
+    const chip = t('en', 'chat.example.indemnity')
+    const msg = await ask(h, chip, appId('contract-brief'))
+    expect(msg.coverage?.mode).toBe('tree')
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) expect(map).toContain(`\nUser request:\n${chip}\n`)
   })
 })

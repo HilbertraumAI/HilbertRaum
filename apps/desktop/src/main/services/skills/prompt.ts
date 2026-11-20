@@ -80,8 +80,9 @@ export function approxPromptTokens(text: string): number {
  * How much of the body a fence may carry. `'full'` (the default) is the whole body, budget-trimmed by
  * whole paragraphs. `'first-paragraph'` caps it at the guaranteed minimum, paragraph 1 (the heading +
  * honesty rules, SKA-15), with the same omit-when-even-that-won't-fit rule: #632, open-issues wave
- * owner call G-1 (option A) — the bundled compare skill's fall-through turn, where the compare engine
- * did not run, drops the section format but keeps the rules (bundled only: owner round WB2-1).
+ * owner call G-1 (option A), and #831, follow-ups wave 4 owner call G-9 — a bundled whole-document
+ * skill's fall-through turn (What Changed? and the four `grounded-whole-doc` skills), where its engine
+ * did not take the turn, drops the section format but keeps the rules (bundled only: owner round WB2-1).
  */
 export type SkillFenceMode = 'full' | 'first-paragraph'
 

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 import { canonicalCase } from './path-casing'
+import { LAZY_WRAPPER_ALIAS } from './tests/helpers/lazy-wrapper-alias'
 import { FullSuiteGuard, listTestFiles, parseShard, shardTestFiles } from './tests/full-suite-guard'
 
 // #646: refuse to run from a working directory (or a vitest CLI path) spelled in another letter
@@ -70,9 +71,10 @@ export default defineConfig({
       // barrel, Transcript) and '../chat/AssistantMarkdownLazy' (ReviewScreen, #815). The regex
       // matches those two whole specifiers and nothing longer, so the lazy wrapper's own test
       // (tests/unit/assistant-markdown-lazy.test.tsx, which imports it by a longer path) still
-      // drives the real React.lazy chunk.
+      // drives the real React.lazy chunk. The regex lives in tests/helpers/lazy-wrapper-alias.ts,
+      // which tests/unit/lazy-wrapper-specifier.test.ts also reads: it fails on a third spelling (#832).
       {
-        find: /^(?:\.\/|\.\.\/chat\/)AssistantMarkdownLazy$/,
+        find: LAZY_WRAPPER_ALIAS,
         replacement: resolve(__dirname, 'src/renderer/chat/AssistantMarkdown.tsx')
       }
     ]

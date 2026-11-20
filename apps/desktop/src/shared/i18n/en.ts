@@ -1262,10 +1262,14 @@ export const en = {
   'models.state.installed': 'Installed',
   'models.state.missing': 'Not downloaded',
   'models.state.checksumFailed': 'Can’t verify',
+  'models.state.noChecksum': 'No checksum',
   'models.state.unsupported': 'Unsupported',
   'models.state.notRecommended': 'Not recommended',
   'models.state.ready': 'Ready',
   'models.state.running': 'Running',
+  'models.noChecksum.hint':
+    'This model has no checksum on record, so it runs only in developer mode on a drive whose policy ' +
+    'allows unverified models.',
   // #599: the running model failed a health re-check, or an answer on it timed out.
   'models.badge.notResponding': 'Not responding',
   'models.notRespondingHint': 'The AI model has stopped answering. Restarting it usually fixes this.',
@@ -2220,6 +2224,8 @@ export const en = {
   'perf.models.loaded': 'loaded now',
   'perf.models.notLoaded': 'not loaded',
   'perf.models.notOnDrive': 'not on this drive',
+  'perf.models.damaged': 'failed its file check',
+  'perf.models.noChecksum': 'no checksum on record',
   'perf.models.lifetime.session': 'stays loaded',
   'perf.models.lifetime.idle': 'unloads when idle',
   'perf.models.lifetime.per-use': 'runs only while working',
@@ -2697,6 +2703,21 @@ export const en = {
   'main.dialog.unsavedReview.tryAgain': 'Try again',
   'main.dialog.unsavedReview.keepOpen': 'Keep open',
   'main.dialog.unsavedReview.closeAnyway': 'Close anyway',
+  // #935: the native dialog when a window close that quits the app (Windows, Linux) would stop an
+  // OCR run or a document translation, running or waiting. Asked before the save above. No count in
+  // the copy (no plural forms). Buttons in order: Keep open (the default and Esc), Close anyway; they
+  // read as the unsaved dialog's two buttons do.
+  'main.dialog.taskRunning.title': 'A document task is not finished yet.',
+  'main.dialog.taskRunning.message': 'A document task is not finished yet.',
+  'main.dialog.taskRunning.detailOcr':
+    'If you close now, reading the scan stops, and the pages read so far are lost.',
+  'main.dialog.taskRunning.detailTranslation':
+    'If you close now, the translation stops, and the part translated so far is lost.',
+  'main.dialog.taskRunning.detailSeveral':
+    'If you close now, the document tasks that are running or waiting stop, and their work so far is ' +
+    'lost.',
+  'main.dialog.taskRunning.keepOpen': 'Keep open',
+  'main.dialog.taskRunning.closeAnyway': 'Close anyway',
   'main.workspace.wrongPassword':
     "That password didn't unlock your workspace. Check it and try again.",
   'main.workspace.openFailed': 'Could not open the workspace.',
@@ -3031,6 +3052,14 @@ export const en = {
     'No transcript is stored for this recording yet. Re-index it to transcribe again.',
   'main.models.noManifests':
     'No model list was found on this drive — the model-manifests folder is missing.',
+  'main.models.unknown': 'This model is no longer in this drive’s model list.',
+  'main.models.notChat': '“{name}” is not a chat model, so it can’t be started here.',
+  'main.models.startDamaged':
+    '“{name}” failed its file check, so it wasn’t started. Download it again on the AI Model screen.',
+  'main.models.startMissing': '“{name}” can’t be started: its model file isn’t on this drive yet.',
+  'main.models.startNeedsRam':
+    '“{name}” needs at least {min} GB RAM; this computer has about {ram} GB. Pick a smaller model — ' +
+    'quality stays great.',
   'main.models.autoSelected':
     'This model is used automatically once installed — there is nothing to select.',
   // F16 (audit-postmerge-2026-06-29): localized lock copy for the model / activity / settings

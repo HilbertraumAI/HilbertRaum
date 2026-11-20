@@ -8,6 +8,7 @@ import type {
   BenchmarkResult,
   GpuDevice,
   MemoryClass,
+  ModelFileVerdict,
   ModelPlacement,
   MovedDriveNotice,
   PerformanceSnapshot,
@@ -39,13 +40,16 @@ import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { displayDevice, eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import {
+  checksumCacheView,
   discoverManifests,
   graphicsBudgetMib,
+  knownFileVerdict,
   launchContextTokens,
   manifestFilesPresent,
   weightsMib
 } from '../services/models'
-import { pickVisionManifest } from '../services/vision/status'
+import { developerLeniency } from '../services/policy'
+import { pickVisionManifest, visionCandidates } from '../services/vision/status'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -1004,9 +1008,21 @@ function buildPlacement(
   // files gone a start is refused. An active model outside the catalog names no files, so it is not on the drive.
   const onDrive = (m: ModelManifest | null | undefined): boolean =>
     m != null && manifestFilesPresent(ctx.paths.rootPath, m)
+  // #933: what the checksum cache already knows about a present model's files: `damaged` (a check found a mismatch) or
+  // `unverified` (no checksum on record, outside developer leniency), both refused at every start, so the row says so
+  // and the totals leave it out (`loadedAtOnceMb`; loaded beats it). Cache only (`knownFileVerdict` hashes nothing),
+  // over a READ-ONLY view of the `checksumCache` this snapshot has already read (A S-A8: the settings store's `get`
+  // re-reads settings per file and can write them). The leniency is the one every start uses (`developerLeniency`).
+  const fileHashes = checksumCacheView(settings.checksumCache, ctx.paths.rootPath)
+  const lenient = developerLeniency(ctx, settings.developerMode)
+  const fileCheck = (m: ModelManifest | null | undefined): ModelFileVerdict =>
+    m != null && onDrive(m)
+      ? knownFileVerdict(m, ctx.paths.rootPath, { developerMode: lenient, hashStore: fileHashes })
+      : 'ok'
   const chatResident = chatModelResident(ctx, activeId)
   let model: PerformanceSnapshot['placement']['model'] = null
   const activeManifest = activeId ? manifests.find((m) => m.id === activeId) ?? null : null
+  const chatFileCheck = fileCheck(activeManifest)
   if (activeId) {
     model = {
       id: activeId,
@@ -1015,6 +1031,8 @@ function buildPlacement(
       // #914 code review: computed once here, for "Your model" — its files are on this drive, or it is resident
       // right now (loaded beats `onDrive`, as on the rows). The screen then claims no size on disk and no fit.
       onDrive: onDrive(activeManifest) || chatResident,
+      // #933: its row's verdict; a resident model is in memory whatever the cache says (loaded beats it).
+      fileCheck: chatResident ? 'ok' : chatFileCheck,
       contextTokens: contextFor(activeId) ?? settings.contextTokens
     }
   }
@@ -1076,8 +1094,21 @@ function buildPlacement(
   const rerankerManifest = byRole('reranker')
   const embeddingsManifest = byRole('embeddings')
   const transcriberManifest = byRole('transcriber')
-  // With no vision model on the drive the row still names the catalog's (every model the app can hold).
-  const visionManifest = pickVisionManifest(manifests, ctx.paths.rootPath) ?? byRole('vision')
+  // With no vision model on the drive the row still names the catalog's (every model the app can hold). #933 (A S-A7):
+  // like `getVisionStatus`, the row passes over a candidate whose files the cache knows are damaged (or have no
+  // checksum on record) for the next one; with none that passes, it names the first, which then says so. Loaded beats
+  // the verdict, as on every row (#933 review N1): while the images service holds a model, the row names THAT model
+  // (`loadedModelId`: the pick, or the next candidate when the pick was passed over at its start), so its name, size and
+  // "loaded now" describe the one in memory. A service that cannot say which (an unknown id) leaves the pick.
+  const visionLoaded = ctx.vision?.isLoaded?.() ?? false
+  const visionLoadedId = visionLoaded ? (ctx.vision?.loadedModelId?.() ?? null) : null
+  const loadedVision =
+    visionLoadedId != null ? manifests.find((m) => m.id === visionLoadedId && m.role === 'vision') : undefined
+  const visionManifest =
+    loadedVision ??
+    (visionLoaded ? undefined : visionCandidates(manifests, ctx.paths.rootPath).find((m) => fileCheck(m) === 'ok')) ??
+    pickVisionManifest(manifests, ctx.paths.rootPath) ??
+    byRole('vision')
   // Each row's `onDrive` is the presence rule defined with `model` above (#914).
   const cardEligible = nextStartUsesGpu(memory)
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
@@ -1097,6 +1128,7 @@ function buildPlacement(
       modelId: activeId,
       sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
       onDrive: onDrive(activeManifest),
+      fileCheck: chatFileCheck,
       device: chatDevice,
       loaded: chatResident,
       lifetime: 'session',
@@ -1108,6 +1140,7 @@ function buildPlacement(
       modelId: translationManifest?.id ?? null,
       sizeOnDiskGb: gib(translationManifest),
       onDrive: onDrive(translationManifest),
+      fileCheck: fileCheck(translationManifest),
       device: translationDevice,
       loaded: translation?.live ?? false,
       lifetime: 'idle',
@@ -1120,8 +1153,9 @@ function buildPlacement(
       modelId: visionManifest?.id ?? null,
       sizeOnDiskGb: gib(visionManifest),
       onDrive: onDrive(visionManifest),
+      fileCheck: fileCheck(visionManifest),
       device: 'cpu',
-      loaded: ctx.vision?.isLoaded?.() ?? false,
+      loaded: visionLoaded,
       lifetime: 'idle',
       gpuLayers: null,
       totalLayers: null
@@ -1131,6 +1165,7 @@ function buildPlacement(
       modelId: rerankerManifest?.id ?? null,
       sizeOnDiskGb: gib(rerankerManifest),
       onDrive: onDrive(rerankerManifest),
+      fileCheck: fileCheck(rerankerManifest),
       // Wave 8 ruling (d): the resident sidecar's ACTUAL posture, or — when nothing is resident
       // — the posture a cold start would take now (`Reranker.devicePosture()`, the `isLoaded?`
       // pattern). A `Reranker` without that optional member reports `'cpu'` here.
@@ -1145,6 +1180,7 @@ function buildPlacement(
       modelId: embeddingsManifest?.id ?? null,
       sizeOnDiskGb: gib(embeddingsManifest),
       onDrive: onDrive(embeddingsManifest),
+      fileCheck: fileCheck(embeddingsManifest),
       device: 'cpu',
       loaded: ctx.embedder?.isLoaded?.() ?? false,
       lifetime: 'session',
@@ -1156,6 +1192,7 @@ function buildPlacement(
       modelId: transcriberManifest?.id ?? null,
       sizeOnDiskGb: gib(transcriberManifest),
       onDrive: onDrive(transcriberManifest),
+      fileCheck: fileCheck(transcriberManifest),
       device: 'cpu',
       loaded: false,
       lifetime: 'per-use',

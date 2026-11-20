@@ -42,9 +42,10 @@ export function visionCandidates(manifests: readonly ModelManifest[], rootPath: 
 }
 
 /**
- * #890: THE images model as the Performance screen names it: the first candidate. `getVisionStatus` runs the same
- * model whenever it verifies; only a preferred model whose files are present but fail their check is passed over
- * there for the next candidate (the AI Model screen shows the damaged file), which a synchronous row cannot see.
+ * #890: the first candidate: the images model `getVisionStatus` runs whenever it verifies. A preferred model whose
+ * files are present but fail their check is passed over there for the next candidate (the AI Model screen shows the
+ * damaged file). #933: the Performance row passes over it too, from the checksum cache (`knownFileVerdict` over
+ * `visionCandidates`), and falls back to this pick only when no candidate passes.
  */
 export function pickVisionManifest(manifests: readonly ModelManifest[], rootPath: string): ModelManifest | undefined {
   return visionCandidates(manifests, rootPath)[0]

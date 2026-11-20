@@ -68,7 +68,7 @@ a future move to Tauri/Rust is a localized swap.
   turns Electron's `GrantFileProtocolExtraPrivileges` fuse off. See
   [`security-model.md`](security-model.md) and "App scheme `hilbertraum://app/` — design record
   (#560)" below. The packaged binary's other fuses (no `ELECTRON_RUN_AS_NODE`, no `--inspect`,
-  `app.asar` integrity) are in "Electron fuses — design record (#562)".
+  no `NODE_OPTIONS` since #564, `app.asar` integrity) are in "Electron fuses — design record (#562)".
 
 ## Swappable interfaces (spec §9.2)
 - `ModelRuntime` — `MockRuntime` **or** `LlamaRuntime`, chosen per `start()` by availability (Phase 10).
@@ -3053,6 +3053,18 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     driven per `startDocTask`, so the manager is usable again after unlock). `awaitActiveTaskSettled()`
     exposes the tracked `run(task)` dispatch promise (resolves immediately when idle); the callers bound
     it with a ~5 s `Promise.race` timeout so a wedged handler can never hang quit/lock.
+  - **The quit hold (#936, follow-ups wave 4).** `holdQueueForQuit()` makes `pump` start nothing;
+    `releaseQueueHold()` clears it and pumps. The running task goes on, and a task started meanwhile is
+    queued (it runs if the quit is called off); `hasActiveTask()` and `listActiveDocTasks()` are
+    unchanged (a held task is still active, so the chat busy guard still sees it). Two callers set it
+    (`main/close-guard.ts`): the main window's close guard, when it commits to a close that quits, and
+    `holdQueueOnQuit`, at every un-prevented `before-quit` (`main/index.ts`). The guard's Keep open releases
+    it, and so does a successful unlock (`registerWorkspaceIpc.ts`; no quit is under way then, so a hold
+    still set would be stale). Why: a quit the guard holds while the window saves (Ctrl+Q on Linux, ⌘Q or Dock Quit
+    on macOS) closes the OCR window first, so the run ended before `will-quit` flushed the queue and
+    the next task started into the save, only to be cancelled a moment later (measured on Electron
+    43.8.6). Still no permanent latch: Keep open releases it, and on a quit that goes on
+    `cancelAllDocTasks()` ends everything anyway.
 
 - **TA-2 — renderer session-store purge moved to the real lock seam (translation audit fix wave,
   2026-07-06; finding H3).** The purge of the three module-level renderer stores (the live TEXT
@@ -6113,7 +6125,9 @@ they are not the second UI-languages wave's G-numbers above. G-1, G-2: the wave'
 order of its pull requests, with #804, #805, #806, #807 and #812 in one; G-1 also took #632's
 option A: on What Changed?'s fall-through turn the fence carries paragraph 1 only, the stamp
 kept; at the code review (owner round WB2-1) the owner limited it to the bundled skill, so a
-user compare skill keeps its whole fence (§44 SK-3b) · G-3 (a): in the
+user compare skill keeps its whole fence (§44 SK-3b); #831 (follow-ups wave 4 owner call
+G-9, 2026-11-20) extended the cap to the four bundled whole-document skills, the needle
+downgrade included, bundled only again (§44 SK-3b) · G-3 (a): in the
 Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian catalogs a figure or a
 placeholder and a unit symbol (GB, MB, KB, B, MB/s, tok/s, ms, s) are joined by U+00A0, the
 Dutch, Polish and Ukrainian rules against a no-break space allow it in exactly that one position
@@ -6430,9 +6444,18 @@ build tree-shakes them).
   summarize chip as written and in capitals; the every-mention chip with its own word and with
   another; in the eight other languages, that chip without its quotes, or followed by another
   question, is a plain question).
+  Since #834 (follow-ups wave 4) the skill classifier reads the same frame: `isNeedleShaped`
+  (`skills/vocabulary.ts`) counts the every-mention chip as no single-fact lookup in any
+  catalog, whatever stands in its quotes, so with a whole-document skill and one document too
+  long to read whole the chip keeps the whole read in every language (before, the German chip,
+  whose «finde» is a lookup word, went to the passage search, and the other nine kept the whole
+  read). The chip helpers moved from `analysis/router.ts` to `analysis/example-chips.ts`
+  (`chipText`, `isSummarizeChip`, `isMentionChip`), which the router and the classifier both
+  import; the router's answers are unchanged. Proof `skills-vocabulary.test.ts` and
+  `rag-whole-doc-skill.test.ts`, one row per registered language each.
   Changing either chip's wording in any language, or the text around the indemnity chip's quotes,
-  changes what the router recognises, and the old wording is then read like any other question
-  in that language. Not a Rule-3 site: the small-talk check (`isSmallTalk`,
+  changes what the router and the skill classifier recognise, and the old wording is then read
+  like any other question in that language. Not a Rule-3 site: the small-talk check (`isSmallTalk`,
   `skills/vocabulary.ts`), whose greetings, thanks and closings for the eight languages beyond
   English and German are language data written in main for the check, not catalog values, so no
   catalog edit changes them. They follow three rules, checked across all ten languages for a
@@ -6540,8 +6563,7 @@ one, and each glossary is pinned on top of its catalog file.
     `preview/preview.tsx`. Its limits: a join built from variables, or one in a `.ts` file, is not
     seen.
   - Left as they are: the dash typed in code between an activity line's time and its entry
-    (`DiagnosticsTab.tsx`); the main process's refusal to start a model that needs more memory than
-    the computer has, which is English (`registerModelIpc.ts`); and Spanish figures, which `Intl`
+    (`DiagnosticsTab.tsx`), and Spanish figures, which `Intl`
     writes in the Spain pattern for every Spanish-speaking user, since it is given the language
     code alone. The Spanish review decision labels put the decision in parentheses («Revisado
     (respaldado)»), so the summary's join adds the only colon (owner call of 2026-11-14 in the
@@ -10948,7 +10970,7 @@ Per-finding disposition (fixed → phase@commit / declined → rationale / info 
 | **SK-1** | HIGH | P1 `c08a0a9` | **fixed** — document-edit's stale "writes a plain `.txt` copy" replaced with the true output matrix (`.docx` keeps its format; PDF/plain-text/Markdown → plain-text copy). **Decision D-P1a:** the matrix is stated in BOTH document-edit and document-redaction (shared Phase-9 seam, `run.ts:1519-1523`/`:1781-1789`) — symmetry over silence on a real user question. Corrupt-DOCX→`.txt` fallback (`run.ts:1696-1699`) deliberately NOT claimed (rare degradation the save dialog already surfaces; promising it would teach the model to hedge every DOCX answer). Version → 1.1.0. |
 | **SK-2** | HIGH | P2 `4f541c1` | **fixed (design, not a patch)** — the 200-change render cap in `renderChangesForModel`/`renderRedline` fired without setting `truncated`, so >200 coalesced changes within the token budget produced a prompt asserting "complete and exact" over a capped list. `DIFF_RENDER_MAX` now exported from `services/diff` as the single source of truth and passed explicitly to both renderers at both consumers; `retrieveCompareDiff` ORs `changes.length > DIFF_RENDER_MAX` into `truncated` (cap + flag can't drift); the PARTIAL prompt wording generalized to be true for BOTH truncation causes. Second consumer `doctasks/handlers/compare.ts` emits an explicit PARTIAL note under `## Exact changes` when the cap fires. New teeth-checked `tests/unit/rag-compare-diff-truncation.test.ts`. Version → 1.1.0. |
 | **SK-3a** | MED | P2 `4f541c1` | **fixed (wording half)** — what-changed's scope rule ("the app replies … before you are ever called") was false on the `intends()`-miss fall-through and at 0 docs; rewritten inside paragraph 0 to discriminate on what the model can SEE — A/B labels or an exact-changes block ⇒ compare; ordinary passages with no diff ⇒ simply answer from the material. |
-| **SK-3b** | MED | P2 (declined); revised by #632 | **declined runtime change — decision D-P2a.** Suppressing the user-chosen compare fence on the relevance fall-through would silently drop instructions the user deliberately selected (the per-message glyph shows the skill applied), and the reworded rule 1 is coherent on both paths. Recorded in [`known-limitations.md`](known-limitations.md) beside the SKA-8 fall-through record. Revisit only if the gold set later shows comparison-framed answers on non-compare fall-through turns. **D-P2a revised 2026-11-15 by #632 (open-issues wave owner call G-1): on What Changed?'s fall-through turn the fence carries paragraph 1 only.** The revisit condition was met in real-app runs rather than the gold set: a 4B model answered most plain questions on fall-through turns with the body's compare sections (the #582 run, and master again when #632 was measured). When the turn skill is the bundled what-changed (an app skill, `source === 'app'`, whose handler is the compare handler `grounded-whole-doc-compare`) and `applies()` is false (not exactly two answerable documents, or small talk), `registerRagIpc.ts:581-584` sets `skillFenceMode` `'first-paragraph'` once and passes it into the fall-through grounded answer (`:1010`), which uses it for every fence that answer builds: the top-k or whole-read call (`rag/index.ts:2066-2069`) and the whole-document rescues' map and reduce calls (`:1855`, `:1874`, `whole-doc-tree.ts:534`). `buildSkillFence` then keeps paragraph[0] only, the heading + honesty rules that are its guaranteed minimum (SKA-15), not reported as `trimmed`, and a tight budget can still omit it (`skills/prompt.ts:155`, `:172-174`); the cap writes one info log line, "skill fence capped to its first paragraph" with the skill id and mode, never the body, and a capped fence the budget still omits carries the mode on its existing warning (`skills/prompt.ts:197-207`, called at `rag/index.ts:2072` and `whole-doc-tree.ts:536`). Bundled only (at the code review, owner round WB2-1): a user-imported skill declaring `analysis: compare` keeps its whole fence, as before #632, because its paragraph 1 is whatever its author wrote (the rules-first layout, SKA-15, is pinned for the bundled bodies only) and, with no routing vocabulary, its real compare requests fall through too. Kept: the skill stamp (fence placed + passages found, `rag/index.ts:2196`), so the selection still shows; the budgets, which still reserve the whole fence (`rag/index.ts:1671`); the two-document compare prompts (the diff and a full rewrite's labelled whole read), byte-identical; every other skill's whole fence. Small talk over two documents is the one two-document prompt that changes (the engine doesn't take it). Plain chat with no documents is not a fall-through and keeps the whole fence (`chat.ts:1928`); the one question measured there was not comparison-framed on either build. Measured on the GTX 1070 Ti machine (llama.cpp b9849, three short lease drafts, What Changed? picked, ten plain questions over one and three drafts, one run each, master vs #632): comparison-framed answers went from 9/10 to 0/10 on qwen3-4b-instruct-q4 (the asked fact stated plainly 1/10 → 10/10) and from 4/10 to 0/10 on qwen3.5-9b-ud-q4kxl (8/10 → 10/10; two of the four gave the fact first and the compare sections after it), every answer kept the stamp, the two-document compare answer was byte-identical between the builds on both models, and the ten turns ran 2–3× faster (shorter answers). |
+| **SK-3b** | MED | P2 (declined); revised by #632, extended by #831 | **declined runtime change — decision D-P2a.** Suppressing the user-chosen compare fence on the relevance fall-through would silently drop instructions the user deliberately selected (the per-message glyph shows the skill applied), and the reworded rule 1 is coherent on both paths. Recorded in [`known-limitations.md`](known-limitations.md) beside the SKA-8 fall-through record. Revisit only if the gold set later shows comparison-framed answers on non-compare fall-through turns. **D-P2a revised 2026-11-15 by #632 (open-issues wave owner call G-1): on What Changed?'s fall-through turn the fence carries paragraph 1 only.** The revisit condition was met in real-app runs rather than the gold set: a 4B model answered most plain questions on fall-through turns with the body's compare sections (the #582 run, and master again when #632 was measured). When the turn skill is the bundled what-changed (an app skill, `source === 'app'`, whose handler is the compare handler `grounded-whole-doc-compare`) and `applies()` is false (not exactly two answerable documents, or small talk), `registerRagIpc.ts:594-597` sets `skillFenceMode` `'first-paragraph'` once and passes it into the fall-through grounded answer (`:1036`), which uses it for every fence that answer builds: the top-k or whole-read call (`rag/index.ts:2081-2084`) and the whole-document rescues' map and reduce calls (`:1868`, `:1888`, `whole-doc-tree.ts:573`). `buildSkillFence` then keeps paragraph[0] only, the heading + honesty rules that are its guaranteed minimum (SKA-15), not reported as `trimmed`, and a tight budget can still omit it (`skills/prompt.ts:156`, `:173-175`); the cap writes one info log line, "skill fence capped to its first paragraph" with the skill id and mode, never the body, and a capped fence the budget still omits carries the mode on its existing warning (`skills/prompt.ts:198-208`, called at `rag/index.ts:2087` and `whole-doc-tree.ts:575`). Bundled only (at the code review, owner round WB2-1): a user-imported skill declaring `analysis: compare` keeps its whole fence, as before #632, because its paragraph 1 is whatever its author wrote (the rules-first layout, SKA-15, is pinned for the bundled bodies only) and, with no routing vocabulary, its real compare requests fall through too. Kept: the skill stamp (fence placed + passages found, `rag/index.ts:2211`), so the selection still shows; the budgets, which still reserve the whole fence (`rag/index.ts:1684`); the two-document compare prompts (the diff and a full rewrite's labelled whole read), byte-identical; every other skill's whole fence. Small talk over two documents is the one two-document prompt that changes (the engine doesn't take it). Plain chat with no documents is not a fall-through and keeps the whole fence (`chat.ts:1928`), on purpose (#830, measured in follow-ups wave 4 on the same machine, models and engine with What Changed? picked and no documents, one run each): the plain questions («Wer ist der Mieter?», "What is a notice period?", "Draft a short email asking for a lower rent") were not comparison-framed (0/6, and 0/10 with #632's control), the 4B once naming two compare sections inside a definition, and a compare of two pasted clauses kept the format (2/2); Contract Brief picked in plain chat framed 0/4. There the fence is the only thing that shapes a pasted compare, and it sits in the system message (`composeSystemPromptWithSkill`, `skills/prompt.ts`), so a per-turn trim would change the prompt llama-server reuses from its cache: the first token came after 2.15 s (4B) and 4.54 s (9B) on a new system message and after 0.16–0.36 s and 0.40–0.74 s once cached. A trim keyed to the compare vocabulary (`routeMatch('what-changed', …)`, English and German words) would also drop the format for a pasted compare in the eight other interface languages. Measured on the GTX 1070 Ti machine (llama.cpp b9849, three short lease drafts, What Changed? picked, ten plain questions over one and three drafts, one run each, master vs #632): comparison-framed answers went from 9/10 to 0/10 on qwen3-4b-instruct-q4 (the asked fact stated plainly 1/10 → 10/10) and from 4/10 to 0/10 on qwen3.5-9b-ud-q4kxl (8/10 → 10/10; two of the four gave the fact first and the compare sections after it), every answer kept the stamp, the two-document compare answer was byte-identical between the builds on both models, and the ten turns ran 2–3× faster (shorter answers). **Extended 2026-11-20 by #831 (follow-ups wave 4 owner call G-9): the four bundled `grounded-whole-doc` skills get the same cap.** Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder read exactly one document, so their engine declines small talk and any other document count (a question outside the skill's vocabulary over several documents falls through; one inside it is narrowed or gets "pick one"), and since A3 it also declines, inside its own branch, a single-fact question over a document too long to read whole (the needle downgrade). `bundledDeliverableSkill` (`registerRagIpc.ts:594-596`) is an app skill whose handler is `grounded-whole-doc-compare` or `grounded-whole-doc`; `!applies()` sets the mode as before, and the downgrade sets it too (`:703`), since `applies()` is true there and the first condition never sees that turn. A downgraded needle that the coverage-extract listing answers carries no fence, as before. Every read the engine takes keeps the whole fence (the whole-document branch passes no mode: a fitting document's one call, and the map and reduce calls over an over-budget one), and so does a user skill declaring `analysis: whole-doc`, on every path (bundled only, the WB2-1 reasoning). Not taken (G-9): an exception for a deliverable-shaped request over several documents ("Summarize these three"); no measured question was one, and a brief built from top-k passages is weak anyway. Proof `rag-whole-doc-compare.test.ts` (the #831 describe: the four skills on each of the three paths; a deliverable over an over-budget document and any question over a fitting one, with the whole fence on every call; a user whole-document skill over three documents and on the downgrade). Measured on the same machine (llama.cpp b9849; per skill, three short lease drafts or meeting notes with a question outside its vocabulary, one long lease or meeting record with a single-fact question, and «Danke!» over one document; 16 turns per model, one run each), master against an emulation that sends exactly the capped fence (four user skills with the bundled title and paragraph 1 as the whole body): answers in the skill's report format went from 11/16 to 0/16 on qwen3-4b-instruct-q4 (Meeting Minutes 4/4 on master, full minutes for "Who attended?") and from 5/16 to 0/16 on qwen3.5-9b-ud-q4kxl (4 of its 5 on «Danke!»); the 4B still stated every fact over three documents (8/8) and the 16 turns ran 2.9× (4B) and 1.5× (9B) faster. Re-run on the branch itself (same machine and setup, one run each): 0/16 framed on both models, every fact over three documents still stated; the 9B's 16 answers were byte-identical to the emulation's and the 4B's 12, the other four being the single-fact turns, where the emulation's shorter body had freed room for one more passage (on the branch the 4B states those facts 0/4, as on master). Open: the budgets still reserve the whole fence (`rag/index.ts:1684`), so on the 4B's 4,096 window the passage search for a single fact in a 19-section lease read 1 section and missed it under every skill (a follow-up); and a thank-you over a document is still answered with a summary of it, skill or not (the grounded prompt's habit, not the fence's). |
 | **SK-4** | MED | P3 `1af932b` | **fixed** — deadline-obligation-finder promised "one or more documents"; the `analysis: whole-doc` engine requires exactly one in-scope doc (`whole-doc-skills.ts:99-103`), multi-doc → the W2 pre-pass narrows or asks. Description + body reworded to single-document ("in a document" / "in einem Dokument", formal register) + a what-changed-style "the app handles document scope … do not police this" sentence; the coverage-honesty rule kept. Multi-doc sweep rejected (D45 one-doc-at-a-time posture; its own plan if beta demand appears). Version → 1.1.0. |
 | **SK-5** | MED | P4 `8063a1e` | **fixed** — the two bank-statement aux files taught the instruction-only v1 (decline to sum/validate/categorize/export) — the opposite of shipped behavior. `examples/reading-a-statement.md` rewritten around the stable honesty posture (kept the three-question structure; "Where the numbers come from" replaces "What this version does not do"; exports always ask before saving); `schemas/transaction.schema.json` `description` fixed to reality (produced by `extract_transactions`, mirrors + pinned to the TS export). Files are never injected at runtime but ride skill export (`installer.ts:840-862`) — first thing a contributor reads. |
 | **SK-6** | MED | P4 `8063a1e` | **fixed** — `transaction.schema.json` was a hand-maintained mirror with no parity pin. `TRANSACTION_ROW_SCHEMA` exported from `tools/bank-statement.ts` (test-motivated, comment says so); new `tests/unit/skills-transaction-schema-parity.test.ts` structurally compares the JSON to the TS export (property-name set, per-property `type`/`pattern`/`minimum`/`minLength`, `required`, `additionalProperties`), the intentional `category` delta encoded by name. Teeth-checked (`^[A-Z]{3}$`→`{4}$` → RED). §8 carries the pin note. |
@@ -11142,7 +11164,7 @@ Per-finding disposition (fixed → phase@commit / deferred·watch → where regi
 | **TS-1** | MED | P10 `9f044d8` | **fixed** — fixed-sleep sweep: the six remaining raw sleep sync points converted to deterministic gates (`reached()` probes, `seenSignal` polls, a positive-control sentinel, an empty-`act` flush); every surviving sleep comment-justified; full suite run 3× — zero flakes; CONTRIBUTING gains the no-fixed-sleeps rule. |
 | **TS-2** | MED | P9 `d6846d1` | **fixed** — webPreferences flags, prod/dev CSP, and the window-open policy extracted verbatim to `window-security.ts` and pin-tested by name/value (a deliberate `sandbox: false` reddens — verified + reverted); a source-level scan keeps the literals from being re-inlined at the call sites. |
 | **TS-3** | MED | — | **deferred → owner design** — the real-model quality gate is human-remembered (opt-in `HILBERTRAUM_*` runs), not mechanical; the proposed release-workflow smoke-record gate (fail unless a smoke record is newer than the last model/runtime-affecting commit) needs the owner's design call. Registered in BUILD_STATE §5. |
-| **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes opt-in `assertNoUnexpectedApiCalls()`; renderer-tier sweep found zero fresh-spy reliance. |
+| **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes `assertNoUnexpectedApiCalls()` (opt-in when fixed; since #832 the DEFAULT: `tests/setup.ts` runs it in an `afterEach` for every renderer row, and suites that call unmocked methods on purpose end on `forgetUnexpectedApiCalls()`); renderer-tier sweep found zero fresh-spy reliance. |
 | **TS-5** | LOW | P9 `d6846d1` | **fixed** — EXPLAIN QUERY PLAN assertions match index NAMES, never planner phrasing (the Node-pinned-SQLite coupling is commented); the teeth counterfactuals kept. |
 | **TS-6** | LOW | P13 `19dfbc9` | **fixed** — optional `test:coverage` (v8 provider, `@vitest/coverage-v8` devDep) + root passthrough; deliberately not CI-wired, no threshold; `coverage/` gitignored; documented in CONTRIBUTING. |
 | **TS-7** | LOW | — | **decided 2026-11-01 (#753): a per-PR `macos 24.x` leg (`macos-15`), packaging.md CI section** (was deferred → owner call) — no macOS CI leg despite first-class macOS support and a history of cross-platform path bugs; a `macos-latest` entry is cheap (the suite is offline and Electron-binary-free) but costs CI minutes. Registered in BUILD_STATE §5. |
@@ -14529,7 +14551,9 @@ Each renderer file named above, apart from the legs and `CitationMarkers` (which
 bridge), runs `assertNoUnexpectedApiCalls()` in an `afterEach` (inside try/finally, after
 any cleanup); review-screen mounts stub through `stubReviewApi` (directly or through
 `renderReview`), every other mount (the EvidencePane, the transcript entry points,
-ChatScreen's chip batch, the gate a11y components) through `stubApi`.
+ChatScreen's chip batch, the gate a11y components) through `stubApi`. Since #832 the check is the default, not a per-file
+choice: `tests/setup.ts` registers the same check as an `afterEach` for every renderer file (it runs after the file's own
+`afterEach(cleanup)`, so an unmount call counts), so the per-file call is a better error site, not the guard.
 
 ### §8 Decision ladder + phase dispositions
 
@@ -16767,7 +16791,8 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
   beside the export destination (serving the print page from memory on a second host would remove
   it — #563; done, EP-1 record "#563 amendment"); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
   plus the OCR rasterizer honouring `ELECTRON_RENDERER_URL` in a packaged build (#562; done, see
-  "Electron fuses — design record (#562)" below: NODE_OPTIONS stays on by owner decision).
+  "Electron fuses — design record (#562)" below: NODE_OPTIONS stayed on by owner decision until #564
+  turned it off, §8 there).
 
 ## Electron fuses — design record (#562)
 
@@ -16778,7 +16803,9 @@ _The packaged binary turns off `RunAsNode` and `EnableNodeCliInspectArguments`, 
 Electron 43.7.7 / Node 24.21.0, app-builder-lib 26.16.1, Windows 11 with Smart App Control and a
 TLS-scanning antivirus (Norton). The analysis is a git-ignored working paper; this is the durable
 record. It follows "App scheme `hilbertraum://app/` — design record (#560)", which turned off
-`GrantFileProtocolExtraPrivileges` and named this as its follow-up._
+`GrantFileProtocolExtraPrivileges` and named this as its follow-up. **#564 amendment
+(2026-11-20, `fix/564-os-cert-store-fuse`):** the in-app downloads trust the operating system's
+certificate store, and `EnableNodeOptionsEnvironmentVariable` is off too (§8)._
 
 ### §1 Threat class
 
@@ -16794,16 +16821,19 @@ code.
 |---|---|---|---|
 | D1 | 0 `RunAsNode` | on → **off** | `ELECTRON_RUN_AS_NODE=1 HilbertRaum.exe -e …` ran Node 24.21.0; nothing in the app, launchers, drive builders or docs uses it (tesseract.js runs on `worker_threads`, which this fuse does not touch) |
 | D2 | 3 `EnableNodeCliInspectArguments` | on → **off** | `--inspect` / `--inspect-brk` opened a debugger on the main process; nothing uses it. Chromium's `--remote-debugging-port` is not covered and keeps working, so the CDP harnesses are unaffected |
-| D3 | 2 `EnableNodeOptionsEnvironmentVariable` | on → **on** (owner decision 2026-10-03) | §3: off breaks the in-app downloads behind TLS-scanning antivirus and proxies; the residual it leaves is small |
+| D3 | 2 `EnableNodeOptionsEnvironmentVariable` | on → **on** (owner decision 2026-10-03); **off since #564** | §3: off broke the in-app downloads behind TLS-scanning antivirus and proxies; the residual it left was small. §8: once the downloads trust the OS store, it goes off |
 | D4 | 4 `EnableEmbeddedAsarIntegrityValidation` | off → **on** | §4: detects a modified `app.asar`; no measurable cost |
 | D5 | 5 `OnlyLoadAppFromAsar` | off → **on** | §4: without it, removing `app.asar` and planting `resources/app/` bypasses D4 |
 | D6 | `ELECTRON_RENDERER_URL` | — | `devRendererUrl(isPackaged)` in `app-protocol.ts` is its only reader; both window loaders pass `app.isPackaged` |
 | D7 | 1 cookie encryption, 6 browser-process snapshot | unchanged (off) | no cookies; a separate snapshot needs its own build step |
 
 The wire goes `101100001` → **`001011001`** (decoded with `@electron/fuses`; index 8, unnamed in
-1.8.0, is `WasmTrapHandlersEnabled`).
+1.8.0, is `WasmTrapHandlersEnabled`), and → **`000011001`** with #564 (§8; position 2 only).
 
 ### §3 Why fuse 2 stays on
+
+_Kept as the record of the 2026-10-03 decision. #564 turned the fuse off once the downloads trusted
+the OS store (§8)._
 
 - A packaged app already drops `NODE_OPTIONS` apart from `--http-parser` and `--max-http-header-size`.
   `NODE_OPTIONS=--require=planted.cjs` did not load on master ("Most NODE_OPTIONs are not supported
@@ -16883,7 +16913,7 @@ that day (`tmp/562` harnesses):
 
 ### §6 Guards
 
-`packaging.test.ts`: the exact `electronFuses` block (fuse 2 explicitly `true`); `asar: true` and
+`packaging.test.ts`: the exact `electronFuses` block (fuse 2 explicitly `true`, `false` since #564); `asar: true` and
 no `disableAsarIntegrity`; one mapping check per option against the installed
 `platformPackager.js`; and that electron-builder still computes the hash and writes it where
 Electron reads it (the Windows resource and the macOS `Info.plist` key).
@@ -16904,7 +16934,7 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
   worker closure against the header's own per-file hashes before the worker starts. Not built.
 - Linux: no asar integrity (from source); the other fuses were not measured on Linux here.
 - macOS: unmeasured (no Mac), including `resetAdHocDarwinSignature` after the larger flip.
-- Fuse 2 on until the downloaders trust the OS store (§3, #564).
+- ~~Fuse 2 on until the downloaders trust the OS store (§3, #564).~~ Off since #564 (§8).
 - `--remote-debugging-port` has no fuse. Refusing it in a packaged build would also refuse the
   packaged smoke harnesses.
 - DevTools have no fuse either. Since #912 a packaged build turns them off on the main window
@@ -16914,6 +16944,154 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
   That makes it hardening, not a boundary: a local user who starts the exe with
   `--remote-debugging-port` reaches the renderer's `window.api` through `Runtime.evaluate` all the
   same.
+
+### §8 #564 amendment: the downloads trust the OS store, fuse 2 off
+
+**Facts** (Electron 43.8.6 / Node 24.22.1, DesktopDiT with Norton scanning TLS, 2026-11-20; probes
+under `ELECTRON_RUN_AS_NODE`, loopback only):
+- `tls.getCACertificates(type)` (Node ≥ 22.15) and `tls.setDefaultCACertificates(certs)` (Node ≥
+  24.5) exist. Bundled 118, extra 1 (Norton's root, from `NODE_EXTRA_CA_CERTS`), default 119,
+  system 120.
+- The OS store holds Norton's root too, the same certificate as the one in the variable. A
+  TLS-scanning product that exports its root through the variable installs it in the store as well.
+- Node's Windows `system` list is not a list of trusted roots. Of its 120 entries, 60 are not in the
+  default list, and many of those are no root at all: intermediates (Amazon RSA 2048 M04, RapidSSL
+  TLS RSA CA G1, Microsoft Secure Server CA 2011 …), two self-signed `CN=localhost` server
+  certificates a development tool added (`CA:FALSE`), "Root Agency", expired or 1024-bit legacy roots
+  (AddTrust External CA Root, VeriSign Class 3 PCA, Thawte Premium Server CA). Electron's bundled
+  list is curated (118 roots, where plain Node bundles 146) and leaves out roots Windows still
+  trusts, such as Entrust G2 and three old DigiCert roots.
+- The list does not say which Windows store a certificate came from: Node merges the Root, the
+  Intermediate Certification Authorities (`CA`) and the Trusted People stores, of the machine and
+  of the user, into one list. So the filter cannot keep only Windows' own roots. `CurrentUser\Root`
+  makes Windows ask the user before a root is added; `CurrentUser\CA` and `CurrentUser\TrustedPeople`
+  do not, so any program running as the user can put a self-signed CA there without a prompt.
+- With the filter below: 120 read, 94 kept (10 not self-signed, 8 outside their validity, 6 not a
+  CA, 2 RSA keys under 2048 bits left out; the signature check and the EC curve list, added after
+  the review, leave out nothing more here), 17 added: GlobalSign Root CA, Starfield Class 2,
+  DigiCert Global, High Assurance EV and Assured ID, thawte Primary, Entrust G2 and Entrust.net
+  2048, VeriSign G5 and Universal, Go Daddy Class 2, five Microsoft roots (among them the
+  time-stamping root) and "Microsoft TPM Root Certificate Authority 2014". 16 of the 17 are in a
+  Windows `Root`/`AuthRoot` store. The TPM root is only in the Intermediate stores, so Windows does
+  not trust it as a root for anything, and the downloads now do (the review's measurement). The
+  default list goes from 119 to 136.
+- Cost on the main thread: reading the system store 21–74 ms, the filter (signature check
+  included) and de-duplication 23–26 ms, setting the list 5–12 ms: about 50–110 ms in all (read,
+  filter and set, once, before the first download). In the test workers (Node 24.13,
+  under load) the unfiltered call took 42–107 ms.
+- Electron's eMudhra block (GHSA-jr5w-w6x2-84p9) is not part of the CA list. Electron's patch
+  `patches/node/tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra
+  RSA intermediates to the SPKI blocklist that Node 24.22.1 compiles in and applies to every
+  `SSL_CTX` through `InstallCertVerifyCallback`: a check at verify time, so replacing the default
+  list cannot bypass it.
+- The main process's `fetch` honours the new list. Against a loopback TLS server whose certificate
+  came from a throwaway CA, `fetch` failed (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`); after
+  `setDefaultCACertificates([...default, thatCA])` the same request answered 200. Host Node 24.13
+  behaves the same. The connection still passes `net.Socket.prototype.connect`, which the offline
+  tripwire (`offlineGuard.ts`) patches, so the tripwire still sees every connect.
+- Node applies the list to TLS connections opened afterwards on the same thread; sessions an agent
+  cached before keep the old trust. The main process opens no remote TLS connection before the
+  first download.
+
+**Decision** (owner gate G-4 (a), 2026-11-20): route 1 of #564, then the fuse off.
+- `services/net/trust.ts` `ensureSystemTrust()` reads `tls.getCACertificates('system')` once per
+  process and **filters** it (owner decision 2026-11-20, `usableRoot`): a certificate counts only
+  when it parses (a throw anywhere, reading its key included, skips it), is a CA, is self-signed,
+  is inside its validity window now, and has an RSA key of at least 2048 bits, a P-256, P-384 or
+  P-521 key, or an Ed25519 key (an OpenSSL build of Node decodes weaker curves such as P-192;
+  Electron's BoringSSL does not). Self-signed takes two checks: `checkIssued` against itself (its
+  issuer name is its own subject, the key identifiers agree where both are present, its key usage
+  allows signing certificates) and `verify` with its own public key. `checkIssued` never looks at
+  the signature: a certificate that names itself as issuer, is signed by another key and carries no
+  key identifiers passes it, and as a trust anchor it then let a leaf signed by that other key
+  verify (the review's measurement). `verify` is what proves the signature.
+- It is **additive**: `tls.setDefaultCACertificates([...default, ...new roots])`, de-duplicated by
+  `fingerprint256`, so every default certificate stays as it was and a connection that verified
+  before still does. When nothing new is left, the list is not touched. It reads both `tls`
+  functions off the module at the call rather than importing them by name, so on a Node without
+  them (the repo's floor is 22.12) the call fails and is caught instead of every module that
+  imports `assets.ts` failing to load.
+- It is **lazy**. Its one caller is `downloadToFile` (`assets.ts`), after the URL check and before
+  the request. Every in-app downloader (models, the AI engine, the knowledge-pack tools, the OCR
+  files) reaches the network only through `downloadToFile`; the sidecar clients talk plain HTTP on
+  loopback and never call it. Not at startup: the 50–110 ms would land before the first paint
+  (BUILD_STATE §5 item 18(g)).
+- It **never throws into a download**. A store read that throws, an empty store (a minimal Linux),
+  a store with nothing usable or new, or a list Node refuses keeps the default trust. It logs one
+  line: counts only (certificates read, kept, added), or an error code, never a certificate or a
+  message. The process does not try again.
+- Route 2, Electron's `net.fetch` (Chromium's stack, the OS proxy), was not taken: every
+  downloader's Range, streaming and abort handling would need re-testing, and it bypasses Node's
+  `connect`, so the offline tripwire would stop seeing the downloads.
+- `electron-builder.yml` turns `EnableNodeOptionsEnvironmentVariable` off. Wire `001011001` →
+  `000011001`.
+
+**What the fuse governs now.** Off, the packaged main process reads neither `NODE_OPTIONS` (it
+ignored all but `--http-parser` and `--max-http-header-size` already, §3) nor `NODE_EXTRA_CA_CERTS`,
+which Electron unsets. An unpackaged development build is not fused and reads both as before.
+
+**What is trusted now.** Node's bundled roots plus every self-signed CA that passes the filter in
+any store Node reads, not only Windows' roots. The residuals:
+- A root that Windows still trusts but Chrome dropped (Entrust, the old DigiCert roots, VeriSign,
+  Go Daddy) is trusted for the in-app downloads.
+- A self-signed CA in an Intermediate or Trusted People store is trusted too, though Windows does
+  not treat it as a root: the Microsoft TPM root is the measured case. Node also reads
+  certificates only, not Windows' per-root purposes, so the time-stamping root counts as a TLS
+  root.
+- A program running as the user can add a CA to `CurrentUser\CA` without Windows' root-install
+  prompt, and the downloads then trust it. That is the same reach `NODE_EXTRA_CA_CERTS` gave such a
+  program before the fuse went off, so turning the fuse off did not close that route; it moved it.
+Every engine, model and OCR file is checked against a pinned SHA-256 before use, the downloads send
+no credentials, and the eMudhra block applies whatever the list holds, so none of these can change
+what gets installed. At most it lets someone who can intercept the connection see which public file
+is being fetched, or make the download fail. Narrowing the list to Windows' Root stores would need
+a second source for the store of origin (a `certutil` or PowerShell read in a child process at the
+first download); not done.
+
+**What stops working.** A root that reaches the app only through `NODE_EXTRA_CA_CERTS`, and is not
+in the OS store, no longer counts in a packaged build: downloads behind such a proxy fail with "fetch
+failed" until the root is in the OS store. Corporate roots are usually rolled out to the OS store
+by policy, and Norton installs into both (measured).
+
+**Guards.** `tests/integration/system-trust.test.ts`, with `node:tls` faked and fed the certificates
+in `tests/fixtures/certs/` (one per rule; certificates only, made with OpenSSL 3.5.7): the call
+keeps every default certificate as it was and adds each new usable root once (an RSA-2048, an EC
+P-256, an EC P-384 and an Ed25519 root; the OS copy of a default root, written with other line
+endings, is not added twice); an expired root, a root not valid yet, an RSA-1024 root, a DSA root, a
+P-192 root, an intermediate, a name twin signed by another key, the same without key identifiers
+(only the signature check catches it), a certificate signed by its own key under another issuer's
+name (only `checkIssued` catches it), a self-signed `CA:FALSE` server certificate, text that is no
+certificate and a PEM body that does not decode are each left out while the usable root beside them
+is still added; a second call reads nothing; importing the module reads no store; a store that
+throws, an empty store, one with no usable root, one whose roots Node has already, and a refused
+list each keep the default with one content-free line and no retry; `downloadToFile` sets the trust
+before its first request. Every other suite gets a no-op trust module (`tests/setup.ts`), so a
+downloader suite with a fake `fetch` neither reads the machine's store nor changes its worker's CA
+list. `packaging.test.ts` pins fuse 2 `false` and `verify-mac-build.sh`'s `EXPECTED_WIRE`, which
+`release.yml` checks each packaged Windows exe against (#769). Mutation-tested (28 mutations, each
+red; a changed success line and the setup mock removed stay green): each filter clause dropped (CA,
+`checkIssued`, the signature check, either end of the validity window, the RSA size, the key type,
+the EC curve list dropped or narrowed to P-256, Ed25519 refused, the catch), de-duplication by text
+instead of fingerprint, either list left out of the merge, the list set when nothing is new, the
+once-only latch, no catch around the read or the merge, the error's text logged, a call at import,
+the call dropped from `downloadToFile` or moved after the request; fuse 2 back on or the old wire
+each fail `packaging.test.ts`.
+
+**Residuals.**
+- macOS (the keychain) and Linux (OpenSSL's default paths) store reads are unmeasured. On a Mac
+  the read runs on the main thread at the first download; if it is slow or asks for anything, it
+  blocks there. Owed to the Mac walk, beside #887/#888.
+- The trust widening above: roots Windows trusts and Chrome dropped, self-signed CAs from the
+  Intermediate and Trusted People stores, and the silent `CurrentUser\CA` route; pinned SHA-256
+  keeps integrity.
+- Whether Node's Windows read honours the `Disallowed` store is not verified (both are empty on the
+  measuring machine, and Node's source was not read).
+- A store read that fails is not retried in that process (by design: one log line); behind a TLS
+  scanner the downloads then fail until the app restarts.
+- **Owed:** the packaged download behind Norton (a `--win dir` build with `NODE_EXTRA_CA_CERTS`
+  removed, an in-app download from github.com or huggingface.co; before: `fetch failed`, §3). The
+  owner postponed it on 2026-11-20. Done: the packaged `--win dir` build's wire reads `000011001`
+  and `packaging.test.ts`'s real-executable rows pass on it.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

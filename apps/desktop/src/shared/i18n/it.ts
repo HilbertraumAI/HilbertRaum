@@ -1194,10 +1194,14 @@ export const it: UiCatalog<'it'> = {
   'models.state.installed': 'Installato',
   'models.state.missing': 'Non scaricato',
   'models.state.checksumFailed': 'Controllo non riuscito',
+  'models.state.noChecksum': 'Nessun checksum',
   'models.state.unsupported': 'Non supportato',
   'models.state.notRecommended': 'Non consigliato',
   'models.state.ready': 'Pronto',
   'models.state.running': 'Avviato',
+  'models.noChecksum.hint':
+    'Questo modello non ha un checksum registrato, quindi funziona solo in modalità sviluppatori su ' +
+    'un’unità i cui criteri consentono modelli non controllati.',
   'models.badge.notResponding': 'Non risponde',
   'models.notRespondingHint':
     'Il modello IA ha smesso di rispondere. Di solito riavviarlo risolve il problema.',
@@ -2239,6 +2243,8 @@ export const it: UiCatalog<'it'> = {
   'perf.models.loaded': 'caricato ora',
   'perf.models.notLoaded': 'non caricato',
   'perf.models.notOnDrive': 'non è su questa unità',
+  'perf.models.damaged': 'controllo dei file non superato',
+  'perf.models.noChecksum': 'nessun checksum registrato',
   'perf.models.lifetime.session': 'resta caricato',
   'perf.models.lifetime.idle': 'libera la memoria quando è inattivo',
   'perf.models.lifetime.per-use': 'attivo solo mentre lavora',
@@ -2668,6 +2674,17 @@ export const it: UiCatalog<'it'> = {
   'main.dialog.unsavedReview.tryAgain': 'Riprova',
   'main.dialog.unsavedReview.keepOpen': 'Non chiudere',
   'main.dialog.unsavedReview.closeAnyway': 'Chiudi comunque',
+  'main.dialog.taskRunning.title': 'Un’attività sul documento non è ancora terminata.',
+  'main.dialog.taskRunning.message': 'Un’attività sul documento non è ancora terminata.',
+  'main.dialog.taskRunning.detailOcr':
+    'Se chiudi ora, la lettura della scansione si interrompe e le pagine lette finora vanno perse.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Se chiudi ora, la traduzione si interrompe e la parte tradotta finora va persa.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Se chiudi ora, le attività sui documenti in corso o in attesa si interrompono e il lavoro ' +
+    'svolto finora va perso.',
+  'main.dialog.taskRunning.keepOpen': 'Non chiudere',
+  'main.dialog.taskRunning.closeAnyway': 'Chiudi comunque',
   'main.workspace.wrongPassword':
     'Questa password non ha sbloccato la tua area di lavoro. Controllala e riprova.',
   'main.workspace.openFailed': 'Non è stato possibile aprire l’area di lavoro.',
@@ -3001,6 +3018,16 @@ export const it: UiCatalog<'it'> = {
   'main.models.noManifests':
     'Su questa unità non è stato trovato nessun elenco dei modelli: manca la cartella ' +
     '«model-manifests».',
+  'main.models.unknown': 'Questo modello non è più nell’elenco dei modelli di questa unità.',
+  'main.models.notChat': '«{name}» non è un modello di chat, quindi non può essere avviato qui.',
+  'main.models.startDamaged':
+    'Il modello «{name}» non ha superato il controllo dei file, quindi non è stato avviato. ' +
+    'Scaricalo di nuovo nella schermata Modello IA.',
+  'main.models.startMissing':
+    'Il modello «{name}» non può essere avviato: il suo file non è ancora su questa unità.',
+  'main.models.startNeedsRam':
+    'Il modello «{name}» richiede almeno {min}\u00A0GB di RAM (questo computer ha circa ' +
+    '{ram}\u00A0GB). Scegli un modello più piccolo: la qualità resta ottima.',
   'main.models.autoSelected':
     'Questo modello viene usato automaticamente una volta installato: non c’è nulla da ' +
     'selezionare.',
