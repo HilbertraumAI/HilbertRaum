@@ -9,13 +9,14 @@ import { clearDocTaskSession, getActiveDocTask, isDocTaskTerminal, startTask } f
 import { en, t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import type { AppStatus, DocTaskStatus, DocumentInfo, TranslateJob } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import type { PreloadApi } from '../../src/preload'
 import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
 // (no `as never` erasure). The `appStatus`/`docTask` builders return the real shared types and
 // the `streamStubs`/`fileStubs` `api` bags are structurally checked against `Partial<PreloadApi>`
-// on the `stubApi(...)` call, so a rename of any mocked method or return shape reddens typecheck.
+// on the `stubApi(translateScreenStubs(...))` call, so a rename of any mocked method or return shape reddens typecheck.
 
 // Renderer test (jsdom + RTL) for the Translate screen state machine (TranslateGemma plan §2 D6/D7,
 // TG-4/5). The TEXT path is driven by capturing the onTranslate* subscriber callbacks and invoking
@@ -35,7 +36,13 @@ afterEach(() => {
   clearTranslateSession()
   clearFileTranslate()
   clearDocTaskSession()
+  assertNoUnexpectedApiCalls()
 })
+
+/** What the screen reads at mount beside the rows' own stubs (#832): no document task running. `over` spreads last. */
+function translateScreenStubs(over: Partial<PreloadApi>): Partial<PreloadApi> {
+  return { listActiveDocTasks: vi.fn<PreloadApi['listActiveDocTasks']>(async () => []), ...over }
+}
 
 function appStatus(over: Partial<AppStatus> = {}): AppStatus {
   return {
@@ -95,10 +102,10 @@ function streamStubs(startJob: TranslateJob = { jobId: 'j1', state: 'queued', te
 describe('TranslateScreen — availability (O2 install path)', () => {
   it('shows the model-missing EmptyState and deep-links to AI Model', async () => {
     const onNavigate = vi.fn()
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () => appStatus({ translationAvailable: false })),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={onNavigate} />)
 
@@ -111,12 +118,12 @@ describe('TranslateScreen — availability (O2 install path)', () => {
 
 describe('TranslateScreen — device hint (issue #42 reopen)', () => {
   it('shows the full-offload GPU hint once the sidecar has started', async () => {
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () =>
         appStatus({ translationDevice: { device: 'auto', gpuLayers: 49, totalLayers: 49, live: true } })
       ),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     render(<TranslateScreen onNavigate={vi.fn()} />)
     expect(
       await screen.findByText(t('en', 'translate.device.gpu', { done: 49, total: 49 }))
@@ -159,12 +166,12 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
   })
 
   it('CODE-23: a fully-starved fit (0 layers) says processor, not "partly on the graphics card"', async () => {
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () =>
         appStatus({ translationDevice: { device: 'auto', gpuLayers: 0, totalLayers: 49, live: false } })
       ),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     render(<TranslateScreen onNavigate={vi.fn()} />)
     // Pre-fix this rendered the contradictory "runs only partly on the graphics card
     // (0/49 layers)" (full-audit 2026-07-11 CODE-23).
@@ -178,24 +185,24 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
   it('#163 (T-7): GPU posture with NO parseable offload line shows the gpuUnknown form', async () => {
     // The fallback branch — the one that renders exactly on machines where the offload parse
     // failed — was the only device-hint branch without a test.
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () =>
         appStatus({ translationDevice: { device: 'auto', gpuLayers: null, totalLayers: null, live: true } })
       ),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     render(<TranslateScreen onNavigate={vi.fn()} />)
     const hint = await screen.findByText(t('en', 'translate.device.gpuUnknown'))
     expect(hint).toHaveAttribute('title', t('en', 'translate.device.title'))
   })
 
   it('#161 (FE-4): the partial-offload cause/remedy is VISIBLE text, not tooltip-only', async () => {
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () =>
         appStatus({ translationDevice: { device: 'auto', gpuLayers: 12, totalLayers: 49, live: false } })
       ),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     render(<TranslateScreen onNavigate={vi.fn()} />)
     const hint = await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
     expect(hint).toHaveAttribute('title', t('en', 'translate.device.partialTitle')) // the tooltip too, not only
@@ -205,21 +212,21 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
   })
 
   it('a forced-CPU start shows the CPU form; no outcome yet shows NO hint', async () => {
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () =>
         appStatus({ translationDevice: { device: 'cpu', gpuLayers: null, totalLayers: null, live: true } })
       ),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     const { unmount } = render(<TranslateScreen onNavigate={vi.fn()} />)
     expect(await screen.findByText(t('en', 'translate.device.cpu'))).toBeInTheDocument()
     unmount()
 
     // Before the sidecar's first start (translationDevice null) the line is absent entirely.
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () => appStatus()),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     const { container } = render(<TranslateScreen onNavigate={vi.fn()} />)
     await screen.findByText(t('en', 'translate.action'))
     expect(container.querySelector('.translate-device-hint')).toBeNull()
@@ -228,12 +235,12 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
   // #671: on a PC with no usable graphics card the GPU posture starts on the processor, and the load
   // log still reads `offloaded 49/49 layers to GPU`; only the missing GPU buffers tell.
   it('#671: a GPU-posture start that put no buffer on a graphics device says processor, whatever its split', async () => {
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () =>
         appStatus({ translationDevice: { device: 'auto', gpuLayers: 49, totalLayers: 49, gpuBuffers: false, live: true } })
       ),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     render(<TranslateScreen onNavigate={vi.fn()} />)
     expect(await screen.findByText(t('en', 'translate.device.cpu'))).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'translate.device.gpu', { done: 49, total: 49 }))).toBeNull()
@@ -246,12 +253,12 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
     ['chat-starting', 'translate.device.cpuChatStarting', false],
     ['too-large', 'translate.device.cpuTooLarge', false]
   ] as const)('#473: a processor start the gate chose names its reason (%s)', async (cpuCause, key, hasRemedy) => {
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () =>
         appStatus({ translationDevice: { device: 'cpu', gpuLayers: null, totalLayers: null, live: true, cpuCause } })
       ),
       getActiveTranslateJob: vi.fn(async () => null)
-    })
+    }))
     render(<TranslateScreen onNavigate={vi.fn()} />)
     expect(await screen.findByText(t('en', key))).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'translate.device.gpuNoneTitle')) != null).toBe(hasRemedy)
@@ -261,7 +268,7 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
 describe('TranslateScreen — translate → stream → copy', () => {
   it('types text, translates, streams the output, and copies it', async () => {
     const s = streamStubs()
-    stubApi(s.api)
+    stubApi(translateScreenStubs(s.api))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
 
@@ -288,7 +295,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
 
   it('shows Stop while translating and cancels the job', async () => {
     const s = streamStubs()
-    stubApi(s.api)
+    stubApi(translateScreenStubs(s.api))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
 
@@ -304,7 +311,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
 
   it("surfaces the backend's docTaskBusy refusal as a friendly banner", async () => {
     const s = streamStubs({ jobId: 'x', state: 'failed', error: 'docTaskBusy' })
-    stubApi(s.api)
+    stubApi(translateScreenStubs(s.api))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
 
@@ -321,11 +328,11 @@ describe('TranslateScreen — translate → stream → copy', () => {
     s: ReturnType<typeof streamStubs>,
     state: DocTaskStatus['state']
   ): Promise<void> {
-    stubApi({
+    stubApi(translateScreenStubs({
       ...s.api,
       startDocTask: vi.fn(async () => ({ jobId: 'foreign' })),
       getDocTask: vi.fn(async () => docTask({ jobId: 'foreign', kind: 'summary', documentIds: ['doc9'], state }))
-    })
+    }))
     await startTask('summary', 'doc9')
   }
 
@@ -360,7 +367,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
   // AI Model screen, not the "low on memory" one of a failed start.
   it('a modelDamaged job shows the download-again banner, not the start-failed one (#913)', async () => {
     const s = streamStubs({ jobId: 'x', state: 'failed', error: 'modelDamaged' })
-    stubApi(s.api)
+    stubApi(translateScreenStubs(s.api))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
     await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
@@ -371,7 +378,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
 
   it('a dismissed error banner clears the store state (does not stick / reappear on remount)', async () => {
     const s = streamStubs({ jobId: 'x', state: 'failed', error: 'runtimeFailed' })
-    stubApi(s.api)
+    stubApi(translateScreenStubs(s.api))
     const user = userEvent.setup()
     const { unmount } = render(<TranslateScreen onNavigate={() => {}} />)
 
@@ -393,7 +400,7 @@ describe('TranslateScreen — translate → stream → copy', () => {
 describe('TranslateScreen — language selects', () => {
   it('swaps the source and target languages', async () => {
     const s = streamStubs()
-    stubApi(s.api)
+    stubApi(translateScreenStubs(s.api))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
 
@@ -410,7 +417,7 @@ describe('TranslateScreen — language selects', () => {
 
   it('disables Translate and hints when source equals target', async () => {
     const s = streamStubs()
-    stubApi(s.api)
+    stubApi(translateScreenStubs(s.api))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
 
@@ -516,7 +523,7 @@ function dropOnZone(files: File[], zoneName: string = t('en', 'translate.drop.ti
 describe('TranslateScreen — document translation (TG-5)', () => {
   it('drops a document → imports as temporary → runs the doc-task → shows the materialized text', async () => {
     const f = fileStubs()
-    stubApi(f.api)
+    stubApi(translateScreenStubs(f.api))
     render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
@@ -538,7 +545,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
   it('translates a document via the choose-a-document picker path', async () => {
     const f = fileStubs()
-    stubApi(f.api)
+    stubApi(translateScreenStubs(f.api))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
@@ -554,7 +561,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     // Combine the text stubs (for a text translation) with the file stubs' getDroppedFilePath.
     const s = streamStubs()
     const f = fileStubs()
-    stubApi({ ...s.api, ...f.api })
+    stubApi(translateScreenStubs({ ...s.api, ...f.api }))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={() => {}} />)
 
@@ -614,7 +621,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     const listDocuments = vi.fn(async () => [
       failedDoc({ scanDetected: true, errorMessage: en['main.ingest.pdfScanDetected'] })
     ])
-    stubApi({ ...f.api, getImportJob: importFailedJob(), listDocuments })
+    stubApi(translateScreenStubs({ ...f.api, getImportJob: importFailedJob(), listDocuments }))
     const onNavigate = vi.fn()
     render(<TranslateScreen onNavigate={onNavigate} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
@@ -656,7 +663,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
   ] as const)('$label surfaces its localized real message in the German UI, never the raw English or "unsupported"', async ({ key, api }) => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     try {
-      stubApi(api())
+      stubApi(translateScreenStubs(api()))
       render(<I18nProvider><TranslateScreen onNavigate={() => {}} /></I18nProvider>)
       await screen.findByLabelText(t('de', 'translate.input.label'))
       act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })], t('de', 'translate.drop.title')))
@@ -676,11 +683,11 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     const parserError = 'Invalid PDF structure.'
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     try {
-      stubApi({
+      stubApi(translateScreenStubs({
         ...fileStubs({ documentIds: ['d1'] }).api,
         getImportJob: importFailedJob(),
         listDocuments: vi.fn(async () => [failedDoc({ scanDetected: false, errorMessage: parserError })])
-      })
+      }))
       render(<I18nProvider><TranslateScreen onNavigate={() => {}} /></I18nProvider>)
       await screen.findByLabelText(t('de', 'translate.input.label'))
       act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })], t('de', 'translate.drop.title')))
@@ -700,7 +707,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     // exactly the old "unsupported" copy AND never reach the failed-row resolver (no row exists).
     const f = fileStubs({ documentIds: [] })
     const listDocuments = vi.fn(async () => [])
-    stubApi({ ...f.api, listDocuments })
+    stubApi(translateScreenStubs({ ...f.api, listDocuments }))
     render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
@@ -712,7 +719,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
   it('exports the materialized document and can show it in Documents', async () => {
     const f = fileStubs()
-    stubApi(f.api)
+    stubApi(translateScreenStubs(f.api))
     const onNavigate = vi.fn()
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={onNavigate} />)
@@ -731,7 +738,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
   it('surfaces a truncated hint when only the start of a long translation is shown', async () => {
     const f = fileStubs({ preview: { segments: [{ text: 'Beginning…' }], nextOffset: 40 } })
-    stubApi(f.api)
+    stubApi(translateScreenStubs(f.api))
     render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
@@ -756,7 +763,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
         }
       })
     })
-    stubApi(f.api)
+    stubApi(translateScreenStubs(f.api))
     const { container } = render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
@@ -778,7 +785,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
   it('#58: a complete translation shows NO completeness warning', async () => {
     const f = fileStubs()
-    stubApi(f.api)
+    stubApi(translateScreenStubs(f.api))
     const { container } = render(<TranslateScreen onNavigate={() => {}} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
@@ -801,7 +808,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 describe('TranslateScreen — mount adoption teeth (#163 / T-2)', () => {
   it('re-adopts a running TEXT job on mount: seeds the accumulated output, shows Stop, re-subscribes', async () => {
     const s = streamStubs()
-    stubApi({
+    stubApi(translateScreenStubs({
       ...s.api,
       getActiveTranslateJob: vi.fn(async () => ({
         jobId: 'j9',
@@ -810,7 +817,7 @@ describe('TranslateScreen — mount adoption teeth (#163 / T-2)', () => {
         windowsTotal: 2,
         windowsDone: 1
       } as TranslateJob))
-    })
+    }))
     render(<TranslateScreen onNavigate={vi.fn()} />)
 
     // The adopt seeded the accumulated text into the live output panel…
@@ -825,13 +832,13 @@ describe('TranslateScreen — mount adoption teeth (#163 / T-2)', () => {
   it('re-adopts a running DOCUMENT translation doc-task on mount (FA-3 / F-3): progress + Stop come back', async () => {
     const running = docTask({ jobId: 'task9', state: 'running', progress: { stepsDone: 2, stepsTotal: 5 } })
     const cancelDocTask = vi.fn(async () => {})
-    stubApi({
+    stubApi(translateScreenStubs({
       getAppStatus: vi.fn(async () => appStatus()),
       getActiveTranslateJob: vi.fn(async () => null),
       listActiveDocTasks: vi.fn(async () => [running]),
       getDocTask: vi.fn(async () => running),
       cancelDocTask
-    })
+    }))
     const user = userEvent.setup()
     render(<TranslateScreen onNavigate={vi.fn()} />)
 

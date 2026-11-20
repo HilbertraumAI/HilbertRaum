@@ -26,8 +26,11 @@ import type {
 } from '../../src/shared/types'
 import { MAX_SELECTED_PACKS } from '../../src/shared/types'
 import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import type { PreloadApi } from '../../src/preload'
 import { knowledgePack, packsEventEmitter } from '../helpers/knowledge-pack-fixtures'
 import { testBudgetMs } from '../helpers/hang-budget'
+import { ENGINE_INSTALLED } from '../helpers/model-fixtures'
+import { makePolicyStatus } from '../helpers/status'
 
 // Knowledge packs (ZIM wave) renderer surfaces: the PacksPanel management list, the
 // ScopePopover pack sources (incl. packIds preservation on unrelated toggles), and the
@@ -36,20 +39,26 @@ import { testBudgetMs } from '../helpers/hang-budget'
 const pack = (o: Partial<KnowledgePack> = {}): KnowledgePack =>
   knowledgePack({ description: 'Offline-Auszug', ...o })
 
+/** The packs panel subscribes to pack changes at mount (#832); a row that emits supplies its own. `over` spreads last. */
+function packsPanelStubs(over: Partial<PreloadApi>): Partial<PreloadApi> {
+  return { onKnowledgePacksChanged: vi.fn<PreloadApi['onKnowledgePacksChanged']>(() => () => {}), ...over }
+}
+
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('PacksPanel', () => {
   it('lists packs with state badges and meta; missing file shows the honest badge', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack(),
         pack({ id: 'uuid-gone', title: 'Chemie von Wikipedia', available: false, enabled: true })
       ]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -79,14 +88,14 @@ describe('PacksPanel', () => {
     const setKnowledgePackEnabled = vi.fn(async () => {
       await parked
     })
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack(),
         pack({ id: 'uuid-gone', title: 'Chemie von Wikipedia', available: false, enabled: true, language: 'zzz' })
       ],
       setKnowledgePackEnabled
-    })
+    }))
     const user = userEvent.setup()
     const first = render(
       <I18nProvider>
@@ -130,7 +139,7 @@ describe('PacksPanel', () => {
   it('a serving-name collision loser gets a "Not served" badge naming the winner; null / absent status shows none', async () => {
     const winner = pack({ id: 'uuid-aaaa', title: 'Klimawandel von Wikipedia' })
     const loser = pack({ id: 'uuid-bbbb', title: 'Klimawandel (Kopie)', leaf: 'wikipedia_de_climate.zim' })
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({
         toolsInstalled: true,
         refreshing: false,
@@ -138,7 +147,7 @@ describe('PacksPanel', () => {
         excluded: [{ packId: 'uuid-bbbb', collidesWith: 'uuid-aaaa' }]
       }),
       listKnowledgePacks: async () => [winner, loser]
-    })
+    }))
     const { unmount } = render(
       <I18nProvider>
         <PacksPanel />
@@ -161,7 +170,7 @@ describe('PacksPanel', () => {
     unmount()
 
     // A winner the list no longer knows (a stale list): the generic line, still a badge.
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({
         toolsInstalled: true,
         refreshing: false,
@@ -169,7 +178,7 @@ describe('PacksPanel', () => {
         excluded: [{ packId: 'uuid-bbbb', collidesWith: 'uuid-gone' }]
       }),
       listKnowledgePacks: async () => [loser]
-    })
+    }))
     const second = render(
       <I18nProvider>
         <PacksPanel />
@@ -184,10 +193,10 @@ describe('PacksPanel', () => {
       { toolsInstalled: true, refreshing: false, revision: 0, excluded: null },
       { toolsInstalled: true, refreshing: false, revision: 0 }
     ]) {
-      stubApi({
+      stubApi(packsPanelStubs({
         getKnowledgePackStatus: async () => status,
         listKnowledgePacks: async () => [winner, loser]
-      })
+      }))
       const r = render(
         <I18nProvider>
           <PacksPanel />
@@ -200,10 +209,13 @@ describe('PacksPanel', () => {
   })
 
   it('shows the tools-missing hint and disables adding when kiwix-tools is absent', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: false, refreshing: false, revision: 0 }),
-      listKnowledgePacks: async () => []
-    })
+      listKnowledgePacks: async () => [],
+      // With the tools missing the panel reads the engine and the policy (the install offer).
+      getEngineStatus: async () => ENGINE_INSTALLED,
+      getPolicy: async () => makePolicyStatus()
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -214,11 +226,11 @@ describe('PacksPanel', () => {
   })
 
   it('#339 P8-2: never calls getEngineStatus or getPolicy while the tools are already installed', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [pack()],
       onKnowledgePacksChanged: () => () => {}
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -235,11 +247,11 @@ describe('PacksPanel', () => {
       added = true
       return { outcome: 'success' as const, added: [pack()], failed: 0, failureReason: null }
     })
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => (added ? [pack()] : []),
       addKnowledgePacks
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -266,11 +278,11 @@ describe('PacksPanel', () => {
       failureReason: null
     }))
     const listKnowledgePacks = vi.fn(async () => [])
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks,
       addKnowledgePacks
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -292,11 +304,11 @@ describe('PacksPanel', () => {
       added = true
       return { outcome: 'partial' as const, added: [pack()], failed: 1, failureReason: 'manager' as const }
     })
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => (added ? [pack()] : []),
       addKnowledgePacks
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -326,11 +338,11 @@ describe('PacksPanel', () => {
       failed: 1,
       failureReason: reason
     }))
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [],
       addKnowledgePacks
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -362,11 +374,11 @@ describe('PacksPanel', () => {
       failed: 1,
       failureReason: reason
     }))
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [],
       addKnowledgePacks
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -380,11 +392,11 @@ describe('PacksPanel', () => {
 
   it('remove asks for confirmation and says the file is untouched', async () => {
     const removeKnowledgePack = vi.fn(async () => undefined)
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [pack()],
       removeKnowledgePack
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -407,11 +419,11 @@ describe('PacksPanel', () => {
       listCalls++
       return listCalls === 1 ? [] : [pack()]
     })
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: true, revision: 0 }),
       listKnowledgePacks,
       onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -428,11 +440,11 @@ describe('PacksPanel', () => {
 
   it('Refresh calls packs:refresh', async () => {
     const refreshKnowledgePacks = vi.fn(async () => ({ started: true }))
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [pack()],
       refreshKnowledgePacks
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -446,11 +458,11 @@ describe('PacksPanel', () => {
   it('ignores a packs:changed event whose epoch is below the last one seen', async () => {
     const emitter = packsEventEmitter()
     const listKnowledgePacks = vi.fn(async () => [pack()])
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks,
       onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -475,7 +487,7 @@ describe('PacksPanel', () => {
   // #301 P6 (plan §9.23 (a) rows 5/6, (c)5): the NEW no-full-text-index badge shows BESIDE
   // the enabled/disabled badge (a pack can be both), never for unknown/yes/undefined.
   it('shows the no-full-text-index badge and its reason line beside the enabled badge; absent for unknown/yes/undefined', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack({ id: 'p-no', title: 'No-index pack', searchable: 'no' }),
@@ -483,7 +495,7 @@ describe('PacksPanel', () => {
         pack({ id: 'p-yes', title: 'Yes pack', searchable: 'yes' }),
         pack({ id: 'p-undef', title: 'Undefined pack', searchable: undefined })
       ]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -503,10 +515,10 @@ describe('PacksPanel', () => {
 
   it('shows the no-full-text-index badge and reason line in German', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [pack({ id: 'p-no', title: 'Paket ohne Index', searchable: 'no' })]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -524,7 +536,7 @@ describe('PacksPanel', () => {
   // reachable WITHOUT a mouse — a visible line under the title row, not only a Badge tooltip.
   // The German copy is the next test.
   it('renders the missing/identity-mismatch reason text visibly (EN), not only in a Badge tooltip', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack({ id: 'p-missing', title: 'Missing pack', available: false, unavailableReason: 'missing' }),
@@ -535,7 +547,7 @@ describe('PacksPanel', () => {
           unavailableReason: 'identity-mismatch'
         })
       ]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -549,7 +561,7 @@ describe('PacksPanel', () => {
 
   it('renders the missing/identity-mismatch reason text visibly in German', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack({ id: 'p-missing', title: 'Fehlendes Paket', available: false, unavailableReason: 'missing' }),
@@ -560,7 +572,7 @@ describe('PacksPanel', () => {
           unavailableReason: 'identity-mismatch'
         })
       ]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -572,10 +584,10 @@ describe('PacksPanel', () => {
 
   // #301 P6 (plan §9.23 (b)7): `.packs-list` is an ARIA list — one listitem per pack.
   it('renders the packs list with list/listitem roles, one listitem per pack', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [pack(), pack({ id: 'p2', title: 'Second pack' })]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -588,13 +600,13 @@ describe('PacksPanel', () => {
   // #301 P6 (plan §9.23 (b)6) / §11.16: the per-row switch and "⋯" menu get an accessible
   // name that includes the pack title — the VISIBLE text stays the plain state word.
   it('names the per-row switch and menu with the pack title', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack({ enabled: true }),
         pack({ id: 'p-off', title: 'Off pack', enabled: false })
       ]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -612,13 +624,13 @@ describe('PacksPanel', () => {
 
   it('names the per-row switch and menu with the pack title in German', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack({ enabled: true }),
         pack({ id: 'p-off', title: 'Anderes Paket', enabled: false })
       ]
-    })
+    }))
     render(
       <I18nProvider>
         <PacksPanel />
@@ -639,7 +651,7 @@ describe('PacksPanel', () => {
   // actually search (present, enabled, served, not a confirmed no-index archive).
   it('shows the summary line and offers "Ask this pack" only for an askable pack', async () => {
     const onAskPack = vi.fn()
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
         pack({ sizeBytes: 2_000_000_000 }),
@@ -647,7 +659,7 @@ describe('PacksPanel', () => {
         pack({ id: 'p-noindex', title: 'No index', searchable: 'no', sizeBytes: null }),
         pack({ id: 'p-gone', title: 'Gone pack', available: false, unavailableReason: 'missing', sizeBytes: 9_000_000_000 })
       ]
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -669,11 +681,11 @@ describe('PacksPanel', () => {
 
   it('renders no "Ask this pack" without the callback, and the empty state carries Add + the library address', async () => {
     const copyToClipboard = vi.fn(async (_text: string) => true)
-    stubApi({
+    stubApi(packsPanelStubs({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [],
       copyToClipboard
-    })
+    }))
     const user = userEvent.setup()
     render(
       <I18nProvider>
@@ -698,11 +710,11 @@ describe('PacksPanel', () => {
 
   it('a refused or failing clipboard write still names the library address', async () => {
     for (const copyToClipboard of [async () => false, async () => Promise.reject(new Error('ipc'))]) {
-      stubApi({
+      stubApi(packsPanelStubs({
         getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
         listKnowledgePacks: async () => [],
         copyToClipboard
-      })
+      }))
       const user = userEvent.setup()
       const view = render(
         <I18nProvider>
@@ -1066,7 +1078,7 @@ describe('ScopePopover — knowledge packs', () => {
 
 describe('ArticleModal', () => {
   it('renders the article sections from the main-resolved plain text, and the archive’s license line after them (#662)', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getPackArticle: async () => ({
         title: 'Treibhausgas',
         sections: [
@@ -1076,7 +1088,7 @@ describe('ArticleModal', () => {
         partial: false,
         notice: 'Dieser Artikel wurde von Wikipedia herausgegeben. Der Text ist unter Creative Commons Attribution-Share Alike 4.0 verfügbar.'
       })
-    })
+    }))
     render(
       <I18nProvider>
         <ArticleModal
@@ -1096,14 +1108,14 @@ describe('ArticleModal', () => {
   })
 
   it('warns that only the first part is shown when the conversion was partial (H1 truncation)', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getPackArticle: async () => ({
         title: 'Treibhausgas',
         sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
         partial: true,
         notice: null
       })
-    })
+    }))
     render(
       <I18nProvider>
         <ArticleModal
@@ -1494,14 +1506,14 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
       )
       cleanup()
 
-      stubApi({
+      stubApi(packsPanelStubs({
         getPackArticle: async () => ({
           title: LONG_TITLE,
           sections: [{ label: null, text: 'Ein Absatz.' }],
           partial: false,
           notice: null
         })
-      })
+      }))
       render(
         <I18nProvider>
           <ArticleModal
@@ -1564,14 +1576,14 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
       expect(document.activeElement).toBe(trigger)
       cleanup()
 
-      stubApi({
+      stubApi(packsPanelStubs({
         getPackArticle: async () => ({
           title: 'Treibhausgas',
           sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
           partial: false,
           notice: null
         })
-      })
+      }))
       render(<ArticleHarness />)
       await userD.click(screen.getByRole('button', { name: /Sources/ }))
       const openBtn = screen.getByRole('button', {
@@ -1641,7 +1653,7 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
         listCalls++
         return listCalls === 1 ? [pack()] : [pack({ searchable: 'no' })]
       })
-      stubApi({
+      stubApi(packsPanelStubs({
         listConversations: vi.fn(async () => [t18Conversation()]),
         getRuntimeStatus: vi.fn(async () => T18_RUNTIME),
         listMessages: vi.fn(async () => []),
@@ -1650,7 +1662,7 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
         listAttachments: vi.fn(async () => []),
         listKnowledgePacks,
         onKnowledgePacksChanged: emitter.onKnowledgePacksChanged
-      })
+      }))
       const userF = userEvent.setup()
       render(<ChatScreen onNavigate={() => {}} />)
       await userF.click(await screen.findByText('Doc Q&A'))
@@ -1761,7 +1773,7 @@ describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
       alreadySaved: false,
       chunkCount: 3
     }))
-    stubApi({ getPackArticle: async () => article, savePackArticle })
+    stubApi(packsPanelStubs({ getPackArticle: async () => article, savePackArticle }))
     render(
       <I18nProvider>
         <ArticleModal target={target} onClose={() => {}} />
@@ -1775,10 +1787,10 @@ describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
   })
 
   it('says so when the article was already saved, naming the existing document', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getPackArticle: async () => article,
       savePackArticle: vi.fn(async () => ({ documentId: 'doc-1', title: 'Treibhausgas (Klimawandel von Wikipedia).md', alreadySaved: true, chunkCount: 0 }))
-    })
+    }))
     render(
       <I18nProvider>
         <ArticleModal target={target} onClose={() => {}} />
@@ -1789,12 +1801,12 @@ describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
   })
 
   it('shows the friendly failure and keeps the action available when the save is refused', async () => {
-    stubApi({
+    stubApi(packsPanelStubs({
       getPackArticle: async () => article,
       savePackArticle: vi.fn(async () => {
         throw new Error("Error invoking remote method 'packs:saveArticle': Error: This article is not available right now, so it could not be saved.")
       })
-    })
+    }))
     render(
       <I18nProvider>
         <ArticleModal target={target} onClose={() => {}} />
@@ -1810,10 +1822,10 @@ describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
   it('discards a save that resolves after the viewer moved on to another article', async () => {
     type Saved = { documentId: string; title: string; alreadySaved: boolean; chunkCount: number }
     let resolveSave: (r: Saved) => void = () => {}
-    stubApi({
+    stubApi(packsPanelStubs({
       getPackArticle: async () => article,
       savePackArticle: () => new Promise<Saved>((r) => (resolveSave = r))
-    })
+    }))
     const { rerender } = render(
       <I18nProvider>
         <ArticleModal target={target} onClose={() => {}} />
@@ -1836,10 +1848,10 @@ describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
 
   it('has no save action while the article is loading or when it is unavailable', async () => {
     let resolveArticle: (a: typeof article | null) => void = () => {}
-    stubApi({
+    stubApi(packsPanelStubs({
       getPackArticle: () => new Promise<typeof article | null>((r) => (resolveArticle = r)),
       savePackArticle: vi.fn()
-    })
+    }))
     render(
       <I18nProvider>
         <ArticleModal target={target} onClose={() => {}} />
