@@ -13,6 +13,33 @@ import type { ModelRuntime } from '../../src/main/services/runtime'
 import { DEFAULT_SETTINGS, type Message } from '../../src/shared/types'
 import { tempRoot } from './db-fixtures'
 
+/** The map and fold instructions as they were before #939, which leaves them byte for byte on every turn but a
+ *  list-shaped question under a bundled whole-document skill. */
+const MASTER_MAP_HEAD = (part: string, total: string): string =>
+  `You are processing part ${part} of ${total} of ONE document, section by section, to complete the task ` +
+  'described below. From THIS part only, note every detail the task needs — keep names, numbers, dates, ' +
+  'decisions, and obligations exact. Write brief notes, not the final answer.\n'
+const MASTER_FOLD_HEAD = (part: string, total: string): string =>
+  `You are condensing the notes from part ${part} of ${total} of ONE document into a shorter summary, to complete ` +
+  'the task described below. Keep every name, number, date, decision, and obligation exact — drop only ' +
+  'repetition and filler. Write condensed notes, not the final answer.\n'
+
+/** A map or fold user turn rebuilt with the pre-#939 instruction around ITS OWN fence, part numbers and text, or
+ *  null when `user` is neither. Equal to `user` ⇔ the step sent the prompt as it was (with no request block, which
+ *  the caller checks too: the rebuild keeps whatever sits between the instruction and the part label). */
+export function asPreRequestMapPrompt(user: string): string | null {
+  const m = user.match(/^You are (processing|condensing the notes from) part (\d+) of (\d+) /)
+  if (!m) return null
+  const fold = m[1] !== 'processing'
+  const marker = `\nPart ${m[2]} of ${m[3]} ${fold ? '(section notes)' : '(section summaries)'}:\n`
+  const at = user.lastIndexOf(marker)
+  const end = 'not the final answer.\n'
+  const instructionEnd = user.indexOf(end) + end.length
+  if (at < 0 || instructionEnd < end.length || instructionEnd > at) return null
+  const head = fold ? MASTER_FOLD_HEAD(m[2], m[3]) : MASTER_MAP_HEAD(m[2], m[3])
+  return head + user.slice(instructionEnd, at) + user.slice(at)
+}
+
 /** The whole-document question the suites ask (German, like the fixture). */
 export const WHOLE_DOC_QUESTION = 'Fasse das gesamte Dokument zusammen: welche Entscheidungen wurden getroffen?'
 

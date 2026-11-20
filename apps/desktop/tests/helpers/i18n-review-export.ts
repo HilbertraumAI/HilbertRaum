@@ -199,12 +199,12 @@ export const EXACT_MATCH_SITES: readonly ExactMatchSite[] = [
       'the checked figures (routedQuestions, skills/analysis/bank-statement.ts).'
   },
   {
-    file: 'src/main/services/analysis/router.ts',
+    file: 'src/main/services/analysis/example-chips.ts',
     find: { calls: 'catalogValues', argument: 0 },
     reason:
       'The document chat recognises this example question by its text: the summarize chip by its ' +
-      'whole text, the every-mention chip by the text around its quotes (catalogValues, ' +
-      'analysis/router.ts).'
+      'whole text, the every-mention chip by the text around its quotes, for the router and for ' +
+      'the single-fact check of a whole-document skill (catalogValues, analysis/example-chips.ts).'
   }
 ]
 

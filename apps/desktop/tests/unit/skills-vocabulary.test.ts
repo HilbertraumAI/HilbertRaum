@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { countKeywordHits } from '../../src/main/services/skills/selector'
 import {
   APP_VOCAB_SKILL_IDS,
@@ -169,6 +170,21 @@ describe('isNeedleShaped — needle-vs-deliverable classify (A3)', () => {
     // No lookup interrogative → not a needle → the whole-doc engine stays the default.
     expect(isNeedleShaped('tell me about the parties')).toBe(false)
     expect(isNeedleShaped('explain the agreement')).toBe(false)
+  })
+
+  // #834: the every-mention example chip asks for every mention, a list. Pre-fix the German value was the one
+  // lookup among the 30 chip values (its «finde» is a needle word), so on a long document a whole-document skill
+  // sent it to the passage search while the English chip kept the whole read. Recognised by its frame in every
+  // catalog, whatever word the user puts in its quotes (`isMentionChip`, the router's own recognition).
+  const withOwnTerm = (chip: string): string => chip.replace(/(['„«“])[^'„«“”»]*(['“”»])/u, '$1force majeure$2')
+
+  it.each(UI_LANGUAGE_CODES)('%s: the every-mention chip is no single-fact lookup, whatever word it quotes', (code) => {
+    const chip = t(code, 'chat.example.indemnity')
+    const ownTerm = withOwnTerm(chip)
+    expect(ownTerm, 'the chip quotes its example word').not.toBe(chip)
+    for (const question of [chip, ownTerm, `${chip}.`, `${ownTerm} ?`]) {
+      expect(isNeedleShaped(question), question).toBe(false)
+    }
   })
 })
 

@@ -1,4 +1,5 @@
 import { foldCase } from '../../../shared/text-fold'
+import { isMentionChip } from '../analysis/example-chips'
 import { wordIncludes } from './tools/money'
 
 // W5 — the ONE canonical bilingual trigger vocabulary per app skill (audit §3.2/§4.1/§4.2/§8.3).
@@ -576,8 +577,8 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
 //   (a) `isSmallTalk` OPTS OUT clearly off-topic chatter (greetings/thanks/assistant-meta) — a "hi"/"danke"
 //       over a document must NOT spend a whole-document read; it keeps the ordinary relevance path.
 //   (b) `isNeedleShaped` classifies a targeted single-fact lookup vs a whole-document DELIVERABLE — the
-//       chat path uses it ONLY to send a needle to top-k WHEN the whole-doc read would truncate and no
-//       deep-index tree exists (a needle past the truncation cut would be missed; top-k finds it anywhere).
+//       chat path uses it ONLY to send a needle to top-k WHEN the whole-doc read would truncate, deep-index
+//       tree or not (SKA-12; a needle past the truncation cut would be missed; top-k finds it anywhere).
 //
 // Both are deliberately conservative. `isSmallTalk` can never fire on a real document question (a question
 // with any content word is not all-filler and matches no whole-question chit-chat form). `isNeedleShaped`
@@ -797,10 +798,13 @@ const NEEDLE_SHAPE_RES: readonly RegExp[] = [/\bfinde\b/]
  * True when the question is a targeted single-fact LOOKUP rather than a whole-document deliverable (A3
  * classify (b), audit §8.2). Used ONLY to prefer top-k over a TRUNCATED whole-doc read (a needle past the
  * cut would be missed). A deliverable verb vetoes it, so a summary/minutes/compare ask is never a needle.
- * Deterministic; the question is never logged.
+ * #834: so does the every-mention example chip, recognised by its frame in every catalog (`isMentionChip`,
+ * whatever word stands in its quotes): it asks for a list of every mention, and the German one held the
+ * needle word «finde» while the other nine held none. Deterministic; the question is never logged.
  */
 export function isNeedleShaped(question: string): boolean {
   const q = question.toLowerCase()
+  if (isMentionChip(question)) return false
   if (DELIVERABLE_SHAPES.some((s) => q.includes(s)) || DELIVERABLE_SHAPE_RES.some((re) => re.test(q)))
     return false
   return NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))

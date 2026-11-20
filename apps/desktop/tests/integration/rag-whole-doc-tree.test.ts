@@ -18,6 +18,7 @@ import {
   answerWholeDocFromTree,
   SUMMARY_MAP_CALL_HARD_CEILING
 } from '../../src/main/services/rag/whole-doc-tree'
+import { asPreRequestMapPrompt } from '../helpers/whole-doc-fixtures'
 import { SUMMARY_MAP_CALL_CEILING } from '../../src/main/services/doctasks/summary'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import type { TurnSkill } from '../../src/main/services/chat'
@@ -218,6 +219,53 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     for (const turn of rt.turns) {
       expect(turn.find((t) => t.startsWith('user:'))).toContain('structured minutes')
     }
+  })
+
+  // #939 (owner call 2026-11-20): with the request flag (a list-shaped question under a bundled skill) the map steps
+  // over the node summaries carry the user's request before the fence, not only the skill's task; without it (here:
+  // the #642 tree summary of a plain document chat, no skill) every map step is the prompt as it was.
+  it.each([
+    { name: 'a skill and the request flag', skill: SKILL, question: "Find every mention of 'budget'", notesForRequest: true },
+    { name: 'no skill', skill: undefined, question: 'Fasse dieses Dokument zusammen', notesForRequest: undefined }
+  ])('the map steps over the node summaries with $name (#939)', async ({ skill, question, notesForRequest }) => {
+    const h = await makeDoc()
+    const sections = [0, 1, 2].map((i) =>
+      insertNode(h.db, h.docId, 1, i, false, `Section ${i + 1} summary. ${'detail point '.repeat(60)}`.trim())
+    )
+    const root = insertNode(h.db, h.docId, 2, 0, true, 'Whole-document root summary.')
+    sections.forEach((nid, i) => {
+      insertEdge(h.db, root, nid, false, i)
+      h.db.prepare('UPDATE tree_nodes SET parent_id = ? WHERE id = ?').run(root, nid)
+    })
+    h.chunkIds.forEach((cid, i) => insertEdge(h.db, sections[i % 3], cid, true, i))
+    markTreeReady(h.db, h.docId)
+
+    const rt = fakeRuntime()
+    const msg = await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question,
+      skill,
+      notesForRequest,
+      contextTokens: 900
+    })
+    expect(msg?.coverage?.mode).toBe('tree')
+    expect(rt.calls).toBeGreaterThanOrEqual(3)
+    const users = rt.turns.map((turn) => turn.find((t) => t.startsWith('user:')) ?? '')
+    for (const turn of users.slice(0, -1)) {
+      const map = turn.slice('user:'.length)
+      expect(map).toContain('(section summaries)')
+      expect(map.includes('structured minutes')).toBe(skill != null)
+      if (notesForRequest) {
+        expect(map).toContain(`\nUser request:\n${question}\n`)
+      } else {
+        expect(map).not.toContain('User request:')
+        expect(map).toBe(asPreRequestMapPrompt(map))
+      }
+    }
+    expect(users.at(-1)).toContain(`User request:\n${question}\n`)
   })
 
   it('no ready tree → returns null (caller falls back to the capped path), no model call', async () => {
