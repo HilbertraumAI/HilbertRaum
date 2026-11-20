@@ -291,6 +291,7 @@ of weights fits in RAM.
 | Qwen3 8B Instruct Q4 | For laptops with 12 GB and more | ~5.0 GB | 12 GB | Apache-2.0 |
 | Ministral 3 8B Instruct (2512) Q4 | The DIY `--with-assets` default chat model (selectable, never auto-recommended: it scored lowest of the 8B class in our 2026-11 study; the 16-23 GB pick is Qwen3.5 9B) | ~5.2 GB | 12 GB | Apache-2.0 |
 | Qwen3.5 9B (UD-Q4_K_XL) | **Recommended for 16-23 GB**: newest-generation 9B | ~6.0 GB | 12 GB | Apache-2.0 |
+| Qwen3.5 9B (UD-Q3_K_XL) | Smaller quantization of the same 9B (selectable, not recommended automatically) | ~5.1 GB | 12 GB | Apache-2.0 |
 | Granite 4.1 8B Q4 | Challenger (selectable, not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 |
 | Gemma 4 E4B Instruct QAT Q4_0 | **Recommended for 12-15 GB without a usable graphics card and for a 6 GB graphics card**: better answers than Gemma 4 E2B in our 2026-11 study at about half its processor speed | ~5.2 GB | 12 GB | Apache-2.0 |
 | Gemma 4 12B Instruct QAT Q4_0 | **Recommended for a 12 or 16 GB graphics card**: 12-14B benchmark winner; has **Deep** (too slow on a processor to be recommended there) | ~7.0 GB | 14 GB | Apache-2.0 |

@@ -652,8 +652,10 @@ the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.t
 the cache the runtime allocates at the model's recommended window under the app's launch (ubatch
 2048, and — since the 2026-09-07 `-np 1` decision on issue #319 — **ONE server slot**, not b9849's
 four unified ones). Carried by exactly the seven decision models (Gemma 4 12B 2.4, 26B-A4B **0.8**,
-E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**) plus TranslateGemma's measured
-0.75 for its sidecar's headroom gate (#473); all eight are pinned in `committed-catalog.test.ts`; the
+E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**), the Qwen3.5 9B UD-Q3_K_XL
+sibling's 0.3 (2026-11-20: same architecture, and the f16 cache does not depend on the weight
+quantization) and TranslateGemma's measured
+0.75 for its sidecar's headroom gate (#473); all nine are pinned in `committed-catalog.test.ts`; the
 GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
 Six are DERIVED from the launch config; the 26B-A4B's is MEASURED off its first hardware start
 (#412, 2026-09-08 — the derived 1.5 it replaced was 2.02× the 760.00 MiB the start logged).
@@ -901,7 +903,7 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb` / `.cardEvidence`) and
   `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb` / `.card`), each calling `graphicsBudgetMib` on
   `nextStartMemory`'s device. `weightsMib(m)` is the shared unrounded GB → MiB conversion the
-  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the eight
+  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the nine
   cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by

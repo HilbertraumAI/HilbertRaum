@@ -79,6 +79,7 @@ const CHAT_FACTS: Record<string, ChatFacts> = {
   'qwen3.5-2b-ud-q4kxl': { family: 'qwen3.5', rank: 0, minRam: 8, recRam: 16, ctx: 4096, thinking: true, displayName: 'Qwen3.5 2B (UD-Q4_K_XL)' },
   'qwen3.5-35b-a3b-ud-q4kxl': { family: 'qwen3.5', rank: 1, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.5 35B-A3B (UD-Q4_K_XL)' },
   'qwen3.5-4b-ud-q4kxl': { family: 'qwen3.5', rank: 3, minRam: 8, recRam: 16, ctx: 4096, thinking: true, displayName: 'Qwen3.5 4B (UD-Q4_K_XL)' },
+  'qwen3.5-9b-ud-q3kxl': { family: 'qwen3.5', rank: 0, minRam: 12, recRam: 16, ctx: 8192, thinking: true, displayName: 'Qwen3.5 9B (UD-Q3_K_XL)' },
   'qwen3.5-9b-ud-q4kxl': { family: 'qwen3.5', rank: 3, minRam: 12, recRam: 16, ctx: 8192, thinking: true, displayName: 'Qwen3.5 9B (UD-Q4_K_XL)' },
   'qwen3.6-27b-q4': { family: 'qwen3.6', rank: 1, minRam: 20, recRam: 24, ctx: 8192, thinking: true, displayName: 'Qwen3.6 27B Q4_K_M' },
   'qwen3.6-27b-q5': { family: 'qwen3.6', rank: 1, minRam: 24, recRam: 32, ctx: 8192, thinking: true, displayName: 'Qwen3.6 27B Q5_K_M' },
@@ -268,6 +269,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.8-27b-ud-q4km': 0.9, // was 1.1: KV 512 + RS 448.88 (MTP, 1 seq) = 960.88 MiB
     'qwen3.8-27b-ud-q5km': 0.9, // was 1.1: same figures — the recurrent state is f32, quant-independent
     'qwen3.5-9b-ud-q4kxl': 0.3, // was 0.4: KV 256 + 1 × 48 = 304 MiB
+    'qwen3.5-9b-ud-q3kxl': 0.3, // same architecture as the UD-Q4_K_XL; the f16 cache does not depend on the weight quant
     'qwen3.5-4b-ud-q4kxl': 0.2, // was 0.3: KV 128 + 1 × 48 = 176 MiB (at its 4,096 window)
     // #473: the translation sidecar, for its headroom gate — KV 256 (non-SWA) + 480 (SWA) = 736 MiB
     // at its 4,096 window (issue473-translategemma-full-offload, 49/49), rounded up.
@@ -368,7 +370,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     }
   })
 
-  it('pins the eight estimated_context_cache_gib values, and that no other manifest carries the field (#473)', () => {
+  it('pins the nine estimated_context_cache_gib values, and that no other manifest carries the field (#473)', () => {
     const all = committedManifests()
     const byId = Object.fromEntries(all.map((m) => [m.id, m]))
     for (const [id, gib] of Object.entries(CACHE_GIB)) {
@@ -1365,7 +1367,7 @@ describe('committed catalog — variant grouping as the library renders it (PR #
     expect(all.flatMap((g) => g.models.map((m) => m.id)).sort()).toEqual(models.map((m) => m.id).sort())
     const groups = all.filter((g) => g.models.length > 1)
     expect(groups.map((g) => [g.name, g.models.length]).sort()).toEqual([
-      ['Qwen3.5 9B', 2],
+      ['Qwen3.5 9B', 3],
       ['Qwen3.6 27B', 2],
       ['Qwen3.8 27B', 6]
     ])
