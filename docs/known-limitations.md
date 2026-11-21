@@ -74,7 +74,8 @@ password recovery — are documented in
   stop`, a forced restart (`sudo shutdown -r now`, or one a management tool starts) or Ctrl+C in a
   terminal. Before, such a stop was an ordinary quit that the question about unsaved review
   changes could hold until the system killed the app, unlocked. Quit from the menu, the keyboard
-  or the Dock, and a log-out, are not signals and work as before. All of these are best effort: a
+  or the Dock, and a log-out, are not signals and work as before (what Activity Monitor's Quit
+  sends is not checked yet). All of these are best effort: a
   very large workspace may not finish locking in the time the system allows, and a review change
   made in the last second, a reply still being written or a scan still being read is not kept, so
   quitting first is still the sure way. On Linux a log-out usually arrives as a lost session, and
@@ -85,11 +86,15 @@ password recovery — are documented in
   #982). The workspace is then left unencrypted on the drive until the next start, which recovers
   its data as after any lock that was cut short. Where the system keeps crash dumps
   (systemd-coredump, apport, WSL), such a crash could store a memory image of the app, vault key
-  included, on the computer's disk. The app now tells Linux to leave its memory out of a crash
-  dump (#982; measured under WSL with a stand-in app: the dump shrank from about 785 MB, with a
-  planted test string in it, to 164 KB with no trace of it). A dump can still name the files the
-  app had open and hold the start of its command line. A signal (`kill`, `systemctl stop`,
-  Ctrl+C) has no such limit. Lock first, or quit, before you log out with a large workspace. The Linux legs are
+  included, on the computer's disk. The app's main process, which holds that key, now tells Linux
+  to leave its memory out of a crash dump, and the helper programs it starts (the model engine,
+  speech recognition, the knowledge-pack server) inherit that (#982; measured under WSL with a
+  stand-in app: the dump shrank from about 785 MB, with a planted test string in it, to 164 KB
+  with no trace of it). A dump can still name the files the app had open and hold the start of
+  its command line. The processes that draw the app's windows are not covered: their dump can
+  still hold what they showed and a password typed on the lock screen. A signal (`kill`,
+  `systemctl stop`, Ctrl+C) has no such limit. Lock first, or quit, before you log out with a
+  large workspace. The Linux legs are
   measured on Electron 43.8.6 under WSL with a stand-in app (the three signals, a lost D-Bus
   session bus, a lock slowed to 8, 12 and 15 seconds); a real desktop log-out (GNOME, KDE), a lost
   display and the packaged AppImage are not checked yet. The macOS signal leg runs the same code,

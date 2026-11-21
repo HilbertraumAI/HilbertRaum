@@ -553,12 +553,14 @@ from its first public `1.0.0` release onward.
   keyboard or the Dock, and logging out, work as before. This follows from how the app and
   Electron handle such a stop; it is not yet checked on a Mac. Quitting first is still the sure
   way: a change made in the last second is not kept (#977).
-- **On Linux, a crash of the app no longer writes its memory into a crash file.** Many Linux
-  systems save a crash file when an app crashes, and the app's could hold a full copy of its
-  memory, including the key that opens your workspace, on the computer's disk. That could happen,
-  for example, when a log-out with a large workspace on a slow USB stick made the app crash while
-  it locked. The app now tells Linux to leave its memory out of such a file. The file can still
-  name the files the app had open (#982).
+- **On Linux, a crash of the app no longer writes the key that opens your workspace into a crash
+  file.** Many Linux systems save a crash file when an app crashes, and the app's could hold a
+  full copy of the memory of its main process, including that key, on the computer's disk. That
+  could happen, for example, when a log-out with a large workspace on a slow USB stick made the app
+  crash while it locked. The main process now tells Linux to leave its memory out of such a file,
+  and so do the helper programs it starts, such as the model engine. The file can still name the
+  files the app had open. The parts of the app that draw its windows are not covered: their crash
+  file can still hold what they showed, including a password typed on the lock screen (#982).
 
 ## [0.1.65] — 2026-11-11
 

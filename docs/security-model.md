@@ -1991,7 +1991,8 @@ re-encrypts (the bullet below).
   session end
   during a running quit teardown defers to that teardown (on Windows the ordering cannot occur —
   the quit closed every window before `will-quit`), and a `will-quit` after the session-end lock
-  exits at once (a prevented quit that never exited would make macOS report the app as
+  runs the same synchronous lock again, which has nothing to do unless the workspace was unlocked
+  since, and exits at once (a prevented quit that never exited would make macOS report the app as
   cancelling the shutdown). `session-end: locking workspace` (with the OS reasons) is logged
   before the lock so it lands in the encrypted log. Best-effort: the lock is synchronous but not
   instantaneous, and the OS grants a bounded grace — a session cut mid-lock is left to the next
@@ -2012,9 +2013,10 @@ re-encrypts (the bullet below).
   same POSIX signal handlers on macOS as on Linux (`electron_browser_main_parts_posix.cc`, built
   for every POSIX target and installed in the same start-up step), so a SIGTERM, SIGINT or SIGHUP
   was the same holdable quit, and a second one killed the app unlocked. The signal leg (1) below
-  is registered on darwin too: the same listeners over the same closure. Every quit a user starts
-  on macOS is an Apple Event, never a signal (⌘Q, the menu and Dock Quit, `osascript`, a log-out,
-  restart or shutdown from the Apple menu), so those are unchanged. The signals come from `kill`
+  is registered on darwin too: the same listeners over the same closure. The usual quits a user
+  starts on macOS are Apple Events, not signals (⌘Q, the menu and Dock Quit, `osascript`, a log-out,
+  restart or shutdown from the Apple menu), so those are unchanged; what Activity Monitor's Quit
+  sends is not checked (on the Mac walk list). The signals come from `kill`
   and `killall`, scripts and management agents, `launchctl stop` (launchd sends SIGKILL after the
   job's `ExitTimeOut`, 20 s by default), a forced `shutdown -r`, a closed Terminal (SIGHUP) and
   Ctrl+C; `npm run dev` on a Mac now locks at once on Ctrl+C or an electron-vite restart, as Linux
@@ -2025,8 +2027,14 @@ re-encrypts (the bullet below).
   could stop (unreachable before #977: only Linux had the signal leg, and only Windows and macOS
   the session-end leg). A closure flag, `appEnding`, set wherever the exit is already under way
   (a signal's or a session-end `will-quit`'s exit, the teardown's `finally`, `quit`), now lets
-  that signal reap and `app.exit(0)` once; repeat signals stay inert (measured on Linux Electron
-  with the stand-in app: the old closure stayed alive until SIGKILL, the new one exited 0).
+  that signal run `emergencyLock` again and `app.exit(0)` once; repeat signals stay inert. The
+  second lock has nothing to do on a workspace still locked, and locks one the user unlocked
+  again after the cancelled shutdown (review round 1), which would otherwise have ended with that
+  session's working copy plaintext (measured on Linux Electron with the stand-in app: the old
+  closure stayed alive until SIGKILL, the new one exited 0). A `will-quit` after a session-end
+  lock (⌘Q in that app) now runs `emergencyLock` the same way before its exit (review
+  round 1; it exited without locking before, on master too), so every exit after a session-end
+  lock ends with the workspace locked.
   **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two legs, registered inside
   `app.whenReady` (the signal leg on Linux and macOS, the `quit` leg on Linux only), first in it
   after the second-instance return (before the code that can throw), over the same closure. (1) A
@@ -2058,8 +2066,10 @@ re-encrypts (the bullet below).
   pages included. **Core dump filter (#982 part 2; owner gate G-15, 2026-11-21):** the first
   statement of the main process (`main/index.ts` → `services/core-dump-filter.ts`, Linux only)
   writes `0` to `/proc/self/coredump_filter`, so the kernel dumps no memory mapping, anonymous or
-  file-backed (no V8 heap, no malloc arena, no mapped database), whatever the handler; a refused
-  write logs one line with its errno code, never the path, and the app goes on. Measured under WSL
+  file-backed (no V8 heap, no malloc arena, no mapped database), whatever the handler. A refused
+  write is kept as its errno code (never the path; a code of any other shape becomes null), the
+  app goes on, and `initBackend` logs one line right after `initLogging`: at the first statement
+  logging does not exist yet, and `initLogging` starts an empty buffer. Measured under WSL
   with the branch's helper and a marker planted 66 times in the stand-in's heap: 823,214,080 bytes
   with 66 copies of the marker without the filter, 167,936 bytes with none with it. What a dump
   still holds: its own headers, the registers of every thread (the lock may be inside AES when the
@@ -2069,9 +2079,11 @@ re-encrypts (the bullet below).
   exec, so the sidecars started later (llama-server, whisper-cli, kiwix-serve) are covered
   (measured: a spawned child and Electron's network utility process read `00000000`). Not covered:
   the zygotes, which Electron starts before the main script runs, and what they fork, the renderers
-  and (measured here) the GPU process, which keep the default `00000033`; they hold no vault key,
-  but a renderer's dump can hold the text it showed. systemd-coredump's journal entry still records
-  the command line, the environment and the open-file paths, without memory contents (not checked
+  and (measured here) the GPU process, which keep the default `00000033`. They hold no vault key,
+  but a renderer's dump can hold the text it showed and the workspace password typed into the
+  unlock field, which passes through the renderer as a JavaScript string that cannot be zeroed
+  (whether a sandboxed renderer dumps core at all is not verified). systemd-coredump's journal
+  entry still records the command line, the environment and the open-file paths, without memory contents (not checked
   on such a host). The lock writes about twice the database's size (checkpoint, re-encrypt with an
   fsync, shred with an fsync), so with about 9 of the 10 s usable a workspace above roughly 75 to
   100 MB may not fit on a stick that writes 20 MB/s, and above roughly 20 to 45 MB at 5 to 10 MB/s
@@ -2098,8 +2110,9 @@ re-encrypts (the bullet below).
   text, including that the signal legs are gated to Linux and macOS, the `quit` leg to Linux and
   the `powerMonitor` leg to macOS, all inside `app.whenReady`, before the protocol, the menu and
   the window); the filter by `tests/unit/core-dump-filter.test.ts` (Linux writes `0`, other
-  platforms touch nothing, a refused write logs no path, and the call sits at module scope before
-  the single-instance lock and `app.whenReady`).
+  platforms touch nothing, a refusal keeps only an errno-shaped code, the call sits at module scope
+  before the single-instance lock and `app.whenReady`, and its outcome is logged in `initBackend`
+  after `initLogging`).
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so

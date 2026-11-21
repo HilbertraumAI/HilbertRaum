@@ -1422,8 +1422,10 @@ shut down, or when the app is stopped with `kill` or Ctrl+C in a terminal: it lo
 and closes at once, without asking. This is checked with those signals and a lost session, not yet
 with a real desktop log-out. On Linux, a log-out with a workspace of more than a few dozen MB on a
 slow USB stick may not finish locking: lock first, or quit before you log out. If the app crashes
-on Linux, it keeps its memory, and with it the key to your workspace, out of the crash file the
-system may save. Everywhere this is a best-effort
+on Linux, its main process, which holds the key to your workspace, keeps its memory out of the
+crash file the system may save, and so do the helper programs it starts, such as the model
+engine. The parts that draw the app's windows are not covered: their crash file can still hold
+what they showed, including a password you typed on the lock screen. Everywhere this is a best-effort
 safety net — a very large workspace may not finish locking in the time the system allows, and a
 change made in the last second is not kept — so quitting the app first is still the sure way. On
 a Mac, the app also locks the workspace and closes at once when something stops it with `kill`,
