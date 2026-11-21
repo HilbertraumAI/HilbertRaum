@@ -378,10 +378,12 @@ export interface WorkspaceStateInfo {
  *  be read, and the encrypted workspace file is not beside it, so no password can open anything;
  *  refused before the password is checked, nothing written. Don't delete the key file (a `.recovery`,
  *  a staged `.enc.new` or stored documents may still need it); restore both files from a backup.
+ *  A create over such a file (one that appeared under the create form) answers it too.
  *  `workspace_exists` (#807): create refused, a workspace is already on the drive (an encrypted
- *  descriptor, the `.enc`, an unreadable descriptor or a newer build's artifact; #954: any
- *  descriptor file, also one put back after the start); unlock it instead. Since #955 the state
- *  then reads `locked`, and the gate re-reads it and shows its unlock form.
+ *  descriptor, the `.enc`, an unreadable descriptor beside an `.enc` or a newer build's artifact;
+ *  #954: any descriptor file, also one put back after the start); unlock it instead. Nothing on the
+ *  disk changes. Since #955 the state then reads `locked`, and the gate re-reads it and shows its
+ *  unlock form.
  *  `plaintext_not_allowed` (#807): a create without a password, which the policy or the build
  *  does not allow. `refused`: create's password under `MIN_PASSWORD_LENGTH` (or not a string);
  *  for a password change also the workspace locked or a lock under way, or document work in

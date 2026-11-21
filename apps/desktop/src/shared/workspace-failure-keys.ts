@@ -48,12 +48,13 @@ export const UNLOCK_FAILURE_KEYS = {
 
 /** The gate's copy for a failed create, by reason (`null`: main never sends it; shows main's `message`). */
 export const CREATE_FAILURE_KEYS = {
-  // `null`: main never sends these seven for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
+  // `null`: main never sends these six for create (what a `null` costs: UNLOCK_FAILURE_KEYS).
   wrong_password: null,
   vault_damaged: null,
   vault_missing: null,
   vault_descriptor_missing: null,
-  vault_descriptor_unreadable: null,
+  // Review V F-3: an unreadable key file that appeared under the create form with no `.enc`: the unlock's own copy.
+  vault_descriptor_unreadable: 'main.workspace.descriptorUnreadable',
   vault_open_failed: null,
   vault_recovery_blocked: null,
   workspace_newer: 'main.workspace.newer',

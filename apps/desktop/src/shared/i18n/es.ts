@@ -2655,8 +2655,9 @@ export const es: UiCatalog<'es'> = {
   'main.workspace.descriptorUnreadable':
     'El archivo con la clave de tu espacio de trabajo (config/workspace.json) no se puede leer y el ' +
     'archivo cifrado del espacio de trabajo falta en la unidad, así que ninguna contraseña puede ' +
-    'abrir el espacio de trabajo. No borres el archivo de la clave. Restaura los dos archivos desde ' +
-    'una copia de seguridad o consulta la guía de solución de problemas antes de empezar de nuevo.',
+    'abrir el espacio de trabajo. No elimines el archivo de la clave. Restaura los dos archivos ' +
+    'desde una copia de seguridad o consulta la guía de solución de problemas antes de empezar de ' +
+    'nuevo.',
   'main.workspace.vaultOpenFailed':
     'Tu contraseña es correcta, pero HilbertRaum no pudo terminar de abrir el espacio de ' +
     'trabajo. El espacio de trabajo cifrado en la unidad se dejó como estaba. Asegúrate de ' +

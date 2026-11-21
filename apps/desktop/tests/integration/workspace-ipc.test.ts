@@ -918,7 +918,18 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     vault_damaged: NEVER_SENT,
     vault_missing: NEVER_SENT,
     vault_descriptor_missing: NEVER_SENT,
-    vault_descriptor_unreadable: NEVER_SENT,
+    // Review V F-3: an unreadable key file that appeared under the create form, with no `.enc`: the unlock's refusal.
+    vault_descriptor_unreadable: [
+      {
+        how: 'a config/workspace.json that is not JSON put under the create form, with no .enc',
+        arrange: () => {
+          const vp = freshVaultPaths('wsipc')
+          const workspace = startedOn(vp)
+          writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+          return { workspace, args: ['longenough', 'encrypted'] }
+        }
+      }
+    ],
     vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
     workspace_newer: [
@@ -1333,7 +1344,8 @@ describe('the typed workspace refusals are recognised by name too (#807)', () =>
     ['WorkspaceExistsError', 'create', 'workspace_exists', 'main.workspace.exists'],
     ['PlaintextNotAllowedError', 'create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
     ['VaultDescriptorMissingError', 'unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing'],
-    ['VaultDescriptorUnreadableError', 'unlock', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable']
+    ['VaultDescriptorUnreadableError', 'unlock', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable'],
+    ['VaultDescriptorUnreadableError', 'create', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable']
   ])('a %s from another copy of the module answers %s %s', async (name, call, reason, key) => {
     const thrower = (): never => {
       throw named(name)

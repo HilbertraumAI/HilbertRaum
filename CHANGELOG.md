@@ -137,8 +137,9 @@ from its first public `1.0.0` release onward.
   "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
 - **The lock screen says when the workspace's key file can't be read and the encrypted file is
   gone.** With `config/workspace.json` damaged and the encrypted workspace file not on the drive,
-  every unlock said "Could not open the workspace." The lock screen now says so, and that you should
-  not delete the key file but restore both files from a backup. And when creating a workspace finds
+  every unlock said "Could not open the workspace." The lock screen now says so, also when you try to
+  create a workspace then, and that you should not delete the key file but restore both files from a
+  backup. And when creating a workspace finds
   one on the drive after all, the lock screen no longer asks you to restart: it switches to the
   unlock screen for that workspace at once (#955).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When

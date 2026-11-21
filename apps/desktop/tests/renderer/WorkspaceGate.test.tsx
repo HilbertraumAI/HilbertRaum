@@ -392,7 +392,7 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
 
 // #955 item 3: a create refused because a workspace is on the drive after all (its key file copied back while the
 // create form was up). The form used to stay until a restart, and its copy said "Restart HilbertRaum". Main now reads
-// `locked` (and has run the start's steps over that vault), so the gate re-reads the state and hands it to its parent,
+// `locked` (its unlock runs the start's steps over that vault), so the gate re-reads the state and hands it to its parent,
 // which shows the unlock form. The refusal arrives in the unlock form's own always-mounted alert region, after that
 // region is in the document: a region inserted already holding its text is missed by many screen readers (#436).
 describe('WorkspaceGate — a create refused because a workspace is on the drive (#955 item 3)', () => {
@@ -518,7 +518,9 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     ['create', 'workspace_exists', 'main.workspace.exists'],
     ['create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
     ['create', 'refused', 'main.workspace.passwordTooShort'],
-    ['unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing']
+    ['unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing'],
+    // Review V F-3: a create over an unreadable key file with no `.enc` shows the unlock's copy, on the create form.
+    ['create', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable']
   ] as const)('%s %s shows %s in German although main said it in English', async (call, reason, key) => {
     const params = { min: MIN_PASSWORD_LENGTH }
     await failIn(call, { ok: false, reason, message: t('en', key, params) }, t('de', key, params))

@@ -299,6 +299,19 @@ describe('encrypted vault lifecycle', () => {
     ctl.lock()
   })
 
+  // Review V F-5 (probe P5): the cleanup removes `.enc.new` only once this create's encrypt returned. An encrypt that
+  // fails replaced nothing there (it writes `.enc.new.tmp`, renamed only at its end; a directory at that name fails
+  // its first open), so a staged file that was already there is not this create's to remove.
+  it('a create whose encrypt fails leaves a staged file that was there before it alone (#954 S-1)', () => {
+    const vp = freshVaultPaths('vault')
+    const staged = `${vp.encPath}${REKEY_SUFFIX}`
+    writeFileSync(staged, 'a staged file this create did not write')
+    mkdirSync(`${staged}.tmp`)
+    expect(thrownBy(() => createEncryptedVaultOnDisk(vp, 'brand-new-pw', FAST_KDF)).name).not.toBe('(no error)')
+    expect(existsSync(vp.descriptorPath)).toBe(false)
+    expect(readFileSync(staged, 'utf8')).toBe('a staged file this create did not write')
+  })
+
   // #860 V5b: past the verifier, a tag failure is damage too, and the error says which damage it is (its message
   // reaches only the log; the user copy is `vault_damaged`'s either way), never that the data decrypted. (A descriptor
   // that lost its `version` but kept `dataKey` reads as unreadable instead, workspace-vault-format-guard.test.ts:
@@ -527,9 +540,10 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
 
   // #860 V4: the row above has `.enc` on disk, which alone keeps the create flow away. Without it the corrupt
   // descriptor is the only sign of a vault, and the stored documents need the wrapped data key only it holds: a
-  // create would replace it with a fresh vault's.
-  it.each<[string, (vp: FreshVaultPaths) => void]>([
-    ['.enc present', () => {}],
+  // create would replace it with a fresh vault's. Review V F-3: with no `.enc`, the refusal is the unlock's own
+  // (`VaultDescriptorUnreadableError`: no password opens anything here, don't delete the key file).
+  it.each<[string, (vp: FreshVaultPaths) => void, string]>([
+    ['.enc present', () => {}, 'WorkspaceExistsError'],
     [
       '.enc gone, an encrypted document left in documents/',
       (vp) => {
@@ -537,9 +551,10 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
         const docs = join(dirname(vp.dbPath), 'documents')
         mkdirSync(docs, { recursive: true })
         writeFileSync(join(docs, 'doc.txt.enc'), randomBytes(64))
-      }
+      },
+      'VaultDescriptorUnreadableError'
     ]
-  ])('a corrupt descriptor keeps the create flow away (%s)', (_case, arrange) => {
+  ])('a corrupt descriptor keeps the create flow away (%s)', (_case, arrange, refusal) => {
     const vp = lockedVault('vault', 'pw')
     arrange(vp)
     writeFileSync(vp.descriptorPath, '{ corrupted-not-json', 'utf8')
@@ -547,7 +562,7 @@ describe('WorkspaceController — create-over-existing-vault guard (H4)', () => 
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     expect(ctl.getState().state).toBe('locked')
-    expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
+    expect(thrownBy(() => ctl.create('another-password', 'encrypted')).name).toBe(refusal)
     expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
     expect(ctl.isUnlocked()).toBe(false)
   })
@@ -1495,7 +1510,8 @@ describe('a workspace put back after the start (#954, #955)', () => {
 
   // #955 item 2: the create committed its key file, and its last step (the staged `.enc.new` onto `.enc`) failed: an
   // antivirus holding the new file. A retry in the same session used to rewrite the key file it had just committed. Now
-  // it is refused, the start's steps roll the staged file into place, and the password just chosen opens the workspace.
+  // it is refused, the unlock runs the start's steps (they roll the staged file into place), and the password chosen
+  // the first time opens the workspace.
   it('after a create whose last rename failed, the retry is refused and the password just chosen opens it (#955 item 2)', () => {
     const { vp, ctl } = startedEmpty()
     createEncryptedVaultOnDisk(vp, 'just-chosen-pw', FAST_KDF)
@@ -1508,19 +1524,88 @@ describe('a workspace put back after the start (#954, #955)', () => {
     ctl.lock()
   })
 
-  // #955 item 3: the refused create runs the start's steps over the vault that appeared, before the lock screen shows
-  // its unlock form for it. Here a key file and a working file came back without their `.enc`: the start keeps that
-  // file as the only copy (#911), and the unlock form says so.
-  it('a refused create runs the start’s steps over the vault that appeared: its notice is on the unlock form (#955 item 3)', () => {
+  // #955 item 3, review V F-1: a refused create writes nothing, also over a vault that appeared after the start; the
+  // unlock that follows runs the start's steps. Here a key file and a working file came back without their `.enc`: the
+  // refusal leaves both byte for byte, and the unlock keeps the working file as the only copy (#911) and encrypts it.
+  it('a refused create over a vault that appeared writes nothing; the unlock runs the start steps (#955 item 3)', () => {
     const src = lockedVault('vault-src', 'pw')
     failedLockState(src, 7171, 'pw') // a closed working file holding the newest data
     const { vp, ctl } = startedEmpty()
     copyFileSync(src.descriptorPath, vp.descriptorPath)
     copyFileSync(src.dbPath, vp.dbPath)
+    const descriptor = readFileSync(vp.descriptorPath)
+    const workingFile = readFileSync(vp.dbPath)
     expect(thrownBy(() => ctl.create('brand-new-pw', 'encrypted')).name).toBe('WorkspaceExistsError')
-    expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'encrypted_file_missing' })
+    expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
+    expect(readFileSync(vp.dbPath).equals(workingFile)).toBe(true)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false)
+    expect(ctl.getState().state).toBe('locked')
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    expect(ctl.takeRestoredMissingEnc()).toBe(true)
+    ctl.lock()
+  })
+
+  // Review V F-1 (probe P4): a create killed between its stage and its commit leaves a `.enc.new` (the crash variant
+  // of S-1, its own issue). With the old workspace copied back whole under the create form, a refused create that ran
+  // the start's steps rolled that leftover over the put-back `.enc`, in a call that says nothing was created.
+  it('a refused create never rolls a leftover .enc.new over a workspace put back under the create form', () => {
+    const { vp, ctl } = startedEmpty()
+    copyFileSync(lockedVault('vault-leftover', 'other-pw').encPath, `${vp.encPath}${REKEY_SUFFIX}`)
+    const old = lockedVault('vault-old', 'old-pw')
+    copyFileSync(old.descriptorPath, vp.descriptorPath)
+    copyFileSync(old.encPath, vp.encPath)
+    const enc = readFileSync(vp.encPath)
+    const leftover = readFileSync(`${vp.encPath}${REKEY_SUFFIX}`)
+    expect(thrownBy(() => ctl.create('brand-new-pw', 'encrypted')).name).toBe('WorkspaceExistsError')
+    expect(readFileSync(vp.encPath).equals(enc)).toBe(true)
+    expect(readFileSync(`${vp.encPath}${REKEY_SUFFIX}`).equals(leftover)).toBe(true)
+  })
+
+  // Review V F-3 (probe P2): an unreadable key file that appears under the create form, with no `.enc`. The create
+  // answered "unlock it with its password" and every unlock then said no password can open it; the create now answers
+  // what the unlock answers, and the file stays as it was.
+  it('an unreadable key file under the create form: the create answers what the unlock answers, the file unchanged', () => {
+    const { vp, ctl } = startedEmpty()
+    writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+    const descriptor = readFileSync(vp.descriptorPath)
+    expect(thrownBy(() => ctl.create('brand-new-pw', 'encrypted')).name).toBe('VaultDescriptorUnreadableError')
+    expect(thrownBy(() => ctl.unlock('pw')).name).toBe('VaultDescriptorUnreadableError')
+    expect(readFileSync(vp.descriptorPath).equals(descriptor)).toBe(true)
+  })
+
+  /** A workspace whose last session ended without a lock (#892: working file + `-wal`), copied under `vp`'s create form. */
+  function putBackEndedUnlocked(vp: FreshVaultPaths): void {
+    const src = lockedVault('vault-src', 'pw')
+    backdate(src.encPath)
+    endedUnlocked(src, 4242, 'pw')
+    copyFileSync(src.descriptorPath, vp.descriptorPath)
+    copyFileSync(src.encPath, vp.encPath)
+    backdate(vp.encPath)
+    for (const suffix of ['', '-wal', '-shm']) copyFileSync(`${src.dbPath}${suffix}`, `${vp.dbPath}${suffix}`)
+  }
+
+  // Review V F-2 (probe P1, on the unlock path): the start's steps judge the session an unclean end left, sweep it, and
+  // record the loss at their end. Something holding `.enc.new.tmp` (a non-empty directory here) makes the rekey
+  // recovery throw after the sweep, so the first unlock fails; once the hold clears, the retry must run the steps
+  // again (the descriptor was adopted, so "appeared" alone no longer said so) and record the loss the first run judged.
+  it.each<[string, boolean]>([
+    ['with nothing in the way', false],
+    ['after a first unlock whose start steps stopped after the sweep', true]
+  ])('an unclean end put back under the create form: the unlock records the lost session %s', (_case, held) => {
+    const { vp, ctl } = startedEmpty()
+    putBackEndedUnlocked(vp)
+    if (held) {
+      const hold = `${vp.encPath}${REKEY_SUFFIX}.tmp`
+      mkdirSync(hold)
+      writeFileSync(join(hold, 'held'), 'x')
+      expect(thrownBy(() => ctl.unlock('pw')).name).not.toBe('(no error)')
+      expect(ctl.isUnlocked()).toBe(false)
+      expect(existsSync(vp.dbPath)).toBe(false) // the first run's sweep shredded the session
+      rmSync(hold, { recursive: true })
+    }
+    ctl.unlock('pw')
+    expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
     ctl.lock()
   })
 })

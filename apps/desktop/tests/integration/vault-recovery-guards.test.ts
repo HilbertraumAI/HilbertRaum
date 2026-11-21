@@ -756,6 +756,31 @@ describe('the start over an encrypted file that is missing or cannot be read (#9
     expect(existsSync(recoveryPath)).toBe(false)
     ctl.lock()
   })
+
+  // Review V F-4: "the encrypted workspace file isn't on the drive" (`vault_descriptor_unreadable`) needs a stat that
+  // says ENOENT. Beside an unreadable key file, a delete-pending `.enc` (EPERM on a stat, false from `existsSync`) proves
+  // neither: the unlock fails as before ("Could not open the workspace."), and the create is refused as a workspace on
+  // the drive, never with that copy.
+  it('a stat of .enc that fails with EPERM beside an unreadable key file never says the encrypted file is missing', async () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    failures.encDeletePending = true
+    let unlocked: unknown
+    let created: unknown
+    try {
+      unlocked = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+      created = (await invoke(handlers, IPC.createWorkspace, 'long-enough-pw', 'encrypted')).result
+    } finally {
+      failures.encDeletePending = false
+    }
+    expect(failures.hits.encStat).toBeGreaterThan(0)
+    expect(unlocked).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.openFailed') })
+    expect(created).toEqual({ ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') })
+    ctl.shutdown()
+  })
 })
 
 // #807 (C S-1): the create IPC used to recognise its two refusals by their English wording, `/not permitted|already

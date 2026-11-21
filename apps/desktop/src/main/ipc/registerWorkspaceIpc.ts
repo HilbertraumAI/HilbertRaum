@@ -503,6 +503,20 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // #807: the two expected refusals are typed, each with its own reason, which the gate renders in its own
         // language (D-17). A workspace is already on the drive: a new one would replace the user's data with an empty
         // vault. instanceof PLUS the name, the bundle-duplication quirk (see the unlock catch).
+        // Review V F-3: a key file that appeared under the create form but cannot be read, with no `.enc` beside it:
+        // the unlock's own refusal (an unlock form would answer it on every try), with the same copy. The log line
+        // names no path.
+        if (
+          err instanceof VaultDescriptorUnreadableError ||
+          (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')
+        ) {
+          log.warn('Workspace create refused: the workspace descriptor is unreadable and no encrypted file is beside it')
+          return {
+            ok: false,
+            reason: 'vault_descriptor_unreadable',
+            message: tMain('main.workspace.descriptorUnreadable')
+          }
+        }
         if (err instanceof WorkspaceExistsError || (err instanceof Error && err.name === 'WorkspaceExistsError')) {
           log.warn('Workspace create refused: a workspace already exists on the drive')
           return { ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') }

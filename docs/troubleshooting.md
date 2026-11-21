@@ -592,7 +592,8 @@ What to do:
 
 You see this on the unlock screen, whatever password you type, when `config/workspace.json` is on
 the drive but can't be read, and the workspace's encrypted file, `workspace/hilbertraum.sqlite.enc`,
-is not there. No password can open anything then: the key file holds the key, and the encrypted
+is not there. The create step shows it too when such a file appears on the drive while it is open.
+No password can open anything then: the key file holds the key, and the encrypted
 file holds the data. The lock screen does not offer a new workspace either, because other parts of
 the old one may still be on the drive: a `workspace/hilbertraum.sqlite.recovery` (the readable copy
 a session left, see "The encrypted workspace file was missing from the drive" above), a
@@ -627,9 +628,14 @@ What to do:
 - Free some space or close that program, then press **Create workspace** again.
 - If the lock screen then says "A workspace already exists on this drive, so no new one was created"
   and shows **Unlock your workspace**, the first try got far enough to save the workspace's key file:
-  unlock with the password you just chose. Restarting HilbertRaum shows the same unlock screen.
+  unlock with the password you chose the first time (a different one typed on the retry does not
+  open it). Restarting HilbertRaum shows the same unlock screen.
 - If it keeps failing, check that the drive is writable on this computer (not locked, not mounted
   read-only) and has free space.
+
+If the lock screen switched to **Unlock your workspace** because a `config/workspace.json` was put on
+the drive by mistake while the create step was open, and you removed that file again, restart
+HilbertRaum to get the create step back: until then every unlock says "Could not open the workspace."
 
 ---
 

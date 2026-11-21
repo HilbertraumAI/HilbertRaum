@@ -201,7 +201,7 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
 
   /**
    * #955 item 3: after a create refused as `workspace_exists`, re-read main's state. A workspace is on the drive after
-   * all (main reads `locked`, and has run the start's steps over it), so hand the state to the parent, which shows the
+   * all (main reads `locked`; its unlock runs the start's steps), so hand the state to the parent, which shows the
    * unlock form; the refusal goes with it. False (the create form keeps the refusal) without a parent to tell, when the
    * read fails, or when main still reads another state.
    */
