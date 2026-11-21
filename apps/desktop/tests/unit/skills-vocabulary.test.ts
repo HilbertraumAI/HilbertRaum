@@ -363,6 +363,86 @@ describe('isSmallTalkReply — the short small-talk reply (#963)', () => {
   })
 })
 
+// #983 (follow-ups wave 6, G-8): "Thanks for the summary" is a thank-you, not a request for the summary. One closed
+// shape in ten languages, every token accounted for: THANKS + for + an optional determiner + ONE report or effort noun
+// (+ a closing word), or PRAISE + noun (+ THANKS). Never noun-first; no other word. On master these all ran the whole
+// report, or a map-reduce with the thank-you as its target ("Thanks for the help!", "Great job!", «Danke für die Hilfe»).
+describe('isSmallTalkReply: "thanks for the <noun>" and "great <noun>" (#983)', () => {
+  const THANKS_FOR = [
+    // English (W §6 c)
+    'Thanks for the summary', 'Great summary, thanks!', 'Thanks for the minutes', 'Thank you for the brief',
+    'Thanks for the review', 'Nice overview', 'Thanks for the help!', 'Thanks for your help', 'Great job!',
+    'Good job, thanks', 'Nice work', 'Thank you very much for the summary', 'Many thanks for the report',
+    'Thanks so much for your help', 'Thanks for the summary, bye', 'THANKS FOR THE SUMMARY',
+    // German
+    'Danke für die Zusammenfassung', 'Vielen Dank für das Protokoll', 'Super Zusammenfassung, danke!',
+    'Tolle Zusammenfassung', 'Danke für die Hilfe', 'Gute Arbeit, danke', 'Danke fürs Zusammenfassen',
+    'Herzlichen Dank für Ihre Hilfe', 'Danke schön für die Antwort',
+    // the eight newer languages: the same shape, each in its own words
+    'Merci pour le résumé', "Merci pour l'aide", 'Merci beaucoup pour votre travail', 'Excellent travail, merci',
+    'Gracias por el resumen', 'Muchas gracias por la ayuda', 'Buen trabajo, gracias',
+    'Grazie per il riassunto', "Grazie per l'aiuto", 'Ottimo lavoro, grazie',
+    'Спасибо за резюме', 'Большое спасибо за помощь', 'Отличная работа, спасибо',
+    'Bedankt voor de samenvatting', 'Hartelijk bedankt voor de hulp', 'Goed werk, bedankt',
+    'Dziękuję za podsumowanie', 'Dzięki za pomoc', 'Świetna robota, dzięki',
+    'Özet için teşekkürler', 'Yardım için teşekkür ederim', 'ÖZET İÇİN TEŞEKKÜRLER', 'ozet icin tesekkurler',
+    'Harika özet, teşekkürler',
+    'Дякую за резюме', 'Щиро дякую за допомогу', 'Чудова робота, дякую'
+  ]
+
+  it.each(THANKS_FOR)('%s → the short reply, and small talk to the opt-outs', (q) => {
+    expect(isSmallTalkReply(q)).toBe(true)
+    expect(isSmallTalk(q)).toBe(true)
+  })
+
+  const STILL_REQUESTS = [
+    // W §6 c: "Must stay requests"
+    'Summarize the summary', 'Thanks, now write the minutes', 'Thanks — can you shorten the summary?',
+    'Thanks for the summary. Now list every deadline', 'Thanks for the summary of the risks',
+    'Thanks! Tell me about the parking rules', 'Thanks, list every deadline', 'Summary, thanks!', 'Minutes please',
+    'The summary please, thanks',
+    // more than one noun, a verb, a question mark or a noun before the thanks
+    'Thanks for the summary and the minutes', 'Thanks for the summary?', 'Thanks for helping me write the summary',
+    'Great, now the summary', 'Nice, summarize this', 'Danke für die Zusammenfassung, jetzt das Protokoll',
+    'Danke, schreibe jetzt das Protokoll', 'Zusammenfassung, danke!', 'Danke für die Hilfe. Was steht im Vertrag?',
+    // the eight newer languages: the thanks, then a request
+    'Merci, maintenant écris le procès-verbal', 'Merci pour le résumé et le rapport', 'Résumé, merci',
+    'Gracias, ahora redacta el acta', 'Gracias por el resumen del contrato', 'Resumen, gracias',
+    'Grazie, ora scrivi il verbale', 'Grazie per il riassunto del contratto', 'Riassunto, grazie',
+    'Спасибо, теперь составь протокол', 'Спасибо за резюме договора', 'Резюме, спасибо',
+    'Bedankt, schrijf nu de notulen', 'Bedankt voor de samenvatting van het contract', 'Samenvatting, bedankt',
+    'Dziękuję, teraz napisz protokół', 'Dziękuję za podsumowanie umowy', 'Podsumowanie, dziękuję',
+    'Teşekkürler, şimdi tutanağı yaz', 'Özet için teşekkürler, şimdi riskleri listele', 'Özet, teşekkürler',
+    'Дякую, тепер склади протокол', 'Дякую за резюме договору', 'Резюме, дякую',
+    // a noun alone, a thanks alone, the wrong language's "for"
+    'Thanks for', 'Thanks for the', 'for the summary', 'Danke for the summary', 'Dank u voor', 'The summary'
+  ]
+
+  it.each(STILL_REQUESTS)('%s → not the short reply (still a request)', (q) => {
+    expect(isSmallTalkReply(q)).toBe(false)
+  })
+
+  it('the short reply stays a subset of small talk, so no message takes both the reply and a document skill', () => {
+    for (const q of [...THANKS_FOR, ...STILL_REQUESTS]) {
+      if (isSmallTalkReply(q)) expect(isSmallTalk(q), q).toBe(true)
+    }
+  })
+
+  it('a question mark ends the shape for the opt-outs too: "Thanks for the summary?" asks something', () => {
+    for (const q of ['Thanks for the summary?', 'Thanks — can you shorten the summary?', 'Danke für die Hilfe？']) {
+      expect(isSmallTalk(q), q).toBe(false)
+      expect(isSmallTalkReply(q), q).toBe(false)
+    }
+  })
+
+  it('the existing replies and requests keep their verdict', () => {
+    for (const q of ['Danke!', 'Thanks a lot!', 'Great, thanks!', 'Ok thanks', 'How are you?']) expect(isSmallTalkReply(q), q).toBe(true)
+    for (const q of ['Ok, and the deposit?', 'Danke, was ist mit der Kaution?', 'Sure?', 'Alles bitte', 'ok']) {
+      expect(isSmallTalkReply(q), q).toBe(false)
+    }
+  })
+})
+
 describe('W7 — SKA-19 synthesis asks veto the needle (§3.3)', () => {
   it('the extended deliverable synonyms keep a "what is the …" synthesis ask on the whole-doc engine', () => {
     for (const q of [

@@ -117,6 +117,13 @@ from its first public `1.0.0` release onward.
   answered like "When is the notice period?" already was: from the best-matching passages, in seconds. A
   question that asks for a list ("When is each payment due?", «Wann ist jede Zahlung fällig?») keeps the whole
   read, which "each" and «jede» had not done before (#981).
+- **"Thanks for the summary" is answered with a short reply, not the summary again.** In a chat about
+  documents, a thank-you or a compliment that names what it thanks you for ("Thanks for the summary",
+  "Thanks for the help!", "Great job!", «Danke für die Hilfe», «Merci pour le résumé», «Gracias por el
+  resumen», «Özet için teşekkürler») used to start a read of the whole document with your thank-you as the
+  task. It now gets the same short reply as "Thanks!", in English, German, Spanish, French, Italian, Dutch,
+  Polish, Turkish, Russian and Ukrainian. A thank-you followed by a request ("Thanks, now write the
+  minutes") is still a request (#983).
 - **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
   workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
   a password, creating the workspace replaced that file, and with it the only key that opens that

@@ -6291,6 +6291,26 @@ as small talk for them). The question-mark test is one character class, so it is
 (follow-ups wave 5, findings G-1 to G-3): a "?" followed by more words, a non-ASCII question mark, a
 thanks or acknowledgement formula with a question mark, and an acceptance word alone had all taken the
 reply.
+**#983 (follow-ups wave 6, owner call G-8):** a thank-you that names what it thanks
+for takes the reply too, through one helper, `isThanksForShape`, that `isSmallTalk` and `isSmallTalkReply`
+both read (so the reply stays a subset of small talk; it is tested after the question-mark test, and a "?"
+ends the shape for both). It is a closed shape, every token accounted for, in each of the ten languages:
+(A) a THANKS phrase ("thanks", "thank you very much", «vielen Dank», «merci beaucoup», «спасибо большое»,
+«teşekkür ederim») + "for" («für», «fürs», «por», «pour», «per», «за», «voor», «za») + an optional
+determiner + ONE noun that names what the assistant gave (summary, minutes, brief, review, report, overview,
+recap, list, breakdown, analysis, comparison, table, answer, reply, help, explanation, info, work, job,
+effort, and their equivalents), then at most a closing word ("bye", «tschüss»); Turkish puts the noun first
+(«Özet için teşekkürler»); or (B) a PRAISE adjective + that noun, then at most a THANKS phrase ("Great
+summary, thanks!", "Great job!", «Gute Arbeit, danke»). It is never noun-first ("Summary, thanks!",
+"Minutes please" are requests), and any other word keeps the request: "Thanks, now write the minutes",
+"Thanks for the summary of the risks", "Thanks for the summary and the minutes". Before #983 these ran a
+whole-document map-reduce with the thank-you as the target (8 calls for "Thanks for the summary" over a long
+lease; the same for "Thanks for the help!" and "Great job!", with the request as the notes' target). The
+lists are per language, so «Danke for the summary» matches none. **The "Sure?" sub-point (W-6):** a filler
+question such as "Sure?" or an acceptance such as «Alles bitte» reads the documents with the bare message
+as the query (retrieval reads no history); when no passage clears the similarity floor, the answer is the
+fixed no-context reply ("I couldn't find this in your documents") with no model call. That is by design
+(G-1 and G-3 stay).
 
 **The reply, as built.** The system prompt `SMALL_TALK_SYSTEM_PROMPT` is `BASE_SYSTEM_PROMPT` and two fixed
 English lines (model-facing, like `GROUNDING_RULES`; no catalog): the message is small talk in a chat about

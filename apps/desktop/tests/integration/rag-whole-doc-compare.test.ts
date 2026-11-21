@@ -533,6 +533,35 @@ describe('askDocuments — small talk gets the short small-talk reply, which rea
   })
 })
 
+// ---- #983 (follow-ups wave 6, G-8): "Thanks for the summary" is a thank-you too ----
+// Over a document too long to read whole, a thank-you that named the answer ("Thanks for the summary", "Thanks for the
+// help!", «Merci pour le résumé») ran a map-reduce over the whole document, with the thank-you as the notes' target (8 calls
+// for the summary, a task-only report for the rest). It is small talk now: one short reply, no document read. A thank-you
+// followed by a request keeps the request.
+describe('askDocuments — a thank-you that names the answer gets the short reply, over a long document too (#983)', () => {
+  it.each(['Thanks for the summary', 'Thanks for the help!', 'Great job!', 'Danke für die Hilfe', 'Merci pour le résumé'])(
+    'Contract Brief over a document too long to read whole, "%s": one call on the small-talk prompt, nothing read',
+    async (message) => {
+      const h = await makeFenceHarness([LONG_LEASE], 4096)
+      const logged = capLogCount('app:contract-brief')
+      const msg = await ask(h, message, 'app:contract-brief')
+      expectSmallTalkReply(h.runtime, msg, message)
+      expect(capLogCount('app:contract-brief') - logged).toBe(0)
+    }
+  )
+
+  it.each(['Thanks, now write the minutes', 'Thanks for the summary. Now list every deadline', 'Summary, thanks!'])(
+    'Contract Brief over the same document, "%s": still a request, the map-reduce',
+    async (message) => {
+      const h = await makeFenceHarness([LONG_LEASE], 4096)
+      const msg = await ask(h, message, 'app:contract-brief')
+      expect(h.runtime.calls).toBeGreaterThan(2)
+      expect(msg.coverage?.mode).toBe('capped')
+      expect(h.runtime.turns.some((turn) => turn[0]?.content === SMALL_TALK_SYSTEM_PROMPT)).toBe(false)
+    }
+  )
+})
+
 describe("askDocuments — the bundled compare skill's fall-through turn carries paragraph 1 of its fence (#632)", () => {
   it.each([
     { name: 'what-changed over one document', skillId: WHAT_CHANGED_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },

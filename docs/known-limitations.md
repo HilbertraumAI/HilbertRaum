@@ -1352,7 +1352,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the whole document in order instead of the best-matching passages. Everything else is still answered
   from the most relevant passages: a chat with several documents (there is no multi-document whole
   read), a chat with knowledge packs selected (the whole read never searches a pack), a short question
-  about the last answer ("Sure?"; other small talk gets a short reply that reads no document, #963), a
+  about the last answer ("Sure?"; it reads the documents with the bare message as the query, so with no
+  matching passage it gets the fixed "I couldn't find this in your documents" reply; other small talk gets a short
+  reply that reads no document, #963), a
   legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
   window. A summary question over such a longer document uses its deep index when one is built (#642);
   without one it is still answered from the most relevant passages, with no hint to build the index,
