@@ -15,8 +15,10 @@ const HELD_HANDLE_CODES: ReadonlySet<string> = new Set(['EPERM', 'EACCES', 'EBUS
 
 /**
  * The total wait across the retries of ONE rename, about 12 s. A scan of a freshly written file ends
- * well within it, and the engine swap's renames fit in the spawn gate's one-minute margin above the
- * extractor's deadline (`runtime/spawn-gate.ts`).
+ * well within it. An engine install step makes several renames (the archive's move, the flatten, the
+ * swap's two, a move back, the `cpu/` carry), so its worst case is several of these budgets on top of
+ * the extractor's 5-minute deadline, and can outlast the spawn gate's 6-minute bound: a spawn that
+ * waited that long goes ahead, which since #986 meets a complete copy (`runtime/spawn-gate.ts`).
  */
 export const RENAME_RETRY_BUDGET_MS = 12_000
 const FIRST_WAIT_MS = 50
@@ -52,4 +54,13 @@ export async function renameWithRetry(
       wait = Math.min(wait * 2, LONGEST_WAIT_MS)
     }
   }
+}
+
+/**
+ * The retry options for a recursive delete (`rm`/`rmSync`) of a folder a scanner may still hold (#986
+ * review): Node retries EBUSY, EPERM and ENOTEMPTY itself, waiting `retryDelay` ms longer on each try, so
+ * 15 tries of 100 ms add up to 12 s, the rename's budget. On Windows only, like the rename's retries.
+ */
+export function removeRetry(platform: NodeJS.Platform = process.platform): { maxRetries: number; retryDelay: number } {
+  return platform === 'win32' ? { maxRetries: 15, retryDelay: 100 } : { maxRetries: 0, retryDelay: 100 }
 }

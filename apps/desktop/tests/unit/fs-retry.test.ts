@@ -32,7 +32,7 @@ vi.mock('node:timers/promises', async (importOriginal) => {
   return { ...mocked, default: mocked }
 })
 
-import { RENAME_RETRY_BUDGET_MS, renameWithRetry } from '../../src/main/services/fs-retry'
+import { RENAME_RETRY_BUDGET_MS, removeRetry, renameWithRetry } from '../../src/main/services/fs-retry'
 
 beforeEach(() => {
   seams.refusals = []
@@ -64,6 +64,17 @@ describe('renameWithRetry (#986)', () => {
     await expect(renameWithRetry('a', 'b', 'win32')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(seams.calls).toBe(1)
     expect(seams.waits).toEqual([])
+  })
+
+  // #986 review: a delete of a copy a scanner still reads gets the same grace as a rename. Node's `rm` waits
+  // `retryDelay` ms longer on each of its `maxRetries` tries, so the waits add up to retryDelay × n(n+1)/2.
+  it('a delete on Windows retries within the rename budget, and nowhere else', () => {
+    const { maxRetries, retryDelay } = removeRetry('win32')
+    const waited = (retryDelay * maxRetries * (maxRetries + 1)) / 2
+    expect(waited).toBeLessThanOrEqual(RENAME_RETRY_BUDGET_MS)
+    expect(waited).toBeGreaterThan(RENAME_RETRY_BUDGET_MS / 2)
+    expect(removeRetry('linux').maxRetries).toBe(0)
+    expect(removeRetry('darwin').maxRetries).toBe(0)
   })
 
   it.each(['linux', 'darwin'] as const)('on %s the first refusal stands (the codes mean a real permission problem there)', async (platform) => {
