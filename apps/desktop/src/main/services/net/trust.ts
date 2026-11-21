@@ -14,7 +14,8 @@ import { log } from '../logging'
 //   is self-signed, is inside its validity window and has an RSA key of at least 2048 bits or a
 //   P-256/P-384/P-521 or Ed25519 key is added (`usableRoot`), and only when the default list lacks
 //   it. Node's list does not say which Windows store a certificate came from, so a self-signed CA
-//   from the Intermediate or Trusted People stores counts as well (architecture.md "Electron fuses — design record (#562)" §8).
+//   from an Intermediate store, or the machine's Trusted People store, counts as well; Windows'
+//   Disallowed store is not consulted (architecture.md "Electron fuses — design record (#562)" §8).
 // - Additive: every certificate of the default list (bundled + NODE_EXTRA_CA_CERTS, where a build
 //   still reads it) stays; a connection that verified before still does. Electron's SPKI blocklist
 //   (the eMudhra intermediates) is a verify-time check, independent of this list.

@@ -252,25 +252,35 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
     key), is inside its validity window, and has an RSA key of at least 2048 bits, a P-256, P-384
     or P-521 key, or an Ed25519 key, and only when Node's list does not hold it already (by
     fingerprint). On one Windows machine that kept 94 of 120 and added 17.
-  - **What is trusted now, and the residual.** Node returns one list for the Root, the Intermediate
-    Certification Authorities and the Trusted People stores (the machine's and the user's) and
-    does not say which store a certificate came from, so the filter cannot keep only Windows' own
-    roots. Every self-signed CA that passes it is trusted, from any of those stores:
+  - **What is trusted now, and the residual.** Node returns one list for the Root and the
+    Intermediate Certification Authorities stores (the machine's and the user's) and the machine's
+    Trusted People store, and does not say which store a certificate came from, so the filter
+    cannot keep only Windows' own roots. `CurrentUser\TrustedPeople` is not read (Node 24.22.1's
+    source, and measured). Every self-signed CA that passes the filter is trusted, from any of the
+    stores Node reads:
     - roots that Windows still trusts and Chrome dropped (Entrust, the old DigiCert roots,
       VeriSign, Go Daddy);
-    - self-signed CAs that sit in an Intermediate or Trusted People store, which Windows does not
-      treat as roots (measured: "Microsoft TPM Root Certificate Authority 2014" is only in the
-      Intermediate stores, and the downloads trust it); and Windows' per-root purposes are not
-      carried over, so the time-stamping root counts as a TLS root;
-    - any CA a program running as the user puts in `CurrentUser\CA` or
-      `CurrentUser\TrustedPeople`: unlike `CurrentUser\Root`, Windows shows no confirmation for
-      those, so such a program can add a CA the downloads then trust. That is the reach
-      `NODE_EXTRA_CA_CERTS` gave it before the fuse went off.
+    - self-signed CAs that sit in an Intermediate store or the machine's Trusted People store,
+      which Windows does not treat as roots (measured: "Microsoft TPM Root Certificate Authority
+      2014" is only in the Intermediate stores, and the downloads trust it); and Node honours a
+      certificate's enhanced key usage property (a root an administrator set to "not for server
+      authentication" is left out) but not Windows' root-program chain policies, so the
+      time-stamping root counts as a TLS root;
+    - any CA a program running as the user puts in `CurrentUser\CA`: unlike `CurrentUser\Root`,
+      Windows shows no confirmation for it, so such a program can add a CA the downloads then
+      trust (the machine's stores need admin rights). That is the reach `NODE_EXTRA_CA_CERTS` gave
+      it before the fuse went off;
+    - a certificate an administrator distrusted in Windows' `Disallowed` store, when a Root or CA
+      store also holds it: Node never reads `Disallowed` (its source, an upstream TODO). Node's
+      bundled roots were never subject to it either.
 
     None of this can change what gets installed: every engine, model and OCR file is checked
     against a pinned SHA-256 before use, and the downloads send no credentials, so such a CA at
     most lets someone who intercepts the connection see which public file is fetched, or make the
-    download fail. Whether Node's read honours Windows' `Disallowed` store is not verified.
+    download fail. Kept by the owner's call on #961: narrowing the list would take a PowerShell
+    child process at the first download or a move to Chromium's network stack (`architecture.md`
+    "Electron fuses — design record (#562)" §8). Node's reader is checked again on each Electron
+    bump.
   - **The eMudhra block still applies.** Electron's patch
     `tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra RSA
     intermediates to the SPKI blocklist that Node 24.22.1 applies to every TLS context through its
