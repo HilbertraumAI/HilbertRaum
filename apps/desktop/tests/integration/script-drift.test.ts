@@ -281,6 +281,24 @@ describe('TS ↔ shell-script drift (drive license artifacts, LIC-1)', () => {
   })
 })
 
+// --- The knowledge-pack tools' install folders (#986 review 2) ------------------------
+// The Kit gate twins name a leftover `<dir>.new`/`.old` beside every pinned build. The knowledge-pack
+// tools have no row in the runtime matrix (optional family), so the twins list their folders apart; a
+// list behind the yaml stops naming a leftover the canonical gate refuses.
+describe('TS ↔ shell-script drift (knowledge-pack tools folders, #986)', () => {
+  const yamlKiwixDirs = (): string[] => {
+    const builds = committedRuntimeSources().families?.kiwix_tools?.builds ?? []
+    return [...new Set(builds.map((b) => b.extractTo))].sort()
+  }
+  it.each([
+    ['scripts/build-commercial-drive.ps1', '$KiwixToolsDirs = @('],
+    ['scripts/build-commercial-drive.sh', 'KIWIX_TOOLS_DIRS=(']
+  ])('%s lists every pinned kiwix_tools install folder', (rel, header) => {
+    expect(yamlKiwixDirs().length).toBeGreaterThan(0)
+    expect(extractScriptArray(repoText(rel), header).sort()).toEqual(yamlKiwixDirs())
+  })
+})
+
 // --- No user data on a sold drive (#893) ---------------------------------------------
 // The builder's native pre-flight re-states the sell gate's user-data rule
 // (commercial-drive.ts `userDataArtifacts`): the folders that must hold nothing and the config

@@ -506,6 +506,20 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).not.toContain('mac@b9999')
       })
 
+      // #986 review 2: the knowledge-pack tools have no row in the runtime matrix (optional family), and
+      // their install can be interrupted all the same.
+      it('names a leftover beside the knowledge-pack tools too (#986)', () => {
+        const root = scriptRoot('script-swap-kiwix-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        mkdirSync(join(root, 'runtime', 'kiwix-tools', 'linux.old'), { recursive: true })
+        mkdirSync(join(root, 'runtime', 'kiwix-tools', 'win.new'), { recursive: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/kiwix-tools/linux.old is left from an interrupted engine install')
+        expect(out).toContain('runtime: runtime/kiwix-tools/win.new is left from an interrupted engine install')
+      })
+
       // #986 review: a leftover that is a link whose target is gone is still a leftover (the canonical
       // gate lstats it). The PowerShell twin looks at the entry itself, not its target.
       it('names a leftover that is a dangling link (#986)', () => {

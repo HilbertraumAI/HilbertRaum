@@ -475,6 +475,23 @@ if (-not $DryRun) {
     $problems += 'model-manifests/runtime-sources.yaml missing on the drive'
   }
 }
+# #986: the knowledge-pack tools are optional, so the matrix above has no row for them, but an engine
+# install interrupted on this drive leaves their swap folders just the same (assertCommercialDrive
+# parity; script-drift.test.ts holds this list to runtime-sources.yaml). Exact names only.
+$KiwixToolsDirs = @(
+  'runtime/kiwix-tools/win',
+  'runtime/kiwix-tools/mac',
+  'runtime/kiwix-tools/linux'
+)
+if (-not $DryRun) {
+  foreach ($ktDir in $KiwixToolsDirs) {
+    foreach ($swapLeft in @("$ktDir.new", "$ktDir.old")) {
+      if (Get-Item -LiteralPath (Join-Path $Target $swapLeft) -Force -ErrorAction SilentlyContinue) {
+        $problems += "runtime: $swapLeft is left from an interrupted engine install (start the app on this drive once, or delete it)"
+      }
+    }
+  }
+}
 # OCR asset gate (Phase 38, assertCommercialDrive parity): every pinned ocr file must
 # be present with a matching sha256 (plain files -- the hash IS the install state).
 if (-not $DryRun) {
