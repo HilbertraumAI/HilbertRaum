@@ -611,8 +611,9 @@ What to do:
 
 - **Don't delete the key file**, and keep a copy of it. It can be damaged in a way that can be
   repaired: a key file that was edited by hand or by a tool (a bracket removed, text a sync tool
-  added) can often be put right. (A byte-order mark that an editor such as Windows PowerShell 5.1
-  or an older Notepad adds no longer makes the file unreadable, issue #974.)
+  added) can often be put right. (A UTF-8 byte-order mark that an editor such as Windows PowerShell
+  5.1 or an older Notepad adds no longer makes the file unreadable, issue #974. A file saved as
+  UTF-16, the default of PowerShell 5.1's `>` and `Out-File`, still does.)
 - Look for the encrypted file first, as "Your password is correct, but the encrypted workspace file
   is missing from the drive" above describes: the recycle bin or trash, a sync tool's deleted or
   conflict files, a `FOUND.000` folder. Put it back as `workspace/hilbertraum.sqlite.enc`.
