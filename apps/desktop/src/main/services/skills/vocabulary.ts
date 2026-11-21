@@ -1106,18 +1106,28 @@ const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHA
 // alle?"); \balle\b matches the bare word without hitting 'alles'/'allen' (word boundary before the 's').
 // Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
 //
-// #981 (follow-ups wave 6, G-9): "each", "every" and "which" (German «jede[nmrs]», «welche[nmrs]») turn a lookup
-// question into a list ("When must each obligation be fulfilled?", "Who was assigned which action items?"). The
-// veto is a WORD match on the lower-cased question. It only turns needles into deliverables, the safe direction by
-// the rule above.
+// #981 (follow-ups wave 6, G-9): "each", "every", "which" (German «jede[nmrs]», «welche[nmrs]») and a bare "all" turn a
+// lookup question into a list ("When must each obligation be fulfilled?", "When must all invoices be paid?", "Who was
+// assigned which action items?"). All of them are WORD matches on the lower-cased question, and they only turn needles
+// into deliverables, the safe direction by the rule above. Two exceptions keep a plain lookup a lookup, because the
+// whole report is the #981 symptom: a FREQUENCY ("each month", "every other week", «jeden Monat», «jede weitere
+// Stunde»: the quantifier, then at most one adjective, then a time unit) is no list, and a relative or indirect
+// "which"/«welche» right after a comma ("Where does it say, which notice period applies?", «Gibt es eine Klausel, welche
+// die Haftung begrenzt?») asks for one fact. «liste» was a bare substring and matched inside "listed", "listener",
+// "listening", "blister", "glisten": the guard refuses a following d, n or r, which also loses the German plural
+// «Listen» (a recorded gap); «Liste», «Aufgabenliste» and «Fristenliste» still veto. Linear: no nested quantifier.
+const TIME_UNIT =
+  '(?:times?|days?|weeks?|months?|quarters?|years?|mornings?|afternoons?|evenings?|nights?|hours?|minutes?|' +
+  'tag|woche|monat|quartal|jahr|mal|stunde)'
 const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [
   /\balle\b/,
-  // #981 follow-up: "all the" and «liste» were bare substrings, so "sh-all the", "c-all the", "inst-all the" and "listed"
-  // / "listener" vetoed a lookup ("When shall the tenant pay?" read as a list). "all the" is now a phrase of whole
-  // words; «liste» still matches inside a German compound («Fristenliste», «Listen») but not "listed" or "listener".
-  /(?<![\p{L}\p{N}])all the(?![\p{L}\p{N}])/u,
-  /liste(?!d(?![\p{L}\p{N}])|ners?(?![\p{L}\p{N}]))/u,
-  /(?<![\p{L}\p{N}])(?:each|every|jede[nmrs]?|welche[nmrs]?)(?![\p{L}\p{N}])/u
+  /(?<![\p{L}\p{N}])all(?![\p{L}\p{N}])/u,
+  /liste(?![dnr])/u,
+  new RegExp(
+    `(?<![\\p{L}\\p{N}])(?:each|every|jede[nmrs]?)(?![\\p{L}\\p{N}])(?!\\s+(?:\\p{L}+\\s+)?${TIME_UNIT}(?![\\p{L}\\p{N}]))`,
+    'u'
+  ),
+  /(?<!,\s*)(?<![\p{L}\p{N}])(?:which|welche[nmrs]?)(?![\p{L}\p{N}])/u
 ]
 
 /** Unambiguous single-fact LOOKUP interrogatives (EN+DE) — a "find this one thing" ask. Kept tight (a false

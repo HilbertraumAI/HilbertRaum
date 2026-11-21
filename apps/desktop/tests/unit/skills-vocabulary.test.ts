@@ -490,20 +490,62 @@ describe('isNeedleShaped — "find a" is a word (#939 review)', () => {
 // #981 (follow-ups wave 6, G-9 = C2): "When must they give notice?" is a lookup, not a request for the report. The new
 // forms are WORD-anchored and definite-singular; German verb-second («Wann endet …») routes like the English twin
 // (#582); an each/every/jede/welche veto keeps a list a list. Rows are W §5 (c)'s table ("Should be" column).
-// #981 follow-up: the list-all substrings "all the" and «liste» matched inside other words.
-describe('isNeedleShaped: "all the" and «liste» are words, not substrings (#981)', () => {
+// #981 follow-up: the list-all words are words, not pieces of other words, and "all" is the word (not only "all the").
+describe('isNeedleShaped: "all" and «liste» are words, not substrings (#981)', () => {
   it.each([
     'When shall the tenant pay?', 'When is it ok to call the landlord before I give notice?',
-    'When is the tenant going to install the heating?', 'When was the property listed?', 'Who was the listener?'
+    'When is the tenant going to install the heating?', 'When was the property listed?', 'Who was the listener?',
+    'When is the small fee due?', 'When is it a call for the tenant?', 'When can I install the lock?',
+    'When must I stop listening to the landlord?', 'When is the blister pack due?'
   ])('%s → a lookup', (question) => {
     expect(isNeedleShaped(question)).toBe(true)
   })
 
   it.each([
-    'Show me all the deadlines', 'List all the action items', 'When is all the rent due?', 'Wann ist die Fristenliste fällig?',
-    'Wann sind die Listen fällig?', 'Wann ist die Liste fällig?'
+    'Show me all the deadlines', 'List all the action items', 'When is all the rent due?',
+    // master's substring "all the" also caught these; a letter after "the" must not let them through (review O2)
+    'How much are all these payments together?', 'What is the total of all their payments?',
+    'What is the sum of all these invoices?', 'How much do all those fees add up to?',
+    'When must all invoices be paid?', 'When should all of the payments be made?', 'When is all rent due?',
+    'Wann ist die Fristenliste fällig?', 'Wann ist die Liste fällig?', 'Wann ist die Aufgabenliste fällig?'
   ])('%s → a list', (question) => {
     expect(isNeedleShaped(question)).toBe(false)
+  })
+})
+
+// Review round 1 (follow-ups wave 6): the each/every/jede veto and "which" / «welche».
+describe('isNeedleShaped: the veto reads quantifiers as words, and a frequency or a relative "which" is no list (#981)', () => {
+  it.each([
+    'When was the contract signed and which parties signed it?', 'Who is the contact for which department?',
+    'When must which documents be submitted?', 'Wann müssen welche Pflichten erfüllt werden?',
+    'Wann sind welche Zahlungen fällig?', 'When is each payment due?', 'Wann ist jede Zahlung fällig?'
+  ])('%s → a list', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    // a frequency: one fact, not a list (before the exclusion the veto turned these into the whole report)
+    'How much is the rent each month?', 'When is rent due every month?', 'When is the rent due each month?',
+    'How much is the service charge each year?', 'What is the late fee for each day of delay?',
+    'When is the meeting held every other week?', 'How much do I pay each additional day?',
+    'When must I pay each time the rent changes?',
+    'Wann ist die Miete jeden Monat fällig?', 'Wie viel kostet die Miete jeden Monat?',
+    'Wann muss ich jeden Monat zahlen?', 'Wie viel kostet jede weitere Stunde?', 'Wann ist die Miete jedes Quartal fällig?',
+    // a relative or indirect "which" / «welche» after a comma
+    'Wo steht, welche Kündigungsfrist gilt?', 'Gibt es eine Klausel, welche die Haftung begrenzt?',
+    'Steht im Vertrag, welche Partei die Reparaturen zahlt?', 'Was ist die Strafe, welche bei Verzug fällig wird?',
+    'Where does it say, which notice period applies?',
+    // the veto's left anchor: "each" inside "breach", "reach", "teach" is no quantifier
+    'When must the breach be cured?', 'When can I reach the landlord?', 'When does the teacher teach it?',
+    // a letter before "all": "overall" is a report word, but "install", "shall", "call", "small" are none
+    'When is the install date?'
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it('a frequency AND a list in one question is still a list', () => {
+    expect(isNeedleShaped('When is each payment due each month?')).toBe(false)
+    expect(isNeedleShaped('Wann ist jede Zahlung jeden Monat fällig?')).toBe(false)
   })
 })
 
