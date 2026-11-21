@@ -31,9 +31,11 @@ const roundUp = (bytes: number, unit: number): number => Math.ceil(bytes / unit)
 /** Every parent folder of the member paths, plus the members that are folders themselves. */
 function folderCount(names: Iterable<string>, explicitDirs: Iterable<string>): number {
   const dirs = new Set<string>()
-  for (const d of explicitDirs) dirs.add(d.replace(/\/+$/, ''))
+  // One spelling for both: `tar -C dir .` writes `./build/` as well as `./build/x`, which must count once.
+  const clean = (p: string): string => p.replace(/^(\.\/)+/, '')
+  for (const d of explicitDirs) dirs.add(clean(d).replace(/\/+$/, ''))
   for (const name of names) {
-    const parts = name.replace(/^\.\//, '').split('/').filter(Boolean)
+    const parts = clean(name).split('/').filter(Boolean)
     for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'))
   }
   dirs.delete('')

@@ -53,6 +53,18 @@ describe('extractedArchiveBytes (#986)', () => {
     expect(await extractedArchiveBytes(tgz, 4096)).toBe(8192 + 4096 + 2 * 4096)
   })
 
+  // #986 review 3: `tar -C dir .` writes `./build/` as well as `./build/x`; the folder counts once.
+  it('counts a folder once when the archive spells it with a leading ./', async () => {
+    const tgz = archive(
+      makeTarGz([
+        { name: './', dir: true },
+        { name: './build/', dir: true },
+        { name: './build/llama-server', data: data(10) }
+      ])
+    )
+    expect(await extractedArchiveBytes(tgz, 4096)).toBe(4096 + 4096)
+  })
+
   it('takes a GNU long name and a pax size override into account', async () => {
     const header = (name: string, type: string, size: number): Buffer => {
       const h = Buffer.alloc(512)
