@@ -158,6 +158,16 @@ function layout(root: string): Record<string, string> {
 }
 const NOTHING_LEFT = { staging: 'absent', previous: 'absent', netStaging: 'absent', netPrevious: 'absent' }
 
+/** Every downloaded archive left anywhere under the drive's `runtime/`, relative with `/`. */
+function archivesUnder(root: string): string[] {
+  const base = join(root, 'runtime')
+  if (!existsSync(base)) return []
+  return (readdirSync(base, { recursive: true }) as string[])
+    .map((p) => p.split(/[\\/]/).join('/'))
+    .filter((p) => p.endsWith('.zip') || p.endsWith('.tar.gz'))
+    .sort()
+}
+
 async function recover(root: string, manifestsDir: string): Promise<void> {
   recoverEngineSwaps(root, manifestsDir)
   await engineFolderDeletesSettled()
@@ -479,6 +489,60 @@ describe('the staged swap in an engine job (#986)', () => {
       if (from.endsWith(join('Release', BIN)) && box.jobId) box.cancelledAt = box.mgr!.cancel(box.jobId).status
     }
     box.mgr = manager({ extract: nested })
+    const started = await box.mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    box.jobId = started.jobId
+    const job = await settle(box.mgr, started.jobId)
+    expect(box.cancelledAt).toBe('cancelled')
+    expect(job.status).toBe('cancelled')
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  it('a first install, with a cpu/ net pinned, installs the main build alone and leaves no archive', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const mgr = manager()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+    expect(archivesUnder(rootPath)).toEqual([])
+  })
+
+  it('a reinstall of the cpu/ net alone swaps it inside the install and leaves the main build as it was', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    net(netDir(rootPath), 'b150')
+    const mainBefore = readFileSync(join(liveDir(rootPath), BIN), 'utf8')
+    const mgr = manager()
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      reinstall: true,
+      reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
+    })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(readFileSync(join(liveDir(rootPath), BIN), 'utf8')).toBe(mainBefore)
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+    expect(archivesUnder(rootPath)).toEqual([])
+  })
+
+  // #986 review: a cancel that lands while the swap deletes a stale `.old` is honoured: the signal is
+  // checked again right before the first rename.
+  it('a cancel that lands while a stale .old is deleted, just before the swap, is honoured', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    copy(`${liveDir(rootPath)}.old`, 'b100')
+    const before = fingerprintTree(liveDir(rootPath))
+    const box: { mgr?: EngineDownloadManager; jobId?: string; cancelledAt?: string } = {}
+    seams.rmRefuses = (p) => {
+      if (p !== `${liveDir(rootPath)}.old`) return false
+      // A delete before phase 2 (the job's own recovery queues one) is refused; the swap's own meets the cancel.
+      if (!box.jobId || box.mgr!.get(box.jobId).status !== 'extracting') return true
+      box.cancelledAt = box.mgr!.cancel(box.jobId).status
+      return false
+    }
+    box.mgr = manager()
     const started = await box.mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
     box.jobId = started.jobId
     const job = await settle(box.mgr, started.jobId)

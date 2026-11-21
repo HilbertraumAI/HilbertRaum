@@ -1461,7 +1461,9 @@ describe('engine updates (#516)', () => {
     expect([...zips(llamaDir(rootPath)), ...zips(cpuDir(rootPath))]).toEqual([])
   })
 
-  it('a job that stops part-way still reports what it replaced: the main build swapped, the cpu/ net failed', async () => {
+  // #986 review: phase 2 installs a family's cpu/ net before its main build (its archive sits inside the
+  // main folder, which the main build's swap moves), so here the net is swapped and the main build fails.
+  it('a job that stops part-way still reports what it replaced: the cpu/ net swapped, the main build failed', async () => {
     const { rootPath, manifestsDir } = makeUpdateDrive()
     await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
     await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
@@ -1469,23 +1471,22 @@ describe('engine updates (#516)', () => {
       fetchImpl: okFetch,
       extractImpl: async (archive, destDir, signal) => {
         // #986: each archive unpacks into its staging folder beside the install.
-        if (destDir === `${cpuDir(rootPath)}.new`) throw new Error('tar exited with code 1')
+        if (destDir === `${llamaDir(rootPath)}.new`) throw new Error('tar exited with code 1')
         await familyExtract(archive, destDir, signal)
       }
     })
-    const installedFamilies: string[][] = []
-    mgr.onInstalled((families) => installedFamilies.push(families))
+    const installed_: Array<[string[], Partial<Record<string, string[]>>]> = []
+    mgr.onInstalled((families, programs) => installed_.push([families, programs]))
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
     await runToEnd(mgr, started.jobId)
     await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     expect(mgr.get(started.jobId).status).toBe('failed')
-    expect(markerVersion(llamaDir(rootPath))).toBe('b200')
-    // #986: the net's failed step left the old net in place, carried over from the replaced main
-    // copy, instead of clearing it: the chat ladder keeps its rung 3.
-    expect(markerVersion(cpuDir(rootPath))).toBe('b150')
-    expect(readFileSync(join(cpuDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
-    // The new main build is on the drive, so its consumers hear of it (re-arm, probe refresh).
-    expect(installedFamilies).toEqual([['llama_cpp']])
+    // The failed main build left the installed one as it was; the new net sits inside it.
+    expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+    expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
+    expect(markerVersion(cpuDir(rootPath))).toBe('b200')
+    // The new net is on the drive, so its consumers hear of it (its old verdict goes, #678).
+    expect(installed_).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
     expect(engineSpawnsHeld('llama_cpp')).toBe(false)
   })
 

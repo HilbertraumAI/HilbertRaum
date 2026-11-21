@@ -3015,8 +3015,9 @@ export const en = {
   'main.engine.notEnoughSpace':
     'There is not enough free space on this drive: the engine needs {needed} once unpacked, and ' +
     '{free} is free. Free up space on the drive, then try again.',
-  // #986: the staged swap's rename was refused after its retries (a file held in the folder); the
-  // installed copy was put back as it was.
+  // #986: the staged swap's rename was refused after its retries (a file held in the folder). The
+  // installed copy was put back; or, when even that was refused, both copies were kept, and the retry
+  // (or the next start) moves the new one in, so "try again" holds either way.
   'main.engine.filesInUse':
     'The engine could not be replaced because another program is using one of its files (an ' +
     'antivirus scan, for example). Please try again in a minute.',

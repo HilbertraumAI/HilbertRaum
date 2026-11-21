@@ -49,7 +49,7 @@ import {
 } from './assets'
 import { extractedArchiveBytes } from './archive-size'
 import { freeBytes } from './disk-space'
-import { renameWithRetry } from './fs-retry'
+import { removeRetry, renameWithRetry } from './fs-retry'
 import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
 import { assertDownloadAllowed, NetworkSwitch, type DownloadGates } from './downloads'
@@ -1158,14 +1158,16 @@ export class EngineDownloadManager {
           return
         }
       }
-      for (const [i, step] of steps.entries()) {
+      const order = installOrder(steps)
+      for (const [i, step] of order.entries()) {
         const outcome = await this.replaceInstall(job, step, rootPath, controller, replacedFolders)
         if (outcome === 'done') replaced.push(step)
         // A cancel stops what has not started; a swap it arrived too late to stop stays recorded.
-        const last = i === steps.length - 1
+        const last = i === order.length - 1
         if (outcome !== 'done' || (controller.signal.aborted && !last)) {
           if (outcome === 'done') job.status = 'cancelled'
-          await discard(fetched.slice(i + 1))
+          // Every archive is in by now: the steps not yet installed hold the ones still to go.
+          await discard(order.slice(i + 1).map((s) => s.plan))
           return
         }
       }
@@ -1384,16 +1386,16 @@ export class EngineDownloadManager {
         log: this.deps.log
       })
       // #986: until the first rename nothing installed has been touched, so a cancel that landed
-      // after the extraction is honoured too. (#516 used to finish such an install: the old copy was
+      // after the extraction is honoured too: `swapEngineFolder` checks it right before that rename
+      // (after any wait on a stale `.old`). (#516 used to finish such an install: the old copy was
       // already gone by then. It no longer is.)
-      if (controller.signal.aborted) throw new Error('engine install cancelled before the swap')
       // A scanner can take a fresh file after the check: the antivirus case of #986. (The stage's
       // own test, `existsSync`, again.)
       if (!requiredInstallFiles(staged).every((p) => existsSync(p))) {
         throw new EngineStepError('incomplete', tMain('main.engine.binaryMissing'))
       }
       try {
-        await swapEngineFolder(dirs, this.deps.log)
+        await swapEngineFolder(dirs, this.deps.log, controller.signal)
       } catch (err) {
         if (err instanceof EngineStepError && err.keepStaging) keepStaging = true
         throw err
@@ -1410,8 +1412,9 @@ export class EngineDownloadManager {
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'
     } catch (err) {
-      // Before the status flips: the renderer refreshes once, on the terminal status. A `.new` the
-      // swap could not put back is the only whole copy left, so it stays for the next start.
+      // Before the status flips: the renderer refreshes once, on the terminal status. A `.new` that is
+      // the only whole copy left (the swap could not put the old one back) stays: the next attempt in
+      // this session, or the next start, moves it in.
       if (dirs && !keepStaging) deleteEngineFolderLater(dirs.staging, this.deps.log)
       await rm(plan.zipDest, { force: true }).catch(() => undefined)
       if (job.status === 'cancelled') return 'aborted'
@@ -1425,7 +1428,7 @@ export class EngineDownloadManager {
       }
       this.deps.log?.('Engine install failed', {
         error: String(err),
-        ...(keepStaging ? { kept: 'both copies, for the next start' } : {})
+        ...(keepStaging ? { kept: 'the only whole copies, for the next attempt or start' } : {})
       })
       return 'failed'
     }
@@ -1437,7 +1440,7 @@ class EngineStepError extends Error {
   constructor(
     readonly reason: EngineJobEndReason,
     message: string,
-    /** The swap could not put the old copy back: the staged copy is the only whole one, kept. */
+    /** A staged (or leftover) copy that is the only whole one: kept for the next attempt or start. */
     readonly keepStaging = false
   ) {
     super(message)
@@ -1445,6 +1448,22 @@ class EngineStepError extends Error {
 }
 
 type EngineLog = ((msg: string, meta?: unknown) => void) | undefined
+
+/**
+ * The order phase 2 installs a job's steps in (#986 review): per family, its `cpu/` net BEFORE its main
+ * build. The net's folder sits inside the main one (`<os>/cpu/`) and its archive downloads into it, so
+ * with the main build first its swap moved the net's archive to `<os>.old/cpu/`, and a refused carry
+ * left the net step without it and the archive inside `cpu/` for good. Net first, the net's swap happens
+ * inside the old install folder and the main build's carry takes the NEW net across; no archive is ever
+ * inside a folder another step renames. Families keep their order; phase 1 keeps the plan's.
+ */
+function installOrder(steps: readonly InstallStep[]): InstallStep[] {
+  const families = [...new Set(steps.map((s) => s.family))]
+  return families.flatMap((f) => [
+    ...steps.filter((s) => s.family === f && !s.main),
+    ...steps.filter((s) => s.family === f && s.main)
+  ])
+}
 
 /** Is there anything at `p`, a dangling link included. */
 function present(p: string): boolean {
@@ -1513,7 +1532,9 @@ async function removeEngineFolder(dir: string, log: EngineLog): Promise<boolean>
     if (!present(dir)) return true
     // `recursive`: whatever sits at the marker's name goes, a folder posing as it too.
     if (isRealFolder(dir)) await rm(runtimeMarkerPath(dir), { force: true, recursive: true })
-    await rm(dir, { recursive: true, force: true })
+    // On Windows a scanner still reading a just-failed copy makes the delete EBUSY/EPERM for a moment:
+    // Node retries within the rename's budget (`removeRetry`).
+    await rm(dir, { recursive: true, force: true, ...removeRetry() })
     return true
   } catch (err) {
     log?.('Could not remove an engine folder', { folder: basename(dir), error: String(err) })
@@ -1641,13 +1662,17 @@ export async function stageEngineInstall(
  * stale `.old` that cannot go (a program of an earlier session still runs from it) or a refused first
  * rename fails before the install folder is touched; a refused second rename moves the old copy back.
  * Each of those is `filesInUse`, with the install folder as it was. Only when the old copy cannot be
- * moved back either are both copies left for the next start, which moves the new one in.
+ * moved back either are both copies kept (the install folder is gone meanwhile): the next attempt in this
+ * session (its `recoverEngineFolder`) or the next start moves the new one in, so "try again" holds. A
+ * cancel that landed while a stale `.old` was being deleted is honoured: `signal` is checked once more
+ * right before the first rename.
  */
-async function swapEngineFolder(dirs: EngineSwapDirs, log: EngineLog): Promise<void> {
+async function swapEngineFolder(dirs: EngineSwapDirs, log: EngineLog, signal?: AbortSignal): Promise<void> {
   await engineFolderDeletesSettled()
   const inUse = (keepStaging = false): EngineStepError =>
     new EngineStepError('filesInUse', tMain('main.engine.filesInUse'), keepStaging)
   if (present(dirs.previous) && !(await removeEngineFolder(dirs.previous, log))) throw inUse()
+  if (signal?.aborted) throw new Error('engine install cancelled before the swap')
   const hadLive = present(dirs.live)
   if (hadLive) {
     try {
@@ -1665,7 +1690,7 @@ async function swapEngineFolder(dirs: EngineSwapDirs, log: EngineLog): Promise<v
       try {
         await renameWithRetry(dirs.previous, dirs.live)
       } catch (back) {
-        log?.('The installed engine could not be moved back: both copies stay for the next start', {
+        log?.('The installed engine could not be moved back: both copies stay for the next attempt or start', {
           error: String(back)
         })
         throw inUse(true)

@@ -2983,7 +2983,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.engine.notEnoughSpace':
     'Auf diesem Laufwerk ist nicht genug Speicherplatz frei: Die Engine braucht entpackt {needed}, ' +
     'frei sind {free}. Gib auf dem Laufwerk Speicherplatz frei und versuche es dann erneut.',
-  // #986: siehe en.ts — der Tausch per Umbenennen wurde verweigert; die installierte Kopie blieb.
+  // #986: siehe en.ts — der Tausch per Umbenennen wurde verweigert; die installierte Kopie blieb, oder beide
+  // Kopien blieben, und der nächste Versuch (oder Start) setzt die neue ein.
   'main.engine.filesInUse':
     'Die Engine konnte nicht ersetzt werden, weil ein anderes Programm eine ihrer Dateien verwendet ' +
     '(zum Beispiel ein Virenscanner). Bitte versuche es in einer Minute erneut.',
