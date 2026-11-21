@@ -69,7 +69,7 @@ import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
 import { runtimeMarkerPath, writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
 import { tMain } from '../../src/main/services/i18n'
 import type { EngineDownloadJob } from '../../src/shared/types'
-import { makeTarGz, makeZip } from '../helpers/archives'
+import { makeSizeOnlyZip, makeTarGz, makeZip } from '../helpers/archives'
 import { runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { fingerprintTree } from '../helpers/read-only-witness'
@@ -509,6 +509,49 @@ describe('the staged swap in an engine job (#986)', () => {
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
   })
 
+  // #986: a full drive used to fail half-way through the extraction, after the old copy was deleted.
+  it('a drive without room to unpack refuses with the figures before the pause, and nothing is touched', async () => {
+    // A directory claiming 10,000 members of ~4.3 GB: more than any disk has free.
+    const archive = makeSizeOnlyZip(10_000, 0xfffffffe)
+    const { rootPath, manifestsDir } = makeDrive(archive)
+    copy(liveDir(rootPath), 'b150')
+    net(netDir(rootPath), 'b200')
+    const before = fingerprintTree(liveDir(rootPath))
+    let extracted = 0
+    let paused = 0
+    const mgr = manager({
+      archive,
+      extract: async () => {
+        extracted++
+      }
+    })
+    const ends: EngineJobEnd[] = []
+    mgr.onSettled((_job, end) => ends.push(end))
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      ...update,
+      beforeReplace: async () => {
+        paused++
+      }
+    })
+    const job = await settle(mgr, started.jobId)
+    expect(job.status).toBe('failed')
+    // The refusal names both figures: the copy around them is the catalog's, the needed one in GB.
+    const [head, middle, tail] = tMain('main.engine.notEnoughSpace', { needed: '\u0000', free: '\u0000' }).split('\u0000')
+    expect(job.error!.startsWith(head)).toBe(true)
+    expect(job.error).toContain(middle)
+    expect(job.error!.endsWith(tail)).toBe(true)
+    expect(job.error!.slice(head.length, job.error!.indexOf(middle))).toMatch(/GB$/)
+    expect(ends).toHaveLength(1)
+    expect(ends[0]).toMatchObject({ reason: 'noSpace' })
+    expect(ends[0].space!.neededBytes).toBeGreaterThan(10_000 * 0xfffffffe)
+    expect(ends[0].space!.neededBytes).toBeGreaterThan(ends[0].space!.freeBytes)
+    expect({ extracted, paused }).toEqual({ extracted: 0, paused: 0 })
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
 })
 
 // #856 + #986: the real default extractor, through the OS's own tar, unpacking in the staging folder

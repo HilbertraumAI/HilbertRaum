@@ -189,7 +189,7 @@ const AUDIT_TRIGGER = 'user'
 function engineAuditMetadata(
   job: EngineDownloadJob,
   preview: EngineDownloadPreview,
-  end?: Pick<EngineJobEnd, 'reason' | 'cause'>
+  end?: Pick<EngineJobEnd, 'reason' | 'cause' | 'space'>
 ): Record<string, unknown> {
   const versions: Record<string, string> = {}
   for (const item of preview.items) versions[item.family] = item.version
@@ -203,7 +203,9 @@ function engineAuditMetadata(
     sizeBytes: preview.totalBytes,
     trigger: AUDIT_TRIGGER,
     ...(end?.reason ? { reason: end.reason } : {}),
-    ...(end?.cause ? { cause: end.cause } : {})
+    ...(end?.cause ? { cause: end.cause } : {}),
+    // #986: a `noSpace` end's two byte counts, the figures its message named.
+    ...(end?.space ? { neededBytes: end.space.neededBytes, freeBytes: end.space.freeBytes } : {})
   }
 }
 

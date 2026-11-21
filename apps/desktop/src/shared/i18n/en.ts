@@ -3010,6 +3010,11 @@ export const en = {
   // #516: the update pauses the engine for the file swap, which would cut off work in progress.
   'main.engine.updateBusy':
     'The AI engine is in use right now (an answer, an import, a translation or a document task is running). Try the update again when it has finished.',
+  // #986: refused before anything is touched — the archives' unpacked size (from the archives
+  // themselves) against the drive's free space; the figures follow main.download.notEnoughSpace.
+  'main.engine.notEnoughSpace':
+    'There is not enough free space on this drive: the engine needs {needed} once unpacked, and ' +
+    '{free} is free. Free up space on the drive, then try again.',
   // #986: the staged swap's rename was refused after its retries (a file held in the folder); the
   // installed copy was put back as it was.
   'main.engine.filesInUse':

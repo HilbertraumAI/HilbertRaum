@@ -2877,6 +2877,9 @@ export const nl: UiCatalog<'nl'> = {
   'main.engine.updateBusy':
     'De AI-engine is op dit moment in gebruik (er is een antwoord, een import, een vertaling of ' +
     'een documenttaak bezig). Probeer de update opnieuw als dat klaar is.',
+  'main.engine.notEnoughSpace':
+    'Er is niet genoeg vrije ruimte op deze schijf: de engine heeft uitgepakt {needed} nodig; vrije ' +
+    'ruimte: {free}. Maak ruimte vrij op de schijf en probeer het dan opnieuw.',
   'main.engine.filesInUse':
     'De engine kon niet worden vervangen, omdat een ander programma een van de bestanden gebruikt ' +
     '(bijvoorbeeld een virusscan). Probeer het over een minuut opnieuw.',

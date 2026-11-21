@@ -2942,6 +2942,9 @@ export const pl: UiCatalog<'pl'> = {
   'main.engine.updateBusy':
     'Silnik AI jest teraz w użyciu (trwa generowanie odpowiedzi, import, tłumaczenie lub zadanie ' +
     'dotyczące dokumentu). Spróbuj ponownie zaktualizować silnik, gdy praca się zakończy.',
+  'main.engine.notEnoughSpace':
+    'Na tym dysku jest za mało wolnego miejsca: rozpakowany silnik wymaga {needed}, wolne miejsce: ' +
+    '{free}. Zwolnij miejsce na dysku i spróbuj ponownie.',
   'main.engine.filesInUse':
     'Nie udało się zastąpić silnika, ponieważ inny program używa jednego z jego plików (na przykład ' +
     'skaner antywirusowy). Spróbuj ponownie za minutę.',

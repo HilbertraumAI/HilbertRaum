@@ -2265,7 +2265,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'chat.packs.outcome.summary',
       'review.progress',
       'review.summary.gateHint',
-      'main.download.notEnoughSpace'
+      'main.download.notEnoughSpace',
+      'main.engine.notEnoughSpace'
     ]
   }
 }

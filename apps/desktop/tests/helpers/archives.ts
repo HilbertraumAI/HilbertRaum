@@ -82,6 +82,34 @@ export function makeZip(entries: ZipEntry[]): Buffer {
   return Buffer.concat([...locals, centralBuf, end])
 }
 
+/**
+ * A zip whose central directory names `count` members of `sizeEach` uncompressed bytes each and holds none of their
+ * data (#986): what the engine installer's room check reads (the directory alone), so a test can claim more than any
+ * disk has free without writing it. Never extractable; an installer that refuses it for room never tries.
+ */
+export function makeSizeOnlyZip(count: number, sizeEach: number): Buffer {
+  const centrals: Buffer[] = []
+  for (let i = 0; i < count; i++) {
+    const name = Buffer.from(`part-${i}.bin`, 'utf8')
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt32LE(sizeEach, 20) // compressed size
+    central.writeUInt32LE(sizeEach, 24) // uncompressed size
+    central.writeUInt16LE(name.length, 28)
+    centrals.push(central, name)
+  }
+  const centralBuf = Buffer.concat(centrals)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(count, 8)
+  end.writeUInt16LE(count, 10)
+  end.writeUInt32LE(centralBuf.length, 12)
+  end.writeUInt32LE(0, 16) // the directory starts the file
+  return Buffer.concat([centralBuf, end])
+}
+
 /** One tar member: a file, a directory (`name` ends in `/`), or a symlink to `symlink` (relative to its own directory). */
 export type TarEntry = { name: string; data: Buffer; mode?: number } | { name: string; dir: true } | { name: string; symlink: string }
 

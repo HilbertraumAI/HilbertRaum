@@ -1,10 +1,11 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
-import { lstat, mkdir, readdir, readlink, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readlink, rm, stat, statfs } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { parse as parseYaml } from 'yaml'
-import { tMain } from './i18n'
+import { mainUiLanguage, tMain } from './i18n'
+import { fmt1, unitJoin } from '../../shared/format'
 import type {
   EngineDownloadJob,
   EngineDownloadKind,
@@ -46,6 +47,8 @@ import {
   type SidecarFamilySpec,
   type RuntimeDownloadPlan
 } from './assets'
+import { extractedArchiveBytes } from './archive-size'
+import { freeBytes } from './disk-space'
 import { renameWithRetry } from './fs-retry'
 import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
@@ -752,7 +755,8 @@ export function previewEngineDownload(opts: EngineStepRequest): EngineDownloadPr
 /**
  * Why a job did not finish (#843), for its audit record: a content-free code, never the job's
  * `error` text. `cancelled` and `networkOff` (#782) are the stops; the rest name where it failed.
- * #986: `filesInUse` — the swap's rename was refused (a file held in the folder) and the installed copy
+ * #986: `noSpace` — the drive had no room to unpack the archives, so nothing was touched;
+ * `filesInUse` — the swap's rename was refused (a file held in the folder) and the installed copy
  * was put back.
  */
 export type EngineJobEndReason =
@@ -765,9 +769,16 @@ export type EngineJobEndReason =
   | 'incomplete'
   | 'install'
   | 'notReplaced'
+  | 'noSpace'
   | 'filesInUse'
   // A failure outside every step that records its own reason (an unexpected exception in the run).
   | 'internal'
+
+/** #986: the room a job needed to unpack its archives on one volume, and what that volume had free. */
+export interface EngineSpaceShortfall {
+  neededBytes: number
+  freeBytes: number
+}
 
 /** What a settled job's listeners learn beside its snapshot (#843). */
 export interface EngineJobEnd {
@@ -775,6 +786,8 @@ export interface EngineJobEnd {
   reason: EngineJobEndReason | null
   /** For `download`: the failure's content-free label (`failureReason`: `network`, `http-404`, …). */
   cause?: string
+  /** #986: for `noSpace`, the byte counts its message names. */
+  space?: EngineSpaceShortfall
   /** What the job set out to fetch (the same preview its dialog showed), or null if unknown. */
   preview: EngineDownloadPreview | null
 }
@@ -804,7 +817,10 @@ export class EngineDownloadManager {
   private readonly settledListeners = new Set<(job: EngineDownloadJob, end: EngineJobEnd) => void>()
   /** #843: what each job set out to fetch (its dialog's preview) and why it stopped, for the audit. */
   private readonly previews = new Map<string, EngineDownloadPreview>()
-  private readonly endReasons = new Map<string, { reason: EngineJobEndReason; cause?: string }>
+  private readonly endReasons = new Map<
+    string,
+    { reason: EngineJobEndReason; cause?: string; space?: EngineSpaceShortfall }
+  >
 
   constructor(private readonly deps: EngineDownloadDeps = {}) {}
 
@@ -948,12 +964,24 @@ export class EngineDownloadManager {
     // `cancelled` without either (a cancel that won a race with a failure) is a cancel; any other
     // ending without one is `internal`, never a guess at the step it reached.
     const fallback: EngineJobEndReason = job.status === 'cancelled' ? 'cancelled' : 'internal'
-    return { reason: recorded?.reason ?? fallback, ...(recorded?.cause ? { cause: recorded.cause } : {}), preview }
+    return {
+      reason: recorded?.reason ?? fallback,
+      ...(recorded?.cause ? { cause: recorded.cause } : {}),
+      ...(recorded?.space ? { space: recorded.space } : {}),
+      preview
+    }
   }
 
   /** #843: record why `job` stops; the first reason recorded for a job stands. */
-  private noteEnd(job: EngineDownloadJob, reason: EngineJobEndReason, cause?: string): void {
-    if (!this.endReasons.has(job.jobId)) this.endReasons.set(job.jobId, { reason, ...(cause ? { cause } : {}) })
+  private noteEnd(
+    job: EngineDownloadJob,
+    reason: EngineJobEndReason,
+    cause?: string,
+    space?: EngineSpaceShortfall
+  ): void {
+    if (!this.endReasons.has(job.jobId)) {
+      this.endReasons.set(job.jobId, { reason, ...(cause ? { cause } : {}), ...(space ? { space } : {}) })
+    }
   }
 
   get(jobId: string): EngineDownloadJob {
@@ -1053,8 +1081,9 @@ export class EngineDownloadManager {
    * is downloaded and verified first, while the installed engine stays untouched and usable; only
    * then (after `beforeReplace`, the update's pause) is each install replaced, which takes seconds.
    * A failure or cancel in the first phase replaces nothing. Archives not yet extracted when the
-   * job stops are deleted. #986: each replacement is a staged swap (`replaceInstall`), so a step
-   * that fails leaves its install as it was.
+   * job stops are deleted. #986: between the phases the job checks that the drive has room to
+   * unpack every archive, before the pause; and each replacement is a staged swap
+   * (`replaceInstall`), so a step that fails leaves its install as it was.
    */
   private async run(
     job: EngineDownloadJob,
@@ -1087,6 +1116,23 @@ export class EngineDownloadManager {
       }
     }
     job.status = 'extracting'
+    // #986: a drive without room to unpack the archives refuses the job here, with the figures:
+    // before the pause (a refused update never stops the model) and before anything installed is
+    // touched. A full drive used to fail half-way through the extraction, with the old copy deleted.
+    const shortfall = await this.missingRoom(steps)
+    if (controller.signal.aborted) {
+      job.status = 'cancelled'
+      await discard(fetched)
+      return
+    }
+    if (shortfall) {
+      job.status = 'failed'
+      job.error = tMain('main.engine.notEnoughSpace', spaceFigures(shortfall))
+      this.noteEnd(job, 'noSpace', undefined, shortfall)
+      this.deps.log?.('Not enough free space to unpack the engine: nothing was replaced', shortfall)
+      await discard(fetched)
+      return
+    }
     // #516: from the pause to the last marker, no program of these families may start — a
     // helper restarting by itself, or a model start that was still hashing its weights, waits
     // for the swap (`spawn-gate.ts`) instead of running a half-extracted binary.
@@ -1270,6 +1316,44 @@ export class EngineDownloadManager {
   }
 
   /**
+   * #986: the room the job's archives need unpacked, against the free space where they unpack. Each
+   * archive's extracted size comes from the verified archive itself (`extractedArchiveBytes`, rounded
+   * to the volume's allocation unit), plus a unit for its staging folder and one for its marker; the
+   * replaced copies are deleted only after the job, so the steps on one volume add up. The staging
+   * folder is a sibling of the install folder, so its parent's volume is the one that counts. Null
+   * when there is room, and also when a figure is unknown (an archive the reader cannot size, a volume
+   * that cannot say): then nothing is refused, as the model downloader's room check (#768) does.
+   */
+  private async missingRoom(steps: readonly InstallStep[]): Promise<EngineSpaceShortfall | null> {
+    const volumes = new Map<number, { needed: number; free: number | null }>()
+    for (const step of steps) {
+      const parent = dirname(step.plan.extractTo)
+      let dev: number
+      let unit: number
+      try {
+        dev = (await stat(parent)).dev
+        unit = Number((await statfs(parent)).bsize)
+      } catch {
+        return null
+      }
+      const unpacked = await extractedArchiveBytes(step.plan.zipDest, unit)
+      if (unpacked === null) {
+        this.deps.log?.('The engine archive could not be sized: no free-space check', {
+          archive: basename(step.plan.zipDest)
+        })
+        return null
+      }
+      const volume = volumes.get(dev) ?? { needed: 0, free: await freeBytes(parent) }
+      volume.needed += unpacked + 2 * unit
+      volumes.set(dev, volume)
+    }
+    for (const { needed, free } of volumes.values()) {
+      if (free !== null && needed > free) return { neededBytes: needed, freeBytes: free }
+    }
+    return null
+  }
+
+  /**
    * Phase 2 for ONE verified archive (#986): a staged swap, never a delete first. `stageEngineInstall`
    * builds the new copy in `<live>.new/` (extract, flatten, left-out files, link sweep, required files,
    * hashes, every file flushed, the marker written last INSIDE `.new`). A cancel is honoured until the
@@ -1379,6 +1463,23 @@ function isRealFolder(p: string): boolean {
   } catch {
     return false
   }
+}
+
+/** The `needed`/`free` figures of `main.engine.notEnoughSpace`, by the model downloader's rules (#768). */
+function spaceFigures({ neededBytes, freeBytes: free }: EngineSpaceShortfall): { needed: string; free: string } {
+  const lang = mainUiLanguage()
+  // The same rules as `assertRoomFor` in downloads.ts: both figures in the unit the size needs,
+  // decimal, one decimal, joined the way the UI language joins a figure and its unit (#804); free
+  // space rounds down to the tenth, the size as shown elsewhere unless that prints the same tenth,
+  // and then up — which always differs, since needed > free.
+  const [unit, label]: [number, string] =
+    neededBytes >= 1e9 ? [1e9, 'GB'] : neededBytes >= 1e6 ? [1e6, 'MB'] : [1e3, 'KB']
+  const shown = (bytes: number): string => `${fmt1(bytes / unit, lang)}${unitJoin(lang)}${label}`
+  const tenth = unit / 10
+  const freeShown = shown(Math.floor(free / tenth) * tenth)
+  let neededShown = shown(neededBytes)
+  if (neededShown === freeShown) neededShown = shown(Math.ceil(neededBytes / tenth) * tenth)
+  return { needed: neededShown, free: freeShown }
 }
 
 // ---- The staged swap (#986; architecture.md "In-app engine updates" §6) -------------------------

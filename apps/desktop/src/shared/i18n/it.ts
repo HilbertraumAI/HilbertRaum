@@ -2963,6 +2963,9 @@ export const it: UiCatalog<'it'> = {
   'main.engine.updateBusy':
     'Il motore IA è in uso in questo momento (è in corso una risposta, un’importazione, una ' +
     'traduzione o un’attività sui documenti). Riprova l’aggiornamento quando avrà finito.',
+  'main.engine.notEnoughSpace':
+    'Su questa unità non c’è abbastanza spazio libero (necessario per estrarre il motore: {needed}; ' +
+    'libero: {free}). Libera spazio sull’unità, poi riprova.',
   'main.engine.filesInUse':
     'Non è stato possibile sostituire il motore perché un altro programma sta usando uno dei suoi ' +
     'file (ad esempio una scansione antivirus). Riprova tra un minuto.',

@@ -2746,6 +2746,9 @@ export const tr: UiCatalog<'tr'> = {
   'main.engine.updateBusy':
     'Yapay zekâ motoru şu anda kullanımda (bir yanıt, içe aktarma, çeviri veya belge görevi ' +
     'sürüyor). Bu işlem bittiğinde güncellemeyi yeniden deneyin.',
+  'main.engine.notEnoughSpace':
+    'Bu sürücüde yeterli boş alan yok (motorun açılması için gereken: {needed}, boş alan: {free}). ' +
+    'Sürücüde yer açın, ardından yeniden deneyin.',
   'main.engine.filesInUse':
     'Motor değiştirilemedi çünkü başka bir program dosyalarından birini kullanıyor (örneğin bir ' +
     'virüs taraması). Bir dakika sonra yeniden deneyin.',

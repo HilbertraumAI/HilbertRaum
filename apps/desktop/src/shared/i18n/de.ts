@@ -2979,6 +2979,10 @@ export const de: Record<keyof typeof en, string> = {
   // #516: das Update hält die Engine für den Dateitausch an, das würde laufende Arbeit abbrechen.
   'main.engine.updateBusy':
     'Die KI-Engine wird gerade verwendet (eine Antwort, ein Import, eine Übersetzung oder eine Dokumentaufgabe läuft). Versuche das Update erneut, wenn sie fertig ist.',
+  // #986: siehe en.ts — vor jeder Änderung abgelehnt; Zahlen wie bei main.download.notEnoughSpace.
+  'main.engine.notEnoughSpace':
+    'Auf diesem Laufwerk ist nicht genug Speicherplatz frei: Die Engine braucht entpackt {needed}, ' +
+    'frei sind {free}. Gib auf dem Laufwerk Speicherplatz frei und versuche es dann erneut.',
   // #986: siehe en.ts — der Tausch per Umbenennen wurde verweigert; die installierte Kopie blieb.
   'main.engine.filesInUse':
     'Die Engine konnte nicht ersetzt werden, weil ein anderes Programm eine ihrer Dateien verwendet ' +
