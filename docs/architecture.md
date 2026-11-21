@@ -15751,6 +15751,18 @@ window loading a static page; first-contentful-paint in ms after the window is c
   binaries ran with `--disable-features=CalculateNativeWinOcclusion`; the figures compare with each
   other, not with the i9's above. The probe itself had stopped loading on 2026-11-03 (#769 gave
   `tests/helpers/fixtures.ts` an extension-less import) and registers `ts-sibling-imports.mjs` now.
+- **43.8.7 (Dependabot #852, 2026-11-21), same desktop.** One fix: a dialog parented to a window
+  that is not mapped (never shown, or hidden again) no longer crashes the browser on Wayland
+  (electron/electron#55569, a cherry-pick of Chromium's `[ozone/wayland] Do not export toplevels that
+  have no role`); the dialog opens without a parent instead. It reaches no known path here: every
+  parented dialog is opened from the shown main window, and the close guard shows the window before
+  its dialog. Otherwise only refreshed PGO profiles. Both stock binaries report the same Chromium
+  150.0.7871.250, Node 24.22.1, V8 15.0.245.31, SQLite 3.53.4 and undici 7.30.1, and the same stock
+  fuse wire. A `--win portable` package: fuse wire `000011001` (#564's), the release workflow's
+  packaged-archive rows 51/51, `packaged-app-probe.mjs` 9 passed and none failed (OCR skipped: no
+  traineddata on this machine), the three real-Electron smokes 24/24. The visible-window probe (a
+  scratch copy of the same design, occlusion tracking off), 7 interleaved runs each with a discarded
+  warm-up: 1,131 ms (43.8.6) and 1,147 ms (43.8.7), ranges overlapping, no change.
 
 ### §4 Re-verification ledger (2026-10-01, the desktop above)
 
