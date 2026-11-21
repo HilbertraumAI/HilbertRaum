@@ -301,7 +301,8 @@ export interface EmergencyLockDeps {
  * or is killed as soon as it returns. In order: arm the workspace lock latch (so no content
  * surface admits new work between here and the kill), fire-and-forget the local API's stop
  * (in-process, no orphan class — only so live external sockets abort instead of dangling until
- * the OS reaps them), flush the encrypted log while the vault key is live, then
+ * the OS reaps them), abort the plaintext and knowledge-pack operations and shred the transients
+ * they registered (#964 security round), flush the encrypted log while the vault key is live, then
  * `workspace.shutdown()` = `lock()` (re-encrypt + shred the plaintext working DB; for
  * `plaintext_dev` a checkpoint + close so no `-wal`/`-shm` outlive the process, #51). Then reap
  * every registered sidecar child: on Windows the children survive the parent, so without this
@@ -309,12 +310,13 @@ export interface EmergencyLockDeps {
  * half first, the hygiene half in its OWN try so a lock throw cannot skip it). A failed lock is
  * logged and left to the next launch's recovery (`workspace.shutdown()` closes the re-opened
  * handle so the working file rests bare and newer than `.enc` — the salvage signature `init()`
- * rolls forward instead of shredding).
+ * rolls forward instead of shredding). Its duration is logged after the lock, content-free.
  */
 export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = {}): void {
   const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
   const killSidecarChildren = deps.killSidecarChildren ?? killRegisteredSidecarChildren
   const log = deps.log ?? realLog
+  const startedAt = performance.now()
   try {
     ctx?.workspace.beginLock()
   } catch {
@@ -325,11 +327,54 @@ export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = 
   } catch {
     /* best-effort */
   }
+  // #964 security round (F2): abort every plaintext and knowledge-pack operation in flight and shred the transients
+  // they registered (a preview, import, re-index, dictation, export or OCR task's decrypted `.parse*` copy; a pack
+  // operation's `library.<n>.xml`), as Lock now and the quit teardown do (#237, #301). Nothing here can await their
+  // settle, so a parser that cannot cancel has its file shredded under it: the lock's own rule at its bound. All
+  // four calls are synchronous and never throw; each has its own try all the same, as in the lock path. The pack
+  // service's `zim-transient/` cleanup is left to the next session start: kiwix-serve still runs until the reap.
+  let swept = 0
+  try {
+    ctx?.plaintextOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
+  try {
+    ctx?.zimOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
+  try {
+    swept += ctx?.plaintextOps?.sweepRegistered() ?? 0
+  } catch {
+    /* best-effort */
+  }
+  try {
+    swept += ctx?.zimOps?.sweepRegistered() ?? 0
+  } catch {
+    /* best-effort */
+  }
+  try {
+    // Before the flush, so it lands in the encrypted log; a count only.
+    if (swept > 0) log.info('emergency lock: swept registered transients', { swept })
+  } catch {
+    /* a log line must never stop the lock */
+  }
+  let lockFailed = false
   try {
     detachVaultKey()
     ctx?.workspace.shutdown()
   } catch (err) {
+    lockFailed = true
     log.error('emergency lock failed — the next launch recovers the working copy', failureForLog(err))
+  }
+  // #964 security round (F1): how long the lock took, against the 10 s Electron allows a lost session's `quit`. The
+  // key is gone by now, so this line reaches the console and a `plaintext_dev` log, not the encrypted one; the
+  // lock's phases are in the perf log (`vault_lock_done`) when HILBERTRAUM_PERF_LOG=1. Content-free.
+  try {
+    log.info('emergency lock: finished', { durationMs: Math.round(performance.now() - startedAt), lockFailed })
+  } catch {
+    /* best-effort */
   }
   try {
     killSidecarChildren()
@@ -463,6 +508,19 @@ export interface AppLifecycleHandlers {
  * nothing. A `quit` DURING a running teardown is a session lost mid-quit: Electron ends the process
  * as the event returns, so the teardown never reaches its lock, and `onQuitEvent` locks at once.
  */
+/**
+ * The line a lock handler writes right before `emergencyLock`, in its own guard (#964 security round, F4): the
+ * handler has already marked the lock as run, so a logger that threw there would leave the workspace unlocked with
+ * every later signal and `quit` doing nothing. The real sinks swallow their errors; this makes it structural.
+ */
+function logBeforeLock(line: () => void): void {
+  try {
+    line()
+  } catch {
+    /* a log line must never stop the lock */
+  }
+}
+
 export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycleHandlers {
   let shuttingDown = false
   /** The session-end lock ran (nothing awaits; a later `will-quit` has nothing left to do). */
@@ -543,9 +601,9 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       shuttingDown = true
       sessionEndLocked = true
       lockRan = true
-      // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
-      deps.log.info('session-end: locking workspace', { reasons: event?.reasons ?? [] })
       try {
+        // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
+        logBeforeLock(() => deps.log.info('session-end: locking workspace', { reasons: event?.reasons ?? [] }))
         deps.emergencyLock()
       } catch (err) {
         deps.log.error('session-end: lock failed', failureForLog(err))
@@ -563,9 +621,9 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       shuttingDown = true
       sessionEndLocked = true
       lockRan = true
-      // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
-      deps.log.info('signal: locking workspace', { signal })
       try {
+        // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
+        logBeforeLock(() => deps.log.info('signal: locking workspace', { signal }))
         deps.emergencyLock()
       } catch (err) {
         deps.log.error('signal: lock failed', failureForLog(err))
@@ -584,9 +642,11 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       shuttingDown = true
       sessionEndLocked = true
       lockRan = true
-      // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
-      deps.log.info('quit: the session ended before the workspace locked — locking workspace', { midTeardown })
       try {
+        // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
+        logBeforeLock(() =>
+          deps.log.info('quit: the session ended before the workspace locked — locking workspace', { midTeardown })
+        )
         deps.emergencyLock()
       } catch (err) {
         deps.log.error('quit: lock failed', failureForLog(err))

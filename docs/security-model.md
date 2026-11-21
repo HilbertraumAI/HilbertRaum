@@ -1979,9 +1979,15 @@ re-encrypts (the bullet below).
   without it) → `onSessionEnd` on the lifecycle factory
   (`main/shutdown.ts`), which runs `emergencyLock` — the `uncaughtException` crash path's
   synchronous best-effort lock, extracted and now shared: arm the lock latch, fire-and-forget the
-  local-API stop, flush the encrypted log, `workspace.shutdown()` (re-encrypt + shred; a
-  `plaintext_dev` DB is checkpointed + closed), then reap the registered sidecar children in its
-  own try. It runs exactly once, over the SAME closure as `will-quit`/`activate`: a session end
+  local-API stop, abort the plaintext and knowledge-pack operations in flight and shred the
+  decrypted transients they registered (#964 security round; no settle can be awaited, so a parser
+  that cannot cancel has its file shredded under it, as at the lock's bound), flush the encrypted
+  log, `workspace.shutdown()` (re-encrypt + shred; a `plaintext_dev` DB is checkpointed +
+  closed), log the lock's duration (content-free; after the flush it reaches the console and a
+  `plaintext_dev` log only), then reap the registered sidecar children in its own try. The
+  knowledge-pack service's `zim-transient/` cleanup is left to the next session start (kiwix-serve
+  runs until the reap). It runs exactly once, over the SAME closure as `will-quit`/`activate`: a
+  session end
   during a running quit teardown defers to that teardown (on Windows the ordering cannot occur —
   the quit closed every window before `will-quit`), and a `will-quit` after the session-end lock
   exits at once (a prevented quit that never exited would make macOS report the app as
@@ -1997,7 +2003,8 @@ re-encrypts (the bullet below).
   system then CANCELS leaves behind (the app alive with the workspace locked and no window
   recreated on a Dock click — quit and relaunch) — owner live check pending (#226); until then
   quit before shutting down. **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two
-  legs, both registered inside `app.whenReady` on Linux only, over the same closure. (1) A termination
+  legs, both registered inside `app.whenReady` on Linux only, first in it after the second-instance
+  return (before the code that can throw), over the same closure. (1) A termination
   signal — SIGTERM (`kill`, `systemctl stop`, a session manager), SIGINT (Ctrl+C), SIGHUP (the
   terminal closed) — runs `onTerminationSignal`: `emergencyLock` once, then `app.exit(0)`. Electron's
   own handler made each signal an ordinary, preventable quit with one shot: the close guard's
@@ -2012,18 +2019,34 @@ re-encrypts (the bullet below).
   Electron then exits with no `before-quit` and no `will-quit`, only `quit` (measured), so
   `onQuitEvent` runs `emergencyLock` unless a lock already ran. A `quit` during a running quit
   teardown (a log-out right after Ctrl+Q) locks at once: Electron ends the process as the event
-  returns, and the teardown never reaches its own lock (measured: one lock, exit 0). A lost bus also
-  brought a SIGTERM a few milliseconds after the `quit` lock (measured twice; most likely GLib's
-  exit-on-close for its D-Bus connection): whichever comes first locks, the other does nothing. A
-  signal that lands in the last milliseconds of the exit, after the lock, ends the
-  process with status 143. Same trade-off as Windows: no question, no save, and no partial reply
-  kept. Not yet checked: a real desktop log-out (GNOME, KDE), a lost display (needs Xvfb), the
-  packaged AppImage (`AppRun` is believed to `exec` Electron). The Linux `powerMonitor` leg (logind's
-  `PrepareForShutdown`) is not registered: the two legs already cover a poweroff. Pinned by
-  `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings against
-  `will-quit`, the reap on the exit path, throw-safety, the Linux signal and `quit` legs (one lock
+  returns, and the teardown never reaches its own lock (measured: one lock, exit 0). This leg runs
+  under Electron's fixed 10 s shutdown watchdog (`Browser::ExitWithCode`), whatever the session
+  manager allows: a lock that takes longer ends in a crash (`Failed to shutdown.`, status 133;
+  measured with a stand-in lock that blocks: 8 s finished, 12 s and 15 s crashed). The workspace
+  is then left unencrypted on the drive until the next start, which recovers it as after any cut
+  lock (the working file is checkpointed and closed before the re-encrypt). Where the host keeps
+  core dumps (systemd-coredump, apport), that crash may store a memory image of the main process,
+  vault key and decrypted pages included, on the host's disk (seen as "core dumped" under WSL; a
+  given desktop's setting is not checked). The lock writes about twice the database's size, so a
+  workspace of a few hundred MB on a slow stick may not fit; the lock's duration is logged after
+  it. The signal leg has no such bound: its lock runs before `app.exit` (a 5 s lock with three more
+  signals during it finished, status 0). Owner call (2026-11-21): keep this leg and document the
+  bound. A lost bus also brought a SIGTERM a few milliseconds after the `quit` lock in two of four
+  runs (most likely GLib's exit-on-close for its D-Bus connection): whichever comes first locks,
+  the other does nothing. A signal that lands in the last milliseconds of the exit, after the
+  lock, ends the process with status 143. Not covered: SIGKILL and SIGQUIT (Ctrl+\ in a
+  terminal), whose default action ends the process at once, SIGQUIT with a core dump where the
+  host keeps them; nothing locks. Same trade-off as Windows: no question, no save, and no partial
+  reply kept; the decrypted transients of the operations in flight are shredded (above). Not yet
+  checked: a real desktop log-out (GNOME, KDE), a lost display (needs Xvfb), the packaged AppImage
+  (`AppRun` is believed to `exec` Electron). The Linux `powerMonitor` leg (logind's
+  `PrepareForShutdown`, which would lock before the session goes, outside that watchdog) is not
+  registered: a poweroff reaches the two legs above, the lost session's under its 10 s bound.
+  Pinned by `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings
+  against `will-quit`, the reap on the exit path, throw-safety (a throwing log line before the lock
+  included), the transient sweep, the duration line, the Linux signal and `quit` legs (one lock
   whatever came first), and the `index.ts` wiring (source text, including that the Linux legs sit
-  inside `app.whenReady`).
+  inside `app.whenReady`, before the protocol, the menu and the window).
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so

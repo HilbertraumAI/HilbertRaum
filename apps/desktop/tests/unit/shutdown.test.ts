@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   performShutdown,
@@ -10,6 +10,8 @@ import {
 import type { AppContext } from '../../src/main/services/context'
 import { workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
+import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
+import { tempRoot } from '../helpers/db-fixtures'
 import { until } from '../helpers/hang-budget'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
@@ -563,7 +565,8 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     handlers.onSessionEnd({ reasons: ['shutdown'] })
     // No await: the OS kills the process as soon as the handler returns, so everything that
     // matters happened by now. The local-API stop is fire-and-forget (in-process, no orphan).
-    expect(order).toEqual(['localApi.stop', 'detach', 'lock', 'reap'])
+    // #964 security round: the plaintext operations are aborted and their transients shredded before the lock.
+    expect(order).toEqual(['localApi.stop', 'plaintext.abort', 'plaintext.sweep', 'detach', 'lock', 'reap'])
     expect(handlers.isShuttingDown()).toBe(true)
     expect(exits).toEqual([]) // the lock does not exit by itself — the OS ends the process
   })
@@ -688,6 +691,52 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     expect(workspaceAdmitsWork(workspace)).toBe(false) // a late doc task, import or analyze: refused
   })
 
+  // #964 security round (F2): a signal, a session end or a crash never runs the quit teardown, which aborts the
+  // operations in flight and shreds the decrypted transients they registered (#237, #301). Before, a preview or an
+  // import cut by `kill` left its `.parse*` copy on the drive until the next start. The real registry, a real file.
+  it.each(['plaintextOps', 'zimOps'] as const)(
+    'emergencyLock aborts the %s in flight and shreds their registered transients before the lock',
+    (registry) => {
+      const transient = join(tempRoot('shutdown-transient'), 'document.parse.md')
+      writeFileSync(transient, 'decrypted text')
+      const ops = createPlaintextOps()
+      const op = ops.register(registry === 'zimOps' ? 'zim-ask' : 'preview')
+      op.track(transient)
+      let presentAtLock: boolean | null = null
+      const ctx = {
+        [registry]: ops,
+        workspace: workspaceStandIn({}, { shutdown: () => void (presentAtLock = existsSync(transient)) })
+      } as unknown as AppContext
+      emergencyLock(ctx, { detachVaultKey: () => undefined, killSidecarChildren: () => undefined, log: quietLog })
+      expect(op.signal.aborted).toBe(true)
+      expect(presentAtLock).toBe(false) // gone before the vault lock ran
+      expect(existsSync(transient)).toBe(false)
+    }
+  )
+
+  // #964 security round (F1): a lost session's `quit` gives the lock about 10 s before Electron crashes the process, so
+  // the lock's duration is logged after it, content-free, whichever way it ended.
+  it.each([false, true])('emergencyLock logs its duration after the lock (lock fails: %s)', (fails) => {
+    const order: Array<string | [string, unknown]> = []
+    const ctx = {
+      workspace: workspaceStandIn(
+        {},
+        {
+          shutdown: () => {
+            order.push('lock')
+            if (fails) throw new Error('ENOSPC')
+          }
+        }
+      )
+    } as unknown as AppContext
+    emergencyLock(ctx, {
+      detachVaultKey: () => undefined,
+      killSidecarChildren: () => void order.push('reap'),
+      log: { error: () => undefined, info: (message: string, meta?: unknown) => void order.push([message, meta]) }
+    })
+    expect(order).toEqual(['lock', [expect.any(String), { durationMs: expect.any(Number), lockFailed: fails }], 'reap'])
+  })
+
   // #964: on Linux, Electron turns SIGTERM, SIGINT and SIGHUP into an ordinary quit with one shot (the close guard's
   // question or a failed save held it, and a second signal killed the app unlocked: exit 143, measured on Electron
   // 43.8.6 Linux), and a lost session (a log-out) ends the app with only `quit`, so nothing locked. The signal leg
@@ -698,7 +747,7 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       const { order, exits, handlers } = sessionHarness('linux')
       handlers.onTerminationSignal('SIGTERM')
       // No await: the listener replaced the default action, so this exit is the only way the process ends.
-      expect(order).toEqual(['localApi.stop', 'detach', 'lock', 'reap', 'exit'])
+      expect(order).toEqual(['localApi.stop', 'plaintext.abort', 'plaintext.sweep', 'detach', 'lock', 'reap', 'exit'])
       expect(exits).toEqual([0])
       expect(handlers.isShuttingDown()).toBe(true)
     })
@@ -753,6 +802,39 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       expect(JSON.stringify(errors)).not.toContain('hilbertraum.sqlite')
     })
 
+    // #964 security round (F4): each lock leg marks the lock as run before its log line. A logger that threw there left
+    // the workspace unlocked, and every later signal and `quit` then did nothing (the review's probes P3, P4).
+    it.each<[string, (h: ReturnType<typeof createAppLifecycleHandlers>) => void, number[]]>([
+      ['a signal', (h) => h.onTerminationSignal('SIGTERM'), [0]],
+      ['a lost session’s quit', (h) => h.onQuitEvent(), []],
+      ['a session end', (h) => h.onSessionEnd(), []]
+    ])('%s still locks, once, when the log line before the lock throws', (_leg, run, expectedExits) => {
+      let locks = 0
+      const exits: number[] = []
+      const handlers = createAppLifecycleHandlers({
+        performShutdown: async () => undefined,
+        emergencyLock: () => void locks++,
+        exit: (code) => void exits.push(code),
+        createWindow: () => undefined,
+        mainWindowCount: () => 1,
+        platform: 'linux',
+        quit: () => undefined,
+        killSidecarChildren: () => undefined,
+        log: {
+          error: () => undefined,
+          info: () => {
+            throw new Error('log sink failed')
+          }
+        }
+      })
+      expect(() => run(handlers)).not.toThrow()
+      expect(locks).toBe(1)
+      expect(exits).toEqual(expectedExits) // the signal leg still ends the app
+      handlers.onQuitEvent()
+      handlers.onTerminationSignal('SIGTERM')
+      expect(locks).toBe(1)
+    })
+
     // A lost session reaches the app as `quit` only. Whatever came before, the workspace ends locked exactly once.
     // "During a parked quit teardown" is a log-out right after Ctrl+Q: Electron ends the process as `quit` returns,
     // so the teardown never reaches its own lock (which is why the row never releases it).
@@ -797,6 +879,13 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     const ready = indexSrc.slice(readyAt, readyEnd)
     const linuxAt = ready.indexOf("if (process.platform === 'linux') {")
     expect(linuxAt, 'the Linux legs are gated to Linux, inside whenReady').toBeGreaterThan(0)
+    // #964 security round (F3): first in the callback after the second-instance return, before the code that can
+    // throw (the protocol, the menu, the window): a throw there would otherwise skip the registration silently.
+    expect(linuxAt, 'after the second-instance return').toBeGreaterThan(ready.indexOf('if (!isPrimaryInstance) return'))
+    for (const later of ['installAppProtocol(', 'Menu.setApplicationMenu(', '\n  createWindow()']) {
+      expect(ready.indexOf(later), later).toBeGreaterThan(0)
+      expect(linuxAt, `before ${later.trim()}`).toBeLessThan(ready.indexOf(later))
+    }
     const linux = ready.slice(linuxAt, ready.indexOf('\n  }\n', linuxAt))
     expect(linux).toContain("for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const)")
     expect(linux).toContain('process.on(signal, () => lifecycle.onTerminationSignal(signal))')

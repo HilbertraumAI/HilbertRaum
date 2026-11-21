@@ -70,14 +70,22 @@ password recovery — are documented in
   Windows the app locks the workspace itself as the session ends (PR #285). On Linux it does the
   same when a log-out, a shutdown or a `kill` ends it (#964): a termination signal (SIGTERM,
   SIGINT or SIGHUP) or a lost session locks the workspace at once and ends the app, with no
-  question. Both are best effort: a very large workspace may not finish locking in the time the
-  system allows, and a review change made in the last second, a reply still being written or a
-  scan still being read is not kept, so quitting first is still the sure way. The Linux legs are
-  measured on Electron 43.8.6 under WSL with a stand-in app (the three signals, a lost D-Bus
-  session bus); a real desktop log-out (GNOME, KDE), a lost display and the packaged AppImage are
-  not checked yet. A forced kill (SIGKILL) still loses every change since the last **Lock now** or
-  normal quit. On macOS the `shutdown` leg is registered but not yet verified on a Mac (owner live
-  check, #226), so quit first there (user-guide §13; `security-model.md` "OS session end locks the
+  question. Both are best effort: a very large workspace may not finish locking in the time
+  Windows allows, and a review change made in the last second, a reply still being written or a
+  scan still being read is not kept, so quitting first is still the sure way. On Linux a log-out
+  usually arrives as a lost session, and then Electron gives the lock a fixed 10 seconds: a lock
+  that takes longer (a workspace of a few hundred MB on a slow stick may) ends in a crash
+  (status 133). The workspace is then left unencrypted on the drive until the next start, which
+  recovers its data as after any lock that was cut short; where the system keeps crash dumps
+  (systemd-coredump, apport), a memory image of the app, vault key included, may be stored on the
+  computer's disk. A signal (`kill`, `systemctl stop`, Ctrl+C) has no such limit. Lock first, or
+  quit, before you log out with a large workspace. The Linux legs are measured on Electron 43.8.6
+  under WSL with a stand-in app (the three signals, a lost D-Bus session bus, a lock slowed to 8,
+  12 and 15 seconds); a real desktop log-out (GNOME, KDE), a lost display and the packaged
+  AppImage are not checked yet. A forced kill (SIGKILL) or SIGQUIT (Ctrl+\ in a terminal) still
+  loses every change since the last **Lock now** or normal quit: nothing runs before the process
+  ends. On macOS the `shutdown` leg is registered but not yet verified on a Mac (owner live check,
+  #226), so quit first there (user-guide §13; `security-model.md` "OS session end locks the
   workspace"). Wait for the window to close before you eject.
 - **On Linux, the AppImage can run without Chromium's sandbox.** The app's windows are configured
   `sandbox: true` (`window-security.ts`), but the operating-system sandbox behind that setting
