@@ -25,8 +25,8 @@ import type { SkillAnalysisHandler, SkillAnalysisInput } from './types'
 // per-skill, per-language keyword list (the recurring incident class: every phrasing gap silently degraded
 // a whole-document ask to top-k-with-fence). `applies()` is `!isSmallTalk(question)` over a single (resp.
 // exactly-two) in-scope doc — any non-chatter question defaults to the engine. (Most chatter never gets here:
-// since #963 the chat path answers it with a short reply first; a filler question like "Sure?" does, and the
-// opt-out sends it to the passage search.) The needle-vs-deliverable
+// since #963 the chat path answers it with a short reply first; a filler question like "Sure?" or a bare "ok"
+// does, and the opt-out sends it to the passage search.) The needle-vs-deliverable
 // classification (the other half of §8.2) lives in the chat path, where W1's truncation calculus can decide
 // whether a NEEDLE ask over an over-budget doc is better served by top-k.
 //

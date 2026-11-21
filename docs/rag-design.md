@@ -6241,19 +6241,30 @@ the skill stamp, so Sources and the coverage meter sat under a thank-you; with n
 similarity floor it got "I couldn't find this in your documents"; with knowledge packs in scope it ran the
 pack arm (a query-expansion model call, then the archive search) and answered from articles.
 
-**The gate.** `isSmallTalkReply` holds for a whole-message chit-chat form (`SMALL_TALK_EXACT`, with or
-without its question mark: "How are you?", «Wie geht's?», "What can you do?"), or for a message made only
-of filler words (`SMALL_TALK_WORDS`) with no "?" after its last letter or digit. It is stricter than
-`isSmallTalk` on purpose: a one- or two-word question about the last answer is made of fillers too
-("Sure?", «Alles?», «Bitte?» for "pardon?", "So much?"), and it still reads the documents. The opt-outs
-keep `isSmallTalk` (G-11 kept «Alles gut?» as small talk for them). The tail check is one greedy pass, so
-a run of punctuation cannot make it backtrack.
+**The gate.** `isSmallTalkReply` holds for a whole-message chit-chat QUESTION to the assistant
+(`SMALL_TALK_QUESTION_FORMS`, with or without its question mark: "How are you?", «Wie geht's?», "What can
+you do?", «¿Qué tal?»). Any other message with a question mark anywhere in it (ASCII, the full-width one
+of an IME, the interrobang and its kin, the Arabic one, the Spanish «¿») reads the documents. Without one,
+a whole-message thanks, greeting, goodbye or praise formula (`SMALL_TALK_SOCIAL_FORMS`: «Passt», "Vale
+gracias", "Thanks a lot") takes the reply, an acceptance formula (`SMALL_TALK_ACCEPT_FORMS`: «vale», «de
+acuerdo», «ok va bene», «peki», «всё понятно», «будь ласка») does not, and a message of small-talk words
+takes it only when one of them is a social word (`SMALL_TALK_SOCIAL_WORDS`: thanks, a greeting, a goodbye,
+laughter, praise; the rest, `SMALL_TALK_FILLER_WORDS`, are acceptances and fillers such as "ok", "sure",
+"all", «bitte», «klar», «claro», «certo», «tamam», «ладно»; a word that can be either is a filler). It is
+stricter than `isSmallTalk` on purpose: a question about the last answer is made of small-talk words too
+("Sure?", «Alles?», «Bitte?» for "pardon?", "Sure? Thanks", «Passt?»), and so is an answer to the
+assistant's own question or offer ("All", «Alles bitte», «Claro»); both read the documents, with the
+conversation. The opt-outs keep `isSmallTalk`, which reads the union of the lists (G-11 kept «Alles gut?»
+as small talk for them). The question-mark test is one character class, so it is linear. Review round
+(follow-ups wave 5, findings G-1 to G-3): a "?" followed by more words, a non-ASCII question mark, a
+thanks or acknowledgement formula with a question mark, and an acceptance word alone had all taken the
+reply.
 
 **The reply, as built.** The system prompt `SMALL_TALK_SYSTEM_PROMPT` is `BASE_SYSTEM_PROMPT` and two fixed
 English lines (model-facing, like `GROUNDING_RULES`; no catalog): the message is small talk in a chat about
 the user's documents, no document text comes with it, reply briefly in one or two sentences in the
 message's language without summarizing, quoting or citing a document. The user turn is the message alone:
-no history (an "ok" after an offer must not continue from it without the documents), no fence, no
+no history (a reply that saw the conversation could continue it without the documents), no fence, no
 excerpts, no compaction pre-pass. `temperature` is `GROUNDED_TEMPERATURE` (0) and the cap
 `SMALL_TALK_MAX_TOKENS` (200); a reply cut there is badged as cut off. The reply is persisted with no
 citations, coverage, knowledge-pack outcomes or skill stamp, so it renders as a plain bubble with no
@@ -6268,10 +6279,11 @@ renderer, IPC, preload, the `Message` shape and the catalogs. The knowledge-pack
 small talk (0 of the 100 questions of `eval/rag_de_en.jsonl`), so the §17 shipping rule is not triggered.
 The local API has no route to the documents, so it is not affected.
 
-**Residuals (accepted).** An offer the assistant made and the user accepts with "ok", "sure" or «bitte»
-gets the short reply, not the offer (before it got a summary). A whole-message form typed with a question
-mark that asks something («Passt?», «Vale?») takes the reply too. The reply sees no earlier turn. "Review"
-still shows under it, as under every answer in a documents chat (a separate product call).
+**Residuals (accepted).** An offer the assistant made and the user accepts with praise alone ("Great",
+«Super», «Perfetto») gets the short reply, not the offer (before #963 it got a summary); "ok", "sure", «bitte»
+and the other acceptance words read the documents with the conversation. A question to the assistant
+keeps the reply with its question mark. The reply sees no earlier turn. "Review" still shows under it, as
+under every answer in a documents chat (a separate product call).
 
 **Not taken.** (a1) a plain chat turn (`generateAssistantMessage`): its prompt tells the model to answer
 from its own knowledge, so "ok" after an offer could continue from the history without the documents, and
@@ -6282,7 +6294,9 @@ me a joke", in the interface language rather than the message's.
 
 **Proof.** `rag-whole-doc-compare.test.ts` (the #963 describe: «Danke!», "Thanks!", «Merci !» and "How are
 you?" with no skill, under Contract Brief, What Changed? over two documents and a user skill with no
-engine; no earlier turn after an answer; "Sure?", «Alles?» and a real question still read the documents;
+engine; the reply's system prompt is `SMALL_TALK_SYSTEM_PROMPT` and carries none of the grounding rules; no
+earlier turn after an answer; "Sure?", «Alles?», "Sure? Thanks", «Alles bitte» and a real question still read
+the documents; "ok" after the assistant's offer reads them with the conversation;
 the rewritten small-talk rows of the #632 and #831 describes), `rag-whole-doc-skill.test.ts` and
 `rag-whole-read.test.ts` (the rewritten small-talk rows; knowledge packs in scope: no pack search, no pack
 outcome), `rag-regenerate-ipc.test.ts` (Stop, "Send again", regenerate), `skills-vocabulary.test.ts`

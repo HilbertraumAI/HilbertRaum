@@ -234,7 +234,7 @@ function skillAnalysisHandler(
  *
  * Stays top-k: a multi-document scope; a chat with knowledge packs (the whole read never queries
  * them); small talk (#963: the short small-talk reply takes most of it before any of this, so what
- * reaches here is a filler question such as "Sure?", which reads passages); a legacy, partly
+ * reaches here is a filler question such as "Sure?" or a bare "ok", which reads passages); a legacy, partly
  * chunked document (its sections are not its whole text, so "covers the whole document" would lie).
  */
 function wholeReadDocumentId(
@@ -374,8 +374,9 @@ export function registerRagIpc(ctx: AppContext): void {
       // #963 (follow-ups wave 5 owner call G-1): small talk ("Danke!", "Thanks!", «Merci !», "How are you?") gets one
       // short model reply that reads nothing: no scope narrowing, no skill engine, no router, no knowledge-pack search
       // and no grounded prompt, so no Sources, coverage meter or skill stamp sit under a thank-you. `isSmallTalkReply`
-      // is stricter than the `isSmallTalk` opt-outs below, so a filler question ("Sure?", «Alles?») still reads the
-      // documents, and an accepted offer ("ok", «bitte») gets the short reply (a documented residual). The turn runs
+      // is stricter than the `isSmallTalk` opt-outs below: a filler question ("Sure?", «Alles?») and an answer to the
+      // assistant's own question or offer with no thanks, greeting or praise in it ("ok", "all", «bitte») still read the
+      // documents, with the conversation. The turn runs
       // through the stream, the regenerate guard and the chat slot every answer uses, so Stop, lock, quit, "Send again"
       // and regenerate behave as on any turn.
       if (isSmallTalkReply(text)) {

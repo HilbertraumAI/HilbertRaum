@@ -1354,14 +1354,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   wave 5, owner call G-1; [`rag-design.md`](rag-design.md) §19).** A thank-you, a greeting, a goodbye or
   "How are you?" gets one short reply from the model, which sees only the message: no document, no
   earlier turn, no skill instructions and no knowledge pack. The reply has no sources, no coverage line
-  and no skill mark. What counts is a short list of whole messages ("How are you?", «Wie geht's?») and
-  of thanks, greeting and acknowledgement words in the ten interface languages, so three things follow.
-  A message of such words with a question mark at the end ("Sure?", «Alles?», «Bitte?» for "pardon?")
-  is a question about the last answer and is answered from the documents. A whole-message form typed
-  as a question («Passt?», «Vale?») gets the short reply. And an offer the assistant made ("Shall I list
-  the other deadlines?") that you accept with "ok", "sure" or «bitte» gets a short reply, not the list:
-  ask for it in words ("List the other deadlines"). A thank-you longer than the lists is still taken for
-  a question about the documents (below).
+  and no skill mark. What counts is a short list of questions to the assistant ("How are you?",
+  «Wie geht's?», "What can you do?"), of whole thanks and greeting formulas («Passt», "Muchas gracias") and
+  of thanks, greeting, goodbye and praise words in the ten interface languages, so four things follow. A
+  message with a question mark anywhere in it, in any script, is a question about the last answer and is
+  answered from the documents: "Sure?", «Alles?», «Bitte?» for "pardon?", «Passt?», «¿Vale?», "Sure? Thanks";
+  only the questions to the assistant keep the short reply with theirs. A message of acknowledgement words
+  alone ("ok", "sure", "all", «alles bitte», «klar», «vale», «tamam», «ладно») can answer the assistant's own
+  question or offer ("Shall I list the other deadlines?"), so it is answered from the documents with the
+  conversation, as before; with a thanks or a greeting in it ("Ok, thanks") it gets the short reply. Praise
+  counts as a thanks, so an offer accepted with "Great" or «Super» alone gets the short reply, not the list:
+  ask for it in words, or with "ok". And a thank-you longer than the lists is still taken for a question
+  about the documents (below).
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the

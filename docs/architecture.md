@@ -6465,9 +6465,12 @@ build tree-shakes them).
   as the German «Gut?» does), and an adjective or numeral that inflects with its noun only inside
   a whole-message form ("muchas gracias", "большое спасибо").
   The short small-talk reply in a documents chat (#963, [`rag-design.md`](rag-design.md) §19) uses a
-  stricter check in the same file, `isSmallTalkReply`: a whole-message form, or fillers only with no
-  "?" after the last word, so a one-word question about the last answer («Alles?», "Sure?") still
-  reads the documents while the whole-document opt-outs keep reading it as small talk.
+  stricter check in the same file, `isSmallTalkReply`: a chit-chat question to the assistant, or,
+  with no question mark anywhere, a thanks or greeting formula or small-talk words with at least one
+  thanks, greeting, goodbye or praise word in them. The lists are split for it (social words and
+  forms, acceptance and filler words and forms, question forms); `isSmallTalk` reads their union, so
+  a one-word question about the last answer («Alles?», "Sure?") or a bare "ok" reads the documents
+  while the whole-document opt-outs keep reading it as small talk.
 - The product name "HilbertRaum" is never translated; language names in the
   picker stay in their own language (each registry entry's `nativeName`: `English`, `Deutsch`,
   `Español`, `Français`, `Italiano`, `Nederlands`, `Polski`, `Türkçe`, `Русский`, `Українська`),

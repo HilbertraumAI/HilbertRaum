@@ -2408,7 +2408,7 @@ export const SMALL_TALK_MAX_TOKENS = 200
 
 /**
  * #963: answer a small-talk message in a documents chat with one short model turn: `SMALL_TALK_SYSTEM_PROMPT` and the
- * message itself, nothing else. No history (an "ok" after an offer must not continue from it without the documents), no
+ * message itself, nothing else. No history (a reply that saw the conversation could continue it without the documents), no
  * fence, no excerpts and no compaction pre-pass. Persisted as a plain assistant turn: no citations, no coverage, no
  * knowledge-pack outcomes and no skill stamp, because it read nothing and no skill shaped it. Stop, lock and quit end it
  * through `signal` like any answer (`persistAssistantMessage` marks a partial "Reply stopped"); a stream that completed

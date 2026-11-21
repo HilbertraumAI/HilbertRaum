@@ -352,7 +352,8 @@ from its first public `1.0.0` release onward.
   documents, with sources and the coverage line under it, and with a skill selected, in that skill's
   layout. It now gets a short reply in the language you wrote in, without sources, and nothing is read
   for it: not the documents, not the knowledge packs in the chat. A short question about the last
-  answer, such as "Sure?" or "Alles?", is still answered from the documents (#963).
+  answer, such as "Sure?" or "Alles?", and a plain "ok" or "all" in answer to the assistant's question
+  are still answered from the documents (#963).
 - **The "every mention" example question reads a long document whole in every language.** With a
   whole-document skill such as Contract Brief selected and one long document in scope, the German
   example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching

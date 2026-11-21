@@ -25,7 +25,7 @@ import { join } from 'node:path'
 import { IPC } from '../../src/shared/ipc'
 import type { Message } from '../../src/shared/types'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
-import { createConversation } from '../../src/main/services/chat'
+import { appendMessage, BASE_SYSTEM_PROMPT, createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
@@ -44,6 +44,8 @@ import {
   EXCERPT_BEGIN,
   EXCERPT_END,
   GROUNDED_MAX_TOKENS,
+  GROUNDED_SYSTEM_PROMPT,
+  SMALL_TALK_SYSTEM_PROMPT,
   WHOLE_READ_SECTION_FRAMING_TOKENS,
   wholeDocumentFitBudgetTokens
 } from '../../src/main/services/rag'
@@ -451,13 +453,23 @@ const THANKING_DRAFTS = TWO_DRAFTS.map((d) => `${d}\nVielen Dank für Ihre Zusam
 // alone (`generateSmallTalkReply`), and the reply carries none of them. A filler QUESTION ("Sure?", «Alles?») still reads
 // the documents (`isSmallTalkReply`).
 
-/** #963: the short reply's contract: one call with a system prompt and the message alone (no earlier turn, no fence, no
- *  excerpt, no document text), a cap below a grounded answer's, and a plain reply (no citations, coverage, pack outcomes
- *  or stamp). */
+/** #963: the grounding rules of a document answer (`GROUNDED_SYSTEM_PROMPT` is the base preamble and these rules), line
+ *  by line: the small-talk reply's system prompt carries none of them. */
+const GROUNDING_RULE_LINES = GROUNDED_SYSTEM_PROMPT.slice(BASE_SYSTEM_PROMPT.length)
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line.length > 0)
+
+/** #963: the short reply's contract: one call with the small-talk system prompt (none of the grounding rules) and the
+ *  message alone (no earlier turn, no fence, no excerpt, no document text), a cap below a grounded answer's, and a plain
+ *  reply (no citations, coverage, pack outcomes or stamp). */
 function expectSmallTalkReply(rt: RecordingRuntime, msg: Message, message: string): void {
   expect(rt.calls).toBe(1)
   expect(rt.lastMessages.map((m) => m.role)).toEqual(['system', 'user'])
   expect(rt.lastMessages[1].content).toBe(message)
+  expect(rt.lastMessages[0].content).toBe(SMALL_TALK_SYSTEM_PROMPT)
+  expect(GROUNDING_RULE_LINES.length).toBeGreaterThan(3)
+  for (const rule of GROUNDING_RULE_LINES) expect(rt.lastMessages[0].content).not.toContain(rule)
   for (const sent of [EXCERPT_BEGIN, 'LOCAL SKILL', 'Max Huber']) expect(rt.lastMessages[0].content).not.toContain(sent)
   expect(rt.options.at(-1)?.maxTokens).toBeLessThan(GROUNDED_MAX_TOKENS)
   expect(msg.content).toBe('The tenant is Max Huber.')
@@ -496,11 +508,26 @@ describe('askDocuments — small talk gets the short small-talk reply, which rea
     expect(msg.citations ?? []).toEqual([])
   })
 
-  // The gate: a filler question about the last answer and a real question still read the documents (a draft that holds
-  // their words, so the passage search finds a passage for each).
-  it.each(['Sure?', 'Alles?', TENANT])('"%s" in the same scope still reads the documents', async (question) => {
+  // The gate: a filler question about the last answer (also with more words after its question mark, review round G-1),
+  // an acceptance word alone (G-3) and a real question still read the documents (a draft that holds their words, so the
+  // passage search finds a passage for each).
+  it.each(['Sure?', 'Alles?', 'Sure? Thanks', 'Alles bitte', TENANT])('"%s" in the same scope still reads the documents', async (question) => {
     const h = await makeFenceHarness([`${LEASE_DRAFTS[0]}\nAlles inklusive: heating and water. Make sure the keys are returned.`])
     const msg = await ask(h, question, null)
+    expect(lastUserTurn(h.runtime)).toContain(EXCERPT_BEGIN)
+    expect(msg.citations?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  // Review round G-3: "ok" can accept the assistant's own offer. It reads the documents with the conversation, as before
+  // #963, so the model sees what it offered.
+  it('"ok" after an offer from the assistant reads the documents, with the conversation', async () => {
+    const h = await makeFenceHarness([`${LEASE_DRAFTS[0]}\nThe parking space is ok for one car.`])
+    const offer = 'The tenant is Max Huber. Shall I also list the rent and the notice period?'
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: TENANT })
+    appendMessage(h.db, { conversationId: h.conversationId, role: 'assistant', content: offer })
+    const msg = await ask(h, 'ok', null)
+    expect(h.runtime.calls).toBe(1)
+    expect(h.runtime.lastMessages.map((m) => m.content)).toContain(offer)
     expect(lastUserTurn(h.runtime)).toContain(EXCERPT_BEGIN)
     expect(msg.citations?.length ?? 0).toBeGreaterThan(0)
   })
