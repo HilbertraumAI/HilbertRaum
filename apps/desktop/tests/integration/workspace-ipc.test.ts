@@ -97,6 +97,7 @@ import {
   unlockedController,
   upgradeBlockedVault,
   workspaceIpcCtx,
+  writeNewerSchema,
   type WorkspaceIpcCtxOptions
 } from '../helpers/vault-fixtures'
 import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
@@ -1476,6 +1477,31 @@ describe('a workspace failure line names no path (#956)', () => {
       expect(lines).toHaveLength(1)
       expect(lines[0]).toContain('EISDIR')
       expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // #985 (review round 3 F3): an unlock that opens `.enc` beside an older copy a newer build stamped (a spent leftover)
+  // keeps that copy as it is, unencrypted, so it says so once, in fixed words.
+  it('an unlock that leaves a spent copy a newer build stamped logs one line that names no path (#985)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    failedLockState(vp, 7171, PW) // `.enc` backdated 60 s
+    writeNewerSchema(vp.dbPath)
+    copyFileSync(vp.dbPath, `${vp.dbPath}${RECOVERY_SUFFIX}`)
+    rmSync(vp.dbPath)
+    backdate(`${vp.dbPath}${RECOVERY_SUFFIX}`, 120_000) // older than `.enc`: spent
+    const copy = readFileSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(readFileSync(`${vp.dbPath}${RECOVERY_SUFFIX}`).equals(copy)).toBe(true)
+      const lines = linesAfter(marker, 'unencrypted copy of the workspace')
+      expect(lines).toHaveLength(1)
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+      expect(lines[0]).not.toContain('.recovery')
     } finally {
       ctrl.lock()
     }

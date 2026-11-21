@@ -260,6 +260,12 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
+      // #985 (review round 3 F3; a log line, no audit type): this unlock opened `.enc` beside a copy of the workspace a
+      // newer HilbertRaum wrote and that `.enc` is newer than (a spent leftover). It stays on the drive unencrypted until
+      // a later failed lock's salvage replaces it or a newer build's unlock shreds it. Fixed words only.
+      if (ctx.workspace.takeNewerRecoveryLeft?.()) {
+        log.warn('Workspace unlock: left an older, unencrypted copy of the workspace that a newer HilbertRaum wrote (#985)')
+      }
       // #875: the last session's changes were lost: the previous lock finished at the last saved state
       // (often at quit, with no lock screen to say so and no log that outlived it), the start swept the
       // working file (or, #892, the session the app ended without locking: a power cut, a pulled drive, a

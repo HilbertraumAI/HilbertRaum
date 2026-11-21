@@ -1319,8 +1319,12 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   keeps the file as `.recovery` (`preserved`, or `kept-only-copy` with `.enc` missing; no #875
   marker; with `.enc` missing no `encrypted_file_missing` notice), the unlock throws
   `WorkspaceNewerError(found)` (→ `workspace_newer`) for a `.recovery` that may hold the freshest
-  data (`.enc` missing or not judged, or the copy at least as new by mtime) before anything is
-  written, and leaves one older than a present `.enc` (a spent leftover) as it is, the create
+  data (`.enc` missing or not judged, or the copy at least as new by mtime) right after the password
+  check, before the staged-file check, the roll-forward or any shred, and keeps one older than a
+  present `.enc` (a spent leftover) as it is, unencrypted, with `UnlockedVault.newerRecoveryLeft`
+  set (the controller's `takeNewerRecoveryLeft()` returns it once, for one content-free log line, no
+  audit type; the copy stays until a later failed lock's salvage replaces it or a newer build's
+  unlock shreds it as spent), the create
   refuses with the same error while a working file or `.recovery` probes `newer`, and the lock and
   `stageRekey` read it as a database.
   `sqliteJudgedDamaged(err)` (the #844 classifier) lives beside it.

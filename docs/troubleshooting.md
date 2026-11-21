@@ -424,7 +424,11 @@ drive, that file may be damaged instead: to open the workspace at its last lock 
 quit HilbertRaum, move `workspace/hilbertraum.sqlite.recovery` off the drive, and unlock again.
 Keep that file somewhere safe: it is your workspace's data, not encrypted. Copies up to 0.1.65 can
 delete such a file when they cannot read it. Creating a new workspace is refused with the same
-message while such a file is on the drive.
+message while such a file is on the drive. When that file is older than the encrypted workspace
+file (the newer copy already opened and locked the workspace since), the older copy opens the
+workspace without the message, leaves the file as it is and notes it in the diagnostics log. It is
+still your workspace's data, not encrypted: the newer copy removes it at its next unlock, and this
+copy replaces it if a later lock fails.
 
 ---
 

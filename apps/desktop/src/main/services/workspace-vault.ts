@@ -2132,6 +2132,9 @@ export interface UnlockedVault {
   recoveryDiscarded: boolean
   /** #911: `.enc` was missing, and this unlock encrypted the `.recovery` copy the start kept as the new `.enc`. */
   restoredMissingEnc: boolean
+  /** #985 (review round 3 F3): a `.recovery` copy a newer build stamped, older than `.enc` (a spent leftover), was left
+   *  in place, unencrypted. */
+  newerRecoveryLeft: boolean
 }
 
 /**
@@ -2240,6 +2243,7 @@ export function unlockEncryptedVault(
     const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
     let recoveryDiscarded = false
     let restoredMissingEnc = false
+    let newerRecoveryLeft = false
     // #911 (code review): `.enc` is judged ONCE, by the start's rule: only ENOENT is missing. `existsSync` read any other
     // stat failure (a delete-pending file on Windows, EPERM, EBUSY) as "missing", so a spent `.recovery` could be
     // encrypted over a good `.enc`.
@@ -2262,10 +2266,13 @@ export function unlockEncryptedVault(
         if (probe.verdict === 'unknown' || probe.verdict === 'gone') {
           throw new Error(`The .recovery probe could not decide (${probe.verdict})`)
         }
-        // #985 (W-66): a copy a NEWER build stamped is never rolled forward or shredded: this build cannot judge its
+        // #985 (W-66): this unlock never rolls forward or shreds a copy a NEWER build stamped: it cannot judge its
         // schema. One that may be the freshest data was refused before the key was used (above); one that gets here
-        // is a spent leftover older than `.enc` (review round 2 R6), left as it is, and the unlock goes on.
+        // is a spent leftover older than `.enc` (review round 2 R6), kept as it is, and the unlock goes on. It stays the
+        // workspace's data unencrypted until a later failed lock's salvage replaces it (REL-1's pre-shred) or a newer
+        // build's unlock shreds it as spent (review round 3 F3), so the IPC logs that it was left.
         const spentNewer = probe.verdict === 'newer'
+        newerRecoveryLeft = spentNewer
         const newer =
           !spentNewer &&
           probe.verdict !== 'not-database' &&
@@ -2361,7 +2368,7 @@ export function unlockEncryptedVault(
       throw openFailure(err)
     }
     if (recoveryDiscarded) shredFile(recoveryPath)
-    return { db, key: fileKey, descriptor, recoveryDiscarded, restoredMissingEnc }
+    return { db, key: fileKey, descriptor, recoveryDiscarded, restoredMissingEnc, newerRecoveryLeft }
   } catch (err) {
     if (openedDb) {
       try {
@@ -2682,6 +2689,9 @@ export class WorkspaceController {
   /** #911: this start found the only copy with `.enc` missing and its structure damaged, and swept it
    *  ({@link discardedOnlyCopy}). */
   private _discardedOnlyCopy = false
+  /** #985 (review round 3 F3): the last successful unlock left a spent `.recovery` a newer build stamped in place, for the
+   *  IPC to log once ({@link takeNewerRecoveryLeft}). */
+  private _newerRecoveryLeft = false
   /** #875: what the last successful unlock consumed, for the IPC to record once ({@link takeWorkingCopyLost}). */
   private _lostAtPreviousLock: { cause: WorkingCopyLossCause; lostAt: string | null } | null = null
   /** #876 review round 2: sites that judged a file by its header because the probe could not read its structure (not
@@ -3049,6 +3059,15 @@ export class WorkspaceController {
     return lost
   }
 
+  /** #985 (review round 3 F3): whether the last successful unlock left a `.recovery` copy a newer build stamped, older
+   *  than `.enc` (a spent leftover), in place: the workspace's data unencrypted on the drive. Returns it once, for the
+   *  IPC's one content-free log line (no audit type). */
+  takeNewerRecoveryLeft(): boolean {
+    const left = this._newerRecoveryLeft
+    this._newerRecoveryLeft = false
+    return left
+  }
+
   /** #911: whether the last successful unlock encrypted the copy a start kept over a missing `.enc` as the new `.enc`.
    *  Returns it once, for the IPC to log now that there is a log key (owner decision D5: a log line, no audit type). */
   takeRestoredMissingEnc(): boolean {
@@ -3137,7 +3156,7 @@ export class WorkspaceController {
       if (this._encMissingKept) this._encMissingKept = this.encMissingKeptOnDisk()
       throw err
     }
-    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc } = unlocked
+    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc, newerRecoveryLeft } = unlocked
     this._db = db
     this.key = key
     this.descriptor = descriptor
@@ -3146,6 +3165,7 @@ export class WorkspaceController {
     // #911: the kept copy is `.enc` again (or there was none to keep), so the notice is over.
     this._encMissingKept = false
     this._restoredMissingEnc = restoredMissingEnc
+    this._newerRecoveryLeft = newerRecoveryLeft
     // #875: a loss this unlock made itself (a broken `.recovery` shredded) is recorded the same way.
     if (recoveryDiscarded && this._lostAtPreviousLock === null) this._lostAtPreviousLock = { cause: 'recovery', lostAt: null }
     // (#858: `unlockEncryptedVault` re-stamped `workspaceMode`, inside its failure guard.)

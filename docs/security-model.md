@@ -1611,8 +1611,11 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   shred, the unlock refuses a `.recovery` judged `newer` that may hold the freshest data (`.enc`
   missing or not judged, or the copy at least as new) with the #247 error (`WorkspaceNewerError` →
   `workspace_newer`, "written by a newer HilbertRaum — update the app"); the newer build's own
-  unlock rolls it forward. One older than a present `.enc` is a spent leftover: left as it is,
-  neither rolled forward nor shredded, and the workspace opens at `.enc`. A create on a drive that
+  unlock rolls it forward. One older than a present `.enc` is a spent leftover: this unlock keeps it
+  as it is (neither rolled forward nor shredded), opens the workspace at `.enc`, and logs one
+  content-free line. That copy is the workspace's data, not encrypted, and it stays on the drive
+  until a later failed lock's salvage replaces it (REL-1's pre-shred of the `.recovery` name) or a
+  newer build's unlock shreds it as spent. A create on a drive that
   holds such a working file or `.recovery` (its key file and `.enc` gone, so the state reads
   `uninitialized`) is refused with the same answer before anything is written: it would commit a
   new workspace that every unlock then refuses. The lock and the v1 rekey stage read `newer` as a
