@@ -33,6 +33,7 @@ import {
   engineStatus,
   hostRuntimeArch,
   hostRuntimeOs,
+  recoverEngineSwaps,
   type ExtractFn
 } from '../../src/main/services/runtime-download'
 import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
@@ -349,6 +350,32 @@ describe('EngineDownloadManager refuses an archive planting an escaping link (SE
     expect(existsSync(`${live}.new`)).toBe(false)
     expect(existsSync(`${live}.old`)).toBe(false)
     expect(existsSync(join(outside, 'keep.txt'))).toBe(true)
+  })
+
+  // #752 used to clear the install one entry at a time so one locked file could not spare the binary
+  // after it. #986: the failed copy is in `.new`, never in the install folder. A `.new` that cannot be
+  // deleted (a scanner holds it) stays unmarked and unread, and the next start deletes it.
+  it('a staging folder that cannot be deleted stays unmarked beside an untouched install, and the next start deletes it (#986)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const live = liveDir(rootPath)
+    const LOCKED = '0-locked.dll'
+    const failingExtract: ExtractFn = async (_archive, destDir) => {
+      await writeFile(join(destDir, LOCKED), 'scanned by the antivirus')
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+      seams.rmRefuses = '.new'
+      throw new Error('tar exited with code 1')
+    }
+    const mgr = new EngineDownloadManager({ fetchImpl: bodyFetch(BODY), extractImpl: failingExtract })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: { policyAllows: true, settingAllows: true } })
+    expect((await settle(mgr, started.jobId)).status).toBe('failed')
+    expect(readdirSync(live)).toEqual([])
+    expect(readdirSync(`${live}.new`)).toEqual(expect.arrayContaining([LOCKED, BIN_NAME]))
+    expect(existsSync(runtimeMarkerPath(`${live}.new`))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+    seams.rmRefuses = null
+    recoverEngineSwaps(rootPath, manifestsDir)
+    await engineFolderDeletesSettled()
+    expect(existsSync(`${live}.new`)).toBe(false)
   })
 
   it('a clean archive through the same flow still installs (no false positive)', async () => {
