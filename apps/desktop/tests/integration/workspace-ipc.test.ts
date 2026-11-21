@@ -1448,6 +1448,21 @@ describe('a workspace failure line names no path (#956)', () => {
     }
   })
 
+  // Review round 2 F4: the removal is a fact on disk as soon as it happens, so it is logged even when a later step of the
+  // same unlock fails (here `.enc` itself fails its tag: "damaged").
+  it('an unlock that removes a staged copy and then fails still logs the removal once, with no path (#973)', async () => {
+    const vp = tagFailingVault(lockedVault('wsipc', PW))
+    copyFileSync(lockedVault('wsipc-leftover', 'other-password').encPath, `${vp.encPath}.new`)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'vault_damaged' })
+    expect(existsSync(`${vp.encPath}.new`)).toBe(false)
+    const lines = linesAfter(marker, 'removed a staged copy')
+    expect(lines).toHaveLength(1)
+    expect(namesNoPath(lines[0], vp.root)).toBe(true)
+  })
+
   it('a password change whose key file write meets a file error logs its code, not the path', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)

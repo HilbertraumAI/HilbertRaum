@@ -1330,28 +1330,47 @@ explicitly:
   folder later had its `.enc` shredded and replaced by an empty database under a key nothing holds,
   and every unlock then said "damaged". Two rules close it (owner decision G-1, option 2 plus a
   narrow option 3). First, a staged `.enc.new` that no rekey journal lists, beside an `.enc` that is
-  there (any stat answer but ENOENT), under a v2 descriptor, is a doubt: the start's recovery holds
+  there (any stat answer but ENOENT), under a v2 descriptor, is a doubt. A journal entry counts by
+  the workspace folder and the file name, not by its absolute path: a Kit that comes back under
+  another drive letter or mount point keeps its journal'd stage. The start's recovery holds
   no key, so it leaves the whole staged set as it is, and so does the unlock's recovery before the
-  password check (a wrong password changes nothing). Once the password verified and the data key is
+  password check (a wrong password changes nothing). A loss the start judged meanwhile (#875, #892:
+  the session it swept) is held, not shown, until the unlock says which snapshot opens: it is
+  recorded when `.enc` opens as it is, and dropped when the stage rolls forward (the stage holds that
+  session). The hold is in memory, so a restart before that unlock forgets the notice. Once the
+  password verified and the data key is
   unwrapped, the unlock streams the staged file through the AES-256-GCM decipher with no output
   (`authenticatesUnder`; a vault frame is one GCM stream with one tag, so one pass proves the whole
   file). If it authenticates, it is this workspace's (a v1 password change by a build before
   0.1.60, cut short after its commit), and the staged set rolls forward as before. If its tag fails,
-  it is ciphertext under another key: it is deleted (best-effort; one a hold keeps stays a doubt for
-  the next unlock), and the unlock opens `.enc` as it is. A file that is no frame of this build's at
+  it is ciphertext under another key: it is deleted, the unlock opens `.enc` as it is, and the rest
+  of the staged set (document and image twins, the journal's deletions) gets what the start's
+  recovery would have given it without that file. A file that is no frame of this build's at
   all (cut short inside its header, another magic; a newer frame is refused earlier, #845) cannot be
-  a staged copy of this workspace and is deleted the same way. A read the pass cannot make (a hold:
-  EBUSY, EPERM, EACCES) changes nothing and refuses the unlock with the #242 "try again" answer
-  (`vault_recovery_blocked`). The unlock that deleted such a file logs one content-free line on its
-  success path (no audit type, as #911's). The cost is one read of the staged file, only in this
-  state. Second, a start with no key file, no `.enc` and no rekey journal
+  a staged copy of this workspace and is deleted the same way. A read the pass cannot make splits by
+  its cause: a file gone since the check is no stage; a hold (EBUSY, EPERM, EACCES) changes nothing
+  and refuses the unlock with the #242 "try again" answer (`vault_recovery_blocked`); anything else
+  (a directory at the name, an I/O error), and a delete that fails, leaves the file exactly as it
+  is, and the unlock opens `.enc`, so it never blocks for good. The unlock logs one content-free
+  line when it deleted or left such a file, also when a later step of that unlock fails (no audit
+  type, as #911's). The cost is one read of the staged file, only in this state, timed as the perf
+  mark `vault_stage_check` (about 1.5 s for 500 MB on a warm NVMe drive in review; expect 5 to 17 s
+  on a USB stick). Second, a start with no key file, no `.enc` and no rekey journal
   (each a stat that says ENOENT) removes a stray `.enc.new` and its write temp, best-effort: that
   is the `uninitialized` state, where the next create overwrites the file anyway, and with it gone
   an older build on the same Kit cannot roll it over a workspace put back later either. Journal'd
   stages, a v1 descriptor (the stage is discarded) and a staged file with `.enc` gone (a create or a
-  swap cut short after its commit, rolled forward at the start) are unchanged. **Residual:** a
+  swap cut short after its commit, rolled forward at the start) are unchanged. **Residuals:** a
   build before #973 still rolls such a leftover forward at its start: one this build has not removed
-  yet, or one it left as a doubt beside a workspace until its next unlock.
+  yet, or one it left as a doubt beside a workspace until its next unlock. The start's removal (the
+  second rule) also deletes the stage of a create that committed and then lost its key file before
+  its rename; such a stage holds only the fresh, empty workspace the create built. It loses data in
+  one double fault only: a v1 → v2 password change by a build before #241 (0.1.50–0.1.59, no
+  journal) cut short between the shred of `.enc` and the rename of its stage, and then the key file
+  removed before the next start (owner decision: the removal stays). Journal-less document and image
+  twins (`documents/*.enc.new`, `images/*.enc.new`) under a v2 descriptor are still rolled forward
+  at the start without any check, as before #973, which can replace a stored copy with a foreign one
+  (a folder merged from a workspace whose migration was cut short); a follow-up issue.
 - **Accepted trade-off (decision): a hard power cut / kill mid-session loses the changes
   since the last successful lock.** Whole-file encryption means the at-rest `.enc` is only
   updated on lock/quit; a mid-session crash leaves a working file with live WAL sidecars,

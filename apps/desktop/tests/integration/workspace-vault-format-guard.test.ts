@@ -835,7 +835,7 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
       ctl.unlock(PW)
       expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
       expect(existsSync(stagedOf(vp))).toBe(false) // removed: it does not open under this workspace's key
-      expect(ctl.takeRemovedForeignStage()).toBe(true)
+      expect(ctl.takeStageOutcome()).toBe('removed')
       expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
       ctl.lock()
       const reopened = unlockedController(vp, PW)
@@ -914,7 +914,8 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
 
   // A file at the staged name that is no frame of this build's at all cannot be a staged copy of this workspace: the
   // unlock removes it as it removes one that fails its tag, and opens `.enc`. (A newer frame is refused earlier, #845;
-  // one the unlock cannot read refuses as "try again": vault-recovery-guards.test.ts.)
+  // one a hold keeps from being read refuses as "try again", and one that cannot be read otherwise is left as it is:
+  // vault-recovery-guards.test.ts and the directory row below.)
   it.each<[string, (staged: string) => void]>([
     [
       'a file in another frame (PAIDENC1)',
@@ -936,8 +937,168 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
       expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
       expect(existsSync(stagedOf(vp))).toBe(false)
       expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
-      expect(ctl.takeRemovedForeignStage()).toBe(true) // for the unlock's one log line, once
-      expect(ctl.takeRemovedForeignStage()).toBe(false)
+      expect(ctl.takeStageOutcome()).toBe('removed') // for the unlock's one log line, once
+      expect(ctl.takeStageOutcome()).toBeNull()
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  /** A v1 workspace whose password change (to `next-password`) committed and then stopped before its swap, with the
+   *  session holding `contextTokens: marker` staged and the working file shredded; the journal as this build writes it. */
+  function committedMigration(marker: number, opts: { backdateEnc?: boolean } = {}): FreshVaultPaths {
+    const vp = lockedVault('fmtguard-973', PW, { legacyV1: true })
+    if (opts.backdateEnc) backdate(vp.encPath)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: marker })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'next-password', FAST_KDF) // the COMMIT; the crash comes before the swap
+    db.close()
+    key.fill(0)
+    dataKey.fill(0)
+    return vp
+  }
+
+  // Review round 2 R1: the journal keeps the absolute paths of the drive it was written on. A Kit that comes back under
+  // another drive letter or mount point after a password change was cut short still has its journal'd stage rolled
+  // forward at the start, as before, and is never taken for a leftover.
+  it('a journal written under another drive root still lists the stage: the start rolls it forward as before', () => {
+    const vp = committedMigration(6363)
+    shredFile(vp.dbPath)
+    cleanSidecars(vp.dbPath)
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+    const written = JSON.parse(readFileSync(journal, 'utf8')) as { staged: string[] }
+    const otherRoot = process.platform === 'win32' ? 'Z:\\Kit' : '/media/other/Kit'
+    const staged = written.staged.map((path) => join(otherRoot, relative(vp.root, path)))
+    expect(staged.some((path) => path.endsWith('hilbertraum.sqlite.enc.new'))).toBe(true)
+    writeFileSync(journal, JSON.stringify({ ...written, staged }, null, 2), 'utf8')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(stagedOf(vp))).toBe(false) // rolled forward at the start, without any key
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6363)
+      expect(ctl.takeStageOutcome()).toBeNull()
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R2: the start judges an unclean end (#892, a crash with the session's sidecars live) against the
+  // `.enc` that is there. With a stage in doubt it cannot know yet which snapshot the unlock opens, so it holds the loss
+  // instead of recording it: the unlock records it when it opens `.enc` as it is (the stage foreign), and drops it when
+  // the stage rolls forward (the stage holds that session).
+  it('an unclean end beside a crash leftover: the loss is held at the start, and recorded when the unlock removes the leftover', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    backdate(vp.encPath)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 9191 })
+    db.close()
+    key.fill(0)
+    writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(vp.dbPath)).toBe(false) // swept, as before
+      expect(ctl.getState()).not.toHaveProperty('lockNotice') // held, not shown
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151) // `.enc` as it was: the session is lost
+      expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('an unclean end beside a journal-less stage that opens under the data key: the unlock rolls it forward and records no loss', () => {
+    const vp = committedMigration(6464, { backdateEnc: true })
+    rmSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)) // a build before #241 wrote none
+    writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(vp.dbPath)).toBe(false) // swept, as before
+      expect(ctl.getState()).not.toHaveProperty('lockNotice')
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6464) // the stage held the session
+      expect(ctl.takeWorkingCopyLost()).toBeNull()
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R7: the #985 refusal of a `.recovery` a newer build stamped comes before the staged-file check, so a
+  // stage in doubt beside it stays as it was: a `workspace_newer` unlock writes nothing.
+  it('a .recovery newer than .enc beside a staged leftover: the refusal writes nothing, the stage included', () => {
+    const vp = lockedVault('fmtguard-973', PW)
+    failedLockState(vp, 7171, PW) // `.enc` backdated 60 s
+    writeNewerSchema(vp.dbPath)
+    renameSync(vp.dbPath, `${vp.dbPath}${RECOVERY_SUFFIX}`)
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      const before = snapshot(vp.root)
+      expect(before['workspace/hilbertraum.sqlite.enc.new']).toBeDefined()
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual({ name: 'WorkspaceNewerError', found: SCHEMA_VERSION + 1 })
+      expect(snapshot(vp.root)).toEqual(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R4: a staged name that can be neither read as a frame nor removed (a directory there: EISDIR on every
+  // OS) is left exactly as it is, and the unlock opens `.enc`. It never blocks every unlock with "try again".
+  it('a directory at the staged name beside a workspace: the unlock leaves it as it is and opens the workspace', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    mkdirSync(stagedOf(vp))
+    writeFileSync(join(stagedOf(vp), 'held'), 'x')
+    const enc = sha(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(readdirSync(stagedOf(vp))).toEqual(['held'])
+      expect(readFileSync(join(stagedOf(vp), 'held'), 'utf8')).toBe('x')
+      expect(ctl.takeStageOutcome()).toBe('left')
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R5: once the unlock has removed a foreign staged database, the rest of the staged set gets what the
+  // start's recovery would have given it with that file gone (master's start rolled all of it forward together with the
+  // leftover): the document twin is swapped in, the journal cleared or, unreadable, quarantined. While the database
+  // stage is in doubt, the start leaves all of it, the journal that does not list the database stage included.
+  it.each<[string, (vp: FreshVaultPaths, docStage: string) => void, boolean]>([
+    ['a journal that lists only the document twin', (vp, docStage) => void rekeyJournal(vp, 1, [docStage]), false],
+    ['a journal that cannot be read', (vp) => writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME), '{ not json', 'utf8'), true]
+  ])('a crash leftover beside %s and a staged document twin: the unlock removes the leftover, then swaps the document in', (_case, journalOf, quarantined) => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    const doc = plant(join(dirname(vp.dbPath), 'documents', 'a.pdf.enc'), 'stored copy')
+    const docStage = plant(`${doc}${REKEY_SUFFIX}`, 'staged copy')
+    journalOf(vp, docStage)
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before) // in doubt: the staged set, the journal and the document as they were
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+      expect(readFileSync(doc, 'utf8')).toBe('staged copy')
+      expect(existsSync(docStage)).toBe(false)
+      const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+      expect(existsSync(journal)).toBe(false)
+      expect(existsSync(`${journal}.corrupt`)).toBe(quarantined)
     } finally {
       ctl.shutdown()
     }

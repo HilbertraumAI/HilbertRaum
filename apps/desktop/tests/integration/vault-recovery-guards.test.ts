@@ -87,9 +87,10 @@ const failures = vi.hoisted(() => ({
    *  are written at `path`: a workspace's key file copied back while the create derives its key and stages its
    *  database, after the checks at its start and before its commit. */
   putBackDescriptorOnStage: null as { path: string; bytes: Buffer } | null,
-  /** #973: openSync throws EBUSY for the staged database (`…/hilbertraum.sqlite.enc.new`) while armed: an antivirus or
-   *  indexer hold on the file the unlock must read under the data key. Its existence still reads true. */
-  openThrowOnStagedEnc: false,
+  /** #973: openSync throws this error code for the staged database (`…/hilbertraum.sqlite.enc.new`) while set: `EBUSY`
+   *  for an antivirus or indexer hold on the file the unlock must read under the data key, `ENOENT` for a file gone since
+   *  the check, `EIO` for a failing drive. Its existence still reads true. */
+  openThrowOnStagedEnc: null as string | null,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
   hits: {
@@ -161,9 +162,10 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.openSyncWorking += 1
         throw errnoError('EBUSY', 'EBUSY: resource busy or locked, open (held working file)')
       }
-      if (failures.openThrowOnStagedEnc && String(path).endsWith('.sqlite.enc.new')) {
+      const stagedCode = failures.openThrowOnStagedEnc
+      if (stagedCode !== null && String(path).endsWith('.sqlite.enc.new')) {
         failures.hits.openSyncStaged += 1
-        throw errnoError('EBUSY', 'EBUSY: resource busy or locked, open (held staged database)')
+        throw errnoError(stagedCode, `${stagedCode}: open (the staged database)`)
       }
       const fd = actual.openSync(path, flags, mode)
       if (failures.enospcOnEncTmpWrite && String(path).endsWith('.enc.tmp')) failures.encTmpFds.add(fd)
@@ -230,7 +232,7 @@ beforeEach(() => {
   failures.openThrowOnWorkingFile = false
   failures.renameThrowOnStagedEnc = false
   failures.putBackDescriptorOnStage = null
-  failures.openThrowOnStagedEnc = false
+  failures.openThrowOnStagedEnc = null
   failures.hits = {
     renameSync: 0,
     openSync: 0,
@@ -883,18 +885,94 @@ describe('a staged database the unlock cannot read (#973)', () => {
     ctl.init()
     files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true)) // the start leaves it
     registerWorkspaceIpc(workspaceIpcCtx(ctl))
-    failures.openThrowOnStagedEnc = true
+    failures.openThrowOnStagedEnc = 'EBUSY'
     let blocked: unknown
     try {
       blocked = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
     } finally {
-      failures.openThrowOnStagedEnc = false
+      failures.openThrowOnStagedEnc = null
     }
     expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
     expect(blocked).toEqual({ ok: false, reason: 'vault_recovery_blocked', message: tMain('main.workspace.recoveryBlocked') })
     files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(ctl.isUnlocked()).toBe(false)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    expect(existsSync(staged)).toBe(false)
+    ctl.shutdown()
+  })
+
+  /** A locked workspace under `pw` holding `contextTokens: 5151`, with another workspace's `.enc` (a create's leftover)
+   *  at the staged name, and the bytes of its key file, `.enc` and stage. */
+  function workspaceBesideLeftover(): { vp: VaultPaths; staged: string; files: string[]; before: Buffer[] } {
+    const vp = lockedVault('recovery-guards-973', 'pw')
+    const seed = unlockedController(vp, 'pw')
+    updateSettings(seed.requireDb(), { contextTokens: 5151 })
+    seed.lock()
+    const staged = `${vp.encPath}.new`
+    writeFileSync(staged, readFileSync(lockedVault('recovery-guards-973-leftover', 'other-pw').encPath))
+    const files = [vp.descriptorPath, vp.encPath, staged]
+    return { vp, staged, files, before: files.map((path) => readFileSync(path)) }
+  }
+
+  // Review round 2 R4: the read failure splits by its code. A file gone since the check (ENOENT) is no stage: nothing to
+  // judge, the workspace opens. Any other failure that is no hold (EIO, a failing drive) can be neither judged nor removed
+  // as a frame: the file is left exactly as it is, the workspace opens at `.enc`, and one content-free line says so.
+  it('a staged copy gone between the check and the read (ENOENT) is no stage: the unlock opens the workspace, nothing logged', () => {
+    const { vp, files, before } = workspaceBesideLeftover()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    failures.openThrowOnStagedEnc = 'ENOENT'
+    try {
+      expect(ctl.unlock('pw').state).toBe('unlocked')
+    } finally {
+      failures.openThrowOnStagedEnc = null
+    }
+    expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    expect(ctl.takeStageOutcome()).toBeNull()
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+    ctl.shutdown()
+  })
+
+  it('a staged copy that fails to read with EIO is left as it is: the unlock opens the workspace and logs one line, no path', async () => {
+    const { vp, staged, before } = workspaceBesideLeftover()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    const linesBefore = readLogTail(100_000).length
+    failures.openThrowOnStagedEnc = 'EIO'
+    let result: unknown
+    try {
+      result = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+    } finally {
+      failures.openThrowOnStagedEnc = null
+    }
+    expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
+    expect(result).toMatchObject({ ok: true })
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    expect(readFileSync(staged).equals(before[2])).toBe(true)
+    const lines = readLogTail(100_000).slice(linesBefore).filter((line) => line.includes('left a staged copy'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).not.toContain(vp.encPath)
+    expect(lines[0]).not.toContain('.enc')
+    ctl.shutdown()
+  })
+
+  // The doubt needs `.enc` proven present only by a stat that does not say ENOENT (the #911 rule): one that fails
+  // otherwise (a delete-pending file on Windows) is doubt too, and the start rolls nothing over it.
+  it('a stat of .enc that fails with EPERM at the start: the staged leftover is left, and the unlock removes it once .enc reads again', () => {
+    const { vp, staged, files, before } = workspaceBesideLeftover()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.encDeletePending = true
+    try {
+      ctl.init()
+    } finally {
+      failures.encDeletePending = false
+    }
+    expect(failures.hits.encStat).toBeGreaterThan(0)
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
     expect(existsSync(staged)).toBe(false)

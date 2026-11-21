@@ -203,6 +203,21 @@ function logProbeFallbacks(ctx: AppContext): void {
   }
 }
 
+/**
+ * #973 (a log line, no audit type, as #911's): what the last unlock did with a staged copy of the database that no rekey
+ * journal listed: removed it, because it does not open under this workspace's key (a create cut short by a crash left
+ * it, or it came from another workspace), or left it, because it could be neither read nor removed. Logged on the
+ * unlock's success and failure paths alike (review round 2 F4). Fixed words only: no path, no file name.
+ */
+function logStageOutcome(ctx: AppContext): void {
+  const outcome = ctx.workspace.takeStageOutcome?.()
+  if (outcome === 'removed') {
+    log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
+  } else if (outcome === 'left') {
+    log.warn('Workspace unlock: left a staged copy of the database that could be neither read nor removed (#973)')
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
@@ -239,12 +254,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       if (ctx.workspace.takeRestoredMissingEnc?.()) {
         log.warn('The encrypted workspace file was missing; the copy the last session left was encrypted again')
       }
-      // #973 (a log line, no audit type, as #911's): this unlock removed a staged copy of the database that no rekey
-      // journal listed and that does not open under this workspace's key (a create cut short by a crash left it, or it
-      // came from another workspace). Fixed words only: no path, no file name.
-      if (ctx.workspace.takeRemovedForeignStage?.()) {
-        log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
-      }
+      logStageOutcome(ctx)
       logProbeFallbacks(ctx)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
@@ -291,6 +301,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       startKnowledgePackSession(ctx)
       return { ok: true, state }
     } catch (err) {
+      logStageOutcome(ctx) // #973 (review round 2 F4): a staged copy removed before a later step failed
       // instanceof PLUS the name: the production rollup bundle can contain a second,
       // tree-shaken copy of workspace-vault (module-id quirk), and the class thrown by
       // the vault is then not the class this file imported — instanceof alone made the
