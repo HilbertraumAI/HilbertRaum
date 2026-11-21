@@ -89,7 +89,11 @@ const sha256 = (b: Buffer): string => createHash('sha256').update(b).digest('hex
 const ALLOW = { policyAllows: true, settingAllows: true }
 
 /** The pin: llama.cpp b200, a main build and its `cpu/` net inside it, both for this host. */
-function makeDrive(archive: Buffer = BODY, folder = 'drive'): { rootPath: string; manifestsDir: string } {
+function makeDrive(
+  archive: Buffer = BODY,
+  folder = 'drive',
+  opts: { mainRuntimeFiles?: string[] } = {}
+): { rootPath: string; manifestsDir: string } {
   const rootPath = join(mkdtempSync(join(tmpdir(), 'hr-engine-swap-')), folder)
   mkdirSync(rootPath, { recursive: true })
   const manifestsDir = mkdtempSync(join(tmpdir(), 'hr-engine-swap-pins-'))
@@ -108,7 +112,10 @@ function makeDrive(archive: Buffer = BODY, folder = 'drive'): { rootPath: string
       llama_cpp: {
         version: 'b200',
         builds: [
-          build('vulkan', `runtime/llama.cpp/${HOST_OS}`, 'llama-main'),
+          {
+            ...build('vulkan', `runtime/llama.cpp/${HOST_OS}`, 'llama-main'),
+            ...(opts.mainRuntimeFiles ? { runtime_files: opts.mainRuntimeFiles } : {})
+          },
           build('cpu', `runtime/llama.cpp/${HOST_OS}/cpu`, 'llama-cpu')
         ]
       }
@@ -120,12 +127,30 @@ function makeDrive(archive: Buffer = BODY, folder = 'drive'): { rootPath: string
 const liveDir = (root: string): string => join(root, 'runtime', 'llama.cpp', HOST_OS)
 const netDir = (root: string): string => join(liveDir(root), 'cpu')
 
-/** An engine copy in `dir`: its program (content `<label> <version>`) and its marker, either left out. */
-function copy(dir: string, version: string, opts: { label?: string; exe?: boolean; marker?: boolean; backend?: string } = {}): void {
+/**
+ * An engine copy in `dir`: its program (content `<label> <version>`) and its marker, either left out. `records`
+ * gives the marker a `binaries` map naming the program and these further files (written too, unless `exe`
+ * is false for the program), as every install since #234 writes it.
+ */
+function copy(
+  dir: string,
+  version: string,
+  opts: { label?: string; exe?: boolean; marker?: boolean; backend?: string; records?: string[] } = {}
+): void {
   mkdirSync(dir, { recursive: true })
   if (opts.exe !== false) writeFileSync(join(dir, BIN), `${opts.label ?? 'engine'} ${version}`)
+  for (const file of opts.records ?? []) writeFileSync(join(dir, file), `${file} ${version}`)
   if (opts.marker !== false) {
-    writeRuntimeMarker(dir, { version, backend: opts.backend ?? 'vulkan', os: HOST_OS, arch: HOST_ARCH })
+    const binaries = opts.records
+      ? Object.fromEntries([BIN, ...opts.records].map((name) => [name, 'a'.repeat(64)]))
+      : undefined
+    writeRuntimeMarker(dir, {
+      version,
+      backend: opts.backend ?? 'vulkan',
+      os: HOST_OS,
+      arch: HOST_ARCH,
+      ...(binaries ? { binaries } : {})
+    })
   }
 }
 const net = (dir: string, version: string, opts: { exe?: boolean; marker?: boolean } = {}): void =>
@@ -179,6 +204,8 @@ interface CrashLayout {
   name: string
   build: (root: string) => void
   expected: Record<string, string>
+  /** The pin, when the row needs another one (a pin that requires one more file). */
+  drive?: { mainRuntimeFiles?: string[] }
 }
 
 // Each layout is the disk a kill, an unplug or a crash leaves at one point of the swap (the main build
@@ -294,14 +321,68 @@ const CRASH_LAYOUTS: CrashLayout[] = [
     expected: { live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT }
   },
   {
-    // Two whole copies and an install folder in the way: a whole copy is never deleted to make room.
+    // #986 review 2: the install folder in the way of two whole copies holds no engine, so it goes and the
+    // new copy moves in. It used to be left, and every start and every job after it too.
     name: 'two whole copies beside an empty install folder',
     build: (root) => {
       mkdirSync(liveDir(root), { recursive: true })
       copy(`${liveDir(root)}.new`, 'b200')
       copy(`${liveDir(root)}.old`, 'b150')
     },
-    expected: { live: '-|-', net: 'absent', staging: 'engine b200|b200', previous: 'engine b150|b150', netStaging: 'absent', netPrevious: 'absent' }
+    expected: { live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT }
+  },
+  {
+    // …and a net it holds goes into the copy that becomes the install first.
+    name: 'two whole copies beside an install folder that holds only the net',
+    build: (root) => {
+      net(netDir(root), 'b150')
+      copy(`${liveDir(root)}.new`, 'b200')
+      copy(`${liveDir(root)}.old`, 'b150')
+    },
+    expected: { live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT }
+  },
+  {
+    // #986 review 2: a net's own swap left unfinished inside the replaced copy (whole nets in cpu.new and
+    // cpu.old) is finished there before the copy is deleted.
+    name: 'a replaced copy holding an unfinished net swap, beside a whole new copy',
+    build: (root) => {
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu.new'), 'b200')
+      net(join(`${liveDir(root)}.old`, 'cpu.old'), 'b150')
+      copy(`${liveDir(root)}.new`, 'b200')
+    },
+    expected: { live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT }
+  },
+  {
+    // #986 review 2: each copy is judged by its OWN marker. The pin now requires one more file, which the
+    // old b150 copy never had; it is still the whole copy to roll back to.
+    name: 'a pin that adds a file: the old copy still rolls back',
+    drive: { mainRuntimeFiles: ['newdep.dll'] },
+    build: (root) => {
+      copy(`${liveDir(root)}.old`, 'b150', { records: [] })
+      copy(`${liveDir(root)}.new`, 'b200', { records: ['newdep.dll'], exe: false })
+    },
+    expected: { live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT }
+  },
+  {
+    name: 'a pin that adds a file: an update killed before its first rename keeps the old engine',
+    drive: { mainRuntimeFiles: ['newdep.dll'] },
+    build: (root) => {
+      copy(liveDir(root), 'b150', { records: [] })
+      copy(`${liveDir(root)}.new`, 'b200', { records: ['newdep.dll'] })
+    },
+    expected: { live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT }
+  },
+  {
+    // #986 review 2: an empty cpu/ in the install used to shadow the only net in .old, which then went.
+    name: 'an empty cpu/ in the install beside the only net in the replaced copy',
+    build: (root) => {
+      copy(liveDir(root), 'b200')
+      mkdirSync(netDir(root))
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+    },
+    expected: { live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT }
   },
   {
     name: 'the cpu/ net’s own swap killed between its renames',
@@ -315,8 +396,8 @@ const CRASH_LAYOUTS: CrashLayout[] = [
 ]
 
 describe('recoverEngineSwaps: the start finishes or rolls back an interrupted swap (#986)', () => {
-  it.each(CRASH_LAYOUTS)('$name', async ({ build, expected }) => {
-    const { rootPath, manifestsDir } = makeDrive()
+  it.each(CRASH_LAYOUTS)('$name', async ({ build, expected, drive }) => {
+    const { rootPath, manifestsDir } = makeDrive(BODY, 'drive', drive)
     build(rootPath)
     await recover(rootPath, manifestsDir)
     expect(layout(rootPath)).toEqual(expected)
@@ -594,6 +675,47 @@ describe('the staged swap in an engine job (#986)', () => {
     seams.renameSyncRefuses = null
     await recover(rootPath, manifestsDir)
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT })
+  })
+
+  // #986 review 2: two whole copies beside an empty install folder (a refused recovery rename, then a job's
+  // download made the folder) used to fail every job `filesInUse` and every start left them.
+  it('a job over two whole copies beside an empty install folder installs the engine', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    mkdirSync(liveDir(rootPath), { recursive: true })
+    copy(`${liveDir(rootPath)}.new`, 'b200')
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    const mgr = manager()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // #986 review 2: the net's OWN swap ended keep-both, so there is no `<os>/cpu/`, and the retry plans the main
+  // build alone. Its swap would have moved both whole nets away with the old copy and deleted them.
+  it('a retry that plans the main build alone first finishes the net’s unfinished swap and keeps the net', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    net(join(liveDir(rootPath), 'cpu.new'), 'b200')
+    net(join(liveDir(rootPath), 'cpu.old'), 'b150')
+    const mgr = manager()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect(mgr.jobPreview(started.jobId)?.items.map((i) => i.safetyNet)).toEqual([false])
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  it('…and when that net swap cannot be finished, the job stops before it moves the nets away', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    net(join(liveDir(rootPath), 'cpu.new'), 'b200')
+    net(join(liveDir(rootPath), 'cpu.old'), 'b150')
+    const before = fingerprintTree(liveDir(rootPath))
+    const held = [join(liveDir(rootPath), 'cpu.new'), join(liveDir(rootPath), 'cpu.old')]
+    seams.renameSyncRefuses = (from) => (held.includes(from) ? 'EPERM' : null)
+    const mgr = manager()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect(await settle(mgr, started.jobId)).toMatchObject({ status: 'failed', error: tMain('main.engine.filesInUse') })
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
   })
 
   // #986 review: the cpu/ net's archive downloads into `<os>/cpu/`. With the main build first, its swap moved
