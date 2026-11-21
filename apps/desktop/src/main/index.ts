@@ -113,7 +113,7 @@ import {
   REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
 } from './services/binary-verifier'
 import { createAppLifecycleHandlers, emergencyLock, performShutdown } from './shutdown'
-import { limitCoreDumps } from './services/core-dump-filter'
+import { limitCoreDumps, reportCoreDumpLimit } from './services/core-dump-filter'
 import type { AppContext } from './services/context'
 
 // HilbertRaum — Electron main process (the "backend").
@@ -122,8 +122,8 @@ import type { AppContext } from './services/context'
 
 // #982: on Linux a crash of this process must not write its memory, the workspace key included, into a crash file.
 // The first statement, at module scope: every child started later (the sidecars) inherits the filter, and nothing
-// secret exists yet. Every other platform: a no-op.
-limitCoreDumps({ platform: process.platform, writeFile: writeFileSync, log })
+// secret exists yet. Every other platform: a no-op. Logging does not exist yet, so `initBackend` reports a refusal.
+const coreDumpLimit = limitCoreDumps({ platform: process.platform, writeFile: writeFileSync })
 
 // The main bundle is ESM (out/main/index.mjs) — `__dirname` doesn't exist. Reconstruct it
 // from import.meta.url (the fileURLToPath idiom already used across the test suite).
@@ -217,6 +217,9 @@ function initBackend(): void {
   })
   ensureWorkspaceDirs(paths)
   initLogging(paths.logsPath)
+  // #982: the core dump filter ran before logging existed (`initLogging` starts an empty buffer); a refusal is
+  // recorded here, once, by its errno code.
+  reportCoreDumpLimit(coreDumpLimit, log)
   // Perf marks (opt-in, HILBERTRAUM_PERF_LOG=1) land beside app.log; buffered marks
   // (app_ready) flush here. See services/perf.ts for the content rules.
   initPerf(paths.logsPath)
