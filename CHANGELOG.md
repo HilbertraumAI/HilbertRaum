@@ -107,6 +107,13 @@ from its first public `1.0.0` release onward.
   proxy certificate was set only there, downloads fail until it is installed on the computer,
   which your IT department can do. Every downloaded file is still checked against a fixed checksum
   before use (#564).
+- **A log you copy or save for support no longer names your account.** A line about a failure
+  could hold a full path, such as `C:\Users\<your name>\AppData\…`, and Copy and Save to file… in
+  Settings → Diagnostics (advanced) → Recent logs handed it out as it was. Now the drive, your home
+  folder and the app's data and temporary folders show as `<drive>`, `<home>`, `<app-data>` and
+  `<temp>`, and an account name in any other path as `<user>`; the rest of each path stays, so
+  support can still see which file failed. The panel shows the log the same way. The log on the
+  drive keeps the full paths, and on an encrypted workspace it stays encrypted (#975).
 
 ### Fixed
 

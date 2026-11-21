@@ -800,7 +800,7 @@ enumerated this class.
 never uploads. Diagnostics surfaces local data only; it transmits nothing off-device.
 
 **The log is encrypted at rest on an encrypted workspace** — `app.log` can carry file
-names/paths and model ids (never document or chat text — a hard call-site rule), so it is sealed
+names, absolute paths and model ids (never document or chat text — a hard call-site rule), so it is sealed
 under the **same vault key as the database and the document cache** (AES-256-GCM, the framed
 `MAGIC | iv | tag | ciphertext` blob), at rest as `logs/app.log.enc` (rotated copy
 `app.1.log.enc`). On a `plaintext_dev` workspace the log stays a plain rotating `app.log`,
@@ -815,8 +815,37 @@ alone (a `cpSync` refusal carries only that), logs its kind, code and system cal
 which names the drive's or the user profile's paths. The system call is kept only as a bare name: a
 spawn error's names the binary's path. Any other error keeps its message, other Node `ERR_*` codes
 included (`ERR_SQLITE_ERROR` keeps SQLite's fixed text). A refused lock's `VaultLockError` carries what caused it (`failure`: where the lock stopped
-and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. About
-25 other main-process log lines still write an error's whole text (a separate issue).
+and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. Other
+main-process lines can still write an error's whole text, a path included; the exit rule below
+redacts it on the way out.
+
+**Lines that leave the log are redacted (#975).** The rule is an exit rule (owner decision
+G-4 b). The log at rest keeps full detail: absolute paths, a refused engine's binary path,
+a sidecar's stderr tail. It stays on the device, encrypted on an encrypted workspace. Every line that
+leaves it is redacted first, by `services/log-redact.ts`: the lines the Diagnostics panel shows and
+Copy hands out (`readLogTail`), and the file Save to file writes (`readLogFull`). Two passes:
+- **Known folders become placeholders.** The main process registers them at start
+  (`setLogRedactionRoots`, `main/index.ts`): the drive root (`<drive>`), the app's data folder
+  (`<app-data>`), the home folder (`<home>`), the temp folder (`<temp>`) and the app's own folders
+  (`<app>`). The longest folder goes first, so a drive root inside the home folder reads `<drive>`.
+  A folder matches in every spelling a line can carry: `\` or `/` separators, JSON's doubled
+  backslashes, the `\\?\` long form and a `file:` URL. A Windows folder matches in any letter
+  case. A folder matches whole segments only: `C:\Users\x` never takes the start of
+  `C:\Users\xavier`. When the workspace is on the app's data folder (no Kit), the root reads
+  `<app-data>`.
+- **Other absolute paths lose the part that names someone.** A profile's account segment becomes
+  `<user>` (`C:\Users\<user>\…`, an 8.3 short name such as `PETERS~1` too, `/Users/<user>/…`,
+  `/home/<user>/…`, `/media/<user>/…`, WSL's `/mnt/c/Users/<user>/…`). A mounted volume's name
+  becomes `<volume>` (`/Volumes/<volume>/…`, `/media/<user>/<volume>/…`, `/mnt/<volume>/…`). A
+  network path's server and share become `\\<server>\<share>\…`.
+
+The rest of the path stays, so support still sees which file failed:
+`<drive>\runtime\llama.cpp\win\llama-server.exe`. Relative paths, file names, `http(s)` URLs and
+ordinary text are left alone, and redacting a redacted line changes nothing. The second pass works
+from path shapes, so it hides accounts, volumes and servers, not every folder name: a path on another
+drive outside a profile (`D:\Private\letter.pdf`) keeps its folders. A full 10 MB log redacts in about
+70 ms; the live log is capped at 2 MB. The console copy of each line (shown in the terminal of a dev
+run, or of an app started from a terminal) is not redacted: the app does not hand it out.
 
 ### Design record — encrypted log (2026-06-13)
 
