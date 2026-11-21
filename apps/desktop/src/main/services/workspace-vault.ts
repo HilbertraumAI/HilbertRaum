@@ -51,6 +51,7 @@ import {
   isKnownKdfAlgo,
   newerFrameError,
   VaultNewerError,
+  isVaultNewerError,
   type VaultNewerWhat,
   BLOB_MAGIC,
   BLOB_IV_BYTES,
@@ -241,6 +242,8 @@ function openFailure(err: unknown): unknown {
  * Content-free ON PURPOSE (like `VaultLockError`): the IPC layer maps it to the
  * `vault_recovery_blocked` result + `main.workspace.recoveryBlocked`. The retry is simply
  * the next unlock — `unlock()` re-runs the salvage first, so it clears once the hold is gone.
+ * #973: also thrown by `unlockEncryptedVault` when it cannot read a staged `.enc.new` it must
+ * judge (a hold on the file): nothing is changed, and the next unlock checks it again.
  */
 export class VaultRecoveryBlockedError extends Error {
   constructor() {
@@ -753,6 +756,41 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
       /* already closed */
     }
     if (out !== null) closeSync(out)
+  }
+}
+
+/**
+ * #973: does the frame at `path` authenticate under `key`? The same streaming AES-256-GCM pass as {@link decryptFile},
+ * with nothing written: each chunk of plaintext is zeroed and dropped, and only the tag check at the end decides. A
+ * vault frame is one GCM stream with one tag, so this proves the whole file is ciphertext under that key. False when
+ * the tag fails (another key, or bytes that changed), and when the file is no frame of this build's at all (too short for
+ * a frame header, or a magic other than `HRAUMEN1`): neither can be a staged copy under any key here. A frame a newer
+ * build wrote throws its `VaultNewerError` (the unlock's format verdict refuses one before this runs), and an I/O error
+ * throws as it is: a file that cannot be read is never judged. SYNCHRONOUS, like the unlock that calls it.
+ */
+function authenticatesUnder(path: string, key: Buffer): boolean {
+  const fd = openSync(path, 'r')
+  try {
+    const headerLen = BLOB_MAGIC.length + BLOB_IV_BYTES + BLOB_TAG_BYTES
+    const header = Buffer.alloc(headerLen)
+    const got = readSync(fd, header, 0, headerLen, null)
+    const magic = classifyFrameMagic(header.subarray(0, got))
+    if (magic === 'newer') throw newerFrameError(header)
+    if (got < headerLen || magic !== 'current') return false
+    const iv = header.subarray(BLOB_MAGIC.length, BLOB_MAGIC.length + BLOB_IV_BYTES)
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(header.subarray(BLOB_MAGIC.length + BLOB_IV_BYTES, headerLen))
+    const buf = Buffer.alloc(FILE_CHUNK_BYTES)
+    let bytes: number
+    while ((bytes = readSync(fd, buf, 0, buf.length, null)) > 0) decipher.update(buf.subarray(0, bytes)).fill(0)
+    try {
+      decipher.final().fill(0) // throws here when the tag does not verify
+    } catch {
+      return false
+    }
+    return true
+  } finally {
+    closeSync(fd)
   }
 }
 
@@ -1719,6 +1757,14 @@ export function discardPendingRekey(vaultPaths: VaultPaths): void {
  * descriptor + staged files ⇒ committed ⇒ roll FORWARD (the new password's files win);
  * v1 descriptor ⇒ uncommitted ⇒ roll BACK (the old password + old files stay intact).
  * A journal with nothing left staged still needs the roll-forward's deletions (#241).
+ *
+ * #973: except a staged database the descriptor cannot vouch for ({@link stageInDoubt}): a journal-less `.enc.new`
+ * beside an `.enc` that is there, under a v2 descriptor. A create stages its database under this suffix with no
+ * journal, so a create cut short by a crash leaves one, and a workspace put back into the same folder later had its
+ * `.enc` shredded and replaced by it: an empty database under a key nothing holds. This recovery holds no key, so it
+ * leaves the whole staged set (and any journal) as it is; the unlock decides once it has the data key
+ * ({@link resolveStageInDoubt}). Journal'd stages, a v1 descriptor and a staged file with `.enc` gone (a create or a
+ * swap cut short after the commit) go on as before.
  */
 export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDescriptor | null): void {
   // encryptFile's own atomic-write temp for the staged DB (a crash mid-stage leaves it;
@@ -1728,9 +1774,90 @@ export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDes
   rmSync(`${rekeyJournalPath(vaultPaths)}.tmp`, { force: true })
   if (stagedRekeyFiles(vaultPaths).length === 0 && !existsSync(rekeyJournalPath(vaultPaths))) return
   if (descriptor && descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
+    if (stageInDoubt(vaultPaths)) return // #973: the unlock resolves it under the data key
     applyPendingRekey(vaultPaths)
   } else {
     discardPendingRekey(vaultPaths)
+  }
+}
+
+/**
+ * #973: is the staged database `.enc.new` one the descriptor cannot vouch for? It is, when no rekey journal lists it (no
+ * journal, or one that names other files or cannot be read) and `.enc` is not proven gone (a stat that says anything
+ * but ENOENT, the #911 rule: only ENOENT proves it is not there). A v1 → v2 password change journals its stage since
+ * #241; a create stages with no journal, as builds before #241 did for a password change, so the file alone does not
+ * tell a committed change from a create's leftover. With `.enc` gone it is no doubt: a create or a swap cut short after
+ * its commit left the staged file as the only snapshot, and it rolls forward at the start as before.
+ */
+function stageInDoubt(vaultPaths: VaultPaths): boolean {
+  const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  if (!existsSync(staged)) return false
+  if (encryptedFileState(vaultPaths) === 'missing') return false
+  const listed = (readRekeyJournal(vaultPaths)?.staged ?? []).some((entry) => pathKey(entry) === pathKey(staged))
+  return !listed
+}
+
+/**
+ * #973: the unlock's answer to {@link stageInDoubt}, once the password verified and the v2 data key is unwrapped. A
+ * staged database that authenticates under that key ({@link authenticatesUnder}) is this workspace's (a password change
+ * of a build before #241, cut short after its commit), and the staged set rolls forward exactly as the start's recovery
+ * would have. One that fails its tag is ciphertext under a key nothing holds (a create's leftover, a copy from another
+ * workspace), and one that is no frame of this build's (cut short, another magic) is no staged copy at all: either is
+ * removed (a plain delete, as {@link discardPendingRekey} does), and the unlock opens `.enc` as it is. Only that file
+ * goes; the rest of the staged set is left to the next recovery, as it is without it. The delete is best-effort: a file
+ * a hold keeps stays a doubt, which no start rolls forward and the next unlock checks again. A file the check cannot
+ * read (a hold: EBUSY, EPERM, EACCES) changes nothing and refuses the unlock with `VaultRecoveryBlockedError`, the #242
+ * "try again" answer. Returns whether it removed the file, for the IPC's one log line.
+ */
+function resolveStageInDoubt(vaultPaths: VaultPaths, dataKey: Buffer): boolean {
+  if (!stageInDoubt(vaultPaths)) return false
+  const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  let authentic: boolean
+  try {
+    authentic = authenticatesUnder(staged, dataKey)
+  } catch (err) {
+    if (isVaultNewerError(err)) throw err
+    throw new VaultRecoveryBlockedError()
+  }
+  if (authentic) {
+    applyPendingRekey(vaultPaths)
+    return false
+  }
+  try {
+    rmSync(staged, { force: true })
+  } catch {
+    /* best-effort: see above */
+    return false
+  }
+  return true
+}
+
+/**
+ * #973 (narrow): a create cut short before its commit (a crash or power loss between its stage and its key file) leaves
+ * a `.enc.new` with no key file, no `.enc` and no rekey journal beside it. The start reports that state as
+ * `uninitialized`, and the next create overwrites the file anyway. Removed here with its write temp, so a workspace put
+ * back into the same folder later can meet it under neither this build's start nor an older build's, which rolls any
+ * `.enc.new` forward under a v2 descriptor. Each of the three is proven absent by a stat that says ENOENT. Best-effort:
+ * a file that stays is overwritten by the next create, and the unlock checks it ({@link resolveStageInDoubt}) if a
+ * workspace comes back first. Nothing else is touched.
+ */
+function discardOrphanedStage(vaultPaths: VaultPaths): void {
+  const absent = (path: string): boolean => {
+    try {
+      statSync(path)
+      return false
+    } catch (err) {
+      return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+    }
+  }
+  if (!absent(vaultPaths.descriptorPath) || !absent(vaultPaths.encPath) || !absent(rekeyJournalPath(vaultPaths))) return
+  const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  for (const leftover of [staged, `${staged}.tmp`]) {
+    try {
+      rmSync(leftover, { force: true })
+    } catch {
+      /* best-effort: see above */
+    }
   }
 }
 
@@ -1838,11 +1965,14 @@ export function createEncryptedVaultOnDisk(
   // journal's own suffix), and only then write the descriptor — the single atomic COMMIT
   // POINT (writeVaultDescriptor is fsync + rename). A crash BEFORE it leaves neither a
   // descriptor nor an `.enc`, so init() still reports `uninitialized` and onboarding
-  // retries (a crash leaves the staged file behind: the retry overwrites it, but a
-  // workspace put back into the same folder first would have it rolled over its `.enc` —
-  // the crash variant of #954's S-1, open as its own issue). A crash AFTER it is the
-  // committed-rekey crash state: `recoverPendingRekey` rolls the staged file forward on the
-  // next init()/unlock. The descriptor used to be written FIRST — a crash mid-create then
+  // retries. The crash leaves the staged file behind (#973, the crash variant of #954's
+  // S-1): the next start removes it (`discardOrphanedStage`: no key file, no `.enc`, no
+  // journal), and one a workspace put back first meets is never rolled over that `.enc`
+  // unchecked: the start leaves it (`stageInDoubt`), and the unlock keeps it only when it
+  // authenticates under the put-back workspace's data key (`resolveStageInDoubt`). A crash
+  // AFTER the commit is the committed-rekey crash state with `.enc` absent:
+  // `recoverPendingRekey` rolls the staged file forward on the next init()/unlock. The
+  // descriptor used to be written FIRST — a crash mid-create then
   // bricked onboarding behind the misleading "restore workspace.json" hint (the actual
   // repair was deleting it). NB the `legacyV1` fixture path shares this ordering but not
   // the roll-forward (recovery is v2-gated); it exists only so tests can build migration
@@ -1850,8 +1980,8 @@ export function createEncryptedVaultOnDisk(
   //
   // #954 S-1: a create that FAILS before the commit (the descriptor's temp cannot be written
   // or renamed, a full drive, the re-check below) removes what it staged before it rethrows:
-  // `.enc.new` is ciphertext under a key nothing holds, and the next start's rekey recovery
-  // rolls ANY `.enc.new` forward under a v2 descriptor, so a workspace put back later into
+  // `.enc.new` is ciphertext under a key nothing holds, and every build before #973 rolls ANY
+  // `.enc.new` forward under a v2 descriptor at its start, so a workspace put back later into
   // the same folder would have its `.enc` shredded and replaced by this empty one. Removed:
   // the staged file and the two write temps (`.enc.new.tmp`, `workspace.json.tmp`: temps
   // nothing reads), once the encrypt has returned. A failure before that (the open, #247, or
@@ -1921,6 +2051,9 @@ export interface UnlockedVault {
   recoveryDiscarded: boolean
   /** #911: `.enc` was missing, and this unlock encrypted the `.recovery` copy the start kept as the new `.enc`. */
   restoredMissingEnc: boolean
+  /** #973: this unlock removed a staged `.enc.new` that no journal listed and that does not open under this
+   *  workspace's data key (a create's leftover, a copy from another workspace, or no frame of this build's). */
+  removedForeignStage: boolean
 }
 
 /**
@@ -1958,7 +2091,8 @@ export function unlockEncryptedVault(
     throw new Error('No encrypted workspace to unlock')
   }
   // A crash during a password change must be resolved BEFORE any decrypt: the descriptor
-  // decides whether staged `.new` files roll forward (committed) or are discarded.
+  // decides whether staged `.new` files roll forward (committed) or are discarded. #973: a staged
+  // database it cannot vouch for waits for the data key below, so a wrong password leaves it as it is.
   recoverPendingRekey(vaultPaths, descriptor)
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const kdfT0 = performance.now()
@@ -1985,9 +2119,15 @@ export function unlockEncryptedVault(
   // narrowing does not follow (it would read `openedDb` as always null there).
   let openedDb = null as Db | null
   try {
+    let removedForeignStage = false
     if (descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
       fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
       key.fill(0)
+      // #973: a staged `.enc.new` no journal vouches for, which the rekey recovery above left as it was: rolled
+      // forward when it authenticates under the data key, removed when it does not (or is no frame of this build's),
+      // refused as "try again" when it cannot be read. Before the `.recovery` block, so that block judges the `.enc`
+      // this unlock opens.
+      removedForeignStage = resolveStageInDoubt(vaultPaths, fileKey)
     }
     // full-audit 2026-07-11 CODE-1b — roll a preserved newer working file FORWARD now that
     // the key exists: re-encrypt it over the stale `.enc` (encryptFile is atomic tmp→rename
@@ -2133,7 +2273,7 @@ export function unlockEncryptedVault(
       throw openFailure(err)
     }
     if (recoveryDiscarded) shredFile(recoveryPath)
-    return { db, key: fileKey, descriptor, recoveryDiscarded, restoredMissingEnc }
+    return { db, key: fileKey, descriptor, recoveryDiscarded, restoredMissingEnc, removedForeignStage }
   } catch (err) {
     if (openedDb) {
       try {
@@ -2417,6 +2557,9 @@ export class WorkspaceController {
   /** #911: the last successful unlock encrypted the kept copy as the new `.enc`, for the IPC to log once
    *  ({@link takeRestoredMissingEnc}). */
   private _restoredMissingEnc = false
+  /** #973: the last successful unlock removed a staged `.enc.new` that does not open under this workspace's key, for
+   *  the IPC to log once ({@link takeRemovedForeignStage}). */
+  private _removedForeignStage = false
   /** #911: the disk state behind {@link _encMissingKept}: `.enc` absent (ENOENT) and a `.recovery` copy waiting that
    *  starts like a database (the #892 header read, 100 bytes: cheap, and read only at {@link init} and after a failed
    *  unlock, never per {@link getState}). One that does not is no copy to keep: the unlock shreds it and says the file
@@ -2684,6 +2827,9 @@ export class WorkspaceController {
       this.adoptWorkingCopyLostMarker(enc)
       return // locked; await unlock
     }
+    // #973 (narrow): a create's staged `.enc.new` that a crash left with no key file, no `.enc` and no rekey journal.
+    // `vaultExistsOnDisk` reads neither file it removes, so the state is `uninitialized` before and after.
+    discardOrphanedStage(this.vaultPaths)
     if (this.vaultExistsOnDisk()) {
       // An encrypted vault exists but its descriptor is missing/corrupt. Stay LOCKED:
       // do not open a plaintext DB over it, and (via getState/create) never offer the
@@ -2796,6 +2942,15 @@ export class WorkspaceController {
     return restored
   }
 
+  /** #973: whether the last successful unlock removed a staged `.enc.new` that does not open under this workspace's
+   *  key (a create cut short by a crash left it, or it came from another workspace). Returns it once, for the IPC's one
+   *  content-free log line (no audit type, as #911's). */
+  takeRemovedForeignStage(): boolean {
+    const removed = this._removedForeignStage
+    this._removedForeignStage = false
+    return removed
+  }
+
   /** #875: a lock finished at the last snapshot, or a start swept the last session's broken working file (or, #892, the
    *  session an unclean end left): report it until the next unlock, in this run and (best-effort, the marker) the next. */
   private markWorkingCopyLost(cause: MarkedLossCause, enc?: string | null): void {
@@ -2866,7 +3021,7 @@ export class WorkspaceController {
       if (this._encMissingKept) this._encMissingKept = this.encMissingKeptOnDisk()
       throw err
     }
-    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc } = unlocked
+    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc, removedForeignStage } = unlocked
     this._db = db
     this.key = key
     this.descriptor = descriptor
@@ -2875,6 +3030,7 @@ export class WorkspaceController {
     // #911: the kept copy is `.enc` again (or there was none to keep), so the notice is over.
     this._encMissingKept = false
     this._restoredMissingEnc = restoredMissingEnc
+    this._removedForeignStage = removedForeignStage
     // #875: a loss this unlock made itself (a broken `.recovery` shredded) is recorded the same way.
     if (recoveryDiscarded && this._lostAtPreviousLock === null) this._lostAtPreviousLock = { cause: 'recovery', lostAt: null }
     // (#858: `unlockEncryptedVault` re-stamped `workspaceMode`, inside its failure guard.)

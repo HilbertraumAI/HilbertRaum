@@ -115,6 +115,12 @@ from its first public `1.0.0` release onward.
   a password, creating the workspace replaced that file, and with it the only key that opens that
   workspace. Creating is now refused. A setup that failed partway also no longer leaves a file
   behind that the next start would write over a workspace you put back into the same folder (#954).
+- **A workspace you put back after a setup that a crash cut short now opens.** When a crash or a
+  power cut stopped the setup of a new workspace, it left a file behind in `workspace/`. If you then
+  copied a workspace back into the same folder (its `config/workspace.json` and its encrypted file),
+  the next start could replace that workspace with the leftover file, and every unlock said the
+  workspace was damaged, for good. The next start now removes the leftover, and the unlock checks
+  such a file against your workspace's key before it uses it (#973).
 - **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
   source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
   letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the

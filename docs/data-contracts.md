@@ -1242,6 +1242,17 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   leaves `images/` and out-of-store twins staged (a current build finishes them); a completed
   migration is a plain v2 vault. Constants: `REKEY_JOURNAL_NAME`, `IMAGES_DIR_NAME`,
   `DOCUMENTS_DIR_NAME`, `ROTATED_ENCRYPTED_LOG_NAME` (`app.1.log.enc`, deleted at the commit).
+  **Staged database in doubt (#973):** `recoverPendingRekey` leaves the whole staged set (and the
+  journal) as it is when a v2 descriptor sits beside a `hilbertraum.sqlite.enc.new` that no journal
+  lists and an `.enc` that is there (any stat answer but ENOENT); `unlockEncryptedVault` resolves it
+  after the data key is unwrapped: the module-private `authenticatesUnder(path, key) → boolean` (one
+  GCM pass, nothing written; false when the tag fails or the file is no `HRAUMEN1` frame, cut short
+  or another magic; a newer frame throws `VaultNewerError`) true → `applyPendingRekey`, false → the
+  file is deleted (best-effort; `UnlockedVault.removedForeignStage` says so); a read it cannot make
+  throws `VaultRecoveryBlockedError` (→ `vault_recovery_blocked`), nothing changed.
+  `WorkspaceController.init()` removes a stray `.enc.new`
+  and `.enc.new.tmp` when there is no descriptor file, no `.enc` and no journal (each ENOENT); the
+  state stays `uninitialized`. No on-disk shape changes.
   `createImageSession(db, dir, req, cipher, beginWork?)` — the optional fifth argument is the
   document-work lease factory (`() => ctl.beginDocumentWork()`), taken before the first await.
 - **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename; `decryptFile` throws
@@ -1343,7 +1354,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   any build's password change; never stage `.enc.new` (or any `*.enc.new`) under a v2 descriptor
   before the commit point — every shipped build rolls a staged file forward under a v2 descriptor and
   quarantines a journal it cannot read, so a newer build's uncommitted stage would end up under a key
-  that exists nowhere; `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
+  that exists nowhere (from #973 on, a journal-less `.enc.new` beside an existing `.enc` is rolled
+  forward only once it authenticates under the unwrapped data key, and deleted when its tag fails,
+  but the builds before it remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
   unrecognised header), and a later frame version is one ASCII digit `2`–`9` after `HRAUMEN` (any other byte
   there reads as damage from #845 on).
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
@@ -1358,7 +1371,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
   locked or in plaintext), `takeWorkingCopyLost()` (#875, below), `discardedOnlyCopy()` (#911),
   `takeRestoredMissingEnc()` (#911,
-  below).
+  below), `takeRemovedForeignStage()` (#973: the last successful unlock removed a staged `.enc.new`
+  that does not open under the data key, from `UnlockedVault.removedForeignStage`; returned once, for
+  the unlock IPC's one content-free log line, no audit type).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
   what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
@@ -1493,7 +1508,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   wording and reach the gate raw);
   `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
-  other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing) — retry once the hold clears, nothing lost;
+  other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing; since #973 also
+  a staged `.enc.new` in doubt that the unlock cannot read) — retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
   written by a NEWER build — nothing written, update the app; since #845 also the unlock refused
   because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages

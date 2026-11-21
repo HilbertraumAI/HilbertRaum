@@ -734,3 +734,170 @@ describe('what is not newer (#845)', () => {
     }
   })
 })
+
+// #973: a create stages its database as `.enc.new` (the rekey suffix) with no journal, before its commit (the key file).
+// A crash between the two leaves that file. Under a v2 descriptor every build rolled ANY `.enc.new` forward at the start,
+// so a workspace put back into the same folder (troubleshooting's "go back" steps, #807, #931) had its `.enc` shredded
+// and replaced by an empty database under a key nothing holds, and every unlock then said "damaged". Now a staged
+// database no journal lists, beside an `.enc` that is there, waits for the unlock, which keeps it only when it
+// authenticates under the data key; and a start with no key file, no `.enc` and no journal removes it.
+describe('a staged database no rekey journal vouches for (#973)', () => {
+  const stagedOf = (vp: FreshVaultPaths): string => `${vp.encPath}${REKEY_SUFFIX}`
+
+  /** A locked workspace under `PW` that holds `contextTokens: 5151`. */
+  function workspaceWithMarker(label: string): FreshVaultPaths {
+    const vp = lockedVault(label, PW)
+    const ctl = unlockedController(vp, PW)
+    updateSettings(ctl.requireDb(), { contextTokens: 5151 })
+    ctl.lock()
+    return vp
+  }
+
+  /** What a create cut short between its stage and its commit leaves at `.enc.new`: a seeded database under a random
+   *  data key that no key file wraps (another workspace's `.enc` has exactly that shape). */
+  const leftoverStage = (): Buffer => readFileSync(lockedVault('fmtguard-973-leftover', 'other-password').encPath)
+
+  it.each<[string, () => { vp: FreshVaultPaths; ctl: WorkspaceController; before: Record<string, string> }]>([
+    [
+      'put back while the app was closed',
+      () => {
+        const vp = workspaceWithMarker('fmtguard-973')
+        writeFileSync(stagedOf(vp), leftoverStage())
+        const before = snapshot(vp.root)
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init() // the next start
+        return { vp, ctl, before }
+      }
+    ],
+    [
+      'put back under the create form while the app runs',
+      () => {
+        const vp = freshVaultPaths('fmtguard-973')
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        expect(ctl.getState().state).toBe('uninitialized')
+        const src = workspaceWithMarker('fmtguard-973-src')
+        copyFileSync(src.descriptorPath, vp.descriptorPath)
+        copyFileSync(src.encPath, vp.encPath)
+        writeFileSync(stagedOf(vp), leftoverStage())
+        return { vp, ctl, before: snapshot(vp.root) }
+      }
+    ]
+  ])('a crash leftover beside a workspace %s: the start and a wrong password leave both, the password opens the workspace', (_when, arrange) => {
+    const { vp, ctl, before } = arrange()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      expect(ctl.getState()).toMatchObject({ state: 'locked', mode: 'encrypted' })
+      expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false) // removed: it does not open under this workspace's key
+      expect(ctl.takeRemovedForeignStage()).toBe(true)
+      expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+      ctl.lock()
+      const reopened = unlockedController(vp, PW)
+      expect(getSettings(reopened.requireDb()).contextTokens).toBe(5151)
+      reopened.shutdown()
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // The control: a password change of a build before #241 (which wrote no journal), cut short after its commit, left the
+  // staged database under the new data key beside the old `.enc`. It authenticates under that key, so the unlock rolls
+  // it forward, as every start did before.
+  it('a journal-less stage that opens under the data key (a password change before #241, cut short after its commit) rolls forward', () => {
+    const vp = lockedVault('fmtguard-973', PW, { legacyV1: true })
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 6262 })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'next-password', FAST_KDF) // the COMMIT; the crash comes before the swap
+    db.close()
+    key.fill(0)
+    dataKey.fill(0)
+    shredFile(vp.dbPath) // the session the crash left, as the start's sweep removes it
+    cleanSidecars(vp.dbPath)
+    rmSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)) // a build before #241 wrote none
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6262)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('a create cut short leaves its stage on an empty drive: the start removes it, and a workspace put back later opens', () => {
+    const vp = freshVaultPaths('fmtguard-973')
+    // 1. A create killed between its stage and its commit: the staged database, and a write temp of an encrypt.
+    writeFileSync(stagedOf(vp), leftoverStage())
+    writeFileSync(`${stagedOf(vp)}.tmp`, 'the write temp of an encrypt cut short')
+    // 2. The restart: the create form, and nothing left of the stage.
+    const first = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    first.init()
+    expect(first.getState().state).toBe('uninitialized')
+    expect(existsSync(stagedOf(vp))).toBe(false)
+    expect(existsSync(`${stagedOf(vp)}.tmp`)).toBe(false)
+    // 3. A workspace put back while the app is closed. 4. The next start, and the unlock.
+    const src = workspaceWithMarker('fmtguard-973-src')
+    copyFileSync(src.descriptorPath, vp.descriptorPath)
+    copyFileSync(src.encPath, vp.encPath)
+    const ctl = unlockedController(vp, PW)
+    try {
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // The removal is narrow: with a key file, an `.enc` or a rekey journal there, the stage may be that workspace's, and
+  // the start leaves it byte for byte.
+  it.each<[string, (vp: FreshVaultPaths) => void]>([
+    ['a key file that cannot be read', (vp) => writeFileSync(vp.descriptorPath, '{ not json', 'utf8')],
+    ['an .enc without its key file', (vp) => writeFileSync(vp.encPath, leftoverStage())],
+    ['a rekey journal that lists it', (vp) => void rekeyJournal(vp, 1, [stagedOf(vp)])]
+  ])('the start leaves a stage beside %s', (_case, plantOne) => {
+    const vp = freshVaultPaths('fmtguard-973')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    plantOne(vp)
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(snapshot(vp.root)).toEqual(before)
+  })
+
+  // A file at the staged name that is no frame of this build's at all cannot be a staged copy of this workspace: the
+  // unlock removes it as it removes one that fails its tag, and opens `.enc`. (A newer frame is refused earlier, #845;
+  // one the unlock cannot read refuses as "try again": vault-recovery-guards.test.ts.)
+  it.each<[string, (staged: string) => void]>([
+    [
+      'a file in another frame (PAIDENC1)',
+      (staged) => {
+        writeFileSync(staged, leftoverStage())
+        setFrameMagic(staged, 'PAIDENC1')
+      }
+    ],
+    ['a frame cut short inside its header', (staged) => writeFileSync(staged, Buffer.from('HRAUMEN1cut', 'latin1'))]
+  ])('beside a workspace, %s at the staged name: the start leaves it, the unlock removes it and opens the workspace', (_case, plantStage) => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    plantStage(stagedOf(vp))
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+      expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+      expect(ctl.takeRemovedForeignStage()).toBe(true) // for the unlock's one log line, once
+      expect(ctl.takeRemovedForeignStage()).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+})

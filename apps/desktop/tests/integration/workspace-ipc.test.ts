@@ -1428,6 +1428,26 @@ describe('a workspace failure line names no path (#956)', () => {
     }
   })
 
+  // #973: an unlock that removes a staged copy of the database which does not open under the workspace's key (a create's
+  // leftover beside a workspace put back) says so once, on the success path, in fixed words: no path, no file name.
+  it('an unlock that removes a staged copy from another key logs one line that names no path (#973)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    copyFileSync(lockedVault('wsipc-leftover', 'other-password').encPath, `${vp.encPath}.new`)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(existsSync(`${vp.encPath}.new`)).toBe(false)
+      const lines = linesAfter(marker, 'removed a staged copy')
+      expect(lines).toHaveLength(1)
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+      expect(lines[0]).not.toContain('.enc')
+    } finally {
+      ctrl.lock()
+    }
+  })
+
   it('a password change whose key file write meets a file error logs its code, not the path', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)

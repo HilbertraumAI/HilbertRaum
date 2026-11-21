@@ -239,6 +239,12 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       if (ctx.workspace.takeRestoredMissingEnc?.()) {
         log.warn('The encrypted workspace file was missing; the copy the last session left was encrypted again')
       }
+      // #973 (a log line, no audit type, as #911's): this unlock removed a staged copy of the database that no rekey
+      // journal listed and that does not open under this workspace's key (a create cut short by a crash left it, or it
+      // came from another workspace). Fixed words only: no path, no file name.
+      if (ctx.workspace.takeRemovedForeignStage?.()) {
+        log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
+      }
       logProbeFallbacks(ctx)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
@@ -372,9 +378,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       // #955 item 1: `config/workspace.json` is on the drive but cannot be read, and the encrypted workspace file is not
       // beside it, so no password can open anything here. Before, a plain English error that read "Could not open the
-      // workspace." on every try. Its own copy says not to delete the key file (a file saved with a byte-order mark
-      // reads as unreadable and can be repaired) and never that no data is left: a `.recovery`, an `.enc.new` or
-      // stored documents may still be on the drive. The log line names no path. instanceof PLUS the name, as above.
+      // workspace." on every try. Its own copy says not to delete the key file (a file damaged by an edit can often be
+      // repaired; #974: a byte-order mark alone no longer makes it unreadable) and never that no data is left: a
+      // `.recovery`, an `.enc.new` or stored documents may still be on the drive. The log line names no path. instanceof PLUS the name, as above.
       if (
         err instanceof VaultDescriptorUnreadableError ||
         (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')
