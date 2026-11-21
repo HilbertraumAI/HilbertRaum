@@ -54,9 +54,10 @@ export interface TranslateJobServiceDeps {
    * controller and its first window would call `translate()` — lazily respawning the ~10 GB
    * sidecar the teardown just suspended, with the pasted source text in its KV cache. The
    * workspace is still "unlocked" throughout (the DB closes only at the very end), so this is
-   * the signal that expresses it. Absent/unwired ⇒ never locking (partial test deps stay valid).
+   * the signal that expresses it. Required: the composition root passes `workspace.isLocking()`;
+   * a test that is not about the lock passes `() => false`.
    */
-  isWorkspaceLocking?: () => boolean
+  isWorkspaceLocking: () => boolean
 }
 
 /** Cap on retained terminal jobs — the interactive view is one-at-a-time, so a tiny history
@@ -101,9 +102,9 @@ export class TranslateJobService {
     // entry, so this would fall through to its generic "something went wrong" banner rather
     // than locked-specific copy. That is accepted, not overlooked — this guard is unreachable
     // in production today (the one call site is the IPC handler, which refuses first with the
-    // module's localized locked copy), so it exists for non-IPC callers, and adding a renderer
-    // code + en/de copy for a path no user can reach would be dead weight.
-    if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
+    // module's localized locked copy), so it is defence in depth for a future caller outside IPC,
+    // and adding a renderer code + en/de copy for a path no user can reach would be dead weight.
+    if (this.deps.isWorkspaceLocking()) return failedJob('cancelled')
     const translator = this.deps.getTranslator()
     if (!translator) return failedJob('noModel')
     const source = req?.sourceLang
@@ -212,6 +213,8 @@ export class TranslateJobService {
         let startFailed = false
         /** #530: the latched start failure was the OS refusing the engine program. */
         let engineCannotRun = false
+        /** #913: the latched start failure was the start check finding the model's file damaged. */
+        let modelDamaged = false
         let timedOutSlow = false
         for (
           let attempt = 1;
@@ -265,6 +268,7 @@ export class TranslateJobService {
               log.warn('Translate view start failed', { jobId, window: i + 1, error: String(err) })
               startFailed = true
               engineCannotRun = err.engineCannotRun
+              modelDamaged = err.modelDamaged
               break
             }
             // #160 (BE-2): a per-request TIMEOUT during a LIVE decode (tokens flowed) is as
@@ -289,7 +293,7 @@ export class TranslateJobService {
           }
         }
         if (startFailed) {
-          this.fail(jobId, engineCannotRun ? 'engineCannotRun' : 'startFailed', emit)
+          this.fail(jobId, engineCannotRun ? 'engineCannotRun' : modelDamaged ? 'modelDamaged' : 'startFailed', emit)
           return
         }
         if (!clean) {

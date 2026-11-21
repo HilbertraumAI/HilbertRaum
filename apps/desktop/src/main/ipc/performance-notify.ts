@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { EVENTS } from '../../shared/ipc'
-import type { AppSettings } from '../../shared/types'
+import type { RendererSettingsKey } from '../../shared/settings-writers'
 
 // The Performance screen's push (PR #303 audit remediation P3, owner decision G6): a
 // payload-free `performance:changed` to every live window, meaning "re-read `performance:get`".
@@ -22,13 +22,12 @@ import type { AppSettings } from '../../shared/types'
 /**
  * The settings keys `buildPerformanceSnapshot` reads that the generic `settings:update`
  * channel can change: a patch touching one of them pushes the screen's re-read; every other
- * settings write stays silent. (`activeModelId` also moves through `models:select` /
- * `models:use`, which push on their own; `gpuProbe`, `modelPlacements`, `lastBenchmark` and
- * `benchmarkHistory` are written only by the seams that already push.)
+ * settings write stays silent. Typed to the renderer-owned keys: since #868 the channel drops
+ * every other key, so a main-owned one here would never fire. (The active slots move through
+ * `models:select` / `runtime:use`, which push on their own; `gpuProbe`, `modelPlacements`,
+ * `lastBenchmark` and `benchmarkHistory` are written only by the seams that already push.)
  */
-export const PERFORMANCE_SETTINGS_KEYS: ReadonlyArray<keyof AppSettings> = [
-  'activeModelId',
-  'activeEmbeddingModelId',
+export const PERFORMANCE_SETTINGS_KEYS: ReadonlyArray<RendererSettingsKey> = [
   'contextTokens',
   'contextTokensOverride',
   'gpuMode'

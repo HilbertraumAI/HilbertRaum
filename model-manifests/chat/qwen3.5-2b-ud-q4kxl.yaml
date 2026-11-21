@@ -21,6 +21,9 @@ recommended_ram_gb: 16
 # 4B is too slow for (the ~2x-fewer-parameters decode win), with the grammar-constrained call
 # sites (categorizer/enricher/extract) expected to hold up better than free-prose surfaces.
 recommendation_rank: 0
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 4096, one slot, batch 2048; b12110, full offload 25/25 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 1574
 recommended_context_tokens: 4096
 # Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat
 # template honours `enable_thinking` → the Deep answer mode applies (like the 4B entry).

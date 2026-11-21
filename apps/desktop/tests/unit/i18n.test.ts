@@ -2083,6 +2083,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'ocr.install.progress',
       'models.ram.needs',
       'models.ram.machine',
+      // #930: the chat start's RAM refusal, the same two figures as the two keys above.
+      'main.models.startNeedsRam',
       'models.badge.ramNeeded',
       'common.percent',
       'perf.report.otherComputer',
@@ -2097,6 +2099,7 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'perf.model.tooLarge',
       'perf.models.row',
       'perf.models.card',
+      'perf.models.cardChat',
       'perf.models.cardReranker',
       'perf.models.ram',
       'perf.models.memory',
@@ -2262,7 +2265,8 @@ const NON_GRAMMATICAL: Readonly<Record<string, { reason: string; keys: readonly 
       'chat.packs.outcome.summary',
       'review.progress',
       'review.summary.gateHint',
-      'main.download.notEnoughSpace'
+      'main.download.notEnoughSpace',
+      'main.engine.notEnoughSpace'
     ]
   }
 }

@@ -19,7 +19,8 @@ if /i "%~1"=="/check" set "CHECK=1"
 
 rem %~dp0 = this script's directory, with a trailing backslash = the drive root.
 set "HILBERTRAUM_DRIVE_ROOT=%~dp0"
-rem One source of truth: the app reads the SAME manifests the drive scripts verified.
+rem The model list reads the SAME manifests the drive scripts verified. The AI-engine pins
+rem always come from the app's own copy, never from this folder (#842).
 set "HILBERTRAUM_MANIFESTS_DIR=%~dp0model-manifests"
 
 rem Find the portable app (the version is part of its name) and count the matches.

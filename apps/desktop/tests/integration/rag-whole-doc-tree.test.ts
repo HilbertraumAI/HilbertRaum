@@ -18,7 +18,14 @@ import {
   answerWholeDocFromTree,
   SUMMARY_MAP_CALL_HARD_CEILING
 } from '../../src/main/services/rag/whole-doc-tree'
-import { SUMMARY_MAP_CALL_CEILING } from '../../src/main/services/doctasks/summary'
+import { asNoFenceMapPrompt, masterMapPrompt, noFenceMapPrompt } from '../helpers/whole-doc-fixtures'
+import {
+  packIntoWindows,
+  summaryBudgetWords,
+  SUMMARY_MAP_CALL_CEILING,
+  SUMMARY_TOKENS_PER_WORD
+} from '../../src/main/services/doctasks/summary'
+import { approxPromptTokens, buildSkillFence } from '../../src/main/services/skills/prompt'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import type { TurnSkill } from '../../src/main/services/chat'
 
@@ -39,7 +46,8 @@ interface FakeRuntime extends ModelRuntime {
   turns: string[][]
 }
 
-function fakeRuntime(): FakeRuntime {
+/** `reply` is every call's output (#939 review: the fold golden row needs notes long enough to fold). */
+function fakeRuntime(reply = 'Minutes body with decisions and actions.'): FakeRuntime {
   const rt = {
     modelId: 'mock',
     calls: 0,
@@ -50,7 +58,7 @@ function fakeRuntime(): FakeRuntime {
     async *chatStream(messages: ChatMessage[]) {
       rt.calls++
       rt.turns.push(messages.map((m) => `${m.role}:${m.content}`))
-      yield 'Minutes body with decisions and actions.'
+      yield reply
     }
   } as unknown as FakeRuntime
   return rt
@@ -217,6 +225,207 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     // The fence rode in EVERY step (each map AND the reduce).
     for (const turn of rt.turns) {
       expect(turn.find((t) => t.startsWith('user:'))).toContain('structured minutes')
+    }
+  })
+
+  // #939 (owner call 2026-11-20): with the request flag the map steps over the node summaries carry the user's
+  // request before the fence, not only the skill's task. #952: with no skill (the #642 tree summary of a plain
+  // document chat) there is no task, so every map step carries the request with no flag, as its only target, and
+  // never names "the task described below".
+  it.each([
+    { name: 'a skill and the request flag', skill: SKILL, question: "Find every mention of 'budget'", notesForRequest: true },
+    { name: 'no skill', skill: undefined, question: 'Fasse dieses Dokument zusammen', notesForRequest: undefined }
+  ])('the map steps over the node summaries with $name (#939, #952)', async ({ skill, question, notesForRequest }) => {
+    const h = await makeDoc()
+    const sections = [0, 1, 2].map((i) =>
+      insertNode(h.db, h.docId, 1, i, false, `Section ${i + 1} summary. ${'detail point '.repeat(60)}`.trim())
+    )
+    const root = insertNode(h.db, h.docId, 2, 0, true, 'Whole-document root summary.')
+    sections.forEach((nid, i) => {
+      insertEdge(h.db, root, nid, false, i)
+      h.db.prepare('UPDATE tree_nodes SET parent_id = ? WHERE id = ?').run(root, nid)
+    })
+    h.chunkIds.forEach((cid, i) => insertEdge(h.db, sections[i % 3], cid, true, i))
+    markTreeReady(h.db, h.docId)
+
+    const rt = fakeRuntime()
+    const msg = await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question,
+      skill,
+      notesForRequest,
+      contextTokens: 900
+    })
+    expect(msg?.coverage?.mode).toBe('tree')
+    expect(rt.calls).toBeGreaterThanOrEqual(3)
+    const users = rt.turns.map((turn) => turn.find((t) => t.startsWith('user:')) ?? '')
+    for (const turn of users.slice(0, -1)) {
+      const map = turn.slice('user:'.length)
+      expect(map).toContain('(section summaries)')
+      expect(map.includes('structured minutes')).toBe(skill != null)
+      expect(map).toContain(`\nUser request:\n${question}\n`)
+      if (skill == null) {
+        expect(map).not.toContain('task described below')
+        expect(map).toBe(asNoFenceMapPrompt(map, question))
+      }
+    }
+    expect(users.at(-1)).toContain(`User request:\n${question}\n`)
+  })
+
+  // #939 review S3: master's WHOLE map and fold prompts, byte for byte, for windows this test knows: fixed node
+  // summaries at a 900-token window (one summary per window), the turn's fence from the same `buildSkillFence`
+  // the core calls, and master's frozen template (`masterMapPrompt`) around them. With no request flag every byte
+  // is master's: the instruction, the fence block, the part labels, the window text and the closing label.
+  const goldenSections = (n: number): string[] =>
+    Array.from({ length: n }, (_, i) => `Section ${i + 1} summary. ${'detail point '.repeat(60)}`.trim())
+  const seedSections = (h: Harness, texts: string[]): void => {
+    const ids = texts.map((text, i) => insertNode(h.db, h.docId, 1, i, false, text))
+    const root = insertNode(h.db, h.docId, 2, 0, true, 'Whole-document root summary.')
+    ids.forEach((nid, i) => {
+      insertEdge(h.db, root, nid, false, i)
+      h.db.prepare('UPDATE tree_nodes SET parent_id = ? WHERE id = ?').run(root, nid)
+    })
+    h.chunkIds.forEach((cid, i) => insertEdge(h.db, ids[i % ids.length], cid, true, i))
+    markTreeReady(h.db, h.docId)
+  }
+  const userTurns = (rt: FakeRuntime): string[] =>
+    rt.turns.map((turn) => (turn.find((t) => t.startsWith('user:')) ?? '').slice('user:'.length))
+  const GOLDEN_BUDGET_WORDS = 200 // `summaryBudgetWords(900)` floors at 200, minus nothing (`Math.max(200, …)`)
+
+  // (With no skill the same windows take the no-fence template since #952: the row after the fold row below.)
+  it.each([
+    { name: 'with a skill', skill: SKILL }
+  ])("master's whole map prompts for known windows ($name, #939 review)", async ({ skill }) => {
+    const h = await makeDoc()
+    const texts = goldenSections(3)
+    seedSections(h, texts)
+    const rt = fakeRuntime()
+    await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question: 'Write the meeting minutes',
+      skill,
+      contextTokens: 900
+    })
+    const fence = skill ? buildSkillFence({ title: skill.title, body: skill.body }).text : null
+    const windows = packIntoWindows(texts, GOLDEN_BUDGET_WORDS)
+    expect(windows).toEqual(texts)
+    expect(userTurns(rt).slice(0, -1)).toEqual(windows.map((w, i) => masterMapPrompt(false, fence, i + 1, windows.length, w)))
+  })
+
+  it("master's whole fold prompts for known notes (#939 review)", async () => {
+    const h = await makeDoc()
+    const texts = goldenSections(SUMMARY_MAP_CALL_CEILING + 1) // one window more than a single-level reduce takes
+    seedSections(h, texts)
+    const note = `Note ${'note '.repeat(60)}`.trim()
+    const rt = fakeRuntime(note)
+    await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question: 'Write the meeting minutes',
+      skill: SKILL,
+      contextTokens: 900
+    })
+    const fence = buildSkillFence({ title: SKILL.title, body: SKILL.body }).text
+    const users = userTurns(rt)
+    const maps = users.slice(0, texts.length)
+    const folds = users.slice(texts.length, -1)
+    expect(maps).toEqual(texts.map((w, i) => masterMapPrompt(false, fence, i + 1, texts.length, w)))
+    const batches = packIntoWindows(Array(texts.length).fill(note), GOLDEN_BUDGET_WORDS)
+    expect(batches.length).toBeGreaterThan(1)
+    expect(folds).toEqual(batches.map((b, i) => masterMapPrompt(true, fence, i + 1, batches.length, b)))
+  })
+
+  // #952: with no skill (the #642 tree summary) there is no task, so every map and fold step takes notes for the user's
+  // request alone, byte for byte the frozen no-fence template (`noFenceMapPrompt`) around the windows this test knows.
+  it('the no-skill whole map and fold prompts for known windows and notes (#952)', async () => {
+    const h = await makeDoc()
+    const texts = goldenSections(SUMMARY_MAP_CALL_CEILING + 1) // one window more than a single-level reduce takes
+    seedSections(h, texts)
+    const note = `Note ${'note '.repeat(60)}`.trim()
+    const rt = fakeRuntime(note)
+    const question = 'Summarize this document'
+    await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question,
+      contextTokens: 900
+    })
+    const users = userTurns(rt)
+    const maps = users.slice(0, texts.length)
+    const folds = users.slice(texts.length, -1)
+    expect(maps).toEqual(texts.map((w, i) => noFenceMapPrompt(false, question, i + 1, texts.length, w)))
+    const batches = packIntoWindows(Array(texts.length).fill(note), GOLDEN_BUDGET_WORDS)
+    expect(batches.length).toBeGreaterThan(1)
+    expect(folds).toEqual(batches.map((b, i) => noFenceMapPrompt(true, question, i + 1, batches.length, b)))
+  })
+
+  // #952 window pin: the question was reserved in every no-skill window before it rode them (the question plus 200
+  // tokens of instruction and labels, `reserveWords`), so the no-skill read packs the same windows as before. Two
+  // sections that fill one window at a real 4,096 window, to the word, still share it: as many map calls, the same
+  // window text in each.
+  it('the no-skill map steps keep their windows and their count at 4,096 (#952 window pin)', async () => {
+    const h = await makeDoc()
+    const question = 'Summarize this document'
+    const budget = summaryBudgetWords(4096) - Math.ceil((approxPromptTokens(question) + 200) / SUMMARY_TOKENS_PER_WORD)
+    const words = (n: number, word: string): string => Array(n).fill(word).join(' ')
+    const half = Math.floor(budget / 2)
+    const texts = [words(budget - half, 'alpha'), words(half, 'bravo'), words(budget - half, 'charlie'), words(half, 'delta')]
+    seedSections(h, texts)
+    const rt = fakeRuntime()
+    await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question,
+      contextTokens: 4096
+    })
+    const maps = userTurns(rt).slice(0, -1)
+    const windowOf = (map: string): string => (map.split('(section summaries):\n').at(-1) ?? '').replace(/\n\nNotes:$/, '')
+    expect(maps.map((m) => m.match(/^You are processing part \d+ of (\d+) /)?.[1])).toEqual(['2', '2'])
+    expect(maps.map(windowOf)).toEqual([`${texts[0]}\n\n${texts[1]}`, `${texts[2]}\n\n${texts[3]}`])
+  })
+
+  // #952 review (N-2): a bundled skill's fall-through turn carries paragraph 1 of its fence only (#632, #831), the
+  // heading and honesty rules, so it holds no task either. With no flag every map step takes notes for the request,
+  // on #939's request layout with paragraph 1 after the request; the later paragraphs never ride.
+  it('a fence of paragraph 1 alone holds no task: every map step takes notes for the request (#952 review)', async () => {
+    const h = await makeDoc()
+    seedSections(h, goldenSections(3))
+    const skill: TurnSkill = {
+      installId: 'app:what-changed',
+      title: 'What Changed?',
+      body: '# What changed\nWork only from the two documents. Never invent a change.\n\nProduce the report in this order: summary, changes.'
+    }
+    const question = 'Summarize the rent and the notice deadline'
+    const rt = fakeRuntime()
+    await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question,
+      skill,
+      skillFenceMode: 'first-paragraph',
+      contextTokens: 900
+    })
+    const fence = buildSkillFence({ title: skill.title, body: skill.body, mode: 'first-paragraph' }).text
+    const maps = userTurns(rt).slice(0, -1)
+    expect(maps).toHaveLength(3)
+    for (const map of maps) {
+      expect(map).toContain(`\nUser request:\n${question}\n\n${fence}\n`)
+      expect(map).toContain('note every detail the task needs, and everything in this part that the user request asks about')
+      expect(map).not.toContain('Produce the report')
     }
   })
 

@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach, onTestFinished } from 'vitest'
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
-import { purgeReviewSession } from '../../src/renderer/lib/reviewSession'
-import { t } from '../../src/shared/i18n'
-import type { EvidenceReviewItemPatch } from '../../src/shared/types'
+import { REVIEW_SAVE_DEBOUNCE_MS, flushReviewSession, purgeReviewSession } from '../../src/renderer/lib/reviewSession'
+import { t, type MessageKey } from '../../src/shared/i18n'
+import type {
+  EvidenceLinkInput,
+  EvidenceReviewFreshness,
+  EvidenceReviewItemPatch,
+  EvidenceReviewPatch,
+  EvidenceSourceContext
+} from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { deferred } from '../helpers/deferred'
 import {
   archiveSource,
   bulkBackend,
@@ -18,6 +25,7 @@ import {
 } from '../helpers/evidenceReview'
 import { fakeMatchMedia, removeMatchMedia } from '../helpers/match-media'
 import { openSummary, renderReview } from '../helpers/review-screen'
+import { renderInLanguage } from '../helpers/render-language'
 
 // EP-1 plan §7.3/§7.4/§7.6 — the review workspace itself: the create→decide→note→
 // summary→ready journey over stubApi, the whole-document honesty wording (asserted by
@@ -51,6 +59,11 @@ afterEach(() => {
 
 function noop(): void {}
 
+/** `text` as a literal regular-expression source. */
+function escapeRe(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 /** Radix DropdownMenu triggers open on POINTERDOWN, not click — drive it the way Radix
  *  listens (a bare fireEvent.click never opens the menu in jsdom). */
 function openBulkMenu(): void {
@@ -83,6 +96,17 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
       screen.getByRole('heading', { name: t('en', 'main.evidenceReviews.defaultTitle') })
     ).toBeInTheDocument()
 
+    // The 600 ms autosave debounce is taken out of the picture for this row only: its timer is armed but never runs, so
+    // no amount of load can fire it before the click. Every other timer (RTL's waits, React) stays real.
+    const realSetTimeout = globalThis.setTimeout
+    const held: unknown[] = []
+    const autosave = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+      if (args[1] !== REVIEW_SAVE_DEBOUNCE_MS) return realSetTimeout(...args)
+      held.push(args[0])
+      return realSetTimeout(() => {}, 0)
+    }) as typeof setTimeout)
+    onTestFinished(() => autosave.mockRestore())
+
     // Decide both items via the radio chips.
     const items = screen.getAllByRole('listitem')
     fireEvent.click(
@@ -108,7 +132,9 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
       name: t('en', 'review.summary.markReady')
     })
     expect(readyBtn).toBeEnabled()
-    // Guard: the 600 ms autosave the edits armed has not fired yet, so the write below can only come from markReviewReady's own flush.
+    // The hold above really caught the autosave the edits armed (so it cannot silently stop holding it) ...
+    expect(held.length).toBeGreaterThan(0)
+    // ... and that autosave never ran, so the write below can only come from markReviewReady's own flush.
     expect(updateEvidenceReviewItem).not.toHaveBeenCalled()
     fireEvent.click(readyBtn)
     // markReviewReady flushes before its first await (reviewSession.ts:401 → :264-289): the first pending patch (i1: decision + note,
@@ -129,6 +155,33 @@ describe('ReviewScreen — create → decide → note → summary → ready (spe
       expect(screen.getAllByText(t('en', 'review.status.ready')).length).toBeGreaterThan(0)
     )
     assertNoUnexpectedApiCalls()
+  })
+
+  // #839 U1f (D-6): a rename edits the stored title through the debounced head patch; Escape drops the draft.
+  it('rename: Enter saves the trimmed title through the head patch, Escape drops the draft', async () => {
+    const updateEvidenceReview = vi.fn(async (id: string, patch: EvidenceReviewPatch) => makeReviewHead({ id, ...patch }))
+    await renderReview({ api: { updateEvidenceReview } })
+    await screen.findByText('Beta')
+
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.rename') }))
+    const input = screen.getByRole('textbox', { name: t('en', 'review.rename.label') })
+    fireEvent.change(input, { target: { value: '  Lease terms  ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(await screen.findByRole('heading', { name: 'Lease terms' })).toBeInTheDocument()
+    await act(async () => {
+      await flushReviewSession()
+    })
+    expect(updateEvidenceReview).toHaveBeenCalledWith('r1', { title: 'Lease terms' })
+
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.rename') }))
+    const again = screen.getByRole('textbox', { name: t('en', 'review.rename.label') })
+    fireEvent.change(again, { target: { value: 'Not this one' } })
+    fireEvent.keyDown(again, { key: 'Escape' })
+    expect(screen.getByRole('heading', { name: 'Lease terms' })).toBeInTheDocument()
+    await act(async () => {
+      await flushReviewSession()
+    })
+    expect(updateEvidenceReview).toHaveBeenCalledTimes(1)
   })
 
   it('a deleted/unknown reviewId lands on the friendly not-found state, never a crash', async () => {
@@ -203,10 +256,10 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
     expect(document.querySelector('.review-evidence .cite-label')).toBeNull()
   })
 
-  it('a reviewer-made link is labeled "Reviewer linked", never "Cited by the answer"', async () => {
+  it('a reviewer-made link is labeled "Reviewer linked", never "Cited by the answer"; its relation choice is saved', async () => {
     const detail = wholeDocDetail()
-    const setEvidenceLink = vi.fn(async (itemId: string, key: string) =>
-      makeItem({ id: itemId, links: [{ evidenceKey: key, origin: 'reviewer' as const, relation: null }] })
+    const setEvidenceLink = vi.fn(async (itemId: string, key: string, input: EvidenceLinkInput) =>
+      makeItem({ id: itemId, links: [{ evidenceKey: key, origin: 'reviewer' as const, relation: input.relation ?? null }] })
     )
     await renderReview({ detail, api: { setEvidenceLink } })
     await screen.findByText('Beta')
@@ -226,6 +279,52 @@ describe('ReviewScreen — whole-document honesty wording (spec §11.4/§13.3, e
       expect(screen.getAllByText(new RegExp(t('en', 'review.link.reviewer'))).length).toBeGreaterThan(0)
     )
     expect(screen.queryByText(t('en', 'review.link.cited'))).toBeNull()
+    // #839 U1h: the item's link chip carries no [S1] marker either: a provenance source has no citation label.
+    const chip = document.querySelector('.review-item-link')
+    expect(chip?.textContent).toContain('contract.pdf')
+    expect(chip?.textContent).not.toContain('[S1]')
+
+    // #839 U1d: the relation the reviewer picks is what main stores (the pack's relation register reads it).
+    fireEvent.change(screen.getByLabelText(t('en', 'review.relation.label')), { target: { value: 'contradicts' } })
+    await waitFor(() =>
+      expect(setEvidenceLink).toHaveBeenLastCalledWith('i1', 'p1', { origin: 'reviewer', relation: 'contradicts' })
+    )
+  })
+
+  // #839 U1i: an extract answer's evidence is structured records; the pane must not caption it as a whole-document read.
+  it('an extract answer captions its evidence as structured records, never as a whole-document read', async () => {
+    const detail = wholeDocDetail()
+    detail.coverageSnapshot = { mode: 'extract', chunksCovered: 40, chunksTotal: 40 }
+    detail.sources[0]!.kind = 'structured_record'
+    await renderReview({ detail })
+    await screen.findByText('Beta')
+    expect(screen.getByText(t('en', 'review.evidence.captionStructured'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'review.evidence.captionWholeDoc'))).toBeNull()
+  })
+})
+
+// #839 U1b/U1c: the generation facts the journey never reaches. A missing record reads "Unavailable", and an answer
+// that did not finish says why on the screen's footer, not only in the pack.
+describe('ReviewScreen — generation honesty (#839)', () => {
+  it('a review with no generation record shows "Unavailable" for every generation fact', async () => {
+    await renderReview({ detail: makeDetail({ generationSnapshot: null }) })
+    const dialog = await openSummary()
+    for (const label of ['review.summary.model', 'review.summary.generatedAt', 'review.summary.appVersion'] as const) {
+      expect(within(dialog).getByText(t('en', label)).nextElementSibling?.textContent).toBe(
+        t('en', 'review.summary.unavailable')
+      )
+    }
+  })
+
+  it.each([
+    ['was cut off (truncated)', { answerTruncated: true }, 'review.summary.truncated'],
+    ['was stopped by the user', { answerEndedEarly: 'user' as const }, 'review.summary.stopped.user']
+  ] as const)('an answer that %s says so on the footer', async (_what, gen, shown) => {
+    const detail = makeDetail()
+    Object.assign(detail.generationSnapshot!, gen)
+    await renderReview({ detail })
+    await screen.findByText('Beta')
+    expect(document.querySelector('.review-screen footer')?.textContent).toContain(t('en', shown))
   })
 })
 
@@ -270,6 +369,40 @@ describe('ReviewScreen — ready review is read-only until reopened (FIX-1)', ()
     // …and the evidence pane's link/relation controls are disabled for the selected item.
     fireEvent.click(screen.getAllByRole('listitem')[0])
     expect(screen.getByRole('button', { name: t('en', 'review.link.add') })).toBeDisabled()
+  })
+
+  // #889 (G-4): from the end of Mark ready's save until main answers, item editing is closed in the store, and the
+  // screen shows it before the review reads Ready — without the "Marked ready" hint, since main may still say "not yet".
+  it('while Mark ready is with main, decisions and notes are read-only before the review shows Ready', async () => {
+    const detail = makeDetail({
+      items: [
+        makeItem({ id: 'i1', decision: 'supported' }),
+        makeItem({ id: 'i2', ordinal: 1, blockKey: 'b1-paragraph-def', textSnapshot: 'Beta', decision: 'supported' })
+      ]
+    })
+    const answer = deferred<{
+      review: ReturnType<typeof makeReviewHead>
+      gate: { eligible: boolean; requiredTotal: number; decidedTotal: number }
+    }>()
+    const markEvidenceReviewReady = vi.fn(() => answer.promise)
+    await renderReview({ detail, api: { markEvidenceReviewReady } })
+    const notes = (): HTMLElement[] => screen.getAllByPlaceholderText(t('en', 'review.item.notePlaceholder'))
+    expect(notes()[0]).toBeEnabled()
+
+    const dialog = await openSummary()
+    fireEvent.click(within(dialog).getByRole('button', { name: t('en', 'review.summary.markReady') }))
+    await waitFor(() => expect(markEvidenceReviewReady).toHaveBeenCalledWith('r1'))
+    const head = within(document.querySelector('.review-head') as HTMLElement)
+    expect(head.getByText(t('en', 'review.status.draft'))).toBeInTheDocument() // not ready yet…
+    for (const note of notes()) expect(note).toBeDisabled() // …and already read-only
+    for (const radio of screen.getAllByRole('radio', { hidden: true })) expect(radio).toBeDisabled()
+    expect(screen.queryByText(t('en', 'review.readonlyHint'))).toBeNull()
+
+    answer.resolve({
+      review: makeReviewHead({ status: 'ready', completedAt: '2026-07-18T11:00:00.000Z' }),
+      gate: { eligible: true, requiredTotal: 2, decidedTotal: 2 }
+    })
+    expect(await head.findByText(t('en', 'review.status.ready'))).toBeInTheDocument()
   })
 
   it('Reopen restores editability (hint gone, controls live again)', async () => {
@@ -417,6 +550,18 @@ describe('ReviewScreen — conservative bulk actions (spec §14.4)', () => {
           name: new RegExp(t('en', 'review.decision.not_reviewed'))
         })
       ).toHaveAttribute('aria-checked', 'true')
+    })
+
+    // undecided→follow-up marks every paragraph still undecided, through its own sweep (#839 U1g).
+    openBulkMenu()
+    fireEvent.click(await screen.findByText(t('en', 'review.bulk.followUp')))
+    await waitFor(() => expect(bulk.spy).toHaveBeenLastCalledWith('r1', 'undecided_follow_up'))
+    await waitFor(() => {
+      for (const row of screen.getAllByRole('listitem').slice(1)) {
+        expect(
+          within(row).getByRole('radio', { name: new RegExp(t('en', 'review.decision.follow_up')) })
+        ).toHaveAttribute('aria-checked', 'true')
+      }
     })
 
     // Clear-all asks for confirmation first (destructive breadth), then resets.
@@ -655,8 +800,8 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
         ]
       })
     })
-    await screen.findByText(t('en', 'review.outdated.title'))
-    const banner = screen.getByRole('status')
+    // The banner is the status region that holds its title (the save line is a status region too, #837).
+    const banner = (await screen.findByText(t('en', 'review.outdated.title'))).closest('[role="status"]') as HTMLElement
     expect(
       within(banner).getByText(t('en', 'review.outdated.sourcesChanged.one', { count: 1 }))
     ).toBeInTheDocument()
@@ -756,12 +901,12 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
         ]
       })
     })
-    await screen.findByText(t('en', 'review.outdated.title'))
+    const title = await screen.findByText(t('en', 'review.outdated.title'))
     // The card: the creation fact, never a second "no longer present" badge (EvidencePane.tsx:269).
     expect(screen.getByText(t('en', 'review.source.missingAtCreation'))).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'review.source.missingNow'))).toBeNull()
-    // The banner: the changed source is drift; the creation-missing one is not (ReviewScreen.tsx:513-523).
-    const banner = screen.getByRole('status')
+    // The banner: the changed source is drift; the creation-missing one is not (ReviewScreen.tsx `countMissingNow`).
+    const banner = title.closest('[role="status"]') as HTMLElement
     expect(
       within(banner).getByText(t('en', 'review.outdated.sourcesChanged.one', { count: 1 }))
     ).toBeInTheDocument()
@@ -812,6 +957,41 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
     assertNoUnexpectedApiCalls()
   })
 
+  // #839 U1a: the modal's other three states. Each says what is true: a moved excerpt is not shown as context, a
+  // changed file is not "unchanged", and a failed read is not an empty context.
+  const located: EvidenceSourceContext = {
+    reviewId: 'r1',
+    key: 's1',
+    documentTitle: 'contract.pdf',
+    availability: 'available',
+    hashState: 'match',
+    snippet: 'Either party may terminate…',
+    located: true,
+    before: 'Clause 4 ends here. ',
+    match: 'Either party may terminate…',
+    after: ' Clause 6 begins.',
+    pageNumber: 12,
+    sectionLabel: null
+  }
+  it.each<[string, EvidenceSourceContext | null, MessageKey, MessageKey]>([
+    [
+      'the excerpt is no longer in the stored text',
+      { ...located, located: false, before: null, match: null, after: null },
+      'review.sourceContext.notLocated',
+      'review.sourceContext.storedNote'
+    ],
+    ['the file changed since the answer', { ...located, hashState: 'mismatch' }, 'review.sourceContext.hashMismatch', 'review.sourceContext.hashMatch'],
+    ['main could not read the context', null, 'review.sourceContext.failed', 'review.sourceContext.storedNote']
+  ])('source-in-context when %s says so', async (_state, answer, shown, absent) => {
+    const getEvidenceSourceContext = vi.fn(async () => answer)
+    await renderReview({ detail: makeDetail(), api: { getEvidenceSourceContext } })
+    fireEvent.click(await screen.findByRole('button', { name: t('en', 'review.sourceContext.open') }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText(t('en', shown))).toBeInTheDocument()
+    expect(within(dialog).queryByText(t('en', absent))).toBeNull()
+    assertNoUnexpectedApiCalls()
+  })
+
   it('source-in-context: a missing document shows the §15.4 copy + the persisted excerpt', async () => {
     const getEvidenceSourceContext = vi.fn(async () => ({
       reviewId: 'r1',
@@ -841,6 +1021,355 @@ describe('ReviewScreen — P4 freshness overlay (plan §9, spec §15.4–15.5/§
       within(dialog).getByText(t('en', 'review.sourceContext.excerptHeading'))
     ).toBeInTheDocument()
     assertNoUnexpectedApiCalls()
+  })
+})
+
+// #837: a review write that fails (a disk or SQLite I/O failure in practice) must stay visible and retryable, and a
+// switch to another review must never drop the unsaved edit silently.
+describe('ReviewScreen — a failed save is never dropped silently (#837)', () => {
+  const DISK_FULL = "Error invoking remote method 'evidence:updateItem': Error: database or disk is full"
+
+  /** Decide item 1 as Supported, then wait out the 600 ms debounce for the write to fail and Try again to show. */
+  async function decideFirstItemAndWaitForFailure(): Promise<HTMLElement> {
+    const items = screen.getAllByRole('listitem')
+    fireEvent.click(
+      within(items[0]).getByRole('radio', { name: new RegExp(t('en', 'review.decision.supported')) })
+    )
+    return screen.findByRole('button', { name: t('en', 'review.autosave.retry') })
+  }
+
+  // #839 U1e.
+  it('a failed write shows the save-error line, and Try again saves the edit and clears it', async () => {
+    let fail = true
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (fail) throw new Error(DISK_FULL)
+      return makeItem({ id, ...patch })
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const retry = await decideFirstItemAndWaitForFailure()
+    expect(screen.getByText(/database or disk is full/)).toBeInTheDocument()
+
+    fail = false
+    fireEvent.click(retry)
+    expect(await screen.findByText(t('en', 'review.autosave.saved'))).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('en', 'review.autosave.retry') })).toBeNull()
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(2)
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
+  })
+
+  // Review round 4: one sweep at a time — while a sweep's call is in flight the trigger is disabled (the store ignores a
+  // second sweep too), and it comes back when the sweep settles.
+  it('while a sweep is in flight, the Bulk actions trigger is disabled; it comes back when the sweep settles', async () => {
+    const detail = makeDetail({
+      items: [
+        makeItem({ id: 'h1', blockKind: 'heading', textSnapshot: '## Heading', decision: 'not_reviewed' }),
+        makeItem({ id: 'p1', textSnapshot: 'Alpha [S1]', decision: 'supported' }),
+        makeItem({ id: 'p2', blockKey: 'b2-paragraph-x', textSnapshot: 'Beta' })
+      ]
+    })
+    const bulk = bulkBackend(detail.items)
+    const sweep = deferred()
+    const applyEvidenceReviewBulkAction = vi.fn(async (reviewId: string, action: Parameters<typeof bulk.spy>[1]) => {
+      await sweep.promise
+      return bulk.spy(reviewId, action)
+    })
+    await renderReview({ detail, api: { applyEvidenceReviewBulkAction } })
+    const trigger = screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })
+
+    openBulkMenu()
+    fireEvent.click(await screen.findByText(t('en', 'review.bulk.headingsNa')))
+    await waitFor(() => expect(applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1))
+    expect(trigger).toBeDisabled()
+    sweep.resolve()
+    await waitFor(() => expect(trigger).toBeEnabled())
+    expect(applyEvidenceReviewBulkAction).toHaveBeenCalledTimes(1)
+  })
+
+  // Review round 2: only an edit a failed write left unsaved disables the trigger (the store's own refusal condition).
+  it('after a failed acknowledge (nothing queued), the Bulk actions trigger stays enabled', async () => {
+    await renderReview({
+      api: {
+        acknowledgeEvidenceReviewFreshness: vi.fn(async () => {
+          throw new Error("Error invoking remote method 'evidence:acknowledgeFreshness': Error: db gone")
+        })
+      },
+      fresh: makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] })
+    })
+    fireEvent.click(await screen.findByRole('button', { name: t('en', 'review.outdated.acknowledge') }))
+    expect(await screen.findByText(/db gone/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })).toBeEnabled()
+  })
+
+  // Review round 6: the save line's Try again is disabled while its retry runs, so a double click cannot start a second
+  // retry over the first one's write (the store waits out a write in flight too).
+  it('the save line’s Try again is disabled while its retry writes, and comes back when the write fails again', async () => {
+    const hold: { gate?: Promise<void> } = {}
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (hold.gate) await hold.gate
+      throw new Error(DISK_FULL)
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const retry = await decideFirstItemAndWaitForFailure()
+    const write = deferred()
+    hold.gate = write.promise
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toBeDisabled())
+    fireEvent.click(retry) // the second click of a double click: ignored
+    write.resolve() // the retry's write goes ahead, and fails again
+    await waitFor(() => expect(retry).toBeEnabled())
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(2) // the debounce write + ONE retry
+    expect(screen.getByText(/database or disk is full/)).toBeInTheDocument()
+  })
+
+  it('while a save error shows, the Bulk actions trigger is disabled, and it comes back once the edit is saved', async () => {
+    let fail = true
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (fail) throw new Error(DISK_FULL)
+      return makeItem({ id, ...patch })
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const bulk = screen.getByRole('button', { name: new RegExp(t('en', 'review.bulk.menu')) })
+    expect(bulk).toBeEnabled()
+    const retry = await decideFirstItemAndWaitForFailure()
+    expect(bulk).toBeDisabled()
+
+    fail = false
+    fireEvent.click(retry)
+    await waitFor(() => expect(bulk).toBeEnabled())
+  })
+
+  /** Review r1 ("Lease check") with a failed edit, then the real switch path: the screen unmounts (its exit flush fails
+   *  again) and mounts for r2 ("Gamma"). Returns the stubs once that mount shows the refusal card naming r1. */
+  async function switchAfterFailedEdit(fail: { on: boolean; hold?: Promise<void> }): Promise<{
+    onNavigate: ReturnType<typeof vi.fn>
+    getEvidenceReview: ReturnType<typeof vi.fn>
+    updateEvidenceReviewItem: ReturnType<typeof vi.fn>
+  }> {
+    const first = makeDetail({ title: 'Lease check' })
+    const second = makeDetail({
+      id: 'r2',
+      messageId: 'm2',
+      items: [makeItem({ id: 'j1', reviewId: 'r2', textSnapshot: 'Gamma' })]
+    })
+    const updateEvidenceReviewItem = vi.fn(async (id: string, patch: EvidenceReviewItemPatch) => {
+      if (fail.hold) await fail.hold // a test can hold a write in flight
+      if (fail.on) throw new Error(DISK_FULL)
+      return makeItem({ id, ...patch })
+    })
+    const getEvidenceReview = vi.fn(async (id: string) => (id === 'r2' ? second : first))
+    const onNavigate = vi.fn()
+    const { view } = await renderReview({
+      detail: first,
+      api: { getEvidenceReview, updateEvidenceReviewItem },
+      props: { onNavigate }
+    })
+    await decideFirstItemAndWaitForFailure()
+    view.unmount()
+    render(<ReviewScreen handoff={{ reviewId: 'r2' }} onNavigate={onNavigate} />)
+    // Wait at once: the failed exit flush settles after the mount, inside this wait.
+    await screen.findByText(t('en', 'review.unsaved.body', { title: 'Lease check' }))
+    return { onNavigate, getEvidenceReview, updateEvidenceReviewItem }
+  }
+
+  it('switching to another review shows a card naming the unsaved review; Try again saves first, then opens it', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview, updateEvidenceReviewItem } = await switchAfterFailedEdit(fail)
+    expect(screen.getByText(t('en', 'review.unsaved.body', { title: 'Lease check' }))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('en', 'review.unsaved.discard') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: new RegExp(t('en', 'review.back')) })).toBeInTheDocument()
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+
+    // Try again while the disk is still full: one more write, and the card stays.
+    const writes = updateEvidenceReviewItem.mock.calls.length
+    const retry = screen.getByRole('button', { name: t('en', 'review.autosave.retry') })
+    fireEvent.click(retry)
+    await waitFor(() => expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(writes + 1))
+    await waitFor(() => expect(retry).toBeEnabled()) // the retry has run its course
+    expect(screen.getByText(t('en', 'review.unsaved.body', { title: 'Lease check' }))).toBeInTheDocument()
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+
+    // The disk recovers: Try again writes the edit, then opens r2.
+    fail.on = false
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.autosave.retry') }))
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    const lastWrite = updateEvidenceReviewItem.mock.invocationCallOrder.at(-1)!
+    const r2Read = getEvidenceReview.mock.invocationCallOrder[getEvidenceReview.mock.calls.findIndex((c) => c[0] === 'r2')]!
+    expect(lastWrite).toBeLessThan(r2Read)
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
+  })
+
+  // Review round 1 (design-guidelines §6, WCAG 2.4.3): the card replaces the review seconds after the click that led
+  // here, and that click's button left with the chat. Try again takes focus when the card appears, and the card's
+  // sentence is its description, so a screen reader reads both (the WorkspaceGate step-focus precedent).
+  it('the card puts focus on Try again when it appears, described by the card’s sentence', async () => {
+    await switchAfterFailedEdit({ on: true })
+    const retry = screen.getByRole('button', { name: t('en', 'review.autosave.retry') })
+    await waitFor(() => expect(retry).toHaveFocus())
+    expect(retry).toHaveAccessibleDescription(
+      new RegExp(`^${escapeRe(t('en', 'review.unsaved.body', { title: 'Lease check' }))}`)
+    )
+  })
+
+  // Review round 2: a Try again that fails again must not look like nothing happened — the card shows the save error
+  // (the text of the review's own error line), and it is part of Try again's description.
+  it('the card shows the save error, and Try again’s description carries it', async () => {
+    await switchAfterFailedEdit({ on: true })
+    const card = document.querySelector('.review-screen .card') as HTMLElement
+    expect(within(card).getByText('database or disk is full')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('en', 'review.autosave.retry') })).toHaveAccessibleDescription(
+      `${t('en', 'review.unsaved.body', { title: 'Lease check' })} database or disk is full`
+    )
+  })
+
+  // Review round 2: the card names a failure. If a later save succeeds while it shows (the old screen's exit flush, a
+  // timer), that failure is gone, so the card goes ahead with the switch it was shown for instead of claiming it.
+  // Review round 3: the go-ahead is for the switch THIS screen was opened for. A refusal left over from an earlier
+  // switch (the user went Back, a save then succeeded, and they opened a third review) must not open the old target.
+  it('a card left over from an earlier switch never opens that switch’s target when the screen opens another review', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview } = await switchAfterFailedEdit(fail)
+    fail.on = false
+    cleanup() // Back to chat: the card's screen unmounts; its exit flush now succeeds
+    await act(async () => {
+      await flushReviewSession()
+    })
+    render(<ReviewScreen handoff={{ reviewId: 'r3' }} onNavigate={noop} />)
+    await waitFor(() => expect(getEvidenceReview).toHaveBeenCalledWith('r3'))
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+  })
+
+  // Review round 3: while the card's own Try again runs, its save succeeding must not start a second open.
+  it('when Try again’s save succeeds, the card opens the other review once, not twice', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview } = await switchAfterFailedEdit(fail)
+    fail.on = false
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.autosave.retry') }))
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50)) // let any second open run
+    })
+    expect(getEvidenceReview.mock.calls.filter((c) => c[0] === 'r2')).toHaveLength(1)
+  })
+
+  it('if a later save succeeds while the card shows, the card goes ahead and opens the other review', async () => {
+    const fail = { on: true }
+    const { getEvidenceReview, updateEvidenceReviewItem } = await switchAfterFailedEdit(fail)
+    fail.on = false
+    await act(async () => {
+      await flushReviewSession() // a save from elsewhere succeeds
+    })
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    expect(updateEvidenceReviewItem).toHaveBeenLastCalledWith('i1', { decision: 'supported' })
+    expect(getEvidenceReview).toHaveBeenCalledWith('r2')
+  })
+
+  it('Try again and Discard are disabled while the retry writes, and focus returns to Try again when it fails again', async () => {
+    const fail: { on: boolean; hold?: Promise<void> } = { on: true }
+    const { getEvidenceReview } = await switchAfterFailedEdit(fail)
+    const retry = screen.getByRole('button', { name: t('en', 'review.autosave.retry') })
+    const discard = screen.getByRole('button', { name: t('en', 'review.unsaved.discard') })
+    const write = deferred()
+    fail.hold = write.promise
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toBeDisabled())
+    expect(discard).toBeDisabled()
+    // Focus leaves Try again while the retry runs (a browser moves it off the disabled button; jsdom cannot blur a
+    // disabled element, so it goes to the still-live Back here). When the retry fails, it comes back to Try again.
+    const back = screen.getByRole('button', { name: new RegExp(t('en', 'review.back')) })
+    back.focus()
+    expect(back).toHaveFocus()
+    write.resolve() // the held write goes ahead, and fails again
+    await waitFor(() => expect(retry).toBeEnabled())
+    expect(discard).toBeEnabled()
+    await waitFor(() => expect(retry).toHaveFocus())
+    expect(getEvidenceReview).not.toHaveBeenCalledWith('r2')
+  })
+
+  it('on that card, Back returns to chat and Discard changes and open opens the other review without the edit', async () => {
+    const { onNavigate, updateEvidenceReviewItem } = await switchAfterFailedEdit({ on: true })
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(t('en', 'review.back')) }))
+    expect(onNavigate).toHaveBeenCalledWith('chat')
+
+    const writes = updateEvidenceReviewItem.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'review.unsaved.discard') }))
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    expect(updateEvidenceReviewItem).toHaveBeenCalledTimes(writes)
+  })
+})
+
+// #837 part 3 (design-guidelines §6, M-U1): a live region that first appears already holding its text is missed by some
+// screen readers. Both of this screen's late-arriving lines (the Outdated banner, the auto-save line) are announced from
+// regions mounted EMPTY with the review; these rows pin that the text lands inside a node that existed before it.
+// Whether Narrator then speaks it is a by-ear check (live-region-nesting.test.ts states the same limit).
+describe('ReviewScreen — live regions exist before their text arrives (#837)', () => {
+  it('the Outdated banner lands inside a status region that was mounted before the verdict', async () => {
+    const verdict = deferred<EvidenceReviewFreshness | null>()
+    await renderReview({ api: { refreshEvidenceReviewState: vi.fn(() => verdict.promise) } })
+    const statusBefore = screen.getAllByRole('status')
+
+    verdict.resolve(makeFreshness({ outdated: true, sources: [{ key: 's1', state: 'changed' }] }))
+    const title = await screen.findByText(t('en', 'review.outdated.title'))
+    expect(statusBefore).toContain(title.closest('[role="status"]'))
+  })
+
+  it('the auto-save line’s regions are mounted before the first edit: Saving… and a failure land inside them', async () => {
+    const updateEvidenceReviewItem = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'evidence:updateItem': Error: database or disk is full")
+    })
+    await renderReview({ api: { updateEvidenceReviewItem } })
+    const statusBefore = screen.getAllByRole('status')
+    const alertBefore = screen.getAllByRole('alert')
+
+    fireEvent.click(
+      within(screen.getAllByRole('listitem')[0]).getByRole('radio', {
+        name: new RegExp(t('en', 'review.decision.supported'))
+      })
+    )
+    const saving = screen.getByText(t('en', 'review.autosave.saving'))
+    expect(statusBefore).toContain(saving.closest('[role="status"]'))
+    const failure = await screen.findByText(/database or disk is full/)
+    expect(alertBefore).toContain(failure.closest('[role="alert"]'))
+  })
+})
+
+// #807: a failed call's own message (SQLite's "database is locked", the same in every language) used to stand alone on
+// the save line and on the open card. Each now leads with what happened in the interface language, the message after it.
+describe('ReviewScreen: a failed call’s own words come after a translated lead (#807)', () => {
+  it('the save line reads the lead, then the failed write’s message, then Try again, in the German UI', async () => {
+    onTestFinished(() => window.localStorage.clear())
+    const updateEvidenceReviewItem = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'evidence:updateItem': Error: database is locked")
+    })
+    await renderReview({ api: { updateEvidenceReviewItem }, lang: 'de' })
+    fireEvent.click(
+      within(screen.getAllByRole('listitem')[0]).getByRole('radio', {
+        name: new RegExp(t('de', 'review.decision.supported'))
+      })
+    )
+    const retry = await screen.findByRole('button', { name: t('de', 'review.autosave.retry') })
+    const line = retry.closest('[role="alert"]') as HTMLElement
+    expect(line.textContent).toBe(
+      `${t('de', 'review.autosave.error')} database is locked ${t('de', 'review.autosave.retry')}`
+    )
+  })
+
+  it('a review that fails to open says so in the German UI, with the failed read’s message under it', async () => {
+    onTestFinished(() => window.localStorage.clear())
+    stubReviewApi({
+      getEvidenceReview: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'evidence:get': Error: database is locked")
+      })
+    })
+    renderInLanguage(<ReviewScreen handoff={{ reviewId: 'r1' }} onNavigate={noop} />, 'de')
+    const lead = await screen.findByText(t('de', 'review.openFailed'))
+    const card = lead.closest('.card') as HTMLElement
+    const detail = within(card).getByText('database is locked')
+    // The lead comes first, then the detail.
+    expect(lead.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(card).getByRole('button', { name: new RegExp(t('de', 'review.back')) })).toBeInTheDocument()
   })
 })
 

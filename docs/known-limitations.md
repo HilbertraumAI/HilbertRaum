@@ -62,13 +62,31 @@ password recovery — are documented in
   (the drag-drop bullet above), and the app will not reject such paths lexically because that
   would change the drop contract for network-share users. Managed Windows fleets can block
   outbound 445/WebDAV at the host firewall.
-- **On macOS and Linux, quit the app before shutting down or logging off (#248).** On Windows
-  the app locks the workspace itself as the session ends (PR #285; best effort — a very large
-  workspace may not finish in the time Windows allows, so quitting first is still the sure way).
-  The macOS `shutdown` leg is registered but not yet verified on a Mac (owner live check, #226),
-  and nothing is registered on Linux: there, every change since the last **Lock now** or normal
-  quit is lost if the session ends with the app open (user-guide §13; `security-model.md` "OS
-  session end locks the workspace"). Wait for the window to close before you eject.
+- **On Windows, the file picker cannot open a file whose name ends in a space or a dot (#918).** The
+  Open dialog lists `notes.txt ` under "All files" but cannot open it (an OS limit; a typed path
+  loses its trailing space). Drop the file onto the app or import its folder instead.
+- **A large drop is slow on a fully busy machine (#934).** Checking a drop of up to 512 paths asks the file system once per path; when every CPU is busy with other work, that can take seconds instead of a fraction of a second. Nothing is lost, and the import carries on.
+- **Quit the app before shutting down or logging off, above all on macOS (#248, #964).** On
+  Windows the app locks the workspace itself as the session ends (PR #285). On Linux it does the
+  same when a log-out, a shutdown or a `kill` ends it (#964): a termination signal (SIGTERM,
+  SIGINT or SIGHUP) or a lost session locks the workspace at once and ends the app, with no
+  question. Both are best effort: a very large workspace may not finish locking in the time
+  Windows allows, and a review change made in the last second, a reply still being written or a
+  scan still being read is not kept, so quitting first is still the sure way. On Linux a log-out
+  usually arrives as a lost session, and then Electron gives the lock a fixed 10 seconds: a lock
+  that takes longer (a workspace of a few hundred MB on a slow stick may) ends in a crash
+  (status 133). The workspace is then left unencrypted on the drive until the next start, which
+  recovers its data as after any lock that was cut short; where the system keeps crash dumps
+  (systemd-coredump, apport), a memory image of the app, vault key included, may be stored on the
+  computer's disk. A signal (`kill`, `systemctl stop`, Ctrl+C) has no such limit. Lock first, or
+  quit, before you log out with a large workspace. The Linux legs are measured on Electron 43.8.6
+  under WSL with a stand-in app (the three signals, a lost D-Bus session bus, a lock slowed to 8,
+  12 and 15 seconds); a real desktop log-out (GNOME, KDE), a lost display and the packaged
+  AppImage are not checked yet. A forced kill (SIGKILL) or SIGQUIT (Ctrl+\ in a terminal) still
+  loses every change since the last **Lock now** or normal quit: nothing runs before the process
+  ends. On macOS the `shutdown` leg is registered but not yet verified on a Mac (owner live check,
+  #226), so quit first there (user-guide §13; `security-model.md` "OS session end locks the
+  workspace"). Wait for the window to close before you eject.
 - **On Linux, the AppImage can run without Chromium's sandbox.** The app's windows are configured
   `sandbox: true` (`window-security.ts`), but the operating-system sandbox behind that setting
   needs unprivileged user namespaces, which Ubuntu 24.04 and later restrict by default (as do some
@@ -114,13 +132,22 @@ password recovery — are documented in
   check exists only on Windows and macOS; Linux has none. macOS is unmeasured. Someone who can
   change the app's files can usually replace the app outright, so this narrows a local attack; it
   does not prevent it.
-- **The app still honours `NODE_EXTRA_CA_CERTS` (#562; owner decision 2026-10-03).** Antivirus
-  products that inspect encrypted connections (Norton, measured) and corporate proxies set this
-  variable so that programs trust them. If the app ignored it, its built-in downloads of the AI
-  engine and models would fail on such computers. The flip side: a program that can set the
-  user's environment can add a certificate the app's downloads will trust. That cannot change what
-  a download installs, because every engine, model and OCR file is checked against a fixed SHA-256
-  checksum before use. Making the downloads trust the operating system's certificates instead is #564.
+- **The released app ignores `NODE_EXTRA_CA_CERTS` (#564).** Antivirus products that inspect
+  encrypted connections (Norton, measured) and corporate proxies set this variable so that programs
+  trust them, and they also add their certificate to the operating system's certificate store. The
+  app's built-in downloads trust that store, so they work on such computers without the variable.
+  A proxy whose certificate is only in the variable, and not in the operating system's store,
+  makes the downloads fail: add the certificate to the store (your IT department does this for a
+  company proxy). Trusting the store also means that an older root certificate Windows still trusts
+  but Chrome no longer does (Entrust, old DigiCert, VeriSign, Go Daddy roots) is trusted, and so is
+  a self-signed CA certificate in the store for intermediate certificates or for trusted people,
+  which Windows itself does not treat as a root. A program running as the user can add one there
+  without the confirmation Windows shows for a new root, much as it could set
+  `NODE_EXTRA_CA_CERTS` before. See
+  [`troubleshooting.md`](troubleshooting.md), "Downloads fail on a company network or behind antivirus".
+  That cannot change what a download installs, because every engine, model and OCR file is checked
+  against a fixed SHA-256 checksum before use. A development build (`npm run dev`) still reads the
+  variable.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
@@ -128,12 +155,28 @@ password recovery — are documented in
   `app.requestSingleInstanceLock()` refuses a second app instance on the same `userData` —
   which covers the incident class (two portable release builds, or two runs of the same
   build), and dev builds keep their own `-dev` suffix. It does NOT cover two processes with
-  *different* `userData` pointed at one drive workspace (e.g. an `npm run dev` with
-  `HILBERTRAUM_DRIVE_ROOT` racing a portable exe launched from that drive). In that corner
+  *different* `userData` pointed at one drive workspace: **two user accounts on one computer**
+  (fast user switching), each starting the app from the same drive, since `userData` lives in
+  each account's own profile (found in #876's analysis; the one case an ordinary user can
+  reach), or an `npm run dev` with `HILBERTRAUM_DRIVE_ROOT` racing a portable exe launched from
+  that drive. In that corner
   the second instance's startup sweep can still destroy the live session's **working file**
-  (its delta since the last lock); the lock-path SQLite-header guard then refuses to
+  (its delta since the last lock); the lock-path database guard then refuses to
   re-encrypt the garbage, so the at-rest `.enc` — the vault itself — survives and the next
-  unlock recovers the last locked snapshot. A workspace-level cross-process lock file would
+  unlock recovers the last locked snapshot. Since #876 the guard judges the file's structure,
+  not only its 16-byte header: on Windows the lock's own checkpoint can write page 1 back over
+  the noise, which the header check let through. Its residual: the probe reads the schema, the
+  root page of every index and the paths down to the first and (for a rowid table) the last row
+  of every table, a small part of a large file. It catches an overwrite that starts at the
+  beginning of the file (the #208 shape: none missed in the review's fuzz) or runs to its end,
+  but mostly misses noise confined to a range or a single page in between (a failing stick's
+  garbled blocks, another tool's partial rewrite), as the header check did; such a file is then
+  encrypted over `.enc`, and the damage shows when the app next reads those pages. On macOS and
+  Linux the sweep deletes the file
+  instead of overwriting it; since #853 the refused lock no longer re-creates it as an empty
+  database, which a retry or the quit used to encrypt over `.enc`, and since #855 it finishes at
+  the last locked snapshot and the lock screen says the session's changes are lost. A
+  workspace-level cross-process lock file would
   close the corner fully; not built (stale-lock handling on hard-killed processes needs its
   own design). A pre-0.1.59 build takes no lock at all: the drive launchers refuse to start
   while two app versions sit at the drive root (#235), but starting an artifact directly
@@ -150,6 +193,52 @@ password recovery — are documented in
   Nothing is harmed or written; opening the drive with a current build works. Accepted: drives
   ship the app alongside the data, so version skew requires deliberately mixing an old app
   with a new workspace.
+- **No reset after a forgotten password (#931).** The app never creates a workspace over an
+  existing one, and it has no reset, so starting over is done by hand: quit, move
+  `config/workspace.json` and `workspace/` off the drive together, start and create
+  (`troubleshooting.md` "I forgot my workspace password"). The new workspace writes its own
+  diagnostics log over the old one's `logs/app.log.enc`, so the old log is lost unless `logs/` was
+  moved too, even when the old pair is put back later.
+- **Builds released before #845 (0.1.65 and earlier) cannot detect a newer vault format.** From
+  #845 on, a build refuses a workspace whose descriptor, KDF, `.enc` frame or password-change
+  journal a newer build wrote, before anything is written, with "This workspace was written by a
+  newer HilbertRaum — update the app to open it." (`security-model.md` "Vault format versions").
+  An older build reads such a workspace the old way: a descriptor that keeps its wrapped data
+  key passes for the current format and a password change rewrites it as such, and its startup
+  sweep and rekey recovery run over the newer files. The same shape as the schema stamp above:
+  any future vault format has to be designed so those builds fail safely (the frozen constraints
+  in `data-contracts.md` "Vault format versions"), and old artifacts still belong off the drive.
+- **A workspace whose encrypted file went missing rests in plaintext until the next unlock (#911;
+  owner decision G-3).** When a start finds `.enc` gone (something outside the app removed it) and
+  the working file still there, it keeps that file, the only copy of the workspace, as
+  `workspace/hilbertraum.sqlite.recovery`, and the next unlock with the right password encrypts it
+  again (`security-model.md` "Encrypted file missing"). The residuals:
+  - The copy is **unencrypted** until that unlock, and the lock screen says so. A user who has
+    forgotten the password keeps it on the drive indefinitely: the next start no longer shreds it.
+    Deleting the file by hand is the way out.
+  - Builds up to 0.1.65 don't keep it. One that starts first (a Kit carries several OSes' apps)
+    shreds the working file as before, and this build's unlock then says the encrypted file is
+    missing. Once a copy is kept, builds from 0.1.47 on leave it at their start and roll it forward
+    at their unlock; builds 0.1.6 to 0.1.46 ignore it, so it rests in plaintext beside the vault
+    until a newer build unlocks (the REL-3 note in `security-model.md`).
+  - The probe reads only part of a large file, so a partly damaged copy can be kept and adopted,
+    and the damage shows when the app reads those pages. With no snapshot left, that still beats
+    losing everything.
+  - A `-wal` that SQLite cannot replay (it reports the database as corrupt) is dropped, so a copy
+    kept then lacks the session's last commits.
+  - A copy that is damaged after the `-wal` replay is shredded, and the unlock then says the file is
+    missing (owner decision D3). So is a kept copy that is damaged by the time of the unlock: the
+    right password shreds it (a wrong one touches nothing), and the notice goes.
+  - The start never replaces a snapshot, but the unlock judges an `.enc` that came back after the
+    start (a sync tool restoring it, a copy put back by hand) by the CODE-1b roll-forward rule: the
+    kept copy replaces it unless the returned `.enc` is newer by mtime. If it is newer, it wins: the
+    kept copy is shredded as a spent leftover, the workspace opens at that older snapshot, and
+    nothing reports the session that was lost. The lock screen's section in `troubleshooting.md`
+    says to unlock first.
+  - A `-wal` the replay cannot empty (a full drive, another program reading the workspace) blocks
+    the start: nothing is moved or shredded, and the unlock shows the "another program is holding a
+    recovery file" message, whose words name only the holding program (owner decision D4: no copy
+    change; `troubleshooting.md` says what else it can mean).
 - **A pre-document-organization build ignores collections on a post-feature DB — but deletes still
   work.** An older app shows the flat document corpus (it never reads the `collections` /
   `document_collections` / `conversation_documents` tables), so organization is invisible, not
@@ -180,12 +269,17 @@ password recovery — are documented in
   is attacker-forgeable anyway). **Since #382 (2026-09-08) routine checks are also LAZY** — every
   screen asks for `lazyVerify`, so on a cold cache only the ACTIVE model is hashed and a present
   but un-started weight is reported `installed` without being read at all. Damage in such a file
-  is therefore found when the model is started, not before. Mitigations: the AI Model screen's
+  is therefore found when the chat model is started, not before; the other models are not hashed
+  at their start, except the search and voice models before their first start in a workspace
+  (#913: their bad output would be stored in the index; a first hash cut short by a lock or quit
+  caches nothing, so the next start hashes again), so damage in the image, translation or
+  re-ranking model is found only by a check. Mitigations: the AI Model screen's
   per-model **Verify checksum** forces a real re-hash, its screen-level **Check all model files**
   walks every present weight (**since #420, 2026-09-08 the screen-level pass can be stopped** with
   the Stop checking button beside its progress bar — what finished stays verified, the rest is simply
   unchecked; the per-model Verify checksum button is still uncancellable, one file), the §7.4 start
-  gate re-verifies whatever it launches, and the
+  gate re-verifies the chat model it launches, every other role refuses to start a file a check
+  found damaged (#913: the cache is read at each start, about 1 ms), and the
   ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
   full-audit 2026-07-16), closing the post-completion power-cut/unplug window that could otherwise
   persist the rename + `(size,mtime)` cache entry over a torn weight the cache then reports verified.
@@ -804,8 +898,10 @@ password recovery — are documented in
   double-click Excel detect the encoding instead of garbling umlauts/ß. The app's own round-trip is
   clean: the md/txt parsers strip one leading BOM on import (F-22) and the CSV importer (papaparse)
   strips it itself — but a strict external consumer that treats bytes verbatim (a naive `cut`/`awk`
-  pipeline, some JSON-adjacent CSV loaders) will see U+FEFF glued to the first header cell. JSON and
-  `.log` exports never carry a BOM (it breaks strict JSON parsers and log tooling).
+  pipeline, some JSON-adjacent CSV loaders) will see U+FEFF glued to the first header cell. The BOM
+  follows the chosen file's extension, not the kind of export: `.json`, `.xml` and `.log` files never get
+  one (it breaks strict JSON parsers and log tooling), but the diagnostic-log export defaults to
+  `hilbertraum-logs.txt` and so carries one unless the user picks `.log`.
 - **The documents list is windowed, so the browser's find-in-page (Ctrl+F) only matches rows that are
   currently rendered ([`architecture.md`](architecture.md) §36).**
   To stop the list DOM (and the per-row Radix menu-root state machines) from growing linearly with library
@@ -889,6 +985,23 @@ password recovery — are documented in
     `activity-log.json` action. The event still records the `documentId` + `status` + `chunkCount`,
     so the row is fully resolvable from inside the app; only the human-readable name is withheld
     from the log, matching the chat (conversation title) and collections (project name) channels.
+- **Saving an export REPLACES the chosen file; it never writes into it.** Every export written
+  through the shared atomic writers — the audit-log, diagnostic-log, transcript, result-table,
+  code-block and document-original exports, and since #838 every skills export (the
+  transactions and invoice CSV, invoice JSON and XML, the redacted and edited copies, the DOCX
+  copy) — goes to a temporary sibling file, is flushed to disk, then renamed over the
+  destination, so a failure leaves no partial file and the file being replaced intact. The
+  trade (the evidence pack's AUD-17 posture, see "Evidence review & evidence packs"): (1) the
+  temporary name is the destination plus a ~37-character token, so on a default Windows setup
+  (`LongPathsEnabled` off) a destination within that margin of the 260-character path limit
+  fails cleanly at the temporary file's creation (recovery: a shorter path); (2) the result is
+  a NEW file: a destination that was a hard link is no longer linked (its other names keep the
+  old content), a symbolic link is replaced by a plain file (its target is untouched), and the
+  old file's ACLs and macOS extended attributes do not carry over; (3) the folder must allow
+  creating a file — one that allows overwriting existing files but not creating new ones
+  refuses the export, and on macOS/Linux a read-only destination in a writable folder is
+  replaced; (4) on Windows a destination held open without delete sharing (Excel keeps a CSV
+  open that way) refuses the rename, and the old file stays.
 
 ## Retrieval quality ([`rag-design.md`](rag-design.md) §11)
 
@@ -967,9 +1080,10 @@ password recovery — are documented in
   Models-screen action — moves the posture to `gpu` with nothing to suspend the sidecar, so the
   next ask could resolve the wide `all` scope while the sidecar stayed resident on the CPU — C1's
   combination again, through a drift window. Step 4-7 adds `activeModelId` to the suspend trigger,
-  fired from all three settings-writing channels (`settings:update`, `models:select`,
-  `models:use`) through one shared predicate (`rerankerPostureInputsChanged`,
-  `rag/device-posture.ts`); `activeEmbeddingModelId` is explicitly not a posture input and never
+  fired from `models:select` and `runtime:use` through one shared predicate
+  (`rerankerPostureInputsChanged`, `rag/device-posture.ts`), the one `settings:update` uses for
+  `gpuMode`; `settings:update` fired it for `activeModelId` too until #868, which drops that key
+  from a renderer patch. `activeEmbeddingModelId` is explicitly not a posture input and never
   triggers it. **The honest residual:** this is not an absolute guarantee for every ask in
   flight — `suspend()` is fire-and-forget, so an ask landing mid-teardown hits the sidecar's
   `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates`
@@ -978,7 +1092,7 @@ password recovery — are documented in
   unvalidated on real hardware, as above.
 - **Scoped Opus review of step 4-7, finding C3, RESOLVED by step 4-8 (Wave 8 ruling (a)):**
   `activeModelId` was never a safe posture input in the first place — it is a proxy for "the chat
-  model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish,
+  model that will be loaded", true only once `runtime:use`'s multi-GB weight hash and load finish,
   and false for the whole window before that (the file's own comment calls this "the long
   pre-start window", minutes on a cold checksum cache). Step 4-7's event-time suspend fired at the
   START of that window, on the OLD model, then held the posture for the entire hash + load — so a
@@ -1237,7 +1351,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   launched context window (about 3 pages at the 4B's 4,096 tokens, about 7 at 8,192) hands the model
   the whole document in order instead of the best-matching passages. Everything else is still answered
   from the most relevant passages: a chat with several documents (there is no multi-document whole
-  read), a chat with knowledge packs selected (the whole read never searches a pack), small talk, a
+  read), a chat with knowledge packs selected (the whole read never searches a pack), a short question
+  about the last answer ("Sure?"; other small talk gets a short reply that reads no document, #963), a
   legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
   window. A summary question over such a longer document uses its deep index when one is built (#642);
   without one it is still answered from the most relevant passages, with no hint to build the index,
@@ -1249,6 +1364,22 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   prefill, for every question about a 30-page document. An off-topic question about a document read
   whole now costs a model call (the model says the document does not cover it) where the passage search
   could answer "not found" without one. Answers given before #643 keep their old source display.
+- **Small talk in a chat about documents gets a short reply that reads no document (#963, follow-ups
+  wave 5, owner call G-1; [`rag-design.md`](rag-design.md) §19).** A thank-you, a greeting, a goodbye or
+  "How are you?" gets one short reply from the model, which sees only the message: no document, no
+  earlier turn, no skill instructions and no knowledge pack. The reply has no sources, no coverage line
+  and no skill mark. What counts is a short list of questions to the assistant ("How are you?",
+  «Wie geht's?», "What can you do?"), of whole thanks and greeting formulas («Passt», "Muchas gracias") and
+  of thanks, greeting, goodbye and praise words in the ten interface languages, so four things follow. A
+  message with a question mark anywhere in it, in any script, is a question about the last answer and is
+  answered from the documents: "Sure?", «Alles?», «Bitte?» for "pardon?", «Passt?», «¿Vale?», "Sure? Thanks";
+  only the questions to the assistant keep the short reply with theirs. A message of acknowledgement words
+  alone ("ok", "sure", "all", «alles bitte», «klar», «vale», «tamam», «ладно») can answer the assistant's own
+  question or offer ("Shall I list the other deadlines?"), so it is answered from the documents with the
+  conversation, as before; with a thanks or a greeting in it ("Ok, thanks") it gets the short reply. Praise
+  counts as a thanks, so an offer accepted with "Great" or «Super» alone gets the short reply, not the list:
+  ask for it in words, or with "ok". And a thank-you longer than the lists is still taken for a question
+  about the documents (below).
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
@@ -1540,32 +1671,85 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
   can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
   needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
-  **What Changed?'s fall-through turn carries only the skill's rules (skills-audit-2026-07-07 SK-3b,
-  decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1).** With What Changed?
-  selected, a turn the compare engine doesn't take falls through to the ordinary answer, which reads
-  top-k passages, or since #643 one document that fits whole. The engine doesn't take small talk or a
-  scope that doesn't hold exactly two documents; at such a count What Changed? answers a compare request
-  with "select exactly two" instead (below). D-P2a kept the whole skill fence on a fall-through turn and
-  relied on honesty rule 1 (`what-changed/SKILL.md`: ordinary passages with no A/B labels and no diff ⇒
-  simply answer the question). Its revisit condition was met: on a 4B model, most plain questions over
-  one or three lease drafts, such as "Wer ist der Mieter?", got the body's compare format (an "Executive
-  summary" and the sections after it) instead of an answer, in the real-app run for #582 (2026-10-07) and
-  again on master when #632 was measured. Since #632 the fence on such a turn carries only the skill's
+  Since #963 most small talk never reaches the opt-out: it gets the short small-talk reply first (above);
+  what still reaches it is a short question about the last answer ("Sure?", «Alles?»), which keeps the
+  passage search.
+  **A bundled whole-document skill's fall-through turn carries only the skill's rules (skills-audit-2026-07-07
+  SK-3b, decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1, for What Changed?;
+  extended 2026-11-20 by #831, follow-ups wave 4 owner call G-9, to the other four).** Each of the five
+  bundled whole-document skills has an engine that reads whole documents: What Changed? compares exactly
+  two, and Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder read exactly
+  one. A turn the engine doesn't take falls through to the ordinary answer, which reads top-k passages, or
+  since #643 one document that fits whole. The engine doesn't take small talk, or a scope with another
+  number of documents, none included (a knowledge-pack-only scope, a document still indexing); at such a
+  count a request in the skill's routing vocabulary is narrowed to one
+  matching document or answered with "select exactly two" or "pick one" instead (below), so only the other
+  questions fall through. A whole-document skill also sends a single-fact question over one document too
+  long to read whole to the passage search (the needle downgrade above). D-P2a kept the whole skill fence
+  on such a turn and relied on the honesty rules (What Changed?'s rule 1: ordinary passages with no A/B
+  labels and no diff ⇒ simply answer the question). Its revisit condition was met: on a 4B model, most
+  plain questions on such turns got the skill's report format instead of an answer. For What Changed? that
+  was the compare format ("Wer ist der Mieter?" got an "Executive summary" and the sections after it, in
+  the real-app run for #582 on 2026-10-07 and again on master when #632 was measured). For the other four
+  it was their own reports, on 11 of 16 plain questions (5 of 16 on a 9B model); Meeting Minutes wrote
+  full minutes for "Who attended?". Since #632 and #831 the fence on such a turn carries only the skill's
   first paragraph, the heading and the honesty rules, which is also the minimum the fence keeps when the
   context is tight (SKA-15); the section format is left out, and the app log records the cap (skill id
-  and mode, never the body). The answer still shows the skill as applied (the per-message glyph), so the
-  selection isn't silently dropped. The two-document compare turn (the exact changes, or both documents
-  read whole when one is a full rewrite) is unchanged, and so is every other skill's fence; small talk
-  over two documents is the one two-document turn whose fence is now the first paragraph. A user-imported
-  skill declaring `analysis: compare` keeps its whole fence on such a turn, as before #632: only a bundled
-  body is known to lead with its rules (SKA-15), and a user skill has no compare vocabulary, so its real
-  compare requests fall through too. Measured on a 4B and a 9B model: [`architecture.md`](architecture.md)
-  §44 SK-3b. What counts as a compare question is the skill's routing vocabulary. Until #582 a
+  and mode, never the body). Since #962 the room the shorter fence frees goes to the document: on a
+  4,096-token window, such as the 4B model's, a single-fact question over a long document reads two
+  passages instead of one, and one document short enough to read whole beside the first paragraph is
+  read whole; a larger window is unchanged. In exchange, on that window a follow-up under Share-Safe
+  Review or What Changed? can keep none of the earlier conversation ([`rag-design.md`](rag-design.md)
+  §15.9). The answer still shows the skill as applied (the per-message glyph), so the
+  selection isn't silently dropped. Every read the engine takes keeps the whole fence, as before: the
+  two-document compare (the exact changes, or both documents read whole when one is a full rewrite), and
+  a whole-document skill's read of its one document, map-reduce included. Small talk over two documents is
+  the one two-document turn whose fence is the first paragraph. A downgraded single-fact question that the
+  deterministic listing answers carries no fence at all, as before. A user-imported skill declaring
+  `analysis: compare` or `analysis: whole-doc` keeps its whole fence on such a turn: only a bundled body is
+  known to lead with its rules (SKA-15), and a user skill has no routing vocabulary, so its real
+  deliverable requests over several documents fall through too. The rule has no exception for a bundled
+  skill's deliverable request over several documents that misses its vocabulary ("Summarize these
+  three", and in the eight interface languages beyond English and German every such request, «Resume
+  estos contratos»): that answer gets the first paragraph too; a brief built from top-k passages would be weak
+  anyway. Plain chat with no documents keeps the whole fence on purpose (#830). There the fence is the only
+  thing that shapes a compare of two pasted versions, and measured on both models with What Changed?
+  picked, plain questions were not compare-framed (0 of 6) while two pasted versions kept the format (2 of
+  2). A trim keyed to the compare vocabulary would drop the format for a pasted compare in the eight
+  interface languages beyond English and German, and since the plain-chat fence sits in the system
+  message, each switch between a compare and another question would cost a fresh prompt (about 2 s on the
+  4B and 4.5 s on the 9B to the first token). Measured on a 4B and a 9B model:
+  [`architecture.md`](architecture.md) §44 SK-3b. What counts as a compare question is the skill's routing
+  vocabulary. Until #582 a
   compare request in one language could miss it while its translation matched: "summarize the
   differences" fell through while "Fasse die Unterschiede zusammen" got "select exactly two". The
   vocabulary now covers the compare and change words in both languages ([`architecture.md`](architecture.md)
   §18 "#582"). A question with any of them gets "select exactly two" at any count other than two,
   including a Library chat with What-changed still selected.
+- **A whole-document read's notes and the question (#939, #952, #953; follow-ups waves 4 and 5).** A
+  document too long to read in one call is read in parts: notes on each part, then the answer from the
+  notes. The notes are taken for the question, with no skill and under any whole-document skill, bundled
+  or your own, unless the question asks for the skill's report: a summary, minutes, a brief or a review
+  keeps the notes for the skill's task, list word or not, so "Summarize all the decisions" is answered
+  from notes shaped like minutes. A turn the skill's engine passes on to the ordinary answer, such as a
+  summary asked of What Changed? over one document, takes notes for the question too; a skill with no
+  analysis engine keeps the notes for its own instructions. The report words are English and German
+  (and the summarize example chip in every language), so a report request typed in the eight newer
+  interface languages gets notes for the question as well, and so does an English or German request for
+  the report in other words: "Is this safe to share?", «Prüfe diesen Vertrag», "Write up the meeting",
+  «Erstelle eine Niederschrift» or "Go ahead". The skill's instructions still set the report's format.
+  Measured residuals ([`rag-design.md`](rag-design.md) §14.10): on a 4B model, items buried in
+  repetitive text can still be lost ("List all action items" over a transcript where twenty
+  near-identical commitments surround the three real ones found none of them, with or without the
+  question in the notes); on a 9B model, a list request over a document whose clauses repeat can fill
+  the notes with the repeated clause and miss the real items in some runs (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12
+  in one session, 11 and 11 in a later one on the same prompt); two rewordings of the list instruction made it
+  worse, so the prompt stays as it is. A 4B model's notes on a long document copy the skill's report format
+  into every part, and its answers can loop or invent details; a shorter map prompt cut the copying but did
+  not improve the answers, so that stays too ([`rag-design.md`](rag-design.md) §14.10.1); and when the
+  notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
+  The answer still says it read the whole document, which is true of what it read, not of what the notes
+  kept.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
   INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
   record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than
@@ -2075,7 +2259,26 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   a restart (the job says so — a live recognizer is never replaced mid-session); and the
   **reranker and embedder** keep the startup-frozen selection (the embedder handle is captured at
   wiring time in `main/index.ts` and must never swap mid-session anyway — an index embedded by
-  one model is unusable with another).
+  one model is unusable with another). **Which** embedder is the manifest flagged
+  `default_for_role` (the E5), else the first embeddings manifest in walk order (#848); the
+  workspace's `activeEmbeddingModelId` setting does not choose it. The flag decides whether or not the
+  E5's file is present: with the E5 weight missing, the app runs on the built-in mock embedder (document
+  search finds nothing, every document reads as needing a re-index) even when another embeddings model is
+  installed. That is deliberate: the other model's vectors are a different space from the index the E5
+  built, so a silent switch would leave every document stale now and again when the E5 returns. Download
+  the E5 again from the AI Model screen ("Check all model files" shows a damaged one). It is written only by
+  `models:select` (which the AI Model screen never calls for embeddings), and since #890 nothing visible
+  reads it: the Performance screen's embeddings row names the composed embedder like every other role row.
+  Honouring a workspace choice belongs to the deferred embedder swap. The **images model** is picked by
+  the same rule among the vision models whose files are all on the drive (#890); when that model's files
+  fail their check, Images runs the next vision model on the drive while the Performance row still names
+  the first (the AI Model screen shows the damaged file). One damaged file is enough: "Check all model
+  files" stops at it and leaves the model's other file unhashed, and since #913 the screen and Images
+  keep reading it as damaged after that. The running analyzer keeps the model it was
+  built with until a failed start, an engine update, a lock or quit, or (since #913) its next cold
+  start after the idle teardown, which loads the model the Images status names: a vision model
+  installed mid-session that becomes the pick (a flagged one, or one earlier in walk order) moves the
+  Performance row and the Images status at their next update, and the analysis at that rebuild.
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start
@@ -2087,7 +2290,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   finish". Freeing memory and restarting the app clears the latch; since full-audit 2026-07-10
   BE-7 a completed in-app re-download of the translation model ALSO clears it (`onModelInstalled`
   replaces a `startFailed`-latched instance with a fresh selection — the delete-and-re-download
-  repair for a genuinely corrupt GGUF no longer needs a restart; a live sidecar is never replaced). We deliberately do NOT
+  repair for a genuinely corrupt GGUF no longer needs a restart; a live sidecar is never replaced). Since #913
+  a clean "Verify checksum" or "Check all model files" re-arms it the same way, and the same three
+  actions re-arm the re-ranking model, which before stayed off until a restart. We deliberately do NOT
   auto-retry the latched start: no reliable transient/OOM signature exists across OSes to tell
   memory pressure from a genuinely permanent fault (on Windows the OOM exit code collides with the
   known template-validation crash; a Linux OOM-kill is indistinguishable from our own shutdown), so
@@ -2382,8 +2587,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   re-transcribe — they read the stored transcript chunks.
 - **Audio costs real drive space, twice the size on encrypted workspaces transiently.**
   The recording is copied into the workspace (encrypted at rest); imports >50 MB of
-  audio ask first. Recordings also re-encrypt on every vault password change like any
-  document sidecar.
+  audio ask first. A password change only re-wraps the data key, so recordings are not
+  re-encrypted; only an older (v1) vault's one-time move to the current format, at its first
+  password change, re-encrypts them with every other stored file.
 - **mac/linux drives need a source-built whisper-cli.** Upstream ships a prebuilt binary
   for Windows only (R-W1); on other OSes audio import fails friendly until the drive
   builder compiles the pinned tag (see `drive-layout.md`). Windows-first, by the
@@ -2396,6 +2602,22 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   misheard (R-W3: "LibriVox" → "Librebox"); numbers, names of people/places, and dates
   held up well in the German probes. The transcript is searchable text, not a notarized
   record.
+- **On Windows, the voice engine refuses a speech model whose path below `models/` is not plain
+  ASCII (#869).** The pinned whisper-cli reads its command line in the system's code page, so since
+  #869 it starts in the workspace's `documents` folder and gets every path in an ASCII spelling
+  from there (`architecture.md` "Audio transcription (Phase 36)", "#869 amendment"): a drive or
+  app-data folder such as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum` or a Kit folder `Übungen`
+  works, and so does a recording named `Sitzung März.mp3` anywhere. A model path with a non-ASCII
+  folder or file name below `models/` has no such spelling — only a user's own manifest can give
+  one (the shipped manifests are ASCII) — so audio import and dictation refuse it with copy that
+  says to move the model to a plain path and update its manifest entry,
+  even on a Windows set to use UTF-8 for its code page. **Encrypted workspace, first import of a
+  recording whose name or folder has no ASCII spelling from the workspace** (a Kit on `D:\`, the
+  file in `C:\Users\Jörg\Musik\`): the app copies it into the workspace's `documents` folder for
+  the transcription and shreds the copy right after, the same short-lived plaintext as an
+  encrypted re-index's decrypted working copy. It costs one extra write of the file, on Windows
+  only. A workspace folder path of 258 or more characters cannot run the voice engine at all
+  (Windows refuses such a working directory); it could not before either.
 
 ## Voice dictation
 
@@ -2681,6 +2903,48 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the temporary file's creation. The failure is clean and honest — no destination file, no export row, a real
   error — and the trade (an edge-case refusal vs. a silently mislabelled signed-off pack) is
   deliberate. Recovery: save under a shorter path.
+- **A review change whose save failed is still lost when you lock.** If saving a decision or a note
+  fails (in practice a full or failing drive), the review keeps the change on screen with "Some
+  changes could not be saved yet." and Try again, Bulk actions waits, and opening another review
+  asks first — Try again, discard the changes, or go back (#837). Locking does not wait for it: Lock
+  now tries the save once more (giving up after about 6 seconds if the drive does not answer), then
+  locks, and an unsaved change is dropped with the rest of the review from memory. That is
+  deliberate — the lock is the user's security action and wins over a failing write, the posture
+  every lock path takes. Closing or quitting the app is different since #888: it saves first, with
+  the same bounded save (giving up after about 6 seconds), so a change made less than a second
+  before closing (the auto-save waits 600 ms) is kept, and so is a language just picked in Settings.
+  A change it cannot save asks first: Try again, Keep open, or Close anyway, which drops it. Two
+  exits still cannot wait for the window: a Windows shutdown, restart or log-off with the app open
+  (Windows ends the app; it locks at once, and a change not yet saved is lost), and a crash. A
+  reload of the window, which closes nothing and so saves nothing first, exists only in a
+  development build since #912 (View → Reload or Ctrl+R); the released app has no reload
+  shortcut or menu item. The error screen's own Reload button, shown after an unexpected error, still
+  reloads without that save.
+  Quitting (Ctrl+Q on Linux, ⌘Q on macOS) closes the hidden helper windows while the window still
+  saves, so an OCR run in progress stops at once and ends as cancelled, even when you then pick Keep
+  open; and an evidence-pack PDF export in progress is stopped by Ctrl+Q or ⌘Q itself (the print's
+  own `before-quit` hook), even when you then pick Keep open. Both can be started again. Nothing
+  new starts while such a quit waits: a document task waiting behind the OCR run stays waiting,
+  and goes on only if you pick Keep open (#936). On Windows and Linux, closing the window quits the
+  app (#910; before, the app went on running with no window and the workspace unlocked, and then
+  threw the finished OCR run away). While a scan is being read (OCR) or a document is being
+  translated, or one of them is waiting to start, the close asks first (#935): **Keep open** (the
+  default, and what Esc answers) leaves everything as it was, and **Close anyway** stops them the
+  way quitting does; run again, they start over from the beginning. The question does not come for
+  Ctrl+Q or ⌘Q, which stop them at once (one pressed while the question is up closes it and counts
+  as Close anyway), for Lock now, for the macOS red button (the app and its tasks keep running), or
+  for a PDF export, a deep index, a summary or a comparison alone: closing during a PDF export
+  still stops it the way quitting does, and a deep index, built again, reuses the parts it had
+  already built. While the question is up, the workspace stays unlocked: a close
+  followed by walking away no longer locks within seconds, but only once someone answers (there is
+  deliberately no timer that answers for you), unless a quit arrives meanwhile (Ctrl+Q or ⌘Q):
+  that closes the question and the app quits as if Close anyway had been picked. On Linux a
+  log-out, a shutdown or a `kill` meanwhile locks the workspace at once and ends the app, without
+  the question and without the save (#964). On macOS, a log-out or shutdown with the
+  app open may be interrupted once while the window saves: the order of the system's quit and its
+  shutdown event is unverified (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF
+  export), a Dock click during an OCR run (it should bring the window back, #910), and a log-out or
+  shutdown with the app open.
 
 ## Local API ([`local-api.md`](local-api.md) · [`architecture.md`](architecture.md) "Local API endpoint — design record")
 
@@ -2767,12 +3031,18 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   bank-statement answers quote the amounts they read with a decimal point ("5.50 EUR"), whatever
   the interface language, and the tax rate in an invoice answer is written the same way, so a
   German answer reads "Steuer (5.5 %)" rather than "5,5 %".
-- **Two texts still ignore the language's own way of writing them.** In Settings → Diagnostics →
+- **One text still ignores the language's own way of writing it.** In Settings → Diagnostics →
   Activity, every entry is written "time — type: message", with a dash that Spanish, French,
-  Italian, Dutch, Polish and Turkish don't use there. And the app's refusal to start a model that needs
-  more memory than the computer has is in English, with English figures ("… needs at least 16 GB
-  RAM; this computer has about 8 GB …"), in every interface language; the AI Model screen already
-  disables Start for such a model and says why in the interface language.
+  Italian, Dutch, Polish and Turkish don't use there.
+- **A model with no checksum on record is still called damaged outside the AI Model screen.** A
+  model whose manifest has a placeholder hash instead of a real checksum (a model you added yourself
+  before capturing its hash) is refused at every start unless developer mode is on and the drive's
+  policy allows unverified models. The AI Model screen says "No checksum" for it, and the Performance
+  screen "no checksum on record". The Images and Translate screens still say that its file failed its
+  check and should be downloaded again. So does the app's log when it refuses to start such a chat
+  model on its own (at unlock, or after the AI engine is installed or checked again); no screen offers
+  to start it. The document search says to check all model files and try again. None of this can
+  help: such a model needs a real checksum in its manifest.
 - **The speed line under an answer can read "1 tokens".** In English, the line under a finished
   chat answer ("42 tok/s · 1.8 s to first token · 615 tokens") ends in "1 tokens" after a
   one-token answer. The other count sentences that read wrong at exactly 1 in English and German
@@ -2822,11 +3092,6 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   language the app is shown in. In any interface language but English and German, the same paste
   then holds a line "--- English ---" and the same report in English, so a report from a Russian
   interface is in Russian and in English. An English or German interface copies one report.
-- **Two rare refusals when creating a workspace are always in English:** a workspace already
-  exists there ("An encrypted workspace already exists here …", "A workspace already exists on
-  this drive …"), or the drive's policy doesn't allow an unencrypted one ("Plaintext workspace is
-  not permitted by policy."). These three messages have no translation and show in English in
-  every interface language.
 - **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as
   documented).** LLM prompts are pinned English (benchmark comparability; models
   follow the language of the user's question naturally), so a one-click summary of a German
@@ -2844,10 +3109,18 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   `documents.error_message`, such as a raw parser-library error (a pdfjs exception message), is
   shown as it was written. A line in the interface language stands above it: "This file couldn't
   be processed." on a failed document's row, and "Couldn't add report.pdf to this chat." (with
-  the file's name) in the chat's banner for a failed attachment.
-  The Documents banner for a failed summary, translation or text-recognition task, the file
-  translation's banner and the evidence-pack export error show such text on its own. Rare
-  failure-path remnants, accepted.
+  the file's name) in the chat's banner for a failed attachment, and the file translation's banner
+  says the same as the row for the same file. Other failures read the same way, with the
+  message after a line in the interface language: a review's save line ("Some changes could not be
+  saved yet." then, for example, SQLite's "database is locked"), a review that could not be opened,
+  and a failed evidence-pack export ("The evidence pack export did not finish." then, for example,
+  a file write error). Wherever a screen reports that one of its own actions failed, though, the
+  failed call's own message still shows on its own: on the Documents, Chat, AI Model and
+  Performance screens, in the knowledge-pack panel and the OCR and knowledge-pack tool installs, in
+  the preview and article windows, for dictation, and on the Translate screen when a call itself
+  fails (starting the translation, reading the result) rather than the file. That message is
+  usually the app's own words in the interface language, but a database or file error reads as the
+  system wrote it (for example "database is locked"). A rare failure-path remnant, accepted.
 - **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now**, whatever
   the interface language. Translating them is content work, tracked separately from UI i18n.
 - **A conversation transcript can legitimately mix languages.** Old answers, model output,
@@ -3398,8 +3671,9 @@ reports and phase plans were working papers; their full text lives in git histor
   `runtime/kiwix-tools/<os>/` by hand still works as a last-resort fallback, but leaves no
   marker, so it resolves through the hashless `skip-legacy` verifier path (residual R-1) instead
   of integrity verification — and it is replaced **wholesale** the first time someone installs
-  the family from inside the app or the script (the installer pre-cleans the family's directory
-  before extracting), so a manually provisioned drive is not stranded, only superseded. The
+  the family from inside the app or the script (the in-app installer builds a fresh copy beside it
+  and swaps it in, #986; the script pre-cleans the family's directory before extracting), so a
+  manually provisioned drive is not stranded, only superseded. The
   in-app install needs **Settings → Allow internet access for downloads and updates** on
   and a drive policy that permits downloads (the same gate models and the engine use). Linux and
   macOS builders without the in-app path use the script.
@@ -3496,7 +3770,9 @@ reports and phase plans were working papers; their full text lives in git histor
 - **At most twelve packs take part in one ask, and not every candidate they find is
   used.** Ticking a 13th pack is refused; an older or hand-edited selection above the
   12-pack limit is trimmed in title order, with a per-answer note that it was not
-  searched. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
+  searched. "Title order" here is the plain code-point order (A to Z, then accented and non-Latin
+  initials); the chat picker and the Packs panel list packs in the interface language's own order
+  (#958), so for such titles the two can differ. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
   is decided round-robin, in title order, only after every pack has finished searching —
   a short or empty pack's unused share goes to the others — and at most two packs are
   searched at a time, under a twenty-second limit for the whole question (a pack cut off

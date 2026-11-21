@@ -123,6 +123,13 @@ export class DocTaskManager {
    */
   private runningPromise: Promise<void> | null = null
   /**
+   * #936: a quit is under way, so `pump()` starts nothing (`holdQueueForQuit`). A quit the close guard holds while
+   * the main window saves (Ctrl+Q on Linux, ⌘Q or Dock Quit on macOS) closes the OCR window first, and the run ends
+   * before the quit's `will-quit` flushes the queue: without the hold the next task started into that gap and was
+   * cancelled a moment later.
+   */
+  private quitHold = false
+  /**
    * The single model-slot owner for a YIELDING tree build (plan §4.1, H9/H10). Only a
    * running `tree` build registers with it; chat uses it to pause+hand-off, never to race.
    */
@@ -246,7 +253,7 @@ export class DocTaskManager {
     // and lazily respawns the translation sidecar the teardown just suspended — the sidecar
     // suspends are non-latching on purpose (they must come back after the next unlock). Same
     // localized copy the doc-task IPC guard uses.
-    if (this.deps.isWorkspaceLocking?.()) {
+    if (this.deps.isWorkspaceLocking()) {
       throw new Error(tMain('main.task.workspaceLocked'))
     }
     const kind = req?.kind as DocTaskKind
@@ -503,6 +510,24 @@ export class DocTaskManager {
     await p.catch(() => undefined)
   }
 
+  /**
+   * #936: a quit has begun (the close guard committed to a close that quits, or an un-prevented `before-quit`):
+   * start nothing new until `releaseQueueHold()`. The running task goes on, and a task started meanwhile is queued,
+   * so it runs if the quit is called off. The quit's `will-quit` cancels everything anyway (`cancelAllDocTasks`).
+   */
+  holdQueueForQuit(): void {
+    this.quitHold = true
+  }
+
+  /**
+   * #936: the quit was called off (Keep open): the queue goes on, starting its next task now if none is running. So
+   * the hold is never a permanent latch. Without a hold it changes nothing (an idle queue holds no waiting task).
+   */
+  releaseQueueHold(): void {
+    this.quitHold = false
+    this.pump()
+  }
+
   /** True while a task is running or queued — the chat-side busy guard reads this. */
   hasActiveTask(): boolean {
     return this.runningId !== null || this.queue.length > 0
@@ -567,9 +592,9 @@ export class DocTaskManager {
     return noModelMessageKey(this.deps.isModelStarting?.() === true)
   }
 
-  /** Run the next queued task; tasks serialize among themselves. */
+  /** Run the next queued task; tasks serialize among themselves. Nothing starts while a quit holds the queue (#936). */
   private pump(): void {
-    if (this.runningId) return
+    if (this.runningId || this.quitHold) return
     const next = this.queue.shift()
     if (!next) return
     const task = this.tasks.get(next)
@@ -767,6 +792,9 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.translation.startFailed',
   // #530: the translation handler's copy when the OS refused to start the engine program.
   'main.engine.cannotRun',
+  // #913: …and when the start check found the translation model's file damaged (the Translate
+  // screen's own copy: download it again on the AI Model screen).
+  'translate.err.modelDamaged',
   'main.model.contextExceeded',
   'main.task.refusedChatStreaming',
   'main.task.documentNotReady',

@@ -22,9 +22,19 @@
 # selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
 # a CPU-era drive to the Vulkan default actually replaces the build).
 #
+# An engine NEWER than the drive's pin (#873) is kept: the app's in-app update (#516) installs
+# its own pin and leaves the drive's runtime-sources.yaml as it was, so the marker can be ahead
+# of the yaml. Versions are ordered the way the app orders them (assets.ts
+# compareRuntimeVersions: `b<build>`, or dotted numbers with an optional `v`); a version that
+# cannot be ordered against the pin is re-fetched as before. --allow-downgrade replaces it
+# anyway; --commercial always does (a sold drive carries the pin of the app it ships with).
+#
 # --commercial (drive builders, #234): a placeholder hash is REFUSED before any download
 # (exit 1, nothing extracted, no marker) and a hashless (legacy) marker is re-fetched
 # instead of skipped, so a sold drive never carries an unverifiable sidecar.
+#
+# --allow-downgrade replaces an engine whose install marker is newer than the drive's pin (an
+# engine the app updated, #873) with the pinned, older one. Without it such an engine is kept.
 #
 # --family selects the asset family: llama_cpp (default, llama-server), whisper_cpp
 # (the whisper-cli transcriber, runtime/whisper.cpp/<os>/ — same verify + marker
@@ -36,10 +46,10 @@
 #
 # Usage:
 #   scripts/fetch-runtime.sh --target /Volumes/HILBERTRAUM \
-#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|kiwix_tools|ocr] [--commercial] [--dry-run]
+#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|kiwix_tools|ocr] [--commercial] [--allow-downgrade] [--dry-run]
 set -euo pipefail
 
-TARGET=""; OS=""; ARCH=""; BACKEND=""; FAMILY="llama_cpp"; COMMERCIAL=0; DRY_RUN=0
+TARGET=""; OS=""; ARCH=""; BACKEND=""; FAMILY="llama_cpp"; COMMERCIAL=0; ALLOW_DOWNGRADE=0; DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2 ;;
@@ -53,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     --family) FAMILY="${2:-}"; shift 2 ;;
     --family=*) FAMILY="${1#*=}"; shift ;;
     --commercial) COMMERCIAL=1; shift ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -115,6 +126,39 @@ if [[ -z "$ARCH" ]]; then
 fi
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
+
+# #873: order two engine release tags of one family the way the app does (assets.ts
+# compareRuntimeVersions). Prints -1 (older), 0 (equal) or 1 (newer), and NOTHING when either tag
+# has an unknown shape or the two shapes differ. `b<digits>` is a build counter;
+# `v?<digits>(.<digits>)*` a dotted release whose missing trailing parts count as zero. Numbers
+# compare as numbers ('3.10' > '3.8'), read in base 10: bash takes a leading 0 for octal and
+# fails on 08/09. Bash 3.2-safe (a Mac builder runs /bin/bash): the patterns held in variables,
+# every test an if, so set -e never fires on a false one.
+runtime_version_kind() {
+  local tag="$1" re_build='^b([0-9]+)$' re_dotted='^v?([0-9]+(\.[0-9]+)*)$'
+  tag="${tag#"${tag%%[![:space:]]*}"}"
+  tag="${tag%"${tag##*[![:space:]]}"}"
+  if [[ "$tag" =~ $re_build ]]; then echo "build ${BASH_REMATCH[1]}"
+  elif [[ "$tag" =~ $re_dotted ]]; then echo "dotted ${BASH_REMATCH[1]}"
+  fi
+}
+compare_runtime_versions() {
+  local a b pa pb n i x y
+  a="$(runtime_version_kind "$1")"
+  b="$(runtime_version_kind "$2")"
+  if [[ -z "$a" || -z "$b" || "${a%% *}" != "${b%% *}" ]]; then return 0; fi
+  IFS='.' read -r -a pa <<< "${a#* }"
+  IFS='.' read -r -a pb <<< "${b#* }"
+  n=${#pa[@]}
+  if [[ ${#pb[@]} -gt $n ]]; then n=${#pb[@]}; fi
+  for (( i = 0; i < n; i++ )); do
+    x=$((10#${pa[i]:-0}))
+    y=$((10#${pb[i]:-0}))
+    if [[ $x -lt $y ]]; then echo -1; return 0; fi
+    if [[ $x -gt $y ]]; then echo 1; return 0; fi
+  done
+  echo 0
+}
 
 # Whether a relative path stays inside the extract dir once its `.` and `..` are resolved (#767): a
 # link's `../lib/x` stays inside its archive, `a/../../x` leaves it.
@@ -517,6 +561,9 @@ marker_hash_for() {
 if [[ -f "$BIN_PATH" ]]; then
   SKIP=0
   WHY="install marker is missing or differs"
+  # #873: the marker's version when it is newer than the pin (kept unless --commercial / --allow-downgrade).
+  NEWER_KEPT=""
+  NEWER_REPLACED=""
   ALL_PRESENT=1
   for f in "${REQUIRED_FILE_NAMES[@]}"; do
     [[ -f "$EXTRACT_TO/$f" ]] || { ALL_PRESENT=0; break; }
@@ -526,7 +573,12 @@ if [[ -f "$BIN_PATH" ]]; then
   elif [[ -f "$MARKER_PATH" ]]; then
     m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
     m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
-    if [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]]; then
+    if [[ "$(compare_runtime_versions "$m_version" "$VERSION")" == "1" ]]; then
+      # Whatever its backend: the app's relation ignores the backend too (runtimeInstallRelation).
+      if [[ $COMMERCIAL -eq 1 ]]; then NEWER_REPLACED="$m_version"
+      elif [[ $ALLOW_DOWNGRADE -eq 0 ]]; then NEWER_KEPT="$m_version"
+      fi
+    elif [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]]; then
       SKIP=1
       if [[ $COMMERCIAL -eq 1 ]]; then
         for f in "${REQUIRED_FILE_NAMES[@]}"; do
@@ -544,6 +596,14 @@ if [[ -f "$BIN_PATH" ]]; then
     echo "  skip ($BIN_NAME already installed: $VERSION/${B_BACKEND[$SEL]} per .hilbertraum-runtime.json)"
     remove_never_installed
     exit 0
+  fi
+  if [[ -n "$NEWER_KEPT" ]]; then
+    echo "  skip ($BIN_NAME $NEWER_KEPT is newer than this drive's pin $VERSION, installed by the app; pass --allow-downgrade to replace it)"
+    remove_never_installed
+    exit 0
+  fi
+  if [[ -n "$NEWER_REPLACED" ]]; then
+    echo "  commercial: replacing the newer $NEWER_REPLACED with the pinned $VERSION (a sold drive carries its app's pin)"
   fi
   echo "  $BIN_NAME present but $WHY — re-fetching $VERSION/${B_BACKEND[$SEL]}"
 fi

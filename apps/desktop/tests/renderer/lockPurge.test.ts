@@ -23,7 +23,7 @@ import {
   editReviewItem,
   purgeReviewSession
 } from '../../src/renderer/lib/reviewSession'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { makeDetail, stubReviewApi } from '../helpers/evidenceReview'
 import { selectedImage } from '../helpers/vision-fixtures'
 import type { DocTaskStatus, ImportJob, StartSkillRunResult } from '../../src/shared/types'
@@ -50,6 +50,7 @@ afterEach(() => {
   clearVisionSession()
   purgeReviewSession()
   vi.restoreAllMocks()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('purgeSessionStores — the real lock seam (TA-2)', () => {

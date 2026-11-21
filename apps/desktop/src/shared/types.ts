@@ -102,6 +102,15 @@ export interface EngineRecheckResult {
   problems: EngineProblem[]
 }
 
+/**
+ * #888: the window's answer to "save before the window closes" (`EVENTS.saveBeforeClose`).
+ * `unsaved` = a change is still not written (a failed or hung write); main then asks the user
+ * before closing. Only `unsaved: false` lets the window close without asking.
+ */
+export interface SaveBeforeCloseResult {
+  unsaved: boolean
+}
+
 export interface AppStatus {
   appName: string
   appVersion: string
@@ -321,18 +330,64 @@ export interface WorkspaceStateInfo {
   plaintextAllowed: boolean
   /** Policy requires encryption — onboarding may not offer plaintext. */
   encryptionRequired: boolean
+  /**
+   * What the lock screen must tell the user before the unlock, one notice per value: why the changes since the previous
+   * lock are lost, or (#911) that the encrypted file was missing and the start kept the only copy.
+   * `working_copy_lost`: a lock finished at the last good snapshot because the working file was gone
+   * or no longer a database (#855), or the startup salvage had to shred the last session's only
+   * fresh copy (#875). `session_not_closed` (#892): the app ended without locking (a power cut, the
+   * drive pulled out, a kill), and the startup sweep shredded the session it left;
+   * `session_not_closed_full`: the same with less free space on the drive than a lock needs (how a
+   * quit on a full drive ends), so the copy asks the user to free space. Set while the workspace is
+   * locked, on what `lockWorkspace` returns and on `getWorkspaceState()` alike, until the next
+   * successful unlock; `config/working-copy-lost.json` carries it across a restart (#875). Under a
+   * newer-build verdict (#845) startup does not read the marker.
+   * `encrypted_file_missing` (#911): `.enc` was missing from the drive, so the start kept the working
+   * file, the only copy of the workspace, unencrypted as `<db>.recovery`; the next unlock with the
+   * right password encrypts it again. Nothing is lost. Read from the disk at every start (no marker).
+   */
+  lockNotice?: 'working_copy_lost' | 'session_not_closed' | 'session_not_closed_full' | 'encrypted_file_missing'
 }
 
 /** Result of an unlock/create action (a wrong password is a normal, non-throwing result).
- *  `vault_damaged` (#208): the password verified but the vault ciphertext did not decrypt
- *  to an openable database — structurally NOT a password problem, and the copy must say so
- *  (retyping the password cannot help; restoring from a backup can).
+ *  `vault_damaged` (#208): the password verified but the vault ciphertext failed its tag
+ *  (#860 V5b) or did not decrypt to an openable database — structurally NOT a password
+ *  problem, and the copy must say so (retyping the password cannot help; restoring from a
+ *  backup can).
  *  `vault_recovery_blocked` (#242): the last session's newest data still waits to be salvaged
  *  and another program holds the recovery file it must be moved onto — the unlock is refused
  *  (opening would decrypt the stale snapshot over it); close that program and retry, nothing
  *  is lost.
  *  `workspace_newer` (#247): the database was written by a NEWER build (`PRAGMA user_version`
- *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app. */
+ *  above this build's `SCHEMA_VERSION`) — refused before any write; update the app. Also (#845)
+ *  a vault format a newer build wrote (descriptor, KDF, `.enc` frame, rekey journal), refused
+ *  before the password is checked.
+ *  `vault_open_failed` (#844): the password verified and the data is a database SQLite does not
+ *  call damaged, but opening it could not finish (an upgrade step: a full drive, an I/O error, a
+ *  bug in a new step). The failed open never rewrites the encrypted vault: free space and retry,
+ *  or after an update start the previous version.
+ *  `vault_missing` (#911): the password verified, but the encrypted workspace file is missing from
+ *  the drive and no copy was left to restore it from (a damaged one is shredded at this unlock).
+ *  Neither `.enc` nor the working file was written; put the file back or
+ *  restore the workspace folder from a backup, and never create a new workspace.
+ *  `vault_descriptor_missing` (#807, C-S2): the encrypted workspace file is on the drive, but
+ *  `config/workspace.json` (the salt, the verifier and the wrapped data key) is missing or
+ *  unreadable, so no password can open it; refused before the password is checked, nothing
+ *  written. Put the file back or restore it from a backup; never create a new workspace.
+ *  `vault_descriptor_unreadable` (#955 item 1): `config/workspace.json` is on the drive but cannot
+ *  be read, and the encrypted workspace file is not beside it, so no password can open anything;
+ *  refused before the password is checked, nothing written. Don't delete the key file (a `.recovery`,
+ *  a staged `.enc.new` or stored documents may still need it); restore both files from a backup.
+ *  A create over such a file (one that appeared under the create form) answers it too.
+ *  `workspace_exists` (#807): create refused, a workspace is already on the drive (an encrypted
+ *  descriptor, the `.enc`, an unreadable descriptor beside an `.enc` or a newer build's artifact;
+ *  #954: any descriptor file, also one put back after the start); unlock it instead. Nothing on the
+ *  disk changes. Since #955 the state then reads `locked`, and the gate re-reads it and shows its
+ *  unlock form.
+ *  `plaintext_not_allowed` (#807): a create without a password, which the policy or the build
+ *  does not allow. `refused`: create's password under `MIN_PASSWORD_LENGTH` (or not a string);
+ *  for a password change also the workspace locked or a lock under way, or document work in
+ *  progress. */
 export type WorkspaceActionResult =
   | { ok: true; state: WorkspaceStateInfo }
   | {
@@ -340,8 +395,14 @@ export type WorkspaceActionResult =
       reason:
         | 'wrong_password'
         | 'vault_damaged'
+        | 'vault_missing'
+        | 'vault_descriptor_missing'
+        | 'vault_descriptor_unreadable'
+        | 'vault_open_failed'
         | 'vault_recovery_blocked'
         | 'workspace_newer'
+        | 'workspace_exists'
+        | 'plaintext_not_allowed'
         | 'refused'
         | 'error'
       message: string
@@ -656,7 +717,11 @@ export interface ModelInfo {
   id: string
   displayName: string
   family: string
-  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision' | 'translation'
+  /**
+   * `'unknown'` (#847): a model for a newer HilbertRaum (`needsNewerApp`), listed for display only. Never a
+   * known role, so no role branch (the active chat model, a task section, Use / Start) can take it.
+   */
+  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision' | 'translation' | 'unknown'
   format: string
   runtime: string
   license: string
@@ -685,6 +750,26 @@ export interface ModelInfo {
    * per-download confirmation (size, license link, URL, license acknowledgement).
    */
   download?: ModelDownloadInfo
+  /**
+   * #932: the `checksum_failed` state comes from a placeholder hash in the manifest (a file with no checksum on
+   * record), not from a file that failed its check. Decided from the manifest alone. The card says "No checksum" and
+   * what the model needs (developer mode on a drive whose policy allows unverified models), and offers no Download,
+   * because a download cannot give it a checksum. `state` and every start gate are unchanged: the model is refused.
+   */
+  noChecksum?: true
+  /**
+   * #847: this entry is a manifest for a newer HilbertRaum (a role this build does not know, or a
+   * `min_app_version` above this app): `role: 'unknown'`, `state: 'unsupported'`, never recommended, never a
+   * `download`. The main process refuses it on every path (an unknown id), whatever the renderer asks.
+   */
+  needsNewerApp?: true
+  /** #847: the role a `needsNewerApp` manifest declares, as written (absent when it names none). */
+  declaredRole?: string
+  /**
+   * #847: for a `needsNewerApp` entry only — every file it declares exists on the drive (existence only, no
+   * hash). The presence contract the "On this drive" view reads for these entries (design-guidelines §15).
+   */
+  filesPresent?: boolean
 }
 
 /**
@@ -927,6 +1012,47 @@ export interface EngineDownloadRequest {
   update?: boolean
 }
 
+/** Which kind of engine job a request starts (#843): the default install, an update or a reinstall. */
+export type EngineDownloadKind = 'install' | 'update' | 'reinstall'
+
+/** One archive an engine job would fetch, as its confirmation dialog states it (#843). */
+export interface EngineDownloadPreviewItem {
+  /** The family key (`llama_cpp`, `whisper_cpp`, `kiwix_tools`). */
+  family: string
+  /** The version this archive installs (this app's pin). */
+  version: string
+  /** What the install record in the target folder states today, or null when there is none. */
+  installed: string | null
+  backend: string
+  os: string
+  arch: string
+  /** True for the family's pure-CPU safety net (`<os>/cpu/`), false for its main build. */
+  safetyNet: boolean
+  /** The pinned download address, shown in full. */
+  url: string
+  /** The pin's `size_bytes`, or null when the pin carries none. A label only, never checked. */
+  sizeBytes: number | null
+  /** The family's licence (SPDX-style), from the code-side family spec. */
+  license: string
+  /** The other licence this archive carries for a bundled library, or null (#843: Windows only). */
+  bundledLicense: string | null
+  /** The upstream `LICENSE` at the pinned tag, or null. */
+  licenseUrl: string | null
+}
+
+/**
+ * What an engine request would do (#843, `engine:plan`): the archives the job would fetch if it started
+ * now, from the same step selection `EngineDownloadManager.start()` runs (`planEngineSteps`). The job
+ * plans again when it starts (Confirm sends the same request), and main's gates decide then. Read-only:
+ * it fetches nothing.
+ */
+export interface EngineDownloadPreview {
+  kind: EngineDownloadKind
+  items: EngineDownloadPreviewItem[]
+  /** The sum of every item's size, or null when one of them is unknown. */
+  totalBytes: number | null
+}
+
 // ---- In-app OCR language-file install (#410) ----
 //
 // OCR is not an engine family: the language files are plain hash-verified files with their own
@@ -950,13 +1076,15 @@ export interface OcrInstallLanguage {
 
 /** What the OCR install dialog states and whether the action can be offered (`ocr:status`). */
 export interface OcrInstallStatus {
-  /** A source list matching the code pins was found (the drive's yaml, else the app-bundled one). */
+  /** Every pinned file has an entry with its pinned hash in some source list (per file: the drive's
+   *  yaml first, then the app's own copy, #841). */
   available: boolean
   /** Every pinned language, in pin order. */
   languages: OcrInstallLanguage[]
   /** Bytes still to download: the sizes of the languages not yet installed. */
   totalBytes: number
-  /** The host(s) the files come from, computed in main from the pinned URLs; null when unavailable. */
+  /** The host(s) the files still to download come from (every file's once all are in place),
+   *  computed in main from the pinned URLs; null when unavailable. */
   sourceHost: string | null
   /** The licence of the language data (code-side: `Apache-2.0`). */
   license: string
@@ -998,14 +1126,16 @@ export interface OcrInstallJob {
 /** Why image understanding is unavailable. NO `'locked'` reason (PROD-2): `getVisionStatus`
  *  is WORKSPACE-AGNOSTIC — vision weights aren't encrypted, so status doesn't fail on lock;
  *  the SCREEN owns the lock gate (it reads `workspaceReady`), and the sidecar is torn down on
- *  lock independently (§13). Status can read `available:true` while the screen shows locked. */
-export type VisionUnavailableReason = 'no-model' | 'no-runtime' | 'incompatible'
+ *  lock independently (§13). Status can read `available:true` while the screen shows locked.
+ *  `damaged` (#913): a vision model on the drive failed its file check (a check found a file
+ *  damaged, or its hash is a placeholder outside developer mode), so Images will not start it. */
+export type VisionUnavailableReason = 'no-model' | 'no-runtime' | 'incompatible' | 'damaged'
 
 export interface VisionStatus {
   available: boolean
   /** Present iff `!available`. */
   reason?: VisionUnavailableReason
-  /** The installed + verified vision model, if any. */
+  /** The vision model Images runs, if any: present, and no check found it damaged (only a cache read, #913). */
   modelId?: string
   /** Human label for the screen (no jargon — never "mmproj"/quantization). */
   modelDisplayName?: string
@@ -1046,7 +1176,9 @@ export type ImageJobState = 'queued' | 'starting' | 'analyzing' | 'done' | 'fail
  * `emptyResponse`, which means the model returned nothing). Renderers must keep an
  * unknown-code fallback (AnswerThread falls back to the `runtimeFailed` copy), so adding
  * codes here stays skew-safe (#123 / #120). `engineCannotRun` (#530): the operating system
- * refused to start the AI engine program — another model would not help.
+ * refused to start the AI engine program — another model would not help. `modelDamaged` (#913):
+ * a check found the vision model's file damaged, so it was not started (the status reason
+ * `damaged` says so first; this is the job's fallback when the status changed meanwhile).
  */
 export type VisionErrorCode =
   | 'tooLarge'
@@ -1060,6 +1192,7 @@ export type VisionErrorCode =
   | 'contextExceeded'
   | 'cancelled'
   | 'busy'
+  | 'modelDamaged'
 
 export interface ImageJob {
   jobId: string
@@ -1532,7 +1665,8 @@ export type TranslateJobState = 'queued' | 'translating' | 'done' | 'failed' | '
  * app or free memory — F-7 / FA-4 option c). `tooLong`: the pasted text exceeds
  * `TRANSLATE_MAX_TEXT_CHARS` (#160 BE-3 — the document path handles big inputs).
  * `engineCannotRun` (#530): the operating system refused to start the AI engine program — memory
- * is not the cause, so the `startFailed` copy would send the user the wrong way.
+ * is not the cause, so the `startFailed` copy would send the user the wrong way. `modelDamaged`
+ * (#913): a check found the translation model's file damaged, so it was not started.
  */
 export type TranslateErrorCode =
   | 'noModel'
@@ -1545,6 +1679,7 @@ export type TranslateErrorCode =
   | 'empty'
   | 'cancelled'
   | 'tooLong'
+  | 'modelDamaged'
 
 /**
  * #160 (BE-3): upper bound on the view-translate paste, in characters. Planning (regex split +
@@ -2833,15 +2968,47 @@ export interface PlacementVerdict {
 }
 
 /**
+ * #933: what the checksum cache already knows about a model's files, read without hashing (`knownFileVerdict`):
+ * `damaged` = a cached digest differs from the manifest's (a check found the file damaged); `unverified` = the
+ * manifest has no checksum on record (a placeholder hash) outside developer leniency; `ok` = neither (verified, or
+ * not checked yet). Both non-`ok` answers are refused at every start.
+ */
+export type ModelFileVerdict = 'ok' | 'damaged' | 'unverified'
+
+/**
  * One model the app can hold in memory (benchmark.md "Models on this computer"): what it is,
- * where it runs under the CURRENT configuration, and whether it is resident right now.
+ * whether its files are on this drive, where it runs under the CURRENT configuration, and
+ * whether it is resident right now.
  */
 export interface ResidentModelRow {
   role: 'chat' | 'translation' | 'vision' | 'embeddings' | 'reranker' | 'transcriber'
-  /** The model id for the role, or null when none is installed/selected. */
+  /**
+   * The model id for the role, or null when there is none: chat names the active model (null when
+   * none is selected); every other role names the catalog's model for it (the one the app composes,
+   * `pickManifestForRole`; for images the pick among the vision models on the drive, else the
+   * catalog's), whether or not its files are on this drive (`onDrive` says which, #914).
+   */
   modelId: string | null
-  /** GiB (the manifest's decimal figure converted), or null when unknown. */
+  /**
+   * GiB (the manifest's decimal figure converted), or null when unknown (no manifest: e.g. an
+   * active model outside the catalog).
+   */
   sizeOnDiskGb: number | null
+  /**
+   * #914: every file of the row's model is on this drive (`manifestFilesPresent`: presence only,
+   * no hash). False for a catalog model that is not downloaded, and for a row with no manifest
+   * (no model, or an active model outside the catalog). Unless the row is `loaded` (loaded beats
+   * `onDrive`, #914 code review: a weight deleted while the runtime holds it open), the screen
+   * shows "not on this drive" instead of "not loaded", and `totals.ramAllMb` leaves the row out.
+   */
+  onDrive: boolean
+  /**
+   * #933: what the checksum cache knows about the row's files (`ModelFileVerdict`; cache only, never a hash). `'ok'`
+   * for a row that is not on this drive. Unless the row is `loaded` (loaded beats it, as for `onDrive`), a `damaged`
+   * or `unverified` row says so instead of "not loaded", and `totals.ramAllMb` and the graphics-card lines leave it
+   * out: every start refuses it.
+   */
+  fileCheck: ModelFileVerdict
   /**
    * 'gpu' = would auto-fit onto the graphics card as things stand: chat and translation on a
    * machine with a usable card, GPU acceleration not switched off or auto-disabled, and no
@@ -2958,9 +3125,22 @@ export interface PerformanceSnapshot {
     /**
      * The active model, or null when none is selected. `sizeOnDiskGb` is the manifest's
      * decimal figure converted to GiB (1024³), the unit every other figure on the screen uses
-     * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing.
+     * (RAM, VRAM, the observed buffers), so the row never shows two sizes for one thing; null
+     * for a model outside the catalog, whose size the app does not know (#914: it used to be 0,
+     * shown as "0.0 GB"). `onDrive` (#914 code review): its files are on this drive
+     * (`manifestFilesPresent`) or it is resident right now (loaded beats `onDrive`, as on the
+     * rows). False → "Your model" claims no size on disk and no fit: the line leaves the size out,
+     * no verdict is stated, and the pill says "not on this drive". `fileCheck` (#933): its row's
+     * `fileCheck`, or `'ok'` while it is resident (loaded beats it); absent reads as `'ok'`. Not
+     * `'ok'` → "Your model" claims no fit either, and the pill says what its row says.
      */
-    model: { id: string; sizeOnDiskGb: number; contextTokens: number } | null
+    model: {
+      id: string
+      sizeOnDiskGb: number | null
+      onDrive: boolean
+      fileCheck?: ModelFileVerdict
+      contextTokens: number
+    } | null
     /**
      * The context the LIVE recommended model (`recommendation.modelId`, PR #308 decision 8) would
      * launch with, resolved main-side by the SAME `launchContextTokens` the start path uses; null
@@ -2982,7 +3162,10 @@ export interface PerformanceSnapshot {
      */
     observedMismatch: { contextTokens: number; backend: 'gpu' | 'cpu'; at: string } | null
     verdict: PlacementVerdict
-    /** Every model the app can hold, chat first (benchmark.md "Models on this computer"). */
+    /**
+     * Every model the app can hold, chat first (benchmark.md "Models on this computer"), each
+     * marked with whether its files are on this drive (`ResidentModelRow.onDrive`, #914).
+     */
     models: ResidentModelRow[]
     totals: {
       /**
@@ -2994,8 +3177,13 @@ export interface PerformanceSnapshot {
        * translation contributes 0), and a `'gpu'`-posture reranker row (contributes 0: its own
        * headroom gate only resolves `'gpu'` when the whole placement fits, and no partial-offload
        * split is tracked for it); on `unified` the full sum (one pool — the copy says "memory",
-       * not "RAM", and the pill compares against the unified budget). null when nothing is
-       * installed.
+       * not "RAM", and the pill compares against the unified budget). On every class only the
+       * rows on this drive count (`onDrive`, #914): a row named from the catalog whose files are
+       * not here adds nothing, and nor does one whose files a check found damaged or that has no
+       * checksum on record (`fileCheck`, #933), unless it is loaded (its memory is in use). null
+       * only when no counted row has a size (nothing installed, or nothing installed will start). 0 means every
+       * counted row runs on the card (an estimated chat spill is not counted); a small value is an
+       * observed small spill. The screen leaves the line out while it would read 0.0 GB.
        */
       ramAllMb: number | null
       /**
@@ -3445,6 +3633,18 @@ export type AuditEventType =
   | 'model_download_started'
   | 'model_download_verified'
   | 'model_download_failed'
+  // #843: installs of the AI engine (llama.cpp, whisper.cpp, the knowledge-pack tools) and of the
+  // OCR language files. Metadata is CODE NAMES, VERSIONS AND COUNTS ONLY — engine: { jobId, kind,
+  // families, versions, sizeBytes, trigger } (`trigger: 'user'` today; an app update will add its
+  // own value, never new types); OCR: { jobId, languages, bytes, trigger }. A failure adds a content-free
+  // `reason` code (`cancelled` and `networkOff` included) and maybe a `cause` label — never the
+  // job's `error` text, which is friendly copy and can name a drive path.
+  | 'engine_install_started'
+  | 'engine_install_finished'
+  | 'engine_install_failed'
+  | 'ocr_install_started'
+  | 'ocr_install_finished'
+  | 'ocr_install_failed'
   | 'document_imported'
   | 'document_reindexed'
   | 'document_deleted'
@@ -3500,6 +3700,13 @@ export type AuditEventType =
   // (full-audit 2026-07-11 CODE-1a). Content-free, like the other workspace events.
   | 'workspace_lock_failed'
   | 'workspace_password_changed'
+  // #875: the changes since the last saved state were lost, recorded by the unlock after the loss: the previous lock
+  // finished at the last saved state (the working file gone or no longer a database), the start swept the working file,
+  // the start swept the session an app that ended without a lock left (#892; 'unclean-full' on a drive too full to
+  // lock), or this unlock discarded a broken recovery copy. Content-free; metadata { cause: 'lock' | 'startup' |
+  // 'unclean' | 'unclean-full' | 'recovery', lostAt? } (lostAt: when the marker was written; none for 'recovery', the
+  // event's own time).
+  | 'workspace_working_copy_lost'
   | 'settings_changed'
   // The local API master switch flipped. Metadata is BOOLEANS ONLY ({ enabled }) — the
   // audit-log export writes metadata verbatim to plaintext JSON outside the vault, so
@@ -3862,7 +4069,8 @@ export interface EvidenceReview {
   completedAt?: string | null
 }
 
-/** Light entry-point shape for `getEvidenceReviewForMessage` (chat action row, Phase 2). */
+/** A review's light summary: the chat's chip state, one per review in `evidence:summariesForConversation`
+ *  (AUD-12); main's `getEvidenceReviewForMessage` builds the same shape for `evidence:create`'s idempotency check. */
 export interface EvidenceReviewSummary {
   id: string
   conversationId: string

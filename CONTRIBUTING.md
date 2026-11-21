@@ -59,6 +59,9 @@ npm test            # the whole suite (root; delegates to the apps/desktop works
 npm run typecheck
 npm run test:coverage  # optional: suite + V8 coverage report (writes coverage/, gitignored; not a CI gate)
 ```
+On Linux, Ctrl+C in `npm run dev` or electron-vite's restart (a SIGTERM) runs the emergency lock and ends the app at
+once, not the normal quit (#964): the workspace locks (a `plaintext_dev` one is checkpointed and closed), and a review
+change still being saved or work in flight is dropped.
 
 **Behind a TLS-intercepting corporate proxy, `npm ci` can hang silently.** Run the one-shot
 bootstrap `scripts/setup-dev.{ps1,sh}` instead of a bare `npm ci`: it probes for and sets
@@ -92,6 +95,10 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   spelling. Vitest does not: from `c:\…` it stops at once with a message naming the real spelling.
   Change to it (PowerShell: `Set-Location 'C:\path\to\HilbertRaum'`) and run again. The cause and the
   build-side fix: [`docs/packaging.md`](docs/packaging.md) "Build paths — design record (#646)".
+- **The app-menu smoke takes the foreground.** `tests/integration/app-menu-electron-smoke.test.ts` drives a real, shown
+  Electron window and presses keys in it, so it needs the active window: another app (or a second Electron run) taking
+  the foreground mid-run costs a key step its activation (the runner repeats such a step up to three times, then the row
+  fails). Run it alone, and do not click into another window while it runs.
 - **From `apps/desktop`** the direct forms work too: `npx vitest run tests/unit/some-file.test.ts`,
   `npx vitest run -t "a test-name substring"` and `npm run test:watch`.
 - **Window security wiring is pin-tested.** The `webPreferences` hardening flags, the CSP
@@ -118,6 +125,12 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   wall-clock advance for timestamp ordering, a timeout simulation where the timer IS the semantics, a
   single-macrotask hop with no observable — must carry a comment saying so; everything else
   is a bug.
+- **Every wait's ceiling comes from `tests/helpers/hang-budget.ts`.** `vi.waitFor` takes
+  `{ timeout: hangBudgetMs(n) }` (5000 is the usual n); a bare testing-library wait inherits the default that
+  `tests/setup.ts` raises to the same budget, and passes `{ timeout: hangBudgetMs(n) }` only to go
+  above it (a number of 5000 or more; the hygiene row refuses a smaller one, which would be narrower than the default); a heavy row takes `testBudgetMs(…)` as its per-test
+  timeout. A literal `timeout:` never widens on CI, so it is not allowed. The repo-hygiene row
+  "every wait takes its ceiling from hang-budget" enforces it.
 - **Type renderer stub payloads — don't reach for `as never`.** `stubApi(overrides)` takes
   `Partial<PreloadApi>` (`tests/helpers/renderer.ts`) so a stub's shape is checked against the real
   preload bridge; a blanket `... as never` opts it out, and a later shared-type rename leaves the
@@ -203,10 +216,17 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   that scripts finish reasons, caps and a Stop. The whole-doc truncation and map-reduce suites carried
   verbatim copies of the harness, and rag.test and the map-reduce suite each had their own finish fake.
 - **A registrar's locked-vault proof is its `MODULES` entry in `ipc-lock-coverage.test.ts`**, which
-  drives every channel and names each exempt one with its reason. A hand-picked lock test in the
+  drives every channel in both `POSTURES` (a locked workspace, and an open one mid-lock with the
+  AUD-02 latch armed) and names each exempt one with its reason. A hand-picked lock test in the
   module's own suite drifts: docs-ipc's checked 5 of the 14 gated `docs:*` channels, and
   doctasks-ipc's checked 1 of 3. A module with its own locked sentence names it (`lockedCopy`): the shared
   "Workspace is locked." prefix matched chat throwing the benchmark's sentence.
+- **A lock-latch proof arms the teardown latch, not only a locked workspace.** "Lock now" keeps the
+  database open for its whole teardown, so a guard reverted to a bare `isUnlocked()` still refuses a
+  locked workspace and admits the call mid-lock. local-api-ipc's key-channel row and the lifecycle's
+  start refusal stayed green with that revert (both arm the latch now). Drive
+  `{ isUnlocked: () => true, isLocking: () => true }` too, or park a real lock as
+  `lock-admission-race.test.ts` does.
 - **An IPC copy of a service guard needs an IPC-specific risk** (routing, a sender check, the lock
   gate, error mapping). doctasks-ipc re-proved the manager's "refuse while chat streams" and
   "exactly two documents" checks through a handler that forwards them unchanged, while the one IPC
@@ -358,8 +378,17 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **A positive row must reach the branch its title names.** chat-compaction's "still fits the context window after
   compaction" used a 1,500-token window the compacted history never exceeded, so the trim it claimed never ran.
   Size the input past the branch's threshold and break the branch once to watch the row go red.
+- **A renderer row fails on an unmocked `window.api` call (#832).** `tests/setup.ts` runs `assertNoUnexpectedApiCalls()` in an
+  `afterEach` for every renderer file, after the file's own `afterEach(cleanup)`; a suite does not opt in, and a repo-hygiene row pins the hook. Supply what the
+  screen reads at mount through a shared stub set: `chatScreenStubs` (below), `documentsScreenStubs`
+  (`tests/helpers/documents-screen.ts`: DocumentsScreen and the suites that mount it), `appShellStubs` (App and Home),
+  `diagnosticsEngineStubs` (`tests/helpers/settings-diagnostics.ts`) and `stubModelsApi`; a row-only read goes in that
+  row's own stubs. A suite that calls unmocked methods on purpose (`stubApi.test.ts`) ends each row with
+  `forgetUnexpectedApiCalls()`. `tests/unit/lazy-wrapper-specifier.test.ts` fails when a source file imports
+  `AssistantMarkdownLazy` by a spelling the vitest alias does not rewrite (the regex lives in
+  `tests/helpers/lazy-wrapper-alias.ts`).
 - **ChatScreen suites start from `tests/helpers/chat-screen.tsx`** and call `assertNoUnexpectedApiCalls()` in
-  `afterEach`. `chatScreenStubs` gives every call an idle chat screen makes a typed answer; `renderChatScreen`,
+  `afterEach` (the shared hook covers it, but the per-file call names the row sooner). `chatScreenStubs` gives every call an idle chat screen makes a typed answer; `renderChatScreen`,
   `fakeChatStream`, `deferred`, `chatDropBridge` and `flushFakeTimers` replace the per-suite copies. Before it each
   suite stubbed its own subset, the chat structure suites printed 495 unmocked-call warnings per run, and an unmocked
   read resolving `undefined` quietly decided which branch a row reached. The renderer factories sit beside it:
@@ -386,6 +415,14 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   settle with `flushFakeTimers()` (`tests/helpers/chat-screen.tsx`) and type with `fireEvent`. Dictation's no-signal
   rows fake `setInterval`, `clearInterval` and `Date` only and drive the shipped 2 s default, where a test-only 80 ms
   prop used to stand in for it. The conversation-search debounce row types with `fireEvent.change`.
+- **Never put an `expect` inside a bare `try { … } catch {}`.** The catch swallows the
+  `AssertionError` along with the error it was meant for: the local API's bind row fetched `[::1]`
+  that way and passed with `::1` never bound. Gate an optional leg on something observable instead
+  (that row now reads the server's own "IPv6 loopback bind failed" log line) and assert outside any catch.
+- **When the read path normalizes again, assert the stored row.** `getSettings` re-sanitizes what it
+  reads, so the benchmark-history and model-placement write-gate rows, which checked the read-back,
+  stayed green with the write-side normalizer deleted and junk stored. Read the raw `value_json` with
+  `rawSetting` (`tests/helpers/db-fixtures.ts`).
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

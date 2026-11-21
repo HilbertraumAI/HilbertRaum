@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
@@ -22,6 +23,8 @@ import {
 } from '../../src/main/services/doctasks'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
+import { watchRunWindowGone } from '../../src/main/services/ocr/window-gone'
+import { holdQueueOnQuit } from '../../src/main/close-guard'
 import { pagesToWalk, pipelinePages } from '../../src/main/services/ocr/pipeline'
 import { createPlaintextOps, type PlaintextOpsRegistry } from '../../src/main/services/ingestion/plaintext-ops'
 import { createMockEmbedder } from '../../src/main/services/embeddings'
@@ -38,6 +41,7 @@ import {
   docTaskManager,
   docTaskRuntime,
   docTaskWorld,
+  importText,
   waitTerminal,
   type DocTaskWorld
 } from '../helpers/doctask-fixtures'
@@ -284,6 +288,25 @@ describe('Make searchable (OCR) end to end', () => {
     // The walk stopped at the cancel: page 2 is never read. Page 1, released after the cancel, may be (the row below
     // owns the pre-persist check).
     expect(engine.calls).toBeLessThan(2)
+    expect(getDocumentOcrPages(w.db, docId)).toBeNull()
+    expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
+  })
+
+  // #910 review SF-1: a quit the close guard holds (Ctrl+Q, ⌘Q, Dock Quit) closes the rasterizer's window before the
+  // quit's own cancel reaches the task; the rasterizer then rejects with an AbortError while the task's signal is not
+  // aborted yet. That is the quit's cancel, read by the error's name: cancelled, no "failed" audit entry, nothing kept.
+  it('an AbortError from the rasterizer ends the task cancelled: nothing persisted, no failure recorded (#910)', async () => {
+    const docId = await importScan(w)
+    const engine = fakeOcrEngine({ text: 'never persisted' })
+    const rasterize: RasterizePdf = async (_pdf, o) => {
+      o.onPageCount?.(2)
+      await o.onPage(1, Buffer.from([1]))
+      throw new DOMException('PDF rasterization aborted', 'AbortError')
+    }
+    const manager = ocrManager(engine, rasterize, { audit: dbAudit(w.db) })
+    const status = await waitTerminal(manager, manager.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
+    expect(status.state).toBe('cancelled')
+    expect(listAuditEvents(w.db, { limit: 50 }).map((e) => e.type)).not.toContain('document_task_failed')
     expect(getDocumentOcrPages(w.db, docId)).toBeNull()
     expect(getDocument(w.db, docId)?.scanDetected).toBe(true)
   })
@@ -766,5 +789,64 @@ describe('#232 dequeue-time guard (#232)', () => {
     expect(status.state).toBe('failed')
     expect(status.error).toMatch(/could not start/)
     expect(status.error).not.toMatch(/Something went wrong/)
+  })
+})
+
+// #936 with the real pieces: the OCR task (`runOcr`) over a rasterizer whose window the PRODUCTION
+// `watchRunWindowGone` watches, and the PRODUCTION `before-quit` belt (`holdQueueOnQuit`, as index.ts wires it).
+// A quit the close guard holds (Ctrl+Q on Linux, ⌘Q or Dock Quit on macOS) fires `before-quit`, then closes the OCR
+// window while the main window saves; `will-quit` comes only after the save (measured on Electron 43.8.6, follow-ups
+// wave 4 research B §0). Before the hold, the summary queued behind the OCR run started into that gap.
+describe('a quit the close guard holds, with an OCR run and a task waiting behind it (#936)', () => {
+  it('the OCR run ends cancelled, the waiting summary does not start during the save, and Keep open starts it', async () => {
+    const app = new EventEmitter()
+    const helper = new EventEmitter() // the rasterizer window's webContents
+    let helperDestroyed = false
+    let rendering!: () => void
+    const watchArmed = new Promise<void>((r) => (rendering = r))
+    // The rasterizer's shape: page 1 renders until its window goes; the watch decides what that means.
+    const rasterize: RasterizePdf = async (_pdf, o) => {
+      o.onPageCount?.(2)
+      let failPage: (err: Error) => void = () => undefined
+      const page = new Promise<never>((_, reject) => (failPage = reject))
+      const watch = watchRunWindowGone({
+        app,
+        webContents: helper,
+        isWindowDestroyed: () => helperDestroyed,
+        failPage: (err) => {
+          failPage(err)
+          return true
+        },
+        abortError: () => new DOMException('PDF rasterization aborted', 'AbortError'),
+        log: { warn: () => undefined }
+      })
+      try {
+        rendering()
+        return await page
+      } finally {
+        watch.dispose()
+      }
+    }
+    const runtime = docTaskRuntime()
+    const manager = ocrManager(fakeOcrEngine({ text: 'never read' }), rasterize, { getRuntime: () => runtime })
+    holdQueueOnQuit(app, () => manager.holdQueueForQuit())
+    const scan = await importScan(w)
+    const doc = await importText(w, 'A short text document about the harbour.', { name: 'notes.txt' })
+    const ocr = manager.startDocTask({ kind: 'ocr', documentIds: [scan] })
+    const summary = manager.startDocTask({ kind: 'summary', documentIds: [doc] })
+    await watchArmed
+
+    const ocrSettled = manager.awaitActiveTaskSettled()
+    app.emit('before-quit', { defaultPrevented: false }) // the quit…
+    helperDestroyed = true
+    helper.emit('destroyed') // …closes the OCR window while the guard holds the main one
+    await ocrSettled
+    expect(manager.getDocTask(ocr.jobId).state).toBe('cancelled')
+    expect(manager.getDocTask(summary.jobId).state).toBe('queued')
+    expect(runtime.calls).toHaveLength(0)
+
+    manager.releaseQueueHold() // Keep open on the unsaved question: the quit is off
+    expect((await waitTerminal(manager, summary.jobId)).state).toBe('done')
+    expect(runtime.calls).toHaveLength(1)
   })
 })

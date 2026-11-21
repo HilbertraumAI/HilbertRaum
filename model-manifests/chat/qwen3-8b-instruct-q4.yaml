@@ -14,6 +14,9 @@ recommended_min_ram_gb: 12
 # 12-14B tier moved to its honest 24.
 recommended_ram_gb: 16
 recommendation_rank: 1  # Phase-29: solid 8B incumbent, ranked below the winner Ministral
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 37/37 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 6055
 recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: false

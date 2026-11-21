@@ -216,7 +216,7 @@ describe('rerankerDeviceFor (step 4-5, ruling (d) — the headroom gate, B2)', (
     const chatModelNeedMib = estimateGraphicsNeedMib(CHAT_4B_MANIFEST)
     // Recorded per ruling (d): the computed headroom figures for this fixture.
     expect(budgetMib).toBe(11511) // the probe's own freeMb — used verbatim
-    expect(chatModelNeedMib).toBeCloseTo(3837.397345214844, 6)
+    expect(chatModelNeedMib).toBe(3277 + 1024) // §6.8: the measured projection plus the fit margin (the derived estimate read 3,837.4)
     expect(budgetMib! - chatModelNeedMib!).toBeGreaterThanOrEqual(RERANKER_HEADROOM_FLOOR_MIB)
     expect(rerankerDeviceFor(headroom({ probeDevices: [RTX_3080_TI], budgetMib, chatModelNeedMib }))).toBe('gpu')
   })

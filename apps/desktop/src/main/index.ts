@@ -1,21 +1,26 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
+import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
+import { recoverEngineSwaps } from './services/runtime-download'
 import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
+import { createMainWindowCloseGuard, holdQueueOnQuit, trackQuitRequests } from './close-guard'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
 import { appPageUrl, createMainWindowNavigationPredicate, devRendererUrl } from './app-protocol'
 import { installAppProtocol, registerAppSchemePrivileges } from './install-app-protocol'
+import { appMenuTemplate, mainWindowMenuBar } from './app-menu'
 import {
   NO_PROXY_SWITCH,
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
   createWindowOpenPolicy,
+  devToolsAllowed,
   disableSpellCheckerDownloads
 } from './window-security'
 import { getSettings } from './services/settings'
@@ -24,6 +29,7 @@ import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
+import { addLogRedactionRoots, currentAccountNames, setLogRedactionRoots } from './services/log-redact'
 import { initPerf, perfMark, perfMs } from './services/perf'
 import { createTrustedSenders } from './ipc/guarded-handle'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
@@ -82,7 +88,6 @@ import { createAuditRecorder } from './services/audit'
 import { RuntimeManager, type RuntimeStartOptions } from './services/runtime'
 import { occupiedLaneForDocTask } from './services/runtime/occupancy'
 import {
-  clearModelLoadLatch,
   createGpuCrashAutoFallback,
   createSelectingRuntimeFactory,
   createSpeculativeCrashAutoFallback,
@@ -94,14 +99,15 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { AppSettings } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import { resolveManifestsDir } from './services/models'
+import { resolveBundledManifestsDir, resolveManifestsDir, setManifestAppVersion } from './services/models'
+import { createModelStartCheck } from './services/model-start-check'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import {
+  afterModelInstalled,
   composeServices,
   composeTranslator,
   probeOcrEngine,
-  refreshTranscriberSlot,
   shouldReplaceTranslator
 } from './services/compose-services'
 import {
@@ -131,6 +137,17 @@ const isDev = !app.isPackaged
 // disk under the unsuffixed path (CHANGELOG notes the move).
 if (isDev) app.setPath('userData', `${app.getPath('userData')}-dev`)
 
+// #975: what Diagnostics shows and Copy / Save log hand out names these folders by placeholder (`<app-data>`, …) and
+// this computer's account as `<user>` (services/log-redact.ts). Registered here, before anything in the start can log
+// or fail; the drive root is added once `resolvePaths` has found it (initBackend). The log at rest keeps the paths.
+setLogRedactionRoots({
+  appData: app.getPath('userData'),
+  home: homedir(),
+  temp: tmpdir(),
+  app: [dirname(app.getPath('exe')), process.resourcesPath, app.getAppPath()],
+  account: currentAccountNames()
+})
+
 // #208: refuse to run a second instance on the same userData. Two live instances destroy
 // an encrypted vault: the second one's startup crash-sweep random-overwrites the first
 // one's plaintext working DB in place (on Windows the overwrite passes SQLite's share
@@ -148,6 +165,12 @@ if (!isPrimaryInstance) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
+    } else if (app.isReady()) {
+      // #910: no main window — macOS after the red button, or a quit teardown on any OS. The Dock
+      // click's path brings the window back, and opens none once a quit has begun (`onActivate`).
+      // Electron emits `second-instance` only after `ready` (its docs guarantee it); the check only keeps
+      // `createWindow` from ever running before `ready`, when no window can be made.
+      lifecycle.onActivate()
     }
   })
 }
@@ -187,14 +210,21 @@ function initBackend(): void {
   // launcher) gets no HILBERTRAUM_DRIVE_ROOT — detect the drive from the app's own location so
   // they still land on the drive's (possibly encrypted) workspace, not a silent fresh
   // app-data one. PORTABLE_EXECUTABLE_DIR is set by the electron-builder portable target
-  // (the exe extracts itself to a temp dir, so execPath alone would miss the drive).
-  const exeDriveRoot =
-    findPreparedDriveRoot(process.env.PORTABLE_EXECUTABLE_DIR) ??
-    findPreparedDriveRoot(dirname(app.getPath('exe')))
+  // (the exe extracts itself to a temp dir, so execPath alone would miss the drive), and
+  // APPIMAGE by a Linux AppImage (it runs from a FUSE mount). An empty override counts as unset.
+  const driveRoot = locateDriveRoot({
+    envOverride: process.env.HILBERTRAUM_DRIVE_ROOT,
+    portableExeDir: process.env.PORTABLE_EXECUTABLE_DIR,
+    appImagePath: process.env.APPIMAGE,
+    appImageDir: process.env.APPDIR,
+    exePath: app.getPath('exe')
+  })
   const paths = resolvePaths({
-    envRoot: process.env.HILBERTRAUM_DRIVE_ROOT ?? exeDriveRoot ?? undefined,
+    envRoot: driveRoot.root,
     fallbackRoot: app.getPath('userData')
   })
+  // #975: the drive root joins the roots registered at the top of this module, before anything here touches the drive.
+  addLogRedactionRoots({ driveRoot: paths.rootPath })
   ensureWorkspaceDirs(paths)
   initLogging(paths.logsPath)
   // Perf marks (opt-in, HILBERTRAUM_PERF_LOG=1) land beside app.log; buffered marks
@@ -203,7 +233,7 @@ function initBackend(): void {
   log.info('Workspace resolved', {
     root: paths.rootPath,
     preparedDrive: paths.isPreparedDrive,
-    detectedFromAppLocation: !process.env.HILBERTRAUM_DRIVE_ROOT && exeDriveRoot != null
+    detectedFromAppLocation: !driveRoot.fromOverride && driveRoot.root !== undefined
   })
 
   // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
@@ -257,12 +287,26 @@ function initBackend(): void {
   if (workspace.isRecoveryBlocked()) {
     // #242: the salvage of the last session's newest data is blocked by a held recovery
     // file; the crash sweep was skipped and the unlock IPC refuses until a retry lands it.
-    log.warn('Workspace recovery blocked: a recovery file is held by another program')
+    // #911: also a stat of `.enc` that failed other than ENOENT, or, with `.enc` missing, a `-wal` the replay could
+    // not empty (a full drive, another program reading the file): nothing was moved or shredded.
+    log.warn('Workspace recovery blocked: a recovery file is held, or a workspace file could not be read or replayed')
+  }
+  if (workspace.discardedOnlyCopy()) {
+    // #911 (owner decision D3): `.enc` was missing and the working copy, the only one, was damaged, so the start swept
+    // it. Content-free, no path; no marker and no audit type. The unlock then answers `vault_missing`.
+    log.warn('Workspace start: the working copy left with no encrypted file did not read as a workspace and was removed')
   }
   if (workspace.isNewerWorkspace()) {
     // #247: the plaintext database on disk was written by a newer build — left closed and
     // untouched; the gate reports `workspace_newer` (update the app).
     log.warn('Workspace not opened: its database was written by a newer build (update the app)')
+  }
+  const newerVaultFormat = workspace.newerVaultFormat()
+  if (newerVaultFormat) {
+    // #845: a vault artifact (descriptor, KDF, `.enc` frame, rekey journal) is in a newer build's
+    // format — startup wrote nothing (no salvage, sweep or rekey recovery); every unlock reports
+    // `workspace_newer`. Buffered like every pre-unlock line: this build never unlocks this vault.
+    log.warn('Workspace not opened: its vault format was written by a newer build (update the app)', newerVaultFormat)
   }
 
   // Settings are readable right away on a plaintext workspace — resolve the UI language
@@ -290,8 +334,27 @@ function initBackend(): void {
   const audit = createAuditRecorder(() => workspace.requireDb())
   for (const warning of policyWarnings) audit('policy_warning', warning)
 
+  // #847 (a+): every manifest discovery compares `min_app_version` with this one value; set before the first.
+  setManifestAppVersion(app.getVersion())
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
-  log.info('Model manifests directory', { manifestsDir })
+  // #842: the app's own copy, never the launcher's override — the engine pins, and the OCR installer's
+  // second list (per file, #841).
+  const bundledManifestsDir = resolveBundledManifestsDir({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath()
+  })
+  log.info('Model manifests directory', { manifestsDir, bundledManifestsDir })
+  // #986: an engine install swaps its folders by rename; a kill, an unplug or a crash between the
+  // renames leaves `<os>.new`/`<os>.old` beside the install. Finish or roll that back NOW, before
+  // anything resolves an engine binary: the transcriber slot below is chosen once, from whether
+  // whisper-cli is there, and the engine check (`startEngineCheck`) spawns the chat engine. Renames
+  // only on this path (milliseconds); deletes run in the background. Reads the app's own pins (#842).
+  recoverEngineSwaps(paths.rootPath, bundledManifestsDir, {
+    log: (m, meta) => log.info(m, meta),
+    // A refused move or delete, or a failure: the layout waits for the next start, worth a warning.
+    warn: (m, meta) => log.warn(m, meta)
+  })
 
   // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
   // Both are opt-in by availability — the selectors return the real backend only when
@@ -542,12 +605,28 @@ function initBackend(): void {
       manifestsDir
     })
   }
+  // #913 (C §913.3): the start check every non-chat role runs at its cold start, before it spawns its
+  // model — the chat start gate's rule for the other roles: a file a check found damaged never
+  // starts. Built by the exported factory (`services/model-start-check.ts`), so its row reads what
+  // production gets: the manifest by id, the policy-aware leniency chat uses (a locked workspace
+  // reads the developer toggle as off), and this workspace's hash store. The composers bind it to
+  // each role's model and hashing choice (required there, #913 review S3); vision binds it below.
+  const checkModel = createModelStartCheck({
+    manifestsDir,
+    paths,
+    isDev,
+    getSettings: readSettingsOrNull,
+    getDb: () => workspace.requireDb(),
+    // #959: a start check that finds a file damaged tells the Performance screen.
+    onVerdictChanged: notifyPerformanceChanged
+  })
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
   const { embedder, reranker, transcriber, transcriberMissing, ocrEngine, translator } = composeServices({
     rootPath: paths.rootPath,
     manifestsDir,
+    bundledManifestsDir,
     // M-5: dev-only binary env overrides are honoured only in a dev build.
     isDev,
     // Issue #42: the translation sidecar honours the same gpuMode/gpuAutoDisabled the chat
@@ -556,7 +635,8 @@ function initBackend(): void {
     // Wave 8 rulings (a)/(b)(Q)/(b)(G): consulted by `rerank()` on every call, never once per
     // cold start any more (see `createRerankerCallbacks`'s doc comment above).
     rerankerDevicePosture,
-    rerankerRequestCeiling
+    rerankerRequestCeiling,
+    checkModel
   })
   // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
@@ -671,6 +751,7 @@ function initBackend(): void {
     // (TG-3). Lazy — it spawns nothing until the first translate() of an available model.
     translator,
     manifestsDir,
+    bundledManifestsDir,
     probeGpu: gpuProbe,
     isDev,
     audit,
@@ -683,7 +764,9 @@ function initBackend(): void {
     pendingModelSwitches,
     // #782: the IPC layer's notices (a download stopped because internet access was switched off)
     // go out the way the runtime factories' do.
-    runtimeNotice: notifyRenderer
+    runtimeNotice: notifyRenderer,
+    // #913: so a transcriber refreshed after an install gets the same start check.
+    checkModel
   }
   // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
   // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the
@@ -713,7 +796,9 @@ function initBackend(): void {
     createRuntime: (status) => createVisionRuntimeFromContext(ctx as AppContext, status),
     // AUD-02: refuse for the whole lock teardown, not just this service's own stop() window —
     // an analyze admitted after that window would build a fresh vision sidecar that outlives it.
-    isWorkspaceLocking: () => workspace.isLocking()
+    isWorkspaceLocking: () => workspace.isLocking(),
+    // #913: the cache-only check (about 1 ms): vision is never hashed before its first start (G-4).
+    checkModel: (modelId, signal) => checkModel(modelId, { hash: false, signal })
   })
   // The Translate-view job orchestrator (TG-4). Built here — not inside registerTranslateIpc — so
   // the lock/quit teardown paths can reach it via `ctx.translateJobs` and abort an in-flight text
@@ -760,7 +845,8 @@ function initBackend(): void {
         rootPath: paths.rootPath,
         manifestsDir,
         isDev,
-        gpu: translationGpu
+        gpu: translationGpu,
+        checkModel
       },
       ctx.reranker
     )
@@ -772,21 +858,10 @@ function initBackend(): void {
   // above) and brings a model the demo runtime stands in for back on the engine, without a
   // lock/unlock, a restart or "Check again".
   rearmWhenChatEngineHeals(ctx)
-  ctx.onModelInstalled = (modelId) => {
-    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model FIRST —
-    // before any statement below can return early or throw (the download manager swallows the
-    // whole hook).
-    clearModelLoadLatch(modelId)
-    if (!ctx) return
-    // #634: the search model downloaded again (the repair "Check all model files" offers for a
-    // damaged file) — re-arm its failed-start latch, so the row's "then try again" works without a
-    // lock/unlock. Same id: the embedder is built from this manifest; a mock embedder never matches.
-    if (modelId === ctx.embedder.id) ctx.embedder.resetStartFailure?.()
-    // #497: BEFORE the translator refresh (a different slot), and never throwing — the
-    // download manager swallows the whole hook, so a throw here would skip the refresh below.
-    refreshTranscriberSlot(ctx)
-    ctx.refreshTranslatorSlot?.()
-  }
+  // #372 / #497 / #634 / #913 review S1: the chat ladder for this model, an empty transcriber slot, and
+  // every role that refused (the search model and the reranker by their id, the images cooldown, the
+  // translator slot). One hook body, shared with the rows (`afterModelInstalled`).
+  ctx.onModelInstalled = (modelId) => afterModelInstalled(ctx as AppContext, modelId)
   // The Performance screen's push (PR #303 P3, G6): every transition of the chat runtime
   // (starting / ready / stopped) and every resident sidecar loading or unloading (the
   // "Models on this computer" rows) tells every window to re-read `performance:get`. The
@@ -838,9 +913,9 @@ function initBackend(): void {
   registerImagesIpc(ctx, ctx.vision)
   registerTranslateIpc(ctx, ctx.translateJobs)
   registerDownloadIpc(ctx)
-  // #410: the OCR installer falls back to the APP-BUNDLED source list (no env override) when the
-  // drive's yaml carries no `ocr:` block.
-  registerEngineIpc(ctx, undefined, { bundledManifestsDir: resolveManifestsDir(app.getAppPath()) })
+  // The engine pins are `ctx.bundledManifestsDir` (#842); the OCR installer takes each file the
+  // drive's yaml does not pin with the right hash from it (#410, #841).
+  registerEngineIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   // The Performance screen's "last answer" figure: every finished chat answer's #290 speed
@@ -911,6 +986,9 @@ function createWindow(): void {
   // carries build/icon.ico (electron-builder embeds it), so build/ is not inside the
   // asar — this path only resolves in dev and on Linux, where the explicit icon matters.
   const iconPath = join(app.getAppPath(), 'build', 'icon.png')
+  // #912 (`app-menu.ts`): on Windows and Linux a released build hides the menu bar for good and a
+  // development build until Alt is pressed; the menu's shortcuts work either way.
+  const menuBar = mainWindowMenuBar({ platform: process.platform, packaged: app.isPackaged })
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -923,11 +1001,15 @@ function createWindow(): void {
     // theme tokens — --bg light/dark — before first paint; this only avoids a
     // mismatched flash while the window comes up).
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f7f8fa',
+    autoHideMenuBar: menuBar === 'autoHide',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      ...SECURE_WINDOW_WEB_PREFERENCES
+      ...SECURE_WINDOW_WEB_PREFERENCES,
+      // #912: no DevTools in a released build (window-security.ts); this window only.
+      devTools: devToolsAllowed(app.isPackaged)
     }
   })
+  if (menuBar === 'hidden') mainWindow.setMenuBarVisibility(false)
 
   // Content-Security-Policy as a response header (defence in depth on top of the
   // index.html meta tag, spec §3.5). The strings live in window-security.ts (TS-2),
@@ -936,7 +1018,10 @@ function createWindow(): void {
   // the app pages and, since #563, the print pages), and this hook adds its own copy there in
   // packaged builds (both measured attaching on the app pages, #560).
   const csp = buildCsp(isDev)
-  trustedSenders.add(mainWindow.webContents.id)
+  const win = mainWindow
+  // Read now: `webContents` is gone by the time `closed` fires.
+  const senderId = win.webContents.id
+  trustedSenders.add(senderId)
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -970,8 +1055,45 @@ function createWindow(): void {
   // (Electron's `app` docs) — it is a WINDOW event, `session-end`, after which the process is
   // killed. Lock the workspace synchronously in the handler (the crash path's `emergencyLock`,
   // shared closure with the quit handlers so it can never run beside a quit teardown). The
-  // window exists for the whole unlocked session on Windows (`window-all-closed` quits).
+  // window exists for the whole unlocked session on Windows: its last close quits the app (#910,
+  // `lifecycle.onMainWindowClosed` below), and Electron emits `session-end` on every window, so
+  // this one listener is enough.
   if (process.platform === 'win32') mainWindow.on('session-end', lifecycle.onSessionEnd)
+
+  // #888: every close of this window (X, Alt+F4, the taskbar, Ctrl+W, File → Exit, Cmd+Q, the
+  // macOS red button) first asks the window to save its pending edits — a review change inside
+  // its 600 ms pause, one whose save failed, the language pick — and closes exactly once after
+  // the answer or the bound; a change that could not be saved asks the user first. A close that
+  // came from a quit quits again (`close-guard.ts`). One guard per window: a macOS `activate`
+  // window gets its own; the quit flag is the app's (`quitRequests`, below).
+  // #935: on Windows and Linux (where this close quits) a close no quit started first asks while an
+  // OCR run or a document translation is running or waiting. #936: a close that quits holds the
+  // document-task queue (nothing new starts while the window saves); Keep open releases it.
+  const closeGuard = createMainWindowCloseGuard({
+    window: win,
+    app,
+    ipc: ipcMain,
+    dialog,
+    t: tMain,
+    quitRequests,
+    isShuttingDown: () => lifecycle.isShuttingDown(),
+    platform: process.platform,
+    listActiveDocTasks: () => ctx?.docTasks?.listActiveDocTasks() ?? [],
+    holdWork: () => ctx?.docTasks?.holdQueueForQuit(),
+    releaseWork: () => ctx?.docTasks?.releaseQueueHold(),
+    log
+  })
+  win.on('close', closeGuard.onClose)
+  // The window is gone: its sender id is no longer trusted, and `mainWindow` no longer points at a
+  // destroyed window, which `second-instance` would call: on macOS the app stays open, and on every
+  // OS a second launch can arrive during the quit teardown (up to 30 s after the window closed).
+  // #910: then the app quits on Windows and Linux, even while a hidden helper window (an OCR run, a
+  // PDF export's print) is still open; macOS stays open with no window (`shutdown.ts`).
+  win.on('closed', () => {
+    trustedSenders.delete(senderId)
+    if (mainWindow === win) mainWindow = null
+    lifecycle.onMainWindowClosed(closeGuard.closedForQuit())
+  })
 
   // Open external links in the OS browser, never inside the app window — policy in
   // window-security.ts (only http(s) reaches the OS handler; the in-app open is always
@@ -1010,7 +1132,10 @@ const lifecycle = createAppLifecycleHandlers({
   emergencyLock: () => emergencyLock(ctx),
   exit: (code) => app.exit(code),
   createWindow,
-  windowCount: () => BrowserWindow.getAllWindows().length,
+  // #910: the main window only; the hidden helper windows do not count.
+  mainWindowCount: () => (mainWindow === null ? 0 : 1),
+  platform: process.platform,
+  quit: () => app.quit(),
   killSidecarChildren: killRegisteredSidecarChildren,
   log
 })
@@ -1024,6 +1149,23 @@ app.whenReady().then(() => {
   // instance must not reach initBackend() — its workspace.init() crash-sweep is the very
   // thing that shreds the primary's live working DB.
   if (!isPrimaryInstance) return
+  // #964: the Linux legs. A SIGTERM (`kill`, `systemctl stop`), SIGINT (Ctrl+C) or SIGHUP (the terminal closed)
+  // locks the workspace at once and ends the app, as a Windows session end does; Electron's own handler made it an
+  // ordinary quit that the close guard's question could hold, and a second signal then killed the app unlocked.
+  // Registered HERE, after `ready`, never at module scope: Electron installs its own handlers for these signals
+  // after the main script has run and so replaces any listener registered at load time (measured on Electron 43.8.6
+  // Linux: a module-scope listener never fires; Electron's handlers are in place by `ready`). And FIRST in this
+  // callback, before anything that can throw (the back end, the protocol, the menu, the window), so a throw there
+  // cannot skip it. Never removed: removing the last listener leaves the signal at its default action, so the next
+  // one would kill the app with nothing locked. A lost session (the display or the D-Bus session bus gone, which is
+  // how a log-out usually arrives) emits neither `before-quit` nor `will-quit`, only `quit`: that leg locks if
+  // nothing has. Both share the quit closure (`createAppLifecycleHandlers`); `ctx` is read when they run.
+  if (process.platform === 'linux') {
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+      process.on(signal, () => lifecycle.onTerminationSignal(signal))
+    }
+    app.on('quit', () => lifecycle.onQuitEvent())
+  }
   perfMark('app_ready')
   // `app.getLocale()` is only meaningful after whenReady (R-L1: verified on Windows —
   // it returns a BCP-47 tag like "en-US"/"de"). Best guess until settings are readable.
@@ -1045,6 +1187,12 @@ app.whenReady().then(() => {
   const protocolT0 = performance.now()
   const appFiles = installAppProtocol(join(__dirname, '../renderer'))
   perfMark('app_protocol_installed', { ms: perfMs(protocolT0), files: appFiles })
+  // #912: the app's own menu (`app-menu.ts`) instead of Electron's default one, whose View → Reload
+  // drops a review change not saved yet and whose Toggle Developer Tools opens a console with
+  // `window.api`; a released build has neither. Set before the first window, which takes it.
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(appMenuTemplate({ platform: process.platform, packaged: app.isPackaged }))
+  )
   createWindow()
 
   app.on('activate', lifecycle.onActivate)
@@ -1055,6 +1203,15 @@ app.whenReady().then(() => {
   // time. Either ordering is safe by the shared closure (see `createAppLifecycleHandlers`).
   if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())
 })
+
+// #888: every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit) fires `before-quit` before it closes the
+// windows. Each main window's close guard reads and clears this app-level flag: a close it prevents
+// cancels that quit, so the guard quits again after the save. The quit an X starts on Windows and
+// Linux (#910) comes after the main window has closed, so no guard reads it.
+const quitRequests = trackQuitRequests(app)
+// #936: from the moment a quit begins, the document-task queue starts nothing new (a quit the guard
+// holds closes the OCR window while the main window saves). A guard's Keep open releases it.
+holdQueueOnQuit(app, () => ctx?.docTasks?.holdQueueForQuit())
 
 app.on('will-quit', lifecycle.onWillQuit)
 
@@ -1077,6 +1234,8 @@ process.on('unhandledRejection', (reason) => {
   log.warn('Unhandled rejection', { reason: String(reason) })
 })
 
+// A fallback only (#910): on Windows and Linux the main window's `closed` already quit, and Electron
+// does not emit this event during a quit. It still keeps macOS open with no window.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

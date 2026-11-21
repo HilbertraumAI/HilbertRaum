@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { countKeywordHits } from '../../src/main/services/skills/selector'
 import {
   APP_VOCAB_SKILL_IDS,
@@ -6,7 +7,9 @@ import {
   deriveMatch,
   entryMatches,
   isNeedleShaped,
+  isReportShaped,
   isSmallTalk,
+  isSmallTalkReply,
   routeEntries,
   routeMatch,
   suggestTerms,
@@ -170,6 +173,21 @@ describe('isNeedleShaped — needle-vs-deliverable classify (A3)', () => {
     expect(isNeedleShaped('tell me about the parties')).toBe(false)
     expect(isNeedleShaped('explain the agreement')).toBe(false)
   })
+
+  // #834: the every-mention example chip asks for every mention, a list. Pre-fix the German value was the one
+  // lookup among the 30 chip values (its «finde» is a needle word), so on a long document a whole-document skill
+  // sent it to the passage search while the English chip kept the whole read. Recognised by its frame in every
+  // catalog, whatever word the user puts in its quotes (`isMentionChip`, the router's own recognition).
+  const withOwnTerm = (chip: string): string => chip.replace(/(['„«“])[^'„«“”»]*(['“”»])/u, '$1force majeure$2')
+
+  it.each(UI_LANGUAGE_CODES)('%s: the every-mention chip is no single-fact lookup, whatever word it quotes', (code) => {
+    const chip = t(code, 'chat.example.indemnity')
+    const ownTerm = withOwnTerm(chip)
+    expect(ownTerm, 'the chip quotes its example word').not.toBe(chip)
+    for (const question of [chip, ownTerm, `${chip}.`, `${ownTerm} ?`]) {
+      expect(isNeedleShaped(question), question).toBe(false)
+    }
+  })
 })
 
 // W7 (audit §3.2/§3.3/§3.4) — answer-shape + classifier vocabulary tuning. Each probe from the findings
@@ -293,6 +311,58 @@ describe('isSmallTalk — the ten interface languages (#809)', () => {
   })
 })
 
+// #963 (follow-ups wave 5 owner call G-1): which messages in a documents chat get the short small-talk reply instead of
+// an answer from the documents. Stricter than `isSmallTalk`. Review round: a question mark anywhere, in any script, makes
+// a question (G-1), except in a chit-chat question to the assistant; a thanks or acknowledgement formula follows that
+// rule (G-2); and without a question mark the reply needs a social word: thanks, a greeting, a goodbye or praise (G-3).
+describe('isSmallTalkReply — the short small-talk reply (#963)', () => {
+  it.each([
+    // Thanks, greetings and goodbyes in the ten languages.
+    'Danke!', 'Thanks!', 'Merci !', 'Vielen Dank!', 'Thank you very much', 'Gracias', 'Grazie mille!', 'Bedankt!',
+    'Dziękuję!', 'Teşekkürler', 'Спасибо!', 'Дякую!', 'Hi', 'Hallo', '¡Hola!', 'Bonjour !', 'Buongiorno', 'Hoi',
+    'Cześć!', 'Merhaba', 'Привет!', 'Привіт!', 'Bye', 'Tschüss', 'Thanks a lot, bye!', 'Au revoir',
+    // Praise, alone or with an acknowledgement (G-3: praise is social).
+    'Great, thanks!', 'Super, danke!', 'Ok thanks', 'Perfect', 'Perfetto!', 'Génial', 'Geweldig', 'Świetnie!',
+    'Harika', 'Отлично!', 'Чудово', 'Відмінно',
+    // Thanks and acknowledgement formulas without a question mark (G-2).
+    'Passt', 'Passt, danke!', 'Vale gracias', 'De acuerdo, gracias', 'Va bene grazie', 'Peki teşekkürler',
+    // Chit-chat questions to the assistant, with their question mark (G-2).
+    'How are you?', 'What can you do?', "Wie geht's?", 'Who are you?', 'Tell me a joke', '¿Qué tal?',
+    'Comment ça va ?', 'Come va?', 'Hoe gaat het?', 'Co słychać?', 'Nasılsın?', 'Что ты умеешь?', 'Як справи?'
+  ])('%s → the short reply', (q) => {
+    expect(isSmallTalkReply(q)).toBe(true)
+  })
+
+  it.each([
+    // G-1: a question mark anywhere, in any script.
+    'Sure?', 'Alles?', 'All?', 'Alles gut?', 'All good?', 'So much?', 'Genau?', 'Bitte?', 'Klar?', 'Okay?', 'Merci ?',
+    'Sure?!', 'Alles? 🙂', '¿Bien?', '¿Claro', 'Sure? Thanks', 'Gut? Danke!', 'So much? ok', 'All good? Great, thanks!',
+    'Alles klar? Danke', 'Sure\uFF1F', 'Alles\uFF1F', 'Sure\u203D', 'Sure\u2047', 'Sure\u2048', 'Sure\u2049',
+    'Sure\u061F',
+    // … also with a thanks in the message, so only the question mark sends it to the documents
+    'Danke\uFF1F', 'Thanks\u203D', 'Thanks\u2047', 'Thanks\u2048', 'Thanks\u2049', 'Danke\u061F',
+    '\u00BFGracias', 'Alles klar\uFF1F Danke',
+    // G-2: a thanks or acknowledgement formula with a question mark.
+    'Passt?', 'Vale?', '¿Vale?', '¿De acuerdo?', 'Ok va bene?', 'Va bene grazie?', 'Все понятно?', 'Всё понятно?',
+    'Peki?', 'Відмінно?', 'Tres bien ?', 'Thanks a lot?',
+    // G-3: acceptance and filler words alone answer the assistant's own question or offer.
+    'ok', 'Sure', 'All', 'All please', 'Alles', 'Alles bitte', 'Bitte', 'Klar', 'Genau', 'Alles klar', 'you sure',
+    'Sounds good', 'Claro', 'Vale', 'Listo', 'De acuerdo', "D'accord", 'Entendu', 'Très bien', 'Certo', 'Prego',
+    'Ok va bene', 'Goed', 'Proszę', 'Dobrze', 'Jasne', 'Tamam', 'Peki', 'Ладно', 'Хорошо', 'Пожалуйста', 'Гаразд',
+    'Добре', 'Будь ласка',
+    // Real questions, and the yes-words the lists leave out.
+    'Ok, and the deposit?', 'Danke, was ist mit der Kaution?', 'Wer ist der Mieter?', 'Yes', 'Gerne', 'Weiter', '', '   '
+  ])('%s → reads the documents', (q) => {
+    expect(isSmallTalkReply(q)).toBe(false)
+  })
+
+  it('a filler question or answer stays small talk to the whole-document opt-outs', () => {
+    for (const q of ['Sure?', 'Alles?', 'Bitte?', 'Alles gut?', 'Sure\uFF1F', 'Passt?', '¿Vale?', 'ok', 'Alles bitte', 'Vale', 'Ладно']) {
+      expect(isSmallTalk(q), q).toBe(true)
+    }
+  })
+})
+
 describe('W7 — SKA-19 synthesis asks veto the needle (§3.3)', () => {
   it('the extended deliverable synonyms keep a "what is the …" synthesis ask on the whole-doc engine', () => {
     for (const q of [
@@ -319,5 +389,44 @@ describe('W7 — SKA-45 word-anchored needle/deliverable shapes (§3.4)', () => 
     expect(isNeedleShaped('sind das wirklich alle')).toBe(false)
     // …and does not fire inside 'alles' (word boundary before the 's').
     expect(isNeedleShaped('wie viele Positionen sind es')).toBe(true) // no 'alle' → stays a needle
+  })
+})
+
+// #939 review S1: "find a" was a substring, so "Find all deadlines" and "Find any deadline", a list, read as a
+// single-fact lookup and went to the passage search over a long document (now with only the skill's rules, #831).
+describe('isNeedleShaped — "find a" is a word (#939 review)', () => {
+  it.each([
+    ['Find all deadlines', false],
+    ['Find any deadline in this contract', false],
+    ['find all action items', false],
+    ['Find a deadline in this contract', true],
+    ['find an invoice number', true],
+    ['Can you find a clause about pets?', true]
+  ] as const)('%s → %s', (question, expected) => {
+    expect(isNeedleShaped(question)).toBe(expected)
+  })
+})
+
+// #939 review B1: a request for the skill's report keeps the whole-document map prompt as it was, even with a list
+// word in it; a plain list request and the every-mention chip are no report.
+describe('isReportShaped — a report request, list word or not (#939 review)', () => {
+  it.each([
+    ['Erstelle das Protokoll mit allen Beschlüssen', true],
+    ['Write the minutes including every action item', true],
+    ['Give me the minutes of the meeting, listing every decision', true],
+    ['Brief this contract. List all risks.', true],
+    ['Summarize all the decisions', true],
+    ['Review every clause for risks', true],
+    ['List all action items', false],
+    ['List every deadline in this contract', false],
+    ['Liste alle Fristen auf', false],
+    ['When is each payment due?', false]
+  ] as const)('%s → %s', (question, expected) => {
+    expect(isReportShaped(question)).toBe(expected)
+  })
+
+  it.each(UI_LANGUAGE_CODES)('%s: the summarize chip is a report, the every-mention chip is none', (code) => {
+    expect(isReportShaped(t(code, 'chat.example.summarize'))).toBe(true)
+    expect(isReportShaped(t(code, 'chat.example.indemnity'))).toBe(false)
   })
 })

@@ -20,7 +20,7 @@ import {
   translatePickedFile,
   type FileTranslateErrorCode
 } from '../lib/fileTranslateSession'
-import { localizeServerCopy } from '../lib/displayMap'
+import { classifyServerCopy, localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
 import { translationRanOnProcessor } from '@shared/runtime-status'
@@ -63,6 +63,8 @@ const ERR_KEY: Partial<Record<ClientTranslateError, MessageKey>> = {
   startFailed: 'translate.err.startFailed',
   // #530: the OS refused to start the engine program — not a memory problem.
   engineCannotRun: 'translate.err.engineCannotRun',
+  // #913: a check found the model's file damaged — download it again, not a memory problem either.
+  modelDamaged: 'translate.err.modelDamaged',
   empty: 'translate.err.empty',
   sameLang: 'translate.err.sameLang',
   tooLong: 'translate.err.tooLong'
@@ -572,6 +574,8 @@ export function TranslateScreen({
   // Banner reconciliation (priority: client guard → text-job failure → file-path failure). At most
   // one path is non-idle at a time, so these never collide in practice; the priority is a tie-break.
   let bannerText: string | null = null
+  // #807: a failed source document's own words, under the lead `bannerText` then holds.
+  let bannerDetail: string | null = null
   let dismissBanner: () => void = () => {}
   // #570 parity: a scanned PDF is fixed in Documents (Make searchable), so its banner links there.
   let bannerToDocuments = false
@@ -584,13 +588,21 @@ export function TranslateScreen({
     // failed state is persistent; a component-local dismiss flag would reset).
     dismissBanner = () => acknowledgeError()
   } else if (fileTx.state === 'failed') {
-    // Doc-task failure messages are persist-canonical ENGLISH — localize at display time via
-    // the DR-7 map, like DocumentsScreen does for the same family (full-audit 2026-07-11
-    // CODE-42). Unknown strings pass through unchanged.
-    bannerText =
-      fileTx.errorMessage != null
-        ? localizeServerCopy(t, fileTx.errorMessage)
-        : t(fileTx.error ? FILE_ERR_KEY[fileTx.error] : 'translate.file.err.runtimeFailed')
+    if (fileTx.documentError != null) {
+      // FE-3 / #807: the source document's stored error, read as DocRow reads it on the Documents screen: a message the
+      // display map knows reads alone, translated; any other (a parser's own words, "Invalid PDF structure.") is the
+      // detail under the same translated lead, so the banner and the row say the same about the same file.
+      const copy = classifyServerCopy(t, fileTx.documentError)
+      bannerText = copy.recognized ? copy.text : t('docs.failed.lead')
+      bannerDetail = copy.recognized ? null : copy.text
+    } else {
+      // A doc-task's or an IPC call's message: run through the DR-7 map like DocumentsScreen does for the same family
+      // (full-audit 2026-07-11 CODE-42). Unknown strings pass through unchanged.
+      bannerText =
+        fileTx.errorMessage != null
+          ? localizeServerCopy(t, fileTx.errorMessage)
+          : t(fileTx.error ? FILE_ERR_KEY[fileTx.error] : 'translate.file.err.runtimeFailed')
+    }
     dismissBanner = () => resetFileTranslation()
     bannerToDocuments = fileTx.error === 'scanned'
   }
@@ -604,6 +616,7 @@ export function TranslateScreen({
           screen readers, so ALL translate errors (runtimeFailed/startFailed/doc-task failures)
           now announce reliably; the visible Banner mounts inside the stable region. */}
       <ErrorBanner message={bannerText} onDismiss={bannerText ? dismissBanner : undefined} t={t}>
+        {bannerDetail != null && <p>{bannerDetail}</p>}
         {bannerToDocuments && (
           <div className="actions">
             <Button size="sm" onClick={() => onNavigate('documents')}>

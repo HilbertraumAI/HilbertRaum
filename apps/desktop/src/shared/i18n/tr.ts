@@ -1058,6 +1058,11 @@ export const tr: UiCatalog<'tr'> = {
   'models.library.translation': 'Çeviri',
   'models.library.images': 'Görseller',
   'models.library.voice': 'Ses',
+  'models.newerApp.heading': 'Daha yeni bir HilbertRaum sürümü gerekli',
+  'models.newerApp.badge': 'Yeni sürüm gerekli',
+  'models.newerApp.hint':
+    'Bu model HilbertRaum’un daha yeni bir sürümü için. Kullanmak için bu bilgisayardaki uygulamayı ' +
+    'güncelleyin.',
   'models.library.memory': 'Gereken bellek: en az {size}',
   'models.library.clear': 'Filtreleri temizle',
   'models.library.showVariants': 'Tüm varyantları göster ({count})',
@@ -1083,10 +1088,14 @@ export const tr: UiCatalog<'tr'> = {
   'models.state.installed': 'Kurulu',
   'models.state.missing': 'İndirilmedi',
   'models.state.checksumFailed': 'Doğrulanamıyor',
+  'models.state.noChecksum': 'Sağlama toplamı yok',
   'models.state.unsupported': 'Desteklenmiyor',
   'models.state.notRecommended': 'Önerilmez',
   'models.state.ready': 'Hazır',
   'models.state.running': 'Çalışıyor',
+  'models.noChecksum.hint':
+    'Bu modelin kayıtlı bir sağlama toplamı yok; bu yüzden yalnızca, ilkesi doğrulanmamış modellere ' +
+    'izin veren bir sürücüde geliştirici modunda çalışır.',
   'models.badge.notResponding': 'Yanıt vermiyor',
   'models.notRespondingHint':
     'Yapay zekâ modeli yanıt vermeyi bıraktı. Yeniden başlatmak genellikle sorunu çözer.',
@@ -1205,6 +1214,18 @@ export const tr: UiCatalog<'tr'> = {
   'models.engine.downloadingNoTotal': 'Yapay zekâ motoru indiriliyor…',
   'models.engine.verifying': 'Yapay zekâ motoru doğrulanıyor…',
   'models.engine.extracting': 'Yapay zekâ motoru arşivden çıkarılıyor…',
+  'models.engineConfirm.chatEngine': 'Yapay zekâ motoru (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Ses motoru (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'yalnızca işlemci için yedek derleme',
+  'models.engineConfirm.version': 'Sürüm',
+  'models.engineConfirm.total': 'Toplam boyut',
+  'models.engineConfirm.licenseIncludes': '{license}; ayrıca şunu içerir: {bundled}',
+  'models.engineConfirm.hint':
+    'Her dosya gösterilen adresten indirilir ve kullanılmadan önce beklenen sağlama toplamıyla ' +
+    'karşılaştırılır. Sizinle veya belgelerinizle ilgili hiçbir şey gönderilmez.',
+  'models.engineConfirm.updateNote':
+    'Modeliniz indirme sürerken yanıt vermeye devam eder. Yalnızca dosyalar değiştirilirken birkaç ' +
+    'saniye duraklar.',
   'models.voiceEngine.title': 'Sesle dikte ekleyin (isteğe bağlı)',
   'models.voiceEngine.explain':
     'Sohbet ve belge yanıtları bu sürücüde zaten çalışıyor. Ses motoru isteğe bağlıdır; yalnızca ' +
@@ -1257,7 +1278,8 @@ export const tr: UiCatalog<'tr'> = {
     'Uygulama bu işletim sisteminde ses motorunu henüz kuramıyor; bu yüzden bu model burada ' +
     'sesle dikteyi veya ses içe aktarmayı etkinleştirmez.',
   'models.vision.installed':
-    'Kurulu – Görseller ekranında otomatik olarak kullanılır. Burada başlatılacak bir şey yok.',
+    'Kurulu – Görseller ekranı hangi görsel modelini kullanacağını otomatik olarak seçer. Burada ' +
+    'başlatılacak bir şey yok.',
   'models.vision.notInstalled':
     'Kurulduktan sonra Görseller ekranında otomatik olarak kullanılır; ek ayar gerekmez.',
   'models.vision.goToImages': 'Görseller ekranına git',
@@ -1846,6 +1868,12 @@ export const tr: UiCatalog<'tr'> = {
   'diag.audit.model_download_started': 'İndirme başlatıldı',
   'diag.audit.model_download_verified': 'İndirme doğrulandı',
   'diag.audit.model_download_failed': 'İndirme başarısız oldu',
+  'diag.audit.engine_install_started': 'Motor veya araç indirmesi başlatıldı',
+  'diag.audit.engine_install_finished': 'Motor veya araçlar kuruldu',
+  'diag.audit.engine_install_failed': 'Motor veya araç kurulumu başarısız oldu',
+  'diag.audit.ocr_install_started': 'OCR dosyalarının indirilmesi başlatıldı',
+  'diag.audit.ocr_install_finished': 'OCR dosyaları kuruldu',
+  'diag.audit.ocr_install_failed': 'OCR dosyalarının kurulumu başarısız oldu',
   'diag.audit.document_imported': 'Belge içe aktarıldı',
   'diag.audit.document_reindexed': 'Belge yeniden dizinlendi',
   'diag.audit.document_deleted': 'Belge silindi',
@@ -1864,6 +1892,7 @@ export const tr: UiCatalog<'tr'> = {
   'diag.audit.workspace_lock_failed':
     'Kilitleme denemesi başarısız oldu (çalışma alanının kilidi açık kaldı)',
   'diag.audit.workspace_password_changed': 'Çalışma alanı parolası değiştirildi',
+  'diag.audit.workspace_working_copy_lost': 'Son değişiklikler kayboldu',
   'diag.audit.settings_changed': 'Ayarlar değiştirildi',
   'diag.audit.local_api_toggled': 'Yerel API açıldı veya kapatıldı',
   'diag.audit.policy_warning': 'İlke bildirimi',
@@ -1978,6 +2007,8 @@ export const tr: UiCatalog<'tr'> = {
   'perf.model.title': 'Modeliniz',
   'perf.model.line.one': '{model} · sürücüde {size}\u00A0GB · {context} token bağlam',
   'perf.model.line.other': '{model} · sürücüde {size}\u00A0GB · {context} token bağlam',
+  'perf.model.lineNoSize.one': '{model} · {context} token bağlam',
+  'perf.model.lineNoSize.other': '{model} · {context} token bağlam',
   'perf.model.none': 'Henüz model seçilmedi. Yapay zekâ modeli ekranında bir model seçin.',
   'perf.model.need': 'Bu bağlamla {need}\u00A0GB gerektirir.',
   'perf.model.needEstimate':
@@ -2049,12 +2080,16 @@ export const tr: UiCatalog<'tr'> = {
   'perf.models.device.processor': 'işlemci',
   'perf.models.loaded': 'şu an yüklü',
   'perf.models.notLoaded': 'yüklü değil',
+  'perf.models.notOnDrive': 'bu sürücüde yok',
+  'perf.models.damaged': 'dosya denetiminden geçemedi',
+  'perf.models.noChecksum': 'kayıtlı sağlama toplamı yok',
   'perf.models.lifetime.session': 'yüklü kalır',
   'perf.models.lifetime.idle': 'boştayken bellekten çıkarılır',
   'perf.models.lifetime.per-use': 'yalnızca iş sırasında çalışır',
   'perf.models.split': 'kartta {gpuLayers} / {layers} katman',
   'perf.models.card':
     'Ekran kartı: sohbet {chat}\u00A0GB + çeviri {translation}\u00A0GB; kart belleği {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Ekran kartı: sohbet {chat}\u00A0GB; kart belleği {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Ekran kartı: sıralama {reranker}\u00A0GB; kart belleği {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'İkisi de şu anda kartta. İkinci başlayan, kalan belleği aldı ve daha yavaş çalışıyor; ' +
@@ -2265,6 +2300,24 @@ export const tr: UiCatalog<'tr'> = {
     'Bu sürücüdeki çalışma alanını açmak için parolanızı girin. Her şey bu sürücüde kalır.',
   'gate.unlock.submit': 'Kilidi aç',
   'gate.unlock.submitBusy': 'Kilit açılıyor…',
+  'gate.unlock.workingCopyLost':
+    'Çalışma alanının sürücüdeki çalışma dosyası silindi veya hasar gördü. Çalışma alanınız, en son ' +
+    'kilitlendiği veya uygulamanın en son kapatıldığı andaki hâliyle korunuyor; o zamandan beri ' +
+    'yapılan değişiklikler kayboldu.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum son kapandığında çalışma alanınız kilitlenmedi. Sürücü çıkarılmış, bilgisayarın ' +
+    'elektriği kesilmiş veya uygulama zorla durdurulmuş olabilir. Çalışma alanınız en son ' +
+    'kilitlendiği andaki hâliyle açılır; o zamandan beri yapılan değişiklikler varsa kayboldu. Bir ' +
+    'dahaki sefere sürücüyü çıkarmadan önce HilbertRaum uygulamasını kapatın.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum son kapandığında sürücü dolu olduğu için çalışma alanınız kilitlenemedi. Çalışma ' +
+    'alanınız en son kilitlendiği andaki hâliyle açılır; o zamandan beri yapılan değişiklikler varsa ' +
+    'kayboldu. Devam etmeden önce sürücüde boş alan olduğundan emin olun; aksi hâlde bir sonraki ' +
+    'kilitleme de değişikliklerinizi kaydedemez.',
+  'gate.unlock.encryptedFileMissing':
+    'Çalışma alanının şifreli dosyası sürücüde yoktu, bu yüzden HilbertRaum son oturumunuzun ' +
+    'bıraktığı şifrelenmemiş kopyayı sakladı. Yeniden şifrelemek için şimdi kilidi açın, ardından ' +
+    'dosyayı neyin sildiğini öğrenin (örneğin bir eşitleme veya temizleme aracı).',
   'gate.welcome.title': 'Hoş geldiniz',
   'gate.welcome.intro':
     'Burası özel yapay zekâ çalışma alanınız. Bir yapay zekâ modeliyle sohbet edin ve ' +
@@ -2329,6 +2382,11 @@ export const tr: UiCatalog<'tr'> = {
   'main.ingest.voiceEngineCannotRun':
     'Ses motoru bu bilgisayarda çalışamıyor; bu yüzden bu kayıt yazıya dökülemedi. Ne yapmanız ' +
     'gerektiği Yapay zekâ modeli ekranında gösteriliyor; ardından bu belgeyi yeniden dizinleyin.',
+  'main.ingest.voiceModelPathUnsupported':
+    'Windows’ta ses motoru konuşma modelini açamıyor, çünkü modelin yolundaki bir klasör veya dosya ' +
+    'adı bir umlaut, aksanlı bir harf ya da başka bir ASCII dışı karakter (ç, ğ, ı, ş gibi) ' +
+    'içeriyor. Modeli bu tür karakterler içermeyen bir yola taşıyın ve modelin manifestindeki ' +
+    'kaydını güncelleyin; ardından bu belgeyi yeniden dizinleyin.',
   'main.ingest.searchModelTimeout':
     'Arama modeli zamanında yanıt vermedi; bu yüzden bu belge dizinlenemedi. Yeniden deneyin.',
   'main.ingest.searchModelCannotStart':
@@ -2412,6 +2470,25 @@ export const tr: UiCatalog<'tr'> = {
     'dosyasından geliyor. Tarayıcınız bu siteye bağlanacak.',
   'main.dialog.openLink.open': 'Bağlantıyı aç',
   'main.dialog.openLink.cancel': 'İptal',
+  'main.dialog.unsavedReview.title': 'İncelemedeki bazı değişiklikler kaydedilemedi.',
+  'main.dialog.unsavedReview.message': 'İncelemedeki bazı değişiklikler kaydedilemedi.',
+  'main.dialog.unsavedReview.detail':
+    'Şimdi kapatırsanız bu değişiklikler kaybolur. Sürücünün hâlâ takılı olduğunu ve boş alanı ' +
+    'bulunduğunu kontrol edin, ardından yeniden deneyin.',
+  'main.dialog.unsavedReview.tryAgain': 'Yeniden dene',
+  'main.dialog.unsavedReview.keepOpen': 'Açık bırak',
+  'main.dialog.unsavedReview.closeAnyway': 'Yine de kapat',
+  'main.dialog.taskRunning.title': 'Bir belge görevi henüz bitmedi.',
+  'main.dialog.taskRunning.message': 'Bir belge görevi henüz bitmedi.',
+  'main.dialog.taskRunning.detailOcr':
+    'Şimdi kapatırsanız taramanın okunması durur ve şimdiye kadar okunan sayfalar kaybolur.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Şimdi kapatırsanız çeviri durur ve şimdiye kadar çevrilen kısım kaybolur.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Şimdi kapatırsanız çalışan ve bekleyen belge görevleri durur ve şimdiye kadar yapılan iş ' +
+    'kaybolur.',
+  'main.dialog.taskRunning.keepOpen': 'Açık bırak',
+  'main.dialog.taskRunning.closeAnyway': 'Yine de kapat',
   'main.workspace.wrongPassword':
     'Bu parola çalışma alanınızın kilidini açmadı. Parolayı kontrol edip yeniden deneyin.',
   'main.workspace.openFailed': 'Çalışma alanı açılamadı.',
@@ -2419,6 +2496,24 @@ export const tr: UiCatalog<'tr'> = {
     'Parolanız doğru, ancak sürücüdeki çalışma alanı verileri hasarlı ve açılamadı. Parolayı ' +
     'yeniden yazmak işe yaramaz. Yeni bir çalışma alanı oluşturmayın: dosyaları olduğu gibi ' +
     'bırakın ve çalışma alanı klasörünü bir yedekten geri yükleyin.',
+  'main.workspace.vaultMissing':
+    'Parolanız doğru, ancak çalışma alanının şifreli dosyası sürücüde yok ve onu kurtarmak için ' +
+    'hiçbir kopya kalmadı. Yeni bir çalışma alanı oluşturmayın. Dosyayı yerine koyun veya çalışma ' +
+    'alanı klasörünü bir yedekten geri yükleyin.',
+  'main.workspace.descriptorMissing':
+    'Çalışma alanınızın anahtarını tutan dosya (config/workspace.json) sürücüde yok veya okunamıyor, ' +
+    'bu yüzden hiçbir parola çalışma alanını açamaz. Yeni bir çalışma alanı oluşturmayın. Dosyayı ' +
+    'yerine koyun veya bir yedekten geri yükleyin.',
+  'main.workspace.descriptorUnreadable':
+    'Çalışma alanınızın anahtarını tutan dosya (config/workspace.json) okunamıyor ve çalışma ' +
+    'alanının şifreli dosyası sürücüde yok, bu yüzden hiçbir parola çalışma alanını açamaz. Anahtar ' +
+    'dosyasını silmeyin. Her iki dosyayı da bir yedekten geri yükleyin veya baştan başlamadan önce ' +
+    'sorun giderme kılavuzuna bakın.',
+  'main.workspace.vaultOpenFailed':
+    'Parolanız doğru, ancak HilbertRaum çalışma alanını açmayı tamamlayamadı. Sürücüdeki ' +
+    'şifreli çalışma alanı olduğu gibi bırakıldı. Sürücüde boş alan olduğundan emin olun ve ' +
+    'yeniden deneyin. Bu sorun bir güncellemeden sonra başladıysa, HilbertRaum’un önceki ' +
+    'sürümü onu hâlâ açabilir.',
   'main.workspace.recoveryBlocked':
     'Çalışma alanı henüz açılamadı: başka bir program, en yeni verilerinizi içeren bir kurtarma ' +
     'dosyasını kullanıyor. Sürücüyü tarıyor olabilecek her şeyi kapatın (virüsten koruma, arama ' +
@@ -2429,6 +2524,12 @@ export const tr: UiCatalog<'tr'> = {
     'güncelleyin. Hiçbir şey değiştirilmedi.',
   'main.workspace.createFailed': 'Çalışma alanı oluşturulamadı.',
   'main.workspace.passwordTooShort': 'Parola en az {min} karakter olmalıdır.',
+  'main.workspace.exists':
+    'Bu sürücüde zaten bir çalışma alanı var, bu yüzden yeni bir tane oluşturulmadı. Parolasıyla ' +
+    'kilidini açın.',
+  'main.workspace.plaintextNotAllowed':
+    'Burada parolasız bir çalışma alanına izin verilmiyor. Çalışma alanını bunun yerine bir ' +
+    'parolayla oluşturun.',
   'main.workspace.newPasswordTooShort': 'Yeni parola en az {min} karakter olmalıdır.',
   'main.workspace.unlockBeforeChange':
     'Parolasını değiştirmeden önce çalışma alanının kilidini açın.',
@@ -2437,6 +2538,9 @@ export const tr: UiCatalog<'tr'> = {
   'main.workspace.changeFailed': 'Parola değiştirilemedi. Mevcut parolanız hâlâ geçerli.',
   'main.workspace.busyPasswordChange':
     'Çalışma alanının parolası şu anda değiştiriliyor. Biraz sonra yeniden deneyin.',
+  'main.workspace.busyDocumentWork':
+    'Belgeler hâlâ içe aktarılıyor veya yeniden dizinleniyor. Bunun bitmesini bekleyin, sonra ' +
+    'yeniden deneyin.',
   'main.workspace.lockFailed':
     'Çalışma alanı kilitlenemedi; kilidi açık kalıyor ve verileriniz güvende. Sürücüde biraz yer ' +
     'açın, sonra yeniden deneyin.',
@@ -2606,7 +2710,7 @@ export const tr: UiCatalog<'tr'> = {
     'başlatıldığında indirme baştan başlar.',
   'main.engine.alreadyRunning': 'Yapay zekâ motoru zaten indiriliyor.',
   'main.engine.noSources':
-    'Bu sürücüde motor kaynağı bulunamadı (runtime-sources.yaml dosyası eksik).',
+    'Bu HilbertRaum kopyasında motor kaynağı bulunamadı (runtime-sources.yaml dosyası eksik).',
   'main.engine.noHostBuild':
     'Bu bilgisayar için kullanılabilir bir yapay zekâ motoru derlemesi yok.',
   'main.engine.alreadyInstalled': 'Yapay zekâ motoru zaten kurulu.',
@@ -2642,15 +2746,21 @@ export const tr: UiCatalog<'tr'> = {
   'main.engine.updateBusy':
     'Yapay zekâ motoru şu anda kullanımda (bir yanıt, içe aktarma, çeviri veya belge görevi ' +
     'sürüyor). Bu işlem bittiğinde güncellemeyi yeniden deneyin.',
+  'main.engine.notEnoughSpace':
+    'Bu sürücüde yeterli boş alan yok (motorun açılması için gereken: {needed}, boş alan: {free}). ' +
+    'Sürücüde yer açın, ardından yeniden deneyin.',
+  'main.engine.filesInUse':
+    'Motor değiştirilemedi çünkü başka bir program dosyalarından birini kullanıyor (örneğin bir ' +
+    'virüs taraması). Bir dakika sonra yeniden deneyin.',
   'main.ocr.badRequest': 'OCR indirme isteği anlaşılamadı. Yeniden deneyin.',
   'main.ocr.alreadyRunning': 'OCR dosyaları zaten indiriliyor.',
   'main.ocr.noSources':
     'Bu sürücüde OCR dosyaları için bir indirme listesi yok. Dosyaları bunun yerine sürücü ' +
     'kurulum betikleriyle ekleyin (“fetch-runtime --family ocr”).',
   'main.ocr.sourcesMismatch':
-    'Bu sürücüdeki OCR indirme listesi bu HilbertRaum sürümüyle eşleşmiyor; bu yüzden hiçbir şey ' +
-    'indirilmedi. Dosyaları bunun yerine sürücü kurulum betikleriyle ekleyin (“fetch-runtime ' +
-    '--family ocr”).',
+    'Ne bu sürücüdeki OCR indirme listesi ne de bu HilbertRaum kopyasındaki liste bu sürümün ' +
+    'kullandığı dosyaları içeriyor; bu yüzden hiçbir şey indirilmedi. Dosyaları bunun yerine ' +
+    'sürücü kurulum betikleriyle ekleyin (“fetch-runtime --family ocr”).',
   'main.ocr.alreadyInstalled':
     'OCR dosyaları zaten bu sürücüde. Metin tanıma hâlâ sunulmuyorsa HilbertRaum’u yeniden ' +
     'başlatın.',
@@ -2695,6 +2805,15 @@ export const tr: UiCatalog<'tr'> = {
     'Bu kayıt için henüz saklanmış bir transkript yok. Yeniden yazıya dökmek için kaydı yeniden ' +
     'dizinleyin.',
   'main.models.noManifests': 'Bu sürücüde model listesi bulunamadı: model-manifests klasörü eksik.',
+  'main.models.unknown': 'Bu model artık bu sürücünün model listesinde yok.',
+  'main.models.notChat': '“{name}” bir sohbet modeli değil, bu yüzden burada başlatılamaz.',
+  'main.models.startDamaged':
+    '“{name}” modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +
+    'yeniden indirin.',
+  'main.models.startMissing': '“{name}” modeli başlatılamıyor: model dosyası henüz bu sürücüde yok.',
+  'main.models.startNeedsRam':
+    '“{name}” modeli için en az {min}\u00A0GB RAM gerekir (bu bilgisayarda yaklaşık {ram}\u00A0GB ' +
+    'var). Daha küçük bir model seçin: kalite yine çok iyi olur.',
   'main.models.autoSelected':
     'Bu model kurulduktan sonra otomatik olarak kullanılır; seçilecek bir şey yok.',
   'main.models.locked':
@@ -2731,6 +2850,12 @@ export const tr: UiCatalog<'tr'> = {
   'main.dictation.engineCannotRun':
     'Ses motoru bu bilgisayarda çalışamıyor. Neyin eksik olduğunu Yapay zekâ modeli ekranında ' +
     'görebilirsiniz.',
+  'main.dictation.voiceModelPathUnsupported':
+    'Windows’ta ses motoru modellerinden birini (konuşma modelini veya ses etkinliği algılama ' +
+    'modelini) açamıyor, çünkü o modelin yolundaki bir klasör veya dosya adı bir umlaut, aksanlı bir ' +
+    'harf ya da başka bir ASCII dışı karakter (ç, ğ, ı, ş gibi) içeriyor. Modeli bu tür karakterler ' +
+    'içermeyen bir yola taşıyın ve modelin manifestindeki kaydını güncelleyin; ardından yeniden ' +
+    'deneyin.',
   'main.preflight.readOnly':
     'Bu sürücü salt okunur görünüyor, bu yüzden uygulama çalışma alanını oluşturamıyor. Farklı ' +
     'bir USB girişi deneyin veya sorun giderme kılavuzuna bakın.',
@@ -3076,6 +3201,9 @@ export const tr: UiCatalog<'tr'> = {
   'images.avail.noRuntime': 'Görsel anlama için önce yapay zekâ motorunun kurulması gerekir.',
   'images.avail.incompatible':
     'Bu sürücüdeki görsel modeli daha yeni bir yapay zekâ motoru gerektiriyor.',
+  'images.avail.damaged':
+    'Bu sürücüdeki görsel modeli dosya denetiminden geçemedi. Yapay zekâ modeli ekranından yeniden ' +
+    'indirin.',
   'images.avail.cta': 'Yapay zekâ modeli ekranına git',
   'images.avail.ocrPointer':
     'Taranmış belgeler mi? Belgeler ekranındaki “Aranabilir yap (OCR)” düğmesini kullanın.',
@@ -3135,6 +3263,9 @@ export const tr: UiCatalog<'tr'> = {
   'images.err.engineCannotRun':
     'Yapay zekâ motoru bu bilgisayarda çalışamıyor. Neyin eksik olduğu Yapay zekâ modeli ' +
     'ekranında gösteriliyor.',
+  'images.err.modelDamaged':
+    'Görsel modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +
+    'yeniden indirin.',
   'images.err.emptyResponse':
     'Bu görsel için yanıt gelmedi. Sorunuzu farklı bir şekilde sormayı deneyin.',
   'images.err.emptyQuestion': 'Önce görsel hakkında bir soru yazın.',
@@ -3233,6 +3364,9 @@ export const tr: UiCatalog<'tr'> = {
   'translate.err.engineCannotRun':
     'Yapay zekâ motoru bu bilgisayarda çalışamıyor. Neyin eksik olduğu Yapay zekâ modeli ' +
     'ekranında gösteriliyor.',
+  'translate.err.modelDamaged':
+    'Çeviri modeli dosya denetiminden geçemediği için başlatılmadı. Yapay zekâ modeli ekranından ' +
+    'yeniden indirin.',
   'translate.err.empty': 'Çeviri gelmedi. Yeniden deneyin veya metni farklı bir şekilde yazın.',
   'translate.err.sameLang': 'İki farklı dil seçin.',
   'translate.err.tooLong':
@@ -3305,12 +3439,17 @@ export const tr: UiCatalog<'tr'> = {
   'review.rename.save': 'Kaydet',
   'review.loading': 'İnceleme açılıyor…',
   'review.notFound': 'Bu inceleme bulunamadı. Silinmiş olabilir.',
+  'review.openFailed': 'Bu inceleme açılamadı.',
   'review.question.toggle': 'Soru',
   'review.answerPane.aria': 'İncelenen yanıt',
   'review.autosave.saving': 'Kaydediliyor…',
   'review.autosave.saved': 'Kaydedildi',
   'review.autosave.error': 'Bazı değişiklikler henüz kaydedilemedi.',
   'review.autosave.retry': 'Yeniden dene',
+  'review.unsaved.body':
+    '“{title}” incelemesindeki bazı değişiklikler henüz kaydedilemedi, bu yüzden diğer inceleme ' +
+    'açılmadı. Yeniden deneyin ya da bu değişikliklerden vazgeçip diğer incelemeyi açın.',
+  'review.unsaved.discard': 'Değişikliklerden vazgeç ve aç',
   'review.evidence.title': 'Dayanaklar',
   'review.evidence.captionRelevance':
     'Gösterilen kaynaklar, bu yanıt için yerel yapay zekâ modeline verilen alıntılardır.',
@@ -3487,6 +3626,7 @@ export const tr: UiCatalog<'tr'> = {
   'review.export.cancel': 'Kapat',
   'review.export.done': 'Dayanak paketi dışa aktarıldı.',
   'review.export.error': 'Dayanak paketi dışa aktarılamadı. Hiçbir dosya yazılmadı.',
+  'review.export.failed': 'Dayanak paketinin dışa aktarımı tamamlanmadı.',
   'review.export.copyHash': 'SHA-256 değerini kopyala',
   'review.export.hashCopied': 'SHA-256 değeri panoya kopyalandı.'
 }

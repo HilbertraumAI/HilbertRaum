@@ -10,12 +10,24 @@ size_on_disk_gb: 5.2
 # / vulkan 5.58 GiB at ctx 8192 → min 12 confirmed (formula 11; kept on the 12 tier line —
 # same tier as qwen3-8b (5.0 GB → min 12) / ministral3-8b (5.2 GB → min 12)).
 recommended_min_ram_gb: 12
-recommended_ram_gb: 16
+recommended_ram_gb: 12
 # Rank 0 AFTER the wave eval (§9.3 wave outcome, ratified 2026-08-03): F1 .2999 does NOT clear
 # the 8B bar (Ministral .3111 / qwen3.5-9b .3152 / qwen3-8b .3262) though hallucination-honest
 # after audit (1 real). No promotion; a rerun would need materially better numbers. E4B is a
 # MatFormer effective-4B slice (~8B raw params, ~4B-class memory/compute footprint).
 recommendation_rank: 0
+# Processor path (model-benchmarks.md §6.7): the 12 to 15 GB pick without a graphics card: 82.9 on
+# the 2026-11 answer-quality study against the E2B's 73.7, at 9.9 tok/s on a Ryzen 7 5800H. The
+# ordinary rank stays 0 (the §9.3 grounded-QA verdict), so nothing changes on a card or on Apple
+# Silicon. recommended_ram_gb 16 -> 12 with it: measured peak working set 5.48 GiB on a 14 GB
+# machine (2026-11-20). A slow benchmark steps to the E2B.
+recommendation_rank_cpu: 3
+step_down_to: gemma4-e2b-it-qat-q4
+# Card rank (model-benchmarks.md §6.8): the pick on a 6 GB card: fully on the RTX 3060 Laptop (43/43) at 78 tok/s, 82.9 on the study.
+recommendation_rank_gpu: 3
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 43/43 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 3458
 recommended_context_tokens: 8192
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server (as the
 # 2026-07-23 smoke found); `enable_thinking: false` suppresses cleanly (0 reasoning chars,

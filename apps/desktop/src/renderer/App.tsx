@@ -77,7 +77,7 @@ import { setThemeSetting } from './theme'
 import { runAndSurface } from './lib/errors'
 import { useEngineProblems } from './lib/useEngineProblems'
 import { purgeSessionStores } from './lib/lockPurge'
-import { flushReviewSession, type ReviewHandoffTarget } from './lib/reviewSession'
+import { flushReviewSessionBeforeLock, type ReviewHandoffTarget } from './lib/reviewSession'
 import { I18nProvider, useT, type I18n } from './i18n'
 import { resolveNavTarget, type ModelsFocus, type ScreenId, type SettingsTab } from './navigation'
 import type { MessageKey } from '@shared/i18n'
@@ -229,7 +229,7 @@ function AppShell(): JSX.Element {
   // visible. This is the end of the user-felt "launch to password prompt" span.
   const gateVisible = workspace !== null && !unlocked
   useEffect(() => {
-    if (gateVisible) window.api?.perfMark?.('gate_visible')
+    if (gateVisible) window.api?.perfMark('gate_visible')
   }, [gateVisible])
 
   // The rail indicator must never claim the opposite of reality (D1), and the two events
@@ -355,8 +355,9 @@ function AppShell(): JSX.Element {
     setLockError(null)
     // EP-1 plan §7.5: flush pending review auto-save edits BEFORE the vault re-encrypts —
     // after lockWorkspace the write would be refused. Best-effort: a failed flush must
-    // never block the lock (the user's explicit security action wins).
-    await flushReviewSession().catch(() => {})
+    // never block the lock (the user's explicit security action wins) — nor a hung one: the
+    // flush waits for a running bulk sweep, so it gives up after a bound (#837 review round 5).
+    await flushReviewSessionBeforeLock()
     const next = await window.api.lockWorkspace()
     // The real lock seam (TA-2 / H3): main has now aborted the jobs + re-encrypted the vault, so
     // drop the resident source/translation/image content from the module-level session stores in
@@ -398,6 +399,9 @@ function AppShell(): JSX.Element {
           // optional starter step picked); a plain unlock keeps the current screen.
           if (landOn) navigate(landOn)
         }}
+        // #955 item 3: a create refused because a workspace is on the drive after all: show the gate for main's new
+        // state (its unlock form). Nothing opened, so no landing.
+        onStateChange={setWorkspace}
       />
     )
   }

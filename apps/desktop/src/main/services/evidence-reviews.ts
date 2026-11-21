@@ -21,6 +21,7 @@ import type {
   ReviewDecision
 } from '../../shared/types'
 import { prepareCached, type Db } from './db'
+import { deriveReadyGate } from '../../shared/evidence-review'
 import { parseCoverage } from './chat'
 import { parseEndedEarly } from './chat/ended-early'
 
@@ -355,31 +356,6 @@ function rowToExport(r: ExportRow): EvidenceExportRecord {
 }
 
 // ---------------------------------------------------------------------------
-// D-7 ready-gate derivation (pure — unit-tested as a matrix)
-// ---------------------------------------------------------------------------
-
-/**
- * Derive the ready gate over a review's items (D-7): required = block items that are not
- * headings (`blockKind === 'heading'` exempt; null/unknown counts as REQUIRED — an
- * unclassified block never silently skips review); selections never gate. Decided = any
- * decision other than 'not_reviewed' ('not_applicable' COUNTS as decided — headings arrive
- * defaulted to it, spec §12.2). `eligible` = every required item decided (vacuously true for
- * an item-less review — there is nothing to review).
- */
-export function deriveReadyGate(
-  items: ReadonlyArray<Pick<EvidenceReviewItem, 'kind' | 'blockKind' | 'decision'>>
-): EvidenceReadyGate {
-  let requiredTotal = 0
-  let decidedTotal = 0
-  for (const item of items) {
-    if (item.kind !== 'block' || item.blockKind === 'heading') continue
-    requiredTotal += 1
-    if (item.decision !== 'not_reviewed') decidedTotal += 1
-  }
-  return { eligible: decidedTotal === requiredTotal, requiredTotal, decidedTotal }
-}
-
-// ---------------------------------------------------------------------------
 // Internal reads
 // ---------------------------------------------------------------------------
 
@@ -568,7 +544,9 @@ export function getEvidenceReview(db: Db, reviewId: string): EvidenceReviewDetai
   }
 }
 
-/** The entry-point read (chat action row): the message's review as a light summary, or null. */
+/** The message's review as a light summary, or null. Its one product caller is `evidence:create`'s
+ *  idempotency check; the chat reads every summary of a conversation through
+ *  {@link listEvidenceReviewSummariesForConversation} (AUD-12), one element per review in this shape. */
 export function getEvidenceReviewForMessage(db: Db, messageId: string): EvidenceReviewSummary | null {
   const row = prepareCached(
     db,
@@ -944,12 +922,19 @@ function bulkUpdateStatement(action: EvidenceReviewBulkAction): {
                WHERE review_id = ? AND decision IN (${DECIDED_PLACEHOLDERS})`,
         extra: DECIDED_DECISION_LITERALS
       }
-    default:
+    case 'undecided_follow_up':
       return {
         sql: `UPDATE evidence_review_items SET decision = 'follow_up', updated_at = ?
                WHERE review_id = ? AND decision NOT IN (${DECIDED_PLACEHOLDERS})`,
         extra: DECIDED_DECISION_LITERALS
       }
+    default: {
+      // Compile-time: exhaustive over the union — a new bulk action fails this assignment.
+      // Runtime: an unknown name sweeps NOTHING (the IPC guard never passes one,
+      // `safeBulkAction`); it throws before the transaction opens.
+      const unknown: never = action
+      throw new Error(`evidence review: unknown bulk action ${String(unknown)}`)
+    }
   }
 }
 

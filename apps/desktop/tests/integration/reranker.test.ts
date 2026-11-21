@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { createSelectedReranker } from '../../src/main/services/reranker/factory'
 import { approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/services/ingestion/chunker'
@@ -420,5 +420,41 @@ describe('createSelectedReranker', () => {
   // real selection is reranker-callbacks-composition.test.ts's, through composeServices.
   it('returns null (NOT a mock) when no reranker model is configured', () => {
     expect(createSelectedReranker({ rootPath: '/r', model: null })).toBeNull()
+  })
+})
+
+// #913: the reranker's start check, at the head of its start ladder. A file a check found damaged never spawns, on
+// either rung, and the refusal latches like a load fault (rerank() fails fast; the caller keeps the fused order).
+describe('LlamaReranker — the start check (#913)', () => {
+  it('a file the check finds damaged starts no sidecar on any rung and latches, without a GPU fallback', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const fallbacks: string[] = []
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => 'damaged' as const)
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl: rerankFetch([0.9, 0.1]),
+      devicePosture: () => 'gpu',
+      onDeviceFallback: (reason) => fallbacks.push(reason),
+      checkModel
+    })
+    await expect(reranker.rerank('q', ['a', 'b'])).rejects.toThrow(/failed its check/)
+    expect(calls).toHaveLength(0)
+    await expect(reranker.rerank('q', ['a', 'b'])).rejects.toThrow(/failed its check/) // latched
+    expect(checkModel).toHaveBeenCalledTimes(1)
+    expect(checkModel.mock.calls[0][0]).toBeInstanceOf(AbortSignal) // the start-abort signal goes in
+    expect(fallbacks).toEqual([]) // no device fault: the card stays allowed
+    expect(reranker.gpuDemoted()).toBe(false)
+    await reranker.stop()
+  })
+
+  it('a file the check passes starts as before', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => 'ok' as const)
+    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch([0.9, 0.1]), checkModel })
+    expect(await reranker.rerank('q', ['a', 'b'])).toHaveLength(2)
+    expect(calls).toHaveLength(1)
+    expect(checkModel).toHaveBeenCalledTimes(1)
+    await reranker.stop()
   })
 })

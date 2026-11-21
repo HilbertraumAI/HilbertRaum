@@ -12,7 +12,9 @@ import type { VisionUnavailableReason } from '@shared/types'
 const REASON_NOTE: Record<VisionUnavailableReason, MessageKey> = {
   'no-model': 'images.avail.noModel',
   'no-runtime': 'images.avail.noRuntime',
-  incompatible: 'images.avail.incompatible'
+  incompatible: 'images.avail.incompatible',
+  // #913: a model on the drive failed its file check; the CTA leads to where it can be downloaded again.
+  damaged: 'images.avail.damaged'
 }
 
 export function VisionUnavailable({

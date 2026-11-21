@@ -45,9 +45,9 @@ function armFsLog(probe: string): void {
 
 const ipcState = vi.hoisted(() => ({
   handlers: new Map<string, unknown>(),
-  openDialog: { canceled: true as boolean, filePaths: [] as string[], opened: 0 },
-  saveDialog: { canceled: true as boolean, filePath: undefined as string | undefined }
+  openDialog: { canceled: true as boolean, filePaths: [] as string[], opened: 0 }
 }))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
@@ -59,7 +59,7 @@ vi.mock('electron', () => ({
       ipcState.openDialog.opened += 1
       return { canceled: ipcState.openDialog.canceled, filePaths: ipcState.openDialog.filePaths }
     },
-    showSaveDialog: async () => ({ canceled: ipcState.saveDialog.canceled, filePath: ipcState.saveDialog.filePath })
+    showSaveDialog: saveDialog.showSaveDialog
   },
   app: { getVersion: () => '0.0.0-test' }
 }))
@@ -133,8 +133,7 @@ beforeEach(() => {
   ipcState.openDialog.canceled = true
   ipcState.openDialog.filePaths = []
   ipcState.openDialog.opened = 0
-  ipcState.saveDialog.canceled = true
-  ipcState.saveDialog.filePath = undefined
+  saveDialog.reset()
   armFsLog('')
 })
 
@@ -174,8 +173,7 @@ describe('skills IPC — round-trip lifecycle', () => {
 
     // export (save dialog → a file)
     const dest = join(tempDir(), 'out.skill.zip')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     const { result: exportPath } = await invoke(handlers, IPC.exportSkill, info.installId)
     expect(exportPath).toBe(dest)
     expect(existsSync(dest)).toBe(true)
@@ -453,8 +451,26 @@ describe('skills IPC — enableSkill policy (#583)', () => {
     expect(getSkillsByDeclaredId(db, 'shared').filter((s) => s.enabled)).toHaveLength(1)
   })
 
-  it('refuses enabling a skill that needs a newer app and changes nothing', async () => {
-    const { db } = seededHarness({ user: [{ id: 'too-new', minAppVersion: '99.0.0' }] }, { reconcile: true })
+  // #846: the reason the reconcile reads to tell the user's "off" (never undone) from the version gate's.
+  it('records why a skill is off: the user (disable), a same-id sibling (enable); enabling clears it', async () => {
+    const { db } = seededHarness({ app: [{ id: 'shared' }], user: [{ id: 'shared' }] }, { reconcile: true })
+    const reasonOf = (installId: string): string | null =>
+      (db.prepare('SELECT disabled_reason FROM skills WHERE install_id = ?').get(installId) as {
+        disabled_reason: string | null
+      }).disabled_reason
+
+    await invoke(handlers, IPC.enableSkill, 'user:shared')
+    expect(reasonOf('app:shared')).toBe('duplicate')
+    expect(reasonOf('user:shared')).toBeNull()
+    await invoke(handlers, IPC.disableSkill, 'user:shared')
+    expect(reasonOf('user:shared')).toBe('user')
+    await invoke(handlers, IPC.enableSkill, 'app:shared')
+    expect(reasonOf('app:shared')).toBeNull()
+  })
+
+  // #896: '0.0.0' too, since this file's app reports '0.0.0-test', a pre-release of 0.0.0 and so older than it.
+  it.each(['99.0.0', '0.0.0'])('refuses enabling a skill that needs a newer app (minimum %s) and changes nothing', async (min) => {
+    const { db } = seededHarness({ user: [{ id: 'too-new', minAppVersion: min }] }, { reconcile: true })
     expect(enabledOf(db, 'user:too-new')).toBe(false)
     await expect(invoke(handlers, IPC.enableSkill, 'user:too-new')).rejects.toThrow(/newer version/i)
     expect(enabledOf(db, 'user:too-new')).toBe(false)

@@ -7,6 +7,13 @@ export const IPC = {
    * HILBERTRAUM_PERF_LOG=1 is set in the environment.
    */
   perfMark: 'perf:mark',
+  /**
+   * #888: the window's one-way answer to `EVENTS.saveBeforeClose` — `{ requestId, unsaved }`, sent
+   * by the preload itself once the renderer's save settles. An `ipcMain.on` listener per request
+   * (`main/close-guard.ts`), not a `guardedHandle`: it checks the sender and the request id
+   * itself, and it must answer while the workspace is locked too.
+   */
+  saveBeforeCloseDone: 'app:saveBeforeCloseDone',
   getDriveStatus: 'app:getDriveStatus',
   getSettings: 'settings:get',
   updateSettings: 'settings:update',
@@ -221,6 +228,11 @@ export const IPC = {
   // stop falling back to the built-in demo runtime. Same gates as model downloads.
   /** Is the llama.cpp engine installed, and can it be fetched for this host? */
   getEngineStatus: 'engine:status',
+  /**
+   * #843: what a `downloadEngine` request would fetch (`EngineDownloadPreview`), for its confirmation
+   * dialog. Takes the same optional payload; read-only (no network, no write).
+   */
+  getEnginePlan: 'engine:plan',
   /** Start fetching + extracting the host's llama-server build (gated: policy ∧ setting). */
   downloadEngine: 'engine:download',
   /** Poll the engine-download job's progress/status. */
@@ -404,8 +416,6 @@ export const IPC = {
   createEvidenceReview: 'evidence:create',
   /** The full review read-model (`EvidenceReviewDetail`), or null on an unknown id. */
   getEvidenceReview: 'evidence:get',
-  /** The message's review as a light `EvidenceReviewSummary` (entry-point state), or null. */
-  getEvidenceReviewForMessage: 'evidence:getForMessage',
   /** EVERY review in one conversation as light `EvidenceReviewSummary[]` — the transcript's
    *  whole chip state in ONE round trip (AUD-12). Asking per message made opening a
    *  conversation cost one serial invoke (plus a full item load and a freshness recompute)
@@ -453,8 +463,6 @@ export const IPC = {
    *  unknown review/key and on unresolved-identity sources. Reads the `chunks` table —
    *  never the source file. */
   getEvidenceSourceContext: 'evidence:sourceContext',
-  /** Delete a review (items/links/exports CASCADE). */
-  deleteEvidenceReview: 'evidence:delete',
   /** How many reviews a conversation's messages carry — the D-2 delete-confirm warning
    *  count (spec §25.4). Added in Phase 2 (plan §7.6): the P0 service function existed
    *  without a channel; the renderer confirm needs the number. Count only — no content. */
@@ -591,6 +599,12 @@ export const EVENTS = {
    * "switched to compatibility mode" message — spec §11.4 tone, never alarming).
    */
   runtimeNotice: 'runtime:notice',
+  /**
+   * #888: the main window is about to close (an X, File → Exit, Cmd+Q, …) — save what is pending,
+   * then answer on `IPC.saveBeforeCloseDone`. Payload: `requestId: number`, echoed in the answer.
+   * Sent to the closing window only, at most once per close attempt (`main/close-guard.ts`).
+   */
+  saveBeforeClose: 'app:saveBeforeClose',
   /**
    * The step a running benchmark just finished (`BenchmarkProgressStep`), sent to the
    * renderer that started it so the Performance screen can show the steps as they land.

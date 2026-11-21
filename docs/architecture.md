@@ -68,7 +68,7 @@ a future move to Tauri/Rust is a localized swap.
   turns Electron's `GrantFileProtocolExtraPrivileges` fuse off. See
   [`security-model.md`](security-model.md) and "App scheme `hilbertraum://app/` — design record
   (#560)" below. The packaged binary's other fuses (no `ELECTRON_RUN_AS_NODE`, no `--inspect`,
-  `app.asar` integrity) are in "Electron fuses — design record (#562)".
+  no `NODE_OPTIONS` since #564, `app.asar` integrity) are in "Electron fuses — design record (#562)".
 
 ## Swappable interfaces (spec §9.2)
 - `ModelRuntime` — `MockRuntime` **or** `LlamaRuntime`, chosen per `start()` by availability (Phase 10).
@@ -262,7 +262,11 @@ noted below.
   `composeServices` discovers manifests ONCE per composition pass and threads the result into its
   role resolvers (`resolveModelByRole` takes an optional pre-discovered list) — the per-action IPC
   callers and the issue-#40 `onModelInstalled` refresh still re-discover; deliberately NO stateful
-  module cache, which could serve stale results. PF-7a: the Home runtime poll keeps the previous
+  module cache, which could serve stale results. **#848 amendment:** the walk takes each folder's entry
+  names in code-unit order on every OS (it was raw `readdirSync` order, sorted only on NTFS), and a resolver
+  takes the manifest of its role flagged `default_for_role: true` first (the committed E5 sets it), present or
+  not, so a second manifest of a role never re-points the embedder, reranker, transcriber or translator by
+  file name. PF-7a: the Home runtime poll keeps the previous
   state object on a value-unchanged tick (React bails out of the re-render) and stops entirely once
   the model runs, with a window-focus re-check instead (the ChatScreen poll-while-not-running
   pattern). PF-7b: the doc-task store's 400 ms poll ports the skillruns `sameRun` no-change gate
@@ -572,7 +576,10 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   the awaited IPC. `buildModelList` gains an additive **`onlyVerifyModelId`**: when present, only that
   model is hashed on a cold cache; other present weights are reported `installed` **without** hashing
   (display-only) — a live cached hash is still served for free, so a known `checksum_failed` still
-  surfaces. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
+  surfaces. A cached mismatch on any one file of a multi-file model is enough (#913): a full check
+  stops at the first damaged file, and before, the lazy answer trusted the cache only when every file
+  had an entry, so a vision GGUF the check had just found damaged read `installed` again on the next
+  visit. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
   (chat path) passes `true` with the active model id. **The §7.4 gate is intact** —
   `startModelRuntime` re-verifies the model it actually launches, and `verify-models --strict` /
   `assertCommercialDrive` still hash fully.
@@ -1054,7 +1061,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     reports the model it was on — and every model after it — **without hashing**, which is exactly
     what RT-3 lazy verification reports for a present weight. The returned list stays complete and
     honest: what finished is verified from the cache, the rest is simply unchecked, the §7.4 gate
-    still re-verifies whatever the user launches, and no error banner is shown. Nothing is
+    still re-verifies the chat model the user launches (the other roles refuse a file a check found
+    damaged, #913), and no error banner is shown. Nothing is
     half-written: `checksumCacheStats.computed`, the L1/L2 cache entry, the #108 read sample and
     #392's `checksumWarmedPaths` mark are all written only by a hash that **completed**.
   - **Navigating away.** The pass runs in main and still survives leaving the screen — but the
@@ -1393,7 +1401,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     its abort-driven `appendMessage`) has fully unwound. A lock/quit teardown MUST therefore `abort()`
     every in-flight controller FIRST, then `await` all settles (`awaitInFlightStreamsSettled`), then
     close the DB — so a partial reply persists before `ctx.db` closes (never rejected, so `allSettled`
-    can't hang teardown). Covered by `tests/integration/lock-stream-persistence.test.ts`.
+    can't hang teardown). The order is pinned by `workspace-ipc.test.ts` "lockWorkspace awaits each
+    in-flight stream settle before re-encrypting (R1)" (lock) and `shutdown.test.ts` "AWAITS each
+    in-flight stream settle before locking (R1)" (quit); `tests/integration/lock-stream-persistence.test.ts`
+    pins the end states in the chat service itself (an aborted partial persists on an open DB, and the
+    defence-in-depth guard drops a partial-persist against a closed DB without a rejection).
   - **CB-2 — regenerate never loses the prior answer on a produced-nothing run.** `withRegenerateGuard`
     deletes the prior reply INSIDE the stream (F2). A user Stop BEFORE the first token *resolves* (does
     not throw) with an unpersisted empty message (`content === ''`), so besides restoring on a non-abort
@@ -2275,7 +2287,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   "Export original file" — before #90 imported documents had NO export action at all (the reported
   bug); (4) the write is the shared `saveBinaryExport` (`ipc/save-export.ts`), hoisted from
   `registerSkillsIpc`'s module-local DOCX writer and upgraded to the evidence-pack atomic tail
-  (tmp sibling → fsync → rename), which the skills export now gets too; (5) the byte read holds
+  (tmp sibling → fsync → rename), which the skills DOCX export now gets too (the skills TEXT
+  exports — the CSVs, invoice JSON/XML, `redacted.txt`/`edited.txt` — took the same tail through
+  `saveTextExport` only with #838); (5) the byte read holds
   the `beginDocumentWork` lease (released before the dialog opens) so it cannot interleave with a
   password-change re-key of the sidecar; (6) consent + boundary per the evidence-pack §24.3
   posture — renderer ConfirmDialog warning before the native dialog, same copy in the dialog
@@ -2367,6 +2381,65 @@ it fails with friendly convert-to-WAV/MP3 copy.
 - **Audit:** the existing `document_imported` (filename, document id, status, chunk
   count — never content) covers audio; the
   transcript is CONTENT and never reaches `runtime_events` (sentinel-tested end-to-end).
+- **#869 amendment (2026-11-18): every whisper-cli child starts in the documents folder and
+  gets an ASCII command line, or none at all.** The pinned whisper-cli (v1.8.6, Windows x64)
+  has a narrow `main` and, unlike llama-server since b12110 (#729), no UTF-8 `activeCodePage`
+  manifest (PE read), so Windows fills its argv in the ANSI code page. Measured with the real
+  `ggml-small` model on code page 1252: a model path (`-m`) with an umlaut makes it die with a
+  fail-fast exception (0xC0000409) right after "loading model from" (it exits within 0.3 s; no
+  error dialog keeps it alive), one with characters outside the code page arrives as `?` ("failed
+  to open", exit 3) — so under a root such as `C:\Users\Jürgen\AppData\Roaming\HilbertRaum`
+  or a Kit folder `Übungen` every import and dictation failed; an audio or output path
+  (`-f`, `-of`) with characters of the code page (`März`) worked, one with characters outside
+  it (`Олена 日本`) failed (`-f`: "input file not found", exit 2; `-of`: exit 0 with no transcript
+  written). A RELATIVE path is read exactly (the OS resolves it against the child's wide working
+  directory), so **design as built, one pure planner (`transcriber/argv.ts`):** **(a)** the child
+  starts in `opts.workDir` — the workspace's `documents/` folder — on every platform, and gets
+  every file there (the transcript `-of`, a stored copy, a decrypted transient, the dictation
+  WAV) by its bare name; **(b)** on Windows a model (`-m`, `-vm`) goes absolute when ASCII, else
+  relative (`..\..\models\transcriber\…`), and with no ASCII spelling — a non-ASCII folder or
+  file name in the model's path below `models/` (an ASCII file name in a non-ASCII folder too),
+  which only a user's own manifest can give — the call is refused before anything starts
+  (`WhisperPathError`, log class `whisper:non-ascii-path`, its own row and dictation copy:
+  `main.ingest.voiceModelPathUnsupported`, `main.dictation.voiceModelPathUnsupported`); copying
+  gigabytes per call is no option; **(c)** on Windows the audio goes absolute when ASCII, else
+  relative when ASCII (never across drives), else it is **copied into the documents folder**
+  as `<uuid>.parse-audio<ext>` for the run: an encrypted workspace's first import parses the
+  user's ORIGINAL file wherever it is (`ingestion/index.ts`), and a name or folder with characters
+  outside the code page cannot be named to the child (the copy rule needs no knowledge of the
+  code page, so every original without an ASCII spelling is copied, e.g. a Kit on `D:\` and the
+  file in `C:\Users\Jörg\Musik\`). The copy is the same plaintext class as an encrypted
+  re-index's decrypted `.parse` transient: written only after the engine-install gate and the
+  binary hash, right before the spawn; shredded in the same `finally` as the transcript; and under
+  the startup crash sweep by its `.parse` infix. While it is being written the call has no child,
+  so it is tracked on its own (`copying`): the call's signal (cancel, lock, quit) and
+  `suspend()`/`stop()` (lock, quit, and an engine update, which suspends without aborting the
+  import's signal) abort it; no child starts after that, and `suspend()`/`stop()` return only
+  after the partial copy is shredded, under the same 10 s cap as a child. An engine install that
+  begins its swap during the copy holds the spawn at the #516 gate, re-checked after the copy.
+  macOS and Linux take (a) only — their argv is bytes, so they never copy and never refuse.
+  Every path is resolved against the APP's working directory before the spawn (the command too,
+  `whisperCommand`): the child starts elsewhere, so a relative one (a dev run's relative drive
+  root, `HILBERTRAUM_WHISPER_BIN`) would otherwise be looked up from the documents folder (the
+  #787 trap). **Why the documents folder (the #787 DLL-search caveat, `rag-design.md` §17 D-Z1).**
+  Windows searches a process's working directory for a DLL it finds neither beside the exe nor
+  in the system folders, and the pinned build imports `MSVCP140.dll`, `VCRUNTIME140.dll`,
+  `VCRUNTIME140_1.dll` and `VCOMP140.DLL`, which the zip does not carry (#530); `whisper-cli`
+  also calls `ggml_backend_load_all`, whose scanner (`ggml.dll`: `current_path()`,
+  `LoadLibraryW`) looks for `ggml-*.dll` backends beside the exe AND in the working directory.
+  The documents folder is the app's own and holds only names the app chooses (`<uuid>…`,
+  `<docId><ext>`, `.enc`, `.parse*`), so nothing there can carry such a DLL name, and writing
+  there needs the same access as writing the unhashed DLLs beside the exe; it is never the
+  audio's own folder (a Downloads folder, what #787 rejected) nor the engine folder (an engine
+  install replaces it while no child runs, #516). Before this, the child inherited the app's
+  own working directory. A documents folder of 258+ characters cannot be a working directory
+  (Node's spawn fails `ENOENT`, absorbed by `guardChildStdio`, #790): the file fails with the
+  generic copy, as it did before (whisper-cli opens its files without a long-path prefix). The
+  real layouts are `tests/manual/whisper-smoke.test.ts` "#869 layout matrix" (three roots `ascii`,
+  `Jörg äöü`, `Олена 日本`: a stored file, a foreign original, a dictation with VAD; a Kit on
+  another drive; the refusal; MAX_PATH), red on master and green here; a whisper pin bump
+  re-runs it (`runtime-sources.yaml`, "To bump") and may retire (b)–(c) if upstream adds the
+  manifest. No transcript, citation or stored-data change.
 
 ## Voice dictation (Phase 37, wave-3 plan §10, decision D30)
 
@@ -2506,6 +2579,11 @@ explicitly out of scope.
   for 2 s, the composer shows the "no sound is reaching the microphone" note until signal
   returns or recording ends; a null analyser never shows it (the post-stop gate still refuses).
   Full record: wave-3 plan §10.
+- **#869 (2026-11-18):** the dictation WAV and its transcript reach whisper-cli by their bare
+  names from the documents folder, the speech and VAD models (`-m`, `-vm`) by an ASCII spelling,
+  so dictation works under a root with any character; a VAD or speech model whose path (a folder
+  or the file name below `models/`) has no ASCII spelling is refused with `main.dictation.voiceModelPathUnsupported`. Record: "Audio
+  transcription (Phase 36)", "#869 amendment".
 
 ## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11, decisions D31–D33)
 
@@ -2975,6 +3053,18 @@ keeps them resolvable (the "Functionality wave 3" precedent)._
     driven per `startDocTask`, so the manager is usable again after unlock). `awaitActiveTaskSettled()`
     exposes the tracked `run(task)` dispatch promise (resolves immediately when idle); the callers bound
     it with a ~5 s `Promise.race` timeout so a wedged handler can never hang quit/lock.
+  - **The quit hold (#936, follow-ups wave 4).** `holdQueueForQuit()` makes `pump` start nothing;
+    `releaseQueueHold()` clears it and pumps. The running task goes on, and a task started meanwhile is
+    queued (it runs if the quit is called off); `hasActiveTask()` and `listActiveDocTasks()` are
+    unchanged (a held task is still active, so the chat busy guard still sees it). Two callers set it
+    (`main/close-guard.ts`): the main window's close guard, when it commits to a close that quits, and
+    `holdQueueOnQuit`, at every un-prevented `before-quit` (`main/index.ts`). The guard's Keep open releases
+    it, and so does a successful unlock or (#955 item 4) create (`registerWorkspaceIpc.ts`; no quit is under
+    way then, so a hold still set would be stale). Why: a quit the guard holds while the window saves (Ctrl+Q on Linux, ⌘Q or Dock Quit
+    on macOS) closes the OCR window first, so the run ended before `will-quit` flushed the queue and
+    the next task started into the save, only to be cancelled a moment later (measured on Electron
+    43.8.6). Still no permanent latch: Keep open releases it, and on a quit that goes on
+    `cancelAllDocTasks()` ends everything anyway.
 
 - **TA-2 — renderer session-store purge moved to the real lock seam (translation audit fix wave,
   2026-07-06; finding H3).** The purge of the three module-level renderer stores (the live TEXT
@@ -3924,8 +4014,9 @@ files**.
   (never a raw sidecar proxy) so external generations inherit abort registration, watchdogs,
   context budgeting, and the D8 pre-emption contract. The full exposed HTTP contract (pipeline
   order, field policy, envelopes, error mapping, limits) lives in `data-contracts.md`; the
-  request pipeline's check ORDER (Host → Origin → content-type → auth) is part of the security
-  contract and test-pinned in `local-api-server.test.ts`.
+  request pipeline's check ORDER (Host → OPTIONS → Origin → content-type → auth → route) is part
+  of the security contract, pinned in `local-api-server.test.ts` "check order: %s" (each request
+  fails two or more checks, and the answer names the one that runs first).
 
 ### GPU acceleration: probe + start ladder (Phase 15; design record below)
 
@@ -4817,13 +4908,13 @@ once per cold start and held it for the session, the ask re-resolved on every as
 also fed the posture at the time, through `chatModelNeedMib`) suspended nothing, reopening the
 wide-scope/CPU-reranker combination through a drift window (measured concretely on the project's
 own GTX 1070 Ti — finding C2). `activeModelId` joined the suspend trigger, fired from all three
-settings-writing channels (`settings:update`, `models:select`, `models:use`) through one shared
+settings-writing channels (`settings:update`, `models:select`, `runtime:use`) through one shared
 predicate. That event-time suspend is a head start, not the correctness guarantee — see step 4-8
 below for what actually makes the posture correct at every moment.
 
 **Step 4-8 (Wave 8 rulings (a)-(d)) resolved a THIRD gap, finding C3 (scoped Opus review of step
 4-7): `activeModelId` was never a safe posture input to begin with.** It is a proxy for "the chat
-model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish —
+model that will be loaded", true only once `runtime:use`'s multi-GB weight hash and load finish —
 and false for the WHOLE window before that. A down-switch on the project's own measured GTX 1070
 Ti (`{totalMb: 8273, freeMb: 7504}`: the 9B running at posture `cpu`, switching to the 4B) could
 cold-start the reranker on the GPU beside the still-resident, still-running OLD chat model, for as
@@ -5291,7 +5382,9 @@ restart, install. Three things blocked an in-app repair:
 2. **Main build only.** The reinstall re-fetches the default build; the pre-clean keeps `cpu/`
    as it always has. The in-app installer never installs `cpu/`, even on a first install, and the
    startup check probes the main binary. *Amended by #678 (§11): the reinstall replaces the builds
-   the OS refused, the `cpu/` net included; a first install still never fetches `cpu/`.*
+   the OS refused, the `cpu/` net included; a first install still never fetches `cpu/`. Amended by
+   #986 ("In-app engine updates" §6): there is no pre-clean any more; the main build's swap carries
+   `cpu/` from the replaced copy into the new one.*
 3. **The voice engine gets the same action**, on its quiet hint (§11.17 decision 5).
 4. **One click**, like the existing "Install AI engine" button. The drive's copy is replaced only
    after the new archive downloaded and matched its pinned SHA-256; a cancelled or failed download
@@ -5304,7 +5397,9 @@ restart, install. Three things blocked an in-app repair:
   `main.engine.nothingToRepair`. `EngineDownloadManager.start` installs the named families
   whether or not they are current; a named family with no build here is `main.engine.noHostBuild`.
   Everything else is the ordinary flow: the gates, download, SHA-256 verify, pre-clean (keeps
-  `cpu/`), extract, marker, verifier cache invalidation.
+  `cpu/`), extract, marker, verifier cache invalidation. *Since #986 ("In-app engine updates" §6)
+  the ordinary flow is a staged swap: extract, check and mark in `<os>.new/`, then swap it in and
+  carry `cpu/` over; a failed reinstall leaves the damaged copy as it was.*
 - **Status and job:** `EngineStatus.reinstallableFamilies` lists the required families that are on
   the drive and have a build here. `EngineDownloadJob.families` and `.reinstall` let the screen
   attribute a job's progress to the surface that started it (data-contracts.md).
@@ -5786,8 +5881,10 @@ cites it as "In-app engine updates"._
   so it never downgrades and never replaces an unrecorded engine. The job carries `update: true`.
 - **Two phases, for every job.** `run()` downloads and verifies every archive first (`fetchArchive`),
   leaving the installed engine untouched and usable. Only then does it call
-  `StartEngineDownloadOptions.beforeReplace` and replace each install (`replaceInstall`: pre-clean,
-  which keeps `cpu/` and the archives, then extract, flatten, completeness check, marker).
+  `StartEngineDownloadOptions.beforeReplace` and replace each install (`replaceInstall`). *Amended by
+  #986 (§6): between the phases the job checks the free space; each install is then a staged swap
+  (extract, flatten, completeness check and marker in `<os>.new/`, then two renames), no longer a
+  pre-clean followed by an extraction in place.*
   - A failure or cancel in phase 1 replaces nothing.
   - Archives not yet extracted when the job stops are deleted.
   - **The spawn gate** (`runtime/spawn-gate.ts`, review fix). From `beforeReplace` to the last
@@ -5807,7 +5904,10 @@ cites it as "In-app engine updates"._
     also never reached the sweep, so its links stayed. A user's cancel of a running tar is the
     exception (see below), but not one that lands on a SEC-2 refusal: that clears too. The residual: a
     refused archive that wrote into `cpu/` is not undone, since the net is kept whole; reaching it
-    takes a tampered `runtime-sources.yaml`, which can name any archive anyway.
+    takes a tampered `runtime-sources.yaml`, which can name any archive anyway. *Amended by #986
+    (§6): a failed install now leaves the PREVIOUS install exactly as it was, and no `.new`. The failed
+    copy is only ever in `<os>.new/`, which is deleted (a first install still leaves nothing that
+    reads as installed); the clear-up, `clearFailedInstall` and the `cpu/` residual are gone.*
   - **A job that stops part-way still reports what it replaced** (review fix). If the main build was
     swapped and a later step (the `cpu/` net, the voice engine) failed or was cancelled, `onInstalled`
     fires for the replaced families, so the new binary's consumers are re-armed and the probe
@@ -5817,7 +5917,11 @@ cites it as "In-app engine updates"._
     folder surfaces as #530 "files damaged", which the #532 reinstall repairs. A cancel that lands
     after `install()` finished arrives too late to stop anything: the old copy is gone and the new
     one is whole, so the marker is written and the job reports done. Skipping the marker used to
-    leave a working engine with no version record, which no update offers to replace.
+    leave a working engine with no version record, which no update offers to replace. *Superseded
+    by #986 (§6): nothing installed is touched before the swap's first rename, so a cancel is
+    honoured until then, after the extraction too (the copy in `.new` is deleted), and arrives too
+    late after it (the step finishes, marker included). A cancelled extraction no longer leaves a
+    half-extracted install folder.*
 - **The pause** (`registerEngineIpc.ts` `startEngineUpdate`):
   1. **Refused up front** while work runs (`engineUpdateBusy` → `main.engine.updateBusy`):
      - any `modelBusyLane` (an answer, a document task, a skill run, the benchmark);
@@ -5849,8 +5953,41 @@ cites it as "In-app engine updates"._
   because that banner leads and a reinstall fetches the pin anyway. It joins the deep-link no-scroll
   predicate (the #539 note on #516), and a toast confirms a finished update. Diagnostics has an
   "Engine versions" row (and Copy-report line) naming every engine or `cpu/` net that is not the pin.
+- **The update asks first (#843, 2026-11-18).** Update opens the engine confirmation (the "In-app
+  engine installer" #843 addendum) with what this job will fetch: the main build and, when older, the
+  `cpu/` net, each "installed → pinned". The dialog's preview and `start()` select the archives with
+  one function, `planEngineSteps` (extracted from `start()`), so the rule "the notice never offers
+  what the update would refuse" now holds for the dialog's list too, for the selection (as of the
+  moment it opened; Confirm plans again), and P8's in-app updater extends that function, not a copy.
+  The preview does not run the checks outside the selection: the gates, the one-job check, an engine
+  in use (`main.engine.runtimeRunning` and its voice and tools twins) and the update's busy check
+  (`main.engine.updateBusy`). Those refusals can arrive after Confirm, as the same friendly errors
+  (research C §1.8 accepted this). The dialog's "the model pauses for a few seconds" note shows only
+  when the update includes the AI engine: a voice-engine-only update pauses the transcriber alone
+  (`pauseEngineUsers`).
 - **Scripts:** `fetch-runtime.{ps1,sh}` print a note when the drive's yaml pins a different version of
   the family than the repo's, and say to refresh the manifests (`prepare-drive`) first (`packaging.md`).
+  **Newer is never replaced there either (#873, 2026-11-18):** a present engine whose marker is NEWER
+  than the drive's pin, by `compareRuntimeVersions`'s order (re-spelled in both twins, held to one
+  shared table by `script-drift.test.ts`), is skipped with a line naming both versions, whatever its
+  backend, unless `-AllowDowngrade`/`--allow-downgrade` (not `-Force`: that is prepare-drive's
+  "overwrite config") or `-Commercial`/`--commercial` (a sold drive carries its app's pin; the script
+  says it is replacing the newer engine). An unorderable version re-fetches as before. Applies to
+  llama.cpp (main and `cpu/`), whisper.cpp and the knowledge-pack tools.
+- **The pin is the app's own (#842, 2026-11-17).** §1's "never the drive's" was the intent, but the
+  handlers passed `ctx.manifestsDir`, which the launchers point at the drive's `model-manifests/`;
+  only a direct start read the bundled copy. A new app copied onto a drive whose manifests were not
+  refreshed therefore compared the engine with the drive's old pin and offered nothing. The status,
+  install, repair and update, and the voice engine's "could it be fetched here" check (#527), now
+  read `ctx.bundledManifestsDir`, set by `resolveBundledManifestsDir`: no override reaches it; a
+  packaged build takes exactly `<resources>/model-manifests` (`process.resourcesPath`), with no
+  walk-up that could reach the drive's copy above the app, and a dev build the checkout's. The
+  model list keeps `ctx.manifestsDir`. Engine entries a drive owner adds to the drive's yaml (another OS's build, a mirror) reach the
+  scripts only. After an in-app update the drive's yaml is older than the engine on it. The sell gate
+  (`assertCommercialDrive`) compares markers with it for EQUAL and reports the updated engine as not
+  matching its pin; `fetch-runtime` run without `prepare-drive` first used to re-install the drive's
+  older pin too, and since #873 keeps the newer engine instead (above). `prepare-drive` brings the
+  yaml back in step.
 
 ### §4 Real-app verification (2026-10-05, DesktopDiT, GTX 1070 Ti, dev build)
 
@@ -5887,9 +6024,9 @@ voice engine was missing.
   a private in-flight counter). One in flight at the pause is cut off and fails, and the user retries
   it. Document translations, image analyses, generations and article saves are all waited for.
 - **An `unknown` engine** (no marker, or an unorderable tag) is reported in Diagnostics but never
-  offered an update. The in-app installer no longer leaves one behind (a late cancel now records the
-  install). One copied by hand heals through the #532 repair if the OS refuses it, or through the
-  scripts.
+  offered an update. The in-app installer no longer leaves one behind (since #986 it marks every copy
+  before it swaps it in, and a cancel leaves the old copy). One copied by hand heals through the #532
+  repair if the OS refuses it, or through the scripts.
 - **The knowledge-pack tools are reported, not updated** (decision 3). Their consent dialog installs a
   missing copy only, and their spawn sites are not behind the spawn gate (no in-app update replaces them).
 - **The ModelsScreen runtime poll** (see "Engine load failures" §8) can show the card's earlier state
@@ -5920,6 +6057,164 @@ Tests:
   Diagnostics row and report.
 - `ModelsScreen.test.tsx`: the deep-link row.
 
+### §6 #986 amendment — the staged engine swap (2026-11-21)
+
+_An install, update or reinstall deleted the installed engine and then extracted the new one into
+the same folder, so any failure after the download left no engine: a full drive, an antivirus hold
+on a new file, a sleep, an unplug or a kill during the extraction (#986; measured: the b9849 folder
+was replaced in place, nothing kept). This is the app-update plan's W-67 (T8.5c, PA-225), built
+before the first Kit release freezes the install path, with the four gaps follow-ups wave 6's
+research found in it. Code cites it as "In-app engine updates" §6._
+
+**The facts it rests on** (measured on NTFS, Windows 11, Node 24, follow-ups wave 6 research E):
+- A folder rename is refused with **EPERM** while any file in it or in a sub-folder is open, and with
+  **EBUSY** while a process has its working folder inside. A **running program does not block the
+  rename** of its folder, only its deletion (`unlink` and `rm -rf` of it: EPERM). So a rename swap is
+  more tolerant than the old delete, and the existing stop and refuse rules (the pause, the in-use
+  refusal, the spawn gate) stay: a process left running would keep the old copy from being deleted.
+- Windows never renames a folder onto an existing one (EPERM); POSIX replaces an empty one only.
+- On exFAT a folder lists in creation order and the marker is written last, so a delete cut short
+  keeps the marker over missing files. exFAT itself was not measured (owed on a real stick).
+- No reader enumerates `runtime/<family>/`: every resolver, the verifier, `engineStatus`, the planner,
+  Diagnostics, the GPU probe and the load check use exact paths, so sibling folders are invisible.
+- The zip central directory states each member's unpacked size: for llama.cpp b11183's Windows Vulkan
+  zip its sum, 92,515,613 bytes in 52 files, is exactly what the extraction writes (96,993,280 bytes
+  at exFAT's 128 KiB allocation unit). No pinned archive is Zip64.
+
+**Decisions** (owner, follow-ups wave 6 gate G-5 (a), 2026-11-21): W-67 now, with its gaps closed; the
+free-space figure from the archive itself (no manifest field); two new strings; the sell gate and the
+Kit gate refuse a leftover; a cancel is honoured until the first rename; CE-F10 (run a complete copy
+in place on a read-only drive) stays the app-update plan's.
+
+**The four gaps in W-67, as closed:**
+1. **The `cpu/` net sits inside the main folder** (`<os>/cpu/`), so the main swap moves it to `.old`.
+   The main step carries `.old/cpu` into the new copy when that has none, before `.old` is deleted; a
+   `.old` whose net could not be carried is kept, and the start carries it.
+2. **"A current folder" means a complete one** (the marker parses and every required file is there,
+   `engineFolderComplete`), never mere existence: the install folder can exist empty (prepare-drive,
+   the archive's download, a net's folder).
+3. **Un-mark before deleting:** every delete of a copy removes its marker first.
+   *Review round 2:* a copy is judged by ITS OWN marker: the marker parses and every file its `binaries`
+   map records is there (the plan's list only for a marker without the map). Judged by the current pin's
+   list, an old copy that lacks a file a newer pin adds read as incomplete, and the start deleted it
+   instead of rolling back to it (and finished an update it should have dropped).
+4. **No rename onto an existing folder:** a stale `.old` is deleted (marker first) before the swap, and
+   one that cannot go fails the step before the install folder is touched.
+
+**As built** (`runtime-download.ts`, `assets.ts`, `fs-retry.ts`, `archive-size.ts`):
+- **Room first.** After every archive verified and before the update's pause, `missingRoom` reads each
+  archive's unpacked size (`extractedArchiveBytes`: a zip's central directory, a tar.gz's ustar headers
+  through gunzip; each file rounded up to the volume's allocation unit, statfs `bsize`; one unit per
+  folder) and sums the steps per volume (the replaced copies go only after the job). More than is free:
+  `noSpace`, `main.engine.notEnoughSpace` with both figures, nothing touched and nothing paused. A size
+  it cannot read (Zip64, an unknown format) skips the check with a log line.
+- **Stage** (`stageEngineInstall(plan, stagingDir)`, per step): wait for queued deletes; delete a stale
+  `<os>.new` (marker first); move the verified archive in (#856: tar runs inside the folder with
+  `./<name>`); extract; flatten; remove the left-out executables (#729); the SEC-2 link sweep; delete
+  the archive; every required file present; chmod; hash every file into the marker; flush every file
+  to the device; write the marker LAST, inside `.new`, and flush it (lens F CE-F1: a marker written
+  after the move made a quit there reinstall over the kept copy). Phase 1 is unchanged: the archives
+  still download into the install folder, which a first install creates.
+- **Order (review round 1):** phase 2 installs each family's `cpu/` net BEFORE its main build. The net's
+  archive downloads into `<os>/cpu/`, inside the main folder: with the main build first, its swap moved
+  that archive into `.old/cpu/`, and a refused carry left the net step without it (ENOENT) and the
+  archive inside `cpu/` for good once the start carried `.old/cpu` back. Net first, the net's swap
+  happens inside the old install folder and the main build's carry takes the NEW net across; no archive
+  is ever inside a folder another step renames. The cost: a net step that fails now stops the job before
+  the main build, which then stays as it was (it used to be replaced and the net failed after it).
+- **A retry never deletes what the last attempt kept (review round 1).** Before phase 1, the job runs the
+  start's recovery rule (`recoverEngineFolder`, below) on each of its folders, main build before its net:
+  a swap whose old copy could not be moved back is finished (the new copy moved in), a net a refused
+  carry left in `.old` is carried in. Before phase 1, because phase 1 makes the install folder again for
+  its archive. In phase 2 a step still refuses to delete a `.new` or `.old` that is the only whole copy
+  (the install folder is not) or that holds a `cpu/` net the install folder lacks: it ends `filesInUse`
+  with nothing touched.
+- **Cancel:** checked after the extraction, before the swap, and once more inside the swap right before
+  its first rename (after a stale `.old` was deleted, which can take seconds). Until the swap's first rename a
+  cancel deletes `.new` and replaces nothing (#516's "finish the install" rule had its reason in the
+  old copy being gone, and is retired); after it, the step finishes.
+- **Swap** (`swapEngineFolder`): delete a stale `.old`; `<os>` → `<os>.old`; `<os>.new` → `<os>`. Each
+  rename goes through `renameWithRetry`: on Windows, EPERM, EACCES and EBUSY are tried again with waits
+  of 50 ms doubling to 1 s, 12 s in all; elsewhere the first refusal stands. A refused first rename
+  touches nothing; a refused second one moves `.old` back. Both end the step `filesInUse`
+  (`main.engine.filesInUse`, "try again in a minute") with the installed copy as it was. Only when `.old`
+  cannot be moved back either do both copies stay; the install folder is then gone for the moment. The
+  next job (the screen offers the install) and the next start first finish such a swap with the start's
+  rule, for every folder of the job's families, the main build's nested net folder included (review
+  round 2). Their renames are tried once, without the waits a job's renames get, so "try again in a
+  minute" holds once the holder has let go; while it still holds a folder, the job ends `filesInUse`
+  again with nothing touched. Deletes of a copy (`removeEngineFolder`) get Node's own `rm` retries
+  on Windows, 15 tries of 100 ms more each (12 s), for a scanner still reading a failed copy.
+- **The spawn gate's bound is not the worst case (review round 1).** One step can take the extractor's
+  5 minutes plus several 12 s rename budgets (the archive's move, the flatten, the swap's renames, a move
+  back, the carry), the hashing, the flush and waits on queued deletes, and a job has up to two steps per
+  family, so a job can hold the gate past its 6 minutes. That is enough: the install folder changes only
+  in the swap's renames, so a spawn that stops waiting meets a complete copy, old or new, with two gaps:
+  between the swap's two renames the install folder does not exist, for up to one 12 s rename-retry
+  budget (the spawn finds no program, as with no engine), and between the main build's swap and its carry
+  the new copy has no net for a moment (review round 3). What a spawn let through early can do is run the old copy, which the swap moves
+  to `.old`, where Windows cannot delete it while it runs; the next swap or start deletes it.
+- **After the swap:** the main step carries `cpu/`; the verifier's cached verdicts for the replaced
+  programs are dropped; `.old` is deleted in the background, marker first, once the job has released
+  the spawn gate (a waiting helper starts on the new copy at once). The deletes run one after another
+  (`engineFolderDeletesSettled`), and the next stage and swap wait for them.
+- **Start recovery** (`recoverEngineSwaps`, in `index.ts` as soon as the pins are known, before the
+  transcriber slot and the engine check resolve a binary): for every family's host build, the main
+  build before its net, and only the exact names `<os>.new` and `<os>.old` (never a pattern: frozen in
+  the first Kit release, it must leave the app-update plan's `<os>@<pin>/` alone):
+  - install complete → carry `.old/cpu` when the install has no whole net (main build), delete `.new`
+    and `.old`;
+  - else `.new` complete → move the incomplete install to `.old`, `.new` in, carry, delete `.old`;
+  - else `.old` complete → move the incomplete install to `.new`, `.old` back, delete `.new`;
+  - else delete both (an incomplete `.old`'s `cpu/` carried first).
+
+  An incomplete leftover already at the spare name is deleted first, synchronously and marker first
+  (its `cpu/` net carried into the install folder before); it used to make the start give up, so a
+  broken install folder stayed broken on every start (review round 1). When the spare name holds a
+  WHOLE copy, the incomplete install folder holds no engine and is the one deleted (its `cpu/` net carried
+  into the copy about to move in first): two whole copies beside an empty install folder used to stay
+  for good, every start and every job (review round 2).
+
+  The `cpu/` carry (start and job) moves the net when the install's `cpu/` is not a WHOLE net by its own
+  marker, deleting an incomplete one first (an empty `cpu/` used to shadow the only net in `.old`, which
+  then went). Before carrying out of a copy, a net swap left unfinished inside it (`<copy>/cpu.new`,
+  `cpu.old`) is finished or rolled back there, so whole nets never go with the copy (review round 2).
+
+  Renames run synchronously, once each: a refusal is logged as a warning and the layout left as it is,
+  never worse (a refused `.new` → install falls back to a complete `.old`). Deletes run in the
+  background. It never throws. A refused rename on a drive that cannot be written is where CE-F10 would hook (pointing the
+  family's resolver at the complete copy); not built.
+- **Gates:** `assertCommercialDrive` fails a Kit with a leftover `<extract_to>.new` or `.old` beside any
+  pinned build (the net's `cpu.new` / `cpu.old` included), and the Kit gate scripts' pre-flight
+  (`build-commercial-drive.{ps1,sh}`) names it too, the knowledge-pack tools' folders included (their own
+  list, held to the yaml by `script-drift.test.ts`). Its advice "start the app on this drive once" works
+  for the builder's own OS only: the start recovers this host's builds.
+
+**Residuals.** exFAT and an antivirus holding a new file are not measured here (the owed T8.5c walk on
+a real stick). The start's renames, and the job's own recovery's, are tried once, without retries (the
+start never waits on a lock): a refused one waits for the next start or job. With a junction at the
+install folder (dev kits only; a real Kit has no links there), the swap renames the junction itself to
+`.old` and moves a real folder in, and the main build's carry then moves `cpu/` out of the junction's
+TARGET into the new folder: the target loses its net (on another volume the carry fails, EXDEV, and
+`.old` stays for the start). Deleting `.old` then unlinks the link and never enters it, so the old copy
+stays on the link's target, orphaned: no folder the app reads points at it any more. A dangling symbolic link at a leftover name is what the PowerShell Kit
+gate's `Get-Item -Force` check is for; this machine cannot create one (no symlink privilege), so only
+the junction case is exercised here. Not modelled: two hosts writing one drive at once.
+
+Tests: `engine-swap.test.ts` (eighteen crash layouts run through the recovery, the incomplete spare,
+two whole copies beside an empty install, a net swap inside `.old`, a pin that adds a file and an empty
+`cpu/` included; a job over two whole copies and a retry that plans the main build alone; the exact-names, marker-first, refused-rename and warning rows; in a job: the `cpu/` carry and
+the marker inside `.new` at the first rename, stale leftovers, a held handle waited out on Windows, the
+rollback, the stranded case and its retry, a retry that fails after a keep-both, a job after a refused
+carry, a refused carry with both builds in one job, a first install, a net-only reinstall, a cancel
+before, during and just before the swap, no room with nothing touched or paused, the OS tar in `.new`);
+`engine-extract-containment.test.ts` (each failing archive as a first install and over an installed
+engine, which stays identical; a `.new` that cannot be deleted); `engine-download.test.ts` (the cancel
+rows, the part-way rows on `.new`); `engine-consent-ipc.test.ts` (the #532 reinstall keeps `cpu/`: the
+carry's regression row); `install-audit.test.ts` (`noSpace` with its byte counts); `fs-retry.test.ts`;
+`archive-size.test.ts`; `assets.test.ts` (the swap folders); `commercial-drive.test.ts` and
+`script-execution.test.ts` (the leftover refusals).
+
 
 ## Internationalization — design record (Phases 39–42)
 
@@ -5943,7 +6238,7 @@ code comments cite them as "i18n record §N"** (the German style rules of §3.5 
 |---|---|
 | D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. `de.ts` is typed `Record<keyof typeof en, string>`, so typecheck enforces catalog parity — removing a key is a compile error. i18next/react-intl were rejected: async resource loading + ICU machinery en/de don't need, and a provider-suspense would have churned hundreds of green synchronous tests. **Amended 2026-11-11 (UI languages wave, D-L9):** plurals are chosen per language. Each registry entry carries a plural rule and the plural forms its catalog must provide. English and German keep the exact `n === 1` rule (`.one` for exactly 1, else `.other`), so their output is unchanged; a language with more forms uses the built-in `Intl.PluralRules` and carries the extra forms as `<base>.few` / `<base>.many`. If a catalog lacks the selected form, `.other` is used. Still no dependency. Every registered catalog is typed against its own required key set, so parity stays typecheck-enforced for every language. |
 | D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). **Amended 2026-11-11:** the setting accepts any registered language (D-L9). `'system'` follows the OS locale's **primary subtag** (lower-cased, split on `-` or `_`) when that language is registered, and is English otherwise; a tag that merely begins with a registered code (`deu`, `frr-DE`) does not match. A stored value this build does not know (for example a language added by a newer build on a shared drive) resolves like `'system'`. **Amended 2026-11-12 (UI languages wave, PR-B):** with Spanish, French, Italian and Russian registered, an OS locale in any of them resolves to that language (an `fr-FR` system gets French). The hint under the picker (`settings.language.hint`) names no languages, so registering one never makes it false (UI-languages owner call D-12 (a)): *System* follows the operating system's language when HilbertRaum offers it, and English otherwise. **Amended 2026-11-13 (second UI-languages wave):** the same holds for Dutch, Polish, Turkish and Ukrainian. Only the primary subtag counts, so `nl-BE` gives Dutch and `uk-UA` Ukrainian, while `ua` (Ukraine's country code, not a language code) and the three-letter codes `ukr` and `nld` give English. |
-| D-L3 | Pre-unlock language: renderer = the `hilbertraum.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. **Amended 2026-11-11 (UI languages wave, UI-languages owner call D-17 (a)):** before unlock the two can differ (the mirror holds the chosen language, `app.getLocale()` the OS's), so the gate (`WorkspaceGate.tsx`) no longer shows main's `message` for a failed unlock or create. It renders the failure from its `reason` code through its own `t()`, with the same `main.workspace.*` key main emits, one table per call; typecheck makes each table cover every reason. Main's `message` shows only for a reason a table maps to `null` (main never sends it for that call; the one that does occur is create's free-text `refused`, the vault's own sentence, which has no catalog key) and for a reason the tables lack. Main's too-short refusal never reaches the gate, which applies the same floor (`MIN_PASSWORD_LENGTH`, `shared/types.ts`) before it sends. **Amended 2026-11-12 (review of PR #801):** the two tables live in `shared/workspace-failure-keys.ts` (the gate imports it; main doesn't read it), and `tests/integration/workspace-ipc.test.ts` drives main's real unlock and create handlers into every branch the gate can receive (all but create's too-short refusal, which the gate's own floor keeps from being sent), in every registered language, checking main's `message` against the gate's key (a `null` entry must be free text: the same in every language and no catalog value), so a key changed on one side alone turns red. |
+| D-L3 | Pre-unlock language: renderer = the `hilbertraum.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. **Amended 2026-11-11 (UI languages wave, UI-languages owner call D-17 (a)):** before unlock the two can differ (the mirror holds the chosen language, `app.getLocale()` the OS's), so the gate (`WorkspaceGate.tsx`) no longer shows main's `message` for a failed unlock or create. It renders the failure from its `reason` code through its own `t()`, with the same `main.workspace.*` key main emits, one table per call; typecheck makes each table cover every reason. Main's `message` shows only for a reason a table maps to `null` (main never sends it for that call; the one that does occur is create's free-text `refused`, the vault's own sentence, which has no catalog key) and for a reason the tables lack. Main's too-short refusal never reaches the gate, which applies the same floor (`MIN_PASSWORD_LENGTH`, `shared/types.ts`) before it sends. **Amended 2026-11-12 (review of PR #801):** the two tables live in `shared/workspace-failure-keys.ts` (the gate imports it; main doesn't read it), and `tests/integration/workspace-ipc.test.ts` drives main's real unlock and create handlers into every branch the gate can receive (all but create's too-short refusal, which the gate's own floor keeps from being sent), in every registered language, checking main's `message` against the gate's key (a `null` entry must be free text: the same in every language and no catalog value), so a key changed on one side alone turns red. **Amended 2026-11-20 (follow-ups wave 4, #807; owner calls G-6 A + A2 and G-8):** no call sends free text any more. Create's two vault refusals are typed (`WorkspaceExistsError`, `PlaintextNotAllowedError`) and answer their own reasons, `workspace_exists` (`main.workspace.exists`) and `plaintext_not_allowed` (`main.workspace.plaintextNotAllowed`); the IPC maps them by class (`instanceof` or `err.name`), and the `/not permitted|already exists/` match that recognised them by their English wording is gone (it also caught Node's own file errors, which reached the gate raw with absolute paths; they are now `error`, logged content-free). Create's `refused` is only the too-short refusal, and its table entry is `main.workspace.passwordTooShort`, which the gate renders with `{ min: MIN_PASSWORD_LENGTH }` (A2). An `.enc` beside a missing or unreadable descriptor answers the unlock's new `vault_descriptor_missing` (`main.workspace.descriptorMissing`, G-8). So a table's `null` now always means "never sent", and the cross-check requires a key for every reason it drives, with the `{ min }` the gate passes. **Amended 2026-11-21 (follow-ups wave 5, #955; owner call G-6):** the unlock has one more reason, `vault_descriptor_unreadable` (`main.workspace.descriptorUnreadable`: a key file that cannot be read with no `.enc` beside it), and the create sends it too, with the same key in its table, for such a file that appeared under the create form (review V F-3; the gate shows it on the create form and does not switch); the cross-check drives both like every other. After a create's `workspace_exists` the gate re-reads main's state and, when it reads `locked` (a key file put back under the create form), hands it to App through a new `onStateChange` prop, not `onUnlocked` (nothing opened, so no landing): the gate switches to its unlock form. The create step and the unlock screen are one card, so its always-mounted alert region stays in the tree across the switch and the refusal arrives as a text change inside it (#436; a separately mounted unlock form put in a region already holding the text, the same frame in the real app); only the fields are keyed by mode, so the unlock field mounts fresh and takes the focus. `main.workspace.exists` no longer says to restart. |
 | D-L4 | **Persist canonical English, translate at display**: an exact-match display map over the finite static persisted set (`renderer/lib/displayMap.ts`). Keeps the `scanDetected` contract and pre-i18n rows valid; persisted copy is retroactively language-switchable. |
 | D-L5 | **Ephemeral main→user strings localize at emission** via `tMain()` + the cached language; the IPC error transport (`friendlyIpcError`) is unchanged. |
 | D-L6 | LLM prompts stay English and unchanged (Phase-29 benchmark comparability; models follow the question's language). Task-output language = a future feature; documented in `known-limitations.md` ("Internationalization"). |
@@ -6001,7 +6296,9 @@ they are not the second UI-languages wave's G-numbers above. G-1, G-2: the wave'
 order of its pull requests, with #804, #805, #806, #807 and #812 in one; G-1 also took #632's
 option A: on What Changed?'s fall-through turn the fence carries paragraph 1 only, the stamp
 kept; at the code review (owner round WB2-1) the owner limited it to the bundled skill, so a
-user compare skill keeps its whole fence (§44 SK-3b) · G-3 (a): in the
+user compare skill keeps its whole fence (§44 SK-3b); #831 (follow-ups wave 4 owner call
+G-9, 2026-11-20) extended the cap to the four bundled whole-document skills, the needle
+downgrade included, bundled only again (§44 SK-3b) · G-3 (a): in the
 Spanish, French, Italian, Dutch, Polish, Turkish, Russian and Ukrainian catalogs a figure or a
 placeholder and a unit symbol (GB, MB, KB, B, MB/s, tok/s, ms, s) are joined by U+00A0, the
 Dutch, Polish and Ukrainian rules against a no-break space allow it in exactly that one position
@@ -6028,9 +6325,12 @@ but English and German carries an English copy in the same paste (§5) · G-8 (a
 query is composed (NFC) and lowered without a locale, a capital «İ» to a plain "i" (`lowerCaseNfc`,
 `shared/text-fold.ts`), and a word holding «ı» is also searched with each «ı» written as "i"; the
 index, its triggers and the stored text stay as they were ([`rag-design.md`](rag-design.md) §11
-"Keyword index"); the filters' `foldCase` composes first; the conversation list orders its project
-sections with an `Intl.Collator` of the interface language instead of the system's locale
-(`ConversationList.tsx` `groupByProject`) (§5) · G-9 (a): three CSS rules for the 880×600 minimum
+"Keyword index"); the filters' `foldCase` composes first; every project list orders its names with an
+`Intl.Collator` of the interface language instead of the system's locale or SQL's code-point order:
+the conversation list's sections, the Documents rail (active and archived), the "Choose a project"
+dialog, the chat scope picker and a row's project chips (built-ins first). One renderer helper,
+`renderer/lib/collation.ts` (`nameCompare`, `inNameOrder`); main's `listCollections` order is
+unchanged (§5, #818, #828) · G-9 (a): three CSS rules for the 880×600 minimum
 window (#803), each written once its cause was confirmed in the running app: the Documents
 filter's icon padding wins over `.text-input` (`.text-input.docs-filter-input`), the chat column
 has no min-content floor (`.chat-main { min-width: 0 }`), and the rail scrolls with no visible
@@ -6234,9 +6534,30 @@ build tree-shakes them).
   exact map, the five interpolated families or the doc-task-busy substring), and only a string it
   does not recognise gets a lead; `localizeServerCopy()` keeps its signature and returns the
   text alone. Stored data is unchanged, so rows stored before the change get the lead too.
-  Everywhere else an unknown string
-  still renders as-is, the Documents banner for a failed summary, translation or OCR task, the
-  file translation's banner and the evidence-pack export error among them. A hygiene test pins
+  **Amended 2026-11-20 (follow-ups wave 4, #807; owner call G-7 E-a):** four more surfaces show a
+  failed call's or a library's own words as the detail under a translated lead. The file
+  translation's banner reads a failed source document's stored error exactly as `DocRow` does
+  (`classifyServerCopy`: a recognised message alone, any other under `docs.failed.lead`; the
+  session keeps that error apart from doc-task and IPC messages, `documentError`). The review's
+  save line always leads with `review.autosave.error` and shows the failed write's message after it
+  (SQLite's "database is locked" says nothing about the edit), and a review that fails to open
+  leads with `review.openFailed`. The evidence-pack export error leads with `review.export.failed`
+  ("The evidence pack export did not finish."), true for every failure, including the named
+  outcome whose file was saved but not recorded, which `review.export.error` ("No file was
+  written") is not; a refused flush keeps `review.export.error` alone. These three take no
+  `classifyServerCopy` verdict: their messages are main's `tMain` text or a library's, which the
+  persist-canonical map never holds, so the lead is always shown. Everywhere else an unknown string
+  still renders as-is: a failed IPC call's own message (`friendlyIpcError(e)`, which strips only the
+  transport prefix) wherever a screen reports a failed action, on its own, with no lead. That is
+  the Documents screen (21 sites), Chat (16), the AI Model screen (9), the knowledge-pack panel
+  (5), Performance (3), the OCR and knowledge-pack tool installs (3 each), the preview and article
+  modals, the sources disclosure, dictation, and the file translation's own calls
+  (`fileTranslateSession.ts` `failWith(friendlyIpcError(e))`: an import, start, poll or result
+  read that fails, as opposed to a failed source document). A lead there needs copy per action,
+  left open (counts at `88da1bc5`). The
+  Documents banner for a failed summary, translation or OCR task gets app text only: the task
+  manager passes its own messages on and replaces anything else with its generic failure. A
+  hygiene test pins
   `DISPLAY_MAP_KEYS` +
   `INTERPOLATED_MAP_KEYS` ↔ the persist-canonical section key-for-key.
 - **Rule 2 — emit localized (D-L5).** Anything ephemeral (IPC guard throws, task-status
@@ -6294,9 +6615,18 @@ build tree-shakes them).
   summarize chip as written and in capitals; the every-mention chip with its own word and with
   another; in the eight other languages, that chip without its quotes, or followed by another
   question, is a plain question).
+  Since #834 (follow-ups wave 4) the skill classifier reads the same frame: `isNeedleShaped`
+  (`skills/vocabulary.ts`) counts the every-mention chip as no single-fact lookup in any
+  catalog, whatever stands in its quotes, so with a whole-document skill and one document too
+  long to read whole the chip keeps the whole read in every language (before, the German chip,
+  whose «finde» is a lookup word, went to the passage search, and the other nine kept the whole
+  read). The chip helpers moved from `analysis/router.ts` to `analysis/example-chips.ts`
+  (`chipText`, `isSummarizeChip`, `isMentionChip`), which the router and the classifier both
+  import; the router's answers are unchanged. Proof `skills-vocabulary.test.ts` and
+  `rag-whole-doc-skill.test.ts`, one row per registered language each.
   Changing either chip's wording in any language, or the text around the indemnity chip's quotes,
-  changes what the router recognises, and the old wording is then read like any other question
-  in that language. Not a Rule-3 site: the small-talk check (`isSmallTalk`,
+  changes what the router and the skill classifier recognise, and the old wording is then read
+  like any other question in that language. Not a Rule-3 site: the small-talk check (`isSmallTalk`,
   `skills/vocabulary.ts`), whose greetings, thanks and closings for the eight languages beyond
   English and German are language data written in main for the check, not catalog values, so no
   catalog edit changes them. They follow three rules, checked across all ten languages for a
@@ -6305,6 +6635,13 @@ build tree-shakes them).
   one-word «Bien?», «Bene?», «Goed?», «Dobrze?», «Хорошо?» or «Добре?» still reads as small talk,
   as the German «Gut?» does), and an adjective or numeral that inflects with its noun only inside
   a whole-message form ("muchas gracias", "большое спасибо").
+  The short small-talk reply in a documents chat (#963, [`rag-design.md`](rag-design.md) §19) uses a
+  stricter check in the same file, `isSmallTalkReply`: a chit-chat question to the assistant, or,
+  with no question mark anywhere, a thanks or greeting formula or small-talk words with at least one
+  thanks, greeting, goodbye or praise word in them. The lists are split for it (social words and
+  forms, acceptance and filler words and forms, question forms); `isSmallTalk` reads their union, so
+  a one-word question about the last answer («Alles?», "Sure?") or a bare "ok" reads the documents
+  while the whole-document opt-outs keep reading it as small talk.
 - The product name "HilbertRaum" is never translated; language names in the
   picker stay in their own language (each registry entry's `nativeName`: `English`, `Deutsch`,
   `Español`, `Français`, `Italiano`, `Nederlands`, `Polski`, `Türkçe`, `Русский`, `Українська`),
@@ -6404,8 +6741,7 @@ one, and each glossary is pinned on top of its catalog file.
     `preview/preview.tsx`. Its limits: a join built from variables, or one in a `.ts` file, is not
     seen.
   - Left as they are: the dash typed in code between an activity line's time and its entry
-    (`DiagnosticsTab.tsx`); the main process's refusal to start a model that needs more memory than
-    the computer has, which is English (`registerModelIpc.ts`); and Spanish figures, which `Intl`
+    (`DiagnosticsTab.tsx`), and Spanish figures, which `Intl`
     writes in the Spain pattern for every Spanish-speaking user, since it is given the language
     code alone. The Spanish review decision labels put the decision in parentheses («Revisado
     (respaldado)»), so the summary's join adds the only colon (owner call of 2026-11-14 in the
@@ -6741,8 +7077,10 @@ Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` m
   `out/tools/assert-commercial-drive.mjs`. The build ORDER lives in the two builder scripts alone
   (`script-orchestration.test.ts` runs it); the TS step plan that once mirrored it had no caller and
   was removed (#770).
-- Drive detection without the launcher: `workspace.ts findPreparedDriveRoot` walks up from the app's
-  own location (`PORTABLE_EXECUTABLE_DIR` / exe path) to the `config/drive.json` marker (audit M16).
+- Drive detection without the launcher: `workspace.ts locateDriveRoot` (an empty `HILBERTRAUM_DRIVE_ROOT`
+  counts as unset) has `findPreparedDriveRoot` walk up from the app's real location
+  (`PORTABLE_EXECUTABLE_DIR`, then `APPIMAGE` while `APPDIR` holds the executable, then the exe path) to
+  the `config/drive.json` marker (audit M16; #858).
 
 ## In-app model downloader (Phase 18)
 
@@ -6879,11 +7217,13 @@ runtime** (`runtime/factory.ts` — "no llama-server binary on the drive"), whic
 hits when downloading a model into a dev/incomplete drive. `services/runtime-download.ts`
 `EngineDownloadManager` closes that gap: it resolves the host build (`selectHostBuild`), then
 **download → verify → clean → extract → flatten → write the `.hilbertraum-runtime.json`
-marker** — mirroring the canonical `fetch-runtime` scripts, but in-app. The network
+marker** — mirroring the canonical `fetch-runtime` scripts, but in-app. *Since #986 ("In-app
+engine updates" §6) there is no clean: download → verify → room check → extract, flatten, check
+and mark in `<os>.new/` → swap it in by rename; the next start finishes an interrupted swap.* The network
 (`fetchImpl`) and the archive extraction (`extractImpl`, default `tar -xf`, which covers the
 .zip/.tar.gz host assets via bsdtar/GNU tar) are **injected seams**, so the unit suite stays
-zero-network and never shells out. **Same gates as the model downloader** (policy ∧
-`allowNetwork`), re-checked in main; placeholder hashes complete `unverified` (checksum
+zero-network; only the #856 rows run the OS's own tar (packaging.md, the in-app engine
+section). **Same gates as the model downloader** (policy ∧ `allowNetwork`), re-checked in main; placeholder hashes complete `unverified` (checksum
 honesty); the install is **idempotent via the marker** (`runtimeInstallCurrent`). Surfaced as
 `engine:status/download/getJob/cancel` IPC + a Models-screen "Install the AI engine" banner
 (shown only when the engine is missing but a host build exists; progress/cancel like a model
@@ -6920,6 +7260,35 @@ install dir (`findNeverInstalledFiles`). Record: `docs/model-policy.md` "Sidecar
 kiwix-tools" (the license side), `docs/data-contracts.md` (the type-level shape),
 `docs/rag-design.md` §17 D-Z17 (the family contract from the knowledge-packs side, including the
 R-1 closure statement).
+
+**Addendum — #843, every engine install asks first (2026-11-18).** PRIVACY.md item 3 promises a
+dialog with the size, licence and address of "that specific download"; the engine's install
+banner, the #516 update notice and the #532 "Install … again" called `downloadEngine` on the click.
+Each now opens `EngineConfirmDialog` (`renderer/components`), the model dialog's `ConfirmDialog` +
+`<dl class="kv">` shape: per archive its version (for an update "installed → pinned"), backend,
+size, full URL in `<code>` and licence with its link and host (#236), the total when there is more
+than one archive, a "checked against its checksum, nothing about you is sent" hint, and for an update
+the pause note. Its title is the clicked surface's own title, its Confirm the action's own label;
+Confirm is disabled while the download gate is closed (`computeDownloadGate`). **Decisions:**
+(1) the facts come from **main** — `engine:plan` answers from `previewEngineDownload`, which runs
+`planEngineSteps`, the step selection `EngineDownloadManager.start()` itself runs (extracted from
+`start()` unchanged), with the same bundled pins and, for a reinstall, the same refused builds. A
+renderer-side reconstruction would have had to re-derive the `cpu/` net and the verdict store's
+builds and could drift; the equality table in `engine-plan.test.ts` holds the preview's URLs to the
+URLs the started job downloads. The preview runs the selection only, not `start()`'s other refusals
+(the gates, the one-job check, an engine in use, an update's busy check), so those can still arrive
+after Confirm as the same friendly error. The dialog shows the plan **at the moment it opened**:
+Confirm sends the same request and `start()` plans again, and main's gates decide again. If the drive changed in
+between (a background helper start reported a refused `cpu/` net while a reinstall dialog was open),
+the job does what the new plan says, and its audit record names what it really fetched; closing that
+gap would need a consent token, which decision (2) rules out. (2) **No consent token in main**: Confirm sends the unchanged request
+(the argument-less install stays argument-less), main checks the gates on every start as before, so
+the in-app updater's "one consent covers the engines inside an update" stays possible. (3) The
+licence is **code-side and pre-reviewed** (`SidecarFamilySpec.license`, `bundledLicenses` per OS,
+`licenseRepo`; `docs/model-policy.md` "What the in-app engine dialog states"), so there is no
+acknowledgement checkbox (the OCR pattern, not the kiwix one). (4) The sizes are the pins'
+`size_bytes` (labels only, never checked — the archive is checked by its SHA-256). The kiwix consent
+dialog is unchanged; its job is audited like every engine job (below).
 
 ## Diagnostics & transcript export (audit round)
 - `getRuntimeStatus` (read-only runtime health), `getLogTail` (tail of the local `app.log`), and
@@ -6971,7 +7340,9 @@ only), `registerModelIpc` (`model_selected/verified`, `runtime_started/stopped`)
 (`document_imported/reindexed/deleted`), `registerWorkspaceIpc`
 (`workspace_created/unlocked/locked/unlock_failed`), `registerDownloadIpc` → an injected
 `DownloadManagerDeps.audit` hook (`model_download_started/verified/failed` — the Phase-18
-follow-up), plus `main/index.ts` for `runtime_crashed`/`runtime_fallback` (the GPU
+follow-up), `registerEngineIpc` (#843: `engine_install_started/finished/failed` from the
+`engine:download` handler and the manager's `onSettled`; `ocr_install_started/finished/failed`
+through the `StartOcrInstallOptions.audit` sink it passes to every OCR job), plus `main/index.ts` for `runtime_crashed`/`runtime_fallback` (the GPU
 crash-fallback/ladder callbacks), `policy_warning` (startup `loadPolicy`), and
 `offline_guard_violation` (a new `assertOfflinePosture.onViolation` hook).
 
@@ -7323,6 +7694,27 @@ conversation/message references. A DB rebuild re-derives every row from disk (no
 `conversations`/`messages` refs keep resolving); there is deliberately **no FK into `skills`** (refs are
 cleared by an app-level sweep on delete, §4). `services/skills/loader.ts` has one mode — read the
 folder — for both sources (no decrypt/transient/shred).
+
+**#846 amendment — why a row is off (`skills.disabled_reason`).** A nullable column (one `ensureColumn`,
+no `SCHEMA_VERSION` bump) records the reason with every "off": `'user'` (the Settings toggle),
+`'min_app_version'` (the §6.5 gate: the reconcile insert of an app skill, the import gate), `'duplicate'`
+(DS12: the enable IPC's sibling disable, the import's coexist and sibling disables, the reconcile safety
+net) or `'unconfirmed'` (a DS19 drop-in); enabling clears it, and the reconcile's update branch never touches
+it. The reconcile ACTS on `'min_app_version'` alone: an app skill the gate kept off is switched back on once
+this build's version is known and satisfies the skill (`ReconcileResult.reenabled`, one content-free log
+line with the count, no audit event, like every reconcile insert); the DS12 safety net then runs as before,
+so the built-in wins over an enabled user copy of the same id (today's arrival rule). Every other value,
+including one only a newer build knows, means "leave it alone", and the reason is read only while
+`enabled = 0`. User imports are never switched on by themselves. A row an older build wrote has no reason:
+"app, off, no reason, `installed_at = updated_at`" can only be the gate's insert (the insert stamps both
+from one clock; every later write moves `updated_at`; the one writer sharing the reconcile's clock, the DS12
+safety net, never disables an app row, and every other disable takes a fresh clock), so it is treated as
+`'min_app_version'` and, while the app is still too old, recorded as such. A gate-disabled row an older build
+touched again (updated by a later drive refresh, or marked unavailable and back) has a moved `updated_at`, is
+not inferred and stays off: fail-safe, the user can switch it on. Builds up to v0.1.65 read the
+table with `SELECT *` and write it with explicit column lists (verified at v0.1.50, v0.1.60 and v0.1.65), so
+they ignore the column. A DB rebuild re-derives the gate's reason from disk; a `'user'` reason on an app
+skill does not survive a rebuild, exactly as the `enabled` choice itself never did.
 
 ### §4 Import / export / delete lifecycle (S4)
 
@@ -8170,7 +8562,15 @@ unchanged §7 ceiling (no new capability, still offline, audit still ids/counts-
   `app.getVersion()` through the registry + installer deps + IPC. (Originally a residual remained: a skill
   edited on disk to need a newer app *while already enabled* stayed effective, because reconcile preserves
   the `enabled` flag and the use-sites gated only on `enabled`. **§15 closed it** — the gate is now airtight:
-  the use-sites gate on *compatibility*, not just `enabled`.)
+  the use-sites gate on *compatibility*, not just `enabled`.) **#846** built the other half: an app skill
+  the gate kept off now comes back on by itself once the app is updated (`skills.disabled_reason`, §3).
+  **#896 amendment (owner decision G-7 (b′), 2026-11-18):** the gate now makes the model gate's comparison
+  (`appOlderThanMinimum`, `shared/app-version.ts`), so a pre-release app is older than its own release
+  (`0.1.66-beta.1` no longer meets `0.1.66`, and #846 re-enables at `0.1.66`, not at its beta). It keeps its
+  lenient read of both versions and its fail-open answer for one it cannot read; build metadata stays
+  ignored. The frozen `manifestNeedsNewerApp` is unchanged and keeps its own copy of the comparison
+  (`scripts/measure-manifest-read.mjs` loads `shared/manifest.ts` through Node's type stripping, which takes
+  no extensionless import); an agreement matrix in `skill-manifest.test.ts` holds the two gates equal.
 - **M2 — the Tier-2 "active tools" note is domain-free.** `skills.tool.note.active` no longer enumerates
   bank tools (it had shown bank copy for the invoice + redaction skills too); it now reads "run approved
   local tools on a document you choose…", true for every `kind:'tool'` skill.
@@ -8771,7 +9171,9 @@ detects `retrieveWholeDocument`'s `truncated` flag and hands off to **`answerWho
 (`manager.summarizeFromTree`) over the precomputed node summaries — the **deepest layer** (`level 1` =
 full leaf coverage) read via `nodeSummariesAtLevel` — with the **SKILL.md fence applied at every step**
 (a skill-fenced MAP per `packIntoWindows` window when the summaries span >1 window, then a skill-fenced
-streamed REDUCE; when they fit one window the single fenced reduce IS the step). It stamps the honest
+streamed REDUCE; when they fit one window the single fenced reduce IS the step). With no skill (the #642
+tree summary) there is no fence, and each map and fold step takes notes for the user's request, its only
+target (#952, follow-ups wave 5; `rag-design.md` §14.10). It stamps the honest
 **`tree`** coverage (`treeStatus:'ready'`, `chunksCovered = reachableLeafChunkIds`, `treeLevels`,
 `truncated:false`) and cites the **leaf chunks** (`documentLeafProvenance`, M2-safe — node summaries are
 never `[Sn]`). It returns **null** when there is no usable tree (no `ready` status / no node summaries),
@@ -10750,7 +11152,7 @@ Per-finding disposition (fixed → phase@commit / declined → rationale / info 
 | **SK-1** | HIGH | P1 `c08a0a9` | **fixed** — document-edit's stale "writes a plain `.txt` copy" replaced with the true output matrix (`.docx` keeps its format; PDF/plain-text/Markdown → plain-text copy). **Decision D-P1a:** the matrix is stated in BOTH document-edit and document-redaction (shared Phase-9 seam, `run.ts:1519-1523`/`:1781-1789`) — symmetry over silence on a real user question. Corrupt-DOCX→`.txt` fallback (`run.ts:1696-1699`) deliberately NOT claimed (rare degradation the save dialog already surfaces; promising it would teach the model to hedge every DOCX answer). Version → 1.1.0. |
 | **SK-2** | HIGH | P2 `4f541c1` | **fixed (design, not a patch)** — the 200-change render cap in `renderChangesForModel`/`renderRedline` fired without setting `truncated`, so >200 coalesced changes within the token budget produced a prompt asserting "complete and exact" over a capped list. `DIFF_RENDER_MAX` now exported from `services/diff` as the single source of truth and passed explicitly to both renderers at both consumers; `retrieveCompareDiff` ORs `changes.length > DIFF_RENDER_MAX` into `truncated` (cap + flag can't drift); the PARTIAL prompt wording generalized to be true for BOTH truncation causes. Second consumer `doctasks/handlers/compare.ts` emits an explicit PARTIAL note under `## Exact changes` when the cap fires. New teeth-checked `tests/unit/rag-compare-diff-truncation.test.ts`. Version → 1.1.0. |
 | **SK-3a** | MED | P2 `4f541c1` | **fixed (wording half)** — what-changed's scope rule ("the app replies … before you are ever called") was false on the `intends()`-miss fall-through and at 0 docs; rewritten inside paragraph 0 to discriminate on what the model can SEE — A/B labels or an exact-changes block ⇒ compare; ordinary passages with no diff ⇒ simply answer from the material. |
-| **SK-3b** | MED | P2 (declined); revised by #632 | **declined runtime change — decision D-P2a.** Suppressing the user-chosen compare fence on the relevance fall-through would silently drop instructions the user deliberately selected (the per-message glyph shows the skill applied), and the reworded rule 1 is coherent on both paths. Recorded in [`known-limitations.md`](known-limitations.md) beside the SKA-8 fall-through record. Revisit only if the gold set later shows comparison-framed answers on non-compare fall-through turns. **D-P2a revised 2026-11-15 by #632 (open-issues wave owner call G-1): on What Changed?'s fall-through turn the fence carries paragraph 1 only.** The revisit condition was met in real-app runs rather than the gold set: a 4B model answered most plain questions on fall-through turns with the body's compare sections (the #582 run, and master again when #632 was measured). When the turn skill is the bundled what-changed (an app skill, `source === 'app'`, whose handler is the compare handler `grounded-whole-doc-compare`) and `applies()` is false (not exactly two answerable documents, or small talk), `registerRagIpc.ts:581-584` sets `skillFenceMode` `'first-paragraph'` once and passes it into the fall-through grounded answer (`:1010`), which uses it for every fence that answer builds: the top-k or whole-read call (`rag/index.ts:2066-2069`) and the whole-document rescues' map and reduce calls (`:1855`, `:1874`, `whole-doc-tree.ts:534`). `buildSkillFence` then keeps paragraph[0] only, the heading + honesty rules that are its guaranteed minimum (SKA-15), not reported as `trimmed`, and a tight budget can still omit it (`skills/prompt.ts:155`, `:172-174`); the cap writes one info log line, "skill fence capped to its first paragraph" with the skill id and mode, never the body, and a capped fence the budget still omits carries the mode on its existing warning (`skills/prompt.ts:197-207`, called at `rag/index.ts:2072` and `whole-doc-tree.ts:536`). Bundled only (at the code review, owner round WB2-1): a user-imported skill declaring `analysis: compare` keeps its whole fence, as before #632, because its paragraph 1 is whatever its author wrote (the rules-first layout, SKA-15, is pinned for the bundled bodies only) and, with no routing vocabulary, its real compare requests fall through too. Kept: the skill stamp (fence placed + passages found, `rag/index.ts:2196`), so the selection still shows; the budgets, which still reserve the whole fence (`rag/index.ts:1671`); the two-document compare prompts (the diff and a full rewrite's labelled whole read), byte-identical; every other skill's whole fence. Small talk over two documents is the one two-document prompt that changes (the engine doesn't take it). Plain chat with no documents is not a fall-through and keeps the whole fence (`chat.ts:1928`); the one question measured there was not comparison-framed on either build. Measured on the GTX 1070 Ti machine (llama.cpp b9849, three short lease drafts, What Changed? picked, ten plain questions over one and three drafts, one run each, master vs #632): comparison-framed answers went from 9/10 to 0/10 on qwen3-4b-instruct-q4 (the asked fact stated plainly 1/10 → 10/10) and from 4/10 to 0/10 on qwen3.5-9b-ud-q4kxl (8/10 → 10/10; two of the four gave the fact first and the compare sections after it), every answer kept the stamp, the two-document compare answer was byte-identical between the builds on both models, and the ten turns ran 2–3× faster (shorter answers). |
+| **SK-3b** | MED | P2 (declined); revised by #632, extended by #831 | **declined runtime change — decision D-P2a.** Suppressing the user-chosen compare fence on the relevance fall-through would silently drop instructions the user deliberately selected (the per-message glyph shows the skill applied), and the reworded rule 1 is coherent on both paths. Recorded in [`known-limitations.md`](known-limitations.md) beside the SKA-8 fall-through record. Revisit only if the gold set later shows comparison-framed answers on non-compare fall-through turns. **D-P2a revised 2026-11-15 by #632 (open-issues wave owner call G-1): on What Changed?'s fall-through turn the fence carries paragraph 1 only.** The revisit condition was met in real-app runs rather than the gold set: a 4B model answered most plain questions on fall-through turns with the body's compare sections (the #582 run, and master again when #632 was measured). When the turn skill is the bundled what-changed (an app skill, `source === 'app'`, whose handler is the compare handler `grounded-whole-doc-compare`) and `applies()` is false (not exactly two answerable documents, or small talk), `registerRagIpc.ts:594-597` sets `skillFenceMode` `'first-paragraph'` once and passes it into the fall-through grounded answer (`:1036`), which uses it for every fence that answer builds: the top-k or whole-read call (`rag/index.ts:2081-2084`) and the whole-document rescues' map and reduce calls (`:1868`, `:1888`, `whole-doc-tree.ts:573`). `buildSkillFence` then keeps paragraph[0] only, the heading + honesty rules that are its guaranteed minimum (SKA-15), not reported as `trimmed`, and a tight budget can still omit it (`skills/prompt.ts:156`, `:173-175`); the cap writes one info log line, "skill fence capped to its first paragraph" with the skill id and mode, never the body, and a capped fence the budget still omits carries the mode on its existing warning (`skills/prompt.ts:198-208`, called at `rag/index.ts:2087` and `whole-doc-tree.ts:575`). Bundled only (at the code review, owner round WB2-1): a user-imported skill declaring `analysis: compare` keeps its whole fence, as before #632, because its paragraph 1 is whatever its author wrote (the rules-first layout, SKA-15, is pinned for the bundled bodies only) and, with no routing vocabulary, its real compare requests fall through too. Kept: the skill stamp (fence placed + passages found, `rag/index.ts:2211`), so the selection still shows; the two-document compare prompts (the diff and a full rewrite's labelled whole read), byte-identical; every other skill's whole fence. Small talk over two documents was the one two-document prompt that changed (the engine doesn't take it); since #963 it gets the short small-talk reply, with no fence (a filler question such as "Sure?" still falls through). Plain chat with no documents is not a fall-through and keeps the whole fence (`chat.ts:1928`), on purpose (#830, measured in follow-ups wave 4 on the same machine, models and engine with What Changed? picked and no documents, one run each): the plain questions («Wer ist der Mieter?», "What is a notice period?", "Draft a short email asking for a lower rent") were not comparison-framed (0/6, and 0/10 with #632's control), the 4B once naming two compare sections inside a definition, and a compare of two pasted clauses kept the format (2/2); Contract Brief picked in plain chat framed 0/4. There the fence is the only thing that shapes a pasted compare, and it sits in the system message (`composeSystemPromptWithSkill`, `skills/prompt.ts`), so a per-turn trim would change the prompt llama-server reuses from its cache: the first token came after 2.15 s (4B) and 4.54 s (9B) on a new system message and after 0.16–0.36 s and 0.40–0.74 s once cached. A trim keyed to the compare vocabulary (`routeMatch('what-changed', …)`, English and German words) would also drop the format for a pasted compare in the eight other interface languages. Measured on the GTX 1070 Ti machine (llama.cpp b9849, three short lease drafts, What Changed? picked, ten plain questions over one and three drafts, one run each, master vs #632): comparison-framed answers went from 9/10 to 0/10 on qwen3-4b-instruct-q4 (the asked fact stated plainly 1/10 → 10/10) and from 4/10 to 0/10 on qwen3.5-9b-ud-q4kxl (8/10 → 10/10; two of the four gave the fact first and the compare sections after it), every answer kept the stamp, the two-document compare answer was byte-identical between the builds on both models, and the ten turns ran 2–3× faster (shorter answers). **Extended 2026-11-20 by #831 (follow-ups wave 4 owner call G-9): the four bundled `grounded-whole-doc` skills get the same cap.** Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder read exactly one document, so their engine declines small talk and any other document count (a question outside the skill's vocabulary over several documents falls through; one inside it is narrowed or gets "pick one"), and since A3 it also declines, inside its own branch, a single-fact question over a document too long to read whole (the needle downgrade). `bundledDeliverableSkill` (`registerRagIpc.ts:594-596`) is an app skill whose handler is `grounded-whole-doc-compare` or `grounded-whole-doc`; `!applies()` sets the mode as before, and the downgrade sets it too (`:703`), since `applies()` is true there and the first condition never sees that turn. A downgraded needle that the coverage-extract listing answers carries no fence, as before. Every read the engine takes keeps the whole fence (the whole-document branch passes no mode: a fitting document's one call, and the map and reduce calls over an over-budget one), and so does a user skill declaring `analysis: whole-doc`, on every path (bundled only, the WB2-1 reasoning). Not taken (G-9): an exception for a deliverable-shaped request over several documents ("Summarize these three"); no measured question was one, and a brief built from top-k passages is weak anyway. Proof `rag-whole-doc-compare.test.ts` (the #831 describe: the four skills on each of the three paths; a deliverable over an over-budget document and any question over a fitting one, with the whole fence on every call; a user whole-document skill over three documents and on the downgrade). Measured on the same machine (llama.cpp b9849; per skill, three short lease drafts or meeting notes with a question outside its vocabulary, one long lease or meeting record with a single-fact question, and «Danke!» over one document; 16 turns per model, one run each), master against an emulation that sends exactly the capped fence (four user skills with the bundled title and paragraph 1 as the whole body): answers in the skill's report format went from 11/16 to 0/16 on qwen3-4b-instruct-q4 (Meeting Minutes 4/4 on master, full minutes for "Who attended?") and from 5/16 to 0/16 on qwen3.5-9b-ud-q4kxl (4 of its 5 on «Danke!»); the 4B still stated every fact over three documents (8/8) and the 16 turns ran 2.9× (4B) and 1.5× (9B) faster. Re-run on the branch itself (same machine and setup, one run each): 0/16 framed on both models, every fact over three documents still stated; the 9B's 16 answers were byte-identical to the emulation's and the 4B's 12, the other four being the single-fact turns, where the emulation's shorter body had freed room for one more passage (on the branch the 4B states those facts 0/4, as on master). **Budgets sized by the fence that is sent, 2026-11-21, #962 (follow-ups wave 5 owner call G-8, Option 2).** The budgets kept reserving the whole fence (`wholeDocumentBudgetTokens`), so on the 4B's 4,096 window the passage search for a single fact in a 19-section lease read 1 section and missed it under every skill. Now `wholeDocumentBudgetTokens` and the two budgets built on it (`retrievalExcerptBudgetTokens`, `wholeDocumentFitBudgetTokens`) take the turn's `fenceMode`; `generateGroundedAnswer` reads `opts.skillFenceMode` once and sizes the allowance and builds the placed fence with it (a placement fuller than the allowance overflowed the budget contract, 4,117 of 4,096 tokens), and the small-document read (`wholeReadFor` in `registerRagIpc.ts`) sizes its fit by it too. The needle check keeps the whole fence: it asks whether the engine's own read, which carries it, would truncate. The freed room (338 to 402 tokens) goes to the passages: two sections instead of one at 4,096, and one document between the two fit budgets is read whole; 8,192 windows are unchanged (the 2,500-token `ragMaxContextTokens` setting binds both ways), so the 9B's prompts are master's. Accepted (G-8): on a 4,096 window a follow-up under Share-Safe Review or What Changed? can keep no earlier turn. Record: [`rag-design.md`](rag-design.md) §15.9. **Small talk, 2026-11-21, #963 (follow-ups wave 5 owner call G-1, option a2).** A thank-you over a document was still answered with a summary of it, skill or not (the grounded prompt's habit, not the fence's). It now gets one short model reply that reads no document: `isSmallTalkReply` (`skills/vocabulary.ts`) sends it, in `registerRagIpc.ts` right after the #132 refusal, to `generateSmallTalkReply` (`rag/index.ts`), a fixed small-talk system prompt and the message alone, persisted with no citations, coverage, pack outcomes or skill stamp. Record: [`rag-design.md`](rag-design.md) §19. |
 | **SK-4** | MED | P3 `1af932b` | **fixed** — deadline-obligation-finder promised "one or more documents"; the `analysis: whole-doc` engine requires exactly one in-scope doc (`whole-doc-skills.ts:99-103`), multi-doc → the W2 pre-pass narrows or asks. Description + body reworded to single-document ("in a document" / "in einem Dokument", formal register) + a what-changed-style "the app handles document scope … do not police this" sentence; the coverage-honesty rule kept. Multi-doc sweep rejected (D45 one-doc-at-a-time posture; its own plan if beta demand appears). Version → 1.1.0. |
 | **SK-5** | MED | P4 `8063a1e` | **fixed** — the two bank-statement aux files taught the instruction-only v1 (decline to sum/validate/categorize/export) — the opposite of shipped behavior. `examples/reading-a-statement.md` rewritten around the stable honesty posture (kept the three-question structure; "Where the numbers come from" replaces "What this version does not do"; exports always ask before saving); `schemas/transaction.schema.json` `description` fixed to reality (produced by `extract_transactions`, mirrors + pinned to the TS export). Files are never injected at runtime but ride skill export (`installer.ts:840-862`) — first thing a contributor reads. |
 | **SK-6** | MED | P4 `8063a1e` | **fixed** — `transaction.schema.json` was a hand-maintained mirror with no parity pin. `TRANSACTION_ROW_SCHEMA` exported from `tools/bank-statement.ts` (test-motivated, comment says so); new `tests/unit/skills-transaction-schema-parity.test.ts` structurally compares the JSON to the TS export (property-name set, per-property `type`/`pattern`/`minimum`/`minLength`, `required`, `additionalProperties`), the intentional `category` delta encoded by name. Teeth-checked (`^[A-Z]{3}$`→`{4}$` → RED). §8 carries the pin note. |
@@ -10944,7 +11346,7 @@ Per-finding disposition (fixed → phase@commit / deferred·watch → where regi
 | **TS-1** | MED | P10 `9f044d8` | **fixed** — fixed-sleep sweep: the six remaining raw sleep sync points converted to deterministic gates (`reached()` probes, `seenSignal` polls, a positive-control sentinel, an empty-`act` flush); every surviving sleep comment-justified; full suite run 3× — zero flakes; CONTRIBUTING gains the no-fixed-sleeps rule. |
 | **TS-2** | MED | P9 `d6846d1` | **fixed** — webPreferences flags, prod/dev CSP, and the window-open policy extracted verbatim to `window-security.ts` and pin-tested by name/value (a deliberate `sandbox: false` reddens — verified + reverted); a source-level scan keeps the literals from being re-inlined at the call sites. |
 | **TS-3** | MED | — | **deferred → owner design** — the real-model quality gate is human-remembered (opt-in `HILBERTRAUM_*` runs), not mechanical; the proposed release-workflow smoke-record gate (fail unless a smoke record is newer than the last model/runtime-affecting commit) needs the owner's design call. Registered in BUILD_STATE §5. |
-| **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes opt-in `assertNoUnexpectedApiCalls()`; renderer-tier sweep found zero fresh-spy reliance. |
+| **TS-4** | LOW | P9 `d6846d1` | **fixed** — `stubApi` caches ONE spy per accessed name (stable identities), warns once per unmocked name actually called, and exposes `assertNoUnexpectedApiCalls()` (opt-in when fixed; since #832 the DEFAULT: `tests/setup.ts` runs it in an `afterEach` for every renderer row, and suites that call unmocked methods on purpose end on `forgetUnexpectedApiCalls()`); renderer-tier sweep found zero fresh-spy reliance. |
 | **TS-5** | LOW | P9 `d6846d1` | **fixed** — EXPLAIN QUERY PLAN assertions match index NAMES, never planner phrasing (the Node-pinned-SQLite coupling is commented); the teeth counterfactuals kept. |
 | **TS-6** | LOW | P13 `19dfbc9` | **fixed** — optional `test:coverage` (v8 provider, `@vitest/coverage-v8` devDep) + root passthrough; deliberately not CI-wired, no threshold; `coverage/` gitignored; documented in CONTRIBUTING. |
 | **TS-7** | LOW | — | **decided 2026-11-01 (#753): a per-PR `macos 24.x` leg (`macos-15`), packaging.md CI section** (was deferred → owner call) — no macOS CI leg despite first-class macOS support and a history of cross-platform path bugs; a `macos-latest` entry is cheap (the suite is offline and Electron-binary-free) but costs CI minutes. Registered in BUILD_STATE §5. |
@@ -11023,7 +11425,7 @@ review-round findings are folded into their rows):
 | **CODE-13** | LOW | C | **fixed** — engine `cancel()` honours `verifying`/`extracting` (post-verify, post-extract-before-marker, and between-family abort re-checks; the downloads.ts BE-4 mirror, new injectable `verifyImpl` seam); an engine job that would rimraf the LIVE chat family's dir is refused while a model runtime runs — review follow-up `ba44a6b`: via `chatEngineInUse()` (running OR `status().startingModelId` in flight), since `activeModelId()` alone is null during a multi-GB START whose loading child already executes from the dir. Registered residuals: a model started while an engine download is ALREADY in flight can still race the pre-clean rimraf (pre-existing exposure, now narrower); a cancel DURING extraction deliberately leaves a fully-verified marker-less binary (self-heals — `runtimeInstallCurrent` false, next install re-runs; pre-spawn verifier treats it `skip-legacy`); the guard does not exempt a MOCK-backed runtime, so a user with no engine yet is refused the FIRST install with the while-running copy (safe-side; polish candidate: exempt `status().backend === 'mock'`). |
 | **CODE-14** | LOW | B | **fixed (spec corrected)** — fresh-vault creation stages the new DB as `.enc.new` and writes the descriptor LAST as the single commit point (the rekey-journal ordering): crash-before → neither artifact exists → `uninitialized`, onboarding retries cleanly; crash-after → the existing `recoverPendingRekey` rolls forward. The report's literal ".enc first, descriptor last" would have bricked differently — an orphan `.enc` without a descriptor reads as `locked` (the H4 wipe-guard, correctly). |
 | **CODE-15** | LOW | I | **fixed (owner-approved)** — persistent checksum-cache keys are drive-RELATIVE (forward-slash `driveRelKey`; `createSettingsHashStore(getDb, rootPath)`), (size, mtime) validity unchanged, lazy-migrate-on-miss from the legacy absolute key + orphan cleanup on set/delete; `rootPath` threaded through all **five** call sites (the report/plan said 3 — `registerModelIpc` ×3, `registerDownloadIpc`, `vision/status`; a partial wiring would have re-hashed via one path and migrated via another). Drive-letter move now zero-recompute (tested). A path outside the root keeps its absolute key verbatim (escape-guard belt, not a behavior change). known-limitations' "trusts size+mtime" bullet deliberately unchanged — the documented limitation is unaffected and it never claimed absolute-path keying. |
-| **CODE-16** | LOW | I | **fixed (owner-approved)** — `MAX_SETTINGS_OBJECT_BYTES = 256 KB` serialized-JSON cap for `checksumCache`/`lastBenchmark`/`gpuProbe` + array-reject for the object-default `checksumCache` (SEC-1 bounding style); the block sits after the null-default chain because `checksumCache` has a non-null object default; legitimate `null` clears pass upstream untouched. Four write-gate pins. |
+| **CODE-16** | LOW | I | **fixed (owner-approved)** — `MAX_SETTINGS_OBJECT_BYTES = 256 KB` serialized-JSON cap for `checksumCache`/`lastBenchmark`/`gpuProbe` + array-reject for the object-default `checksumCache` (SEC-1 bounding style); the block sits after the null-default chain because `checksumCache` has a non-null object default; legitimate `null` clears pass upstream untouched. Four write-gate pins (an oversized `lastBenchmark`, `gpuProbe` and `checksumCache` dropped, an array `checksumCache` rejected: the CODE-16 describe of `settings-write-gate.test.ts`, whose `checksumCache` row also writes a map exactly at the cap and one character over it; the describe's fourth row is the separate 10,000-element cap on a `string[]` setting). |
 | **CODE-17** | LOW | E | **fixed** — conversation auto-title truncation is code-point-safe (the `truncateSnippet`/RAG-2 idiom); no more `�`-tailed persisted titles. |
 | **CODE-18** | LOW | E | **fixed** — the R1 abort+closed-DB persist guard extracted into shared `persistAssistantMessage` (chat.ts) and applied at ALL FOUR persist sites (plain chat + rag/index.ts ×2 + whole-doc-tree.ts) — the grounded Stop+lock race now drops the partial quietly instead of erroring. Registered residual: `generateGroundedAnswer`'s canned NO_DOCUMENT_CONTEXT/REINDEX early return (~:1608) still persists via raw `appendMessage` — the one remaining unguarded site; much narrower window (no model stream to park in); fix-when-touched. |
 | **CODE-19** | LOW | E | **fixed (+rider)** — the compaction region boundary is exchange-aligned (walks back to end on an ASSISTANT turn), so an odd compactable count no longer replaces the synthetic ack via `collapseToAlternating`. Rider (a Phase-D fixture discovery, FIXED here): `deleteLastAssistantMessage` AND `hasRegenerableAssistantReply` now exclude `kind='compaction'` rows — a checkpoint at the conversation tail can no longer be deleted by a regenerate; both queries look at the last VISIBLE message. |
@@ -11448,7 +11850,7 @@ fine-print folded into its rows):
 | **F-38** | LOW | P7 `397a7fc` | **fixed** — `body[data-marketing-ready]` was sticky once set (StagedShell `clearInterval`'d on success, making its own flag-delete unreachable), so an acknowledged post-walk remount could yield a silently WRONG (reset-shell) capture: fix option (a), fully local to StagedShell — keep observing after readiness; a vanished goal clears the flag and re-walks (waitReady re-blocks); the tries-cap give-up now prints an actionable `console.warn`. Verified manually with an injected 800 ms settle delay + a forced give-up (both temp probes reverted, diff-confirmed); `scripts/screenshot.mjs` untouched. |
 | **F-39** | LOW | P8 `306f7bb` ⟨D-D⟩ | **investigated → VERDICT: KEEP + document** (deliberately NOT a code change) — production CSP retains `style-src 'unsafe-inline'`: rendering KaTeX proves valid math emits many per-expression inline `style="height:…;vertical-align:…"` ATTRIBUTES (`x^2 + y^2` → 11, `\sum_{i=0}^{n} i` → 7), and inline style attributes have no nonce/hash escape hatch (CSP nonces cover only `<style>`/`<link>`; `'unsafe-hashes'` cannot hash dynamic values) — dropping it would block sizing/alignment on ALL rendered math. Residual risk bounded: `script-src 'self'` blocks script injection and the closed `connect-src`/`img-src` close exfiltration, leaving only same-origin cosmetic CSS effects. The CSP string, the `window-security.test.ts` exact pin, and the index.html/ocr.html meta tags are UNCHANGED; the rationale lives in the `buildCsp` header + security-model.md. Both outcomes were pre-authorized (D-D); this is the evidence-backed one. |
 | **F-40** | LOW | P9 `29427a4` | **fixed (comment) + re-capture REGISTERED** — the b9585-provenance captured fixtures (GPU `--list-devices`, vision SSE sample) were never re-captured after the runtime pin bumped to b9849, and the gpu.test.ts comment still called b9585 "the pinned build" with a false "fails in CI if upstream changes the shape" guarantee (which only holds if captures track the pin): comment corrected to the honest scope — the frozen b9585 capture reddens only if the PARSER regresses against the b9585 shape (M-A5 is observation-triggered). NO fixture bytes or assertions moved: the full b9849 re-capture (with the byte-pinned `gpu.test.ts` freeMb and `vision-sse.test.ts` split-UTF-8 assertions moving) is consolidated-smoke-checklist item **(h)** (BUILD_STATE §5 item 7, TS-3). |
-| **F-41** | LOW | P9 `29427a4` | **fixed (bounded slice + standing ratchet)** — ~230 `as never` casts in test stubs eroded exactly the typed PreloadApi contract `stubApi` was built to enforce: the five heaviest stub-cast files converted to typed builders + `Partial<PreloadApi>`-typed api bags (fileTranslateSession 28→0, ImagesScreen 23→0, TranslateScreen 21→0, AppLock 12→0, translateSession 9→0 real casts; deliberately-partial/contract-violating payloads use a NARROW named `as unknown as <Type>` at exactly that value — the AppLock pattern — never a blanket `} as never)`), so method-name/return-shape renames redden typecheck again. **New one-way ratchet** `tests/unit/as-never-ratchet.test.ts`: the comment-stripped `as never` count under tests/ may only decrease (**baseline 110**); TEETH red-green (planted cast → 111 > 110 red → removed). Top-5 re-derived by live grep with one ledgered exclusion: settings-write-gate's 15 are deliberate invalid-VALUE casts (`null as never`, `42 as never`) testing the write-gate's runtime rejection — the audit's own "triage separately" class, not stub-payload erasure. The rest is fix-when-touched (CONTRIBUTING's new typed-stub-payloads bullet; doctasksStore at 8 is the next candidate). No assertion changed by any conversion. |
+| **F-41** | LOW | P9 `29427a4` | **fixed (bounded slice + standing ratchet)** — ~230 `as never` casts in test stubs eroded exactly the typed PreloadApi contract `stubApi` was built to enforce: the five heaviest stub-cast files converted to typed builders + `Partial<PreloadApi>`-typed api bags (fileTranslateSession 28→0, ImagesScreen 23→0, TranslateScreen 21→0, AppLock 12→0, translateSession 9→0 real casts; deliberately-partial/contract-violating payloads use a NARROW named `as unknown as <Type>` at exactly that value — the AppLock pattern — never a blanket `} as never)`), so method-name/return-shape renames redden typecheck again. **New one-way ratchet** `tests/unit/as-never-ratchet.test.ts`: the comment-stripped `as never` count under tests/ may only decrease (**baseline 110**); TEETH red-green (planted cast → 111 > 110 red → removed). Top-5 re-derived by live grep with one ledgered exclusion: settings-write-gate's 15 are deliberate invalid-VALUE casts (`null as never`, `42 as never`) testing the write-gate's runtime rejection — the audit's own "triage separately" class, not stub-payload erasure (since 2026-11-16 those rows, and db-settings' alike, cast the whole patch through a named `JunkPatch` type, so neither file holds an `as never`; the baseline stands at 13). The rest is fix-when-touched (CONTRIBUTING's new typed-stub-payloads bullet; doctasksStore at 8 is the next candidate). No assertion changed by any conversion. |
 
 **Queue + new findings (§Q/NF, all closed):** **Q-1** (found P3 — the #59 warning-copy half)
 **resolved P7 `ed69824`**: the scanned-PDF/OCR dead-ends `docs.scan.ocrMissing` +
@@ -11653,10 +12055,10 @@ fail-open guard hardened into a `script-drift` teeth check; the `forceRestart` G
 closed at the composition seam during the P2 loop). The remainder are **deferred-with-registration**,
 by area:
 - **EP-1 review/pack follow-ups:** no in-app review-delete affordance (the AUD-01 copy names the
-  alternative because of it); "Try again" has no renderer review gate (unreachable today); a dead
-  `evidence:getForMessage` channel + preload method after AUD-12; the batch channel still recomputes
-  freshness per review; ordinary review edits still fan out non-atomically (the AUD-13 shape one level
-  down); the AUD-01 refusal logs at ERROR (content-free).
+  alternative because of it); "Try again" has no renderer review gate (unreachable today); the
+  batch channel still recomputes freshness per review; ordinary review edits still fan out
+  non-atomically (the AUD-13 shape one level down); the AUD-01 refusal logs at ERROR
+  (content-free).
 - **Provisioning / packaging:** `build-commercial-drive.ps1` still carries the `Write-Error` hazard
   and bare-`&` child calls (out of the audit's stated scope); the archive-download path has AUD-24's
   416 trap; four manifests carry no `download.size_bytes` so AUD-24 stays open there; the manifest
@@ -11677,6 +12079,10 @@ by area:
 - **Owner decisions (open):** whether `user-guide.md` §7 should carry a "packaged OCR currently
   crashes" caveat or wait for the fix bundle to land first (**B-30**), and whether the
   `architecture.md` TEST-N1 ledger row should get a superseding note for the CI Node change (**B-40**).
+
+**Closed since registration:** the dead `evidence:getForMessage` channel and preload method
+(registered under EP-1 above), together with the equally caller-less `evidence:delete`, were removed
+by #840.
 
 **§-anchor legend.** Commits, code comments, tests, and BUILD_STATE cite this audit as
 `AUD-nn` / `DV-n` (or the bare id beside a qualified cite); all 26 finding ids, the four design
@@ -11815,33 +12221,33 @@ phase moved):
 | **SEC-8** (H-01 · NEW-3, CODE-1, DOC-3, DOC-8) | MED-HIGH | 5a — NOT OPENED | — | **open residual — default stands, re-open on request.** Decision 4 (#221: native confirmation showing the full URL / an allowlist / ratify "renderer compromise is out of practical scope" and document) and decision 11 (#228: the CODE-1 untrusted-data guard line in ordinary RAG prompts) were unanswered at every kickoff, and the plan made the code half BLOCKING: `createWindowOpenPolicy` (`window-security.ts:119`) still hands every syntactically valid http(s) `window.open` to `shell.openExternal` (`index.ts:702` — the only `shell.*` sink) unconfirmed, unthrottled and invisible to the CSP and the socket tripwire, so after a renderer compromise everything the renderer can page while unlocked can leave through visible browser windows; the `licenseUrl` anchor in the download-confirm dialog (NEW-3) needs only a hostile manifest and a click. The docs half landed in 9a (#280): `security-model.md` "Residual egress channels" item (i) `Pending #236 (owner decision #221)` — DOC-3's replacement for "there is no network sink to exfiltrate read content" written ONCE as the enumerated list (i) external open, (ii) SMB via raw paths, (iii) Chromium background fetches, (iv) the OS clipboard; the D1 bullet and `known-limitations.md` point at it; the seam is now recorded as a residual, not only as a control (DOC-8). CODE-1: no prompt change — recorded as "#228 unanswered, default stands", never as "owner-declined". Containment item 4's links half is promoted verbatim to `known-limitations.md` at this close-out. The Phase 5a change set (an `external-open.ts` opener with `dialog.showMessageBox`, ≤ 200 chars shown with the origin preserved, requests dropped while a dialog is open, https-only `licenseUrl`, EN+DE; or the allowlist; or the ratify path) and its tests are recorded on #236. **#236 OPEN.** |
 | **SEC-8** — §52 addendum 2026-09-04 | MED-HIGH | F (PR 4, `fix/pf-sec8-external-open-consent`) | #287 | **fixed — the external open is consented; the licence link is https-only with its host shown. CODE-1 (#228) NOT shipped: the eval gate could not run** (owner decision #221, `**DECISION:** confirmation`, 2026-09-03; owner decision #228, `**DECISION:** wrap, gated by the grounded-QA eval`, 2026-09-03). `main/external-open.ts` `createExternalOpener({ dialog, shell, getWindow, t })` is now the callback `createWindowOpenPolicy` receives in `index.ts` — the policy and its four pins are unchanged (http(s) still routes to the callback, every other scheme is dropped, the in-app open is always denied). The opener normalises the URL (`new URL().href`: lower-case punycode host, percent-encoded path), shows ONE `dialog.showMessageBox` (type question, buttons Open / Cancel, Cancel the default AND the Esc button, `noLink`) whose detail names the origin on its own line and shows the URL built from the PARSED URL as origin + path/query/fragment (userinfo dropped from the display and flagged — the `https://bank.example@evil.test/` deception), cut past `EXTERNAL_URL_DISPLAY_BUDGET` = 200 characters with the count of hidden characters, never inside the origin and always keeping the path's leading `/`, so the shown string parses to the SAME origin as what opens (`describeUrlForDisplay`; the guard is armed only after every synchronous step, so a throw there cannot latch it) — and calls `shell.openExternal` only from Open; every further request is DROPPED while a dialog is open (a burst shows one dialog; a failed dialog resets the guard); EN/DE `main.dialog.openLink.*` via `tMain`. NEW-3: `shared/manifest.ts` refuses a non-https `license_url` (top-level and `mmproj.download`, the same `isHttpsUrl` rule as `url`; an empty string is refused too) and `ModelsScreen.tsx` renders the licence anchor only for an https URL, with its host beside the fixed label (defence in depth for a stale cached manifest). Tests (red first, PR #287): `external-open.test.ts` — confirmed → exactly one `openExternal` of the normalised URL, the dialog names the origin; cancelled → none; over-budget → `new URL(shown).origin === new URL(opened).origin` and the cut marked; a burst → one dialog, the guard resets; a rejected dialog or a rejected `openExternal` resets the guard; the app-modal overload without a window; a throw while preparing the dialog does not latch the guard; userinfo dropped and flagged; a non-normalised input keeps its origin; non-web schemes never reach the dialog; the wiring pin (`createWindowOpenPolicy(<the createExternalOpener result>)` in `index.ts` source, coexisting with the window-security and shutdown pins) and a `src/main` scan that `shell.openExternal` is reached nowhere outside the module; `manifest.test.ts` (http:, javascript:, bare host, empty; the mmproj block); `ModelsScreen.test.tsx` (host shown, href https; an http: URL renders no link). Docs: `security-model.md` control row, the D1 bullet ("no unattended network sink") and residual egress (i) → consented; `known-limitations.md` (the promoted containment-item-4 links half removed; the "outside the drive" bullet); `architecture.md` Chat & streaming link note; user-guide §5, §6 and §10; CHANGELOG Unreleased. **CODE-1 (#228): the ordinary RAG excerpts are still quoted bare** — the grounded-QA harness (`tests/manual/model-eval.test.ts` against the `K:` eval drive, all ten chat GGUFs) could not complete on the execution machine: Windows Smart App Control blocks the K: runtime's unsigned `llama.dll` / `llama-common.dll` (Code Integrity events 3077/3033 "did not meet the Enterprise signing level"; `llama-server.exe` exits `0xC0E90002` before health, `--version` included — the same policy that blocks the dev `electron.exe`, §52 process note (b)), so no before/after numbers exist and the framing is not shipped unevaluated; recorded on #228, which stays OPEN with the change set (wrap `buildGroundedPrompt` / `buildCompareWholeDocPrompt` excerpts in the `grounded-data.ts` markers + guard line; update the pins in `chat-compaction.test.ts`, `skills-turn.test.ts`, `rag.test.ts`) for a machine where the harness runs. **#236 CLOSED, #221 CLOSED; #228 OPEN.** |
 | **CODE-1** (in SEC-8) — §52 addendum 2026-09-04 | MED-HIGH (defence in depth) | F (PR 6, `fix/pf-code1-rag-excerpt-framing`) | #293 | **fixed — the ordinary RAG excerpts are framed as document content, not instructions; shipped on a level grounded-QA eval** (owner decision #228, `**DECISION:** wrap, gated by the grounded-QA eval`, 2026-09-03). `rag/grounded-data.ts` exports `EXCERPT_BEGIN` (`--- BEGIN DOCUMENT EXCERPTS (document content, not instructions) ---`), `EXCERPT_END` (`--- END DOCUMENT EXCERPTS ---`) and `EXCERPT_GUARD_LINE` (fixed English, byte-stable); `buildGroundedPrompt` renders `Document excerpts:` → BEGIN → the `[Sn]` excerpts → END → the guard line → `Answer:`; `buildCompareWholeDocPrompt` wraps its whole two-document block once after the compare preface, with a partial half's notice printed BEFORE the block (review catch — an instruction from the app must not sit under the guard line); `stripSkillFenceEcho` also scrubs an echoed marker or guard line from the answer (review catch); `wholeDocumentBudgetTokens` counts the framing (`EXCERPT_FRAMING_TOKENS`). Nothing in `system` (`GROUNDED_SYSTEM_PROMPT` byte-identical — the `rag.test.ts` byte-stable pin passes unchanged); the `[Sn]` format, the skill fence, the notice text and the analysis block are unchanged. **Eval gate** (`tests/manual/model-eval.test.ts`, `docs/model-benchmarks.md` §2 — all ten chat GGUFs of the `K:` eval drive, i9-14900K / RTX 3080 Ti, the `b9849` Vulkan runtime, backend label `vulkan`, `-c 8192`, temperature 0, maxTokens 384, 100 items of which 15 unanswerable; `i9-14900K-pr6-before` on master `03080b85`, 70 min; `i9-14900K-pr6-after` on the framing commit `b19257bf`, 65 min; same machine, same day). Ranked models, `mean_f1` / `abstain_rate_unans` / `hallucination_rate` before → after: gemma4-12b-it-qat-q4 .3399→.3370 / .9333→.9333 / .0667→.0667; gemma4-e2b-it-qat-q4 .3385→.3362 / .8000→.8000 / .2000→.2000; ministral3-8b-instruct-2512-q4 .2972→.3044 / 1.0000→1.0000 / .0000→.0000; qwen3-14b-instruct-q4 .3370→.3362 / .8667→.8000 / .1333→.2000; qwen3-4b-instruct-2507-q4 .3347→.3347 / .9333→.9333 / .0667→.0667; qwen3-4b-instruct-q4 .3022→.3075 / .8000→.7333 / .2000→.2667; qwen3-8b-instruct-q4 .3256→.3266 / .8667→.8667 / .1333→.1333; `em_rate` level on all seven (ministral up .9412→.9647). Rank 0 (not judged): granite-4.1-8b-q4 .2498→.2104 / .7333→.8000 / .2667→.2000; qwen3.5-4b-ud-q4kxl .2725→.2405 / .8000→.8667 / .2000→.1333; qwen3.5-9b-ud-q4kxl .3180→.2755 / .9333→.8000 / .0667→.2000. **Verdict — level within noise on the ranked models:** F1 moves within ±.003 (four up; the two Gemma deltas of −.0023 / −.0029 sit at the §9.4 ±.002 floor; a single-model repeat of the AFTER run on gemma4-12b (`i9-14900K-pr6-after2`, 14 min) reproduced .3370 with 1 of 100 answers differing in text and none in score, so run-to-run noise on this machine is ≈ 0 and the −.0029 is a real change at the scale of one slightly longer answer, with EM, abstention and hallucination identical — judged level at the decision scale, as §9.4 judges ±.002); abstention level on five; on qwen3-14b and qwen3-4b ONE unanswerable item each (= .0667) moved to "answered" on the phrase detector, and the items dump (audited as §2 requires) shows the 14b answer states that the documents do not directly answer the question and invents no figure (its wording, "nicht direkt beantwortet", is outside the detector's list) while the 4b case is a paired swap (de-contract-penalty gained an abstention, en-contract-penalty lost one). *(Scorer v4, #517, 2026-09-27: the `*-quality-rescored.csv` files for both runs now count that 14b item, and six more German refusals of the same wording class, as the abstentions this audit said they were — e.g. `pr6-after` qwen3-14b abstain .8000 → .8667 / hallucination .2000 → .1333; the numbers in this row are the v3 figures as scored at the time, and the level-at-decision-scale reading is unchanged.)* The rank-0 models changed STYLE — they now quote the excerpt after the answer, so token-F1 fell .03–.04 while EM rose. Result files not committed (the numbers are here and in the PR #293 body). Tests (red first, PR #293): `rag.test.ts` (markers + guard present and in order, byte-exact head and tail, stable across turns, a hostile excerpt stays quoted inside the block, the compare block once, the partial-half notice before it, the persisted answer scrubbed), `skills-prompt.test.ts` (the echo scrub), the pins in `chat-compaction.test.ts` and `skills-turn.test.ts` moved to the new bytes; `rag-grounded-data.test.ts` untouched. Docs: `security-model.md` (the paragraph after the grounded-data framing record), `rag-design.md` (the prompt-format record), CHANGELOG Unreleased. **#228 CLOSED; #217 CLOSED.** |
-| **SEC-10** (H-03 · DOC-4, dictation/export transients) | MED-HIGH | 4 | #273 | **fixed** — lock and quit awaited streams, doc tasks and sidecar stops but held no registry of preview, re-index or the current prepare/parser promise; an encrypted preview decrypts to `.parse-preview-*` and shredded it only in an async `finally`, so "Lock now" reported `locked` and quit called `app.exit(0)` with a decrypted file on the drive and a parse still running (B2 reproduced across a real lock and a real `performShutdown`). Now a plaintext-operation registry `createPlaintextOps()` (`ingestion/plaintext-ops.ts:67`; kinds preview / reindex / import-prepare / dictation / export / doc-task; `register(kind, parent?)` → `{ signal, track(path), release() }`, `abortAll()`, `awaitSettled(bound)`, `sweepRegistered()` shreds every tracked path of a still-live op plus its `.tmp` stage) sits on `ctx.plaintextOps`, and every `.parse*` writer joins it — preview, re-index, import prepare, the two export readers, dictation, and the doc-task `.parse.md`/`.parse-ocr.pdf` materialisations the plan's list had missed (reviewer). "Lock now" (`registerWorkspaceIpc.ts:96` `settleAndSweepPlaintextOps`: abort with the other aborts → settle ≤ 5 s, the existing `LOCK_TASK_SETTLE_TIMEOUT_MS` → sweep) and quit (`shutdown.ts:353,368`; the sweep runs OUTSIDE the 30 s race, before the lock) apply it; the parse wall-clock timeout aborts the same signal (`ingestion/index.ts:710`); the preview IPC re-checks admission after its awaits. Photo OCR and audio honour the abort; pdfjs/mammoth/txt cannot and are sweep-bounded (documented; true cancellation needs a terminable worker — not planned). Deliberately NOT a lock-time name sweep: it would also shred `encryptFileAsync`'s `.tmp` stage — ciphertext in progress. Quit's raced middle is now 25.5 s worst case under the 30 s constant. B2 inverted: `lock-admission-race.test.ts` "#237" describes (`:733`, `:807` — parked photo preview across a real lock and a real `performShutdown`, both engine flavours, a `readdirSync` name sweep at the "locked" instant, stored copies survive); `plaintext-ops.test.ts` (8 contracts). DOC-4: `security-model.md`'s lock contract lists the kinds; the quit bullet generalised. Residual: the GUI smoke (lock mid-preview) not run. #237 closed. |
+| **SEC-10** (H-03 · DOC-4, dictation/export transients) | MED-HIGH | 4 | #273 | **fixed** — lock and quit awaited streams, doc tasks and sidecar stops but held no registry of preview, re-index or the current prepare/parser promise; an encrypted preview decrypts to `.parse-preview-*` and shredded it only in an async `finally`, so "Lock now" reported `locked` and quit called `app.exit(0)` with a decrypted file on the drive and a parse still running (B2 reproduced across a real lock and a real `performShutdown`). Now a plaintext-operation registry `createPlaintextOps()` (`ingestion/plaintext-ops.ts:67`; kinds preview / reindex / import-prepare / dictation / export / doc-task; `register(kind, parent?)` → `{ signal, track(path), release() }`, `abortAll()`, `awaitSettled(bound)`, `sweepRegistered()` shreds every tracked path of a still-live op plus its `.tmp` stage) sits on `ctx.plaintextOps`, and every `.parse*` writer joins it — preview, re-index, import prepare, the two export readers, dictation, and the doc-task `.parse.md`/`.parse-ocr.pdf` materialisations the plan's list had missed (reviewer). "Lock now" (`registerWorkspaceIpc.ts:96` `settleAndSweepPlaintextOps`: abort with the other aborts → settle ≤ 5 s, the existing `LOCK_TASK_SETTLE_TIMEOUT_MS` → sweep) and quit (`shutdown.ts:353,368`; the sweep runs OUTSIDE the 30 s race, before the lock) apply it; the parse wall-clock timeout aborts the same signal (`ingestion/index.ts:710`); the preview IPC re-checks admission after its awaits. Photo OCR and audio honour the abort; pdfjs/mammoth/txt cannot and are sweep-bounded (documented; true cancellation needs a terminable worker — not planned). Deliberately NOT a lock-time name sweep: it would also shred `encryptFileAsync`'s `.tmp` stage — ciphertext in progress. Quit's raced middle is now 25.5 s worst case under the 30 s constant. B2 inverted: `lock-admission-race.test.ts` "#237" describes (`:871`, `:968` — parked photo preview across a real lock and a real `performShutdown`, both engine flavours, a `readdirSync` name sweep at the "locked" instant, stored copies survive); `plaintext-ops.test.ts` (8 contracts). DOC-4: `security-model.md`'s lock contract lists the kinds; the quit bullet generalised. Residual: the GUI smoke (lock mid-preview) not run. #237 closed. |
 | **SEC-12** (NEW-1 · GAP-2) | MED-HIGH | 0 | #267 | **fixed** — the re-entry branch of `will-quit` returned WITHOUT `preventDefault()` on the premise "cleanup already ran", so a second quit during a parked teardown let Electron exit with the working DB plaintext at rest and every change since the last lock lost at the next launch (B1 reproduced over an event stub). `createAppLifecycleHandlers` (`shutdown.ts:286`) now owns `will-quit`/`activate` over one closure: every `will-quit` is prevented, the exit comes only from the teardown's `finally` — which also reaps registered sidecar children (`killRegisteredSidecarChildren` had run only in the `uncaughtException` path, so a deadline-abandoned llama-server would have orphaned on Windows) — and `activate` is a no-op while shutting down (GAP-2: a Dock click no longer opens a window against a latched runtime). Rider 13 default: `SHUTDOWN_OVERALL_DEADLINE_MS = 30_000` (`:39`) races the awaited middle (`withOverallDeadline` `:211`: local-API stop ≤ 0.5 s, sidecar `allSettled` ≤ 10 s, streams 5 s, doc tasks 5 s, plaintext ops 5 s = 25.5 s worst case, 4.5 s headroom) with the lock OUTSIDE the race (`log.info('quit: locking workspace')` `:190`). Whether Electron re-emits `will-quit` after a prevented one (the macOS ⌘Q leg) stays HYPOTHESIS — the rule holds either way. B1 inverted: `shutdown.test.ts:303` "will-quit re-entry during a parked teardown (#238, B1 inverted)" and `:394` "overall teardown deadline (#238 / #230)". Record: `security-model.md` "App-shell gate & lifecycle" quit bullet. Residual: the interactive double-quit smoke not run. #238 closed. |
 | **SEC-1** | MED-HIGH | 0 | #267 | **fixed (decision 1 default)** — Electron's `webPreferences.spellcheck` defaults to true and downloads Hunspell dictionaries from a Google-operated CDN on Windows/Linux on first typing — a browser-process fetch neither the CSP nor the Node-socket tripwire can see, and a hard-rule breach. `spellcheck: false` in `SECURE_WINDOW_WEB_PREFERENCES` (`window-security.ts:36`; all three windows spread it); the five-flag exact pin plus a call-site scan banning an inline `spellcheck:` (`window-security.test.ts:21-30`, `:246`). Closed by construction, not by measurement (a network capture on a packaged build was forbidden by the round's rules). Records: `security-model.md` "3. Chromium background fetches", `PRIVACY.md`, `known-limitations.md`, CHANGELOG. Other way (#218): dictionaries on the drive + a no-op `setSpellCheckerDictionaryDownloadURL` + closed `setSpellCheckerLanguages` (Phase F). #239 closed. **Measured 2026-10-03/04, #567:** the flag stops only the underlining; the session still downloaded the dictionary (Linux; Windows for a language it cannot check). Closed by `disableSpellCheckerDownloads` on every session, plus `no-proxy-server` for WPAD (security-model "Chromium background fetches"). |
 | **SEC-9** (H-02 · NEW-2, DOC-11, DOC-12) | MED (conf) / MED (avail) | 5b — 5b-a landed, 5b-b NOT OPENED | #275 | **partial — open residual, default stands.** The accepted BUILD_STATE §8 L-4 rationale ("no network sink") was false: each renderer-controlled drop/preflight path reached `lstatSync`/`realpathSync` before any lexical check, so on Windows a UNC path with an attacker-controlled host invokes name resolution and the SMB client (and, where 445/WebDAV egress is open and outgoing NTLM unrestricted, a credential exchange — documented behaviour, never probed); the preflight walk was synchronous, uncapped and on the main thread; the skills picker returned a raw path that the installer `lstat`ed (NEW-2, B6). **5b-a:** `pickSkillPackage` (`registerSkillsIpc.ts:213`) is unlock-gated and returns `{ token, path }`; `previewSkillPackage` peeks and `importSkill` spends the token (`requirePickedSource` `:203`), so a renderer string never reaches the installer (B6 inverted: `skills-ipc.test.ts` "picker token binds preview/import to the OS dialog (#240)" — an EMPTY fs call log for a non-token string, junk or a spent token); `createPickerTokens` (`ipc/picker-tokens.ts:26`, bounded FIFO of 16, extracted from the documents handler; the images handler keeps its own older copy — a tidy-up, no defect); `MAX_DROP_PATHS = 512` (`limits.ts:84`) is refused before the first `lstat` on `hardenDroppedPaths` and on the token-less `importPreflight` (`registerDocsIpc.ts:195,606`; a picker selection is exempt — `importPreflight(paths, pickerToken?)` peeks the docs token uncapped, else a Ctrl+A over 513 documents would have died at preflight); the walk is bounded — `expandPathsBounded` (`ingestion/index.ts:2028`; `DEFAULT_WALK_BUDGET` 50 000 entries / depth 64 / 10 000 ms, env-overridable; the result is a SUBSEQUENCE of the unbounded walk, picked files after a stopped walk kept); DOC-11 (this file's rows claiming `pickSkillPackage` minted a token) and DOC-12 (BUILD_STATE §8 L-4/L-5) restated. **5b-b** — the lexical half: `isNonLocalPath` rejecting UNC `\\host` / `//host`, device `\\.\` `\\?\` `\??\` and `file:` forms BEFORE any syscall on every platform (Q21 default), also inside the walk after each `realpathSync` (a local folder holding a junction to a share), with renderer copy and a troubleshooting note — is the drop-contract change for network-share users and stayed BLOCKING on decision 5 (#222), unanswered: `hardenDroppedPaths`' first fs call is still `lstatSync` (`registerDocsIpc.ts:213`). The off-thread walk is REL-13 #274. Docs: `security-model.md` residual egress (ii) `pending #240 (owner decision #222)`, the D1 and L-3 bullets, `known-limitations.md` drag-drop bullet; containment item 4's paths half promoted verbatim at this close-out. The 5b-b change set and tests are recorded on #240. **#240 OPEN.** |
 | **SEC-9** — §52 addendum 2026-09-04 | MED (conf) / MED (avail) | F (PR 2, `docs/pf-decisions-confirmed`) | #284 | **default confirmed as a ruling — decline** (owner decision #222, `**DECISION:** decline`, 2026-09-03). 5b-b, the lexical UNC/device rejection, will not be built: the SMB/NTLM credential-exposure leg is the accepted residual. Docs rewritten from "pending #240 / #222" to accepted wording — `security-model.md` residual egress (ii), the D1 and L-3 pointers and the bounds paragraph; `known-limitations.md` (the promoted containment-item-4 paths half is now a permanent "do not drop network-share paths" line; the drag-drop bullet); BUILD_STATE §8 L-4. The off-thread walk landed in PR #283. **#240 CLOSED.** |
-| **REL-5** (H-04 · rotated log, out-of-store copies, DOC-5, DOC-14) | MED | 6 | #276 | **fixed** — the v1→v2 password change staged the DB plus `documents/*.enc` only, so image history (`images/*.enc`, written under the same cipher without the lease), legacy out-of-store stored copies and the rotated encrypted log were left under a key that was then zeroed (B3 reproduced; shipped population plausibly zero — the v2 envelope predates every distributed build). `listVaultKeyCiphertexts(vaultPaths, db)` (`workspace-vault.ts:842`) now enumerates every class: `documents/*.enc`, `images/*.enc`, out-of-store rows whose `stored_path` is a regular `.enc` file outside the store AND that have no canonical `documents/<leaf>` copy (the resolver's own order — a copied vault's sibling store is never rekeyed; the leaf rule moved to dependency-free `ingestion/stored-copy-leaf.ts`), and the rotated log (`ROTATED_ENCRYPTED_LOG_NAME` `:753`; action `delete` at commit — Q18 default, nothing reads it; a rollback keeps it). A NEW on-disk file `workspace/rekey-journal.json` (`REKEY_JOURNAL_NAME` `:757`; `{ version: 1, staged: [], remove: [] }`, written atomically BEFORE staging — `writeRekeyJournal` `:894`) lets recovery find out-of-store twins while the DB is closed; a corrupt journal is quarantined as `.corrupt`, never deleted; staged twins are keyed on `pathKey()` (resolved, lower-cased on win32) — the first draft listed one physical file under two spellings and the second swap shredded the fresh target (reviewer BLOCKING, fixed in-PR). Image writes take the document-work lease (`createImageSession(…, beginWork)` `vision/history.ts:78-83`): a save mid-change is REFUSED with `VaultBusyError`, not queued. Downgrade caveat (a pre-#276 build ignores the journal) in `security-model.md` + `data-contracts.md`. DOC-5: "Password change" enumerates the four classes; DOC-14: CHANGELOG's pre-1.0 note now says v0.1.46 (2026-07-10) was a tester pre-release whose page was removed. B3 inverted + crash cuts at every journal step over every class in both directions (`password-change.test.ts`, `CUTS` `:698`). Residuals: an out-of-store copy on a drive DETACHED during the change stays under the old key (documented); lease-less image READS can fail transiently during a v1 change (never corrupt; pre-existing). #241 closed. |
-| **REL-8** (C-01 · TQ-2) | MED | 7 | #277 | **fixed** — after a failed lock the fresh working DB is the only copy of the session delta; preservation shredded an old `.recovery`, renamed the fresh file over it, swallowed both errors, and `init()` swept unconditionally — a held `.recovery` (AV/indexer) therefore shredded the only fresh DB (B4 reproduced). `preserveNewerPlaintext` returns `'preserved' | 'not-needed' | 'failed'` (`workspace-vault.ts:685`); on `'failed'` `init()` skips the crash sweep AND the pending-rekey recovery and marks the controller blocked (`isRecoveryBlocked()` `:1548`); `unlock()` re-runs `init()` (the hold may have cleared) and, still blocked, throws `VaultRecoveryBlockedError` (`:161`) → IPC reason `vault_recovery_blocked` (`registerWorkspaceIpc.ts:187`, `shared/types.ts:218`) + EN/DE `main.workspace.recoveryBlocked` (Q24; a one-key change if reworded). The SAME loss existed on the UNLOCK leg (reviewer, fixed in-PR): once `init()` had preserved the fresh copy as `.recovery`, a hold denying the header read at unlock let the older probe-error path proceed into the stale `.enc`, and a later lock made the never-rolled-forward copy shreddable — the probe-error catch now refuses whenever `.recovery` could still be fresh and proceeds only when `.enc` is demonstrably newer. Single `.recovery` name kept (Q20). TQ-2: `vi.spyOn(fs, …)` records nothing for ESM-namespace binders and the shipped guard test's injection was never reached; it now uses the pass-through `vi.mock('node:fs')` wrapper (`rmSync`→EPERM, `writeSync`→ENOSPC) and ASSERTS each injection was hit (`vault-recovery-guards.test.ts:137` `holdRecovery`; "#242" cases `:290,327`); B4 inverted (the fresh DB survives, unlock yields the marker). The incomplete fix REL-8 completes is the **2026-07-12 round's REL-1** (`6a33f25e`, §48). #242 closed. |
+| **REL-5** (H-04 · rotated log, out-of-store copies, DOC-5, DOC-14) | MED | 6 | #276 | **fixed** — the v1→v2 password change staged the DB plus `documents/*.enc` only, so image history (`images/*.enc`, written under the same cipher without the lease), legacy out-of-store stored copies and the rotated encrypted log were left under a key that was then zeroed (B3 reproduced; shipped population plausibly zero — the v2 envelope predates every distributed build). `listVaultKeyCiphertexts(vaultPaths, db)` (`workspace-vault.ts:842`) now enumerates every class: `documents/*.enc`, `images/*.enc`, out-of-store rows whose `stored_path` is a regular `.enc` file outside the store AND that have no canonical `documents/<leaf>` copy (the resolver's own order — a copied vault's sibling store is never rekeyed; the leaf rule moved to dependency-free `ingestion/stored-copy-leaf.ts`), and the rotated log (`ROTATED_ENCRYPTED_LOG_NAME` `:753`; action `delete` at commit — Q18 default, nothing reads it; a rollback keeps it). A NEW on-disk file `workspace/rekey-journal.json` (`REKEY_JOURNAL_NAME` `:757`; `{ version: 1, staged: [], remove: [] }`, written atomically BEFORE staging — `writeRekeyJournal` `:894`) lets recovery find out-of-store twins while the DB is closed; a corrupt journal is quarantined as `.corrupt`, never deleted; staged twins are keyed on `pathKey()` (resolved, lower-cased on win32) — the first draft listed one physical file under two spellings and the second swap shredded the fresh target (reviewer BLOCKING, fixed in-PR). Image writes take the document-work lease (`createImageSession(…, beginWork)` `vision/history.ts:78-83`): a save mid-change is REFUSED with `VaultBusyError`, not queued. Downgrade caveat (a pre-#276 build ignores the journal) in `security-model.md` + `data-contracts.md`. DOC-5: "Password change" enumerates the four classes; DOC-14: CHANGELOG's pre-1.0 note now says v0.1.46 (2026-07-10) was a tester pre-release whose page was removed. B3 inverted + crash cuts at every journal step over every class in both directions (`password-change.test.ts`, `CUTS` `:489`). Residuals: an out-of-store copy on a drive DETACHED during the change stays under the old key (documented); lease-less image READS can fail transiently during a v1 change (never corrupt; pre-existing). #241 closed. |
+| **REL-8** (C-01 · TQ-2) | MED | 7 | #277 | **fixed** — after a failed lock the fresh working DB is the only copy of the session delta; preservation shredded an old `.recovery`, renamed the fresh file over it, swallowed both errors, and `init()` swept unconditionally — a held `.recovery` (AV/indexer) therefore shredded the only fresh DB (B4 reproduced). `preserveNewerPlaintext` returns `'preserved' | 'not-needed' | 'failed'` (`workspace-vault.ts:685`); on `'failed'` `init()` skips the crash sweep AND the pending-rekey recovery and marks the controller blocked (`isRecoveryBlocked()` `:1548`); `unlock()` re-runs `init()` (the hold may have cleared) and, still blocked, throws `VaultRecoveryBlockedError` (`:161`) → IPC reason `vault_recovery_blocked` (`registerWorkspaceIpc.ts:187`, `shared/types.ts:218`) + EN/DE `main.workspace.recoveryBlocked` (Q24; a one-key change if reworded). The SAME loss existed on the UNLOCK leg (reviewer, fixed in-PR): once `init()` had preserved the fresh copy as `.recovery`, a hold denying the header read at unlock let the older probe-error path proceed into the stale `.enc`, and a later lock made the never-rolled-forward copy shreddable — the probe-error catch now refuses whenever `.recovery` could still be fresh and proceeds only when `.enc` is demonstrably newer. Single `.recovery` name kept (Q20). TQ-2: `vi.spyOn(fs, …)` records nothing for ESM-namespace binders and the shipped guard test's injection was never reached; it now uses the pass-through `vi.mock('node:fs')` wrapper (`rmSync`→EPERM, `writeSync`→ENOSPC) and ASSERTS each injection was hit (`vault-recovery-guards.test.ts:129` `holdRecovery`; "#242" cases `:242,278`); B4 inverted (the fresh DB survives, unlock yields the marker). The incomplete fix REL-8 completes is the **2026-07-12 round's REL-1** (`6a33f25e`, §48). #242 closed. |
 | **REL-9** (C-02 · DOC-15) | MED (confidence medium-low) | 7 (docs) | #277 | **documented on decision 6's default — open.** Every completed file is fsynced before its rename (`workspace-vault.ts` `fsyncSync` at `:255,337,541,739,900`) but no parent-directory flush follows a durability-critical rename; Node exposes no documented Windows directory-flush primitive (the review measured `openSync(dir,'r+')` + `fsyncSync` SUCCEEDING on Win11 — whether it has any namespace effect is HYPOTHESIS; NTFS journaling gives consistency, not durability), so on exFAT/FAT32 a power cut in the metadata window after a rename can roll a committed name back and the old-or-new rekey ordering could be violated. `drive-layout.md` "### Filesystem" (`:277`) recommends exFAT for cross-OS kits and states the caveat (the last successfully locked snapshot always survives); `security-model.md` and `troubleshooting.md` point there (DOC-15: the format was assumed in three docs and chosen nowhere). Not confirmed: no crash-cut tests ran (owner-gated). Ratify (#223) → a Phase F spike: retain the previous generation until the next successful lock, POSIX directory fsync on macOS/Linux, a crash-cut harness on exFAT; `MoveFileEx` write-through needs a native addon. **#243 OPEN.** |
 | **REL-9** — §52 addendum 2026-09-04 | MED (confidence medium-low) | F (PR 2, `docs/pf-decisions-confirmed`) | #284 | **default confirmed as a ruling — document, plus one manual crash-cut on exFAT before the first kit ships** (owner decision #223, `**DECISION:** document; one manual crash-cut on exFAT before the first kit ships`, 2026-09-03). No spike, no directory flush, no write-through. `drive-layout.md` **Filesystem** names the ruling; `packaging.md` "Manual pre-ship checklist" item 9 carries the crash-cut session (a scratch exFAT kit, a hard unplug during a multi-second lock, the wedged instance quit before re-plug; pass = the workspace opens at the last locked snapshot OR with the session rolled forward through `.recovery` — a cut in the encrypt phase is the failed-lock signature; fail = refuses every unlock or opens torn; machine/OS/date/outcome recorded; a per-platform repeat recommended, not ruled); `security-model.md` "Lock failure & durability" points there. Release-acceptance line 7's power-cut half closes by this explicit acceptance. One manual cut samples the lock at an arbitrary point — it is recorded as evidence, not proof, and the finding stays a CANDIDATE. **#243 CLOSED.** |
 | **REL-10** (M-01) | MED | 0 | #267 | **fixed** — E5Embedder, LlamaReranker and VisionRuntime created their `LlamaServer` without a start abort signal and awaited the in-flight cold start on teardown, so "Lock now"/quit waited the full 180 s health window (B8: 180 250 ms ×3 vs Translation's 250 ms). All three now carry the translation runtime's #159 pattern: a per-start `AbortController` passed as `startAbortSignal`, `isStartAbortError` as the FIRST clause of each `startFailed` latch (`e5.ts:287`, `reranker/llama.ts:193`, `vision/runtime.ts:275` — without the bypass a lock during a cold start would latch the wrapper dead until restart), `abort()` first in teardown/stop. B8 ported: `sidecar-teardown-abort.test.ts` (`WrapperCase` table; fake spawn + fake timers, production defaults 180 000 / 250) — 250 ms for all four wrappers, child killed, no stale latch, a fresh child on the next start; real worst case ≈ 5.25 s (one poll + the 3 s probe timeout + the 2 s POSIX SIGTERM grace). Record: the #159 note in this file. #244 closed. |
 | **SEC-2** | MED | 8 | #278 | **fixed** — `zipDest` was `join(extractTo, <last '/'-segment of the url>)`, so a `runtime-sources.yaml` basename containing `..\..\` walked up from the guarded extraction root on Windows (clamped at the volume root) and `download()` wrote there before the attacker-supplied hash was checked. `archiveNameFromUrl(url, fallback)` (`assets.ts:291`) takes `new URL(url).pathname`'s last segment, percent-decoded, requires `ARCHIVE_NAME_RULE = /^[A-Za-z0-9._-]{1,128}$/` (`:281`) and not `.`/`..`, else `<binary>-<version>-<os>-<arch>.zip`; `zipDest = resolveWithinRoot(extractTo, name)` (a hostile `version` in the fallback now throws instead of escaping); every `url` must be https at parse time in all three families (`runtime-sources.ts:134,211`). Two cases, not one: a raw `\` in an https path is a `/` under WHATWG and the `..` resolve INSIDE the root; only the percent-encoded `%5C` form reaches the rule and falls back (`assets.test.ts:1038` "archiveNameFromUrl (#245)"). Record: `security-model.md` manifest-tampering bullet (3). Adjacent, unchanged: BUILD_STATE §8 L-7 (archive MEMBERS; same trigger, different code). #245 closed. |
 | **DOC-6** | MED (reader) | 9 → 9a | #280 | **fixed** — `user-guide.md` §13 "**If the app is not quit cleanly:**" (`:1023`): pulling the drive while the app runs, a power cut or a forced kill, or shutting down / logging off with the app open loses every change since the workspace last locked; the workspace reopens from that point — the product's public statement of REL-11 ("a crash" was dropped after review: an in-process crash runs the synchronous lock). The "(harmless, …)" the evaluation misread modifies the Windows scan prompt. Owner may reword (STATE Q26). #246 closed. |
 | **REL-4** (NEW-5) | MED-LOW | 3 PR 3-b — NOT OPENED | — | **open residual — default stands.** No `PRAGMA user_version` anywhere under `apps/desktop/src` (`db.ts:998` `applyPragmasAndMigrations` runs WAL + additive `CREATE … IF NOT EXISTS`/`ensureColumn` migrations only), so an older build cannot tell it opened a newer workspace and degrades silently — realistic only through REL-7, whose launcher refusal (#272) now closes the trigger. Decision 8 (#225, an on-disk format change) unanswered → not ratified. Ratify → PR 3-b, design on #247: read `user_version` first; `> CURRENT` → `WorkspaceNewerError` → IPC `workspace_newer` + EN/DE copy; `< CURRENT` → migrate then stamp; `0` = every existing DB; `data-contracts.md` migration note; pre-fix builds ignore the stamp, so it protects only future pairs. **#247 OPEN.** |
-| **REL-4** — §52 addendum 2026-09-04 | MED-LOW | F (PR 5, `fix/pf-rel4-user-version`) | #289 | **fixed — ratified** (owner decision #225, `**DECISION:** ratify`, 2026-09-03). `services/db.ts` `SCHEMA_VERSION = 1`; `applyPragmasAndMigrations` reads `PRAGMA user_version` FIRST — before the WAL pragma or any write — so above `SCHEMA_VERSION` → the typed, content-free `WorkspaceNewerError` (`found`, `supported`; `openDatabase` closes the handle, the file is byte-identical, no sidecar is left behind — a WAL-mode read opens `-wal`/`-shm` transiently and the close removes them), below → the additive migrations run and the file is stamped, equal → nothing written (a second open is a no-op); `0` = every database written before this change, upgraded in place at its next open. `unlockEncryptedVault` rethrows the typed error after the damaged-vault cleanup (the decrypted working file shredded again; `.enc` is not rewritten by the refusal — a pending `.recovery` still rolls forward first, so nothing is lost; the password verifies first, so a wrong password still surfaces as such); the controller's plaintext `init()` catches it, stays uninitialized (`isNewerWorkspace()` + a startup warn in `index.ts`) and the gate's create reaches the same refusal; `registerWorkspaceIpc` maps it on unlock AND create to `{ ok: false, reason: 'workspace_newer', message }` (`shared/types.ts` union; EN "This workspace was written by a newer HilbertRaum — update the app to open it. Nothing was changed." / DE). Tests (red first, PR #289): `db-user-version.test.ts` (fresh → stamped; version 0 → migrated + stamped, a second open a no-op with the file hash unchanged; newer → refused, byte-identical, handle closed — the file unlinks on Windows; a far-future stamp too), `workspace-newer.test.ts` (encrypted unlock → the typed error, no plaintext at rest, `.enc` byte-identical, a wrong password still `WrongPasswordError`; the unlock IPC → `workspace_newer` with the update-the-app copy; plaintext_dev startup does not throw, the file untouched, create → `workspace_newer`; a control at the current version). Docs: `data-contracts.md` (the reason union + "Schema stamp"), `security-model.md` single-instance bullet (the second floor beside #235), `known-limitations.md`, `troubleshooting.md`, CHANGELOG. Caveat stated in each: builds ≤ 0.1.59 never read the stamp — the guard protects only pairs whose OLDER build carries this change (an old 0.1.57 portable started directly still opens a stamped workspace silently; the launcher refusal, #235, stays the first floor). **#247 CLOSED, #225 CLOSED.** |
+| **REL-4** — §52 addendum 2026-09-04 | MED-LOW | F (PR 5, `fix/pf-rel4-user-version`) | #289 | **fixed — ratified** (owner decision #225, `**DECISION:** ratify`, 2026-09-03). `services/db.ts` `SCHEMA_VERSION = 1`; `applyPragmasAndMigrations` reads `PRAGMA user_version` FIRST — before the WAL pragma or any write — so above `SCHEMA_VERSION` → the typed, content-free `WorkspaceNewerError` (`found`, `supported`; `openDatabase` closes the handle, the file is byte-identical, no sidecar is left behind — a WAL-mode read opens `-wal`/`-shm` transiently and the close removes them), below → the additive migrations run and the file is stamped, equal → only the stamp write is skipped (the additive migrations still run on every open, so an equal-stamped file missing a newer column gets it; on a complete schema a second open changes nothing); `0` = every database written before this change, upgraded in place at its next open. `unlockEncryptedVault` rethrows the typed error after the damaged-vault cleanup (the decrypted working file shredded again; `.enc` is not rewritten by the refusal — a pending `.recovery` still rolls forward first, so nothing is lost; the password verifies first, so a wrong password still surfaces as such); the controller's plaintext `init()` catches it, stays uninitialized (`isNewerWorkspace()` + a startup warn in `index.ts`) and the gate's create reaches the same refusal; `registerWorkspaceIpc` maps it on unlock AND create to `{ ok: false, reason: 'workspace_newer', message }` (`shared/types.ts` union; EN "This workspace was written by a newer HilbertRaum — update the app to open it. Nothing was changed." / DE). Tests (red first, PR #289): `db-user-version.test.ts` (fresh → stamped; version 0 → migrated + stamped, a second open a no-op with the file hash unchanged; newer → refused, byte-identical, handle closed — the file unlinks on Windows; a far-future stamp too), `workspace-newer.test.ts` (encrypted unlock → the typed error, no plaintext at rest, `.enc` byte-identical, a wrong password still `WrongPasswordError`; plaintext_dev startup does not throw, the file untouched, create → `workspace_newer`). Two of its rows were retired on 2026-11-16 as duplicates: the unlock IPC's `workspace_newer` answer with the update-the-app copy is held by `workspace-ipc.test.ts`'s D-17 row "unlock workspace_newer (a database a newer build stamped)", in every interface language, and the control at the current version by `db-user-version.test.ts`'s fresh and version-0 rows (a database at `SCHEMA_VERSION` opens, and a second open writes nothing). Docs: `data-contracts.md` (the reason union + "Schema stamp"), `security-model.md` single-instance bullet (the second floor beside #235), `known-limitations.md`, `troubleshooting.md`, CHANGELOG. Caveat stated in each: builds ≤ 0.1.59 never read the stamp — the guard protects only pairs whose OLDER build carries this change (an old 0.1.57 portable started directly still opens a stamped workspace silently; the launcher refusal, #235, stays the first floor). **#247 CLOSED, #225 CLOSED.** |
 | **GAP-1** | MED-LOW | 9 → 9a (wording); 0-c NOT OPENED | #280 | **documented on decision 9's default — open.** No `session-end` (Windows) / `shutdown` (macOS) handler exists; those events never pass through `will-quit`, so an OS shutdown or logoff with the app open is a hard kill: the process leaves a live `-wal`, `preserveNewerPlaintext` declines it and the next launch shreds the working DB — REL-11's loss for every user who shuts the laptop down with the app open (the mechanism the evaluation had mis-attributed to NEW-1). `security-model.md` "App-shell gate & lifecycle": "**OS session end is a hard kill (#248; owner decision #226, default = document)**" (`:1067`) + the §13 clause; `index.ts` has only the `uncaughtException` synchronous lock (`:769-791`), `window-all-closed` and the factory's `will-quit`; the macOS leg stays HYPOTHESIS. "Quit the app before shutting down or logging off" (containment item 7's remaining half) is promoted verbatim to `known-limitations.md` at this close-out. Ratify → PR 0-c, design on #248: extract the `uncaughtException` body into `emergencyLock()` (`localApi.stop()` fire-and-forget, `detachVaultKey()`, synchronous `workspace.shutdown()`, kill sidecar children), register `session-end` and `shutdown` on the lifecycle factory, one emission test. **#248 OPEN.** |
 | **GAP-1** — §52 addendum 2026-09-04 | MED-LOW | F (PR 3, `fix/pf-gap1-session-end`) | #285 | **fixed on Windows; macOS registered, unverified** (owner decision #226, `**DECISION:** handler (Windows now, macOS after a live check)`, 2026-09-03). Premise corrected at execution: neither event is an `app` event — `session-end` is a `BrowserWindow` event (win32; `WindowSessionEndEvent.reasons`, cannot be prevented, the process is killed once the handler returns) and `shutdown` a `powerMonitor` event (darwin/linux; usable after `ready`) — so the registration sits in `createWindow` (win32, on the main window) and in `whenReady` (darwin), not beside `will-quit`. `emergencyLock(ctx, deps)` (`main/shutdown.ts`) is the crash path's synchronous best-effort lock extracted and now shared by `uncaughtException` and the new `onSessionEnd`: arm the lock latch, local-API stop fire-and-forget, `detachVaultKey()`, `workspace.shutdown()`, reap the sidecar children in its own try. `onSessionEnd` shares the factory's `shuttingDown` closure: once only; a session end during a running quit teardown defers to it (impossible on Windows — the quit closed every window before `will-quit`); a `will-quit` after the session-end lock exits at once (a prevented quit that never exits would cancel a macOS shutdown); `session-end: locking workspace` with the OS reasons precedes the lock. `shutdown.test.ts` (seven cases, red first): exactly one lock (`localApi.stop`, `detach`, `lock`, `reap`), the second emission, both orderings against `will-quit`, the reap on the exit path, throw-safety, the `index.ts` source-text wiring pin (win32 + darwin + the crash path). Docs: `security-model.md` lifecycle bullet → handled (+ the durability paragraph's mitigation list); user-guide §13 narrowed to pull / power cut / forced kill, with the Windows sentence and the macOS caveat; `known-limitations.md` "quit before shutdown/logoff" narrowed to macOS/Linux; CHANGELOG Unreleased. Residual: the lock is synchronous but not instantaneous under a bounded OS grace — a cut mid-lock is left to `init()`'s recovery (a bare, closed working file rolls forward; a live `-wal` still shreds); `query-session-end` (cancelable, delays the shutdown) is the recorded next step if the live check shows the grace is too short. Owner-only, still open: the macOS live check (the ordering against `will-quit` — Electron's `powerMonitor` docs read as `shutdown` first; the grace; whether a Dock-menu Quit reaches the same handler; a shutdown the system then cancels leaves the app alive, locked, with no window recreated — quit and relaunch); Linux registers nothing (not ruled). Review repairs in-PR: the activate test made non-vacuous (window count 0), the crash-path wiring pin anchored on the `uncaughtException` handler, the post-session-end `will-quit` exit reaps once more, the unused `detachVaultKey` import dropped. **#248 CLOSED, #226 CLOSED.** |
 | **SEC-3** | LOW | 9 → 9a | #280 | **fixed (documented)** — `security-model.md` "### What lives or passes outside the drive" (`:1221`): the host Chromium profile under the app's OS app-data folder holds four renderer `localStorage` keys (UI booleans + the language code) and caches, no `Dictionaries/` (spellcheck off), no `partition`, not cleared on lock (rider 14 default — #231; the profile holds no workspace content by construction). `renderer-storage-keys.test.ts` pins the key set (each key to its defining file), no `sessionStorage`/`indexedDB`, and no `partition:`/`clearStorageData(`/`clearCache(` under `src/main`. #249 closed. |
 | **SEC-4** | LOW | 9 → 9a | #280 | **documented on decision 10's default — open.** 8 `copyToClipboard` sites in 7 renderer files (chat answers, summaries, translations, image answers, the file hash, diagnostics text/log tail, the local-API address) write the OS clipboard through `writeClipboard` (`registerCoreIpc.ts:108`) with no wipe — Windows clipboard history / cloud clipboard and Universal Clipboard carry it off-device; the one exception is the local-API KEY copy, which arms a 60 s best-effort clear (`registerLocalApiIpc.ts:21` `CLIPBOARD_CLEAR_MS`). Documented in the "outside the drive" section + residual egress item (iv). Ratify (#227) → generalise that timer into `writeClipboard` behind a setting, with a timer test (Phase F; design on #250). **#250 OPEN.** |
 | **SEC-4** — §52 addendum 2026-09-04 | LOW | F (PR 2, `docs/pf-decisions-confirmed`) | #284 | **default confirmed as a ruling — document only** (owner decision #227, `**DECISION:** document only`, 2026-09-03). No timed clear ships; the timer design stays recorded on #250. `security-model.md` (the clipboard paragraph in "What lives or passes outside the drive", residual egress (iv)) and `known-limitations.md` carry the accepted wording. **#250 CLOSED.** |
-| **SEC-5** (NEW-6) | LOW | 8 | #278 | **fixed** — `updateSettings` gated keys with `key in DEFAULT_SETTINGS`, which let `__proto__` through as an own row (no pollution — but a junk, size-unbounded row in the encrypted blob; B7). Now `Object.hasOwn(DEFAULT_SETTINGS, key)` on write (`settings.ts:90`) AND `getSettings` skips rows whose key is not an own default (`:62` — a pre-fix `__proto__` row set the merge object's prototype on every unlock; reviewer completion), with ONE serialized-size cap `MAX_SETTINGS_OBJECT_BYTES` = 256 KB (`:25`) on every non-primitive write (was: three named keys). B7 A–F ported inverted (`settings-write-gate.test.ts:201-281`). #251 closed. |
+| **SEC-5** (NEW-6) | LOW | 8 | #278 | **fixed** — `updateSettings` gated keys with `key in DEFAULT_SETTINGS`, which let `__proto__` through as an own row (no pollution — but a junk, size-unbounded row in the encrypted blob; B7). Now `Object.hasOwn(DEFAULT_SETTINGS, key)` on write (`settings.ts:107`) AND `getSettings` skips rows whose key is not an own default (`:64` — a pre-fix `__proto__` row set the merge object's prototype on every unlock; reviewer completion), with ONE serialized-size cap `MAX_SETTINGS_OBJECT_BYTES` = 256 KB (`:32`) on every non-primitive write (was: three named keys). B7 A–F ported inverted (`settings-write-gate.test.ts`, the "#251" describe at `:354`; since 2026-11-16 it keeps one row per guard: "A: a `__proto__` key writes no row" (the write allowlist), "a `__proto__` row left by an older build is ignored on read and sets no prototype" (the read allowlist) and "the byte cap covers every non-primitive write, not only the three named object keys"; the control rows B, C, D, F and the double-revert row E were retired, as none of them could fail when either guard was reverted). #251 closed. |
 | **SEC-6** (NEW-7) | LOW | 8-b | #279 | **fixed** — 137 `ipcMain.handle` registrations had no sender check (unreachable today: the print window has no preload, the OCR preload never `invoke`s). `guardedHandle(channel, handler, { trustedSenders, log })` (`ipc/guarded-handle.ts:59`) runs the body only when `event.sender.id` is in `ctx.trustedSenders` (REQUIRED on `AppContext`; `createWindow` adds the main window's `webContents.id` at `index.ts:668` before any load); a refused invoke rejects with a content-free `UntrustedSenderError` (`:39`) and is logged; a missing set THROWS at registration (fail closed and loud). 18 registrars converted by codemod (`const ipcHandle = guardedHandleFor(ctx)`); the two `ipcMain.on` sites keep their own `event.sender !== win.webContents` check; `repo-hygiene.test.ts:637` bans a bare `ipcMain.handle(` under `src/main/ipc/**`. `guarded-handle.test.ts` (real sets; a real registrar through a non-permissive set); `tests/helpers/ipc.ts` `makeEvent(senderId?)` + `ANY_SENDER` in 36 fake contexts. Merged WITHOUT a live launch (this machine's application-control policy blocked `electron.exe` that session) on the substitute proof — the IPC smoke joins the owner list. #252 closed. |
 | **SEC-7** | LOW | 8 | #278 | **fixed** — `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">` in the evidence-pack head (`render-html.ts:200`; `evidence-pack-html.test.ts` › "carries a CSP meta that forbids every active resource, ahead of the stylesheet (#253)", and unchanged under the hostile render in "escapes hostile content in answer, question, notes, titles, snippets, labels"; six goldens +1 line) makes the pack's self-containment structural when opened in a browser. The manual PDF-export smoke is on the owner list. #253 closed. |
 | **GAP-3** (HYPOTHESIS) | LOW | 8 (investigated in the Phase 0 sitting) | #278 (recorded) | **confirmed residual, recorded — no code.** WebRTC and `<link rel=dns-prefetch/preconnect>` are outside every CSP directive, unused by the renderer, reachable only after a renderer compromise; no Blink flag added (its effect cannot be verified offline). Recorded in `security-model.md` "3. Chromium background fetches" and the residual-egress list; the cheap CSP hardening became SEC-14 #266 (below). #254 closed by #278. |
-| **REL-1** | LOW | 8 (+ the `local-api.md` wording the paper put in 9) | #278 | **fixed** — the body bound was a 30 s IDLE timer reset by every byte, so sixteen 1 B/25 s trickles could hold every listener slot. `BODY_TOTAL_TIMEOUT_MS = 120_000` (`local-api/server.ts:78`) is armed beside the idle timer at the end of the header phase, `req.destroy()`s on expiry, cleared on `end`/`close`; seam `bodyTotalTimeoutMs` (`local-api-hardening.test.ts:296`); `local-api.md` §6.1 bounds table "Body total" row (`:390`) + the Host wording. NOT the 2026-07-12 round's REL-1. #255 closed. |
+| **REL-1** | LOW | 8 (+ the `local-api.md` wording the paper put in 9) | #278 | **fixed** — the body bound was a 30 s IDLE timer reset by every byte, so sixteen 1 B/25 s trickles could hold every listener slot. `BODY_TOTAL_TIMEOUT_MS = 120_000` (`local-api/server.ts:93`) is armed beside the idle timer at the end of the header phase, `req.destroy()`s on expiry, cleared on `end`/`close`; seam `bodyTotalTimeoutMs` (`local-api-hardening.test.ts:229`); `local-api.md` §6.7 bounds table "Body total" row (`:395`) + the Host wording. NOT the 2026-07-12 round's REL-1. #255 closed. |
 | **REL-2** | LOW | 8 | #278 | **fixed** — `saveTextExport` wrote with `writeFileSync` on the main thread (the AUD-15 defect one file away). It now shares the async atomic `writeAtomic` tail (`save-export.ts:71`: tmp sibling → short-write check → `fd.sync()` → close → rename; `rm` on failure) with `saveBinaryExport` (`save-export.test.ts` › "the shared atomic tail, both writers (#90, #256)"). #256 closed. |
 | **REL-3** | LOW | 8 → 3 | #272 | **fixed** — `set -euo pipefail` + `${1:-}`/`${HOME:-}` guards in `start-hilbertraum.sh:14` AND `Start HilbertRaum.command:22` (Q16 default). The review's "no `set -e`" was wrong — `set -e` existed; `-u` and `pipefail` did not. Landed in the Phase 3 launcher PR (the same file), not Phase 8. #257 closed. |
-| **TQ-1** | LOW | 4 | #273 | **fixed** — a `setImmediate`-based `waitUntil` starves the libuv poll phase where fs callbacks land (a real `decryptFileAsync` never left its `.tmp` stage). `lock-admission-race.test.ts` `tick` = `setTimeout(r, 1)` (`:81`); on this Windows host one tick ≈ 15–19 ms (timer coalescing), so the pre-existing 20-tick drains cost ~0.4 s each — ceilings, not sleeps. BUILD_STATE §7 conventions entry (both bullets, with TQ-2's wrapper rule). #258 closed. |
+| **TQ-1** | LOW | 4 | #273 | **fixed** — a `setImmediate`-based `waitUntil` starves the libuv poll phase where fs callbacks land (a real `decryptFileAsync` never left its `.tmp` stage). `lock-admission-race.test.ts` `tick` = `setTimeout(r, 1)` (`:101`); on this Windows host one tick ≈ 15–19 ms (timer coalescing), so the pre-existing 20-tick drains cost ~0.4 s each — ceilings, not sleeps. BUILD_STATE §7 conventions entry (both bullets, with TQ-2's wrapper rule). #258 closed. |
 | **DOC-9** | LOW | 9 → 9a | #280 | **fixed** — `data-contracts.md:1398`: 138 channels = the keys of the `IPC` constant; `STREAM`, `OCR_RASTER` and `EVENTS` are separate constants (the counting rule the "140" had blurred). The frozen `docs/audits/docs-code-comment-audit.md` left alone. #259 closed. — **145 after #301's seven `packs:*` keys (P7, 2026-09-06)**. |
 | **DOC-10** | LOW | 9 → 9a | #280 | **fixed** — `data-contracts.md:669` `setup-dev` line says `npm ci` (BUILD_STATE §8 L-8 closed; the only `npm install` in `.github/` is the global npm CLI pin). #260 closed. |
 | **DOC-16** (HYPOTHESIS) | LOW | 9 → 9a | #281 | **confirmed at the component → fixed.** `SkillRunBar.tsx`'s write/export confirm read the LIVE `selectedId` (`targets.find(…) ?? targets[0]`), so a target list that changed between open and Run could run the tool on a different document than displayed (sibling defect: a picked document leaving the list silently fell back to `targets[0]`). Now `PendingConfirm { tool, documentId, documentName }` (`:40`) is snapshotted when the dialog opens, `onRun` uses the snapshot, and the dialog names the document (`chat.skill.confirm.target` "Document: {document}", EN+DE; `SkillRunBar.test.tsx:659`); main REFUSES an out-of-scope snapshot id (`main.skills.run.documentOutOfScope`), so the snapshot is never worse than the live binding. The screen-level race is reachable only by timing (the scope-refresh effect unmounts the dialog before a reply lands) — a UX note, no issue. #261 closed. |
@@ -11896,12 +12302,12 @@ observed `console.log` values):
 | B | finding | landed as | does not prove |
 |---|---|---|---|
 | B1 | SEC-12 | `tests/unit/shutdown.test.ts:303-395` — the second `will-quit` IS prevented; exit only from the finally (lock → reap → exit); the 30 s deadline with the lock outside the race | that Electron re-emits `will-quit` after a prevented one (documentation-derived; the fake harness cannot express `defaultPrevented`, so the handler ran over an event stub) |
-| B2 | SEC-10 | `tests/integration/lock-admission-race.test.ts` "#237" describes (`:733`, `:807`) — a parked photo preview (`gatedOcrEngine`, no-op `suspend()`) across a real encrypted vault, real IPC, real `performShutdown`; `tick` = `setTimeout(r, 1)` | that residue survives a real process exit (asserted at `performShutdown` resolution); pdf/docx/txt parses (no injection seam — they are sweep-bounded); the real tesseract `suspend()` gives the photo path a partial mitigation the fake removed |
-| B3 | REL-5 | `tests/integration/password-change.test.ts` "#241" describes (`CUTS` `:698`) — `legacyV1` vault, two images via the real writer, an out-of-store copy, real `changePassword`, lock, fresh controller; crash cuts at every journal step over every class | that any real user has a v1 vault (v2 envelope 2026-06-11; first public release v0.1.50 2026-07-12; the tester pre-release v0.1.46 of 2026-07-10 post-dates the envelope) |
-| B4 | REL-8 | `tests/integration/vault-recovery-guards.test.ts` "#242" cases (`:290`, `:327`; `holdRecovery` arms `openSync`→EBUSY, `rmSync`→EPERM, `renameSync`→EPERM together, hit-counted) | that a real AV/indexer hold produces exactly this fault set |
+| B2 | SEC-10 | `tests/integration/lock-admission-race.test.ts` "#237" describes (`:871`, `:968`) — a parked photo preview (`gatedOcrEngine`, no-op `suspend()`) across a real encrypted vault, real IPC, real `performShutdown`; `tick` = `setTimeout(r, 1)` | that residue survives a real process exit (asserted at `performShutdown` resolution); pdf/docx/txt parses (no injection seam — they are sweep-bounded); the real tesseract `suspend()` gives the photo path a partial mitigation the fake removed |
+| B3 | REL-5 | `tests/integration/password-change.test.ts` "#241" describes (`CUTS` `:489`) — `legacyV1` vault, two images via the real writer, an out-of-store copy, real `changePassword`, lock, fresh controller; crash cuts at every journal step over every class | that any real user has a v1 vault (v2 envelope 2026-06-11; first public release v0.1.50 2026-07-12; the tester pre-release v0.1.46 of 2026-07-10 post-dates the envelope) |
+| B4 | REL-8 | `tests/integration/vault-recovery-guards.test.ts` "#242" cases (`:242`, `:278`; `holdRecovery` arms `openSync`→EBUSY, `rmSync`→EPERM, `renameSync`→EPERM together, hit-counted) | that a real AV/indexer hold produces exactly this fault set |
 | B5 | GAP-4 | `tests/integration/commercial-drive.test.ts:762,776` + `script-execution.test.ts` (the scripts executed) | — (the paper's "19 push sites per script" was 20; none concerned the app — the conclusion stood) |
 | B6 | SEC-9 / NEW-2 | `tests/integration/skills-ipc.test.ts` "picker token binds preview/import to the OS dialog (#240)" — EMPTY fs call log for a non-token string, junk or a spent token; `{ token, path }`; the junction-loop / depth-50 / width-500 inequalities kept | anything about UNC/SMB — no UNC string exists in any test, by rule (never pass a UNC path to a real fs call) |
-| B7 | SEC-5 | `tests/unit/settings-write-gate.test.ts:201-281` (A–F; A and E red before the fix) | — |
+| B7 | SEC-5 | `tests/unit/settings-write-gate.test.ts` "#251" describe (`:354`; A–F landed with A and E red before the fix; since 2026-11-16 three rows: A, the read-allowlist row and the byte-cap row, which together hold both halves of E) | — |
 | B8 | REL-10 | `tests/integration/sidecar-teardown-abort.test.ts` (four wrappers, fake spawn + fake timers, production defaults) | the field likelihood of a wedged cold start |
 | B9 | REL-7 | `tests/integration/launcher-execution.test.ts` (16 cases: two artifacts → refusal on all three scripts; `/check`/`--check`; controls) | behaviour on a real macOS host; a real `.cmd` launch is never performed by a test (cmd's `start` blocks under a hidden console with piped stdio — a harness artefact; the Windows walk's launch step ran detached with a visible console) |
 
@@ -12605,7 +13011,10 @@ edit locate→verify→splice.
   never decrypted just to be discovered non-DOCX). The §14 ceiling holds: the **seam** holds the FS/cipher
   reach via the injected closure; the pure tool never does.
 - **Binary write + save dialog.** `saveBinaryFile` (IPC) is the `.docx` sibling of `saveTextFile` (identical
-  save-dialog + privacy posture, `writeFile` with a Buffer, no `'utf8'`). Each document-transform descriptor
+  save-dialog + privacy posture; bytes written verbatim, no BOM). Both go through the shared atomic writers in
+  `ipc/save-export.ts` — `saveBinaryExport` since #90, `saveTextExport` since #838 (tmp sibling → fsync →
+  rename, so a failed write leaves no partial file and the file it was replacing intact; this record first
+  shipped both as a plain `writeFile` onto the chosen path). Each document-transform descriptor
   names its own `docxDialog` (a `.docx` filter) beside its `.txt` `dialog`; the source-format branch lives in
   the **seam** (keyed off the document's stored extension via `readOriginalDocument`): DOCX source → the DOCX
   writer + `redacted.docx`/`edited.docx`; everything else → the unchanged `.txt` path.
@@ -13327,8 +13736,15 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   asserting `transitions === [true, false]` (SET then CLEARED around the real Argon2id rewrap) AND
   `refusedWhileChanging`. **Teeth:** neuter `changePassword`'s `this.changingPassword = true` → `transitions` is
   `[false]` and the refusal never fires → red (the old field-poking test could not catch this). The reciprocal
-  direction (a real doc-work lease refusing a real `changePassword`, `password-change.test.ts:375`) was already
-  strong and is left intact.
+  direction (a real doc-work lease refusing a real `changePassword`, `password-change.test.ts` "refuses while
+  document work holds a lease; works once released") was already strong and is left intact. **Since
+  2026-11-16** the trap lives in the image-save row of the same file, "an image save admitted while a REAL password
+  change runs is refused with VaultBusyError and writes nothing": at the instant the flag flips true a save takes
+  the lease through `createImageSession` and is refused (no session row, no file), `transitions` is
+  `[true, false]`, and a lease taken after the change starts cleanly. The doc-work row was retired into it, with
+  the same teeth (no SET → `[false]` and no attempt; no reset in the `finally` → `[true]`). The
+  reciprocal row now also holds two leases and releases the first twice, so a release is shown to
+  be idempotent.
 - **T7 (Low, backlog) — already-mitigated; pinned, NO src change.** The audit flagged the SSRF deny-list
   (`assets.ts isPrivateOrLoopbackHost`) as "literal-dotted-decimal only", missing decimal/octal/hex IP encodings of
   loopback (`https://2130706433/`). Driving the REAL path shows it is NOT bypassable: `assertSafeDownloadUrl` reads
@@ -13515,7 +13931,7 @@ reconciliation (D1–D10 + M1; docs/comments-only; §3 of the report).
 | T3 (Med) | F | **closed (test)** — injected-failure ROLLBACK tests for the categorize persist + the ingestion chunk-insert loop (no partial rows + connection-not-poisoned + clean recovery; teeth-checked). **Audit correction:** `commitNode` (H11) + the extraction insert already had rollback tests — "1 of ~12" was ≥3 | "Test-enforcement seams" Phase-F; `doctasks-categorize.test.ts`, `ingestion.test.ts` |
 | **T4** (Low-Med) | **A** | **landed with Phase A** — new `tests/unit/money.test.ts`: pure-function table tests (`parseAmount` incl. apostrophe-decimal + 2-dp invariant, `MONEY_RE` boundaries, `detectCurrency`/`detectDocumentCurrency`, `inferDateOrder`/`parseDate`, `wordIncludes`, `csvField`). Offline | §8; `tests/unit/money.test.ts` |
 | T5 (Low) | F | **closed (swept)** — the 3 genuine correctness-gating fixed waits (`reranker`/`e5`/`ocr-task`) → state-polls; residuals recorded (timestamp-monotonicity, absence-settle, slow-op sims); 3× timeout headroom retained | "Test-enforcement seams" Phase-F |
-| T6 (Low) | F | **closed (test)** — `changingPassword` lifecycle pinned via a property-trap on the real `changePassword` (`[true,false]` + in-flight refusal). Teeth: neuter the flag SET → red (the field-poking test could not) | "Test-enforcement seams" Phase-F; `password-change.test.ts` |
+| T6 (Low) | F | **closed (test)** — `changingPassword` lifecycle pinned via a property-trap on the real `changePassword` (`[true,false]` + in-flight refusal; since 2026-11-16 in the image-save lease row, where the refused lease is an image save's). Teeth: neuter the flag SET → red (the field-poking test could not) | "Test-enforcement seams" Phase-F; `password-change.test.ts` |
 | T7 (Low) | F | **already-mitigated; pinned, NO src change** — WHATWG `new URL` canonicalizes numeric IPv4 → dotted-decimal before the deny-regex, so the decimal/octal/hex loopback encodings are already rejected; regression-pinned in both F15 styles | "Test-enforcement seams" Phase-F; `assets.test.ts` |
 | **D1–D10** (Med/Low, docs) | G | **fixed (docs)** — the post-DX-1/DX-3 doc drift reconciled to the as-built `handlers/`/`context.ts`/`MODEL_TASK_HANDLERS` layout (D1–D5), the "Move to project…"/toolbar labels (D6/D7), the §36 split note (D8), the version-hygiene note (D9), and the README/security-model cosmetics (D10). 2 same-class extras folded/flagged transparently | §3 of the report (folded); architecture.md "Document tasks", rag-design.md, `services/doctasks.ts`, user-guide.md, README.md, security-model.md |
 | **M1** (Low) | G | **fixed (comment-only)** — the duplicated RAG-1 determinism comment block in `VectorIndex.search` deleted | §3 of the report; `embeddings/index.ts` |
@@ -13623,15 +14039,21 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
 - **`shared/manifest.ts`** — `vision` role; an optional **`mmproj` projector sub-block** (`MmprojSpec`,
   required iff `role: vision`); the top-level `download` + `mmproj.download` validation share one
   `validateDownloadSubBlock` (https-only, a real download hash equals the real file hash); optional
-  informational `input_modalities`. Unknown keys ignored ⇒ older builds treat a vision manifest as
-  `unsupported` (forward-compatible).
+  informational `input_modalities`. Unknown keys are ignored, but an unknown ROLE was not: the builds that
+  predate `vision` reject a vision manifest, so it vanishes there (the "shown as `unsupported`" claim was
+  never true). Since #847 a role a build does not know is listed as needing a newer HilbertRaum instead
+  (model-policy.md "A manifest for a newer HilbertRaum").
 - **`services/models.ts`** — vision install state = **every declared file present + verified**:
   `mmprojPath` + `manifestFiles` thread through `computeInstallState` (precedence `unsupported →
   missing → checksum_failed → installed`), the lazy `skipHash` path, and the `(path,size,mtime)`
   two-tier checksum cache. Since #310, `manifestFiles` appends the same treatment to every file a
   manifest's `files:` list declares (kind `'extra'`) — GGUF, mmproj, and `files:` alike.
 - **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible →
-  available; cheap, lazy, lock-safe), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
+  available; cheap, lazy, lock-safe; since #890 it tries `visionCandidates` in order: `pickManifestForRole`
+  over the vision manifests whose files are all on the drive first (`pickVisionManifest`, which the
+  Performance screen's images row names), then the rest when that one fails verification; since #913 a candidate that
+  fails its check makes the reason `damaged` when none is available, and `VisionService` checks the named model
+  against the cache again before a cold start), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
   guards + the D4 header pixel-bomb cap + `validateAnalyzeRequest` — the SEC-3 main-side re-validation
   `importDocuments` lacks). **SEC-6 (backend-audit-2026-06-27):** `validateAnalyzeRequest` now rejects
   a **claimed** png/jpeg whose header won't parse (`decodedPixelCount` → `null`) as `decodeFailed`
@@ -14065,7 +14487,7 @@ delete of a `messages` row silently takes the whole review chain with it, and a
 **regenerate** deletes one — the chat "Try again" and the skill "Answer without it" undo both
 re-answer the last turn by dropping the previous assistant reply. Conversation deletion was
 built to warn and count first (D-2); the message-level replace had no such guard, and the
-snapshot its failure/Stop restore paths replay covers the `messages` row only, so even those
+snapshot its failure/Stop restore paths replay covers the `messages` row and its `result_tables` rows (P1b), never the review chain, so even those
 "lose nothing" legs brought the answer back without the human's decisions, notes, links and
 export history. The fix is a hard refusal at the ONE shared regenerate choke point
 (`withRegenerateGuard`, used by the chat channel and all seven RAG call sites): it resolves
@@ -14092,8 +14514,72 @@ reveal + filter that matches the marker AS DISPLAYED incl. DE `Q{n}`); narrow wi
 the pane for a `Modal width='wide'` drawer with focus return. Edits flow through the
 repo's first **debounced auto-save store** (`renderer/lib/reviewSession.ts`: 600 ms,
 drain-before-await, failed patches re-merge under newer values, every post-await write
-`openToken`-guarded; hard flush on exit AND in `App.lockNow` before `lockWorkspace()`,
-store purged after). **Ready is read-only** — main refuses item/selection/link mutations
+`openToken`-guarded; a one-pass flush on exit, the drain below in `App.lockNow` before `lockWorkspace()` —
+bounded by `REVIEW_LOCK_FLUSH_BOUND_MS` (6 s) so a hung call never holds the lock — and the
+store purged after, which also releases every wait on a call that never answered; the same
+bounded drain also runs before the window closes (#888: the store registers it with
+`renderer/lib/beforeClose.ts`, and main waits for its answer, `security-model.md` "App-shell gate &
+lifecycle")). **A switch or a sweep never runs over a failed save** (#837): a failed
+write leaves its patch queued with the save-error line + Try again, and every action that
+runs after a save checks for it — mark ready, export and reopen refuse; a bulk sweep refuses
+(and its Bulk actions trigger is disabled) only while an edit a failed write left unsaved
+is waiting (`hasEditsAfterFailedSave` — other errors queue nothing and block nothing), writes
+what was queued at the click first, and then holds ONE write lane (`sweepLane`): no item flush
+starts while its call is in flight, so at its merge no item write is in flight and the rule is
+exact — an item keeps its local decision iff a decision patch for it is still queued (written
+after the sweep, the last word), otherwise it takes the sweep's value, which is what main
+holds; anything still queued gets the debounce armed, an error is never cleared by the merge,
+and one sweep runs at a time (`bulkRunning`; the trigger is disabled meanwhile); a sweep that
+fails or is refused persisted nothing, so its swept items with nothing queued go back to their
+pre-sweep decisions and its error line stays until the user acts (an edit, Try again), while a
+decision queued during its call is still written after it; a sweep never clears an error that
+was already showing; a failed HEAD edit counts like an item edit; a switch
+drains (below) and is refused when a write failed, or when edits are still queued after the
+drain's four passes;
+re-opening the SAME review keeps the edit on screen with no re-read; a switch to ANOTHER
+review keeps the open one (detail + patches, no `openToken` bump) and records `openError:
+{ kind: 'unsaved' }`, which the screen renders as a card naming that review, showing the save
+error, with Try again / Discard changes and open / Back (the card goes ahead on its own if a
+later save succeeds while it shows). Only the lock still drops a failed patch without asking —
+`App.lockNow`'s flush is best-effort and the lock wins (`known-limitations.md`); closing the window
+with one asks first (#888: Try again / Keep open / Close anyway).
+**Every save settles before an action** (#889, #901, follow-ups wave 2): ONE drain
+(`drainReviewSaves`) takes the write lane and saves in passes inside it until nothing is queued
+or a write fails (at most four, the valve against typing that never stops), and resolves still
+holding the lane, so its verdict is read after the last write and no waiting timer write can
+take the queue first or fail after the caller went ahead — nor write after the caller refused:
+the debounce timer's flush stands down when a write failed while it waited for the lane (a
+`writeFailures` count read before and after the wait) and no edit was made after that write left
+(an edit sequence the write records; code review: an edit typed while it was out still gets its
+own timer's save, with the failed patch), so a refused Mark ready, Export or Reopen
+keeps its error line and Try again until the user acts (#917; before, the timer wrote the failed
+edit again and the line was gone a moment later). Mark ready, export, reopen, a review
+switch, Try again, the pre-lock save and the save before the window closes (#888) share it. When the passes run out with an edit still
+queued, Mark ready and export refuse as after a failed save but with no error (the line still
+says "Saving…" and the timer writes the edit); reopen goes ahead, since only head fields can be
+queued on a ready review and its merge keeps them. Mark ready and reopen hold the lane through
+their call and merge, and the merge keeps head fields still queued (typed during the call,
+written after it); while Mark ready's call is out, item editing is closed and the screen renders
+it read-only (`finishing`, G-4: main decides from the saved rows and refuses item writes once
+ready; what only Ready hides — the selection composer, Bulk actions — stays mounted, disabled,
+so an open composer keeps its range). Export releases the lane before its call, with no await
+between, so a save that comes due during its dialog or PDF print is not held behind it. Try
+again holds the lane through its
+re-read and puts the edits still queued back over it. A selection delete takes the lane too and,
+once main deleted the row, drops its queued edit and ends "Saving…" when nothing else is queued
+(a later write to the deleted id read as a stale handle: a false save error). A link or unlink
+takes the lane until its call is sent, so every write to an existing item (an edit save, a
+delete, a link or unlink) is on it: a link waits for a delete of its row in flight and is
+dropped once that delete succeeded. Adding a selection does not take the lane: it creates a
+row, and nothing queued can target a row that does not exist yet. Every holder takes
+the lane through one helper (`acquireLane`), at once when it is free, so its first IPC still
+goes out in the caller's own task; the drain and the one-pass flush share one flush pass. A
+link's answer contributes its links only, never the row's decision or note. A sweep keeps its
+single pre-sweep flush (a decision made during it is written after the sweep) and takes the lane
+through the same helper. Pinned by `reviewSession.test.ts` and a seeded random-order checker
+(`reviewSessionOrders.test.ts`). The save line and the Outdated banner announce from
+live regions mounted empty with the review (design-guidelines §6).
+**Ready is read-only** — main refuses item/selection/link mutations
 while ready (head edits stay allowed), the renderer disables the affordances, Reopen
 restores. Reviewer **selections** are carved via a read-only `<textarea>` whose value IS
 `textSnapshot`, so native `selectionStart/End` ARE the persisted UTF-16 offsets (exact by
@@ -14247,7 +14733,9 @@ Each renderer file named above, apart from the legs and `CitationMarkers` (which
 bridge), runs `assertNoUnexpectedApiCalls()` in an `afterEach` (inside try/finally, after
 any cleanup); review-screen mounts stub through `stubReviewApi` (directly or through
 `renderReview`), every other mount (the EvidencePane, the transcript entry points,
-ChatScreen's chip batch, the gate a11y components) through `stubApi`.
+ChatScreen's chip batch, the gate a11y components) through `stubApi`. Since #832 the check is the default, not a per-file
+choice: `tests/setup.ts` registers the same check as an `afterEach` for every renderer file (it runs after the file's own
+`afterEach(cleanup)`, so an unmount call counts), so the per-file call is a better error site, not the guard.
 
 ### §8 Decision ladder + phase dispositions
 
@@ -14307,9 +14795,10 @@ N.
   the chips appeared at the speed of the slowest one. The batch channel
   (`evidence:summariesForConversation` → `listEvidenceReviewSummariesForConversation`) answers
   for the whole conversation in TWO statements at any length: one indexed head read, one join
-  for the item rows the gates derive from. The per-message channel stays — a freshly created
-  review still reads through it, and the two are pinned element-for-element identical by
-  test. Beyond latency the single commit shrinks a real window: while a reviewed turn's chip
+  for the item rows the gates derive from. The per-message channel had no caller left (a fresh
+  review takes its detail from `evidence:create`; the transcript re-reads the batch) and was
+  removed (#840), together with the equally caller-less `evidence:delete`. Beyond latency the
+  single commit shrinks a real window: while a reviewed turn's chip
   state is unknown the transcript renders the "Answer without it" undo as enabled, so the
   fewer render passes spent in that state the better (main refuses the destructive action
   outright regardless — the AUD-01 amendment above).
@@ -14551,13 +15040,19 @@ they rest on._
 5. The pinned files are 1,333,102 bytes (`deu`) and 2,952,873 bytes (`eng`), measured 2026-09-22
    from the pinned URLs; their sha256 matched the pins.
 6. A release-only portable exe reads the APP-BUNDLED `model-manifests/`; a launcher-started drive
-   reads the drive's user-writable copy (`HILBERTRAUM_MANIFESTS_DIR`).
+   reads the drive's user-writable copy (`HILBERTRAUM_MANIFESTS_DIR`). (Since #842 that holds for
+   the model list and this installer's first source; the engine pins always come from the bundle.)
 
 **§3 Design as built.**
 - **Service** `services/ocr-install.ts` (Electron-free). `OCR_PINS` + `OCR_LICENSE`;
-  `resolveOcrSources` reads the drive's yaml `ocr:` block, falls back to the app-bundled copy only
-  when the drive's offers no usable block (none, or a yaml that does not validate as a whole), and refuses a block that lacks a pinned language or pins a
-  different sha256 (`mismatch` — never "fixed" by falling back); `planOcrDownloads` over the pins
+  `resolveOcrSources` resolves per pinned file: the first source list whose entry for that file
+  carries the pinned sha256, the drive's yaml `ocr:` block first, then the app-bundled copy (a
+  yaml that does not validate as a whole offers no block). An entry with another sha256 is never
+  used; `mismatch` only when some pinned file has a matching entry in no list, `none` when no list
+  offers a block. (#841, 2026-11-18: a valid drive block that lacked a pinned file or pinned
+  another sha256 used to be refused as a whole without trying the bundle, so a drive prepared
+  before `osd` (#538) offered no in-app download once a newer app was copied onto it. The yaml
+  only ever chooses the host; the bytes are the code pins' either way.) `planOcrDownloads` over the pins
   (code hash + fixed `ocr/<lang>.traineddata.gz` destination, yaml URL) skips present + matching
   files. `prepareOcrFolder` creates `ocr/` when missing and refuses a symlink/junction, a
   non-directory, or a realpath outside the root — at start and before every write. Per file:
@@ -14605,6 +15100,17 @@ they rest on._
   the in-app action first, the script as the DIY alternative; the network-inventory sentence
   (pinned in five places by `repo-hygiene.test.ts`) gained its fourth item; PRIVACY.md's downloads
   section names the OCR files and their host.
+- **Audit (#843, 2026-11-18).** Every job records `ocr_install_started` when it starts and one
+  `ocr_install_finished` (with the activation `outcome`) or `ocr_install_failed` when its run has
+  settled, through `StartOcrInstallOptions.audit`, which `registerEngineIpc` passes as `ctx.audit` (the
+  Phase-19 rule: the IPC layer owns the wiring; the manager never sees the DB). Metadata
+  `{ jobId, languages, bytes, trigger: 'user' }` (the IPC layer adds `trigger`, as on the engine rows:
+  the rows are permanent and an app update will record the same types with its own); a failure's
+  `reason` is its `main.ocr.*` key's last part and its `cause` the log's own label (`http-404`,
+  `mismatch`, `rename`, …); a stop is `cancelled` or `networkOff` (#782). Never `job.error`. A lock
+  in the middle needs nothing: the recorder buffers while the DB is locked and writes in order after
+  the unlock. That buffer is memory only, so an end event still waiting there is lost if the app quits
+  before the next unlock (the same for an engine job), leaving a `started` row with no end.
 
 **§4 Tests.** `ocr-install.test.ts` (gates, payload, hostile `dest`, pin mismatch, bundled
 fallback, hash-is-state skip, mismatch keeps the old file, size cap, third-language survival,
@@ -14628,7 +15134,8 @@ either order).
   German UI; policy/`allowNetwork` off disables the action).
 - Pre-existing, out of scope (D7; not filed): engine `extract_to` unconstrained + destructive
   pre-clean; the model manifest `local_path` has no prefix rule; PRIVACY.md item 3 vs the
-  dialog-less engine banner; `translationAvailable` is read on mount only; release-only installs
+  dialog-less engine banner (fixed by #843: "In-app engine installer"); `translationAvailable` is
+  read on mount only; release-only installs
   have no app skills.
 
 ## Dependency remediation — design record (wave DEP-1, PR #77)
@@ -16466,7 +16973,8 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
   beside the export destination (serving the print page from memory on a second host would remove
   it — #563; done, EP-1 record "#563 amendment"); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
   plus the OCR rasterizer honouring `ELECTRON_RENDERER_URL` in a packaged build (#562; done, see
-  "Electron fuses — design record (#562)" below: NODE_OPTIONS stays on by owner decision).
+  "Electron fuses — design record (#562)" below: NODE_OPTIONS stayed on by owner decision until #564
+  turned it off, §8 there).
 
 ## Electron fuses — design record (#562)
 
@@ -16477,7 +16985,9 @@ _The packaged binary turns off `RunAsNode` and `EnableNodeCliInspectArguments`, 
 Electron 43.7.7 / Node 24.21.0, app-builder-lib 26.16.1, Windows 11 with Smart App Control and a
 TLS-scanning antivirus (Norton). The analysis is a git-ignored working paper; this is the durable
 record. It follows "App scheme `hilbertraum://app/` — design record (#560)", which turned off
-`GrantFileProtocolExtraPrivileges` and named this as its follow-up._
+`GrantFileProtocolExtraPrivileges` and named this as its follow-up. **#564 amendment
+(2026-11-20, `fix/564-os-cert-store-fuse`):** the in-app downloads trust the operating system's
+certificate store, and `EnableNodeOptionsEnvironmentVariable` is off too (§8)._
 
 ### §1 Threat class
 
@@ -16493,16 +17003,19 @@ code.
 |---|---|---|---|
 | D1 | 0 `RunAsNode` | on → **off** | `ELECTRON_RUN_AS_NODE=1 HilbertRaum.exe -e …` ran Node 24.21.0; nothing in the app, launchers, drive builders or docs uses it (tesseract.js runs on `worker_threads`, which this fuse does not touch) |
 | D2 | 3 `EnableNodeCliInspectArguments` | on → **off** | `--inspect` / `--inspect-brk` opened a debugger on the main process; nothing uses it. Chromium's `--remote-debugging-port` is not covered and keeps working, so the CDP harnesses are unaffected |
-| D3 | 2 `EnableNodeOptionsEnvironmentVariable` | on → **on** (owner decision 2026-10-03) | §3: off breaks the in-app downloads behind TLS-scanning antivirus and proxies; the residual it leaves is small |
+| D3 | 2 `EnableNodeOptionsEnvironmentVariable` | on → **on** (owner decision 2026-10-03); **off since #564** | §3: off broke the in-app downloads behind TLS-scanning antivirus and proxies; the residual it left was small. §8: once the downloads trust the OS store, it goes off |
 | D4 | 4 `EnableEmbeddedAsarIntegrityValidation` | off → **on** | §4: detects a modified `app.asar`; no measurable cost |
 | D5 | 5 `OnlyLoadAppFromAsar` | off → **on** | §4: without it, removing `app.asar` and planting `resources/app/` bypasses D4 |
 | D6 | `ELECTRON_RENDERER_URL` | — | `devRendererUrl(isPackaged)` in `app-protocol.ts` is its only reader; both window loaders pass `app.isPackaged` |
 | D7 | 1 cookie encryption, 6 browser-process snapshot | unchanged (off) | no cookies; a separate snapshot needs its own build step |
 
 The wire goes `101100001` → **`001011001`** (decoded with `@electron/fuses`; index 8, unnamed in
-1.8.0, is `WasmTrapHandlersEnabled`).
+1.8.0, is `WasmTrapHandlersEnabled`), and → **`000011001`** with #564 (§8; position 2 only).
 
 ### §3 Why fuse 2 stays on
+
+_Kept as the record of the 2026-10-03 decision. #564 turned the fuse off once the downloads trusted
+the OS store (§8)._
 
 - A packaged app already drops `NODE_OPTIONS` apart from `--http-parser` and `--max-http-header-size`.
   `NODE_OPTIONS=--require=planted.cjs` did not load on master ("Most NODE_OPTIONs are not supported
@@ -16582,7 +17095,7 @@ that day (`tmp/562` harnesses):
 
 ### §6 Guards
 
-`packaging.test.ts`: the exact `electronFuses` block (fuse 2 explicitly `true`); `asar: true` and
+`packaging.test.ts`: the exact `electronFuses` block (fuse 2 explicitly `true`, `false` since #564); `asar: true` and
 no `disableAsarIntegrity`; one mapping check per option against the installed
 `platformPackager.js`; and that electron-builder still computes the hash and writes it where
 Electron reads it (the Windows resource and the macOS `Info.plist` key).
@@ -16603,9 +17116,199 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
   worker closure against the header's own per-file hashes before the worker starts. Not built.
 - Linux: no asar integrity (from source); the other fuses were not measured on Linux here.
 - macOS: unmeasured (no Mac), including `resetAdHocDarwinSignature` after the larger flip.
-- Fuse 2 on until the downloaders trust the OS store (§3, #564).
+- ~~Fuse 2 on until the downloaders trust the OS store (§3, #564).~~ Off since #564 (§8).
 - `--remote-debugging-port` has no fuse. Refusing it in a packaged build would also refuse the
   packaged smoke harnesses.
+- DevTools have no fuse either. Since #912 a packaged build turns them off on the main window
+  (`devTools: devToolsAllowed(app.isPackaged)`, `window-security.ts`) and its menu has no Reload,
+  Force Reload or Toggle Developer Tools item (`app-menu.ts`); `--remote-debugging-port` and
+  `webContents.debugger` still work with DevTools off (measured), so the harnesses keep working.
+  That makes it hardening, not a boundary: a local user who starts the exe with
+  `--remote-debugging-port` reaches the renderer's `window.api` through `Runtime.evaluate` all the
+  same.
+
+### §8 #564 amendment: the downloads trust the OS store, fuse 2 off
+
+**Facts** (Electron 43.8.6 / Node 24.22.1, DesktopDiT with Norton scanning TLS, 2026-11-20; probes
+under `ELECTRON_RUN_AS_NODE`, loopback only):
+- `tls.getCACertificates(type)` (Node ≥ 22.15) and `tls.setDefaultCACertificates(certs)` (Node ≥
+  24.5) exist. Bundled 118, extra 1 (Norton's root, from `NODE_EXTRA_CA_CERTS`), default 119,
+  system 120.
+- The OS store holds Norton's root too, the same certificate as the one in the variable. A
+  TLS-scanning product that exports its root through the variable installs it in the store as well.
+- Node's Windows `system` list is not a list of trusted roots. Of its 120 entries, 60 are not in the
+  default list, and many of those are no root at all: intermediates (Amazon RSA 2048 M04, RapidSSL
+  TLS RSA CA G1, Microsoft Secure Server CA 2011 …), two self-signed `CN=localhost` server
+  certificates a development tool added (`CA:FALSE`), "Root Agency", expired or 1024-bit legacy roots
+  (AddTrust External CA Root, VeriSign Class 3 PCA, Thawte Premium Server CA). Electron's bundled
+  list is curated (118 roots, where plain Node bundles 146) and leaves out roots Windows still
+  trusts, such as Entrust G2 and three old DigiCert roots.
+- The list does not say which Windows store a certificate came from. Node 24.22.1's Windows reader
+  (`ReadWindowsCertificates`, `src/crypto/crypto_context.cc` L759-L806; Electron's Node patches do
+  not change what it reads) merges into one list the Root and the Intermediate Certification
+  Authorities (`CA`) stores at five locations (the machine, the machine's group policy, the
+  enterprise, the user, the user's group policy) and the Trusted People store at the three machine
+  locations only.
+  `CurrentUser\TrustedPeople` is not read (Node's comment: trusted end-entity certificates count for
+  server authentication in the local machine store only; measured: the two certificates there are
+  not in the list). So the filter cannot keep only Windows' own roots. `CurrentUser\Root` makes
+  Windows ask the user before a root is added; `CurrentUser\CA` does not, so any program running as
+  the user can put a self-signed CA there without a prompt. The machine's stores need admin rights.
+- Node checks each certificate's purposes as Chromium does (`IsCertTrustedForServerAuth`, L669-L708):
+  the enhanced key usage (EKU) property an administrator sets in certmgr, intersected with the EKU
+  extension. A certificate set to "not for server authentication" is left out (measured: the
+  machine's Trusted People certificate, an EFS certificate, is). Windows' root-program chain
+  policies (`CERT_ROOT_PROGRAM_CHAIN_POLICIES_PROP_ID`, property 105) are not read, and that is where
+  the time-stamping root's restriction lives (measured with `certutil -v -store Root`: "Microsoft
+  Time Stamp Root CA 2014" carries no EKU extension and no EKU property).
+- Node never opens the `Disallowed` store and subtracts nothing from the list (its TODO at
+  L761-L762: "support disallowed (revoked) certificates"), so a certificate distrusted there stays
+  in the list when a Root or CA store also holds it. Node's bundled roots were never subject to
+  `Disallowed` either. Both `Disallowed` stores are empty on the measuring machine. Read from
+  Node's source (#961), not measured: the self-cleaning measurement script writes to
+  `CurrentUser\CA` and `CurrentUser\Disallowed` and was not run (G-5 below).
+- With the filter below: 120 read, 94 kept (10 not self-signed, 8 outside their validity, 6 not a
+  CA, 2 RSA keys under 2048 bits left out; the signature check and the EC curve list, added after
+  the review, leave out nothing more here), 17 added: GlobalSign Root CA, Starfield Class 2,
+  DigiCert Global, High Assurance EV and Assured ID, thawte Primary, Entrust G2 and Entrust.net
+  2048, VeriSign G5 and Universal, Go Daddy Class 2, five Microsoft roots (among them the
+  time-stamping root) and "Microsoft TPM Root Certificate Authority 2014". 16 of the 17 are in a
+  Windows `Root`/`AuthRoot` store. The TPM root is only in the Intermediate stores, so Windows does
+  not trust it as a root for anything, and the downloads now do (the review's measurement). The
+  default list goes from 119 to 136.
+- Cost on the main thread: reading the system store 21–74 ms, the filter (signature check
+  included) and de-duplication 23–26 ms, setting the list 5–12 ms: about 50–110 ms in all (read,
+  filter and set, once, before the first download). In the test workers (Node 24.13,
+  under load) the unfiltered call took 42–107 ms.
+- Electron's eMudhra block (GHSA-jr5w-w6x2-84p9) is not part of the CA list. Electron's patch
+  `patches/node/tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra
+  RSA intermediates to the SPKI blocklist that Node 24.22.1 compiles in and applies to every
+  `SSL_CTX` through `InstallCertVerifyCallback`: a check at verify time, so replacing the default
+  list cannot bypass it.
+- The main process's `fetch` honours the new list. Against a loopback TLS server whose certificate
+  came from a throwaway CA, `fetch` failed (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`); after
+  `setDefaultCACertificates([...default, thatCA])` the same request answered 200. Host Node 24.13
+  behaves the same. The connection still passes `net.Socket.prototype.connect`, which the offline
+  tripwire (`offlineGuard.ts`) patches, so the tripwire still sees every connect.
+- Node applies the list to TLS connections opened afterwards on the same thread; sessions an agent
+  cached before keep the old trust. The main process opens no remote TLS connection before the
+  first download.
+
+**Decision** (owner gate G-4 (a), 2026-11-20): route 1 of #564, then the fuse off.
+- `services/net/trust.ts` `ensureSystemTrust()` reads `tls.getCACertificates('system')` once per
+  process and **filters** it (owner decision 2026-11-20, `usableRoot`): a certificate counts only
+  when it parses (a throw anywhere, reading its key included, skips it), is a CA, is self-signed,
+  is inside its validity window now, and has an RSA key of at least 2048 bits, a P-256, P-384 or
+  P-521 key, or an Ed25519 key (an OpenSSL build of Node decodes weaker curves such as P-192;
+  Electron's BoringSSL does not). Self-signed takes two checks: `checkIssued` against itself (its
+  issuer name is its own subject, the key identifiers agree where both are present, its key usage
+  allows signing certificates) and `verify` with its own public key. `checkIssued` never looks at
+  the signature: a certificate that names itself as issuer, is signed by another key and carries no
+  key identifiers passes it, and as a trust anchor it then let a leaf signed by that other key
+  verify (the review's measurement). `verify` is what proves the signature.
+- It is **additive**: `tls.setDefaultCACertificates([...default, ...new roots])`, de-duplicated by
+  `fingerprint256`, so every default certificate stays as it was and a connection that verified
+  before still does. When nothing new is left, the list is not touched. It reads both `tls`
+  functions off the module at the call rather than importing them by name, so on a Node without
+  them (the repo's floor is 22.12) the call fails and is caught instead of every module that
+  imports `assets.ts` failing to load.
+- It is **lazy**. Its one caller is `downloadToFile` (`assets.ts`), after the URL check and before
+  the request. Every in-app downloader (models, the AI engine, the knowledge-pack tools, the OCR
+  files) reaches the network only through `downloadToFile`; the sidecar clients talk plain HTTP on
+  loopback and never call it. Not at startup: the 50–110 ms would land before the first paint
+  (BUILD_STATE §5 item 18(g)).
+- It **never throws into a download**. A store read that throws, an empty store (a minimal Linux),
+  a store with nothing usable or new, or a list Node refuses keeps the default trust. It logs one
+  line: counts only (certificates read, kept, added), or an error code, never a certificate or a
+  message. The process does not try again.
+- Route 2, Electron's `net.fetch` (Chromium's verifier, which reads Windows' stores by role and
+  checks `Disallowed` first), was not taken: every downloader's Range, streaming and abort handling
+  would need re-testing; `net.fetch` rejects `redirect: 'manual'` ("Redirect was cancelled",
+  Electron 43.8.6 `net-client-request.ts`), which the downloads' per-hop redirect checks rely on;
+  it bypasses Node's `connect`, so the offline tripwire would stop seeing the downloads; and it
+  brings no proxy support either, since the app runs Chromium with `--no-proxy-server` (#567).
+- `electron-builder.yml` turns `EnableNodeOptionsEnvironmentVariable` off. Wire `001011001` →
+  `000011001`.
+
+**Decision on #961** (follow-ups wave 5 gate G-5, 2026-11-20: the default, which the owner saw and
+let stand): keep the union, and say exactly what is and is not read (the Facts above). Narrowing to
+Windows' Root stores and honouring `Disallowed` would take a second source per store, a PowerShell
+or `certutil` child process at the first download (about 1 s measured, a Windows-only branch on the
+download path, antivirus and AppLocker failure modes, localized `certutil` output), or route 2.
+Integrity is pinned, so both residuals touch which public file is fetched and whether a download
+succeeds, not what gets installed. The script that would measure `Disallowed` changes the OS trust
+store and was not run. Re-read Node's `ReadWindowsCertificates` on each Electron bump: if its
+`Disallowed` TODO lands, that residual goes away with no change here.
+
+**What the fuse governs now.** Off, the packaged main process reads neither `NODE_OPTIONS` (it
+ignored all but `--http-parser` and `--max-http-header-size` already, §3) nor `NODE_EXTRA_CA_CERTS`,
+which Electron unsets. An unpackaged development build is not fused and reads both as before.
+
+**What is trusted now.** Node's bundled roots plus every self-signed CA that passes the filter in
+any store Node reads, not only Windows' roots. The residuals:
+- A root that Windows still trusts but Chrome dropped (Entrust, the old DigiCert roots, VeriSign,
+  Go Daddy) is trusted for the in-app downloads.
+- A self-signed CA in an Intermediate store, or in the machine's Trusted People store, is trusted
+  too, though Windows does not treat it as a root: the Microsoft TPM root is the measured case.
+  Node honours a certificate's EKU property but not Windows' root-program chain policies, so the
+  time-stamping root counts as a TLS root.
+- A certificate an administrator distrusted in `Disallowed` stays trusted when a Root or CA store
+  also holds it: Node never reads `Disallowed`.
+- A program running as the user can add a CA to `CurrentUser\CA` without Windows' root-install
+  prompt, and the downloads then trust it. That is the same reach `NODE_EXTRA_CA_CERTS` gave such a
+  program before the fuse went off, so turning the fuse off did not close that route; it moved it.
+Every engine, model and OCR file is checked against a pinned SHA-256 before use, the downloads send
+no credentials, and the eMudhra block applies whatever the list holds, so none of these can change
+what gets installed. At most it lets someone who can intercept the connection see which public file
+is being fetched, or make the download fail. Narrowing the list to Windows' Root stores would need
+a second source for the store of origin (a `certutil` or PowerShell read in a child process at the
+first download); not done ("Decision on #961" above).
+
+**What stops working.** A root that reaches the app only through `NODE_EXTRA_CA_CERTS`, and is not
+in the OS store, no longer counts in a packaged build: downloads behind such a proxy fail with "fetch
+failed" until the root is in the OS store. Corporate roots are usually rolled out to the OS store
+by policy, and Norton installs into both (measured).
+
+**Guards.** `tests/integration/system-trust.test.ts`, with `node:tls` faked and fed the certificates
+in `tests/fixtures/certs/` (one per rule; certificates only, made with OpenSSL 3.5.7): the call
+keeps every default certificate as it was and adds each new usable root once (an RSA-2048, an EC
+P-256, an EC P-384 and an Ed25519 root; the OS copy of a default root, written with other line
+endings, is not added twice); an expired root, a root not valid yet, an RSA-1024 root, a DSA root, a
+P-192 root, an intermediate, a name twin signed by another key, the same without key identifiers
+(only the signature check catches it), a certificate signed by its own key under another issuer's
+name (only `checkIssued` catches it), a self-signed `CA:FALSE` server certificate, text that is no
+certificate and a PEM body that does not decode are each left out while the usable root beside them
+is still added; a second call reads nothing; importing the module reads no store; a store that
+throws, an empty store, one with no usable root, one whose roots Node has already, and a refused
+list each keep the default with one content-free line and no retry; `downloadToFile` sets the trust
+before its first request. Every other suite gets a no-op trust module (`tests/setup.ts`), so a
+downloader suite with a fake `fetch` neither reads the machine's store nor changes its worker's CA
+list. `packaging.test.ts` pins fuse 2 `false` and `verify-mac-build.sh`'s `EXPECTED_WIRE`, which
+`release.yml` checks each packaged Windows exe against (#769). Mutation-tested (28 mutations, each
+red; a changed success line and the setup mock removed stay green): each filter clause dropped (CA,
+`checkIssued`, the signature check, either end of the validity window, the RSA size, the key type,
+the EC curve list dropped or narrowed to P-256, Ed25519 refused, the catch), de-duplication by text
+instead of fingerprint, either list left out of the merge, the list set when nothing is new, the
+once-only latch, no catch around the read or the merge, the error's text logged, a call at import,
+the call dropped from `downloadToFile` or moved after the request; fuse 2 back on or the old wire
+each fail `packaging.test.ts`.
+
+**Residuals.**
+- macOS (the keychain) and Linux (OpenSSL's default paths) store reads are unmeasured. On a Mac
+  the read runs on the main thread at the first download; if it is slow or asks for anything, it
+  blocks there. Owed to the Mac walk, beside #887/#888.
+- The trust widening above: roots Windows trusts and Chrome dropped, self-signed CAs from the
+  Intermediate stores and the machine's Trusted People store, the silent `CurrentUser\CA` route,
+  and `Disallowed` not honoured; pinned SHA-256 keeps integrity.
+- `Disallowed` is not honoured: Node 24.22.1 never opens it (`ReadWindowsCertificates`, its TODO at
+  L761-L762). Read from the source, not measured (the measuring script changes the OS trust store;
+  G-5). Re-read `ReadWindowsCertificates` on each Electron bump.
+- A store read that fails is not retried in that process (by design: one log line); behind a TLS
+  scanner the downloads then fail until the app restarts.
+- **Owed:** the packaged download behind Norton (a `--win dir` build with `NODE_EXTRA_CA_CERTS`
+  removed, an in-app download from github.com or huggingface.co; before: `fetch failed`, §3). The
+  owner postponed it on 2026-11-20. Done: the packaged `--win dir` build's wire reads `000011001`
+  and `packaging.test.ts`'s real-executable rows pass on it.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
@@ -16648,7 +17351,7 @@ embeddings, no workspace data, and the endpoint never starts, stops, or switches
 | # | Decision | Where it lives now |
 |---|---|---|
 | D1 | "The space" = the user's machine. The model is made available to local apps; no content is logged, ever. | Counts-only `LocalApiStatus`; the P6 sentinel test |
-| D2 | Bind loopback only, always. No LAN mode, no `0.0.0.0`, no proxy/forward. | `server.ts` hard-coded literals; test-pinned |
+| D2 | Bind loopback only, always. No LAN mode, no `0.0.0.0`, no proxy/forward. | `server.ts` hard-coded literals; the listen calls are pinned by `local-api-server.test.ts` "listens on 127.0.0.1 AND ::1, never 0.0.0.0; the two listeners share the port" |
 | D3 | Default OFF; policy can only restrict (`effective = policy ∧ setting`). | `localApiEffectivelyEnabled` in `shared/local-api.ts` |
 | D4 | Token auth is a user choice, ON by default. Web-origin + Host checks are unconditional in **both** modes. | `handlers.ts` check order |
 | D5 | Warn about concurrent use — but only while it is true. | The card's warning banner, driven by `externalActive` / `lastPreemptedAt` |
@@ -16815,10 +17518,17 @@ off; and a rotation window during a slow body upload.
 
 ### §9 Verification
 
-**Pinned in CI:** the bind posture (loopback only, never `0.0.0.0`); **no listener at all** in the
-default-off and policy-forbidden states; the Host/Origin/content-type/auth matrix in both auth
-modes; zero CORS headers anywhere; streaming and non-streaming happy paths; the error-code
-mapping incl. `Retry-After`; pre-emption closing without `[DONE]`; counted-byte body cap over a
+**Pinned in CI:** the bind posture (loopback only, never `0.0.0.0`: `local-api-server.test.ts`
+"listens on 127.0.0.1 AND ::1, never 0.0.0.0; the two listeners share the port" reads the hosts
+off the listen calls themselves, `127.0.0.1` then `::1` on the port the first one got); **no
+listener at all** in the default-off and policy-forbidden states; the Host/Origin/content-type/auth
+matrix in both auth modes, and the order of those checks ("check order: %s"); zero CORS headers
+anywhere; the listener's `local-api.md` §6.7 limits by value ("serves with the published bounds":
+the 1 MB body cap, header phase 10 s, body idle 30 s, body total 120 s, no generation timeout, SSE
+reader stall 15 s, 16 connections; the queue wait is `local-api-admission.test.ts`'s "caps the
+queued wait"; the app-side wedge bounds of the Generation row are not in it); streaming and
+non-streaming happy paths; the error-code mapping incl. `Retry-After`; pre-emption closing
+without `[DONE]`; counted-byte body cap over a
 chunked body; the drain-timeout reclaiming a slot; lock and quit killing the listener first;
 rotation aborting in-flight streams; the gate counting all lanes on both the mock and ladder
 paths with `isExternallyBusy()` failing closed; the counter surviving never-iterated and
@@ -16828,7 +17538,10 @@ object; and hostile wire input — a slow-loris header phase cut off **by the se
 (the test shortens `headersTimeout` through a seam and watches for the server's own close, so an
 unarmed timeout fails it), a `Content-Length` + `Transfer-Encoding` request refused rather than
 interpreted twice, a smuggled second request line answered at most once and never successfully, a
-truncated upload that starts no generation, and a torn-down server that answers nothing further.
+truncated upload that is counted neither as served nor as a refusal, with the next caller served
+(`local-api-hardening.test.ts` "a body that stops mid-upload is answered nothing, counted as no
+refusal, and the next caller is served"), and a stopped server that answers nothing further
+(`local-api-server.test.ts` "stop() closes the listener — connections are refused afterwards").
 
 **Manual real-model smoke — DONE 2026-08-18** on a real attached prepared drive (H:, "lite"
 edition created 2026-06-30, encrypted workspace with live data, the pinned **b9849 vulkan**
@@ -17145,7 +17858,7 @@ everything except the drive itself is proven by CI:
 | `apps/desktop/tests/helpers/read-only-witness.ts` | The **witness**: fingerprints a tree (path + size + mtime of every entry) so "it never writes to the drive" is an assertion, not a claim. |
 | `apps/desktop/tests/manual/stored-copy-diagnostic.test.ts` | The **operator shell**, env-gated on `HILBERTRAUM_STORED_COPY_AUDIT` in the `tests/manual/*-smoke.test.ts` shape. Hidden password prompt read from the console DEVICE (§9.3). |
 | `apps/desktop/tests/helpers/console-password.ts` | The **console password prompt** (§9.3): opens the terminal DEVICE (`\\.\CONIN$` / `/dev/tty`) in raw mode, or fails fast with a recipe. Never `process.stdin`. |
-| `apps/desktop/tests/unit/console-password.test.ts` | CI proof for the non-TTY path: the forked worker’s own piped stdin, the fail-fast text, the no-cooked-fallback refusal, and a source pin on the harness. |
+| `apps/desktop/tests/unit/console-password.test.ts` | CI proof for the non-TTY path: the forked worker’s own piped stdin, the fail-fast text with its no-cooked-fallback refusal (one row: the opener is consulted once, no retry, no fallback read), and a source pin on the harness. |
 | `apps/desktop/tests/unit/stored-copy-audit.test.ts` | Classifier fixtures, the mutation guards, the public-safety assertion, and the `node:sqlite` `{ readOnly: true }` floor probe (CI runs both ends of `engines.node`). |
 | `apps/desktop/tests/integration/stored-copy-audit-run.test.ts` | The collector end-to-end against a **synthetic vault** (v2, legacy v1, and `plaintext_dev`) with exact counts, plus the witness on each branch. |
 
@@ -17337,8 +18050,9 @@ no prompt on a product whose premise is that nothing leaves the space.
 CI covers everything except a human typing, and the coverage is the defect's own witness rather
 than a simulation of it: `tests/unit/console-password.test.ts` runs **in that same forked worker**,
 so it asserts `process.stdin.isTTY` is falsy directly, then pins the fail-fast message (the recipe,
-the env var, the history hazard, and the *absence* of the "interactive shell" advice), the refusal
-to resolve from a console that could not be put into raw mode, and a source pin on the harness —
+the env var, the history hazard, and the *absence* of the "interactive shell" advice) in the same
+row as the refusal to resolve from a console that could not be put into raw mode (the opener is
+consulted once, with no retry and no echoing fallback read), and a source pin on the harness —
 mutation-checked by reinstating the `isTTY` gate, which turns it red.
 
 One more operator-facing correction rides along: `npx` is blocked by the PowerShell execution

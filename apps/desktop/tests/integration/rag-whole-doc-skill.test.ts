@@ -29,7 +29,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
-import { t } from '../../src/shared/i18n'
+import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -185,7 +185,7 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
     expect(msg.coverage).toBeUndefined()
   })
 
-  it('clear small talk keeps the relevance path (A3 opt-out — no capped coverage, no whole-doc model call)', async () => {
+  it('clear small talk gets the short small-talk reply, not the whole-document engine (A3 opt-out, #963)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -195,14 +195,20 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
       MEETING_INSTALL_ID
     )
     const msg = result as Message
-    // Small-talk opt-out ⇒ the whole-doc engine did NOT fire: no capped whole-document coverage claim
-    // (the ordinary relevance path handled it — renderer falls back to the relevance badge).
+    // The whole-doc engine did NOT fire: no capped whole-document coverage claim, and no stamp.
     expect(msg.coverage).toBeUndefined()
-    // …and it is the relevance path's own answer: nothing matches "thanks!", so the fixed no-context reply
-    // comes back with ZERO model calls. The whole-doc engine firing here would call the model once and
-    // answer with the minutes.
-    expect(msg.content).toBe(t('en', 'main.rag.noContext'))
-    expect(h.runtime.calls).toBe(0)
+    expect(msg.skillId ?? null).toBeNull()
+    // #963: one short model reply to the message alone. Before #963 the relevance path took it (here the fixed
+    // no-context reply, with no model call, because nothing matches "thanks!"); the engine firing would have sent the
+    // transcript and the minutes fence.
+    expect(h.runtime.calls).toBe(1)
+    expect(h.runtime.lastMessages.map((m) => [m.role, m.role === 'user' ? m.content : ''])).toEqual([
+      ['system', ''],
+      ['user', 'thanks!']
+    ])
+    expect(JSON.stringify(h.runtime.lastMessages)).not.toContain('second reviewer')
+    expect(JSON.stringify(h.runtime.lastMessages)).not.toContain('structured minutes')
+    expect(msg.content).not.toBe(t('en', 'main.rag.noContext'))
   })
 })
 
@@ -258,6 +264,27 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     const notices = event.sender.send.mock.calls.filter((c) => c[0] === STREAM.compaction(h.conversationId))
     expect(notices.map((c) => c[1])).toEqual([{ phase: 'start', kind: 'analysis' }])
   })
+
+  // #834: the every-mention example chip asks for a list, so it keeps the whole read in every interface language.
+  // Pre-fix the German chip ("Finde jede Erwähnung …", a needle by its «finde») went to top-k here, one call, while
+  // the English one took the chunk map-reduce.
+  it.each(UI_LANGUAGE_CODES)(
+    '%s: the every-mention chip over a document too long to read whole keeps the whole read (chunk map-reduce)',
+    async (code) => {
+      const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
+      const chip = t(code, 'chat.example.indemnity')
+      const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, chip, MEETING_INSTALL_ID)
+      const msg = result as Message
+      expect(h.runtime.calls).toBeGreaterThan(1)
+      expect(msg.coverage?.mode).toBe('capped')
+      expect(msg.coverage?.truncated).toBe(false)
+      expect(msg.skillId).toBe(MEETING_INSTALL_ID)
+      // #939: and the notes are taken for the chip's question, not only for the minutes: every map call carries it.
+      for (const turn of h.runtime.turns.slice(0, -1)) {
+        expect(turn.find((m) => m.role === 'user')?.content).toContain(`\nUser request:\n${chip}\n`)
+      }
+    }
+  )
 
   it('SKA-23 (A4): a NEEDLE over a NOT-fully-chunked over-budget doc is served by top-k, NOT refused', async () => {
     // The needle downgrade is now evaluated BEFORE the D45 fully-chunked refusal: a downgraded needle takes

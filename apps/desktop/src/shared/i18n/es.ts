@@ -1131,6 +1131,11 @@ export const es: UiCatalog<'es'> = {
   'models.library.translation': 'Traducción',
   'models.library.images': 'Imágenes',
   'models.library.voice': 'Voz',
+  'models.newerApp.heading': 'Requiere una versión más reciente de HilbertRaum',
+  'models.newerApp.badge': 'Requiere actualizar',
+  'models.newerApp.hint':
+    'Este modelo es para una versión más reciente de HilbertRaum. Actualiza la aplicación en este ' +
+    'equipo para usarlo.',
   'models.library.memory': 'Memoria mínima: {size}',
   'models.library.clear': 'Borrar filtros',
   'models.library.showVariants': 'Mostrar todas las variantes ({count})',
@@ -1157,10 +1162,14 @@ export const es: UiCatalog<'es'> = {
   'models.state.installed': 'Instalado',
   'models.state.missing': 'Sin descargar',
   'models.state.checksumFailed': 'No verificable',
+  'models.state.noChecksum': 'Sin suma de comprobación',
   'models.state.unsupported': 'No compatible',
   'models.state.notRecommended': 'No recomendado',
   'models.state.ready': 'Listo',
   'models.state.running': 'En ejecución',
+  'models.noChecksum.hint':
+    'Este modelo no tiene ninguna suma de comprobación registrada, así que solo funciona en modo de ' +
+    'desarrollo en una unidad cuya política permita modelos sin verificar.',
   'models.badge.notResponding': 'No responde',
   'models.notRespondingHint': 'El modelo de IA dejó de responder. Reiniciarlo suele solucionarlo.',
   'models.restart': 'Reiniciar',
@@ -1284,6 +1293,18 @@ export const es: UiCatalog<'es'> = {
   'models.engine.downloadingNoTotal': 'Descargando el motor de IA…',
   'models.engine.verifying': 'Verificando el motor de IA…',
   'models.engine.extracting': 'Descomprimiendo el motor de IA…',
+  'models.engineConfirm.chatEngine': 'Motor de IA (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Motor de voz (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'versión de reserva solo para el procesador',
+  'models.engineConfirm.version': 'Versión',
+  'models.engineConfirm.total': 'Tamaño total',
+  'models.engineConfirm.licenseIncludes': '{license}, incluye {bundled}',
+  'models.engineConfirm.hint':
+    'Cada archivo se descarga de la dirección indicada y, antes de usarse, se compara con su suma de ' +
+    'comprobación esperada. No se envía nada sobre ti ni sobre tus documentos.',
+  'models.engineConfirm.updateNote':
+    'Tu modelo sigue respondiendo mientras dura la descarga. Solo se pausa unos segundos mientras se ' +
+    'reemplazan los archivos.',
   'models.voiceEngine.title': 'Agregar el dictado por voz (opcional)',
   'models.voiceEngine.explain':
     'El chat y las respuestas sobre documentos ya funcionan en esta unidad. El motor de voz es ' +
@@ -1339,7 +1360,8 @@ export const es: UiCatalog<'es'> = {
     'En este sistema operativo, la aplicación todavía no puede instalar el motor de voz, así que ' +
     'este modelo no habilita aquí el dictado por voz ni la importación de audio.',
   'models.vision.installed':
-    'Instalado: se usa automáticamente en la pantalla Imágenes. Aquí no hay nada que iniciar.',
+    'Instalado: la pantalla Imágenes elige automáticamente qué modelo usar. Aquí no hay nada que ' +
+    'iniciar.',
   'models.vision.notInstalled':
     'Se usa automáticamente en la pantalla Imágenes una vez instalado: no hace falta configurar ' +
     'nada.',
@@ -1955,6 +1977,12 @@ export const es: UiCatalog<'es'> = {
   'diag.audit.model_download_started': 'Descarga iniciada',
   'diag.audit.model_download_verified': 'Descarga verificada',
   'diag.audit.model_download_failed': 'Error en la descarga',
+  'diag.audit.engine_install_started': 'Descarga del motor o las herramientas iniciada',
+  'diag.audit.engine_install_finished': 'Motor o herramientas instalados',
+  'diag.audit.engine_install_failed': 'Error al instalar el motor o las herramientas',
+  'diag.audit.ocr_install_started': 'Descarga de los archivos de OCR iniciada',
+  'diag.audit.ocr_install_finished': 'Archivos de OCR instalados',
+  'diag.audit.ocr_install_failed': 'Error al instalar los archivos de OCR',
   'diag.audit.document_imported': 'Documento importado',
   'diag.audit.document_reindexed': 'Documento reindexado',
   'diag.audit.document_deleted': 'Documento eliminado',
@@ -1973,6 +2001,7 @@ export const es: UiCatalog<'es'> = {
   'diag.audit.workspace_lock_failed':
     'Intento de bloqueo fallido (el espacio de trabajo siguió abierto)',
   'diag.audit.workspace_password_changed': 'Contraseña del espacio de trabajo cambiada',
+  'diag.audit.workspace_working_copy_lost': 'Cambios recientes perdidos',
   'diag.audit.settings_changed': 'Ajustes cambiados',
   'diag.audit.local_api_toggled': 'API local activada o desactivada',
   'diag.audit.policy_warning': 'Aviso de política',
@@ -2091,6 +2120,9 @@ export const es: UiCatalog<'es'> = {
   'perf.model.line.one': '{model} · {size}\u00A0GB en la unidad · contexto de {context} token',
   'perf.model.line.many': '{model} · {size}\u00A0GB en la unidad · contexto de {context} de tokens',
   'perf.model.line.other': '{model} · {size}\u00A0GB en la unidad · contexto de {context} tokens',
+  'perf.model.lineNoSize.one': '{model} · contexto de {context} token',
+  'perf.model.lineNoSize.many': '{model} · contexto de {context} de tokens',
+  'perf.model.lineNoSize.other': '{model} · contexto de {context} tokens',
   'perf.model.none':
     'Todavía no hay ningún modelo seleccionado. Elige uno en la pantalla Modelo de IA.',
   'perf.model.need': 'Ocupa {need}\u00A0GB con este contexto.',
@@ -2168,12 +2200,16 @@ export const es: UiCatalog<'es'> = {
   'perf.models.device.processor': 'procesador',
   'perf.models.loaded': 'cargado ahora',
   'perf.models.notLoaded': 'sin cargar',
+  'perf.models.notOnDrive': 'no está en esta unidad',
+  'perf.models.damaged': 'no ha superado la comprobación de archivos',
+  'perf.models.noChecksum': 'sin suma de comprobación registrada',
   'perf.models.lifetime.session': 'permanece cargado',
   'perf.models.lifetime.idle': 'se libera de la memoria si está inactivo',
   'perf.models.lifetime.per-use': 'solo se ejecuta mientras se usa',
   'perf.models.split': 'capas en la tarjeta: {gpuLayers} de {layers}',
   'perf.models.card':
     'Tarjeta gráfica: chat {chat}\u00A0GB + traducción {translation}\u00A0GB, de {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Tarjeta gráfica: chat {chat}\u00A0GB, de {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Tarjeta gráfica: reordenación {reranker}\u00A0GB, de {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Ahora mismo los dos están en la tarjeta. El que se inició en segundo lugar recibió lo que ' +
@@ -2398,6 +2434,24 @@ export const es: UiCatalog<'es'> = {
     'esta unidad.',
   'gate.unlock.submit': 'Desbloquear',
   'gate.unlock.submitBusy': 'Desbloqueando…',
+  'gate.unlock.workingCopyLost':
+    'El archivo de trabajo del espacio de trabajo en la unidad se eliminó o se dañó. Tu espacio de ' +
+    'trabajo se conserva tal como estaba la última vez que se bloqueó o se cerró la aplicación; los ' +
+    'cambios hechos desde entonces se han perdido.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum no bloqueó tu espacio de trabajo la última vez que se cerró, por ejemplo porque se ' +
+    'quitó la unidad, el equipo se quedó sin corriente o se forzó el cierre de la aplicación. Tu ' +
+    'espacio de trabajo se abre tal como estaba la última vez que se bloqueó; cualquier cambio hecho ' +
+    'desde entonces se ha perdido. La próxima vez, cierra HilbertRaum antes de quitar la unidad.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum no pudo bloquear tu espacio de trabajo la última vez que se cerró porque la unidad ' +
+    'estaba llena. Tu espacio de trabajo se abre tal como estaba la última vez que se bloqueó; ' +
+    'cualquier cambio hecho desde entonces se ha perdido. Asegúrate de que la unidad tenga espacio ' +
+    'libre antes de continuar: si no, el próximo bloqueo tampoco podrá guardar tus cambios.',
+  'gate.unlock.encryptedFileMissing':
+    'El archivo cifrado del espacio de trabajo faltaba en la unidad, así que HilbertRaum conservó la ' +
+    'copia sin cifrar que dejó tu última sesión. Desbloquea ahora para volver a cifrarla y luego ' +
+    'averigua qué eliminó el archivo, por ejemplo una herramienta de sincronización o de limpieza.',
   'gate.welcome.title': 'Te damos la bienvenida',
   'gate.welcome.intro':
     'Este es tu espacio de trabajo de IA privado. Chatea con un modelo de IA y haz preguntas ' +
@@ -2464,6 +2518,11 @@ export const es: UiCatalog<'es'> = {
     'El motor de voz no puede funcionar en este equipo, así que no se pudo transcribir esta ' +
     'grabación. En la pantalla Modelo de IA se indica qué hacer; después, reindexa este ' +
     'documento.',
+  'main.ingest.voiceModelPathUnsupported':
+    'En Windows, el motor de voz no puede abrir el modelo de transcripción porque el nombre de una ' +
+    'carpeta o del archivo en la ruta del modelo contiene una diéresis, un acento u otro carácter ' +
+    'que no es ASCII. Guarda el modelo en una ruta sin esos caracteres y actualiza su entrada en el ' +
+    'manifiesto del modelo; después, reindexa este documento.',
   'main.ingest.searchModelTimeout':
     'El modelo de búsqueda no respondió a tiempo, así que no se pudo indexar este documento. ' +
     'Vuelve a intentarlo.',
@@ -2557,6 +2616,25 @@ export const es: UiCatalog<'es'> = {
     'navegador se conectará a este sitio.',
   'main.dialog.openLink.open': 'Abrir',
   'main.dialog.openLink.cancel': 'Cancelar',
+  'main.dialog.unsavedReview.title': 'Algunos cambios de la revisión no se pudieron guardar.',
+  'main.dialog.unsavedReview.message': 'Algunos cambios de la revisión no se pudieron guardar.',
+  'main.dialog.unsavedReview.detail':
+    'Si cierras ahora, se perderán. Comprueba que la unidad siga conectada y tenga espacio libre, y ' +
+    'vuelve a intentarlo.',
+  'main.dialog.unsavedReview.tryAgain': 'Volver a intentarlo',
+  'main.dialog.unsavedReview.keepOpen': 'No cerrar',
+  'main.dialog.unsavedReview.closeAnyway': 'Cerrar de todos modos',
+  'main.dialog.taskRunning.title': 'Una tarea de documentos aún no ha terminado.',
+  'main.dialog.taskRunning.message': 'Una tarea de documentos aún no ha terminado.',
+  'main.dialog.taskRunning.detailOcr':
+    'Si cierras ahora, la lectura del escaneo se detiene y se pierden las páginas leídas hasta ahora.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Si cierras ahora, la traducción se detiene y se pierde la parte traducida hasta ahora.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Si cierras ahora, las tareas de documentos en curso o en espera se detienen y se pierde el ' +
+    'trabajo hecho hasta ahora.',
+  'main.dialog.taskRunning.keepOpen': 'No cerrar',
+  'main.dialog.taskRunning.closeAnyway': 'Cerrar de todos modos',
   'main.workspace.wrongPassword':
     'Esa contraseña no desbloqueó tu espacio de trabajo. Compruébala y vuelve a intentarlo.',
   'main.workspace.openFailed': 'No se pudo abrir el espacio de trabajo.',
@@ -2565,6 +2643,26 @@ export const es: UiCatalog<'es'> = {
     'y no se pudieron abrir. Volver a escribir la contraseña no servirá. No crees un espacio de ' +
     'trabajo nuevo: deja los archivos como están y restaura la carpeta «workspace» desde una ' +
     'copia de seguridad.',
+  'main.workspace.vaultMissing':
+    'Tu contraseña es correcta, pero el archivo cifrado del espacio de trabajo falta en la unidad y ' +
+    'no quedó ninguna copia para recuperarlo. No crees un espacio de trabajo nuevo. Vuelve a poner ' +
+    'el archivo en su sitio o restaura la carpeta «workspace» desde una copia de seguridad.',
+  'main.workspace.descriptorMissing':
+    'Falta en la unidad el archivo con la clave de tu espacio de trabajo (config/workspace.json), o ' +
+    'no se puede leer, así que ninguna contraseña puede abrir el espacio de trabajo. No crees un ' +
+    'espacio de trabajo nuevo. Vuelve a poner el archivo en su sitio o restáuralo desde una copia de ' +
+    'seguridad.',
+  'main.workspace.descriptorUnreadable':
+    'El archivo con la clave de tu espacio de trabajo (config/workspace.json) no se puede leer y el ' +
+    'archivo cifrado del espacio de trabajo falta en la unidad, así que ninguna contraseña puede ' +
+    'abrir el espacio de trabajo. No elimines el archivo de la clave. Restaura los dos archivos ' +
+    'desde una copia de seguridad o consulta la guía de solución de problemas antes de empezar de ' +
+    'nuevo.',
+  'main.workspace.vaultOpenFailed':
+    'Tu contraseña es correcta, pero HilbertRaum no pudo terminar de abrir el espacio de ' +
+    'trabajo. El espacio de trabajo cifrado en la unidad se dejó como estaba. Asegúrate de ' +
+    'que la unidad tenga espacio libre y vuelve a intentarlo. Si esto empezó después de una ' +
+    'actualización, la versión anterior de HilbertRaum todavía puede abrirlo.',
   'main.workspace.recoveryBlocked':
     'Todavía no se pudo abrir el espacio de trabajo: otro programa tiene abierto un archivo de ' +
     'recuperación con tus datos más recientes. Cierra todo lo que pueda estar analizando la ' +
@@ -2575,6 +2673,12 @@ export const es: UiCatalog<'es'> = {
     'aplicación para abrirlo. No se modificó nada.',
   'main.workspace.createFailed': 'No se pudo crear el espacio de trabajo.',
   'main.workspace.passwordTooShort': 'La contraseña debe tener al menos {min} caracteres.',
+  'main.workspace.exists':
+    'Ya hay un espacio de trabajo en esta unidad, así que no se creó uno nuevo. Desbloquéalo con su ' +
+    'contraseña.',
+  'main.workspace.plaintextNotAllowed':
+    'Aquí no se permite un espacio de trabajo sin contraseña. Crea el espacio de trabajo con una ' +
+    'contraseña.',
   'main.workspace.newPasswordTooShort': 'La contraseña nueva debe tener al menos {min} caracteres.',
   'main.workspace.unlockBeforeChange':
     'Desbloquea el espacio de trabajo antes de cambiar su contraseña.',
@@ -2585,6 +2689,9 @@ export const es: UiCatalog<'es'> = {
   'main.workspace.busyPasswordChange':
     'Se está cambiando la contraseña del espacio de trabajo. Vuelve a intentarlo en unos ' +
     'instantes.',
+  'main.workspace.busyDocumentWork':
+    'Todavía se están importando o reindexando documentos. Espera a que termine y vuelve a ' +
+    'intentarlo.',
   'main.workspace.lockFailed':
     'No se pudo bloquear el espacio de trabajo: sigue abierto y tus datos están a salvo. Libera ' +
     'algo de espacio en la unidad y vuelve a intentarlo.',
@@ -2773,7 +2880,7 @@ export const es: UiCatalog<'es'> = {
     'parcial. Si la vuelves a iniciar, empezará desde el principio.',
   'main.engine.alreadyRunning': 'El motor de IA ya se está descargando.',
   'main.engine.noSources':
-    'No se encontró la lista de descargas del motor en esta unidad (falta ' +
+    'No se encontró la lista de descargas del motor en esta copia de HilbertRaum (falta ' +
     '«runtime-sources.yaml»).',
   'main.engine.noHostBuild': 'No hay ninguna versión del motor de IA disponible para este equipo.',
   'main.engine.alreadyInstalled': 'El motor de IA ya está instalado.',
@@ -2815,15 +2922,22 @@ export const es: UiCatalog<'es'> = {
   'main.engine.updateBusy':
     'El motor de IA está en uso ahora mismo (hay una respuesta, una importación, una traducción ' +
     'o una tarea de documentos en curso). Vuelve a intentar la actualización cuando termine.',
+  'main.engine.notEnoughSpace':
+    'No hay suficiente espacio libre en esta unidad: el motor necesita {needed} una vez ' +
+    'descomprimido y el espacio libre es de {free}. Libera espacio en la unidad y vuelve a ' +
+    'intentarlo.',
+  'main.engine.filesInUse':
+    'No se pudo reemplazar el motor porque otro programa está usando uno de sus archivos (por ' +
+    'ejemplo, un análisis antivirus). Vuelve a intentarlo dentro de un minuto.',
   'main.ocr.badRequest': 'No se entendió la solicitud de descarga de OCR. Vuelve a intentarlo.',
   'main.ocr.alreadyRunning': 'Los archivos de OCR ya se están descargando.',
   'main.ocr.noSources':
     'Esta unidad no tiene una lista de descargas para los archivos de OCR. En su lugar, ' +
     'agrégalos con los scripts de configuración de la unidad («fetch-runtime --family ocr»).',
   'main.ocr.sourcesMismatch':
-    'La lista de descargas de OCR de esta unidad no corresponde a esta versión de HilbertRaum, ' +
-    'así que no se descargó nada. En su lugar, agrega los archivos con los scripts de ' +
-    'configuración de la unidad («fetch-runtime --family ocr»).',
+    'Ni la lista de descargas de OCR de esta unidad ni la de esta copia de HilbertRaum incluyen ' +
+    'los archivos que usa esta versión, así que no se descargó nada. En su lugar, agrega los ' +
+    'archivos con los scripts de configuración de la unidad («fetch-runtime --family ocr»).',
   'main.ocr.alreadyInstalled':
     'Los archivos de OCR ya están en esta unidad. Si el reconocimiento de texto sigue sin estar ' +
     'disponible, reinicia HilbertRaum.',
@@ -2876,6 +2990,16 @@ export const es: UiCatalog<'es'> = {
     'transcribirla.',
   'main.models.noManifests':
     'No se encontró ninguna lista de modelos en esta unidad: falta la carpeta «model-manifests».',
+  'main.models.unknown': 'Este modelo ya no está en la lista de modelos de esta unidad.',
+  'main.models.notChat': '«{name}» no es un modelo de chat, así que no se puede iniciar aquí.',
+  'main.models.startDamaged':
+    'El modelo «{name}» no ha superado la comprobación de sus archivos, así que no se ha iniciado. ' +
+    'Vuelve a descargarlo en la pantalla Modelo de IA.',
+  'main.models.startMissing':
+    'El modelo «{name}» no se puede iniciar: su archivo de modelo todavía no está en esta unidad.',
+  'main.models.startNeedsRam':
+    'El modelo «{name}» necesita al menos {min}\u00A0GB de RAM; este equipo tiene unos ' +
+    '{ram}\u00A0GB. Elige un modelo más pequeño: la calidad sigue siendo excelente.',
   'main.models.autoSelected':
     'Este modelo se usa automáticamente una vez instalado: no hay nada que seleccionar.',
   'main.models.locked':
@@ -2915,6 +3039,12 @@ export const es: UiCatalog<'es'> = {
   'main.dictation.engineCannotRun':
     'El motor de voz no puede funcionar en este equipo. En la pantalla Modelo de IA se indica ' +
     'qué falta.',
+  'main.dictation.voiceModelPathUnsupported':
+    'En Windows, el motor de voz no puede abrir uno de sus modelos (el modelo de transcripción o el ' +
+    'de detección de actividad de voz) porque el nombre de una carpeta o del archivo en la ruta de ' +
+    'ese modelo contiene una diéresis, un acento u otro carácter que no es ASCII. Guarda el modelo ' +
+    'en una ruta sin esos caracteres, actualiza su entrada en el manifiesto del modelo y vuelve a ' +
+    'intentarlo.',
   'main.preflight.readOnly':
     'Parece que esta unidad es de solo lectura, así que la aplicación no puede crear su espacio ' +
     'de trabajo. Prueba con otro puerto USB o lee la guía de solución de problemas.',
@@ -3295,6 +3425,9 @@ export const es: UiCatalog<'es'> = {
   'images.avail.noRuntime': 'Para entender imágenes, primero hay que instalar el motor de IA.',
   'images.avail.incompatible':
     'El modelo para imágenes de esta unidad necesita un motor de IA más reciente.',
+  'images.avail.damaged':
+    'El modelo para imágenes de esta unidad no ha superado la comprobación de sus archivos. Vuelve a ' +
+    'descargarlo en la pantalla Modelo de IA.',
   'images.avail.cta': 'Ir a Modelo de IA',
   'images.avail.ocrPointer':
     '¿Documentos escaneados? Usa «Habilitar búsqueda (OCR)» en Documentos.',
@@ -3357,6 +3490,9 @@ export const es: UiCatalog<'es'> = {
   'images.err.engineCannotRun':
     'El motor de IA no puede funcionar en este equipo. En la pantalla Modelo de IA se indica qué ' +
     'falta.',
+  'images.err.modelDamaged':
+    'El modelo para imágenes no ha superado la comprobación de sus archivos, así que no se ha ' +
+    'iniciado. Vuelve a descargarlo en la pantalla Modelo de IA.',
   'images.err.emptyResponse':
     'No se recibió ninguna respuesta sobre esa imagen. Prueba a formular la pregunta de otra ' +
     'manera.',
@@ -3466,6 +3602,9 @@ export const es: UiCatalog<'es'> = {
   'translate.err.engineCannotRun':
     'El motor de IA no puede funcionar en este equipo. En la pantalla Modelo de IA se indica qué ' +
     'falta.',
+  'translate.err.modelDamaged':
+    'El modelo de traducción no ha superado la comprobación de sus archivos, así que no se ha ' +
+    'iniciado. Vuelve a descargarlo en la pantalla Modelo de IA.',
   'translate.err.empty':
     'No se recibió ninguna traducción. Vuelve a intentarlo o formula el texto de otra manera.',
   'translate.err.sameLang': 'Elige dos idiomas distintos.',
@@ -3551,12 +3690,17 @@ export const es: UiCatalog<'es'> = {
   'review.rename.save': 'Guardar',
   'review.loading': 'Cargando la revisión…',
   'review.notFound': 'No se encontró esta revisión. Puede que se haya eliminado.',
+  'review.openFailed': 'No se pudo abrir esta revisión.',
   'review.question.toggle': 'Pregunta',
   'review.answerPane.aria': 'Respuesta en revisión',
   'review.autosave.saving': 'Guardando…',
   'review.autosave.saved': 'Guardado',
   'review.autosave.error': 'Algunos cambios todavía no se pudieron guardar.',
   'review.autosave.retry': 'Volver a intentarlo',
+  'review.unsaved.body':
+    'Algunos cambios en «{title}» todavía no se pudieron guardar, así que la otra revisión no se ' +
+    'abrió. Puedes volver a intentarlo o descartar esos cambios y abrirla.',
+  'review.unsaved.discard': 'Descartar cambios y abrir',
   'review.evidence.title': 'Evidencia',
   'review.evidence.captionRelevance':
     'Las fuentes que se muestran son los extractos que se le proporcionaron al modelo de IA ' +
@@ -3766,6 +3910,7 @@ export const es: UiCatalog<'es'> = {
   'review.export.done': 'Paquete de evidencia exportado.',
   'review.export.error':
     'No se pudo exportar el paquete de evidencia. No se escribió ningún archivo.',
+  'review.export.failed': 'La exportación del paquete de evidencia no terminó.',
   'review.export.copyHash': 'Copiar SHA-256',
   'review.export.hashCopied': 'SHA-256 copiado en el portapapeles.'
 }

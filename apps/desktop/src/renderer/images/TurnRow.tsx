@@ -17,6 +17,8 @@ const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
   runtimeFailed: 'images.err.runtimeFailed',
   // #530: the OS refused to start the engine program — another model would not help.
   engineCannotRun: 'images.err.engineCannotRun',
+  // #913: a check found the model's file damaged — download it again, a retry would not help.
+  modelDamaged: 'images.err.modelDamaged',
   emptyResponse: 'images.err.emptyResponse',
   emptyQuestion: 'images.err.emptyQuestion',
   timedOut: 'images.err.timedOut',

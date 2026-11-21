@@ -42,6 +42,7 @@ import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
 import { assertChatStreamReady, resendableQuestion, withChatStream, withRegenerateGuard } from './chat-stream'
 import { saveBinaryExport, saveTextExport } from './save-export'
+import { fileNameStem } from '../services/text'
 import { codeBlockDefaultFileName, codeBlockExtension } from '../../shared/code-block-export'
 import { tableToCsv } from '../services/tables'
 import { loadResultTable } from '../services/tables/store'
@@ -383,7 +384,7 @@ export function registerChatIpc(ctx: AppContext): void {
   ipcHandle(IPC.exportConversation, async (_e, conversationId: string): Promise<string | null> => {
     requireUnlocked()
     const { title, markdown } = exportTranscript(ctx.db, conversationId)
-    const safeName = title.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 60) || 'chat'
+    const safeName = fileNameStem(title, { fallback: 'chat' }) // the shared file-name rule (#899)
     const filePath = await saveTextExport(
       {
         title: tMain('main.dialog.exportChat'),

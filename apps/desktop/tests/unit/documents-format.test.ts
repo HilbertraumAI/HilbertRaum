@@ -4,10 +4,13 @@ import {
   formatSize,
   friendlyMimeLabel,
   isRetryableFailure,
-  metaLine
+  metaLine,
+  rowChips
 } from '../../src/renderer/screens/documents/format'
 import { t as translate, tCount } from '../../src/shared/i18n'
 import { makeDocumentInfo } from '../helpers/chat-fixtures'
+import { nameCompare } from '../../src/renderer/lib/collation'
+import { PROJECT_ORDER_CASES, inLanguageOrder } from '../helpers/project-order-fixtures'
 
 /** `s` with each U+00A0 spelled out, so a row compares code points and a failure shows which space. */
 const NBSP = String.fromCharCode(0xa0)
@@ -104,5 +107,35 @@ describe('badgeFor — the transcribing percent in the language’s own pattern 
     const doc = makeDocumentInfo({ mimeType: 'audio/mpeg', status: 'extracting', transcriptionProgress: 15 })
     const { label } = badgeFor(doc, (key, params) => translate(lang, key, params))
     expect(shown(label)).toBe(`${translate(lang, 'docs.status.transcribing')} ${percent}`)
+  })
+})
+
+// #828: a row's project chips come in the language's name order, built-ins first; main's join returns the
+// order the document was added to each project.
+describe.each(PROJECT_ORDER_CASES)('rowChips project order (%s)', (lang, sqlOrder) => {
+  const member = (id: string, name: string, type: 'project' | 'library' | 'temporary') => ({
+    id,
+    name,
+    type,
+    role: 'source' as const
+  })
+
+  it('puts the built-ins first, then the projects in the language order', () => {
+    const d = makeDocumentInfo({
+      collections: [
+        ...sqlOrder.map((n, i) => member(`p${i}`, n, 'project')),
+        member('lib', 'Library', 'library')
+      ]
+    })
+    const chips = rowChips(d, (key, params) => translate(lang, key, params), nameCompare(lang))
+    expect(chips).toEqual([translate(lang, 'docs.chip.library'), ...inLanguageOrder(lang, sqlOrder)])
+    expect(inLanguageOrder(lang, sqlOrder)).not.toEqual(sqlOrder)
+  })
+
+  it('does not follow the order the document was added to the projects', () => {
+    const reversed = [...sqlOrder].reverse()
+    const d = makeDocumentInfo({ collections: reversed.map((n, i) => member(`p${i}`, n, 'project')) })
+    const chips = rowChips(d, (key, params) => translate(lang, key, params), nameCompare(lang))
+    expect(chips).toEqual(inLanguageOrder(lang, sqlOrder))
   })
 })

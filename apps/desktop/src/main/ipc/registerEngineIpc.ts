@@ -3,7 +3,9 @@ import { refreshGpuProbeAfterRuntimeInstall } from './registerBenchmarkIpc'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
+  AuditEventType,
   EngineDownloadJob,
+  EngineDownloadPreview,
   EngineProblemFamily,
   EngineRecheckResult,
   EngineStatus,
@@ -14,7 +16,9 @@ import {
   EngineDownloadManager,
   engineStatus,
   parseEngineDownloadRequest,
-  type EngineFamily
+  previewEngineDownload,
+  type EngineFamily,
+  type EngineJobEnd
 } from '../services/runtime-download'
 import { OcrInstallManager, assertNoOcrInstallPayload } from '../services/ocr-install'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
@@ -51,7 +55,7 @@ import { isModelStarting } from '../../shared/runtime-status'
  * still STARTING (full-audit 2026-07-11 CODE-13, review follow-up): `activeModelId()` is
  * null during a multi-GB load — the manager commits `current` only after health — but the
  * loading child is ALREADY executing from the llama_cpp dir, so an engine install begun
- * mid-start would still rimraf it. `status().startingModelId` names the in-flight start.
+ * mid-start would still replace it. `status().startingModelId` names the in-flight start.
  * A model answering on the built-in DEMO runtime does not count (#532, the CODE-13 polish
  * candidate): the mock never executes the engine dir, and it is exactly what runs while the
  * engine is missing or refused — so the install or the repair the user needs is no longer
@@ -153,7 +157,7 @@ function refusedBuilds(families: readonly EngineFamily[]): Partial<Record<Engine
 /**
  * Is ANY llama-server-backed sidecar's install dir in live use (F-32)? The E5 embedder, reranker,
  * vision and translation sidecars all execute the SAME `runtime/llama.cpp/<os>/` binary a
- * llama_cpp (re-)install pre-cleans — not just the chat runtime CODE-13 covered. The CODE-11
+ * llama_cpp (re-)install replaces — not just the chat runtime CODE-13 covered. The CODE-11
  * per-family sidecar PID registry is the cheap unified signal (a live child ⇒ its family is in
  * use). Exported for the engine-download suite.
  */
@@ -171,14 +175,43 @@ export function kiwixToolsInUse(): boolean {
   return registeredSidecarPids('kiwix_tools').length > 0
 }
 
+/**
+ * #843: what starts a job this registrar audits. Every engine and OCR job started here is one the user
+ * confirmed in a dialog; an in-app updater will record the same audit types with its own trigger.
+ */
+const AUDIT_TRIGGER = 'user'
+
+/**
+ * #843: an engine job's audit metadata — code names, versions and counts only, from what the job
+ * set out to fetch (`preview`, the same plan its dialog showed when it opened). Never the job's
+ * `error`, which is friendly copy and can carry a drive path or a URL's failure text.
+ */
+function engineAuditMetadata(
+  job: EngineDownloadJob,
+  preview: EngineDownloadPreview,
+  end?: Pick<EngineJobEnd, 'reason' | 'cause' | 'space'>
+): Record<string, unknown> {
+  const versions: Record<string, string> = {}
+  for (const item of preview.items) versions[item.family] = item.version
+  return {
+    jobId: job.jobId,
+    // The plan's kind, never rebuilt from the job's flags: one rule (`planEngineSteps`), so a kind
+    // an in-app updater adds is recorded as planned.
+    kind: preview.kind,
+    families: [...(job.families ?? [])],
+    versions,
+    sizeBytes: preview.totalBytes,
+    trigger: AUDIT_TRIGGER,
+    ...(end?.reason ? { reason: end.reason } : {}),
+    ...(end?.cause ? { cause: end.cause } : {}),
+    // #986: a `noSpace` end's two byte counts, the figures its message named.
+    ...(end?.space ? { neededBytes: end.space.neededBytes, freeBytes: end.space.freeBytes } : {})
+  }
+}
+
 export interface RegisterEngineIpcOptions {
   /** The OCR installer (#410); tests inject one with a fake fetch and fake pins. */
   ocrInstaller?: OcrInstallManager
-  /**
-   * The app-bundled `model-manifests/` (resolved WITHOUT the env override) — the OCR installer's
-   * fallback source list when the drive's yaml carries no `ocr:` block (#410).
-   */
-  bundledManifestsDir?: string | null
 }
 
 export function registerEngineIpc(
@@ -247,6 +280,36 @@ export function registerEngineIpc(
     }
   })
 
+  // #843: every engine job the user confirmed is recorded — once when it starts, once when it ends
+  // (finished, or failed with a content-free reason: `cancelled` and `networkOff` included). A job
+  // refused before it exists (a closed gate, nothing to do) records nothing, as a model download's.
+  // The recorder buffers while the workspace is locked, so a lock in the middle needs nothing here.
+  // The start is recorded when `start()` resolves. A job cannot settle before that: `start()` returns
+  // before its run's first file operation completes, and the handler resumes on the next microtask.
+  // `start()` stores every job's plan before it returns, so `preview` is always there; the null arm is
+  // a type guard, never a second rule. Never throws: an audit fault must not fail the install it records.
+  const auditEngine = (
+    type: AuditEventType,
+    job: EngineDownloadJob,
+    preview: EngineDownloadPreview | null,
+    end?: EngineJobEnd
+  ): void => {
+    try {
+      if (!preview) {
+        log.warn('Engine job audit skipped: no plan recorded for the job', { jobId: job.jobId, type })
+        return
+      }
+      const metadata = engineAuditMetadata(job, preview, end)
+      const verb = type === 'engine_install_started' ? 'started' : type === 'engine_install_finished' ? 'finished' : 'failed'
+      ctx.audit?.(type, `Engine ${preview.kind} ${verb}: ${(metadata.families as string[]).join(', ')}`, metadata)
+    } catch (err) {
+      log.warn('Engine job audit failed', { jobId: job.jobId, type, error: String(err) })
+    }
+  }
+  engine.onSettled((job, end) => {
+    auditEngine(job.status === 'done' ? 'engine_install_finished' : 'engine_install_failed', job, end.preview, end)
+  })
+
   // #516: a failed or cancelled update (or one the install hook did not resume) brings back the
   // model its pause stopped. The helpers need nothing: they restart on their next use.
   engine.onSettled((job) => {
@@ -266,6 +329,11 @@ export function registerEngineIpc(
     ocrInstaller.networkSwitched(on, onStopped)
   }
 
+  // #842: every engine call below (the status, the install and repair, the update) reads the pins
+  // from `ctx.bundledManifestsDir`, the app's own `runtime-sources.yaml`, never `ctx.manifestsDir`,
+  // which a launcher start points at the drive's copy. A new app on a drive whose manifests were not
+  // refreshed then compared the engine with the drive's old pin, found it current, and never offered
+  // its update. One source for all of them, so the notice never offers what the update would refuse.
   const gates = (): DownloadGates => {
     const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m), { isDev: ctx.isDev })
     const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork
@@ -284,7 +352,7 @@ export function registerEngineIpc(
     const update = { jobId: '', modelId: null as string | null, paused: false, resumed: false }
     const job = await engine.start({
       rootPath: ctx.paths.rootPath,
-      manifestsDir: ctx.manifestsDir ?? null,
+      manifestsDir: ctx.bundledManifestsDir,
       gates: gates(),
       families,
       update: true,
@@ -320,30 +388,48 @@ export function registerEngineIpc(
 
   ipcHandle(
     IPC.getEngineStatus,
-    (): EngineStatus => engineStatus(ctx.paths.rootPath, ctx.manifestsDir ?? null)
+    (): EngineStatus => engineStatus(ctx.paths.rootPath, ctx.bundledManifestsDir)
   )
 
-  ipcHandle(IPC.downloadEngine, (_e, raw?: unknown): Promise<EngineDownloadJob> => {
-    // #339 P8-2: the OPTIONAL argument. Absent = the default install (required families
-    // only — the manager never reaches an optional family without it). The consent dialog
-    // sends `{ families: ['kiwix_tools'] }` after the licence acknowledgement; the payload
-    // is renderer input and is validated against the code's own family names.
+  /**
+   * The request the renderer sent, validated — the same for `engine:plan` and `engine:download`, so
+   * the preview a dialog shows and the job its Confirm starts are selected from one request. #532:
+   * "Install … again" re-fetches an engine that is on the drive and current by its marker — admitted
+   * only for a family whose files the OS loader found damaged this session.
+   */
+  const admittedRequest = (raw: unknown): ReturnType<typeof parseEngineDownloadRequest> => {
     const request = parseEngineDownloadRequest(raw)
-    // #532: "Install … again" re-fetches an engine that is on the drive and current by its
-    // marker — admitted only for a family whose files the OS loader found damaged this session.
     if (request.reinstall && !(request.families ?? []).every(repairable)) {
       throw new Error(tMain('main.engine.nothingToRepair'))
     }
+    return request
+  }
+
+  // #843: what a request would fetch, for its confirmation dialog — the step selection `start()`
+  // runs (`planEngineSteps`), with the same pins and, for a reinstall, the same refused builds. The
+  // payload is the one Confirm then sends to `engine:download` unchanged: main keeps no consent
+  // token, it checks the gates on every start. Read-only: no network, no write.
+  ipcHandle(IPC.getEnginePlan, (_e, raw?: unknown): EngineDownloadPreview => {
+    const request = admittedRequest(raw)
+    return previewEngineDownload({
+      rootPath: ctx.paths.rootPath,
+      manifestsDir: ctx.bundledManifestsDir,
+      ...request,
+      ...(request.reinstall ? { reinstallBuilds: refusedBuilds(request.families ?? []) } : {})
+    })
+  })
+
+  const startEngineJob = (request: ReturnType<typeof parseEngineDownloadRequest>): Promise<EngineDownloadJob> => {
     // #516: an update downloads first and pauses the engine's users only for the swap.
     if (request.update) return startEngineUpdate(request.families ?? [])
     return engine.start({
       rootPath: ctx.paths.rootPath,
-      manifestsDir: ctx.manifestsDir ?? null,
+      manifestsDir: ctx.bundledManifestsDir,
       gates: gates(),
       ...request,
       // #678: what the reinstall replaces — the builds the OS refused, the `cpu/` net included.
       ...(request.reinstall ? { reinstallBuilds: refusedBuilds(request.families ?? []) } : {}),
-      // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
+      // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install replaces the dir the
       // LIVE chat sidecar executes from — the manager refuses a job that would touch it
       // while a model runtime is up OR still starting (friendly copy; stop the model first).
       // The demo runtime is not "up" here (#532): it never executes that dir.
@@ -354,10 +440,21 @@ export function registerEngineIpc(
       // family still proceed, and so does a repair of the `cpu/` net alone (#678: no sidecar runs it).
       llamaSidecarActive: llamaSidecarInUse(),
       whisperActive: whisperSidecarInUse(),
-      // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install pre-cleans the dir a live
+      // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install replaces the dir a live
       // kiwix-serve / kiwix-manage child executes from — refused while one is registered.
       kiwixToolsActive: kiwixToolsInUse()
     })
+  }
+
+  ipcHandle(IPC.downloadEngine, async (_e, raw?: unknown): Promise<EngineDownloadJob> => {
+    // #339 P8-2: the OPTIONAL argument. Absent = the default install (required families
+    // only — the manager never reaches an optional family without it). The consent dialog
+    // sends `{ families: ['kiwix_tools'] }` after the licence acknowledgement; the payload
+    // is renderer input and is validated against the code's own family names.
+    const request = admittedRequest(raw)
+    const job = await startEngineJob(request)
+    auditEngine('engine_install_started', job, engine.jobPreview(job.jobId))
+    return job
   })
 
   ipcHandle(IPC.getEngineJob, (_e, jobId: string): EngineDownloadJob => engine.get(jobId))
@@ -375,7 +472,7 @@ export function registerEngineIpc(
   const ocrSources = () => ({
     rootPath: ctx.paths.rootPath,
     manifestsDir: ctx.manifestsDir ?? null,
-    bundledManifestsDir: options.bundledManifestsDir ?? null
+    bundledManifestsDir: ctx.bundledManifestsDir
   })
 
   ipcHandle(IPC.getOcrInstallStatus, (): Promise<OcrInstallStatus> => ocrInstaller.status(ocrSources()))
@@ -386,7 +483,10 @@ export function registerEngineIpc(
     return ocrInstaller.start({
       ...ocrSources(),
       gates: gates(),
-      activate: () => refreshOcrSlot(ctx)
+      activate: () => refreshOcrSlot(ctx),
+      // #843: the job's start and end reach the activity log (language codes and counts only), with
+      // the trigger the engine rows carry: the rows are permanent, and an app update records its own.
+      audit: (type, message, metadata) => ctx.audit?.(type, message, { ...metadata, trigger: AUDIT_TRIGGER })
     })
   })
 

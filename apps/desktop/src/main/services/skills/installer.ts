@@ -792,8 +792,10 @@ export function importSkill(
 function applyImportEnableState(db: Db, record: SkillRecord, now: string, appVersion: string): void {
   // §6.5 gate: a skill needing a newer app is installed but kept DISABLED (it cannot shape a turn
   // or run a tool until the app is updated) — it still coexists/lists, just never enabled here.
+  // #846: each "off" records its reason. A user import is never switched on by itself later (only an
+  // app skill is), but the reason is on record for a future build.
   if (skillNeedsNewerApp(record.manifest.compatibility.minAppVersion, appVersion)) {
-    setSkillEnabled(db, record.installId, false, now)
+    setSkillEnabled(db, record.installId, false, now, 'min_app_version')
     db.prepare('UPDATE skills SET warning_ack = 0, updated_at = ? WHERE install_id = ?').run(now, record.installId)
     return
   }
@@ -801,7 +803,7 @@ function applyImportEnableState(db: Db, record: SkillRecord, now: string, appVer
   const enabledApp = siblings.find((s) => s.source === 'app' && s.enabled)
   if (enabledApp) {
     // Coexist disabled + warned; the trusted app skill stays effective.
-    setSkillEnabled(db, record.installId, false, now)
+    setSkillEnabled(db, record.installId, false, now, 'duplicate')
     db.prepare('UPDATE skills SET warning_ack = 0, updated_at = ? WHERE install_id = ?').run(now, record.installId)
     return
   }
@@ -809,7 +811,7 @@ function applyImportEnableState(db: Db, record: SkillRecord, now: string, appVer
   setSkillEnabled(db, record.installId, true, now)
   db.prepare('UPDATE skills SET warning_ack = 0, updated_at = ? WHERE install_id = ?').run(now, record.installId)
   for (const s of siblings) {
-    if (s.enabled) setSkillEnabled(db, s.installId, false, now)
+    if (s.enabled) setSkillEnabled(db, s.installId, false, now, 'duplicate')
   }
 }
 

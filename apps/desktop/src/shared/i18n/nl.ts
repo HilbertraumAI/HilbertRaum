@@ -1100,6 +1100,11 @@ export const nl: UiCatalog<'nl'> = {
   'models.library.translation': 'Vertaling',
   'models.library.images': 'Afbeeldingen',
   'models.library.voice': 'Spraak',
+  'models.newerApp.heading': 'Nieuwere versie van HilbertRaum nodig',
+  'models.newerApp.badge': 'Nieuwere app nodig',
+  'models.newerApp.hint':
+    'Dit model is voor een nieuwere versie van HilbertRaum. Werk de app op deze computer bij om het ' +
+    'te gebruiken.',
   'models.library.memory': 'Minimaal geheugen: {size}',
   'models.library.clear': 'Filters wissen',
   'models.library.showVariants': 'Alle varianten tonen ({count})',
@@ -1125,10 +1130,14 @@ export const nl: UiCatalog<'nl'> = {
   'models.state.installed': 'Geïnstalleerd',
   'models.state.missing': 'Niet gedownload',
   'models.state.checksumFailed': 'Niet controleerbaar',
+  'models.state.noChecksum': 'Geen controlesom',
   'models.state.unsupported': 'Niet ondersteund',
   'models.state.notRecommended': 'Niet aanbevolen',
   'models.state.ready': 'Klaar',
   'models.state.running': 'Draait',
+  'models.noChecksum.hint':
+    'Van dit model is geen controlesom bekend, dus het werkt alleen in ontwikkelaarsmodus op een ' +
+    'schijf waarvan het beleid niet-gecontroleerde modellen toestaat.',
   'models.badge.notResponding': 'Reageert niet',
   'models.notRespondingHint':
     'Het AI-model antwoordt niet meer. Meestal lost opnieuw starten dit op.',
@@ -1253,6 +1262,18 @@ export const nl: UiCatalog<'nl'> = {
   'models.engine.downloadingNoTotal': 'AI-engine downloaden…',
   'models.engine.verifying': 'AI-engine controleren…',
   'models.engine.extracting': 'AI-engine uitpakken…',
+  'models.engineConfirm.chatEngine': 'AI-engine (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Spraakengine (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'reserveversie alleen voor de processor',
+  'models.engineConfirm.version': 'Versie',
+  'models.engineConfirm.total': 'Totale grootte',
+  'models.engineConfirm.licenseIncludes': '{license}, bevat {bundled}',
+  'models.engineConfirm.hint':
+    'Elk bestand wordt gedownload van het getoonde adres en vóór gebruik gecontroleerd met de ' +
+    'verwachte controlesom. Er wordt niets over jou of je documenten verstuurd.',
+  'models.engineConfirm.updateNote':
+    'Je model blijft antwoorden zolang de download loopt. Alleen terwijl de bestanden worden ' +
+    'vervangen, pauzeert het een paar seconden.',
   'models.voiceEngine.title': 'Dicteerfunctie toevoegen (optioneel)',
   'models.voiceEngine.explain':
     'Antwoorden in chats en over documenten werken op deze schijf al. De spraakengine is ' +
@@ -1308,8 +1329,8 @@ export const nl: UiCatalog<'nl'> = {
     'Op dit besturingssysteem kan de app de spraakengine nog niet installeren, dus met dit model ' +
     'zijn dicteren en het importeren van audio hier niet mogelijk.',
   'models.vision.installed':
-    'Geïnstalleerd: wordt automatisch gebruikt op het scherm Afbeeldingen. Hier is niets te ' +
-    'starten.',
+    'Geïnstalleerd: het scherm Afbeeldingen kiest zelf welk beeldmodel het gebruikt. Hier is niets ' +
+    'te starten.',
   'models.vision.notInstalled':
     'Wordt na installatie automatisch gebruikt op het scherm Afbeeldingen: je hoeft niets in te ' +
     'stellen.',
@@ -1920,6 +1941,12 @@ export const nl: UiCatalog<'nl'> = {
   'diag.audit.model_download_started': 'Download gestart',
   'diag.audit.model_download_verified': 'Download gecontroleerd',
   'diag.audit.model_download_failed': 'Download mislukt',
+  'diag.audit.engine_install_started': 'Download van engine of hulpprogramma’s gestart',
+  'diag.audit.engine_install_finished': 'Engine of hulpprogramma’s geïnstalleerd',
+  'diag.audit.engine_install_failed': 'Installatie van engine of hulpprogramma’s mislukt',
+  'diag.audit.ocr_install_started': 'Download van de OCR-bestanden gestart',
+  'diag.audit.ocr_install_finished': 'OCR-bestanden geïnstalleerd',
+  'diag.audit.ocr_install_failed': 'Installatie van de OCR-bestanden mislukt',
   'diag.audit.document_imported': 'Document geïmporteerd',
   'diag.audit.document_reindexed': 'Document opnieuw geïndexeerd',
   'diag.audit.document_deleted': 'Document verwijderd',
@@ -1937,6 +1964,7 @@ export const nl: UiCatalog<'nl'> = {
   'diag.audit.workspace_unlock_failed': 'Ontgrendelen mislukt',
   'diag.audit.workspace_lock_failed': 'Vergrendelen mislukt (de werkruimte bleef open)',
   'diag.audit.workspace_password_changed': 'Wachtwoord van de werkruimte gewijzigd',
+  'diag.audit.workspace_working_copy_lost': 'Recente wijzigingen verloren',
   'diag.audit.settings_changed': 'Instellingen gewijzigd',
   'diag.audit.local_api_toggled': 'Lokale API in- of uitgeschakeld',
   'diag.audit.policy_warning': 'Melding over het beleid',
@@ -2053,6 +2081,8 @@ export const nl: UiCatalog<'nl'> = {
   'perf.model.title': 'Je model',
   'perf.model.line.one': '{model} · {size}\u00A0GB op schijf · context van {context} tokens',
   'perf.model.line.other': '{model} · {size}\u00A0GB op schijf · context van {context} tokens',
+  'perf.model.lineNoSize.one': '{model} · context van {context} tokens',
+  'perf.model.lineNoSize.other': '{model} · context van {context} tokens',
   'perf.model.none': 'Nog geen model geselecteerd. Kies er een op het scherm AI-model.',
   'perf.model.need': 'Gebruikt {need}\u00A0GB met deze context.',
   'perf.model.needEstimate':
@@ -2124,12 +2154,16 @@ export const nl: UiCatalog<'nl'> = {
   'perf.models.device.processor': 'processor',
   'perf.models.loaded': 'nu geladen',
   'perf.models.notLoaded': 'niet geladen',
+  'perf.models.notOnDrive': 'niet op deze schijf',
+  'perf.models.damaged': 'niet door de bestandscontrole',
+  'perf.models.noChecksum': 'geen controlesom bekend',
   'perf.models.lifetime.session': 'blijft geladen',
   'perf.models.lifetime.idle': 'wordt bij inactiviteit uit het geheugen gehaald',
   'perf.models.lifetime.per-use': 'draait alleen tijdens gebruik',
   'perf.models.split': 'lagen op de kaart: {gpuLayers} van {layers}',
   'perf.models.card':
     'Grafische kaart: chat {chat}\u00A0GB + vertaling {translation}\u00A0GB, van {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Grafische kaart: chat {chat}\u00A0GB, van {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Grafische kaart: rangschikking {reranker}\u00A0GB, van {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Beide staan op dit moment op de kaart. Het model dat als tweede startte, kreeg wat er over ' +
@@ -2349,6 +2383,26 @@ export const nl: UiCatalog<'nl'> = {
     'schijf.',
   'gate.unlock.submit': 'Ontgrendelen',
   'gate.unlock.submitBusy': 'Ontgrendelen…',
+  'gate.unlock.workingCopyLost':
+    'Het werkbestand van de werkruimte op de schijf is verwijderd of beschadigd. Je werkruimte ' +
+    'blijft zoals hij was toen hij voor het laatst werd vergrendeld of de app werd gesloten; ' +
+    'wijzigingen sinds dat moment zijn verloren gegaan.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum heeft je werkruimte niet vergrendeld toen de app de laatste keer werd gesloten, ' +
+    'bijvoorbeeld omdat de schijf werd losgekoppeld, de computer zonder stroom kwam te zitten of de ' +
+    'app geforceerd werd gestopt. Je werkruimte opent in de staat van de laatste vergrendeling; ' +
+    'eventuele wijzigingen sindsdien zijn verloren gegaan. Sluit HilbertRaum de volgende keer af ' +
+    'voordat je de schijf loskoppelt.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum kon je werkruimte niet vergrendelen toen de app de laatste keer werd gesloten, ' +
+    'omdat de schijf vol was. Je werkruimte opent in de staat van de laatste vergrendeling; ' +
+    'eventuele wijzigingen sindsdien zijn verloren gegaan. Zorg dat er vrije ruimte op de schijf is ' +
+    'voordat je verdergaat: anders kan ook de volgende vergrendeling je wijzigingen niet opslaan.',
+  'gate.unlock.encryptedFileMissing':
+    'Het versleutelde bestand van de werkruimte ontbrak op de schijf, dus HilbertRaum heeft de ' +
+    'onversleutelde kopie bewaard die je laatste sessie achterliet. Ontgrendel nu om die opnieuw te ' +
+    'versleutelen, en zoek daarna uit wat het bestand heeft verwijderd, bijvoorbeeld een ' +
+    'synchronisatie- of opruimprogramma.',
   'gate.welcome.title': 'Welkom',
   'gate.welcome.intro':
     'Dit is je privéwerkruimte voor AI. Chat met een AI-model en stel vragen over je documenten: ' +
@@ -2417,6 +2471,11 @@ export const nl: UiCatalog<'nl'> = {
     'De spraakengine kan op deze computer niet draaien, dus deze opname kon niet worden ' +
     'getranscribeerd. Op het scherm AI-model staat wat je kunt doen. Indexeer dit document ' +
     'daarna opnieuw.',
+  'main.ingest.voiceModelPathUnsupported':
+    'Onder Windows kan de spraakengine het transcriptiemodel niet openen, omdat de naam van een map ' +
+    'of van het bestand in het pad van het model een umlaut, een accent of een ander ' +
+    'niet-ASCII-teken bevat. Zet het model op een pad zonder zulke tekens en pas de vermelding in ' +
+    'het manifest van het model aan. Indexeer dit document daarna opnieuw.',
   'main.ingest.searchModelTimeout':
     'Het zoekmodel reageerde niet op tijd, dus dit document kon niet worden geïndexeerd. Probeer ' +
     'het opnieuw.',
@@ -2512,6 +2571,27 @@ export const nl: UiCatalog<'nl'> = {
     'maakt verbinding met deze website.',
   'main.dialog.openLink.open': 'Openen',
   'main.dialog.openLink.cancel': 'Annuleren',
+  'main.dialog.unsavedReview.title':
+    'Sommige wijzigingen in de beoordeling konden niet worden opgeslagen.',
+  'main.dialog.unsavedReview.message':
+    'Sommige wijzigingen in de beoordeling konden niet worden opgeslagen.',
+  'main.dialog.unsavedReview.detail':
+    'Als je nu sluit, gaan ze verloren. Controleer of de schijf nog is aangesloten en vrije ruimte ' +
+    'heeft, en probeer het dan opnieuw.',
+  'main.dialog.unsavedReview.tryAgain': 'Opnieuw proberen',
+  'main.dialog.unsavedReview.keepOpen': 'Open laten',
+  'main.dialog.unsavedReview.closeAnyway': 'Toch sluiten',
+  'main.dialog.taskRunning.title': 'Een documenttaak is nog niet klaar.',
+  'main.dialog.taskRunning.message': 'Een documenttaak is nog niet klaar.',
+  'main.dialog.taskRunning.detailOcr':
+    'Als je nu sluit, stopt het lezen van de scan en gaan de al gelezen pagina’s verloren.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Als je nu sluit, stopt de vertaling en gaat het al vertaalde deel verloren.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Als je nu sluit, stoppen de documenttaken die bezig zijn of wachten, en gaat het werk tot nu ' +
+    'toe verloren.',
+  'main.dialog.taskRunning.keepOpen': 'Open laten',
+  'main.dialog.taskRunning.closeAnyway': 'Toch sluiten',
   'main.workspace.wrongPassword':
     'Met dat wachtwoord is je werkruimte niet ontgrendeld. Controleer het en probeer het opnieuw.',
   'main.workspace.openFailed': 'De werkruimte kon niet worden geopend.',
@@ -2520,6 +2600,24 @@ export const nl: UiCatalog<'nl'> = {
     'konden niet worden geopend. Het wachtwoord opnieuw invoeren helpt niet. Maak geen nieuwe ' +
     'werkruimte aan: laat de bestanden zoals ze zijn en herstel de map van de werkruimte vanuit ' +
     'een back-up.',
+  'main.workspace.vaultMissing':
+    'Je wachtwoord klopt, maar het versleutelde bestand van de werkruimte ontbreekt op de schijf, en ' +
+    'er is geen kopie meer waarmee het hersteld kan worden. Maak geen nieuwe werkruimte aan. Zet het ' +
+    'bestand terug of herstel de map van de werkruimte vanuit een back-up.',
+  'main.workspace.descriptorMissing':
+    'Het bestand met de sleutel van je werkruimte (config/workspace.json) ontbreekt op de schijf of ' +
+    'is niet leesbaar, dus geen enkel wachtwoord kan de werkruimte openen. Maak geen nieuwe ' +
+    'werkruimte aan. Zet het bestand terug of herstel het vanuit een back-up.',
+  'main.workspace.descriptorUnreadable':
+    'Het bestand met de sleutel van je werkruimte (config/workspace.json) is niet leesbaar en het ' +
+    'versleutelde bestand van de werkruimte ontbreekt op de schijf, dus geen enkel wachtwoord kan de ' +
+    'werkruimte openen. Verwijder het sleutelbestand niet. Herstel beide bestanden vanuit een ' +
+    'back-up, of lees de handleiding voor probleemoplossing voordat je opnieuw begint.',
+  'main.workspace.vaultOpenFailed':
+    'Je wachtwoord klopt, maar HilbertRaum kon het openen van de werkruimte niet afronden. ' +
+    'De versleutelde werkruimte op de schijf is ongewijzigd gebleven. Zorg dat er vrije ' +
+    'ruimte op de schijf is en probeer het dan opnieuw. Als dit na een update is begonnen, ' +
+    'kan de vorige versie van HilbertRaum de werkruimte nog steeds openen.',
   'main.workspace.recoveryBlocked':
     'De werkruimte kon nog niet worden geopend: een ander programma houdt een herstelbestand met ' +
     'je nieuwste gegevens vast. Sluit alles wat de schijf mogelijk scant (antivirus, ' +
@@ -2530,6 +2628,12 @@ export const nl: UiCatalog<'nl'> = {
     'de werkruimte te openen. Er is niets gewijzigd.',
   'main.workspace.createFailed': 'De werkruimte kon niet worden aangemaakt.',
   'main.workspace.passwordTooShort': 'Het wachtwoord moet minstens {min} tekens lang zijn.',
+  'main.workspace.exists':
+    'Op deze schijf staat al een werkruimte, dus er is geen nieuwe aangemaakt. Ontgrendel die ' +
+    'werkruimte met het wachtwoord dat erbij hoort.',
+  'main.workspace.plaintextNotAllowed':
+    'Een werkruimte zonder wachtwoord is hier niet toegestaan. Maak de werkruimte in plaats daarvan ' +
+    'aan met een wachtwoord.',
   'main.workspace.newPasswordTooShort':
     'Het nieuwe wachtwoord moet minstens {min} tekens lang zijn.',
   'main.workspace.unlockBeforeChange':
@@ -2541,6 +2645,9 @@ export const nl: UiCatalog<'nl'> = {
   'main.workspace.busyPasswordChange':
     'Het wachtwoord van de werkruimte wordt op dit moment gewijzigd. Probeer het zo meteen ' +
     'opnieuw.',
+  'main.workspace.busyDocumentWork':
+    'Er worden nog documenten geïmporteerd of opnieuw geïndexeerd. Wacht tot dat klaar is en probeer ' +
+    'het dan opnieuw.',
   'main.workspace.lockFailed':
     'Vergrendelen is niet gelukt: de werkruimte blijft open en je gegevens zijn veilig. Maak wat ' +
     'ruimte vrij op de schijf en probeer het dan opnieuw.',
@@ -2727,8 +2834,8 @@ export const nl: UiCatalog<'nl'> = {
     'verwijderd. Bij een nieuwe start begint de download opnieuw vanaf het begin.',
   'main.engine.alreadyRunning': 'De AI-engine wordt al gedownload.',
   'main.engine.noSources':
-    'Er zijn op deze schijf geen downloadbronnen voor de engine gevonden (runtime-sources.yaml ' +
-    'ontbreekt).',
+    'Er zijn in deze kopie van HilbertRaum geen downloadbronnen voor de engine gevonden ' +
+    '(runtime-sources.yaml ontbreekt).',
   'main.engine.noHostBuild': 'Er is geen versie van de AI-engine beschikbaar voor deze computer.',
   'main.engine.alreadyInstalled': 'De AI-engine is al geïnstalleerd.',
   'main.engine.unknownJob': 'Onbekende download van de engine.',
@@ -2770,6 +2877,12 @@ export const nl: UiCatalog<'nl'> = {
   'main.engine.updateBusy':
     'De AI-engine is op dit moment in gebruik (er is een antwoord, een import, een vertaling of ' +
     'een documenttaak bezig). Probeer de update opnieuw als dat klaar is.',
+  'main.engine.notEnoughSpace':
+    'Er is niet genoeg vrije ruimte op deze schijf: de engine heeft uitgepakt {needed} nodig; vrije ' +
+    'ruimte: {free}. Maak ruimte vrij op de schijf en probeer het dan opnieuw.',
+  'main.engine.filesInUse':
+    'De engine kon niet worden vervangen, omdat een ander programma een van de bestanden gebruikt ' +
+    '(bijvoorbeeld een virusscan). Probeer het over een minuut opnieuw.',
   'main.ocr.badRequest':
     'Het verzoek om de OCR-bestanden te downloaden werd niet begrepen. Probeer het opnieuw.',
   'main.ocr.alreadyRunning': 'De OCR-bestanden worden al gedownload.',
@@ -2777,9 +2890,10 @@ export const nl: UiCatalog<'nl'> = {
     'Deze schijf heeft geen downloadlijst voor de OCR-bestanden. Voeg ze in plaats daarvan toe ' +
     'met de scripts voor het instellen van de schijf (“fetch-runtime --family ocr”).',
   'main.ocr.sourcesMismatch':
-    'De downloadlijst voor de OCR-bestanden op deze schijf past niet bij deze versie van ' +
-    'HilbertRaum, dus er is niets gedownload. Voeg de bestanden in plaats daarvan toe met de ' +
-    'scripts voor het instellen van de schijf (“fetch-runtime --family ocr”).',
+    'Noch de downloadlijst voor de OCR-bestanden op deze schijf, noch die in deze kopie van ' +
+    'HilbertRaum noemt de bestanden die deze versie gebruikt, dus er is niets gedownload. Voeg de ' +
+    'bestanden in plaats daarvan toe met de scripts voor het instellen van de schijf ' +
+    '(“fetch-runtime --family ocr”).',
   'main.ocr.alreadyInstalled':
     'De OCR-bestanden staan al op deze schijf. Wordt tekstherkenning nog steeds niet aangeboden, ' +
     'start HilbertRaum dan opnieuw.',
@@ -2834,6 +2948,16 @@ export const nl: UiCatalog<'nl'> = {
     'te transcriberen.',
   'main.models.noManifests':
     'Er is geen modellijst op deze schijf gevonden: de map model-manifests ontbreekt.',
+  'main.models.unknown': 'Dit model staat niet meer in de modellijst van deze schijf.',
+  'main.models.notChat': '“{name}” is geen chatmodel en kan hier dus niet worden gestart.',
+  'main.models.startDamaged':
+    'Het model “{name}” is niet door de bestandscontrole gekomen en is daarom niet gestart. Download ' +
+    'het opnieuw op het scherm AI-model.',
+  'main.models.startMissing':
+    'Het model “{name}” kan niet worden gestart: het modelbestand staat nog niet op deze schijf.',
+  'main.models.startNeedsRam':
+    'Het model “{name}” heeft minstens {min}\u00A0GB RAM nodig – deze computer heeft ongeveer ' +
+    '{ram}\u00A0GB. Kies een kleiner model: de kwaliteit blijft uitstekend.',
   'main.models.autoSelected':
     'Dit model wordt automatisch gebruikt zodra het is geïnstalleerd: er is niets te selecteren.',
   'main.models.locked':
@@ -2876,6 +3000,12 @@ export const nl: UiCatalog<'nl'> = {
   'main.dictation.engineCannotRun':
     'De spraakengine kan op deze computer niet draaien. Op het scherm AI-model staat wat er ' +
     'ontbreekt.',
+  'main.dictation.voiceModelPathUnsupported':
+    'Onder Windows kan de spraakengine een van zijn modellen (het transcriptiemodel of het model ' +
+    'voor spraakactiviteitsdetectie) niet openen, omdat de naam van een map of van het bestand in ' +
+    'het pad van dat model een umlaut, een accent of een ander niet-ASCII-teken bevat. Zet het model ' +
+    'op een pad zonder zulke tekens, pas de vermelding in het manifest van het model aan en probeer ' +
+    'het opnieuw.',
   'main.preflight.readOnly':
     'Deze schijf lijkt alleen-lezen te zijn, dus de app kan geen werkruimte aanmaken. Probeer ' +
     'een andere USB-poort, of lees de handleiding voor probleemoplossing.',
@@ -3241,6 +3371,9 @@ export const nl: UiCatalog<'nl'> = {
   'images.avail.noRuntime':
     'Voor het begrijpen van afbeeldingen moet eerst de AI-engine zijn geïnstalleerd.',
   'images.avail.incompatible': 'Het beeldmodel op deze schijf heeft een nieuwere AI-engine nodig.',
+  'images.avail.damaged':
+    'Het beeldmodel op deze schijf is niet door de bestandscontrole gekomen. Download het opnieuw op ' +
+    'het scherm AI-model.',
   'images.avail.cta': 'Naar AI-model',
   'images.avail.ocrPointer':
     'Gescande documenten? Gebruik “Doorzoekbaar maken (OCR)” in Documenten.',
@@ -3303,6 +3436,9 @@ export const nl: UiCatalog<'nl'> = {
   'images.err.engineCannotRun':
     'De AI-engine kan op deze computer niet draaien. Op het scherm AI-model staat wat er ' +
     'ontbreekt.',
+  'images.err.modelDamaged':
+    'Het beeldmodel is niet door de bestandscontrole gekomen en is daarom niet gestart. Download het ' +
+    'opnieuw op het scherm AI-model.',
   'images.err.emptyResponse':
     'Er is geen antwoord over deze afbeelding teruggekomen. Probeer je vraag anders te ' +
     'formuleren.',
@@ -3408,6 +3544,9 @@ export const nl: UiCatalog<'nl'> = {
   'translate.err.engineCannotRun':
     'De AI-engine kan op deze computer niet draaien. Op het scherm AI-model staat wat er ' +
     'ontbreekt.',
+  'translate.err.modelDamaged':
+    'Het vertaalmodel is niet door de bestandscontrole gekomen en is daarom niet gestart. Download ' +
+    'het opnieuw op het scherm AI-model.',
   'translate.err.empty':
     'Er is geen vertaling teruggekomen. Probeer het opnieuw, of formuleer de tekst anders.',
   'translate.err.sameLang': 'Kies twee verschillende talen.',
@@ -3489,12 +3628,18 @@ export const nl: UiCatalog<'nl'> = {
   'review.rename.save': 'Opslaan',
   'review.loading': 'Beoordeling laden…',
   'review.notFound': 'Deze beoordeling is niet gevonden. Mogelijk is de beoordeling verwijderd.',
+  'review.openFailed': 'Deze beoordeling kon niet worden geopend.',
   'review.question.toggle': 'Vraag',
   'review.answerPane.aria': 'Antwoord dat wordt beoordeeld',
   'review.autosave.saving': 'Opslaan…',
   'review.autosave.saved': 'Opgeslagen',
   'review.autosave.error': 'Sommige wijzigingen konden nog niet worden opgeslagen.',
   'review.autosave.retry': 'Opnieuw proberen',
+  'review.unsaved.body':
+    'Sommige wijzigingen in “{title}” konden nog niet worden opgeslagen, daarom is de andere ' +
+    'beoordeling niet geopend. Probeer het opnieuw, of negeer deze wijzigingen en open de andere ' +
+    'beoordeling.',
+  'review.unsaved.discard': 'Wijzigingen negeren en openen',
   'review.evidence.title': 'Onderbouwing',
   'review.evidence.captionRelevance':
     'De getoonde bronnen zijn de fragmenten die het lokale AI-model voor dit antwoord heeft ' +
@@ -3692,6 +3837,7 @@ export const nl: UiCatalog<'nl'> = {
   'review.export.done': 'Onderbouwingspakket geëxporteerd.',
   'review.export.error':
     'Het onderbouwingspakket kon niet worden geëxporteerd. Er is geen bestand geschreven.',
+  'review.export.failed': 'Het exporteren van het onderbouwingspakket is niet voltooid.',
   'review.export.copyHash': 'SHA-256 kopiëren',
   'review.export.hashCopied': 'SHA-256 gekopieerd naar het klembord.'
 }

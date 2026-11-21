@@ -706,6 +706,21 @@ describe('helpers', () => {
     expect(suggestedPackFileName('Ärger — größer', 'html')).toBe('Ärger  größer.html')
     expect(suggestedPackFileName('Contract questions', 'pdf')).toBe('Contract questions.pdf')
     expect(suggestedPackFileName('   ', 'pdf')).toBe('evidence-pack.pdf')
+    // #839 P1h: the stem stops at 60 characters, counted in code points, so the cut never leaves half an astral
+    // letter (U+20000, CJK Ext-B: two UTF-16 units) as a lone surrogate in the suggested name.
+    expect(suggestedPackFileName('A'.repeat(100), 'html')).toBe(`${'A'.repeat(60)}.html`)
+    const astral = '\u{20000}'
+    expect(suggestedPackFileName(`${'A'.repeat(59)}${astral}${astral}`, 'pdf')).toBe(`${'A'.repeat(59)}${astral}.pdf`)
+    // A cut that lands on a space leaves no space before the extension.
+    expect(suggestedPackFileName(`${'A'.repeat(59)} Clause 7`, 'html')).toBe(`${'A'.repeat(59)}.html`)
+  })
+
+  // #899: the pack name goes through the shared file-name rule (file-name-stem.test.ts owns it). It used to strip
+  // combining marks, so vowel signs and a decomposed accent were lost.
+  it('suggestedPackFileName keeps the vowel signs and accents of a title, composing a decomposed one (#899)', () => {
+    expect(suggestedPackFileName('हिन्दी', 'html')).toBe('हिन्दी.html')
+    expect(suggestedPackFileName('Pru\u0308fung', 'pdf')).toBe('Pr\u00fcfung.pdf')
+    expect(suggestedPackFileName('Report (draft)', 'html')).toBe('Report draft.html') // ( ) only in document exports
   })
 
   // AUD-15: the writer is ASYNC (fs.promises + a FileHandle fsync) so a multi-MB pack no

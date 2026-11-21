@@ -12,6 +12,17 @@ recommended_min_ram_gb: 14
 # machines were stuck on the 8B tier because nothing was tuned between 16 and 32.
 recommended_ram_gb: 24
 recommendation_rank: 2  # Phase-29 12-14B WINNER (beats Qwen3 14B on every axis) — preferred at tier
+# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
+# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 0
+# Card rank (model-benchmarks.md §6.8): 89.5 on the 2026-11 answer-quality study against the 9B's 86.1, at 73 tok/s on the RTX 3090
+# (9B: 94). The pick on a card that holds it.
+recommendation_rank_gpu: 3
+# A slow benchmark on it steps to the 9B, then along the 9B's own chain (§6.7, §6.8).
+step_down_to: qwen3.5-9b-ud-q4kxl
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 49/49 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 8249
 recommended_context_tokens: 8192
 # Context cache at 8k under the app launch (ubatch 2048): 512 MiB full-attention + 1,920 MiB
 # sliding-window cells (40 layers x 6,144 cells) = 2.375 GiB; the picker's graphics-fit cache term

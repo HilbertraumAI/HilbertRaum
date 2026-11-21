@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Preload-surface pins for the local API's three access-key channels (local-api wave P4).
 // The preload calls `contextBridge.exposeInMainWorld('api', api)` at import, so electron is
-// mocked to CAPTURE the exposed object. What matters here is that the bridge exposes ONLY
-// these three (the toggles + live status ride settings:update / app:getAppStatus) and that
-// each one routes to the channel the main-process handler is registered on — a rename on
-// either side would otherwise fail silently at runtime.
+// mocked to CAPTURE the exposed object. What matters here is that the bridge's localApi-named
+// surface is exactly these three (the toggles + live status ride settings:update /
+// app:getAppStatus) and that each one routes to the channel the main-process handler is
+// registered on — a rename on either side would otherwise fail silently at runtime. That the
+// FULL key never reaches the renderer is main's contract, proved in local-api-ipc.test.ts (a
+// mask out of connection info and rotation, the copy done main-side).
 
 const bridge = vi.hoisted(() => ({ api: undefined as unknown }))
 const ipc = vi.hoisted(() => ({
@@ -46,7 +48,7 @@ describe('preload — local API surface', () => {
     expect(ipc.invoke).toHaveBeenCalledWith(IPC.localApiRegenerateToken)
   })
 
-  it('exposes NO method that could carry the full access key to the renderer', async () => {
+  it("the bridge's localApi-named surface is exactly the three key methods", async () => {
     const api = await loadApi()
     const localApiMethods = Object.keys(api).filter((k) => /localapi/i.test(k))
     // An added name here is a deliberate decision, not an accident: anything shaped like

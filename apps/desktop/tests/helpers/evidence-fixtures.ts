@@ -40,6 +40,7 @@ import type {
   EvidenceSourceSnapshot
 } from '../../src/shared/types'
 import { ANY_SENDER } from './ipc'
+import { workspaceStandIn } from './workspace-stand-in'
 
 /**
  * One `documents` row ONLY (no stored file anywhere), status 'indexed'. `sha256: undefined` gets the default hash
@@ -252,9 +253,9 @@ function tripwireEmbedder(touched: string[]): Embedder {
 }
 
 /**
- * The AppContext the evidence IPC suites hand to `registerEvidenceReviewsIpc`: paths under `root`, the production
- * workspace admission shape (`isUnlocked` from `o.unlocked`, default always unlocked; `isLocking` from `o.locking`,
- * default never locking: the AUD-02 `workspaceAdmitsWork` latch reads both), `tripwireRuntime` + a tripwire embedder
+ * The AppContext the evidence IPC suites hand to `registerEvidenceReviewsIpc`: paths under `root`, a `workspaceStandIn`
+ * (`isUnlocked` from `o.unlocked`, default always unlocked; `isLocking` from `o.locking`, default never locking: the
+ * AUD-02 `workspaceAdmitsWork` latch reads both), `tripwireRuntime` + a tripwire embedder
  * (both feed `runtimeTouched`), `manifestsDir` (default null), `isDev: true`. `audit` is the real
  * `createAuditRecorder` over `db`, which swallows a failed insert: suites read what PERSISTED
  * (`listAuditEvents(db, …)`), never a list of what the handler passed.
@@ -272,7 +273,7 @@ export function evidenceIpcContext(
     trustedSenders: ANY_SENDER,
     db,
     paths: { workspacePath: root, rootPath: root, configPath: join(root, 'config.json') },
-    workspace: { isUnlocked: o.unlocked ?? (() => true), isLocking: o.locking ?? (() => false) },
+    workspace: workspaceStandIn({ unlocked: o.unlocked, locking: o.locking }),
     runtime: tripwireRuntime(runtimeTouched),
     embedder: tripwireEmbedder(runtimeTouched),
     manifestsDir: o.manifestsDir ?? null,

@@ -543,6 +543,28 @@ describe('duplicate id — coexist with one active (DS12)', () => {
     expect(getSkill(db, appInstall)?.enabled).toBe(true) // app stays effective
   })
 
+  // #846: the import records why it left the copy off, so the reconcile never mistakes it for the version gate's
+  // (or the gate's for the user's). User imports are never switched on by themselves; the reason is on record anyway.
+  it('records why an import stays off: a skill too new for this app, a copy beside an active built-in', async () => {
+    const db = freshDb()
+    const deps = makeDeps({ appVersion: '1.0.0' })
+    const reasonOf = (installId: string): string | null =>
+      (db.prepare('SELECT disabled_reason FROM skills WHERE install_id = ?').get(installId) as {
+        disabled_reason: string | null
+      }).disabled_reason
+    const tooNew = await writeZip([{ name: 'SKILL.md', content: skillMdText({ id: 'too-new', minAppVersion: '2.0.0' }) }])
+    expect(importSkill(db, tooNew, deps).info.enabled).toBe(false)
+    expect(reasonOf('user:too-new')).toBe('min_app_version')
+
+    mkdirSync(join(deps.appSkillsDir, 'shared'), { recursive: true })
+    writeFileSync(join(deps.appSkillsDir, 'shared', 'SKILL.md'), skillMd({ id: 'shared' }))
+    expect(importSkill(db, await validZip({ id: 'shared' }), deps).info.enabled).toBe(false)
+    expect(reasonOf('user:shared')).toBe('duplicate')
+
+    expect(importSkill(db, await validZip({ id: 'plain' }), deps).info.enabled).toBe(true)
+    expect(reasonOf('user:plain')).toBeNull()
+  })
+
 })
 
 describe('downgrade is developer-mode gated (DS15)', () => {

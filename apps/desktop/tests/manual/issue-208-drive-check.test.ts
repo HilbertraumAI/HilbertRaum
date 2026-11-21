@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   vaultPathsFrom,
-  VaultLockError,
   WorkspaceController
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
@@ -37,7 +36,7 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 }
 
 gate('issue #208 on the real drive — two-instance overlap must not destroy the vault', () => {
-  it('create → second-instance init → lock refused → vault still unlocks', () => {
+  it('create → second-instance init → lock refused over garbage, finished at the last snapshot → vault still unlocks', () => {
     const scratch = join(root!, '_issue208-check')
     rmSync(scratch, { recursive: true, force: true })
     mkdirSync(join(scratch, 'config'), { recursive: true })
@@ -61,8 +60,10 @@ gate('issue #208 on the real drive — two-instance overlap must not destroy the
         `[208-drive] after second-instance sweep: working file ${existsSync(vp.dbPath) ? 'SURVIVES as noise (Windows-style hold)' : 'unlinked (POSIX-style)'}; shredded=${dbShredded}`
       )
 
-      // Instance A quits: the guard must refuse to encrypt garbage over `.enc`.
-      expect(() => a.lock()).toThrowError(VaultLockError)
+      // Instance A quits: the guard must refuse to encrypt garbage over `.enc`, and with nothing
+      // newer than `.enc` left the lock finishes at the last good snapshot (#855).
+      expect(a.lock()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+      expect(existsSync(vp.dbPath)).toBe(false)
       expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
 
       // Relaunch: the vault still opens with the original password.
@@ -72,7 +73,7 @@ gate('issue #208 on the real drive — two-instance overlap must not destroy the
       expect(c.getState().state).toBe('unlocked')
       expect(getSettings(c.requireDb()).workspaceMode).toBe('encrypted')
       c.lock()
-      console.log('[208-drive] PASS: lock refused over garbage, .enc byte-identical, vault unlocks after relaunch')
+      console.log('[208-drive] PASS: lock refused over garbage and finished at the last snapshot, .enc byte-identical, vault unlocks after relaunch')
     } finally {
       rmSync(scratch, { recursive: true, force: true })
     }

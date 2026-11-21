@@ -17,6 +17,7 @@ import { clearModelLoadLatches } from '../services/runtime/factory'
 import { resolveCpuFallbackServerPath, resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
+import { rearmStartRefusals } from '../services/model-start-check'
 import { probeAndPersistGpu } from './registerBenchmarkIpc'
 import { startModelRuntime } from './registerModelIpc'
 import { isModelStarting } from '../../shared/runtime-status'
@@ -36,14 +37,8 @@ import { isModelStarting } from '../../shared/runtime-status'
  */
 export function rearmLlamaConsumers(ctx: AppContext): void {
   clearModelLoadLatches()
-  try {
-    ctx.embedder?.resetStartFailure?.()
-    ctx.reranker?.resetStartFailure?.()
-    ctx.vision?.resetStartFailure()
-    ctx.refreshTranslatorSlot?.()
-  } catch (err) {
-    log.warn('Re-arming the AI engine consumers failed', { error: String(err) })
-  }
+  // The one re-arm helper (#913 code review), unfiltered: every role runs this engine.
+  rearmStartRefusals(ctx)
 }
 
 /**

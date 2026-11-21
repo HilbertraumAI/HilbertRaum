@@ -359,6 +359,42 @@ describe('document-edit — the run seam (locate → verify → splice → write
     expect(run.status).toBe('cancelled')
   })
 
+  // The edit twin of the redaction row: the cancelled-before-write guard after the tool is reachable only through an
+  // abort inside the tool's progress tick (tick 1 is the locate window, tick 2 is the tool).
+  it('a cancel landing as the tool finishes opens no save dialog and records cancelled, not a write', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, 'Der Vertreter kennt den Fall.')
+    const { audit, events } = capturingAudit()
+    const controller = new AbortController()
+    let saveCalled = false
+    let ticks = 0
+    const runtime = scriptedRuntime(() =>
+      JSON.stringify({ edits: [{ line: 1, find: 'Vertreter', occurrence: 1, replace: 'Anwalt' }] })
+    )
+    const res = await runDocumentEdit(db, { skillInstallId: skillInstall, documentId: docId }, {
+      audit,
+      confirmed: true,
+      runtime,
+      instruction: 'replace Vertreter with Anwalt',
+      signal: controller.signal,
+      onProgress: () => {
+        ticks += 1
+        if (ticks === 2) controller.abort()
+      },
+      saveTextFile: async () => {
+        saveCalled = true
+        return true
+      }
+    })
+    expect(ticks).toBe(2)
+    // The tool itself finished (its audit is `skill_run_done`): the abort landed after it, inside its tick, not in the locate step.
+    expect((events as Array<{ type: string }>).map((e) => e.type)).toContain('skill_run_done')
+    expect(res).toMatchObject({ ok: false, cancelled: true })
+    expect(saveCalled).toBe(false)
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('cancelled')
+  })
+
   it('a dismissed save persists nothing and reports it calmly (cancelled, not failed)', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, 'Der Vertreter kennt den Fall.')

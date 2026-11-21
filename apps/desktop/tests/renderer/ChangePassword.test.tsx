@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
+import { ToastProvider } from '../../src/renderer/components'
 import {
   DEFAULT_SETTINGS,
   MIN_PASSWORD_LENGTH,
@@ -10,7 +11,8 @@ import {
   type WorkspaceActionResult
 } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
-import { stubApi } from '../helpers/renderer'
+import { UNLOCKED_ENCRYPTED_WORKSPACE } from '../helpers/app-shell'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 
 // Phase 32: the Settings → General "Change password" card. Reuses the Phase-27
 // password components (strength meter, show toggle) from components/PasswordField;
@@ -28,19 +30,10 @@ function stubSettings(opts: {
   const change =
     opts.changeWorkspacePassword ??
     vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({
-        ok: true,
-        state: {
-          state: 'unlocked',
-          mode: 'encrypted',
-          plaintextAllowed: false,
-          encryptionRequired: true
-        }
-      })
+      async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE })
     )
   stubApi({
     getSettings: vi.fn(async () => opts.settings ?? settings()),
-    updateSettings: vi.fn(async (p: Partial<AppSettings>) => settings(p)),
     changeWorkspacePassword: change
   })
   return change
@@ -57,18 +50,16 @@ async function fillCard(
   await user.type(screen.getByLabelText('Confirm new password'), confirm)
 }
 
-afterEach(cleanup)
+// #832: a window.api call no row stubbed fails that row (cleanup first, so one failure cannot cascade).
+afterEach(() => {
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
+})
 
 describe('Settings → Change password (Phase 32)', () => {
-  it('shows the card on an encrypted workspace with the three password fields', async () => {
-    stubSettings({})
-    render(<SettingsScreen tab="general" />)
-    expect(await screen.findByRole('heading', { name: /change password/i })).toBeInTheDocument()
-    expect(screen.getByLabelText('Current password')).toBeInTheDocument()
-    expect(screen.getByLabelText('New password')).toBeInTheDocument()
-    expect(screen.getByLabelText('Confirm new password')).toBeInTheDocument()
-  })
-
   it('is hidden ENTIRELY in plaintext_dev mode (nothing to change)', async () => {
     stubSettings({ settings: settings({ workspaceMode: 'plaintext_dev' }) })
     render(<SettingsScreen tab="general" />)
@@ -80,7 +71,11 @@ describe('Settings → Change password (Phase 32)', () => {
   it('gates submission on the 8-char floor + confirm match, then calls the IPC', async () => {
     const change = stubSettings({})
     const user = userEvent.setup()
-    render(<SettingsScreen tab="general" />)
+    render(
+      <ToastProvider>
+        <SettingsScreen tab="general" />
+      </ToastProvider>
+    )
     const button = await screen.findByRole('button', { name: /change password/i })
     expect(button).toBeDisabled()
 
@@ -107,6 +102,25 @@ describe('Settings → Change password (Phase 32)', () => {
     )
     expect((screen.getByLabelText('New password') as HTMLInputElement).value).toBe('')
     expect((screen.getByLabelText('Confirm new password') as HTMLInputElement).value).toBe('')
+    // …and says so (#860 C3): the cleared form alone does not tell the user the change took.
+    expect(await screen.findByText(t('en', 'settings.changePassword.toast'))).toBeInTheDocument()
+  })
+
+  // #860 C1: a call that rejects (the IPC itself failed, not main's answer) still tells the user, and says the current
+  // password still works; a silent card would leave them guessing which password is now valid.
+  it('shows the "something went wrong" copy when the change call itself rejects, keeping the fields', async () => {
+    const change = vi.fn(async (): Promise<WorkspaceActionResult> => {
+      throw new Error('ipc channel closed')
+    })
+    stubSettings({ changeWorkspacePassword: change })
+    const user = userEvent.setup()
+    render(<SettingsScreen tab="general" />)
+    await screen.findByRole('heading', { name: /change password/i })
+    await fillCard(user, 'old-password', 'long-enough-pw', 'long-enough-pw')
+    await user.click(screen.getByRole('button', { name: /change password/i }))
+    expect(change).toHaveBeenCalledWith('old-password', 'long-enough-pw')
+    expect(await screen.findByText(t('en', 'settings.changePassword.failed'))).toBeInTheDocument()
+    expect(screen.getByLabelText('Current password')).toHaveValue('old-password')
   })
 
   // The floor is main's (`registerWorkspaceIpc` refuses a new password under it); a copy of the
@@ -127,13 +141,16 @@ describe('Settings → Change password (Phase 32)', () => {
     expect(button).toBeEnabled()
   })
 
-  it('shows the strength meter on the new password (advisory only)', async () => {
+  // Advisory only: the floor row above enables the button on a Weak password.
+  it('shows the strength meter on the new password', async () => {
     stubSettings({})
     const user = userEvent.setup()
     render(<SettingsScreen tab="general" />)
     await screen.findByRole('heading', { name: /change password/i })
     await user.type(screen.getByLabelText('New password'), 'C0rrect-horse-battery!')
-    expect(screen.getByText('Very strong')).toBeInTheDocument()
+    // The sr-only announcer repeats the word once typing has paused for 600 ms (Components.test.tsx owns that
+    // debounce), which can land before this line: look past it.
+    expect(screen.getByText('Very strong', { ignore: 'script, style, [role="status"]' })).toBeInTheDocument()
   })
 
   it('surfaces a wrong-current-password failure as the friendly message, keeping the fields', async () => {
@@ -150,8 +167,13 @@ describe('Settings → Change password (Phase 32)', () => {
     await screen.findByRole('heading', { name: /change password/i })
     await fillCard(user, 'wrong-current', 'long-enough-pw', 'long-enough-pw')
     await user.click(screen.getByRole('button', { name: /change password/i }))
+    expect(change).toHaveBeenCalledWith('wrong-current', 'long-enough-pw')
     expect(
       await screen.findByText(/doesn't match your current password/i)
     ).toBeInTheDocument()
+    // Only success clears the fields: the user corrects the current password and retries.
+    expect(screen.getByLabelText('Current password')).toHaveValue('wrong-current')
+    expect(screen.getByLabelText('New password')).toHaveValue('long-enough-pw')
+    expect(screen.getByLabelText('Confirm new password')).toHaveValue('long-enough-pw')
   })
 })

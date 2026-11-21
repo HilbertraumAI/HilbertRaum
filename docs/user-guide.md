@@ -91,7 +91,8 @@ The first launch walks you through a short, full-window setup:
    are not encrypted — they are public weights, not your data. The local diagnostics log is
    encrypted along with your workspace.) The password is
    **never stored** anywhere, and if you forget it the data cannot be recovered — that's
-   the point. While you type, a small strength meter offers honest advice (longer is
+   the point (to start over, see [`troubleshooting.md`](troubleshooting.md), "I forgot my
+   workspace password"). While you type, a small strength meter offers honest advice (longer is
    stronger); it never blocks you. The **eye button** reveals what you typed, and pasting
    from a password manager works normally. On developer drives a toggle offers a **plaintext
    workspace** (no password, unencrypted) instead.
@@ -170,6 +171,10 @@ blocks you.
      through the catalog; if it is one of several variants of the same model, that group opens
      automatically so the damaged version is visible straight away. (If the publisher has since
      withdrawn the file, the row explains that instead of offering a download.)
+   - **No checksum** — the file is present, but the model's manifest has no checksum on record to
+     check it against (a model you added yourself, before you captured its hash). It runs only in
+     developer mode on a drive whose policy allows unverified models, and a download can't fix it,
+     so the row offers none (see Troubleshooting).
    - **Unsupported** — this model can't run on this computer/build.
 3. Click **Use this model** on a downloaded model's row — this makes it your model *and* starts it, so
    you can go straight to chatting. The first start of a model can take a little while as it loads
@@ -219,12 +224,13 @@ happens by itself:
    If a download **fails**, or finishes without a checksum the app can verify, the result stays
    in that panel — named, with **Retry download** and **Dismiss** — until you act on it. It
    survives searching and filtering, and it is still there when you leave the **AI Model** screen
-   and come back. Reloading the app window keeps it too: the screen finds the running download —
-   or the result you haven't dealt with yet — again by itself, and anything you dismissed stays
-   dismissed. **Retry download** re-opens the same confirmation (size, license, address) for
-   exactly that model; it is greyed out with the reason when downloads are switched off, the
-   file is no longer offered, or the model turns out to be on this drive already. **Dismiss** clears the panel and puts the result back on the model's
-   own card, where its Resume button is.
+   and come back. If the window has to reload (the **Reload** button after an unexpected error),
+   it is kept too: the screen finds the running download — or the result you haven't dealt with
+   yet — again by itself, and anything you dismissed stays dismissed. **Retry download**
+   re-opens the same confirmation (size, license, address) for exactly that model; it is greyed
+   out with the reason when downloads are switched off, the file is no longer offered, or the
+   model turns out to be on this drive already. **Dismiss** clears the panel and puts the result
+   back on the model's own card, where its Resume button is.
 4. The file is checksum-verified before the app will use it — a corrupted download is
    discarded automatically, never silently kept.
 
@@ -237,6 +243,14 @@ Some optional models carry a **license you accept before downloading** — the c
 a link to the license and a tick-box you must check first. The **TranslateGemma** translation
 model is one of these: it is downloaded on demand (never bundled), used automatically for
 translation once installed, and — like the vision model — needs no starting or selecting.
+
+The **AI engine** and the voice engine download the same way. **Install AI engine**, **Install voice
+engine**, **Update** and **Install the AI engine again** each open a confirmation first. It lists
+every file that action is about to fetch (an update or a repair can include the engine's
+processor-only fallback too), each with its version, size, license and full download address, and
+nothing is downloaded until you confirm. Each engine and OCR-file install is recorded in the Activity panel
+(§10): what was installed, when, and whether it finished, failed or was stopped (the knowledge-pack
+tools' install too, under "Engine or tools").
 
 ### Speed: graphics-card acceleration (automatic)
 
@@ -264,13 +278,14 @@ words per second" and "faster than you can read". There is nothing to install or
   then choose **Check again** (or restart the app). When the engine's own files on the drive are
   missing or damaged, the banner also offers **Install the AI engine again**, which downloads a
   fresh, checksum-verified copy (the voice engine's note offers the same). Like every download, it
-  needs **Allow internet access…** in Settings and a drive that permits downloads. Home, the chat
-  and Diagnostics point to the same banner. Step by step:
+  asks first and needs **Allow internet access…** in Settings and a drive that permits downloads.
+  Home, the chat and Diagnostics point to the same banner. Step by step:
   [`troubleshooting.md`](troubleshooting.md), "The AI engine can't run on this computer".
 - When the drive carries an older AI engine (or voice engine) than this app was built for, the
   **AI Model** screen shows a quiet notice, "An update for the AI engine is available". **Update**
-  downloads and checks the new version while your model keeps answering, then pauses the models for
-  a few seconds to replace the files and starts your model again. Settings → Diagnostics lists the
+  shows what it will download and, once you confirm, downloads and checks the new version while your
+  model keeps answering, then pauses the models for a few seconds to replace the files and starts
+  your model again. Settings → Diagnostics lists the
   versions under *Engine versions*.
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
@@ -321,7 +336,8 @@ model is one click. **Copy report** puts everything above into your clipboard fo
 message, and always says which computer it describes, so a report copied on a different laptop
 is never mistaken for this one's.
 
-**Your model.** A row under the tiles about the model you actually have selected. Before its
+**Your model.** A row under the tiles about the model you actually have selected. If that model's
+files are not on this drive, the row says **not on this drive** and makes no estimate. Before its
 first start on this computer it is an estimate from the file size alone, and the note says the
 context cache is measured once the model starts. After a start, with the context size and
 graphics setting you currently have, the row switches to what actually happened: on the graphics
@@ -341,14 +357,21 @@ design (voice and images, always; document search's index model too). Document s
 model (the reranker) is the exception: it follows its own graphics-card headroom check against
 the model you are chatting with, so its row can say either "graphics card" or "processor"
 depending on this computer and what else is loaded — never "by design". A row reads **loaded**
-only once that service is actually running and ready, not while it is still starting. Below the
-rows: a card line for chat and translation (what each is resident on the graphics card for,
-against its memory), a second card line whenever the ranking model is also resident there, and a
-processor total (what loading everything at once would take from RAM). Whenever two or more of
-chat, translation and the ranking model share the card at once, both lines carry a warning badge;
-the chat-and-translation line also spells out that whichever of the two loaded second got what
-was left over and runs slower, but only when chat and translation are themselves both on the
-card.
+only once that service is actually running and ready, not while it is still starting. A model
+that is not on this drive keeps its row, so you can see what it would take before you download
+it, and reads **not on this drive** instead. A model on this drive that the app won't start reads
+**failed its file check** (Check all model files found its file damaged) or **no checksum on
+record** (see the AI Model screen's **No checksum**) instead of **not loaded**. Below the rows: a
+card line for chat and translation (what each is resident on the graphics card for, against its
+memory, shown only when both models are on this drive and can start; with only the chat model
+here, the line names chat alone), a second card line whenever the ranking model is also resident
+there, and a processor total (what loading everything on this drive at once would take from RAM;
+a model that is not on this drive, or that the app won't start, is not counted). **Your model**
+makes no fit claim for a chat model the app won't start either; its badge says why.
+Whenever two or more of chat, translation and the ranking model share the card at once, both lines
+carry a warning badge; the chat-and-translation line also spells out that whichever of the two
+loaded second got what was left over and runs slower, but only when chat and translation are
+themselves both on the card.
 
 **Observed while you worked.** Three rows fill in from ordinary use, with no separate check: your
 last finished chat answer, your last model start, and your last full file check. These are
@@ -508,7 +531,8 @@ your files.
    *"What are the termination rights in this contract?"*
 4. Each answer carries **▸ Sources (N)** — click it to see the cited files, with
    page/section and the exact passage each citation came from. If the documents don't
-   contain the answer, the app says so rather than guessing.
+   contain the answer, the app says so rather than guessing. A thank-you, a greeting or a
+   goodbye gets a short reply instead, which reads no documents and so has no sources.
    A short honesty line under the answer says how much it drew on — e.g. *"Based on sections:
    3 of 12"* — so you can tell an answer rested on a few passages, not the whole
    document. When the chat answers from **one** document that is short enough for the AI model
@@ -562,7 +586,7 @@ scanner's output) has no readable text, so the app tells you honestly: *"This PD
 like a scan — it has no readable text yet."* If your drive has the OCR files, the row
 offers a **Make searchable (OCR)** button right on the row. If it says the OCR files are
 *not on this drive*, the row offers **Download OCR files** instead: a short confirmation shows
-the files (German, English and the page-orientation data, about 8 MB together, Apache-2.0) and
+the files (German, English and the page-orientation data, about 8.6 MB together, Apache-2.0) and
 where they come from, and once they are downloaded and checked, text recognition starts working
 **without a restart** — the row then offers **Make searchable (OCR)**. (The same download is on
 the **AI Model** screen as *"Text recognition for scans and photos (optional)"*; on a drive that
@@ -572,7 +596,8 @@ drive policy and **Allow internet access…** must permit it. Without internet, 
 `prepare-drive --with-assets` or `fetch-runtime --family ocr` — see the Troubleshooting guide.)
 The pages are read **on this drive** (no cloud OCR — German and English are included), with
 per-page progress and a Cancel button; the last step reads *"Finishing — making the text
-searchable…"* while the recognized text is indexed. When it finishes, the document is a normal
+searchable…"* while the recognized text is indexed. Closing the window while the pages are read asks
+first (§12). When it finishes, the document is a normal
 searchable document; answers cite it **by page**, and **Preview** shows the recognized text per
 page with a *"Text recognized on this drive (OCR)"* note that counts the pages on which text was
 found — recognition is good on clean scans but can contain errors on blurry ones. **Sideways or
@@ -827,8 +852,11 @@ AI model anything, and nothing touches the network — it is you, the answer, an
 
 - The answer is split into **review items** (paragraphs, list entries, headings). For each one,
   record a decision: **Reviewed — supported / partly supported / not supported**, **Needs
-  follow-up**, **Not reviewed**, or **Not applicable** (headings start there). Add a note where
-  it helps. Everything **saves automatically** as you work.
+  follow-up**, **Not reviewed**, or **Not applicable** (headings start there). Add a note where it
+  helps. Everything **saves automatically** as you work, and closing or quitting the app saves the
+  latest changes first. If a change cannot be saved (for example because the drive is full or was
+  unplugged), the app asks before it closes: **Try again**, **Keep open**, or **Close anyway**,
+  which loses that change.
 - **Review one statement separately.** When a paragraph bundles several claims, choose
   **Review a passage separately** under it: the item's *original* text appears (plain, exactly
   as generated — without formatting), you highlight the passage — with the mouse or with
@@ -1170,7 +1198,8 @@ or **Delete** your own.
 - Built-in skills can be turned on or off but **not deleted**.
 - A skill may show a **"Needs newer app"** badge with its toggle greyed out — it was built for a newer
   version of HilbertRaum than the one you're running. Update the app to use it; until then it stays
-  listed but inactive (it can't be switched on, suggested, or run).
+  listed but inactive (it can't be switched on, suggested, or run). A built-in skill switches itself
+  on once you update; one you switched off yourself stays off.
 
 You choose when a skill is active; while it is, its **read-only** tools may run automatically to answer
 a question you ask, and anything that **writes or exports a file** always asks you to confirm first. As
@@ -1294,8 +1323,8 @@ is what disabled it.
 ### The Activity panel (what did the app do?)
 
 **Settings → Diagnostics (advanced) → Activity** shows a local record of what the app did and when — models
-started and stopped, downloads, document imports, workspace lock/unlock, and changes to
-privacy-relevant settings. Use the dropdown to focus on one kind of activity, **Show
+started and stopped, downloads (models, the AI engine and the OCR files), document imports,
+workspace lock/unlock, and changes to privacy-relevant settings. Use the dropdown to focus on one kind of activity, **Show
 earlier activity** to page back, and **Export to file…** to save the record.
 
 The record stays in your workspace (so it is encrypted whenever your workspace is) and is
@@ -1342,6 +1371,12 @@ passages) is tuned for English and German — see [known-limitations](known-limi
   again automatically.
 - Closing the app stops the local model and, for encrypted workspaces, re-locks and protects
   your data automatically.
+- If a scan is being read (**Make searchable (OCR)**) or a document is being translated, or one
+  of them is waiting to start, closing the window on Windows or Linux asks first. **Keep open**
+  (the default) lets it finish. **Close anyway** stops it, and it starts over from the beginning
+  when you run it again. Until you answer, the app stays open and your workspace stays unlocked.
+  Quitting with Ctrl+Q (Linux) or ⌘Q (macOS) and **Lock now** stop these tasks without asking. On
+  macOS, closing the window leaves the app running, so the task goes on.
 
 ### Change your password
 
@@ -1375,12 +1410,21 @@ show the *"scan and fix this drive?"* prompt on the next plug-in (harmless, but 
 **If the app is not quit cleanly:** pulling the drive while the app is running, a power cut or a
 forced kill of the app loses any changes made since the workspace last locked (the last
 **Lock now** or a normal quit). The workspace itself is not damaged — it reopens from that last
-locked point — but everything after it is gone, so quit the app first.
+locked point — but everything after it is gone, so quit the app first. The next start says so on
+the unlock screen. A quit on a drive that is almost full can end the same way: when there is no
+room left to lock the workspace, the quit cannot lock it, and the unlock screen then also asks you
+to free space. So when **Lock now** says it could not lock, free some space and lock again before
+you quit.
 
 **Shutting down, restarting or logging off with the app still open:** on Windows the app locks
-the workspace on its own as the session ends. That is a best-effort safety net — a very large
-workspace may not finish locking in the time Windows allows — so quitting the app first is
-still the sure way. On a Mac this is not yet verified: quit the app before you shut down.
+the workspace on its own as the session ends. On Linux it should do the same when you log out or
+shut down, or when the app is stopped with `kill` or Ctrl+C in a terminal: it locks the workspace
+and closes at once, without asking. This is checked with those signals and a lost session, not yet
+with a real desktop log-out. On Linux, a log-out with a very large workspace on a slow drive may
+not finish locking: lock first, or quit before you log out. Everywhere this is a best-effort
+safety net — a very large workspace may not finish locking in the time the system allows, and a
+change made in the last second is not kept — so quitting the app first is still the sure way. On
+a Mac this is not yet verified: quit the app before you shut down.
 
 **Performance remembers each computer separately** (§5a): plug the drive into a computer it has
 seen before and its hardware result comes back immediately, with nothing re-measured. On a

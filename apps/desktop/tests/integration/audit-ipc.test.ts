@@ -12,22 +12,15 @@ import { stringify } from 'yaml'
 // prove none of them was recorded. Plus the Activity surface: getAuditEvents paging and
 // the export-to-file action. CI stays zero-network (injected fake fetch) and zero-model.
 
-const ipcState = vi.hoisted(() => ({
-  handlers: new Map<string, unknown>(),
-  saveDialog: { canceled: true as boolean, filePath: undefined as string | undefined }
-}))
+const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: {
-    showSaveDialog: async () => ({
-      canceled: ipcState.saveDialog.canceled,
-      filePath: ipcState.saveDialog.filePath
-    })
-  },
+  dialog: { showSaveDialog: saveDialog.showSaveDialog },
   app: { getVersion: () => '0.0.0-test' }
 }))
 
@@ -77,6 +70,7 @@ import { START_READS } from '../helpers/chat-runtime-stub'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { bodyFetch } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -205,11 +199,7 @@ function makeHarness(): Harness {
     trustedSenders: ANY_SENDER,
     paths: { rootPath, workspacePath, configPath },
     db,
-    workspace: {
-      isUnlocked: () => true,
-      documentCipher: () => null,
-      beginDocumentWork: () => () => {}
-    },
+    workspace: workspaceStandIn(),
     runtime: {
       ...START_READS,
       active: () => runtime,
@@ -258,8 +248,7 @@ async function pollUntil(check: () => Promise<boolean>, what: string): Promise<v
 
 beforeEach(() => {
   ipcState.handlers.clear()
-  ipcState.saveDialog.canceled = true
-  ipcState.saveDialog.filePath = undefined
+  saveDialog.reset()
   inFlightStreams.clear()
 })
 
@@ -274,6 +263,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     }
     // Phase 33/34: the document task engine, wired exactly like main/index.ts does it.
     ctx.docTasks = new DocTaskManager({
+      isWorkspaceLocking: () => false,
       getDb: () => ctx.db,
       getRuntime: () => ctx.runtime.active(),
       // TG-3: translation runs on the sidecar seam. The echo translator plays the old
@@ -312,19 +302,21 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       })
     )
 
-    // -- settings: a privacy-relevant key + a sentinel value on a NON-privacy key.
+    // -- settings: a privacy-relevant key + a sentinel value on a NON-privacy key. `skillInfoSeen` is
+    // the one renderer-writable free-text key (#868: a main-owned key such as `gpuLastError` is dropped
+    // before the audit sweep, so its value could not reach the events anyway).
     await invoke(handlers, IPC.updateSettings, {
       allowNetwork: true,
-      gpuLastError: SETTING_SENTINEL
+      skillInfoSeen: [SETTING_SENTINEL]
     })
+    expect(getSettings(ctx.db).skillInfoSeen).toContain(SETTING_SENTINEL) // the save really carried it
 
     // -- chat: sentinel content streams through the real chat path, then export+delete.
     const { result: convRaw } = await invoke(handlers, IPC.createConversation, {})
     const conv = convRaw as Conversation
     const { result: replyRaw } = await invoke(handlers, IPC.sendChatMessage, conv.id, CHAT_SENTINEL)
     expect((replyRaw as Message).content).toContain(CHAT_SENTINEL) // the flow really carried it
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = join(rootPath, 'transcript.md')
+    saveDialog.result = { canceled: false, filePath: join(rootPath, 'transcript.md') }
     await invoke(handlers, IPC.exportConversation, conv.id)
     // -- #286: save a fenced code block of the reply through the real handler. The bytes are
     // renderer-supplied: the block text AND the fence info string are model output, the
@@ -332,8 +324,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     // runtime_events, and the metadata pin further down proves the event carries
     // { messageId, bytes, extension } only.
     const reply = replyRaw as Message
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = join(rootPath, `${CODE_EXPORT_PATH_SENTINEL}.py`)
+    saveDialog.result = { canceled: false, filePath: join(rootPath, `${CODE_EXPORT_PATH_SENTINEL}.py`) }
     const { result: codeBlockPath } = await invoke(
       handlers,
       IPC.saveCodeBlock,
@@ -365,8 +356,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     // sentinel-named destination and the sentinel filename/title are both user-private:
     // the sweep below proves neither reached runtime_events, and the metadata pin further
     // down proves `document_exported` carries the documentId ONLY.
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = join(rootPath, `${DOC_EXPORT_PATH_SENTINEL}.txt`)
+    saveDialog.result = { canceled: false, filePath: join(rootPath, `${DOC_EXPORT_PATH_SENTINEL}.txt`) }
     const { result: originalExportPath } = await invoke(
       handlers,
       IPC.exportDocumentOriginal,
@@ -422,8 +412,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     const { result: docs2Raw } = await invoke(handlers, IPC.listDocuments)
     const translated = (docs2Raw as DocumentInfo[]).find((d) => d.id === translatedId)
     expect(translated?.origin).toMatchObject({ kind: 'translation', sourceDocumentIds: [documentId] })
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = join(rootPath, 'translated-export.md')
+    saveDialog.result = { canceled: false, filePath: join(rootPath, 'translated-export.md') }
     await invoke(handlers, IPC.exportDocument, translatedId)
     // …the exported file really carries the sentinel (the echo runtime echoes the
     // window prompt, which contains the document text)…
@@ -461,8 +450,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     const { result: docs3Raw } = await invoke(handlers, IPC.listDocuments)
     const compared = (docs3Raw as DocumentInfo[]).find((d) => d.id === comparedId)
     expect(compared?.origin).toMatchObject({ kind: 'compare', sourceDocumentIds: [documentId, documentIdB] })
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = join(rootPath, 'comparison-export.md')
+    saveDialog.result = { canceled: false, filePath: join(rootPath, 'comparison-export.md') }
     await invoke(handlers, IPC.exportDocument, comparedId)
     const comparisonText = readFileSync(join(rootPath, 'comparison-export.md'), 'utf8')
     expect(comparisonText).toContain(DOC_SENTINEL)
@@ -570,18 +558,15 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     // EP-1 Phase 3: export the (ready) review to a destination whose PATH is a sentinel —
     // the pack file itself may carry review content (it is the user's chosen export), but
     // the audit event must record {reviewId, format} and NOTHING else.
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = join(rootPath, `${REVIEW_EXPORT_PATH_SENTINEL}.html`)
+    saveDialog.result = { canceled: false, filePath: join(rootPath, `${REVIEW_EXPORT_PATH_SENTINEL}.html`) }
     const { result: packRecordRaw } = await invoke(handlers, IPC.exportEvidencePack, review.id, {})
     expect(packRecordRaw).not.toBeNull()
-    ipcState.saveDialog.canceled = true
-    ipcState.saveDialog.filePath = undefined
+    saveDialog.result = { canceled: true }
     const packExportEvent = listAuditEvents(db, { limit: 5000 }).find(
       (e) => e.type === 'evidence_pack_exported'
     )
     expect(packExportEvent?.message).toBe('Evidence pack exported')
     expect(packExportEvent?.metadata).toEqual({ reviewId: review.id, format: 'html' })
-    await invoke(handlers, IPC.deleteEvidenceReview, review.id)
 
     // -- models + runtime: select, verify, start (mock fallback), stop.
     await invoke(handlers, IPC.selectModel, 'test-model-q4')
@@ -622,10 +607,10 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'documents_added_to_collection',
       'documents_removed_from_collection',
       'document_lifecycle_changed',
-      // EP-1 lifecycle events (Phase 1) + the pack-export event (Phase 3).
+      // EP-1 lifecycle events (Phase 1) + the pack-export event (Phase 3). `evidence_review_deleted` has no emitter
+      // since #840 removed the `evidence:delete` channel (no review-delete in the app, B-03); its label stays for old rows.
       'evidence_review_created',
       'evidence_review_ready',
-      'evidence_review_deleted',
       'evidence_pack_exported',
       'code_block_exported'
     ]) {
@@ -685,8 +670,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
 
     // S1: the plaintext activity-log.json export (the exfiltration amplifier) carries no
     // sentinel either — drive the REAL exportAuditLog handler and grep the written file.
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = join(rootPath, 'activity-log.json')
+    saveDialog.result = { canceled: false, filePath: join(rootPath, 'activity-log.json') }
     const { result: auditExportPath } = await invoke(handlers, IPC.exportAuditLog)
     expect(auditExportPath).toBeTruthy()
     const exportedLog = readFileSync(join(rootPath, 'activity-log.json'), 'utf8')
@@ -832,8 +816,7 @@ describe('the Activity surface (getAuditEvents + exportAuditLog)', () => {
     expect(cancelled).toBeNull()
 
     const outPath = join(rootPath, 'activity-log.json')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = outPath
+    saveDialog.result = { canceled: false, filePath: outPath }
     const { result: saved } = await invoke(handlers, IPC.exportAuditLog)
     expect(saved).toBe(outPath)
     const exported = JSON.parse(readFileSync(outPath, 'utf8')) as AuditEvent[]

@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest'
-import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { EventEmitter, once } from 'node:events'
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import {
   createWhisperCliTranscriber,
@@ -12,6 +12,7 @@ import {
   whisperCliDir
 } from '../../src/main/services/transcriber'
 import { AUDIO_DECODE_ERROR_PREFIX, VAD_SPEECH_PAD_MS } from '../../src/main/services/transcriber/cli'
+import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 import {
   EngineCannotRunError,
   engineProblemFor,
@@ -24,7 +25,53 @@ import {
   registeredSidecarPids
 } from '../../src/main/services/runtime/sidecar'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
-import { within } from '../helpers/hang-budget'
+import type { ModelStartVerdict } from '../../src/main/services/models'
+import { until, within } from '../helpers/hang-budget'
+
+// #869 review: a pass-through `node:fs` whose `createReadStream`, once armed, hands the transcriber's
+// copy a source that sends one chunk and then stalls — a copy still being written, so a stop(),
+// suspend(), cancel or engine swap can land in it deterministically. Fault injection, not a wait;
+// every other call (and an unarmed copy) is the real one.
+const stalledCopy = vi.hoisted(() => ({
+  armed: false,
+  source: null as null | { push(chunk: Buffer | null): boolean },
+  /** The copy's own write stream, so a row can wait for its handle to close. */
+  writer: null as null | NodeJS.EventEmitter
+}))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const { Readable } = await import('node:stream')
+  const createReadStream = ((...args: Parameters<typeof actual.createReadStream>) => {
+    if (!stalledCopy.armed) return actual.createReadStream(...args)
+    const source = new Readable({ read() {} })
+    source.push(Buffer.from('PARTIAL-AUDIO'))
+    stalledCopy.source = source
+    return source
+  }) as typeof actual.createReadStream
+  const createWriteStream = ((...args: Parameters<typeof actual.createWriteStream>) => {
+    const writer = actual.createWriteStream(...args)
+    if (stalledCopy.armed) stalledCopy.writer = writer
+    return writer
+  }) as typeof actual.createWriteStream
+  const mocked = { ...actual, createReadStream, createWriteStream }
+  return { ...mocked, default: mocked }
+})
+
+// #869 review: the pre-spawn binary hash, observed (each call logs 'hash' into `events`) and, once
+// `hold` is set, held — so a row can see WHEN it runs relative to the copy and an engine swap, and
+// land a suspend() inside it. Pass-through otherwise (the verifier is inert in the unit suite).
+const hashProbe = vi.hoisted(() => ({ events: [] as string[], hold: null as null | Promise<void> }))
+vi.mock('../../src/main/services/binary-verifier', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/services/binary-verifier')>()
+  return {
+    ...actual,
+    verifyBinaryBeforeSpawn: async (binPath: string) => {
+      hashProbe.events.push('hash')
+      if (hashProbe.hold) await hashProbe.hold
+      return actual.verifyBinaryBeforeSpawn(binPath)
+    }
+  }
+})
 
 // Phase 36 — the whisper-cli path resolver and the CLI backend driven by a FAKE spawn (CI is zero-binary:
 // no real process, no real audio). The selector itself runs over a real temp drive in compose-transcriber.test.ts.
@@ -114,6 +161,17 @@ function makeStubbornChild(diesOn: ReadonlyArray<NodeJS.Signals>): StubbornChild
   return child
 }
 
+/**
+ * Where whisper-cli writes its transcript: `<-of>.json`, a relative `-of` resolved against the CHILD's
+ * working directory (#869), as the OS does for the real program. Null when a relative `-of` came
+ * with no `cwd`: the real child would write into the app's own folder, so the fake writes nothing.
+ */
+function transcriptPathOf(args: string[], o: SpawnOptions | undefined): string | null {
+  const outBase = args[args.indexOf('-of') + 1]
+  if (isAbsolute(outBase)) return `${outBase}.json`
+  return typeof o?.cwd === 'string' ? resolve(o.cwd, `${outBase}.json`) : null
+}
+
 /** A transcriber whose spawn records argv + options, then (next macrotask) writes `json` (if given) to the
  *  `-of` path, emits `stderrText` and closes with (exitCode, signal) — or emits `error` instead, or (`thrown`)
  *  throws it from the spawn call itself, as Node does for codes outside its async list (#658). */
@@ -127,23 +185,33 @@ function fakeCliTranscriber(opts: {
   /** #790: after `error`, an ENOTCONN on both piped streams, as a spawn that failed before its pipes
    *  were open emits; whatever such an emit throws (an unhandled stream error) is collected here. */
   pipeErrorsThrown?: unknown[]
+  modelPath?: string
   vadModelPath?: string
   platform?: NodeJS.Platform
+  /** #869: runs at spawn time, while the child "runs" — what the child would find on disk. */
+  onSpawn?: (args: string[], o: SpawnOptions) => void
+  /** The child runs until it is killed (no close of its own). */
+  hold?: boolean
+  /** #913: the voice model's start check. */
+  checkModel?: (signal?: AbortSignal) => Promise<ModelStartVerdict>
 }): { transcriber: ReturnType<typeof createWhisperCliTranscriber>; spawned: string[][]; spawnOptions: SpawnOptions[] } {
   const spawned: string[][] = []
   const spawnOptions: SpawnOptions[] = []
   const transcriber = createWhisperCliTranscriber({
     id: 'whisper-small-multilingual',
     binPath: 'C:/fake/whisper-cli.exe',
-    modelPath: 'C:/fake/ggml-small.bin',
+    modelPath: opts.modelPath ?? 'C:/fake/ggml-small.bin',
     vadModelPath: opts.vadModelPath,
     platform: opts.platform,
     threads: 4,
+    checkModel: opts.checkModel,
     spawnImpl: (_cmd: string, args: string[], o: SpawnOptions): ChildProcess => {
       spawned.push(args)
       spawnOptions.push(o)
       if (opts.thrown) throw opts.thrown
+      opts.onSpawn?.(args, o)
       const child = makeFakeChild()
+      if (opts.hold) return child as unknown as ChildProcess
       setImmediate(() => {
         if (opts.error) {
           child.emit('error', opts.error)
@@ -156,9 +224,9 @@ function fakeCliTranscriber(opts: {
           }
           return
         }
-        const outBase = args[args.indexOf('-of') + 1]
+        const outJson = transcriptPathOf(args, o)
         if (opts.stderrText) child.stderr.emit('data', Buffer.from(opts.stderrText))
-        if (opts.json !== undefined) writeFileSync(`${outBase}.json`, JSON.stringify(opts.json))
+        if (opts.json !== undefined && outJson) writeFileSync(outJson, JSON.stringify(opts.json))
         if (!child.killed) child.emit('close', opts.signal ? null : (opts.exitCode ?? 0), opts.signal ?? null)
       })
       return child as unknown as ChildProcess
@@ -190,7 +258,8 @@ describe('WhisperCliTranscriber — Silero VAD for dictation (#504)', () => {
     await transcriber.transcribe('C:/audio/dictation.wav', { workDir, vad: true })
     const args = spawned[0]
     expect(args).toContain('--vad')
-    expect(args[args.indexOf('-vm') + 1]).toBe(VAD)
+    // #869: absolute, resolved before the child starts in the documents folder (an ASCII path here).
+    expect(args[args.indexOf('-vm') + 1]).toBe(resolve(VAD))
     expect(args[args.indexOf('-vp') + 1]).toBe(String(VAD_SPEECH_PAD_MS))
     expect(VAD_SPEECH_PAD_MS).toBe(200) // the 2026-09-21 calibration: keeps "Guten" at −40 dB
   })
@@ -238,25 +307,25 @@ describe('vadModelPathOf (#504)', () => {
 describe('WhisperCliTranscriber (fake spawn)', () => {
   it('parses the -oj JSON into ordered ms segments and shreds the transient', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-work-'))
-    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })
+    const { transcriber, spawned, spawnOptions } = fakeCliTranscriber({ json: WHISPER_JSON })
     const segments = await transcriber.transcribe('C:/audio/meeting.mp3', { workDir })
     expect(segments).toEqual([
       { startMs: 0, endMs: 5920, text: 'Abschnitt drei der Erzählungen.' },
       { startMs: 5920, endMs: 8440, text: 'Dies ist eine Aufnahme.' }
     ])
-    // CLI contract: model, file, auto language, threads, progress, JSON out.
+    // CLI contract: model, file, auto language, threads, progress, JSON out. #869: a path outside
+    // the documents folder goes absolute (ASCII here), resolved before the child changes folder.
     const args = spawned[0]
-    expect(args[args.indexOf('-m') + 1]).toBe('C:/fake/ggml-small.bin')
-    expect(args[args.indexOf('-f') + 1]).toBe('C:/audio/meeting.mp3')
+    expect(args[args.indexOf('-m') + 1]).toBe(resolve('C:/fake/ggml-small.bin'))
+    expect(args[args.indexOf('-f') + 1]).toBe(resolve('C:/audio/meeting.mp3'))
     expect(args[args.indexOf('-l') + 1]).toBe('auto')
     expect(args).toContain('-pp')
     expect(args).toContain('-oj')
-    // The transcript JSON is CONTENT: the transient carries the crash-sweep `.parse`
-    // infix inside workDir and is gone after the call.
+    // The transcript JSON is CONTENT: the transient carries the crash-sweep `.parse` infix inside
+    // workDir — the child's working directory, so `-of` is its bare name (#869) — and is gone after.
     const outBase = args[args.indexOf('-of') + 1]
-    expect(outBase.startsWith(workDir)).toBe(true)
-    expect(outBase).toContain('.parse')
-    expect(existsSync(`${outBase}.json`)).toBe(false)
+    expect(spawnOptions[0]?.cwd).toBe(resolve(workDir))
+    expect(outBase).toMatch(/^[0-9a-f-]{36}\.parse-transcript$/)
     expect(readdirSync(workDir)).toEqual([])
   })
 
@@ -271,13 +340,13 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
       id: 'whisper-small-multilingual',
       binPath: 'C:/fake/whisper-cli.exe',
       modelPath: 'C:/fake/ggml-small.bin',
-      spawnImpl: (_cmd, args, _o): ChildProcess => {
+      spawnImpl: (_cmd, args, o): ChildProcess => {
         const child = makeFakeChild() as FakeChild & { pid: number }
         child.pid = 7777
         setImmediate(() => {
           observedDuringRun = registeredSidecarPids()
-          const outBase = args[args.indexOf('-of') + 1]
-          writeFileSync(`${outBase}.json`, JSON.stringify(WHISPER_JSON))
+          const outJson = transcriptPathOf(args, o)
+          if (outJson) writeFileSync(outJson, JSON.stringify(WHISPER_JSON))
           child.emit('close', 0, null)
         })
         return child as unknown as ChildProcess
@@ -323,11 +392,10 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
       id: 't',
       binPath: 'C:/fake/whisper-cli.exe',
       modelPath: 'C:/fake/m.bin',
-      spawnImpl: (_cmd: string, args: string[]): ChildProcess => {
+      spawnImpl: (_cmd: string, args: string[], o: SpawnOptions): ChildProcess => {
         const child = makeFakeChild()
-        const outBase = args[args.indexOf('-of') + 1]
-        outJson = `${outBase}.json`
-        writeFileSync(outJson, JSON.stringify(WHISPER_JSON)) // transcript content on disk
+        outJson = transcriptPathOf(args, o) ?? ''
+        if (outJson) writeFileSync(outJson, JSON.stringify(WHISPER_JSON)) // transcript content on disk
         return child as unknown as ChildProcess
       }
     })
@@ -448,11 +516,11 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
       binPath: 'C:/fake/whisper-cli.exe',
       modelPath: 'C:/fake/m.bin',
       killGraceMs: 20, // SIGTERM grace dialled down (prod default 2 s)
-      spawnImpl: (_cmd: string, args: string[]): ChildProcess => {
+      spawnImpl: (_cmd: string, args: string[], o: SpawnOptions): ChildProcess => {
         const child = makeStubbornChild(['SIGKILL']) // ignores SIGTERM, dies only on SIGKILL
         held = child
-        outJson = `${args[args.indexOf('-of') + 1]}.json`
-        writeFileSync(outJson, JSON.stringify(WHISPER_JSON)) // transcript content on disk
+        outJson = transcriptPathOf(args, o) ?? ''
+        if (outJson) writeFileSync(outJson, JSON.stringify(WHISPER_JSON)) // transcript content on disk
         return child as unknown as ChildProcess
       }
     })
@@ -534,6 +602,51 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
   })
 })
 
+// #913: the voice model's start check runs before each spawn, ahead of the engine gate and the binary check. Under
+// G-4 (d2) the composition passes the hashing check (a damaged model writes wrong transcripts into the index), so a
+// lock or quit during that hash must end the call before anything spawns.
+describe('WhisperCliTranscriber — the start check (#913)', () => {
+  it('a model the check finds damaged spawns nothing and hashes no binary; the next call checks again', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-check-'))
+    let verdict: ModelStartVerdict = 'damaged'
+    const checkModel = vi.fn(async (_signal?: AbortSignal) => verdict)
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON, checkModel })
+    hashProbe.events.length = 0
+    await expect(transcriber.transcribe('a.mp3', { workDir })).rejects.toThrow(/failed its file check/)
+    expect(spawned).toHaveLength(0)
+    expect(hashProbe.events).toEqual([]) // refused before the binary check, too
+    expect(checkModel.mock.calls[0][0]).toBeInstanceOf(AbortSignal)
+    // No latch: a re-download primes the cache, and the next transcription checks again.
+    verdict = 'ok'
+    expect(await transcriber.transcribe('a.mp3', { workDir })).toHaveLength(2)
+    expect(checkModel).toHaveBeenCalledTimes(2)
+    expect(spawned).toHaveLength(1)
+  })
+
+  it.each<[string, (t: { suspend(): Promise<void>; stop(): Promise<void> }, c: AbortController) => unknown]>([
+    ['a lock (suspend)', (t) => t.suspend()],
+    ['a quit (stop)', (t) => t.stop()],
+    ['a cancel', (_t, c) => c.abort()]
+  ])('%s during the hash aborts it, and the call spawns nothing (G-4 d2)', async (_label, end) => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-check-'))
+    // A hash under way: it settles only when its signal aborts, as the real read does.
+    const checkModel = vi.fn(
+      (signal?: AbortSignal) =>
+        new Promise<ModelStartVerdict>((_resolve, reject) =>
+          signal?.addEventListener('abort', () => reject(new Error('Hashing was cancelled')), { once: true })
+        )
+    )
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON, checkModel })
+    const controller = new AbortController()
+    const call = transcriber.transcribe('a.mp3', { workDir, signal: controller.signal })
+    await until(() => checkModel.mock.calls.length > 0, 'the call reaching its start check')
+    await within(Promise.resolve(end(transcriber, controller)), 'the teardown settling while the call hashed')
+    await expect(within(call, 'the call ending after its hash was aborted')).rejects.toThrow(/cancelled/)
+    expect(spawned).toHaveLength(0)
+    expect(readdirSync(workDir)).toEqual([])
+  })
+})
+
 // #530: a whisper-cli the OS loader refuses is classified (typed, path-free error + session verdict);
 // every other failure keeps its old message.
 describe('WhisperCliTranscriber — OS loader refusal (#530)', () => {
@@ -608,9 +721,250 @@ describe('WhisperCliTranscriber — OS loader refusal (#530)', () => {
     expect(engineProblemFor('whisper_cpp')).toBeNull()
   })
 
-  it('spawns with windowsHide: true', async () => {
+  // #869: and in the documents folder, every platform — the folder its bare-name arguments resolve in.
+  it('spawns with windowsHide: true, in the documents folder', async () => {
+    const dir = workDir()
     const { transcriber, spawnOptions } = fakeCliTranscriber({ stderrText: LOADER_LINE, exitCode: 127 })
-    await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch(() => undefined)
+    await transcriber.transcribe('a.mp3', { workDir: dir }).catch(() => undefined)
     expect(spawnOptions[0]?.windowsHide).toBe(true)
+    expect(spawnOptions[0]?.cwd).toBe(resolve(dir))
+  })
+})
+
+// #869: the pinned whisper-cli reads its command line through the Windows ANSI code page, so the
+// child starts in the documents folder and gets ASCII spellings from there (the pure planner's rows
+// are in transcriber-argv.test.ts). These rows cover what the transcriber does around the spawn: the
+// working directory, the transcript read back under a non-ASCII root, the transient copy of an
+// original that has no ASCII spelling, and the refusal of a model that has none.
+describe('WhisperCliTranscriber — non-ASCII paths on Windows (#869)', () => {
+  /** An ASCII temp root (Node 24.13's rmSync skips a non-ASCII one), with non-ASCII folders inside it. */
+  const scratch = (): string => mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-869-'))
+
+  it('reads the transcript back from the documents folder of a non-ASCII root, the stored file by its bare name', async () => {
+    const docs = join(scratch(), 'Jörg äöü', 'workspace', 'documents')
+    mkdirSync(docs, { recursive: true })
+    writeFileSync(join(docs, 'doc-1.mp3'), 'AUDIO')
+    const { transcriber, spawned, spawnOptions } = fakeCliTranscriber({ json: WHISPER_JSON })
+    const segments = await transcriber.transcribe(join(docs, 'doc-1.mp3'), { workDir: docs })
+    expect(segments.map((s) => s.text)).toEqual(['Abschnitt drei der Erzählungen.', 'Dies ist eine Aufnahme.'])
+    expect(spawnOptions[0]?.cwd).toBe(resolve(docs))
+    expect(spawned[0][spawned[0].indexOf('-f') + 1]).toBe('doc-1.mp3')
+    // Not asserted here: that the transcript is gone. Node 24.13's `rmSync` silently skips a path
+    // with a non-ASCII character (measured 2026-11-18; Electron 43.8.6's Node 24.22.1 removes it),
+    // so the shred would fail on such a test runtime for a reason that is not the app's. The rows
+    // below and above prove the shred in an ASCII folder.
+  })
+
+  // A dev run's relative drive root (or `HILBERTRAUM_WHISPER_BIN`): the child starts elsewhere, so a
+  // relative command or model would be looked up from the documents folder — the #787 trap.
+  it('hands the child the command and the models resolved from the app folder, not from its own', async () => {
+    const docs = scratch()
+    const spawnedAs: string[] = []
+    const transcriber = createWhisperCliTranscriber({
+      id: 't',
+      binPath: join('drive', 'runtime', 'whisper-cli'),
+      modelPath: join('drive', 'models', 'ggml-small.bin'),
+      vadModelPath: join('drive', 'models', 'ggml-silero-v5.1.2.bin'),
+      spawnImpl: (cmd: string, args: string[], o: SpawnOptions): ChildProcess => {
+        spawnedAs.push(cmd, args[args.indexOf('-m') + 1], args[args.indexOf('-vm') + 1])
+        const child = makeFakeChild()
+        setImmediate(() => {
+          const outJson = transcriptPathOf(args, o)
+          if (outJson) writeFileSync(outJson, JSON.stringify(WHISPER_JSON))
+          child.emit('close', 0, null)
+        })
+        return child as unknown as ChildProcess
+      }
+    })
+    await transcriber.transcribe(join(docs, 'a.wav'), { workDir: docs, vad: true })
+    expect(spawnedAs).toEqual([
+      resolve('drive', 'runtime', 'whisper-cli'),
+      resolve('drive', 'models', 'ggml-small.bin'),
+      resolve('drive', 'models', 'ggml-silero-v5.1.2.bin')
+    ])
+  })
+
+  // An encrypted first import parses the user's ORIGINAL file wherever it is (`ingestion/index.ts`).
+  // With no ASCII spelling from the documents folder it is copied there under an ASCII `.parse` name
+  // (the startup crash sweep covers it) for exactly as long as the child runs. `platform: 'win32'`
+  // picks the Windows plan on every host; the copy itself is the same code everywhere.
+  it.each<[string, { exitCode?: number; stderrText?: string; json?: unknown; hold?: boolean }, 'resolves' | 'rejects', 'abort' | 'suspend' | null]>([
+    ['a transcription that succeeds', { json: WHISPER_JSON }, 'resolves', null],
+    ['a transcription that fails', { exitCode: 3, stderrText: 'error: failed to initialize whisper context' }, 'rejects', null],
+    ['a cancelled transcription', { hold: true }, 'rejects', 'abort'],
+    ['a transcription stopped by suspend() (lock)', { hold: true }, 'rejects', 'suspend']
+  ])('copies an original with no ASCII spelling in for the run and shreds it after %s', async (_label, child, outcome, end) => {
+    const root = scratch()
+    const docs = join(root, 'workspace', 'documents')
+    const origin = join(root, 'Jörg', 'Music', 'Sitzung März.mp3')
+    mkdirSync(docs, { recursive: true })
+    mkdirSync(join(root, 'Jörg', 'Music'), { recursive: true })
+    writeFileSync(origin, 'ORIGINAL-AUDIO-BYTES')
+    const seenByChild: Array<{ file: string; bytes: string | null }> = []
+    const { transcriber } = fakeCliTranscriber({
+      ...child,
+      platform: 'win32',
+      onSpawn: (args, o) => {
+        const file = args[args.indexOf('-f') + 1]
+        const copy = resolve(String(o.cwd), file)
+        seenByChild.push({ file, bytes: existsSync(copy) ? readFileSync(copy, 'utf8') : null })
+      }
+    })
+    const controller = new AbortController()
+    const call = transcriber.transcribe(origin, { workDir: docs, signal: controller.signal })
+    if (end) {
+      await until(() => seenByChild.length > 0, 'the child starting') // it "runs" until killed
+      if (end === 'abort') controller.abort()
+      else await transcriber.suspend() // must not return before the copy is shredded (L5)
+      if (end === 'suspend') expect(readdirSync(docs)).toEqual([])
+    }
+    if (outcome === 'resolves') await expect(call).resolves.toHaveLength(2)
+    else await expect(within(call, 'the transcription settling')).rejects.toThrow()
+    expect(seenByChild).toEqual([{ file: expect.stringMatching(/^[0-9a-f-]{36}\.parse-audio\.mp3$/), bytes: 'ORIGINAL-AUDIO-BYTES' }])
+    expect(readdirSync(docs)).toEqual([]) // the copy and the transcript are shredded
+    expect(readFileSync(origin, 'utf8')).toBe('ORIGINAL-AUDIO-BYTES') // the original is never touched
+  })
+
+  // The copy is the call's work before a child exists, so a quit's stop(), a lock's or an engine
+  // update's suspend() and a cancel each reach it as they reach a running child: the copy is aborted,
+  // nothing is spawned, and the partial copy is shredded before stop()/suspend() return. An engine
+  // update suspends WITHOUT aborting the import's signal (`registerEngineIpc` pauseEngineUsers).
+  describe('a copy still being written', () => {
+    afterEach(() => {
+      stalledCopy.armed = false
+      stalledCopy.source = null
+      stalledCopy.writer = null
+      hashProbe.events.length = 0
+      hashProbe.hold = null
+    })
+
+    /** Start a transcription of an original that is copied in (its child "runs" until killed). With
+     *  `stall` (the default) the copy stops after its first chunk and this resolves once that chunk is
+     *  on disk; without it the copy completes on its own and this resolves at once. */
+    async function copyInFlight(stall = true): Promise<{
+      docs: string
+      call: Promise<unknown>
+      controller: AbortController
+      spawned: string[][]
+      transcriber: ReturnType<typeof createWhisperCliTranscriber>
+    }> {
+      const root = scratch()
+      const docs = join(root, 'workspace', 'documents')
+      mkdirSync(docs, { recursive: true })
+      mkdirSync(join(root, 'Олена'), { recursive: true })
+      const origin = join(root, 'Олена', 'Sitzung März.wav')
+      writeFileSync(origin, 'ORIGINAL-AUDIO-BYTES')
+      const { transcriber, spawned } = fakeCliTranscriber({
+        json: WHISPER_JSON,
+        platform: 'win32',
+        hold: true,
+        onSpawn: () => hashProbe.events.push('spawn')
+      })
+      const controller = new AbortController()
+      stalledCopy.armed = stall
+      const call = transcriber.transcribe(origin, { workDir: docs, signal: controller.signal })
+      call.catch(() => undefined) // settled by each row
+      if (stall) {
+        await until(
+          () => readdirSync(docs).some((f) => f.includes('.parse-audio') && readFileSync(join(docs, f), 'utf8') === 'PARTIAL-AUDIO'),
+          'the copy writing its first chunk'
+        )
+      }
+      return { docs, call, controller, spawned, transcriber }
+    }
+
+    it.each<[string, (t: ReturnType<typeof createWhisperCliTranscriber>, c: AbortController) => Promise<void> | void]>([
+      ['stop() (quit)', (t) => t.stop()],
+      ['suspend() (lock, engine update)', (t) => t.suspend()]
+    ])('%s aborts it, spawns nothing, and returns only once the partial copy is shredded', async (_label, end) => {
+      const { docs, call, spawned, transcriber, controller } = await copyInFlight()
+      await within(Promise.resolve(end(transcriber, controller)), 'stop()/suspend() returning')
+      expect(readdirSync(docs)).toEqual([]) // shredded BEFORE it returned
+      await expect(within(call, 'the transcription settling')).rejects.toThrow('Transcription was cancelled.')
+      expect(spawned).toHaveLength(0)
+    })
+
+    it('a cancel aborts it and spawns nothing', async () => {
+      const { docs, call, spawned, controller } = await copyInFlight()
+      controller.abort()
+      await expect(within(call, 'the transcription settling')).rejects.toThrow('Transcription was cancelled.')
+      expect(spawned).toHaveLength(0)
+      expect(readdirSync(docs)).toEqual([])
+    })
+
+    // #516 + vuln-scan B, the order that matters: the copy comes FIRST, then the spawn gate, the binary
+    // hash and the spawn, in that order and with nothing between the hash and the spawn. An engine
+    // install that starts its swap during a long copy therefore holds the spawn, and the binary is
+    // hashed only after the swap — the one that will run, never the one replaced under the copy.
+    it('an engine swap that begins during it holds the spawn, and the binary is hashed after the swap', async () => {
+      const { spawned, transcriber } = await copyInFlight()
+      const release = holdEngineSpawns('whisper_cpp')
+      try {
+        const closed = once(stalledCopy.writer!, 'close')
+        stalledCopy.source!.push(null) // the copy completes while the swap runs
+        await within(closed, 'the copy closing')
+        await new Promise((r) => setImmediate(r)) // every continuation of the finished copy has run
+        expect(spawned).toHaveLength(0)
+      } finally {
+        hashProbe.events.push('swap over')
+        release()
+      }
+      await until(() => spawned.length === 1, 'the spawn after the swap')
+      expect(hashProbe.events).toEqual(['swap over', 'hash', 'spawn'])
+      await transcriber.stop() // the held child
+    })
+
+    // A suspend() (or stop()) landing during the binary hash — after the copy, before the spawn — is
+    // seen too: the finished copy is shredded before it returns, and no child starts afterwards.
+    it('a suspend() during the binary hash returns at once, the copy shredded, and starts nothing', async () => {
+      let hashDone: () => void = () => undefined
+      hashProbe.hold = new Promise<void>((r) => (hashDone = r))
+      const { docs, call, spawned, transcriber } = await copyInFlight(false)
+      try {
+        await until(() => hashProbe.events.includes('hash'), 'the hash starting')
+        await within(transcriber.suspend(), 'suspend() returning during the hash')
+        expect(readdirSync(docs)).toEqual([])
+      } finally {
+        hashDone()
+      }
+      await expect(within(call, 'the transcription settling')).rejects.toThrow('Transcription was cancelled.')
+      expect(spawned).toHaveLength(0)
+    })
+
+    // The engine update's own suspend() then lands while the finished copy waits at that gate: it must
+    // not wait for the gate (the swap waits for it), and nothing may start after the swap.
+    it('a suspend() while the finished copy waits at the gate returns at once and starts nothing', async () => {
+      const { docs, call, spawned, transcriber } = await copyInFlight()
+      const release = holdEngineSpawns('whisper_cpp')
+      try {
+        const closed = once(stalledCopy.writer!, 'close')
+        stalledCopy.source!.push(null)
+        await within(closed, 'the copy closing')
+        await new Promise((r) => setImmediate(r)) // parked at the gate
+        await within(transcriber.suspend(), 'suspend() returning while the gate is held')
+        expect(readdirSync(docs)).toEqual([])
+      } finally {
+        release()
+      }
+      await expect(within(call, 'the transcription settling')).rejects.toThrow('Transcription was cancelled.')
+      expect(spawned).toHaveLength(0)
+    })
+  })
+
+  // Only a user's own manifest can give a model a path with a non-ASCII character; copying gigabytes
+  // per call is no option, so the call is refused, typed, before anything is spawned or written.
+  it('refuses a model with no ASCII spelling before it spawns or writes anything', async () => {
+    const docs = scratch()
+    const { transcriber, spawned } = fakeCliTranscriber({
+      json: WHISPER_JSON,
+      platform: 'win32',
+      modelPath: join(tmpdir(), 'models', 'ggml-small-für-mich.bin')
+    })
+    const err = await transcriber.transcribe(join(docs, 'a.wav'), { workDir: docs }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(WhisperPathError)
+    expect(err).toMatchObject({ arg: '-m' })
+    expect((err as Error).message).not.toContain('für-mich') // path-free
+    expect(spawned).toHaveLength(0)
+    expect(readdirSync(docs)).toEqual([])
   })
 })

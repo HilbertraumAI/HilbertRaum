@@ -15,10 +15,13 @@ import {
 import { ToastProvider } from '../../src/renderer/components'
 import { startTask, clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import type { AppStatus, Collection, DocTaskStatus, DocumentInfo } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 import { hangBudgetMs } from '../helpers/hang-budget'
-import { appStatus as appStatusFixture } from '../helpers/status'
+import { appStatus as appStatusFixture, makePolicyStatus } from '../helpers/status'
+import { NO_OCR_SOURCES } from '../helpers/model-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
+import { PROJECT_ORDER_CASES, inLanguageOrder } from '../helpers/project-order-fixtures'
 
 // PERF-5: count DocRow renders test-side — production's memo object, inner component wrapped (no src seam).
 const rowRenders = vi.hoisted(() => new Map<string, number>())
@@ -66,6 +69,7 @@ function coll(over: Partial<Collection>): Collection {
 afterEach(() => {
   cleanup()
   clearDocTaskSession()
+  assertNoUnexpectedApiCalls()
 })
 
 // ---- Document organization: section rail + chips + project management (plan §12) ----
@@ -74,13 +78,13 @@ describe('DocumentsScreen — organization', () => {
     const user = userEvent.setup()
     const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
     const tax = coll({ id: 'tax', name: 'Tax 2025' })
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [library, tax]),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'policy.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
         doc({ id: 'd2', title: 'return.pdf', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] })
       ])
-    })
+    }))
     window.localStorage.clear()
     render(<DocumentsScreen />)
     // Rail sections are present: the project, and the non-empty locations behind "More" (§11.16).
@@ -108,7 +112,7 @@ describe('DocumentsScreen — organization', () => {
       .fn<() => Promise<Collection[]>>()
       .mockResolvedValueOnce([library])
       .mockResolvedValue([library, created])
-    stubApi({ listCollections, listDocuments: vi.fn(async () => [doc({})]), createCollection })
+    stubApi(documentsScreenStubs({ listCollections, listDocuments: vi.fn(async () => [doc({})]), createCollection }))
     render(<DocumentsScreen />)
     await user.click(await screen.findByRole('button', { name: 'New project' }))
     await user.type(await screen.findByLabelText('Project name'), 'Lawsuit')
@@ -121,7 +125,7 @@ describe('DocumentsScreen — organization', () => {
 
   it('shows a quiet staleness badge on a generated row whose source changed, but not a fresh one', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         // Source re-indexed (updatedAt) AFTER the translation was made → stale.
@@ -139,7 +143,7 @@ describe('DocumentsScreen — organization', () => {
           origin: { kind: 'translation', sourceDocumentIds: ['s2'], createdAt: '2026-02-01T00:00:00Z' }
         })
       ])
-    })
+    }))
     // The rail reads the remembered "More" state on mount — start closed so the click OPENS it.
     window.localStorage.clear()
     render(<DocumentsScreen />)
@@ -166,7 +170,7 @@ describe('DocumentsScreen — organization', () => {
     const addToCollection = vi.fn(async () => {})
     const setDocumentLifecycle = vi.fn(async () => [])
     const removeFromCollection = vi.fn(async () => {})
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [library, temp, tax]),
       listDocuments: vi.fn(async () => [
         doc({
@@ -180,7 +184,7 @@ describe('DocumentsScreen — organization', () => {
       setDocumentLifecycle,
       removeFromCollection,
       ...extra
-    })
+    }))
     return { addToCollection, setDocumentLifecycle, removeFromCollection }
   }
 
@@ -213,7 +217,7 @@ describe('DocumentsScreen — organization', () => {
 
 describe('DocumentsScreen', () => {
   it('lists documents with their status and chunk count', async () => {
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]) }))
     render(<DocumentsScreen />)
     expect(await screen.findByText('contract.pdf')).toBeInTheDocument()
     // Status reads as a Badge (icon + word), never a button (Task 2).
@@ -226,26 +230,26 @@ describe('DocumentsScreen', () => {
   })
 
   it('shows the re-index banner for a document with stale embeddings (M7)', async () => {
-    stubApi({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: true })]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: true })]) }))
     render(<DocumentsScreen />)
     expect(await screen.findByText(/different search model/i)).toBeInTheDocument()
   })
 
   it('does NOT show the re-index banner when embeddings are current', async () => {
-    stubApi({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: false })]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: false })]) }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     expect(screen.queryByText(/different search model/i)).not.toBeInTheDocument()
   })
 
   it('surfaces a localized, softened error for a failed import; offers Remove not Preview (Task B/C)', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         // The legacy raw literal is still recognized by the display map and re-rendered as the
         // friendly copy (no raw English leak), keeping the offending extension.
         doc({ status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     // Softened §7 copy — the raw "Unsupported file type" phrasing is gone, the extension shows.
     expect(await screen.findByText(/isn't supported/i)).toBeInTheDocument()
@@ -268,7 +272,7 @@ describe('DocumentsScreen', () => {
       ])
       .mockResolvedValue([]) // after remove
     const deleteDocument = vi.fn(async () => {})
-    stubApi({ listDocuments, deleteDocument })
+    stubApi(documentsScreenStubs({ listDocuments, deleteDocument }))
     render(<DocumentsScreen />)
     await screen.findByText('broken.pdf')
     // A transient read error IS retryable → Try again offered alongside Remove; never Preview.
@@ -285,7 +289,7 @@ describe('DocumentsScreen', () => {
       .mockResolvedValueOnce([doc({})]) // initial mount
       .mockResolvedValue([]) // after delete
     const deleteDocument = vi.fn(async () => {})
-    stubApi({ listDocuments, deleteDocument })
+    stubApi(documentsScreenStubs({ listDocuments, deleteDocument }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -306,7 +310,7 @@ describe('DocumentsScreen', () => {
   it('does not delete when the ConfirmDialog is cancelled', async () => {
     const user = userEvent.setup()
     const deleteDocument = vi.fn(async () => {})
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), deleteDocument })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), deleteDocument }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -330,7 +334,7 @@ describe('DocumentsScreen', () => {
         { text: 'Appendix text.', pageNumber: null, sectionLabel: 'Appendix' }
       ]
     }))
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), previewDocument }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -365,7 +369,7 @@ describe('DocumentsScreen', () => {
       totalSegments: 2,
       nextOffset: null
     }))
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -387,12 +391,12 @@ describe('DocumentsScreen', () => {
 
   it('surfaces a preview failure as the screen error', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({})]),
       previewDocument: vi.fn(async () => {
         throw new Error('The document file is no longer on disk. Re-import it to preview.')
       })
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: /preview/i }))
@@ -405,13 +409,13 @@ describe('DocumentsScreen', () => {
   it('selecting indexed documents enables "Ask these documents" with the selected ids', async () => {
     const user = userEvent.setup()
     const onAskSelected = vi.fn()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({}),
         doc({ id: 'd2', title: 'terms.docx' }),
         doc({ id: 'd3', title: 'broken.xyz', status: 'failed', chunkCount: 0 })
       ])
-    })
+    }))
     render(<DocumentsScreen onAskSelected={onAskSelected} />)
     await screen.findByText('contract.pdf')
 
@@ -431,14 +435,14 @@ describe('DocumentsScreen', () => {
 
   it('the header select-all checkbox selects every visible indexed document, and clears on a second click', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({}),
         doc({ id: 'd2', title: 'terms.docx' }),
         // A failed document gets no per-row checkbox at all — select-all must not touch it.
         doc({ id: 'd3', title: 'broken.xyz', status: 'failed', chunkCount: 0 })
       ])
-    })
+    }))
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('contract.pdf')
 
@@ -465,13 +469,13 @@ describe('DocumentsScreen', () => {
 
   it('the name filter narrows select-all to only the currently visible documents', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'Lease 2026.pdf' }),
         doc({ id: 'd2', title: 'Q3 audit notes.docx' })
       ])
-    })
+    }))
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('Lease 2026.pdf')
 
@@ -495,13 +499,13 @@ describe('DocumentsScreen', () => {
   // ---- Audio (Phase 36): formats line, Transcribing badge, D35 size confirm ------
 
   it('advertises the verified audio formats on the Supported line', async () => {
-    stubApi({ listDocuments: vi.fn(async () => []) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => []) }))
     render(<DocumentsScreen />)
     expect(await screen.findByText(/WAV, MP3, FLAC,\s*OGG/)).toBeInTheDocument()
   })
 
   it('shows "Transcribing…" with the percent for an audio document being read', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({
           title: 'meeting.mp3',
@@ -511,12 +515,12 @@ describe('DocumentsScreen', () => {
           chunkCount: 0
         })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     expect(await screen.findByText(/Transcribing… 42%/)).toBeInTheDocument()
     // A TEXT document in `extracting` keeps the plain "Reading" label.
     cleanup()
-    stubApi({ listDocuments: vi.fn(async () => [doc({ status: 'extracting', chunkCount: 0 })]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({ status: 'extracting', chunkCount: 0 })]) }))
     render(<DocumentsScreen />)
     expect(await screen.findByText('Reading')).toBeInTheDocument()
   })
@@ -524,7 +528,7 @@ describe('DocumentsScreen', () => {
   it('asks before importing large audio (D35) and imports only on confirm', async () => {
     const user = userEvent.setup()
     const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9'] }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({})]),
       pickDocuments: vi.fn(async () => ({ token: 'tok1', paths: ['/u/long-meeting.wav'] })),
       importPreflight: vi.fn(async () => ({
@@ -534,7 +538,7 @@ describe('DocumentsScreen', () => {
       })),
       importDocuments,
       getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
 
@@ -555,7 +559,7 @@ describe('DocumentsScreen', () => {
   it('cancelling the large-audio confirm imports nothing', async () => {
     const user = userEvent.setup()
     const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: [] }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({})]),
       pickDocuments: vi.fn(async () => ({ token: 'tok1', paths: ['/u/long-meeting.wav'] })),
       importPreflight: vi.fn(async () => ({
@@ -564,7 +568,7 @@ describe('DocumentsScreen', () => {
         audioBytes: 600 * 1024 * 1024
       })),
       importDocuments
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: /import files/i }))
@@ -576,13 +580,13 @@ describe('DocumentsScreen', () => {
   it('small/text selections import directly with no confirm', async () => {
     const user = userEvent.setup()
     const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9'] }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({})]),
       pickDocuments: vi.fn(async () => ({ token: 'tok2', paths: ['/u/note.txt'] })),
       importPreflight: vi.fn(async () => ({ fileCount: 1, audioFileCount: 0, audioBytes: 0 })),
       importDocuments,
       getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: /import files/i }))
@@ -598,13 +602,13 @@ describe('DocumentsScreen', () => {
   it('a walk cut by its budget toasts "too large to scan completely" once and still imports (#274)', async () => {
     const user = userEvent.setup()
     const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9', 'd10', 'd11'], exhausted: 'entries' as const }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({})]),
       pickDocuments: vi.fn(async () => ({ token: 'tok3', paths: ['/u/huge-folder'] })),
       importPreflight: vi.fn(async () => ({ fileCount: 3, audioFileCount: 0, audioBytes: 0, exhausted: 'entries' as const })),
       importDocuments,
       getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 3, completed: 3, failed: 0, done: true, exhausted: 'entries' as const }))
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -636,7 +640,7 @@ describe('DocumentsScreen', () => {
     const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true, cancelled: false }
     const startReindexAll = vi.fn(async () => finished)
     const getReindexAllJob = vi.fn(async () => finished)
-    stubApi({ listDocuments, startReindexAll, getReindexAllJob })
+    stubApi(documentsScreenStubs({ listDocuments, startReindexAll, getReindexAllJob }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -678,7 +682,7 @@ describe('DocumentsScreen', () => {
       .fn<() => Promise<{ jobId: string; total: number; completed: number; failed: number; done: boolean; cancelled: boolean }>>()
       .mockResolvedValueOnce({ jobId: 'r1', total: 1, completed: 0, failed: 0, done: false, cancelled: false })
       .mockResolvedValue({ jobId: 'r1', total: 1, completed: 1, failed: 0, done: true, cancelled: false })
-    stubApi({ listDocuments, getReindexAllJob })
+    stubApi(documentsScreenStubs({ listDocuments, getReindexAllJob }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -706,7 +710,13 @@ describe('DocumentsScreen', () => {
     const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true, cancelled: false }
     const startReindexAll = vi.fn(async () => finished)
     const getReindexAllJob = vi.fn(async () => finished)
-    stubApi({ listDocuments, startReindexAll, getReindexAllJob })
+    stubApi(documentsScreenStubs({
+      getOcrInstallStatus: vi.fn(async () => NO_OCR_SOURCES),
+      getPolicy: vi.fn(async () => makePolicyStatus()),
+      listDocuments,
+      startReindexAll,
+      getReindexAllJob
+    }))
     render(<DocumentsScreen />)
 
     // The "Retry all" button lives ONLY in the "Needs attention" view (§11.16).
@@ -739,13 +749,13 @@ describe('DocumentsScreen', () => {
         failed: 0,
         done: completed >= 2
       }))
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments,
         pickDocuments: vi.fn(async () => ({ token: 'tok3', paths: ['/u/a.pdf', '/u/b.pdf'] })),
         importPreflight: vi.fn(async () => ({ fileCount: 2, audioFileCount: 0, audioBytes: 0 })),
         importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
         getImportJob
-      })
+      }))
       const flush = async (): Promise<void> => {
         await act(async () => {
           for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
@@ -795,13 +805,13 @@ describe('DocumentsScreen', () => {
         poll += 1
         return { jobId: 'j1', total, completed, failed: 0, done: completed >= total }
       })
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments,
         pickDocuments: vi.fn(async () => ({ token: 'tokF31', paths: ['/u/a.pdf', '/u/b.pdf'] })),
         importPreflight: vi.fn(async () => ({ fileCount: 2, audioFileCount: 0, audioBytes: 0 })),
         importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
         getImportJob
-      })
+      }))
       const flush = async (): Promise<void> => {
         await act(async () => {
           for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
@@ -842,13 +852,13 @@ describe('DocumentsScreen', () => {
             release = () => res({ jobId: 'j1', total: 2, completed: 2, failed: 0, done: false })
           })
       )
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments,
         pickDocuments: vi.fn(async () => ({ token: 't', paths: ['/u/a.pdf', '/u/b.pdf'] })),
         importPreflight: vi.fn(async () => ({ fileCount: 2, audioFileCount: 0, audioBytes: 0 })),
         importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
         getImportJob
-      })
+      }))
       const flush = async (): Promise<void> => {
         await act(async () => {
           for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
@@ -887,7 +897,7 @@ describe('DocumentsScreen', () => {
       doc({ id: 'd2', title: 'terms.docx', staleEmbeddings: true })
     ]
     const startReindexAll = vi.fn(async () => ({ jobId: 'r1', total: 2, completed: 0, failed: 0, done: false, cancelled: false }))
-    stubApi({ listDocuments: vi.fn(async () => stale), startReindexAll })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => stale), startReindexAll }))
     render(<DocumentsScreen />)
 
     await user.click(await screen.findByRole('button', { name: /re-index all \(2\)/i }))
@@ -903,7 +913,7 @@ describe('DocumentsScreen', () => {
     const running = { jobId: 'r1', total: 5, completed: 1, failed: 0, done: false, cancelled: false }
     const getReindexAllJob = vi.fn(async () => running)
     const cancelReindexAll = vi.fn(async () => undefined)
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob, cancelReindexAll })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob, cancelReindexAll }))
     render(<DocumentsScreen />)
 
     const cancelBtn = await screen.findByRole('button', { name: 'Cancel' })
@@ -921,7 +931,7 @@ describe('DocumentsScreen', () => {
     const cancelReindexAll = vi.fn(async () => {
       throw new Error("Error invoking remote method 'cancelReindexAll': Error: cancel exploded")
     })
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob, cancelReindexAll })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob, cancelReindexAll }))
     render(<DocumentsScreen />)
 
     await user.click(await screen.findByRole('button', { name: 'Cancel' }))
@@ -943,7 +953,7 @@ describe('DocumentsScreen — the lead above a failure message the app does not 
 
   /** The failed row's banner text in `lang` (its text content is the lines in DOM order). */
   async function failedBanner(lang: UiLanguage, over: Partial<DocumentInfo>): Promise<HTMLElement> {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({ id: 'd9', title: 'broken.pdf', status: 'failed', chunkCount: 0, ...over })
       ]),
@@ -951,7 +961,7 @@ describe('DocumentsScreen — the lead above a failure message the app does not 
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: true })),
       getReindexAllJob: vi.fn(async () => null),
       getActiveImportJob: vi.fn(async () => null)
-    })
+    }))
     renderInLanguage(<DocumentsScreen />, lang)
     const row = (await screen.findByText('broken.pdf')).closest('.doc-row') as HTMLElement
     return row.querySelector('.banner-text') as HTMLElement
@@ -1023,10 +1033,10 @@ describe('DocumentsScreen — the lead above a failure message the app does not 
 describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () => {
   it('the "⋯" overflow exposes Summarize/Translate/Re-index/Build deep index/Add to project + a destructive Delete that opens ConfirmDialog', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
       listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: null })])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     // Only ONE inline action (Preview) sits on the row; everything else is behind "⋯".
@@ -1055,7 +1065,7 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
       .mockResolvedValueOnce([doc({ id: 'd1' }), doc({ id: 'd2', title: 'terms.docx' })])
       .mockResolvedValue([doc({ id: 'd2', title: 'terms.docx' })])
     const deleteDocument = vi.fn(async () => {})
-    stubApi({ listDocuments, deleteDocument })
+    stubApi(documentsScreenStubs({ listDocuments, deleteDocument }))
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('contract.pdf')
 
@@ -1076,11 +1086,11 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
 
   it('a COMPLETE deep index (tree + extract, #38) reads as the "Deeply indexed" badge (not a button), and Build is gone from the overflow', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: 'ready' })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     expect(screen.getByText('Deeply indexed')).toBeInTheDocument()
@@ -1095,7 +1105,7 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
 
   it('lays the row out as a flex-filling name column + a right-aligned trailing cluster', async () => {
     const summary = { text: 's', modelId: 'm', createdAt: '2026-01-01T00:00:00Z', truncated: false }
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
       listDocuments: vi.fn(async () => [
         doc({
@@ -1105,7 +1115,7 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
           collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }]
         })
       ])
-    })
+    }))
     const { container } = render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
 
@@ -1129,12 +1139,12 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
   })
 
   it('renders tag chips as a distinct quieter element from the bordered Preview button', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
       listDocuments: vi.fn(async () => [
         doc({ collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] })
       ])
-    })
+    }))
     const { container } = render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     // The tag is a non-interactive Chip inside the chips group — not a button, not the Preview.
@@ -1148,11 +1158,11 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
 
   it('keeps readiness as the only green badge — Summary + Deeply indexed are neutral', async () => {
     const summary = { text: 's', modelId: 'm', createdAt: '2026-01-01T00:00:00Z', truncated: false }
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({ fullyChunked: true, treeStatus: 'ready', extractStatus: 'ready', summary })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     // Readiness = success (green).
@@ -1165,7 +1175,7 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
   })
 
   it('the "⋯" trigger is keyboard-focusable even though it is hover-revealed', async () => {
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]) }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     const trigger = screen.getByRole('button', { name: 'More actions for contract.pdf' })
@@ -1200,7 +1210,7 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 
   it('renders the mode switch and the decluttered rail: All documents · Recently added · Projects · More; Unfiled lists only the unfiled documents', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [
         coll({ id: 'lib', name: 'Library', type: 'library', builtin: true }),
         coll({ id: 'tax', name: 'Tax 2025' })
@@ -1209,7 +1219,7 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
         doc({ id: 'd1', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] }),
         doc({ id: 'd2', title: 'loose.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     // The header's segmented switch (the Chat header pattern): a radiogroup, My documents selected.
     const group = await screen.findByRole('radiogroup', { name: 'Documents view' })
@@ -1241,10 +1251,10 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 
   it('the active item carries aria-current and uses the fill (not a ring); selection moves it', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [doc({})])
-    })
+    }))
     render(<DocumentsScreen />)
     // Default landing = All documents, marked current.
     const all = await screen.findByRole('button', { name: 'All documents' })
@@ -1258,14 +1268,14 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 
   it('offers "Needs attention" only while something failed or is stale, with its count, and it filters to those', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'fine.pdf' }),
         doc({ id: 'd2', title: 'stale.pdf', staleEmbeddings: true }),
         doc({ id: 'd3', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     const attention = await screen.findByRole('button', { name: 'Needs attention' })
     expect(attention).toHaveTextContent('2')
@@ -1277,13 +1287,13 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 
   it('folds the locations behind a "More" disclosure (keyboard, aria-expanded, remembered); empty locations are hidden', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
         doc({ id: 'd2', title: 'note.md', lifecycle: 'archived' })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     const more = await screen.findByRole('button', { name: 'More' })
     expect(more).toHaveAttribute('aria-expanded', 'false')
@@ -1308,11 +1318,11 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
   it('with no project the rail shows one "+ New project" row; with a project, the header "+" and an Unfiled row', async () => {
     const user = userEvent.setup()
     const createCollection = vi.fn(async () => coll({ id: 'new', name: 'Lawsuit' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [doc({})]),
       createCollection
-    })
+    }))
     const first = render(<DocumentsScreen />)
     // Exactly one affordance, and it opens the create dialog.
     const row = await screen.findByRole('button', { name: 'New project' })
@@ -1323,10 +1333,10 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     expect(await screen.findByLabelText('Project name')).toBeInTheDocument()
     first.unmount()
 
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
       listDocuments: vi.fn(async () => [doc({})])
-    })
+    }))
     render(<DocumentsScreen />)
     expect(await screen.findByText('Projects')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'New project' })).toHaveLength(1)
@@ -1335,13 +1345,13 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 
   it('the name filter narrows the visible section and says so when nothing matches', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'Lease 2026.pdf' }),
         doc({ id: 'd2', title: 'Q3 audit notes.docx' })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('Lease 2026.pdf')
     const box = screen.getByRole('searchbox', { name: 'Filter documents by name' })
@@ -1362,13 +1372,13 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
   // without a locale lowers in Turkish, through the real ICU data.
   it('the name filter finds "Invoice" for a typed "inv" on a Turkish system', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'Invoice 2026-03.pdf' }),
         doc({ id: 'd2', title: 'Lease 2026.pdf' })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('Invoice 2026-03.pdf')
     const lower = String.prototype.toLocaleLowerCase
@@ -1392,13 +1402,13 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
     const user = userEvent.setup()
     const dotless = String.fromCharCode(0x0131)
     const istanbul = `${String.fromCharCode(0x0130)}STANBUL kira.pdf`
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'ISI raporu.pdf' }),
         doc({ id: 'd2', title: istanbul })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('ISI raporu.pdf')
     const box = screen.getByRole('searchbox', { name: 'Filter documents by name' })
@@ -1413,12 +1423,13 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 
   it('the Knowledge packs mode replaces the rail and list with the packs panel; the empty state links to it', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
+      onKnowledgePacksChanged: vi.fn(() => () => {}),
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => []),
       getKnowledgePackStatus: vi.fn(async () => ({ toolsInstalled: true, refreshing: false, revision: 0 })),
       listKnowledgePacks: vi.fn(async () => [])
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -1439,12 +1450,13 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
   })
 
   it('initialMode="packs" opens the packs panel directly (the documents:packs deep link)', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
+      onKnowledgePacksChanged: vi.fn(() => () => {}),
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [doc({})]),
       getKnowledgePackStatus: vi.fn(async () => ({ toolsInstalled: true, refreshing: false, revision: 0 })),
       listKnowledgePacks: vi.fn(async () => [])
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen initialMode="packs" />
@@ -1457,10 +1469,10 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 
   it('collapses and expands the whole sub-nav, remembering the state; collapsed → no rail', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [doc({})])
-    })
+    }))
     render(<DocumentsScreen />)
     // Expanded by default: the rail and its "All documents" row are present.
     expect(await screen.findByRole('button', { name: 'All documents' })).toBeInTheDocument()
@@ -1492,14 +1504,14 @@ describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
 describe('DocumentsScreen — row memoization (PERF-5)', () => {
   it('re-renders ONLY the toggled row when another row’s selection changes', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'alpha.pdf' }),
         doc({ id: 'd2', title: 'beta.pdf' }),
         doc({ id: 'd3', title: 'gamma.pdf' })
       ])
-    })
+    }))
     // onAskSelected makes the per-row select checkboxes appear (indexed rows only).
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('alpha.pdf')
@@ -1533,14 +1545,14 @@ describe('DocumentsScreen — row memoization (PERF-5)', () => {
 
   it('re-renders ONLY the opened row when another row’s ⋯ menu opens', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'alpha.pdf' }),
         doc({ id: 'd2', title: 'beta.pdf' }),
         doc({ id: 'd3', title: 'gamma.pdf' })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('alpha.pdf')
     await screen.findByText('gamma.pdf')
@@ -1611,10 +1623,10 @@ describe('DocumentsScreen — list windowing (PERF-2)', () => {
     const docs = Array.from({ length: 1000 }, (_, i) =>
       doc({ id: `d${i}`, title: `doc-${String(i).padStart(4, '0')}.pdf` })
     )
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => docs)
-    })
+    }))
     render(<DocumentsScreen />, { container: content })
 
     // The first rows render (the windowed path shows real content, not a blank list)…
@@ -1639,10 +1651,10 @@ describe('DocumentsScreen — list windowing (PERF-2)', () => {
     // Render standalone (the default RTL container, NOT inside `.content`), so `closest('.content')`
     // finds nothing → the fallback path renders all (the pre-PERF-2 / existing-corpus behavior).
     const docs = Array.from({ length: 40 }, (_, i) => doc({ id: `e${i}`, title: `ed-${i}.pdf` }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => docs)
-    })
+    }))
     render(<DocumentsScreen />)
     expect(await screen.findByText('ed-0.pdf')).toBeInTheDocument()
     // All 40 mounted — windowing stayed off without a viewport.
@@ -1691,12 +1703,12 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   it('FE-1: a scan-detected row offers an inline "Make searchable (OCR)" button that starts the task', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatus()),
       startDocTask,
       getDocTask: vi.fn(async () => ocrStatus())
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('scan.pdf')
     // The banner's promise and the control agree: the button renders on the failed row itself.
@@ -1713,13 +1725,13 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   })
 
   it('FE-1 control: an ordinary failed row gains NO OCR button (strictly showOcr-gated)', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({ id: 'd9', title: 'broken.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 }),
         scanDoc()
       ]),
       getAppStatus: vi.fn(async () => appStatus())
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('broken.pdf')
     // The scan row's button appearing proves ocrAvailable has landed — and it is the ONLY one:
@@ -1736,10 +1748,12 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   })
 
   it('FE-1: without the OCR files the scan row explains (ocrMissing) and offers no button', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
+      getOcrInstallStatus: vi.fn(async () => NO_OCR_SOURCES),
+      getPolicy: vi.fn(async () => makePolicyStatus()),
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('scan.pdf')
     expect(await screen.findByText(/needs the OCR files/)).toBeInTheDocument()
@@ -1755,10 +1769,10 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   // (`ocrAvailable: false`, `ocrState: 'unavailable'`). The scan row must not claim the files are
   // missing, the offer stays hidden, and the screen says so in a banner.
   it('#232: a recognizer that cannot run in this build explains itself (ocrUnavailable + banner), no button, no "files missing" copy', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc()]),
       getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false, ocrState: 'unavailable' }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('scan.pdf')
     expect(await screen.findByText(/which could not start in this build/)).toBeInTheDocument()
@@ -1773,7 +1787,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
       .fn()
       .mockResolvedValueOnce(appStatus({ ocrAvailable: false, ocrState: 'probing' }))
       .mockResolvedValue(appStatus({ ocrAvailable: true, ocrState: 'available' }))
-    stubApi({ listDocuments: vi.fn(async () => [scanDoc()]), getAppStatus })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [scanDoc()]), getAppStatus }))
     render(<DocumentsScreen />)
     await screen.findByText('scan.pdf')
     expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
@@ -1788,12 +1802,12 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   })
 
   it('FE-1: the inline OCR button disables while another task is active', async () => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [scanDoc(), doc({ id: 'd2', title: 'other.pdf' })]),
       getAppStatus: vi.fn(async () => appStatus()),
       startDocTask: vi.fn(async () => ({ jobId: 'j-sum' })),
       getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-sum', kind: 'summary', documentIds: ['d2'] }))
-    })
+    }))
     render(<DocumentsScreen />)
     const btn = await screen.findByRole('button', { name: 'Make searchable (OCR)' })
     expect(btn).toBeEnabled()
@@ -1806,7 +1820,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   it('FE-2: an already-OCR\'d indexed PDF offers "Read again (OCR)" in its overflow, and it starts the task', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j-redo' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({
           ocr: { pageCount: 2, languages: ['deu', 'eng'], engineId: 'tesseract.js-7.0.0', createdAt: '2026-01-01T00:00:00Z' }
@@ -1815,7 +1829,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
       getAppStatus: vi.fn(async () => appStatus()),
       startDocTask,
       getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-redo', documentIds: ['d1'] }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
@@ -1827,7 +1841,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
 
   it('FE-2 control: a plain indexed row (no stored recognition) offers no redo item', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({
           id: 'dOcr',
@@ -1837,7 +1851,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
         doc({ id: 'd2', title: 'plain.pdf' })
       ]),
       getAppStatus: vi.fn(async () => appStatus())
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('plain.pdf')
     // Seeing the redo item on the OCR'd row first proves ocrAvailable has landed…
@@ -1856,7 +1870,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   it('#576/#538: the preview counts the pages with text; an unsure reading is named on the row and in the preview, with Read again', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j-redo' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({
           ocr: {
@@ -1878,7 +1892,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
       })),
       startDocTask,
       getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-redo', documentIds: ['d1'] }))
-    })
+    }))
     render(<DocumentsScreen />)
     const unsure = translate('en', 'docs.ocr.unsure.some', { count: 1, total: 2 })
     expect(await screen.findByText(unsure)).toBeInTheDocument() // the row caption
@@ -1917,7 +1931,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
       }
     })
     const reindexDocument = vi.fn(async () => photo)
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [photo]),
       getAppStatus: vi.fn(async () => appStatus()),
       previewDocument: vi.fn(async () => ({
@@ -1928,7 +1942,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
       })),
       startDocTask,
       reindexDocument
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('receipt.jpg')
     await user.click(screen.getByRole('button', { name: /preview/i }))
@@ -1949,7 +1963,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   it('#575: scanned pages in a text PDF are named on the row and offered OCR; once read, the preview counts them against the document', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j-575' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({ id: 'unread', title: 'letter.pdf', scannedPages: { count: 2, pageCount: 3 } }),
         doc({
@@ -1974,7 +1988,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
       })),
       startDocTask,
       getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-575', documentIds: ['unread'] }))
-    })
+    }))
     render(<DocumentsScreen />)
     const caption = translate('en', 'docs.ocr.scannedPages', { count: 2, total: 3 })
     expect(await screen.findAllByText(caption)).toHaveLength(1) // the unread row only
@@ -2002,10 +2016,10 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     ['unavailable', false],
     ['probing', false]
   ] as const)('#575: with OCR %s, the scanned-pages caption names the OCR files: %s', async (ocrState, named) => {
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({ title: 'letter.pdf', scannedPages: { count: 2, pageCount: 3 } })]),
       getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false, ocrState }))
-    })
+    }))
     render(<DocumentsScreen />)
     const caption = translate('en', 'docs.ocr.scannedPages', { count: 2, total: 3 })
     const row = (await screen.findByText(new RegExp(caption.replace(/[.]/g, '\\.')))).closest('p') as HTMLElement
@@ -2017,13 +2031,13 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   it('FE-4: the OCR busy label switches to "Finishing…" on the final re-ingest step; Cancel stays enabled', async () => {
     vi.useFakeTimers()
     try {
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments: vi.fn(async () => [scanDoc()]),
         getAppStatus: vi.fn(async () => appStatus()),
         startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
         // stepsDone = pages (3) of stepsTotal = pages + 1 — the signal-less re-ingest step.
         getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 3, stepsTotal: 4 } }))
-      })
+      }))
       render(<DocumentsScreen />)
       await flush() // mount refresh + ocr status
       await act(async () => {
@@ -2047,13 +2061,13 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     vi.useFakeTimers()
     try {
       const cancelDocTask = vi.fn(async () => undefined)
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments: vi.fn(async () => [scanDoc()]),
         getAppStatus: vi.fn(async () => appStatus()),
         startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
         getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 3, stepsTotal: 4 } })),
         cancelDocTask
-      })
+      }))
       render(<DocumentsScreen />)
       await flush()
       await act(async () => {
@@ -2078,12 +2092,12 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   it('FE-4 control: a mid-pages status still reads "Reading the scan… (k/n)"', async () => {
     vi.useFakeTimers()
     try {
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments: vi.fn(async () => [scanDoc()]),
         getAppStatus: vi.fn(async () => appStatus()),
         startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
         getDocTask: vi.fn(async () => ocrStatus({ progress: { stepsDone: 1, stepsTotal: 4 } }))
-      })
+      }))
       render(<DocumentsScreen />)
       await flush()
       await act(async () => {
@@ -2110,7 +2124,7 @@ describe('DocumentsScreen — export original file (#90)', () => {
   it('offers "Export original file" on an imported doc, behind the encryption warning', async () => {
     const user = userEvent.setup()
     const exportDocumentOriginal = vi.fn(async () => 'C:/out/contract.pdf')
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), exportDocumentOriginal })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), exportDocumentOriginal }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -2128,7 +2142,7 @@ describe('DocumentsScreen — export original file (#90)', () => {
   it('cancelling the warning dialog exports nothing', async () => {
     const user = userEvent.setup()
     const exportDocumentOriginal = vi.fn(async () => null)
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), exportDocumentOriginal })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), exportDocumentOriginal }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -2142,7 +2156,7 @@ describe('DocumentsScreen — export original file (#90)', () => {
 
   it('a generated doc keeps the text "Export" and does NOT offer the original export', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [
         doc({
           id: 'g1',
@@ -2150,7 +2164,7 @@ describe('DocumentsScreen — export original file (#90)', () => {
           origin: { kind: 'translation', sourceDocumentIds: ['d1'], createdAt: '2026-01-01T00:00:00Z' }
         })
       ])
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract (Deutsch).md')
@@ -2174,7 +2188,7 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
   it('a successful single-document re-index toasts, naming the document', async () => {
     const user = userEvent.setup()
     const reindexDocument = vi.fn(async () => doc({}))
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), reindexDocument })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), reindexDocument }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -2200,7 +2214,7 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
       .fn<() => Promise<DocumentInfo[]>>()
       .mockResolvedValueOnce([doc({})])
       .mockResolvedValue([])
-    stubApi({ listDocuments, deleteDocument })
+    stubApi(documentsScreenStubs({ listDocuments, deleteDocument }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -2227,10 +2241,10 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
     const reindexDocument = vi.fn(
       () => new Promise<DocumentInfo>((resolve) => { release = () => resolve(doc({})) })
     )
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({}), doc({ id: 'd2', title: 'terms.docx' })]),
       reindexDocument
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -2257,10 +2271,10 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
     const reindexDocument = vi.fn(async () => {
       throw new Error("Error invoking remote method 'reindexDocument': Error: The document file is no longer present.")
     })
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc({}), doc({ id: 'd2', title: 'terms.docx' })]),
       reindexDocument
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -2277,5 +2291,76 @@ describe('DocumentsScreen — single-document action feedback (#194)', () => {
       await screen.findByText('contract.pdf: The document file is no longer present.')
     ).toBeInTheDocument()
     expect(screen.queryByText('“contract.pdf” re-indexed.')).not.toBeInTheDocument()
+  })
+})
+
+// #828: every project list follows the interface language's collation, not the code-point order
+// main returns. The fixtures are handed over in code-point order, as `listCollections` returns them.
+describe.each(PROJECT_ORDER_CASES)('DocumentsScreen project order (%s)', (lang, sqlOrder) => {
+  const expected = inLanguageOrder(lang, sqlOrder)
+  // The screen's mount-time reads, answered with nothing in flight.
+  const quiet = {
+    getAppStatus: vi.fn(async () => appStatusFixture()),
+    getReindexAllJob: vi.fn(async () => null),
+    getActiveImportJob: vi.fn(async () => null)
+  }
+
+  afterEach(() => {
+    cleanup()
+    clearDocTaskSession()
+  })
+
+  it('the fixture order differs from the code-point order and from the en order', () => {
+    expect(expected).not.toEqual(sqlOrder)
+    expect(expected).not.toEqual(inLanguageOrder('en', sqlOrder))
+  })
+
+  it('lists the rail projects in the language order', async () => {
+    stubApi(documentsScreenStubs({
+      ...quiet,
+      listCollections: vi.fn(async () => sqlOrder.map((n, i) => coll({ id: `a${i}`, name: n }))),
+      listDocuments: vi.fn(async () => [doc({})])
+    }))
+    const { container } = renderInLanguage(<DocumentsScreen />, lang)
+    await screen.findByRole('button', { name: new RegExp(sqlOrder[0]!) })
+    const names = [...container.querySelectorAll('.docs-rail-project:not(.archived) .docs-rail-item')].map((b) =>
+      (b.textContent ?? '').replace(/\d+$/, '').trim()
+    )
+    expect(names).toEqual(expected)
+  })
+
+  it('lists the archived rail projects in the language order', async () => {
+    stubApi(documentsScreenStubs({
+      ...quiet,
+      listCollections: vi.fn(async () =>
+        sqlOrder.map((n, i) => coll({ id: `r${i}`, name: n, archivedAt: '2026-02-01T00:00:00Z' }))
+      ),
+      listDocuments: vi.fn(async () => [doc({})])
+    }))
+    const { container } = renderInLanguage(<DocumentsScreen />, lang)
+    await screen.findByRole('button', { name: new RegExp(sqlOrder[0]!) })
+    const names = [...container.querySelectorAll('.docs-rail-project.archived .docs-rail-item')].map((b) =>
+      (b.textContent ?? '').replace(/\d+$/, '').trim()
+    )
+    expect(names).toEqual(expected)
+  })
+
+  it('lists the projects of the "Choose a project" window in the language order', async () => {
+    const user = userEvent.setup()
+    stubApi(documentsScreenStubs({
+      ...quiet,
+      listCollections: vi.fn(async () => sqlOrder.map((n, i) => coll({ id: `m${i}`, name: n }))),
+      listDocuments: vi.fn(async () => [doc({})])
+    }))
+    renderInLanguage(<DocumentsScreen />, lang)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: translate(lang, 'docs.moreActions', { title: 'contract.pdf' }) }))
+    await user.click(await screen.findByRole('menuitem', { name: translate(lang, 'docs.action.moveToProject') }))
+    const dialog = await screen.findByRole('dialog')
+    const names = within(dialog)
+      .getAllByRole('button')
+      .map((b) => (b.textContent ?? '').trim())
+      .filter((n) => sqlOrder.includes(n))
+    expect(names).toEqual(expected)
   })
 })

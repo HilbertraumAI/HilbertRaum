@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse as parseYaml, stringify } from 'yaml'
 
 // #339 P8-2 — the consent step's IPC contract, through the REAL `downloadEngine` handler:
 //
@@ -45,6 +45,8 @@ import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb, START_READS } from '../helpers/performance-fixture'
 import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as IpcHandlers
 const HOST_OS = hostRuntimeOs()
@@ -124,9 +126,22 @@ function demoRuntime(): { status: () => RuntimeStatus; activeModelId: () => stri
  *  `withWhisper` (#497) also pins the whisper_cpp family and provisions the speech model's
  *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case.
  *  `kit` (#678) pins the chat engine as a prepared Kit has it: a vulkan main build, plus the
- *  `cpu/` safety net in its own folder (each its own archive URL). */
+ *  `cpu/` safety net in its own folder (each its own archive URL).
+ *  The engine pins are the app's own copy (`ctx.bundledManifestsDir`, #842). By default the yaml
+ *  lives ONLY there and the drive's folder holds the model manifests alone, so every engine row in
+ *  this file fails if a path reads the drive's copy. `appLlamaVersion` keeps the yaml on the drive
+ *  too, as its stale pin, and gives the app a newer chat-engine pin with its own archive URL
+ *  (`…-app.zip`): a new app copied onto a drive whose manifests were not refreshed, started through
+ *  the launcher. */
 function makeDrive(
-  opts: { withWhisper?: boolean; runtime?: unknown; llamaVersion?: string; extract?: ExtractFn; kit?: boolean } = {}
+  opts: {
+    withWhisper?: boolean
+    runtime?: unknown
+    llamaVersion?: string
+    appLlamaVersion?: string
+    extract?: ExtractFn
+    kit?: boolean
+  } = {}
 ): Drive {
   const root = freshRoot()
   const manifests = join(root, 'model-manifests')
@@ -185,6 +200,19 @@ function makeDrive(
       }
     })
   )
+  const drivePins = join(manifests, 'runtime-sources.yaml')
+  const appManifests = join(root, 'app-bundle', 'model-manifests')
+  mkdirSync(appManifests, { recursive: true })
+  if (opts.appLlamaVersion) {
+    const sources = parseYaml(readFileSync(drivePins, 'utf8')) as {
+      llama_cpp: { version: string; builds: Array<{ url: string }> }
+    }
+    sources.llama_cpp.version = opts.appLlamaVersion
+    for (const build of sources.llama_cpp.builds) build.url = build.url.replace(/\.zip$/, '-app.zip')
+    writeFileSync(join(appManifests, 'runtime-sources.yaml'), stringify(sources))
+  } else {
+    renameSync(drivePins, join(appManifests, 'runtime-sources.yaml'))
+  }
   const db = seededDb(root)
   updateSettings(db, { allowNetwork: true })
   const reconcile = vi.fn(async () => undefined)
@@ -192,6 +220,7 @@ function makeDrive(
   const ctx = ctxWith(root, db, {
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     manifestsDir: manifests,
+    bundledManifestsDir: appManifests,
     runtime: opts.runtime ?? { activeModelId: () => null, status: () => ({ running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: '' }) },
     zim: { reconcile },
     // #497: the startup composition found no whisper-cli, so the slot is null until an install.
@@ -212,7 +241,7 @@ describe('a completed whisper_cpp install activates dictation without a restart 
     expect(job.status).toBe('done')
     expect(existsSync(join(d.root, 'runtime', 'whisper.cpp', HOST_OS, WHISPER_BIN))).toBe(true)
     // The completed install re-ran the transcriber selector — binary + weights are both present now.
-    await vi.waitFor(() => expect(d.ctx.transcriber).not.toBeNull())
+    await vi.waitFor(() => expect(d.ctx.transcriber).not.toBeNull(), { timeout: hangBudgetMs(5000) })
     expect(d.ctx.transcriber?.id).toBe('whisper-test')
     // Only the requested family was fetched; the packs reconcile is the kiwix hook's, not this one's.
     expect(d.fetchSpy).toHaveBeenCalledTimes(1)
@@ -230,7 +259,7 @@ describe('a completed whisper_cpp install activates dictation without a restart 
 })
 
 async function settle(d: Drive, job: EngineDownloadJob): Promise<EngineDownloadJob> {
-  await vi.waitFor(() => expect(['done', 'failed', 'cancelled']).toContain(d.manager.get(job.jobId).status), { timeout: 5000 })
+  await vi.waitFor(() => expect(['done', 'failed', 'cancelled']).toContain(d.manager.get(job.jobId).status), { timeout: hangBudgetMs(5000) })
   return d.manager.get(job.jobId)
 }
 
@@ -254,7 +283,7 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     expect(d.fetchSpy).toHaveBeenCalledTimes(1)
     expect(String(d.fetchSpy.mock.calls[0]?.[0])).toContain('download.kiwix.org')
     // The completed install re-probes the packs with the new bundle — exactly once.
-    await vi.waitFor(() => expect(d.reconcile).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(d.reconcile).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
   })
 
   // #782: the registrar hands settings:update its engine manager (the switch itself: core-model-ipc).
@@ -263,7 +292,7 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     d.fetchSpy.mockImplementation(hangingFetch('partial-archive'))
     const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
     const started = result as EngineDownloadJob
-    await vi.waitFor(() => expect(d.manager.get(started.jobId).receivedBytes).toBeGreaterThan(0))
+    await vi.waitFor(() => expect(d.manager.get(started.jobId).receivedBytes).toBeGreaterThan(0), { timeout: hangBudgetMs(5000) })
     const onStopped = vi.fn()
     d.ctx.installsNetworkSwitched?.(false, onStopped)
     expect((await runToEnd(d.manager, started.jobId)).status).toBe('cancelled')
@@ -297,7 +326,7 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
     const job = await settle(d, result as EngineDownloadJob)
     expect(job.status).toBe('done')
-    await vi.waitFor(() => expect(d.reconcile).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(d.reconcile).toHaveBeenCalledTimes(1), { timeout: hangBudgetMs(5000) })
     expect(modelLoadLatchReason('a')).toBe('unknown model architecture')
     clearModelLoadLatches()
   })
@@ -319,7 +348,7 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['kiwix_tools'] })
     await reached
     // The lock begins (AUD-02: the database is still open, the workspace no longer admits work).
-    ;(d.ctx as { workspace: unknown }).workspace = { isUnlocked: () => true, isLocking: () => true }
+    ;(d.ctx as { workspace: unknown }).workspace = workspaceStandIn({ locking: true })
     release()
     const job = await settle(d, result as EngineDownloadJob)
     expect(job.status).toBe('done')
@@ -447,9 +476,9 @@ describe('engine load verdicts over IPC (#530)', () => {
   it('engine:recheck is registered and refuses while the workspace does not admit work', async () => {
     const d = makeDrive()
     expect(d.handlers.has(IPC.recheckEngine)).toBe(true)
-    ;(d.ctx as unknown as { workspace: unknown }).workspace = { isUnlocked: () => false }
+    ;(d.ctx as unknown as { workspace: unknown }).workspace = workspaceStandIn({ unlocked: false })
     await expect(invoke(d.handlers, IPC.recheckEngine)).rejects.toThrow(/locked/i)
-    ;(d.ctx as unknown as { workspace: unknown }).workspace = { isUnlocked: () => true, isLocking: () => true }
+    ;(d.ctx as unknown as { workspace: unknown }).workspace = workspaceStandIn({ locking: true })
     await expect(invoke(d.handlers, IPC.recheckEngine)).rejects.toThrow(/locked/i)
   })
 
@@ -467,7 +496,7 @@ describe('engine load verdicts over IPC (#530)', () => {
     reportEngineProblem({ ...LLAMA_PROBLEM, family: 'whisper_cpp' }, '/drive/runtime/whisper.cpp/linux/whisper-cli')
     const { result } = await invoke(d.handlers, IPC.downloadEngine)
     expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
-    await vi.waitFor(() => expect(resetStartFailure).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(resetStartFailure).toHaveBeenCalledTimes(3), { timeout: hangBudgetMs(5000) })
     expect(engineProblemFor('llama_cpp')).toBeNull()
     // Only the family that was installed loses its verdict.
     expect(engineProblemFor('whisper_cpp')).not.toBeNull()
@@ -549,7 +578,7 @@ describe('downloadEngine({ families, reinstall }) — the damaged-files repair (
     const { result } = await invoke(d.handlers, IPC.downloadEngine)
     expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
     // As after a healed "Check again": the demo runtime is stopped and the same model started again.
-    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
+    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })), { timeout: hangBudgetMs(5000) })
     expect(runtime.stop).toHaveBeenCalledTimes(1)
     expect(runtime.stop.mock.invocationCallOrder[0]).toBeLessThan(runtime.start.mock.invocationCallOrder[0] ?? 0)
   })
@@ -711,7 +740,7 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
     expect(runtime.stop).toHaveBeenCalledTimes(1)
     expect(d.fetchSpy.mock.invocationCallOrder[0]).toBeLessThan(runtime.stop.mock.invocationCallOrder[0] ?? 0)
     // …and the same model comes back on the new engine…
-    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
+    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })), { timeout: hangBudgetMs(5000) })
     // …after every helper running from that folder was paused for the swap. (A model start
     // suspends the reranker again as any switch does, so only the first call is the pause.)
     for (const pause of [h.embedder.suspend, h.reranker.suspend, h.vision.releaseRuntime, h.translator.suspend]) {
@@ -735,7 +764,7 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
     const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
     expect((await settle(d, result as EngineDownloadJob)).status).toBe('failed')
     expect(runtime.stop).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
+    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })), { timeout: hangBudgetMs(5000) })
   })
 
   it.each<[string, (ctx: AppContext) => void]>([
@@ -772,6 +801,35 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
     ).rejects.toThrow(/in use right now/i)
     expect(d.fetchSpy).not.toHaveBeenCalled()
     expect(runtime.stop).not.toHaveBeenCalled()
+  })
+
+  // #842: a launcher start points `ctx.manifestsDir` at the drive's `model-manifests/`, which a new
+  // app copied onto the drive by hand leaves as it was: its yaml still pins the engine that is on the
+  // drive. The status, the update and the plain install all take the app's own pin all the same.
+  it('offers the update against the app’s pin when the drive’s yaml still pins the engine on it (#842)', async () => {
+    const runtime = liveRuntime()
+    const d = makeDrive({ runtime, llamaVersion: 'b150', appLlamaVersion: 'b200' })
+    Object.assign(d.ctx, helpers())
+    withOlderEngine(d) // b150: current by the drive's yaml, older by the app's
+    const status = (await invoke(d.handlers, IPC.getEngineStatus)).result as EngineStatus
+    expect(status.version).toBe('b200')
+    expect(status.engineVersions?.find((v) => v.family === 'llama_cpp')).toMatchObject({
+      installed: 'b150',
+      pinned: 'b200',
+      relation: 'older'
+    })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(d.fetchSpy.mock.calls.map(([url]) => String(url))).toEqual(['https://example.test/llama-app.zip'])
+    expect(versionOnDrive(d)).toBe('b200')
+  })
+
+  it('installs a missing engine from the app’s pin, not the drive’s (#842)', async () => {
+    const d = makeDrive({ llamaVersion: 'b150', appLlamaVersion: 'b200' })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine)
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(d.fetchSpy.mock.calls.map(([url]) => String(url))).toEqual(['https://example.test/llama-app.zip'])
+    expect(versionOnDrive(d)).toBe('b200')
   })
 
   it('work that starts during the download refuses the swap at the pause — the old engine stays and keeps answering', async () => {

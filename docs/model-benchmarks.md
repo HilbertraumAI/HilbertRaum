@@ -170,16 +170,24 @@ The deliverable is **one row per model × laptop × backend**. Join the Part-A Q
 with the Part-B/C speed + RSS columns into `eval/results/<machine>-<backend>.csv`:
 
 ```
-model, backend, pp512_tps, pp2048_tps, pp8192_tps, tg_tps, peak_rss_gib,
-em_rate, mean_f1, citation_correct_rate, grounded_rate, over_abstain_rate,
-abstain_rate_unans, hallucination_rate, em_rate_de, em_rate_en, f1_de, f1_en, notes
+model, backend, pp512_tps, pp2048_tps, pp8192_tps, tg_tps, peak_rss_gib, suggested_min_ram_gb,
+em_rate, mean_f1, mean_answer_chars, citation_correct_rate, grounded_rate, over_abstain_rate,
+abstain_rate_unans, hallucination_rate, em_rate_de, em_rate_en, f1_de, f1_en
 ```
 The harness writes the QA half (`…-quality.csv`); paste the speed/RSS numbers alongside. Commit
 the combined CSVs + the per-item JSONL. `node eval/combine.mjs` builds this join from each
-`…-quality-rescored.csv` and its `…-speed.csv`. It picks the columns by name (`OUT_COLS`,
-`eval/combine.mjs:22-27`), and that list leaves `mean_answer_chars` out on purpose: #378 did not
-regenerate the combined CSVs, and adding the column means regenerating them. Read the answer
-length from the `…-quality-rescored.csv`.
+`…-quality-rescored.csv` and its `…-speed.csv`. It picks the columns by name (`OUT_COLS` in
+`eval/combine.mjs`). `mean_answer_chars` sits right after `mean_f1`, as in the rescored CSVs, so the
+F1 is never read without the answer length (#378, #833). A stem with no speed CSV is a quality-only
+run and gets no combined file.
+
+Two combined files are committed: `i7-1185G7-cpu.csv` and `i9-9900X-vulkan.csv`. The i9 speed run
+covers four Gemma 4 models (e2b, e4b, 26b-a4b, 31b) whose QA ran in a separate wave. `combine.mjs`
+joins that QA from `i9-9900X-gemma4wave-vulkan-quality-rescored.csv`. First source wins: where a model
+is in both runs (`gemma4-12b`, `qwen3.6-27b-q4`) the main run's row is kept whole. The combined CSVs
+are derived files. After `rescore.mjs` or a new speed CSV, run `node eval/combine.mjs` and commit the
+result. `apps/desktop/tests/eval/combine.test.ts` re-runs the script over the committed inputs and
+fails on any byte of difference.
 
 **The decision rule** — a challenger earns `recommended_profiles` promotion (and a default-model
 challenge) at its tier when it either (a) beats the incumbent on the German RAG metrics AND
@@ -601,6 +609,11 @@ different context → still steps) and `benchmark-schema.test.ts`.
 
 ### 6.6 Graphics-memory-aware picker: the card decides on a discrete GPU (2026-09-05)
 
+> **Amended 2026-11-20 by §6.8.** The need is now the runtime's measured projection, the order
+> follows card ranks (decision 2 is retired), and a model seen landing partly on the card is not
+> picked again. The thresholds, grids and the 8 GB reasoning below are the record of the state
+> before that.
+
 **Status: implemented on `feat/vram-aware-picker` (PR #308), merged onto the Performance wave
 (PR #303). Changes the recommendation on every machine with a usable discrete card, so it carried
 the §5 item 8 standing requirement: **owner sign-off given 2026-09-06 in the PR #308 review**
@@ -730,13 +743,13 @@ consumer machine.
    item 22 (e) now records: the two models with no measured figure, and the fact that nothing
    recomputes the field when a manifest's weights change.
 4. `estimated_context_cache_gib` (optional manifest field, number ≥ 0) replaces the flat 0.5 GiB
-   term for eight models: the seven chat models below, whose figure was derived from the launch
+   term for nine models: the eight chat models below, whose figure was derived from the launch
    config (`--ctx-size 8192`, `ubatch 2048`; the 4B's figure is its own 4,096-token window) — the
    26B-A4B's has since been read off a hardware start instead (#412) — and, since #473, the
    translation model, whose figure was measured; every other manifest defaults to
    0.5 GiB in code (the field is absent, not stored as 0.5). **Recomputed 2026-09-07 for ONE server
    slot** (issue #319: `CHAT_SERVER_ARGS` passes `-np 1` — the amendment below). Pinned in
-   `committed-catalog.test.ts` ("pins the eight `estimated_context_cache_gib` values, and that no
+   `committed-catalog.test.ts` ("pins the nine `estimated_context_cache_gib` values, and that no
    other manifest carries the field"); each manifest carries its own arithmetic in a YAML comment:
 
    | model | `estimated_context_cache_gib` | was (4 slots) | why it moved, or did not |
@@ -747,6 +760,7 @@ consumer machine.
    | `qwen3.8-27b-ud-q4km` | **0.9** | 1.1 | KV 512 + recurrent 448.88 MiB (MTP, 1 seq) = 960.9 MiB |
    | `qwen3.8-27b-ud-q5km` | **0.9** | 1.1 | identical figures — the recurrent state is f32, quant-independent |
    | `qwen3.5-9b-ud-q4kxl` | **0.3** | 0.4 | KV 256 + 1 × 48 = 304 MiB (measured at 4 slots: 256 + 201) |
+   | `qwen3.5-9b-ud-q3kxl` | 0.3 | none (added 2026-11-20) | same architecture as the UD-Q4_K_XL above, and the f16 cache does not depend on the weight quantization: KV 256 + 1 × 48 = 304 MiB |
    | `qwen3.5-4b-ud-q4kxl` | **0.2** | 0.3 | KV 128 + 1 × 48 = 176 MiB, at its 4,096 window |
    | `translategemma-12b-it-q4` | 0.75 | — (added by #473) | measured on a full-offload start at its 4,096 window: KV 256 (non-SWA) + 480 (SWA) = 736 MiB, rounded up; it feeds the translation sidecar's headroom gate |
 
@@ -1621,10 +1635,249 @@ their raw needs are pinned alongside these in the same test. Rank-0 models — `
 Both consumers build the picker's `PickerMemory` from ONE decision — `pickerMemoryFor` in
 `registerModelIpc.ts` and `probeAndPersistGpu` in `registerBenchmarkIpc.ts`, both calling
 `nextStartMemory` + `graphicsBudgetMib` — so the AI Model ★ and the Performance check can never
-disagree. Legacy callers that pass no memory class get the RAM pick, byte-identical to
-`recommendModelIdByRam`.
+disagree. Legacy callers that pass no memory class are treated as class `cpu` and get the
+processor pick of §6.7 (until 2026-11-20: the RAM pick).
 
 **Not changed here.** The `insufficientRam` gate and its copy still speak of RAM only.
+
+### 6.7 Processor path: picks for a computer without a usable graphics card (2026-11-20)
+
+**Scope.** This section governs the chat recommendation for the memory class `cpu` only: a
+computer whose next start runs from RAM on the processor, because it has no usable graphics card
+(an integrated chip included) or because the GPU is switched off or auto-disabled
+(`nextStartMemory`). Apple Silicon (`unified`) keeps the RAM pick of §6.2 to §6.5, a discrete card
+keeps rule C of §6.6. Both are unchanged by this section, on purpose: their picks wait for
+measurements on those machines.
+
+**Why a separate path.** Until now the processor shared the RAM pick, which ranks by capacity and
+knows nothing about decode speed. Two measurements showed that this serves processor-only
+machines badly: the picks for 24 GB and more (dense 27B models) decode near 3 tok/s on a
+processor, and the picks for 8 to 15 GB were not the best-scoring models that run there at a
+usable speed.
+
+**Decision basis.** A pick on this path has to be justified on two axes, in this order:
+
+1. **Answer quality:** the suite score of the 2026-11 answer-quality study (29 model variants,
+   seven tasks in German and English, llama.cpp b12110, context 32,768, one run per model,
+   finished 2026-11-15; all results on <https://hilbertraum.ai/en/benchmark/>). It replaces the
+   "newer generation is expected to be better" prior of §6.4 where the two disagree. Differences
+   under 3 points count as level: there is one run per model and no agreed margin of error yet.
+2. **Processor speed:** decode tok/s and the wait for the first token on a document-sized prompt,
+   measured through the app on a processor (below). A model under the slow line
+   (`SLOW_PICK_TOKENS_PER_SECOND`, 5 tok/s) is not a pick, however well it scores.
+
+Memory is a gate, not an axis: every pick must clear its own `recommended_min_ram_gb`, and its
+measured peak has to fit the band it is recommended for. The §2 grounded-QA harness is not
+re-run for this decision; where its earlier verdict and the study disagree (the E4B), the
+ordinary rank keeps the harness verdict and only the processor rank moves.
+
+**Processor measurements (2026-11-20).** Lenovo Legion, Ryzen 7 5800H (8 cores), 16 GB installed
+(13.9 GB usable, the app reads 14), Windows 11, mains power, GPU acceleration off and every start
+confirmed `backend=cpu`, dev build of `master` 5dc4e058 on llama.cpp b12110. Per model: one
+warm-up and three in-app Diagnostics benchmarks (decode-only, #291), then one Fast-mode answer to
+a prompt of about 1,400 tokens. Memory is the llama-server peak working set. Raw rows:
+`eval/results/hardware/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/cpu-speed-2026-11-20.jsonl`.
+
+| Model | Study score | tok/s (median of 3) | First token, long prompt | Peak working set |
+|---|---|---|---|---|
+| `qwen3.5-0.8b-q6` | 39.4 | 37.2 | 3.7 s | 1.25 GiB |
+| `gemma4-e2b-it-qat-q4` | 73.7 | 19.9 | 5.0 s | 2.83 GiB |
+| `qwen3.5-2b-ud-q4kxl` | 56.7 | 19.5 | 7.3 s | 2.21 GiB |
+| `qwen3-4b-instruct-q4` | 76.2 | 12.0 | 18.7 s | 4.94 GiB |
+| `qwen3-4b-instruct-2507-q4` | 82.0 | 11.8 | 18.4 s | 4.32 GiB |
+| `gemma4-e4b-it-qat-q4` | 82.9 | 9.9 | 17.6 s | 5.48 GiB |
+| `qwen3.5-4b-ud-q4kxl` | 76.9 | 8.6 | 18.7 s | 4.74 GiB |
+| `qwen3-8b-instruct-q4` | 77.2 | 6.4 | 31.1 s | 6.99 GiB |
+| `granite-4.1-8b-q4` | 79.0 | 5.9 | 35.2 s | 6.53 GiB |
+| `ministral3-8b-instruct-2512-q4` | 64.7 | 5.9 | 33.4 s | 7.01 GiB |
+| `qwen3.5-9b-ud-q4kxl` | 86.1 | 5.1 | 32.4 s | 6.06 GiB |
+| `gemma4-12b-it-qat-q4` | 89.5 | 4.5 | 75.8 s | 8.15 GiB |
+| `qwen3.5-9b-q8` | 85.9 | 3.4 | 60.5 s | 8.73 GiB |
+| `qwen3-14b-instruct-q4` | 87.4 | 3.4 | 58.4 s | 9.26 GiB |
+
+The models from 20 GB up do not start on this machine. Their processor figures are the §9.3 and
+§9.4 rows of the i9-9900X: `gemma4-26b-a4b-it-qat-q4` 15.6 tok/s (a mixture-of-experts model,
+about 3.8B parameters active per token), the dense `qwen3.6-27b-q4` 2.8 and `qwen3.8-27b-q4` 2.83.
+The two machines are not the same processor, so the 15.6 is evidence of the class (five times a
+dense 27B on the same machine), not a figure for a laptop.
+
+**The picks.**
+
+| RAM | Pick on the processor | Study score | Was (RAM pick) | Why |
+|---|---|---|---|---|
+| 8 to 11 GB | `qwen3-4b-instruct-2507-q4` | 82.0 | `qwen3.5-4b-ud-q4kxl`, 76.9 | Ahead on both axes (11.8 against 8.6 tok/s). Cost: no thinking mode, so Deep does nothing on it. |
+| 12 to 15 GB | `gemma4-e4b-it-qat-q4` | 82.9 | `gemma4-e2b-it-qat-q4`, 73.7 | 9 points for half the speed, which still leaves 9.9 tok/s. Level with the 2507 on quality, and it keeps a thinking mode. |
+| 16 to 23 GB | `qwen3.5-9b-ud-q4kxl` | 86.1 | the same | Every other 8B-class model runs at the same speed and scores lower. It sits at the slow line, which is what the chain below is for. Gemma 4 12B scores higher (89.5) and is under the line. |
+| 24 GB and more | `gemma4-26b-a4b-it-qat-q4` | 90.5 | `qwen3.8-27b-ud-q4km` 89.9 / `-q5km` 90.0 | Level on quality, about five times the processor speed of a dense 27B. The best-scoring models of the study (Gemma 4 31B 94.6, Qwen3.6 27B 92.8) are dense and stay card and Apple Silicon candidates. |
+
+**How it is built (decision: data in the catalog, no model names in code).**
+
+- `recommendChatModelId` sends the `cpu` class to `recommendModelIdForProcessor`. That function
+  runs the unchanged `recommendModelIdByRam` stages (capacity first, rank inside a band, ranked
+  models only) over a view of the catalog in which `recommendation_rank_cpu`, where a manifest
+  carries it, replaces `recommendation_rank`.
+- `recommendation_rank_cpu: 0` keeps a model selectable but never the automatic pick on a
+  processor. Seven manifests carry it. Six were measured too slow there: Gemma 4 12B and Qwen3 14B
+  in the table above, and the dense 27B models from the i9-9900X rows. The seventh, Qwen3.5
+  35B-A3B, was **not** measured on a processor (it needs 24 GB of RAM, more than the 16 GB
+  laptop). As a mixture-of-experts model it may be fast enough. It carries 0 because the stages
+  order by comfortable RAM first: a positive rank would make this unmeasured model, comfortable at
+  32, the pick from 32 GB ahead of the measured 26B-A4B. A processor measurement can lift it. Five
+  carry a positive value: three of the four picks above at 3 (the 9B carries no processor rank
+  and keeps its ordinary 3), the E2B at 2, under the E4B, and `qwen3.5-4b-ud-q4kxl` at 1.
+- Two comfortable-RAM figures moved with it, both from measurement: `gemma4-e4b-it-qat-q4`
+  16 to 12 (5.48 GiB peak on the 14 GB machine) and `gemma4-26b-a4b-it-qat-q4` 32 to 24 (in-app
+  peak RSS 14.28 GiB, §9.3, under the 16.8 GB Qwen3.6 27B Q4 that already sits at 24). Neither
+  changes a pick outside this path: the E4B's ordinary rank is 0 and the 26B-A4B's is 2, under the
+  rank-3 holder of its band.
+- `ministral3-8b-instruct-2512-q4` goes from rank 2 to 0 on every path: lowest study score of the
+  8B class (64.7 against 79.0 and 77.2) and the slowest start. It never was an automatic pick.
+- A catalog without the two fields gives exactly the RAM pick, with or without a speed signal
+  (pinned in `committed-catalog.test.ts`).
+
+**Step-down (replaces §6.5 on this path).** §6.5 moves a crawling pick one capacity band down,
+once. On a processor that was not enough: the 9B's single step would end on the model one band
+below, and a machine too slow for that one stayed there. Here each manifest names its own
+target, `step_down_to`, and the chains are:
+
+```
+gemma4-26b-a4b-it-qat-q4 -> qwen3.5-9b-ud-q4kxl -> gemma4-e4b-it-qat-q4 -> gemma4-e2b-it-qat-q4
+qwen3-4b-instruct-2507-q4 -> gemma4-e2b-it-qat-q4
+```
+
+Rules, all in `recommendModelIdForProcessor`:
+
+1. The no-signal pick is computed from RAM alone on every call. Nothing is stored.
+2. A benchmark strictly under 5 tok/s on a model that lies on the pick's chain recommends that
+   model's target. So a slow reading on the pick steps once, and a later slow reading on the
+   stepped model steps again, down to the E2B (19.9 tok/s above, the fastest ranked model).
+3. A target that the machine's RAM floor refuses, or that is not ranked on the processor, ends
+   the chain. The end of a chain that was followed stays the recommendation.
+4. A slow reading on a model that is not on the chain is judged by §6.5 unchanged: an oversized
+   model is no signal, anything else moves the pick one band down at most.
+5. Unlike §6.5, a runnable-stage pick (8 to 11 GB) steps too, because its target is named.
+
+The chain tests pin that every target exists, is ranked on the processor, needs no more RAM than
+its source, and that no chain loops.
+
+**What this does not settle.**
+
+- Apple Silicon. The card path is §6.8.
+- The 26B-A4B on a processor other than the i9-9900X, and any processor pick on a machine weaker
+  than the 5800H (the #153 class). The chain is the safety net for both.
+- One study run per model and no margin of error: the 24 GB row rests on "level on quality", not
+  on a measured gain.
+- The legacy `recommended_profiles` picker and the profile step-down are untouched.
+
+**Changing a pick later.** Bring both axes: the study score (or its successor) and an in-app
+processor measurement filed under `eval/results/hardware/`. Then edit `recommendation_rank_cpu`
+and, if the model should be a step-down source or target, `step_down_to`, and update the
+pinned mapping, chain list and rank table in `committed-catalog.test.ts` with this section.
+
+### 6.8 Card path: measured need, card ranks, and what an earlier start showed (2026-11-20)
+
+**Scope.** This section governs the chat recommendation on a discrete graphics card (memory
+class `discrete`). It amends §6.6: the budget (the probe's free figure, else total − 1,024), the
+RAM floor and the no-fit fallback stay as they are; the need, the order of the picks and the
+handling of a wrong estimate change. Apple Silicon is untouched. The tables and thresholds in
+§6.6 describe the state before this section; the current figures are pinned in
+`committed-catalog.test.ts`.
+
+**1. The need is the runtime's own projection.** §6.6 derived a model's need from its file size
+(`(weights − host-mapped) × 1.15 + cache + margin`). Measured against real starts that estimate was
+off in both directions: 117 MiB too high for the 9B on an idle 8 GB card (which therefore got the
+4B although the 9B was measured at 33/33 there, #391 leg 2), up to 3.5 GiB too high for the large
+models, and 552 MiB too low for the E2B. llama.cpp prints the figure it actually decides by:
+"projected to use N MiB of device memory", which it compares with the card's free memory less
+its 1 GiB `--fit-target`. A manifest now carries that figure as `projected_graphics_need_mib`,
+and `estimateGraphicsNeedMib` returns it plus the same 1,024 MiB margin. A manifest without one
+keeps the derived estimate.
+
+The figures were read on the i9-9900X / RTX 3090 on b12110 with the app's launch per manifest
+(its own context, `-np 1`, batch and ubatch 2048, the MTP flags where the manifest sets them),
+every start a full offload: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/projected-graphics-need-b12110-20261120.tsv`,
+24 chat manifests. The five without a figure are the withdrawn Qwen3.8 K-quants and the two
+local-test stubs. Cross-check on Windows (RTX 3060 Laptop, 2026-11-20, card peak by `nvidia-smi`):
+E2B 1,865 against a projection of 1,799, E4B 3,536 against 3,458, the 2507 3,319 against 3,275,
+Qwen3.5 4B 3,335 against 3,277. The projection is a property of the model and the launch, not of
+the card, which is why one machine can supply it for all.
+
+**2. Card ranks decide the order.** `recommendation_rank_gpu`, where a manifest carries it,
+replaces `recommendation_rank` on this path. When the catalog carries any, the pick is the
+highest card-ranked model that fits the card and clears the RAM floor (rank, then comfortable
+tier, then size), outright. §6.6 decision 2, "the RAM pick stands wherever it fits the card", is
+retired with it: the RAM pick is ordered by comfortable RAM, which says little about a model that
+lives on the card, and it kept the 9B ahead of Gemma 4 12B on cards that hold both. A catalog
+without card ranks is rule C unchanged.
+
+Decision basis, as in §6.7: the 2026-11 answer-quality study first, then speed measured on a card.
+
+| Card (idle, total − 1,024) | Pick, RAM allowing | Study score | Before | Speed evidence |
+|---|---|---|---|---|
+| 6 GB | `gemma4-e4b-it-qat-q4` | 82.9 | `qwen3.5-4b-ud-q4kxl`, 76.9 | 78 tok/s, 43/43 layers, RTX 3060 Laptop (the 4B: 69) |
+| 8 GB | `qwen3.5-9b-ud-q4kxl` | 86.1 | `qwen3.5-4b-ud-q4kxl`, 76.9 | 29 tok/s, 33/33, GTX 1070 Ti (#391 leg 2) |
+| 12 and 16 GB | `gemma4-12b-it-qat-q4` | 89.5 | `qwen3.5-9b-ud-q4kxl`, 86.1 | 73 tok/s on the RTX 3090 (the 9B: 94) |
+| 20 GB | `qwen3.8-27b-ud-q4km` | 89.9 | the same | 48 tok/s with MTP, RTX 3090 |
+| 24 GB | `gemma4-31b-it-qat-q4` | 94.6 | `qwen3.8-27b-ud-q5km`, 90.0 | 35 tok/s, 61/61 layers, RTX 3090 (the UD-Q5_K_M: 50 with MTP) |
+
+Under 12 GB of RAM the pick is `qwen3-4b-instruct-2507-q4` on every card (82.0; 88 tok/s on the
+RTX 3060 Laptop), at 12 and 13 GB the 9B where the card holds it. Card ranks: Gemma 4 12B and the
+E4B and Gemma 4 31B 3, the 2507 and the Qwen3.8 27B UD-Q5_K_M 2, Qwen3.5 4B and the E2B 1; the 9B
+and the Qwen3.8 27B UD-Q4_K_M keep their ordinary 3.
+
+The 20 and 24 GB rows (owner call 2026-11-20, speeds in
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/card-speed-b12110-20261120.tsv`):
+
+- **24 GB: Gemma 4 31B.** It leads the study by 4.6 points over the UD-Q5_K_M, more than the
+  study's 3-point threshold for calling two models apart, and 35 tok/s on the card is far above
+  reading speed. Its need with the margin is 21,640 MiB, so it is the pick from that much free
+  memory. This sets the card rank only. Its ordinary rank stays 0, so the §9 ruling "rank 0
+  forever" (made on the grounded-answer F1, where it tied the 26B-A4B at a quarter of the speed)
+  still holds without a card and on Apple Silicon; on a card that holds it completely the speed
+  objection does not apply, and the study gives it the quality lead that F1 did not show.
+- **The UD-Q5_K_M steps behind its UD-Q4_K_M sibling on the card** (card rank 2). The two are
+  level on the study (90.0 and 89.9), the UD-Q4_K_M needs 3 GiB less, and a card just short of
+  the 31B (21,340 to 21,639 MiB free) is better served by the model with room to spare.
+- **20 GB: unchanged, the UD-Q4_K_M.** Gemma 4 31B does not fit. Qwen3.6 27B Q4 leads by 2.9
+  points (92.8), under the threshold, and is slower (39 tok/s against 48 with MTP).
+
+What partial offload costs, from the same laptop: the 9B at 20 of 33 layers ran at 8.7 tok/s
+(5.1 on the processor alone, 94 fully on a card), its UD-Q3 variant at 25 of 33 at 15. A model
+that does not fit completely is not a card pick.
+
+**3. A model seen landing only partly on this card is not picked for it again.** The need is
+measured, the budget is a reading, and both can be wrong for one machine. So the picker also reads
+what happened: the placement the app already stores per model after every start
+(`AppSettings.modelPlacements`, this machine's only, `cardEvidenceFor`). `landedPartlyOnCard`
+counts a record when
+
+- it is a card start with fewer layers on the card than the model has,
+- its context was no larger than the one the next start launches with, and
+- the card had at least as much free memory then as the budget offers now, within 256 MiB
+  (a start beside something that filled the card must not demote the model for good; an unknown
+  free figure counts).
+
+Such a model is not eligible, and the next card-ranked model that fits is the pick. A later start
+that lands fully overwrites the record and lifts the exclusion. This is what allows the 1 GiB
+margin to be the only reserve: a wrong estimate corrects itself after one start instead of being
+padded for everyone. All three seams (the AI Model ★, the Performance check, the live
+recommendation) pass the same evidence.
+
+**4. The named chain applies here too.** The field of §6.7 is called `step_down_to` since this
+section, because the card path follows it as well: a benchmark under 5 tok/s on the pick, or on a
+model further down its chain, recommends that model's target, over models that are card-ranked
+and eligible. Gemma 4 12B joined the chain (`-> qwen3.5-9b-ud-q4kxl`), so on a card it runs
+Gemma 12B → 9B → E4B → E2B. A slow reading the chain does not cover is §6.5, as before. A no-fit
+fallback never steps.
+
+**Not settled.** The 20 and 24 GB picks (above). The projections come from one machine and one
+build: a pin bump re-reads them with `projected-graphics-need` in the same folder as the template.
+`chatGraphicsShareMib` (the reranker and translation headroom gates) does not read the projection.
+It charges the running chat model its MEASURED share from this session's load log, and only
+without one the derived estimate with the cache term scaled to the launched window. Against the
+projection plus the margin, that fallback is higher for 16 of the 24 measured models but lower for
+8, most for Gemma 4 31B (692 MiB) and the E2B (553 MiB), so before a measured start those gates can
+count the chat model short. No start on a 12, 16 or 20 GB card has been measured on this build.
 
 ## 7. Design record — catalog expansion (Phases 28–29, decisions D16–D22)
 
@@ -2072,7 +2325,7 @@ recorded next to the rank in its manifest:
 | Candidate | Decision | Basis (rescored numbers) |
 |---|---|---|
 | `gemma4-26b-a4b-it-qat-q4` | **rank 2** — ranked runner-up / MoE speed alternative | EM parity with the 24 GB pick `qwen3.6-27b-q4` (.9765 both), ZERO audited hallucinations (both), ~4× its decode (tg 155.8 vs 40.1 t/s vulkan; 15.6 vs 2.8 cpu) at 2.5 GB less disk — but F1 .3307 vs .3523 keeps the Qwen the tier pick (both families share the terse house style, so the §9 length confound does not explain the gap). Never the auto-pick while a rank-3 model fits (pinned in `committed-catalog.test.ts`). *(#378: the quality part of this basis is an F1 delta; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
-| `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). |
+| `gemma4-31b-it-qat-q4` | **rank 0 forever — DO NOT PROMOTE** | Issue #82's drop condition is met: ties the 26B-A4B within .003 F1 (.3334 vs .3307; both 0 hallucinations, both the same two cautious DE over-abstentions) while decoding 4.2× (vulkan) / 6× (cpu) slower at +3.3 GB disk. Stays selectable as the Apache-2.0 GPU-box quality ceiling; catalog removal deliberately not taken (shipped in v0.1.55). **Amended 2026-11-20 (§6.8):** the ordinary rank stays 0, but it carries card rank 3 and is the pick on a 24 GB card, on the 2026-11 answer-quality study (94.6). |
 | `gemma4-e4b-it-qat-q4` | **rank 0** — missed the 8B bar | F1 .2999 vs Ministral .3111 / `qwen3.5-9b` .3152 / `qwen3-8b` .3262; hallucination-honest after audit (1 real). *(#378: an F1-delta basis; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
 | `gemma4-e2b-it-qat-q4` | **rank 0** — gated on the owed weak-hardware datapoint *(resolved 2026-08-09: the #153 leg landed and promoted it to **rank 3** — see §6.5 "#153 amendment")* | F1 .3373 edges the bundled `qwen3-4b` (.3277) with equal audited hallucinations (3) and the fastest cpu decode measured (24.3 t/s tg) — but `qwen3-4b-2507` keeps the tier quality lead (.3613, 1 real), Deep failed the flip rule at this size (7/8 vs Balanced 8/8), and the issue-#53 weak-16 GB-box measured-tok/s leg is still owed. That datapoint decides (wave follow-up issue). *(#378: the quality part of this basis is an F1 delta; read it beside `mean_answer_chars`, re-read pending as an owner call, §5.)* |
 | `qwen3.5-35b-a3b-ud-q4kxl` *(§9's deferred-to-speed rank)* | **rank 1** — ranked MoE alternative | The §9 bar ("beat `qwen3-30b-a3b-q4` on speed OR quality by enough") is met on both axes: 0 real hallucinations vs the incumbent MoE's 2 at EM parity (quality), and the 3B-active speed case confirmed (tg 140.9 t/s vulkan / 12.1 cpu vs the dense 27B-Q4's 40.1 / 2.8). *(Residual settled: its §9.1 in-app smoke PASSED 2026-08-09 — see the smokes record below.)* |

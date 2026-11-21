@@ -16,6 +16,9 @@ recommended_ram_gb: 32
 # depends ONLY on the local German/English grounded-QA benchmark + manual smoke — not the public
 # scores. Promote with a real `recommendation_rank` only after it wins locally on b9849.
 recommendation_rank: 0
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 65/65 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 17414
 # Native context is 262,144 tokens (extensible to ~1,010,000 via YaRN). Manifest runtime context
 # is 8192 for now — the safe local runtime budget for normal laptops, not the model maximum.
 # Revisit only after KV-cache/RAM budgeting + a long-context eval.

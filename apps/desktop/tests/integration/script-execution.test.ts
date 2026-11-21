@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import { assertCommercialDrive, DRIVE_LICENSE_ARTIFACTS } from '../../src/main/services/commercial-drive'
@@ -10,7 +10,9 @@ import { buildChecksumsJson, buildPolicyJson, DRIVE_LAYOUT_DIRS, type ChecksumsJ
 import { REPO_ROOT, repoText } from '../helpers/repo-files'
 import { SCRIPT_LEGS, downloadEnv, isolatedScripts, outputOf, scriptRoot } from '../helpers/script-legs'
 import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
+import { MARKER_ROWS, type MarkerFamily } from '../helpers/fetch-runtime-markers'
 import { testBudgetMs } from '../helpers/hang-budget'
+import { canMakeUnreadable, makeUnreadable } from '../helpers/unreadable-dir'
 
 // Executes the drive-builder scripts (#233, #234) — unlike script-drift.test.ts, which is
 // text-only by charter. Every case is OFFLINE and deterministic: the fetch cases stop before
@@ -201,6 +203,10 @@ function sellableDrive(): string {
   writeDriveFile(root, 'config/policy.json', JSON.stringify(buildPolicyJson(), null, 2))
   writeDriveFile(root, 'app-skills/demo/SKILL.md', '---\nid: demo\n---\n')
   mkdirSync(join(root, 'user-skills'))
+  // The folders a Kit build lays out empty, and the ones the app creates on first use and may leave empty (#893).
+  for (const dir of ['workspace/documents', 'workspace/images', 'workspace/zim-transient', 'logs']) {
+    mkdirSync(join(root, ...dir.split('/')), { recursive: true })
+  }
   for (const name of DRIVE_LICENSE_ARTIFACTS) writeDriveFile(root, name, name)
   writeDriveFile(root, `HilbertRaum-${APP_VERSION}-portable.exe`, 'app')
   writeDriveFile(root, 'Start HilbertRaum.cmd', 'launcher')
@@ -343,6 +349,36 @@ describe.skipIf(!toolBuilt)('assert-commercial-drive command line', () => {
     expect(r.stderr).toBe('')
   })
 
+  // #847: a Kit is built with its own app version, so a manifest for a newer HilbertRaum on it is always a defect, and
+  // discovery no longer reports one as invalid (it is listed, not dropped): the gate counts it on its own, by name.
+  it.each<[string, (yaml: string) => string, string]>([
+    ['a role the app does not know', (y) => y.replace('role: chat', 'role: hologram'), 'role "hologram"'],
+    ['a min_app_version above the app the Kit ships', (y) => `${y}min_app_version: 99.0.0\n`, 'min_app_version 99.0.0']
+  ])('a manifest for a newer HilbertRaum makes the drive NOT SELLABLE: %s (#847)', (_title, edit, named) => {
+    const root = sellableDrive()
+    writeDriveFile(
+      root,
+      'model-manifests/future.yaml',
+      edit(manifestYaml({ id: 'future', localPath: 'models/chat/future.gguf', sha256: REAL_SHA }))
+    )
+    const r = gate(declared(root))
+    expect(r.status, outputOf(r)).toBe(1)
+    expect(r.stdout).toContain('NOT SELLABLE')
+    expect(r.stdout).toContain(named)
+  })
+
+  it('a min_app_version the Kit app meets is judged against --app-version: still SELLABLE (#847)', () => {
+    const root = sellableDrive()
+    writeDriveFile(
+      root,
+      'model-manifests/future.yaml',
+      `${manifestYaml({ id: 'future', localPath: 'models/chat/future.gguf', sha256: REAL_SHA })}min_app_version: ${APP_VERSION}\n`
+    )
+    const r = gate(declared(root))
+    expect(r.status, outputOf(r)).toBe(0)
+    expect(r.stdout).toContain('SELLABLE')
+  })
+
   // #767: verifying a weight logs a line through console.log, and it landed on stdout ahead of the object.
   it('--json keeps stdout to the one verdict object while a weight is hashed', async () => {
     const root = sellableDrive()
@@ -359,6 +395,30 @@ describe.skipIf(!toolBuilt)('assert-commercial-drive command line', () => {
     expect(Object.keys(verdict.checks)).toEqual(Object.keys(inProcess.checks))
     expect(Object.values(verdict.checks).every((v) => v === true)).toBe(true)
   })
+})
+
+// A name is bytes. BSD tr (macOS) refuses a sequence that is not valid UTF-8 in a UTF-8 locale ("Illegal byte sequence"), and
+// under `set -euo pipefail` that ended the gate with no verdict. GNU tr never refuses, so this stand-in plays BSD tr: first on
+// PATH it exits 1 on a non-UTF-8 name unless the locale is C. Whether a Mac can hold such a name at all (APFS refuses it) is owed by hand; the
+// darwin row below pins what the real tr does with the byte.
+const BSD_TR_STAND_IN = [
+  '#!/bin/bash',
+  'loc="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"',
+  'input="$(cat; echo x)"; input="${input%x}"',
+  'case "$loc" in',
+  "  C|POSIX|'') ;;",
+  '  *) if ! printf \'%s\' "$input" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then echo "tr: Illegal byte sequence" >&2; exit 1; fi ;;',
+  'esac',
+  "printf '%s' \"$input\" | /usr/bin/tr \"$@\"",
+  ''
+].join('\n')
+
+// The premise of the row below, on the real BSD tr: under LC_ALL=C a byte that is not UTF-8 passes through and the exit
+// code is 0 (the fix relies on it). od's field width differs between BSD and GNU, so the hex bytes are normalised.
+it.skipIf(process.platform !== 'darwin')('the real tr passes a non-UTF-8 byte under LC_ALL=C (#919 premise)', () => {
+  const r = spawnSync('bash', ['-c', `set -o pipefail; printf '\\377x' | LC_ALL=C tr '[:upper:]' '[:lower:]' | od -An -tx1`], { encoding: 'utf8' })
+  expect(r.status, outputOf(r)).toBe(0)
+  expect(r.stdout.trim().split(/\s+/).join(' ')).toBe('ff 78')
 })
 
 for (const leg of SCRIPT_LEGS) {
@@ -427,6 +487,52 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain('model-manifests missing on the drive')
         expect(out).not.toMatch(/^\s*SELLABLE:/m)
         expect(out).not.toContain('Done. Test the drive')
+      })
+
+      // #986: an engine install interrupted on the drive leaves `<dir>.new` / `<dir>.old` beside a pinned
+      // build until the app's next start there. The native pre-flight names it (the canonical gate does too).
+      it('names a leftover from an interrupted engine install beside a pinned build (#986)', () => {
+        const root = scriptRoot('script-swap-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'win.new'), { recursive: true })
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'linux', 'cpu.old'), { recursive: true })
+        // Not a name the swap uses (the app-update plan's own folder): exact names only.
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'mac@b9999.new'), { recursive: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/llama.cpp/win.new is left from an interrupted engine install')
+        expect(out).toContain('runtime: runtime/llama.cpp/linux/cpu.old is left from an interrupted engine install')
+        expect(out).not.toContain('mac@b9999')
+      })
+
+      // #986 review 2: the knowledge-pack tools have no row in the runtime matrix (optional family), and
+      // their install can be interrupted all the same.
+      it('names a leftover beside the knowledge-pack tools too (#986)', () => {
+        const root = scriptRoot('script-swap-kiwix-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        mkdirSync(join(root, 'runtime', 'kiwix-tools', 'linux.old'), { recursive: true })
+        mkdirSync(join(root, 'runtime', 'kiwix-tools', 'win.new'), { recursive: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/kiwix-tools/linux.old is left from an interrupted engine install')
+        expect(out).toContain('runtime: runtime/kiwix-tools/win.new is left from an interrupted engine install')
+      })
+
+      // #986 review: a leftover that is a link whose target is gone is still a leftover (the canonical
+      // gate lstats it). The PowerShell twin looks at the entry itself, not its target.
+      it('names a leftover that is a dangling link (#986)', () => {
+        const root = scriptRoot('script-swap-link-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        const gone = mkdtempSync(join(tmpdir(), 'hilbertraum-script-gone-'))
+        mkdirSync(join(root, 'runtime', 'llama.cpp'), { recursive: true })
+        symlinkSync(gone, join(root, 'runtime', 'llama.cpp', 'win.old'), process.platform === 'win32' ? 'junction' : 'dir')
+        rmSync(gone, { recursive: true, force: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/llama.cpp/win.old is left from an interrupted engine install')
       })
 
       it('rejects an unknown platform label before doing anything (exit 2)', () => {
@@ -1034,6 +1140,57 @@ for (const leg of SCRIPT_LEGS) {
       })
     })
 
+    // #873: an engine newer than the drive's pin was put there by a newer app (#516, #842); the script used to
+    // re-fetch the drive's older pin over it. The table is shared with script-drift.test.ts's ordering row.
+    describe('fetch-runtime keeps an engine newer than the drive pin (#873)', () => {
+      const WHISPER_BLOCK = [
+        'whisper_cpp:',
+        '  version: v1.8.6',
+        '  builds:',
+        '    - os: win',
+        '      arch: x64',
+        '      backend: cpu',
+        '      url: https://example.invalid/whisper-bin-x64.zip',
+        `      sha256: ${REAL_SHA}`,
+        '      extract_to: runtime/whisper.cpp/win',
+        ''
+      ].join('\n')
+      const DIRS: Record<MarkerFamily, string[]> = {
+        llama_cpp: ['llama.cpp', 'win'],
+        whisper_cpp: ['whisper.cpp', 'win'],
+        kiwix_tools: ['kiwix-tools', 'win']
+      }
+      const FILES: Record<MarkerFamily, readonly string[]> = {
+        llama_cpp: ['llama-server.exe'],
+        whisper_cpp: ['whisper-cli.exe'],
+        kiwix_tools: KIWIX_WIN
+      }
+
+      it.each(MARKER_ROWS.map((row) => [row.title, row] as const))('%s', (_title, row) => {
+        const root = scratchTarget(REAL_SHA, (y) => `${y}${WHISPER_BLOCK}`)
+        const dir = join(root, 'runtime', ...DIRS[row.family], ...(row.cpuNet ? ['cpu'] : []))
+        mkdirSync(dir, { recursive: true })
+        for (const name of FILES[row.family]) writeFileSync(join(dir, name), 'fake')
+        // #729: an install the script keeps still loses the tunnel program, as on the current-pin skip path.
+        if (row.family === 'llama_cpp') writeFileSync(join(dir, 'llama-connect.exe'), 'tunnel')
+        writeFileSync(join(dir, '.hilbertraum-runtime.json'), JSON.stringify({ ...row.marker, os: 'win', arch: 'x64' }))
+        const args = [f('Target'), root, f('Family'), row.family, f('Os'), 'win', f('Arch'), 'x64', ...(row.cpuNet ? [f('Backend'), 'cpu'] : [])]
+        const r = leg.run(fetcher, [...args, f('DryRun'), ...row.flags.map((flag) => f(flag))])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(0)
+        if (row.expect === 'skip-newer') {
+          expect(out).toContain(`${row.marker.version} is newer than this drive's pin ${row.pin}, installed by the app; pass ${f('AllowDowngrade')} to replace it`)
+          expect(out).not.toContain('present but')
+          expect(out.includes('would leave out: llama-connect.exe')).toBe(row.family === 'llama_cpp')
+        } else {
+          expect(out).toContain('present but')
+          expect(out).not.toMatch(/skip \(/)
+          expect(out).not.toContain('is newer than')
+        }
+        expect(out.includes(`commercial: replacing the newer ${row.marker.version} with the pinned ${row.pin}`)).toBe(row.expect === 'refetch-commercial')
+      })
+    })
+
     // build-commercial-drive provisions every OS from one host, so it leans on both rules. Each CI leg has
     // one discriminating row: mac on x64 hosts, linux on the arm64 macOS runner.
     describe('fetch-runtime picks a build', () => {
@@ -1149,6 +1306,136 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).toContain(`    - ${line}`)
         expect(out).not.toContain('SELLABLE: canonical gate passed')
       })
+
+      /** The native pre-flight's user-data lines (both families), whole and sorted. */
+      const nativeUserData = (out: string): string[] =>
+        out
+          .split(/\r?\n/)
+          .map((l) => l.trimEnd())
+          .filter((l) => l.startsWith('    - user data '))
+          .sort()
+
+      // #893: a hand-wiped drive that kept files beside the workspace, in logs/ or in config/. The pre-flight names each one,
+      // a file in a sub-folder by its folder and a link by its own name (never followed: its target here is an empty folder),
+      // a config file in any case and with any suffix, and a dot file. One combined row per leg: a verify run is slow on the
+      // Windows runner (#458).
+      it.skipIf(!toolBuilt)('a used drive: the pre-flight names every leftover (#893)', () => {
+        const root = sellableDrive()
+        for (const rel of [
+          'workspace/hilbertraum.sqlite.recovery',
+          'workspace/hilbertraum.sqlite.tmp',
+          'workspace/images/a.enc',
+          'workspace/.write-test-1',
+          'config/working-copy-lost.json',
+          'config/Workspace.json.tmp',
+          'logs/app.log.enc'
+        ]) {
+          writeDriveFile(root, rel, 'x')
+        }
+        const linkTarget = mkdtempSync(join(tmpdir(), 'hilbertraum-script-link-'))
+        symlinkSync(linkTarget, join(root, 'workspace', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('NOT SELLABLE')
+        // Whole lines: `…sqlite.tmp` must not pass for `…sqlite`, and the empty folders sellableDrive() lays out stay unnamed.
+        expect(nativeUserData(out), out).toEqual(
+          [
+            'config/Workspace.json.tmp',
+            'config/working-copy-lost.json',
+            'logs/app.log.enc',
+            'workspace/.write-test-1',
+            'workspace/hilbertraum.sqlite.recovery',
+            'workspace/hilbertraum.sqlite.tmp',
+            'workspace/images/*',
+            'workspace/linked'
+          ].map((rel) => `    - user data present: ${rel}`)
+        )
+      })
+
+      // #893: the pre-flight read a folder it could not list, or a file where the folder belongs, as empty. It refuses each
+      // and names it: logs/ and a workspace sub-folder that hold a file, and a config/ whose policy still opens by its path.
+      it.skipIf(!toolBuilt || !canMakeUnreadable)('a drive the pre-flight cannot look into: it names each folder (#893)', () => {
+        const root = sellableDrive()
+        writeDriveFile(root, 'logs/app.log', 'x')
+        writeDriveFile(root, 'workspace/documents/a.enc', 'x')
+        const undo = [
+          makeUnreadable(join(root, 'logs')),
+          makeUnreadable(join(root, 'workspace', 'documents')),
+          makeUnreadable(join(root, 'config'), { traverse: true })
+        ]
+        try {
+          const r = verify(root)
+          const out = outputOf(r)
+          expect(r.status, out).toBe(1)
+          expect(out).toContain('NOT SELLABLE')
+          expect(nativeUserData(out), out).toEqual(
+            ['config/', 'logs/', 'workspace/documents/'].map((rel) => `    - user data unreadable: ${rel}`)
+          )
+        } finally {
+          for (const u of undo) u()
+        }
+      })
+
+      it.skipIf(!toolBuilt)('a drive whose workspace and logs are files: the pre-flight names each (#893)', () => {
+        const root = sellableDrive()
+        for (const dir of ['workspace', 'logs']) {
+          rm(root, dir)
+          writeDriveFile(root, dir, 'x')
+        }
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('NOT SELLABLE')
+        expect(nativeUserData(out), out).toEqual(
+          ['logs (not a folder)', 'workspace (not a folder)'].map((rel) => `    - user data unreadable: ${rel}`)
+        )
+      })
+
+      // A POSIX name may hold a newline. Each entry is one name, as the TS gate reads it: an empty folder named so is no user
+      // data, and `x<newline>workspace.json` is no vault descriptor, so the drive stays SELLABLE. Windows names hold none.
+      it.skipIf(!toolBuilt || process.platform === 'win32')('names holding a newline are one entry each: the drive stays SELLABLE (#893)', () => {
+        const root = sellableDrive()
+        mkdirSync(join(root, 'workspace', 'new\nline'))
+        writeDriveFile(root, 'config/x\nworkspace.json', 'x')
+        const r = verify(root)
+        const out = outputOf(r)
+        expect(nativeUserData(out), out).toEqual([])
+        expect(r.status, out).toBe(0)
+        expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+      })
+
+      it.skipIf(!toolBuilt || process.platform === 'win32')(
+        'a config/ name that is not UTF-8 is one entry: the gate still gives its verdict (#919)',
+        (ctx) => {
+          const root = sellableDrive()
+          const odd = Buffer.concat([Buffer.from(join(root, 'config') + '/'), Buffer.from([0xff]), Buffer.from('x')])
+          try {
+            writeFileSync(odd, '')
+          } catch (e) {
+            // A file system that refuses a name that is not valid UTF-8 (APFS: EILSEQ; others EINVAL, ENOENT-style
+            // refusals) cannot hold the row's premise. Any other error is a real failure.
+            const code = (e as NodeJS.ErrnoException).code
+            if (code === 'EILSEQ' || code === 'EINVAL') return ctx.skip()
+            throw e
+          }
+          try {
+            const stubs = mkdtempSync(join(tmpdir(), 'hilbertraum-bsd-tr-'))
+            writeFileSync(join(stubs, 'tr'), BSD_TR_STAND_IN)
+            chmodSync(join(stubs, 'tr'), 0o755)
+            const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-x64'], {
+              env: { PATH: `${stubs}${delimiter}${process.env.PATH ?? ''}`, LANG: 'C.UTF-8', LC_ALL: '', LC_CTYPE: '' }
+            })
+            const out = outputOf(r)
+            expect(r.status, out).toBe(0)
+            expect(out).toContain(`SELLABLE: canonical gate passed for win-x64 at ${APP_VERSION}.`)
+            expect(nativeUserData(out), out).toEqual([])
+          } finally {
+            // Unlink through the same bytes, so the scratch root can always be removed.
+            rmSync(odd, { force: true })
+          }
+        }
+      )
 
       // #766: a Kit ships its bundled set plus any model with a file on the drive, and lists every other manifest for in-app
       // download. The pre-flight and the canonical gate both leave a catalog model alone, and both refuse a drive that ships

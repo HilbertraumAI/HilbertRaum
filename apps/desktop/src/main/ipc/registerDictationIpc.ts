@@ -9,6 +9,7 @@ import { shredFile, workspaceAdmitsWork } from '../services/workspace-vault'
 import { t } from '../../shared/i18n'
 import { tMain } from '../services/i18n'
 import { isEngineCannotRunError } from '../services/runtime/engine-load'
+import { isWhisperPathError } from '../services/transcriber/argv'
 import { log } from '../services/logging'
 import {
   describeDictationLevel,
@@ -136,6 +137,8 @@ export function registerDictationIpc(ctx: AppContext): void {
       // The reason is for the local log only (stderr tails, never content); the
       // renderer gets the friendly copy (timeout included — a wedged child is a failure).
       log.warn('Dictation transcription failed', { error: String(err) })
+      // #869: a voice model whose path the voice engine cannot read here — moving it fixes that.
+      if (isWhisperPathError(err)) throw new Error(tMain('main.dictation.voiceModelPathUnsupported'))
       // #530: the OS refused to start the voice engine — say so; a retry would not help.
       throw new Error(tMain(isEngineCannotRunError(err) ? 'main.dictation.engineCannotRun' : 'main.dictation.failed'))
     } finally {

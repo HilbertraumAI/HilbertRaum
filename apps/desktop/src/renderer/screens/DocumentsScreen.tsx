@@ -37,6 +37,7 @@ import {
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { initialTranslateChoice, setLastTranslateChoice } from '../lib/translateSession'
 import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
+import { inNameOrder } from '../lib/collation'
 import { useEventCallback } from '../lib/useEventCallback'
 import { foldCase } from '@shared/text-fold'
 import { useOcrInstall } from '../lib/useOcrInstall'
@@ -852,14 +853,17 @@ export function DocumentsScreen({
 
   // ---- Document-organization: section rail filtering + collection/project actions ----
   const { activeProjects, archivedProjects, libraryCollection, temporaryCollection } = useMemo(() => {
-    const projects = collections.filter((c) => c.type === 'project')
+    const projects = inNameOrder(
+      collections.filter((c) => c.type === 'project'),
+      lang
+    )
     return {
       activeProjects: projects.filter((c) => c.archivedAt == null),
       archivedProjects: projects.filter((c) => c.archivedAt != null),
       libraryCollection: collections.find((c) => c.type === 'library') ?? null,
       temporaryCollection: collections.find((c) => c.type === 'temporary') ?? null
     }
-  }, [collections])
+  }, [collections, lang])
 
   // Source lookup for the generated-staleness derivation (plan §15.3) — pure, off the
   // already-listed fields; no extra read, no hot-path write.

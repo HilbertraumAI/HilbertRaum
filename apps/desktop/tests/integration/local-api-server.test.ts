@@ -1,127 +1,20 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, vi, onTestFinished } from 'vitest'
+import http from 'node:http'
 import net from 'node:net'
-import { RuntimeManager, type RuntimeChatOptions } from '../../src/main/services/runtime'
+import { RuntimeManager } from '../../src/main/services/runtime'
 import { LocalApiServer, PortInUseError } from '../../src/main/services/local-api/server'
-import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
-import { manualSource, type ManualSource } from '../helpers/manual-stream'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { ChatRequestError, RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
+import { until, within } from '../helpers/hang-budget'
+import { authed, freePort, localApiDeps, localApiHarness, rawHttp, type LocalApiHarness } from '../helpers/local-api-harness'
 
 // LocalApiServer integration pins (local-api wave P3): a REAL listener on an ephemeral
-// port, driven over real HTTP, against a real RuntimeManager (gated mock runtimes). The
-// pin set is the plan's §4 P3 rows: bind posture, the Host/Origin/content-type/auth
-// matrix, the OpenAI response + error contract, distinct model states, pre-emption
-// semantics, body-cap/backpressure bounds, and teardown.
+// port, driven over real HTTP, against a real RuntimeManager (gated fake runtimes; the shared
+// harness, tests/helpers/local-api-harness.ts). The pin set is the plan's §4 P3 rows: bind
+// posture, the Host/Origin/content-type/auth matrix and its order, the OpenAI response +
+// error contract, distinct model states, pre-emption semantics, body-cap/backpressure
+// bounds, the shipped limits of docs/local-api.md §6.7, and teardown.
 
-interface Harness {
-  server: LocalApiServer
-  mgr: RuntimeManager
-  base: string
-  port: number
-  token: string
-  sources: ManualSource[]
-  lastOptions: () => RuntimeChatOptions | undefined
-  setDocTask: (busy: boolean) => void
-  /** Rotate the access key the server validates against (the P4 regenerate flow). */
-  setToken: (t: string) => void
-  setAdmitsWork: (v: boolean) => void
-  /** How many admission checks ran — each request's `tryAdmit` asks once, synchronously before it parks. */
-  admitChecks: () => number
-  stopAll: () => Promise<void>
-}
-
-const cleanups: Array<() => Promise<void>> = []
-afterEach(async () => {
-  while (cleanups.length > 0) await cleanups.pop()!()
-})
-
-async function makeHarness(opts?: {
-  startModel?: boolean
-  tokenRequired?: boolean
-  echo?: boolean
-  queueWaitMs?: number
-  drainTimeoutMs?: number
-}): Promise<Harness> {
-  const sources: ManualSource[] = []
-  const optionsSeen: RuntimeChatOptions[] = []
-  const echo = opts?.echo ?? true
-  const mgr = new RuntimeManager((startOpts) => ({
-    modelId: startOpts.modelId,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: '', port: null }),
-    contextWindow: () => startOpts.contextTokens,
-    chatStream(messages, options?: RuntimeChatOptions) {
-      if (options) optionsSeen.push(options)
-      if (echo) {
-        // Echo runtime: deterministic two-token reply, honours signal + onFinish.
-        const text = messages[messages.length - 1]?.content ?? ''
-        return (async function* (): AsyncGenerator<string, void, unknown> {
-          if (options?.signal?.aborted) return
-          yield 'echo: '
-          yield text
-          options?.onFinish?.('stop')
-        })()
-      }
-      const src = manualSource()
-      sources.push(src)
-      return src.stream(options?.signal)
-    }
-  }))
-  if (opts?.startModel !== false) {
-    await mgr.start({ modelId: 'test-model', modelPath: '/m.gguf', contextTokens: 4096 })
-  }
-  let docTask = false
-  let admits = true
-  let admitChecks = 0
-  const token = 'hr-' + 'a'.repeat(43)
-  let liveToken = token
-  const server = new LocalApiServer({
-    getSettings: () => ({ localApiPort: 0, localApiTokenRequired: opts?.tokenRequired ?? true }),
-    getToken: () => liveToken,
-    runtime: {
-      status: () => mgr.status(),
-      active: () => mgr.active(),
-      isExternallyBusy: () => mgr.isExternallyBusy(),
-      setExternalPreemption: (hook) => mgr.setExternalPreemption(hook)
-    },
-    hasActiveDocTask: () => docTask,
-    admitsWork: () => {
-      admitChecks++
-      return admits
-    },
-    estimateBusySeconds: () => 42,
-    appVersion: '0.0.0-test',
-    queueWaitMs: opts?.queueWaitMs,
-    drainTimeoutMs: opts?.drainTimeoutMs
-  })
-  await server.start()
-  const port = server.status().port!
-  const harness: Harness = {
-    server,
-    mgr,
-    base: `http://127.0.0.1:${port}`,
-    port,
-    token,
-    sources,
-    lastOptions: () => optionsSeen[optionsSeen.length - 1],
-    setDocTask: (b) => (docTask = b),
-    setToken: (t) => (liveToken = t),
-    setAdmitsWork: (v) => (admits = v),
-    admitChecks: () => admitChecks,
-    stopAll: async () => {
-      await server.stop()
-      await mgr.stop()
-    }
-  }
-  cleanups.push(harness.stopAll)
-  return harness
-}
-
-function authed(token: string, extra?: Record<string, string>): Record<string, string> {
-  return { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...extra }
-}
-
-async function post(h: Harness, body: unknown, headers?: Record<string, string>): Promise<Response> {
+async function post(h: LocalApiHarness, body: unknown, headers?: Record<string, string>): Promise<Response> {
   return fetch(`${h.base}/v1/chat/completions`, {
     method: 'POST',
     headers: headers ?? authed(h.token),
@@ -138,108 +31,149 @@ function ssePayloads(text: string): string[] {
     .map((b) => b.slice('data: '.length))
 }
 
+/** The `(port, host)` of every `listen` an http.Server made since the spy was installed. */
+function httpBinds(listen: { mock: { calls: unknown[][]; contexts: unknown[] } }): unknown[][] {
+  return listen.mock.calls.filter((_, i) => listen.mock.contexts[i] instanceof http.Server).map((args) => args.slice(0, 2))
+}
+
+/**
+ * Whether the `setTimeout` call whose stack this is came from local-api/server.ts itself. Called from a spy
+ * implementation: frame 0 is that implementation, the spy's own frames (node_modules) follow, then the caller.
+ */
+function armedByServer(stack: string | undefined): boolean {
+  const frames = (stack ?? '').split('\n').filter((line) => line.trimStart().startsWith('at '))
+  const caller = frames.slice(1).find((frame) => !/[\\/]node_modules[\\/]/.test(frame))
+  return caller !== undefined && /[\\/]services[\\/]local-api[\\/]server\.ts:\d/.test(caller)
+}
+
+/** Whether something accepts a TCP connection on `host:port` (a refusal, or a host with no such loopback, is false). */
+function accepts(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect(port, host)
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => resolve(false))
+  })
+}
+
 describe('LocalApiServer — bind posture (D2/O5)', () => {
   it('listens on 127.0.0.1 AND ::1, never 0.0.0.0; the two listeners share the port', async () => {
-    const h = await makeHarness()
+    // The bind targets are literals in server.ts: read them off the listen calls themselves.
+    const listen = vi.spyOn(net.Server.prototype, 'listen')
+    onTestFinished(() => listen.mockRestore())
+    const h = await localApiHarness()
+    // The setting asks for port 0 (ephemeral); the ::1 twin binds the port the v4 listener got.
+    expect(httpBinds(listen)).toEqual([
+      [0, '127.0.0.1'],
+      [h.port, '::1']
+    ])
     const v4 = await fetch(`${h.base}/v1/models`, { headers: authed(h.token) })
     expect(v4.status).toBe(200)
-    // ::1 twin (guarded: a runner without IPv6 loopback would have logged + degraded).
-    try {
+    // A machine without IPv6 loopback degrades to v4-only and says so in the log; anywhere else the ::1 listener
+    // must answer (Windows resolves `localhost` to ::1 first).
+    if (!h.logged.some((line) => line.includes('IPv6 loopback bind failed'))) {
       const v6 = await fetch(`http://[::1]:${h.port}/v1/models`, { headers: authed(h.token) })
       expect(v6.status).toBe(200)
-    } catch {
-      /* no IPv6 loopback on this runner — the v4 assertion above still pins the port */
     }
-    // Nothing is reachable via a non-loopback interface: the listener addresses are
-    // loopback-only by construction (bind targets are literals in server.ts, pinned here
-    // via the Server header response on loopback + the D2 test below).
-    const server = (await v4.text()).length
-    expect(server).toBeGreaterThan(0)
   })
 
-  it('a taken port surfaces PortInUseError (never a crash)', async () => {
-    const blocker = net.createServer()
-    await new Promise<void>((r) => blocker.listen(0, '127.0.0.1', r))
-    const takenPort = (blocker.address() as net.AddressInfo).port
+  // #860 API1: the server binds 127.0.0.1 first, so a port taken only on ::1 fails AFTER the v4 listener is live. That
+  // listener must go too: Windows resolves `localhost` to ::1 first, so with a v4 listener left open, a client would
+  // send its access key to whatever program holds ::1, and the user would be told the endpoint is off.
+  it.for<[string, string]>([
+    ['127.0.0.1', '::1'],
+    ['::1', '127.0.0.1']
+  ])('a port taken on %s surfaces PortInUseError + lastError (never a crash), leaves no listener on %s, and a deliberate stop clears it — "off" is off, not broken', async ([taken, other], { skip }) => {
+    // The blocker takes an ephemeral port and the row reads it back: no gap in which another process could take it.
+    // That port is free on `taken`, but an unrelated program may hold the same number on `other`; then a listener
+    // found there below could be that program's, not the server's, so the row draws another port (a few tries).
+    const close = (s: net.Server): Promise<void> => new Promise<void>((r) => s.close(() => r()))
+    let blocker: net.Server | null = null
+    let takenPort = 0
+    for (let attempt = 0; attempt < 5 && blocker === null; attempt++) {
+      const candidate = net.createServer()
+      const blocked = await new Promise<string | null>((r) => {
+        candidate.once('error', (err: NodeJS.ErrnoException) => r(err.code ?? String(err)))
+        candidate.listen(0, taken, () => r(null))
+      })
+      skip(blocked !== null && taken === '::1', `this host has no IPv6 loopback (${blocked})`)
+      expect(blocked).toBeNull()
+      const port = (candidate.address() as net.AddressInfo).port
+      if (await accepts(other, port)) {
+        await close(candidate)
+        continue
+      }
+      blocker = candidate
+      takenPort = port
+    }
+    expect(blocker, `every drawn port was already held on ${other}`).not.toBeNull()
+    onTestFinished(() => (blocker ? close(blocker) : undefined))
     const mgr = new RuntimeManager(() => {
       throw new Error('unused')
     })
-    const server = new LocalApiServer({
-      getSettings: () => ({ localApiPort: takenPort, localApiTokenRequired: true }),
-      getToken: () => 'hr-x',
-      runtime: {
-        status: () => mgr.status(),
-        active: () => null,
-        isExternallyBusy: () => true,
-        setExternalPreemption: () => {}
-      },
-      hasActiveDocTask: () => false,
-      admitsWork: () => true,
-      estimateBusySeconds: () => 30,
-      appVersion: 't'
-    })
+    const server = new LocalApiServer(
+      localApiDeps(mgr, { getSettings: () => ({ localApiPort: takenPort, localApiTokenRequired: true }) })
+    )
+    onTestFinished(() => server.stop())
     await expect(server.start()).rejects.toThrow(PortInUseError)
     expect(server.status().running).toBe(false)
+    expect(await accepts(other, takenPort)).toBe(false)
     // The P4 card's error surface: the failed bind is queryable, not just logged.
     expect(server.status().lastError).toBe('port_in_use')
-    await new Promise<void>((r) => blocker.close(() => r()))
-  })
-
-  it('a deliberate stop clears the bind failure — "off" is off, not broken', async () => {
     // Without this the Diagnostics row (and the copy report) would keep telling a user who
     // simply switched the feature back off that the port is still in use (review 2026-08-18).
-    const blocker = net.createServer()
-    await new Promise<void>((r) => blocker.listen(0, '127.0.0.1', () => r()))
-    const takenPort = (blocker.address() as net.AddressInfo).port
-    const mgr = new RuntimeManager(() => {
-      throw new Error('unused')
-    })
-    const server = new LocalApiServer({
-      getSettings: () => ({ localApiPort: takenPort, localApiTokenRequired: true }),
-      getToken: () => 'hr-x',
-      runtime: {
-        status: () => mgr.status(),
-        active: () => null,
-        isExternallyBusy: () => true,
-        setExternalPreemption: () => {}
-      },
-      hasActiveDocTask: () => false,
-      admitsWork: () => true,
-      estimateBusySeconds: () => 30,
-      appVersion: 't'
-    })
-    await expect(server.start()).rejects.toThrow(PortInUseError)
-    expect(server.status().lastError).toBe('port_in_use')
     await server.applySettings({ shouldRun: false })
     expect(server.status().lastError).toBeNull()
     expect(server.status().running).toBe(false)
-    await new Promise<void>((r) => blocker.close(() => r()))
   })
 
   it('stop() closes the listener — connections are refused afterwards', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     await h.server.stop()
     await expect(fetch(`${h.base}/v1/models`, { headers: authed(h.token) })).rejects.toThrow()
   })
 })
 
 describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => {
-  it('rejects a foreign or ABSENT Host with 403 (DNS-rebinding backstop)', async () => {
-    const h = await makeHarness()
-    // fetch refuses to override Host — drive both legs over a raw socket.
-    const foreign = await rawRequest(
-      h.port,
-      `GET /v1/models HTTP/1.1\r\nhost: evil.example\r\nauthorization: Bearer ${h.token}\r\nconnection: close\r\n\r\n`
-    )
-    expect(foreign).toContain('403')
-    expect(foreign).toContain('forbidden_host')
-    // Absent Host (HTTP/1.0).
-    const raw = await rawRequest(h.port, 'GET /v1/models HTTP/1.0\r\n\r\n')
-    expect(raw).toContain('403')
+  it('rejects a foreign, ABSENT, wrong-port or look-alike Host with 403 (DNS-rebinding backstop)', async () => {
+    const h = await localApiHarness()
+    // fetch refuses to override Host — drive every leg over a raw socket, each with a valid key, so only the Host
+    // check can answer 403. The control: a loopback name for OUR port is served.
+    const get = (host: string): Promise<string> =>
+      rawHttp(h.port, `GET /v1/models HTTP/1.1\r\nhost: ${host}\r\nauthorization: Bearer ${h.token}\r\nconnection: close\r\n\r\n`)
+    expect(await get(`localhost:${h.port}`)).toMatch(/^HTTP\/1\.1 200 /)
+    for (const host of ['evil.example', `127.0.0.1:${h.port + 1}`, `127.0.0.1.evil.example:${h.port}`]) {
+      const answer = await get(host)
+      expect(answer, host).toMatch(/^HTTP\/1\.1 403 /)
+      expect(answer, host).toContain('"code":"forbidden_host"')
+    }
+    // Absent Host (HTTP/1.0): no Origin and no key, so only the Host check can answer 403 (otherwise 401).
+    const absent = await rawHttp(h.port, 'GET /v1/models HTTP/1.0\r\n\r\n')
+    expect(absent).toMatch(/^HTTP\/1\.[01] 403 /)
+    expect(absent).toContain('"code":"forbidden_host"')
+  })
+
+  // The ORDER of the checks is part of the security contract (handlers.ts): Host → OPTIONS → Origin →
+  // content-type → auth → route, so nothing is readable before auth. Each request below fails two or more
+  // checks and carries no key; the answer names the check that runs first.
+  it.each<[string, string, (port: number) => string[], number, string]>([
+    ['a foreign Host first', 'OPTIONS /v1/chat/completions', () => ['host: evil.example', 'origin: https://evil.example'], 403, 'forbidden_host'],
+    ['OPTIONS before Origin', 'OPTIONS /v1/chat/completions', (p) => [`host: 127.0.0.1:${p}`, 'origin: https://evil.example'], 403, 'no_cors'],
+    ['Origin before content-type', 'POST /v1/chat/completions', (p) => [`host: 127.0.0.1:${p}`, 'origin: https://evil.example', 'content-type: text/plain', 'content-length: 2'], 403, 'forbidden_origin'],
+    ['content-type before auth', 'POST /v1/chat/completions', (p) => [`host: 127.0.0.1:${p}`, 'content-type: text/plain', 'content-length: 2'], 415, 'unsupported_content_type'],
+    ['auth before the route', 'GET /v1/embeddings', (p) => [`host: 127.0.0.1:${p}`], 401, 'invalid_api_key']
+  ])('check order: %s', async (_order, line, headers, status, code) => {
+    const h = await localApiHarness()
+    const body = line.startsWith('POST') ? '{}' : ''
+    const answer = await rawHttp(h.port, [`${line} HTTP/1.1`, ...headers(h.port), 'connection: close', '', body].join('\r\n'))
+    expect(answer).toMatch(new RegExp(`^HTTP/1\\.1 ${status} `))
+    expect(answer).toContain(`"code":"${code}"`)
   })
 
   it("rejects web origins, Origin: null and the app's own scheme; allows absent + other custom app schemes", async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const web = await fetch(`${h.base}/v1/models`, {
       headers: { ...authed(h.token), origin: 'https://evil.example' }
     })
@@ -276,23 +210,29 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
   })
 
   it('refuses OPTIONS and never emits a CORS header on ANY response', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const preflight = await fetch(`${h.base}/v1/chat/completions`, {
       method: 'OPTIONS',
       headers: { origin: 'app://x', 'access-control-request-method': 'POST' }
     })
-    expect(preflight.status).toBe(403)
     const ok = await fetch(`${h.base}/v1/models`, { headers: authed(h.token) })
-    for (const res of [preflight, ok]) {
+    // A completion writes its own head, once as the JSON answer and once as the SSE prologue.
+    const completion = await post(h, { messages: [{ role: 'user', content: 'x' }] })
+    const stream = await post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
+    expect(stream.headers.get('content-type')).toContain('text/event-stream')
+    const responses = [preflight, ok, completion, stream]
+    expect(responses.map((res) => res.status)).toEqual([403, 200, 200, 200])
+    for (const res of responses) {
       for (const name of res.headers.keys()) {
-        expect(name.toLowerCase().startsWith('access-control-')).toBe(false)
+        expect(name.toLowerCase().startsWith('access-control-'), name).toBe(false)
       }
+      await res.text()
     }
     expect(ok.headers.get('server')).toMatch(/^HilbertRaum\//)
   })
 
   it('POST requires application/json but tolerates a charset parameter', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const noCt = await post(h, { messages: [{ role: 'user', content: 'x' }] }, { authorization: `Bearer ${h.token}` })
     expect(noCt.status).toBe(415)
     const charset = await post(
@@ -304,7 +244,7 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
   })
 
   it('401 on a bad/missing key; both routes are auth-gated; token-off IGNORES a present key', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     for (const headers of [
       { 'content-type': 'application/json' },
       { 'content-type': 'application/json', authorization: 'Bearer wrong' }
@@ -312,7 +252,7 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
       expect((await fetch(`${h.base}/v1/models`, { headers })).status).toBe(401)
       expect((await post(h, { messages: [{ role: 'user', content: 'x' }] }, headers)).status).toBe(401)
     }
-    const h2 = await makeHarness({ tokenRequired: false })
+    const h2 = await localApiHarness({ tokenRequired: false })
     // SDKs always send SOME key — token-off must ignore it, not validate it.
     const dummy = await fetch(`${h2.base}/v1/models`, {
       headers: { authorization: 'Bearer dummy' }
@@ -321,16 +261,15 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
   })
 
   it('unknown routes are 404 with an OpenAI-shaped error body', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const res = await fetch(`${h.base}/v1/embeddings`, {
       method: 'POST',
       headers: authed(h.token),
       body: '{}'
     })
     expect(res.status).toBe(404)
-    const body = (await res.json()) as { error: { message: string; type: string; code: string } }
-    expect(body.error.type).toBe('invalid_request_error')
-    expect(typeof body.error.message).toBe('string')
+    // docs/local-api.md §6.6 publishes the code clients branch on.
+    expect(await res.json()).toEqual({ error: { message: 'Not found', type: 'invalid_request_error', code: 'unknown_route' } })
   })
 })
 
@@ -339,7 +278,7 @@ describe('LocalApiServer — key rotation mid-request (SEC-F6)', () => {
     // Auth runs before the (up to 30 s) body phase, so a rotation landing in that window
     // would otherwise let a request admitted under the dead key occupy the model — the same
     // hole abortExternalRequests closes for streams already running.
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const body = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] })
     const socket = net.connect(h.port, '127.0.0.1')
     await new Promise<void>((r) => socket.once('connect', r))
@@ -358,22 +297,26 @@ describe('LocalApiServer — key rotation mid-request (SEC-F6)', () => {
         ''
       ].join('\r\n')
     )
-    await new Promise((r) => setTimeout(r, 50))
+    // The headers passed the key check (it reads the key once per check), so the rotation lands in the body window.
+    await until(() => h.tokenCalls() === 1, 'the server checking the key on the headers')
     h.setToken('hr-' + 'b'.repeat(43)) // the user pressed "Create a new key"
     socket.write(body)
-    await waitFor(() => Buffer.concat(chunks).toString('utf8').includes('\r\n\r\n'), 5_000)
+    await until(() => Buffer.concat(chunks).toString('utf8').includes('\r\n\r\n'), 'the answer to the stale-key request')
     const answer = Buffer.concat(chunks).toString('utf8')
     socket.destroy()
-    expect(answer).toContain('401')
+    expect(answer).toMatch(/^HTTP\/1\.1 401 /)
     expect(answer).toContain('invalid_api_key')
-    // …and nothing was generated for it.
-    expect(h.mgr.isGenerating()).toBe(false)
+    expect(h.tokenCalls()).toBe(2) // the second check is the one after the body
+    // …and nothing was generated for it (the echo runtime records every chatStream call's options): it was refused
+    // before it even asked for admission, so it never held the one external slot.
+    expect(h.lastOptions()).toBeUndefined()
+    expect(h.admitChecks()).toBe(0)
   })
 })
 
 describe('LocalApiServer — model states (perf M6)', () => {
   it('GET /v1/models: 200 with id + context window when running', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const res = await fetch(`${h.base}/v1/models`, { headers: authed(h.token) })
     const body = (await res.json()) as { object: string; data: Array<{ id: string; context_window: number | null }> }
     expect(body.object).toBe('list')
@@ -382,7 +325,7 @@ describe('LocalApiServer — model states (perf M6)', () => {
   })
 
   it('model_not_loaded vs model_starting are DISTINCT 503s; starting carries Retry-After', async () => {
-    const h = await makeHarness({ startModel: false })
+    const h = await localApiHarness({ startModel: false })
     const absent = await fetch(`${h.base}/v1/models`, { headers: authed(h.token) })
     expect(absent.status).toBe(503)
     expect(((await absent.json()) as { error: { code: string } }).error.code).toBe('model_not_loaded')
@@ -406,22 +349,14 @@ describe('LocalApiServer — model states (perf M6)', () => {
       chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
     }))
     const startPromise = slowMgr.start({ modelId: 'loading', modelPath: '/m.gguf', contextTokens: 2048 })
-    const server2 = new LocalApiServer({
-      getSettings: () => ({ localApiPort: 0, localApiTokenRequired: false }),
-      getToken: () => 'hr-x',
-      runtime: {
-        status: () => slowMgr.status(),
-        active: () => slowMgr.active(),
-        isExternallyBusy: () => slowMgr.isExternallyBusy(),
-        setExternalPreemption: () => {}
-      },
-      hasActiveDocTask: () => false,
-      admitsWork: () => true,
-      estimateBusySeconds: () => 17,
-      appVersion: 't'
-    })
+    const server2 = new LocalApiServer(
+      localApiDeps(slowMgr, {
+        getSettings: () => ({ localApiPort: 0, localApiTokenRequired: false }),
+        estimateBusySeconds: () => 17
+      })
+    )
     await server2.start()
-    cleanups.push(async () => {
+    onTestFinished(async () => {
       release()
       await startPromise
       await server2.stop()
@@ -436,7 +371,7 @@ describe('LocalApiServer — model states (perf M6)', () => {
 
 describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   it('non-streaming (the SDK default): ONE chat.completion object with the full content', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const res = await post(h, { messages: [{ role: 'user', content: 'hello' }] })
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
@@ -456,7 +391,7 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   })
 
   it('streaming: role-first chunk → content deltas → finish_reason chunk → [DONE]', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const res = await post(h, { messages: [{ role: 'user', content: 'hi' }], stream: true })
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toContain('text/event-stream')
@@ -474,7 +409,7 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   })
 
   it('external requests run balanced/thinking-off on the external lane, schema honored (json_schema)', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const schema = { type: 'object', properties: { a: { type: 'string' } } }
     const res = await post(h, {
       messages: [{ role: 'user', content: 'x' }],
@@ -493,21 +428,24 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   })
 
   it('capability fields 400 naming the field; benign fields accepted-and-ignored', async () => {
-    const h = await makeHarness()
-    const tools = await post(h, { messages: [{ role: 'user', content: 'x' }], tools: [{}] })
-    expect(tools.status).toBe(400)
-    expect(((await tools.json()) as { error: { message: string } }).error.message).toContain('tools')
-    const n2 = await post(h, { messages: [{ role: 'user', content: 'x' }], n: 2 })
-    expect(n2.status).toBe(400)
-    const jsonObject = await post(h, {
-      messages: [{ role: 'user', content: 'x' }],
-      response_format: { type: 'json_object' }
-    })
-    expect(jsonObject.status).toBe(400)
-    const imageParts = await post(h, {
-      messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'x' } }] }]
-    })
-    expect(imageParts.status).toBe(400)
+    const h = await localApiHarness()
+    // docs/local-api.md §6.4/§6.6: 400 `unsupported_field`, the message naming the field.
+    const message = [{ role: 'user', content: 'x' }]
+    const capabilities: Array<[string, Record<string, unknown>]> = [
+      ['tools', { messages: message, tools: [{}] }],
+      ['n>1', { messages: message, n: 2 }],
+      ["response_format.type='json_object'", { messages: message, response_format: { type: 'json_object' } }],
+      ['messages[].content parts', { messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'x' } }] }] }],
+      ['audio', { messages: message, audio: { voice: 'alloy' } }],
+      ['audio', { messages: message, modalities: ['text', 'audio'] }]
+    ]
+    for (const [field, body] of capabilities) {
+      const res = await post(h, body)
+      expect(res.status, field).toBe(400)
+      const { error } = (await res.json()) as { error: { message: string; code: string } }
+      expect(error.code, field).toBe('unsupported_field')
+      expect(error.message, field).toContain(`'${field}'`)
+    }
     // Benign: ignored, not refused. Text content-parts flatten.
     const benign = await post(h, {
       messages: [{ role: 'user', content: [{ type: 'text', text: 'flat' }] }],
@@ -525,29 +463,44 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   })
 
   it('busy while an in-app generation runs: 429 + Retry-After (fail-closed admission)', async () => {
-    const h = await makeHarness({ echo: false, queueWaitMs: 50 })
+    const h = await localApiHarness({ runtime: 'manual' })
+    // A direct active().chatStream, the way the benchmark or a skill run drives the model: registered nowhere,
+    // but the gate counts it.
     const inApp = h.mgr.active()!.chatStream([{ role: 'user', content: 'q' }])
     const pull = inApp.next()
-    await Promise.resolve()
+    await until(() => h.sources.length === 1, 'the in-app generation reaching the model')
     h.sources[0].push('tok')
     await pull
+    // The admission side's own read: the generation gate answers the same 429 through
+    // ExternalGenerationBusyError, so the status alone cannot show that the fail-closed busy predicate
+    // counts an in-flight generation.
+    expect(h.mgr.isExternallyBusy()).toBe(true)
     const res = await post(h, { messages: [{ role: 'user', content: 'x' }] })
     expect(res.status).toBe(429)
     expect(res.headers.get('retry-after')).toBe('42')
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('busy')
     h.sources[0].end()
     await inApp.return()
+    expect(h.mgr.isExternallyBusy()).toBe(false)
+    // The lane is idle again: the next request is admitted and served, not refused.
+    const next = post(h, { messages: [{ role: 'user', content: 'again' }] })
+    await until(() => h.sources.length === 2, 'the next request reaching the model')
+    h.sources[1].push('ok')
+    h.sources[1].end()
+    expect((await next).status).toBe(200)
   })
 
   it('a doc task refuses admission too', async () => {
-    const h = await makeHarness({ queueWaitMs: 50 })
+    const h = await localApiHarness()
     h.setDocTask(true)
     const res = await post(h, { messages: [{ role: 'user', content: 'x' }] })
     expect(res.status).toBe(429)
+    expect(res.headers.get('retry-after')).toBe('42')
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('busy')
   })
 
   it('locked workspace → 503 workspace_locked', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     h.setAdmitsWork(false)
     const res = await post(h, { messages: [{ role: 'user', content: 'x' }] })
     expect(res.status).toBe(503)
@@ -558,38 +511,39 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   // prompt progress — it used to hold the one external slot until undici gave up at 300 s, or forever behind pings). Before
   // the first token both modes owe the documented 502, and the slot must free.
   it.each([false, true])('the runtime stops responding before its first token → 502 runtime_unresponsive, slot freed (stream: %s)', async (stream) => {
-    const h = await makeHarness({ echo: false })
+    const h = await localApiHarness({ runtime: 'manual' })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream })
-    await waitFor(() => h.sources.length === 1)
+    await until(() => h.sources.length === 1, 'the generation starting')
     h.sources[0].fail(new RuntimeUnresponsiveError(120_000))
     const res = await resPromise
     expect(res.status).toBe(502)
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('runtime_unresponsive')
     const next = post(h, { messages: [{ role: 'user', content: 'again' }] })
-    await waitFor(() => h.sources.length === 2) // admitted, not 429
+    await until(() => h.sources.length === 2, 'the next request being admitted') // admitted, not 429
     h.sources[1].push('ok')
     h.sources[1].end()
     expect((await next).status).toBe(200)
   })
 
-  it('pre-emption mid-stream: preempted_by_user error frame, close WITHOUT [DONE]', async () => {
-    const h = await makeHarness({ echo: false })
+  // #860 API3: each abort row runs under both production shapes of an aborted generation. The dev-mode mock runtime
+  // RETURNS (the server's post-loop branch); the real LlamaRuntime REJECTS with an AbortError (the catch branch).
+  it.each([false, true])('pre-emption mid-stream: preempted_by_user error frame, close WITHOUT [DONE] (runtime rejects on abort: %s)', async (rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
-    // Feed one delta so the stream starts, then enter an in-app turn (D8 pre-empts).
-    await waitFor(() => h.sources.length === 1)
+    await until(() => h.sources.length === 1, 'the external generation starting')
     h.sources[0].push('partial ')
-    await new Promise((r) => setTimeout(r, 50))
+    const res = await resPromise // the headers ride the first delta: the stream has started
+    // An in-app turn enters (D8): the manager's pre-emption hook aborts the external stream.
     const inApp = h.mgr.active()!.chatStream([{ role: 'user', content: 'in-app' }])
     const inAppPull = inApp.next()
-    const res = await resPromise
-    const payloads = ssePayloads(await res.text())
+    const payloads = ssePayloads(await within(res.text(), 'the pre-empted stream ending'))
     expect(payloads).not.toContain('[DONE]')
     const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
     expect(last.error?.code).toBe('preempted_by_user')
-    // The in-app turn proceeds once the external stream tore down.
-    await Promise.resolve()
-    h.sources[1]?.push('a')
-    await inAppPull
+    // The in-app turn proceeds once the external stream tore down, and gets its first token.
+    await until(() => h.sources.length === 2, 'the in-app turn reaching the model')
+    h.sources[1].push('a')
+    expect((await inAppPull).value).toBe('a')
     await inApp.return()
   })
 
@@ -598,14 +552,16 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   // (a switch, with Retry-After) or `model_not_loaded` (a stop) — not the 502 runtime_unresponsive a
   // killed sidecar used to produce (measured on master 2026-10-06: 502 / in-band runtime_error).
   it.each([
-    ['model_not_loaded' as const, false],
-    ['model_starting' as const, true]
-  ])('a model change before any bytes → 503 %s for the running request and the one queued behind it (Retry-After: %s)', async (code, retryAfter) => {
-    const h = await makeHarness({ echo: false })
+    ['model_not_loaded' as const, false, false],
+    ['model_not_loaded' as const, false, true],
+    ['model_starting' as const, true, false],
+    ['model_starting' as const, true, true]
+  ])('a model change before any bytes → 503 %s for the running request and the one queued behind it (Retry-After: %s; runtime rejects on abort: %s)', async (code, retryAfter, rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const running = post(h, { messages: [{ role: 'user', content: 'x' }] })
-    await waitFor(() => h.sources.length === 1) // generating, nothing sent yet
+    await until(() => h.sources.length === 1, 'the generation starting') // generating, nothing sent yet
     const queued = post(h, { messages: [{ role: 'user', content: 'y' }] })
-    await waitFor(() => h.admitChecks() === 2) // parked in the one-deep queue
+    await until(() => h.admitChecks() === 2, 'the second request parking in the queue') // the one-deep queue
     h.server.endForModelChange(code)
     for (const res of [await running, await queued]) {
       expect(res.status).toBe(503)
@@ -614,10 +570,10 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     }
   })
 
-  it('a model change mid-stream → in-band model_starting frame, closed WITHOUT [DONE] (#600)', async () => {
-    const h = await makeHarness({ echo: false })
+  it.each([false, true])('a model change mid-stream → in-band model_starting frame, closed WITHOUT [DONE] (#600; runtime rejects on abort: %s)', async (rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
-    await waitFor(() => h.sources.length === 1)
+    await until(() => h.sources.length === 1, 'the generation starting')
     h.sources[0].push('partial ')
     const res = await resPromise // the headers ride the first delta
     h.server.endForModelChange('model_starting')
@@ -627,14 +583,13 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     expect(last.error?.code).toBe('model_starting')
   })
 
-  it('server stop mid-stream (the lock teardown): error frame, no [DONE], listener gone', async () => {
-    const h = await makeHarness({ echo: false })
+  it.each([false, true])('server stop mid-stream (the lock teardown): error frame, no [DONE], listener gone (runtime rejects on abort: %s)', async (rejectOnAbort) => {
+    const h = await localApiHarness({ runtime: 'manual', rejectOnAbort })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
-    await waitFor(() => h.sources.length === 1)
+    await until(() => h.sources.length === 1, 'the generation starting')
     h.sources[0].push('some ')
-    await new Promise((r) => setTimeout(r, 50))
+    const res = await resPromise // the headers ride the first delta: the stream has started
     await h.server.stop()
-    const res = await resPromise
     const payloads = ssePayloads(await res.text())
     expect(payloads).not.toContain('[DONE]')
     const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
@@ -642,8 +597,128 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     await expect(fetch(`${h.base}/v1/models`, { headers: authed(h.token) })).rejects.toThrow()
   })
 
+  it('a stop queued behind a same-port settings re-apply still ends the running stream with server_stopped (#859)', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    h.setSettingsPort(h.port) // the re-apply below takes the same-port path, which used to clear `stopping`
+    const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    h.sources[0].push('some ')
+    const res = await resPromise
+    // A Settings save just before Lock now: the re-apply is queued first, then the lock's stop.
+    void h.server.applySettings({ shouldRun: true })
+    await h.server.stop()
+    const payloads = ssePayloads(await res.text())
+    const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
+    expect(last.error?.code).toBe('server_stopped')
+    expect(h.server.status().running).toBe(false)
+  })
+
+  it('a request queued behind a running one is refused with 503 server_stopped when the endpoint stops, not 429 busy (#859)', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const running = post(h, { messages: [{ role: 'user', content: 'x' }] })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    const queued = post(h, { messages: [{ role: 'user', content: 'y' }] })
+    await until(() => h.admitChecks() === 2, 'the second request parking in the queue')
+    await h.server.stop()
+    for (const res of [await running, await queued]) {
+      expect(res.status).toBe(503)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('server_stopped')
+      expect(res.headers.has('retry-after')).toBe(false)
+    }
+  })
+
+  // #859: the admission gate. The request's headers are in (its key was checked) but its body is still
+  // uploading when the stop lands, so it reaches admission DURING the teardown: the gate must answer it
+  // 503 server_stopped. Before, a plain stop answered workspace_locked (the gate fed the lock check), and
+  // a same-port re-apply queued first, or a re-port, let it in for the close to cut off.
+  it.each([
+    ['a stop', async (h: LocalApiHarness) => void h.server.stop()],
+    [
+      'a same-port settings re-apply, then a stop',
+      async (h: LocalApiHarness) => {
+        h.setSettingsPort(h.port)
+        void h.server.applySettings({ shouldRun: true })
+        void h.server.stop()
+      }
+    ],
+    [
+      'a re-port',
+      async (h: LocalApiHarness) => {
+        h.setSettingsPort(await freePort())
+        return h.server.applySettings({ shouldRun: true })
+      }
+    ]
+  ])('a request that reaches admission during %s gets 503 server_stopped (#859)', async (_label, trigger) => {
+    const h = await localApiHarness()
+    let finishBody!: () => void
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"messages":[{"role":"user",'))
+        finishBody = () => {
+          controller.enqueue(new TextEncoder().encode('"content":"x"}]}'))
+          controller.close()
+        }
+      }
+    })
+    const resPromise = fetch(`${h.base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: authed(h.token),
+      body,
+      duplex: 'half'
+    } as RequestInit)
+    await until(() => h.tokenCalls() === 1, 'the server checking the key on the headers')
+    const settled = trigger(h)
+    finishBody()
+    const res = await resPromise
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('server_stopped')
+    await settled // a re-port's applySettings must not reject (a lost port would)
+  })
+
+  // #859: the other half of the gate. A bookkeeping slip in the stop-request count would leave a live
+  // listener answering every request 503 server_stopped: after each way the gate closes, it must open again.
+  it('the gate opens again: a start after a stop, a start after a stop queued behind a re-apply, and a re-port all serve (#859)', async () => {
+    const h = await localApiHarness()
+    const complete = async (): Promise<number> => {
+      const res = await fetch(`http://127.0.0.1:${h.server.status().port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: authed(h.token),
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }] })
+      })
+      await res.text()
+      return res.status
+    }
+    await h.server.stop()
+    await h.server.start()
+    expect(await complete()).toBe(200)
+    h.setSettingsPort(h.server.status().port!)
+    void h.server.applySettings({ shouldRun: true })
+    await h.server.stop()
+    await h.server.start()
+    h.setSettingsPort(0)
+    expect(await complete()).toBe(200)
+    h.setSettingsPort(await freePort())
+    await h.server.applySettings({ shouldRun: true })
+    expect(await complete()).toBe(200)
+  })
+
+  it('a re-port ends the streams on the old port with server_stopped, not a "retry shortly" preemption (#859)', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const nextPort = await freePort() // free on both loopbacks the server binds
+    const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    h.sources[0].push('some ')
+    const res = await resPromise
+    h.setSettingsPort(nextPort)
+    await h.server.applySettings({ shouldRun: true })
+    const payloads = ssePayloads(await res.text())
+    const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
+    expect(last.error?.code).toBe('server_stopped')
+    expect(h.server.status()).toMatchObject({ running: true, port: nextPort })
+  })
+
   it('413 via COUNTED bytes on a chunked body (no Content-Length to trust)', async () => {
-    const h = await makeHarness()
+    const h = await localApiHarness()
     const chunk = 'x'.repeat(64 * 1024)
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -661,7 +736,7 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
   })
 
   it('a slow reader is reclaimed by the drain timeout — the slot frees for the next request', async () => {
-    const h = await makeHarness({ echo: false, drainTimeoutMs: 120, queueWaitMs: 50 })
+    const h = await localApiHarness({ runtime: 'manual', deps: { drainTimeoutMs: 120 } })
     // Raw socket client that sends the request then never reads the response.
     const socket = net.connect(h.port, '127.0.0.1')
     await new Promise<void>((r) => socket.once('connect', r))
@@ -671,59 +746,169 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
       `POST /v1/chat/completions HTTP/1.1\r\nhost: 127.0.0.1:${h.port}\r\nauthorization: Bearer ${h.token}\r\n` +
         `content-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
     )
-    await waitFor(() => h.sources.length === 1)
-    // Flood deltas until the socket buffer fills and the drain timeout reclaims the slot.
+    await until(() => h.sources.length === 1, 'the generation starting')
+    // Feed deltas until the drain timeout reclaims the slot. The source never ends, so the stream cannot finish
+    // normally: however much the loopback buffers absorb (a fixed 4 MiB flood fit them under load, and the stream
+    // then ended as served), the writer stays ahead of the reader until a write waits on 'drain' and times out.
     const big = 'y'.repeat(64 * 1024)
-    for (let i = 0; i < 64; i++) h.sources[0].push(big)
-    h.sources[0].end()
-    await waitFor(() => !h.mgr.isGenerating(), 5_000)
+    await until(() => {
+      if (!h.mgr.isGenerating()) return true
+      h.sources[0].push(big)
+      return false
+    }, 'the drain timeout reclaiming the stalled stream')
     socket.destroy()
-    // The slot is free: a fresh request is admitted (echo path not used here — manual).
+    // The slot is free: a fresh request is admitted and served.
     const next = post(h, { messages: [{ role: 'user', content: 'ok' }] })
-    await waitFor(() => h.sources.length === 2)
+    await until(() => h.sources.length === 2, 'the next request being admitted')
     h.sources[1].push('fine')
     h.sources[1].end()
     expect((await next).status).toBe(200)
+    // The stalled stream was RECLAIMED (counted as refused), not finished: had the loopback buffers taken the whole
+    // flood, it would have ended normally and counted as served, and only the follow-up would be.
+    expect(h.server.status()).toMatchObject({ rejectedCount: 1, requestsServed: 1 })
   })
 
   it('client disconnect aborts the generation (no orphan burn)', async () => {
-    const h = await makeHarness({ echo: false })
+    const h = await localApiHarness({ runtime: 'manual' })
     const controller = new AbortController()
     const resPromise = fetch(`${h.base}/v1/chat/completions`, {
       method: 'POST',
       headers: authed(h.token),
       body: JSON.stringify({ messages: [{ role: 'user', content: 'x' }], stream: true }),
       signal: controller.signal
-    }).catch(() => null)
-    await waitFor(() => h.sources.length === 1)
+    })
+    await until(() => h.sources.length === 1, 'the generation starting')
     h.sources[0].push('a')
-    await new Promise((r) => setTimeout(r, 30))
+    await resPromise // the headers ride the first delta: the client leaves mid-stream
     controller.abort()
-    await resPromise
-    await waitFor(() => !h.mgr.isGenerating(), 5_000)
-    expect(h.mgr.isGenerating()).toBe(false)
+    await until(() => !h.mgr.isGenerating(), 'the generation ending after the client left')
   })
 })
 
-async function waitFor(check: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const start = Date.now()
-  while (!check()) {
-    if (Date.now() - start > hangBudgetMs(timeoutMs)) throw new Error('waitFor timed out')
-    await new Promise((r) => setTimeout(r, 10))
-  }
-}
+// #860 API2: the rest of the published error table (docs/local-api.md §6.6) clients branch on. `invalid_json`,
+// `unsupported_field`, the auth/Host/Origin codes, `busy`, the model states, `runtime_unresponsive` and
+// `server_stopped` have their rows above; `internal_error` (the catch-all 500) has none on purpose.
+describe('LocalApiServer — the rest of the §6.6 error table (#860 API2)', () => {
+  const ask = { messages: [{ role: 'user', content: 'x' }] }
 
-/** Minimal raw HTTP exchange (for requests fetch cannot express, e.g. absent Host). */
-function rawRequest(port: number, request: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect(port, '127.0.0.1', () => socket.write(request))
-    const chunks: Buffer[] = []
-    socket.on('data', (c) => chunks.push(c))
-    socket.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
-    socket.on('error', reject)
-    setTimeout(() => {
-      socket.destroy()
-      resolve(Buffer.concat(chunks).toString('utf8'))
-    }, 2_000).unref()
+  /** A completion whose generation has started and sent nothing yet: the row's runtime event lands before any bytes.
+   *  The answer is boxed: an async function would otherwise adopt the promise and wait for it. */
+  async function startedCompletion(h: LocalApiHarness): Promise<{ answer: Promise<Response> }> {
+    const answer = post(h, ask)
+    await until(() => h.sources.length === 1, 'the generation starting')
+    return { answer }
+  }
+
+  it.each<[string, number, string, string | null, (h: LocalApiHarness) => Promise<Response>]>([
+    ['a body that is not an object', 400, 'invalid_body', null, (h) => post(h, ['x'])],
+    ['an empty messages array', 400, 'invalid_messages', null, (h) => post(h, { messages: [] })],
+    ['a response_format that is not an object', 400, 'invalid_response_format', null, (h) => post(h, { ...ask, response_format: 'json' })],
+    [
+      'the runtime refusing a prompt over its context window, before any bytes',
+      400,
+      'context_overflow',
+      null,
+      async (h) => {
+        const { answer } = await startedCompletion(h)
+        // llama-server's typed refusal, as LlamaRuntime surfaces it (runtime/llama.ts `isExceedContextError`).
+        h.sources[0].fail(new ChatRequestError(400, 'the request exceeds the available context size', 'exceed_context_size_error'))
+        return answer
+      }
+    ],
+    [
+      'the user’s own chat taking the model before any bytes',
+      429,
+      'preempted_by_user',
+      '42',
+      async (h) => {
+        const { answer } = await startedCompletion(h)
+        const inApp = h.mgr.active()!.chatStream([{ role: 'user', content: 'in-app' }]) // D8: the in-app turn wins
+        const inAppPull = inApp.next()
+        const res = await answer
+        await until(() => h.sources.length === 2, 'the in-app turn reaching the model')
+        h.sources[1].end()
+        await inAppPull
+        await inApp.return()
+        return res
+      }
+    ]
+  ])('%s → %s %s (Retry-After: %s)', async (_provocation, status, code, retryAfter, provoke) => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const res = await provoke(h)
+    expect(res.status).toBe(status)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(code)
+    expect(res.headers.get('retry-after')).toBe(retryAfter)
   })
-}
+
+  it('a runtime failure mid-stream → in-band runtime_error frame, closed WITHOUT [DONE]', async () => {
+    const h = await localApiHarness({ runtime: 'manual' })
+    const resPromise = post(h, { ...ask, stream: true })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    h.sources[0].push('partial ')
+    const res = await resPromise // the headers ride the first delta: the stream has started
+    h.sources[0].fail(new Error('llama-server closed the connection'))
+    const payloads = ssePayloads(await res.text())
+    expect(payloads).not.toContain('[DONE]')
+    expect((JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }).error?.code).toBe('runtime_error')
+  })
+})
+
+// docs/local-api.md §6.7 publishes these bounds to third-party clients; every expected value is a literal, so a
+// changed constant turns this row red instead of moving the test along with it. (The queue wait, ~30 s, is
+// local-api-admission.test.ts's "caps the queued wait" row.)
+describe('LocalApiServer — the shipped limits and timeouts (docs/local-api.md §6.7)', () => {
+  it('serves with the published bounds', async () => {
+    const listen = vi.spyOn(net.Server.prototype, 'listen')
+    // The delay of every setTimeout server.ts arms ITSELF (the spy's caller frame is server.ts), so a timer of the
+    // same length armed anywhere else cannot stand in for a bound: the two decoys below are armed by this row.
+    const realSetTimeout = globalThis.setTimeout
+    const serverDelays: unknown[] = []
+    const timers = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+      if (armedByServer(new Error().stack)) serverDelays.push(args[1])
+      return realSetTimeout(...args)
+    }) as typeof setTimeout)
+    const bodyIdle = vi.spyOn(http.IncomingMessage.prototype, 'setTimeout')
+    const decoys = [120_000, 15_000].map((ms) => setTimeout(() => {}, ms))
+    onTestFinished(() => {
+      for (const decoy of decoys) clearTimeout(decoy)
+      listen.mockRestore()
+      timers.mockRestore()
+      bodyIdle.mockRestore()
+    })
+    const h = await localApiHarness({ runtime: 'manual' })
+    const servers = listen.mock.contexts.filter((s): s is http.Server => s instanceof http.Server)
+    expect(servers.length).toBeGreaterThan(0)
+    // One streaming completion whose delta overflows the response buffer: the write waits for 'drain', under the
+    // SSE reader-stall bound.
+    const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
+    await until(() => h.sources.length === 1, 'the generation starting')
+    h.sources[0].push('y'.repeat(256 * 1024))
+    h.sources[0].end()
+    const res = await resPromise
+    expect(res.status).toBe(200)
+    await res.text()
+    const bounds: Array<[string, unknown, unknown]> = [
+      ['header phase 10 s', servers.map((s) => s.headersTimeout), servers.map(() => 10_000)],
+      ['generation: no timeout', servers.map((s) => s.requestTimeout), servers.map(() => 0)],
+      ['concurrent connections 16', servers.map((s) => s.maxConnections), servers.map(() => 16)],
+      ['body idle 30 s', bodyIdle.mock.calls[0]?.[0], 30_000],
+      ['body total 120 s', serverDelays.includes(120_000), true],
+      ['SSE reader stall 15 s', serverDelays.includes(15_000), true]
+    ]
+    for (const [bound, actual, expected] of bounds) expect(actual, bound).toEqual(expected)
+    // Request body 1 MB, counted as bytes arrive: exactly the cap is read (and is not JSON), one byte more is refused.
+    const atCap = await fetch(`${h.base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: authed(h.token),
+      body: 'x'.repeat(1024 * 1024)
+    })
+    expect(((await atCap.json()) as { error: { code: string } }).error.code).toBe('invalid_json')
+    const pastCap = await fetch(`${h.base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: authed(h.token),
+      body: 'x'.repeat(1024 * 1024 + 1)
+    })
+    expect(pastCap.status).toBe(413)
+    expect(((await pastCap.json()) as { error: { code: string } }).error.code).toBe('body_too_large')
+  })
+})

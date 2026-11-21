@@ -8,12 +8,13 @@ import type {
   BenchmarkResult,
   GpuDevice,
   MemoryClass,
+  ModelFileVerdict,
   ModelPlacement,
   MovedDriveNotice,
   PerformanceSnapshot,
   ResidentModelRow
 } from '../../shared/types'
-import type { ModelManifest } from '../../shared/manifest'
+import { pickManifestForRole, type ModelManifest } from '../../shared/manifest'
 import { detectSystem, runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
 import { effectiveReadOrPersisted, liveChatRecommendation } from './registerModelIpc'
 import { notifyPerformanceChanged } from './performance-notify'
@@ -38,7 +39,19 @@ import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
 import { displayDevice, eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
-import { discoverManifests, graphicsBudgetMib, launchContextTokens, weightsMib } from '../services/models'
+import {
+  type CardEvidence,
+  cardEvidenceFor,
+  checksumCacheView,
+  discoverManifests,
+  graphicsBudgetMib,
+  knownFileVerdict,
+  launchContextTokens,
+  manifestFilesPresent,
+  weightsMib
+} from '../services/models'
+import { developerLeniency } from '../services/policy'
+import { pickVisionManifest, visionCandidates } from '../services/vision/status'
 import { getSettings, updateSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
@@ -62,8 +75,9 @@ import { isModelStarting, translationRanOnProcessor } from '../../shared/runtime
  * unified with PR #303 audit M8.2 at the merge of the two) — and the bump eligibility over
  * ALL devices (`gpuUsefulForProfile`, unchanged — owner decision G4).
  */
-function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBenchmarkInput {
+function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory, card: CardEvidence | null = null): GpuBenchmarkInput {
   return {
+    card,
     name: next.device?.name ?? null,
     // The profile bump looks at the HARDWARE (every probed device); the class below looks at
     // the next START — see `GpuBenchmarkInput.useful`.
@@ -106,8 +120,8 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * foreign-machine case is covered by the stamp either way. The key and the session epoch are
  * captured BEFORE the await, and admission is re-checked after it, for every path: a probe that
  * outlives a lock, or a lock and a re-unlock, never writes into a session it was not admitted
- * to (the AUD-03 seam `startModelRuntime` uses; a stand-in workspace without the counter skips
- * the epoch half). The catch branch's own write must not escape either.
+ * to (the AUD-03 seam `startModelRuntime` uses). The catch branch's own write must not escape
+ * either.
  *
  * #380 AMENDS decision 6 with its one exception: a probe that hit its kill-timeout resolves
  * `null`, which is not an answer but the ABSENCE of one. It writes nothing and pushes nothing —
@@ -129,14 +143,14 @@ export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkI
   let gpuMode: AppSettings['gpuMode'] = 'auto'
   let gpuAutoDisabled = false
   const hereKey = machineKey(detectSystem())
-  const epoch = ctx.workspace?.unlockEpoch?.()
+  const epoch = ctx.workspace?.unlockEpoch()
   /** Persist `list` as this session's stamped probe if the session still admits it; says whether it did. */
   const persistProbe = (list: GpuDevice[]): boolean => {
     if (!workspaceAdmitsWork(ctx.workspace)) {
       log.info('GPU probe finished after the workspace locked; result not persisted')
       return false
     }
-    if (epoch !== undefined && ctx.workspace.unlockEpoch?.() !== epoch) {
+    if (ctx.workspace.unlockEpoch() !== epoch) {
       log.info('GPU probe outlived its workspace session; result not persisted')
       return false
     }
@@ -192,12 +206,16 @@ export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkI
   // machine's. On the #380 unknown path there is no answer to describe, so they ARE a read of
   // the store — deliberately, and filtered through `eligibleDevicesFor`, so a foreign-stamped
   // record still supplies nothing and the same guarantee holds.
+  // §6.8: the same card evidence `pickerMemoryFor` hands the Models ★ (`cardEvidenceFor`).
+  let card: CardEvidence | null = null
   try {
-    ;({ gpuMode, gpuAutoDisabled } = getSettings(ctx.db))
+    const s = getSettings(ctx.db)
+    ;({ gpuMode, gpuAutoDisabled } = s)
+    card = cardEvidenceFor(s, hereKey)
   } catch {
     /* defaults */
   }
-  return gpuSummary(devices, nextStartMemory({ platform: process.platform, arch: process.arch, devices, gpuMode, gpuAutoDisabled }))
+  return gpuSummary(devices, nextStartMemory({ platform: process.platform, arch: process.arch, devices, gpuMode, gpuAutoDisabled }), card)
 }
 
 /**
@@ -290,8 +308,8 @@ async function runBenchmarkAndPersist(
   // seconds — minutes on a wedged probe — and a lock, or a lock AND a re-unlock, can complete
   // inside that window; the guard after the legs mirrors `startModelRuntime`'s post-hash check
   // and `probeAndPersistGpu`'s, so the result never persists into a session it was not admitted
-  // to. Undefined for a stand-in workspace without the counter ⇒ the epoch half is skipped.
-  const epoch = ctx.workspace?.unlockEpoch?.()
+  // to. Undefined only for a context with no workspace at all, which the admission check refuses.
+  const epoch = ctx.workspace?.unlockEpoch()
   const manifests = ctx.manifestsDir
     ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
     : []
@@ -361,7 +379,7 @@ async function runBenchmarkAndPersist(
     log.info('Benchmark finished after the workspace locked; result not persisted')
     throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
-  if (epoch !== undefined && ctx.workspace.unlockEpoch?.() !== epoch) {
+  if (ctx.workspace.unlockEpoch() !== epoch) {
     log.info('Benchmark outlived its workspace session; result not persisted')
     throw new Error(tMain('main.benchmark.lockedDuringRun'))
   }
@@ -388,7 +406,7 @@ async function runBenchmarkAndPersist(
   // §5 item 22 (a): this computer now has a result measured just now, so the moved-drive notice
   // has nothing left to say — whichever of its states was standing. Covers the automatic run and
   // the "Check this computer" the notice itself points at. The caller's `finally` pushes.
-  setMovedDriveNotice(ctx.db, ctx.workspace.unlockEpoch?.(), null)
+  setMovedDriveNotice(ctx.db, ctx.workspace.unlockEpoch(), null)
   log.info('Benchmark complete', {
     profile: result.profile,
     recommendedModelId: result.recommendedModelId,
@@ -455,7 +473,10 @@ export interface FirstBenchmarkDecision {
   run: FirstBenchmarkRun | null
   /** True when `run` is null ONLY because this session's automatic attempt was already made (SD2). */
   attempted: boolean
-  /** The unlock session the decision was made in — `undefined` for a stand-in without the counter. */
+  /**
+   * The unlock session the decision was made in — `undefined` on the `nothing` decision (a
+   * workspace that admits no work, or settings it could not read).
+   */
   epoch: number | undefined
   /** This machine's fingerprint at decision time (null when detection failed). */
   hereKey: string | null
@@ -515,9 +536,8 @@ function armTimer(fn: () => void, ms: number): () => void {
 /**
  * SD2 — the one automatic attempt this session made, keyed like the persisted-sample memo in
  * registerModelIpc: the workspace DB handle AND the session epoch. A lock/unlock yields a new
- * `Db` and a new epoch, so the next session re-evaluates; a stand-in without the counter is
- * keyed on the handle alone. Set when a scheduling is ACCEPTED (the attempt), never on a
- * `run: null` decision — a session that owed nothing has attempted nothing.
+ * `Db` and a new epoch, so the next session re-evaluates. Set when a scheduling is ACCEPTED (the
+ * attempt), never on a `run: null` decision — a session that owed nothing has attempted nothing.
  */
 let attemptMemo: { db: Db; epoch: number | undefined } | null = null
 
@@ -582,7 +602,7 @@ export function movedDriveNotice(ctx: AppContext): MovedDriveNotice | null {
   } catch {
     return null // locked
   }
-  return movedDriveMemo.epoch === ctx.workspace.unlockEpoch?.() ? movedDriveMemo.notice : null
+  return movedDriveMemo.epoch === ctx.workspace.unlockEpoch() ? movedDriveMemo.notice : null
 }
 
 /**
@@ -627,7 +647,7 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
     // persists settings, and the DB stays open for that whole window.
     if (!workspaceAdmitsWork(ctx.workspace)) return nothing
     // AUD-03: the session this decision belongs to. The scheduler compares it at settlement.
-    const epoch = ctx.workspace.unlockEpoch?.()
+    const epoch = ctx.workspace.unlockEpoch()
     const db = ctx.db
     const settings = getSettings(db)
     const here = machineKey(detectSystem())
@@ -813,7 +833,7 @@ async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchma
       log.info(`${label} skipped: the workspace locked while the model start settled`)
       return 'skipped-admission'
     }
-    if (decision.epoch !== undefined && ctx.workspace.unlockEpoch?.() !== decision.epoch) {
+    if (ctx.workspace.unlockEpoch() !== decision.epoch) {
       log.info(`${label} skipped: the workspace was locked and re-opened meanwhile (the new session re-checks)`)
       return 'skipped-epoch'
     }
@@ -986,12 +1006,40 @@ function buildPlacement(
   // model — the screen no longer recomputes either.
   const contextFor = (modelId: string | null): number | null =>
     modelId == null ? null : launchContextTokens(settings, manifests.find((m) => m.id === modelId) ?? null)
+  // #914: a row still names the catalog's model when its files are not here (the planning view the docs promise), and
+  // says so: `onDrive` is `manifestFilesPresent`, presence only (1–3 `existsSync` per row, never a hash: the rows are
+  // display-only). The screen then shows "not on this drive" instead of "not loaded", and `loadedAtOnceMb` leaves the
+  // row out of the processor total, because nothing will load it. A RESIDENT model is never either (#914 code review:
+  // loaded beats `onDrive` — a weight deleted while the runtime holds it open, a manifest removed under a running
+  // model): the screen and the total check `loaded` first. The chat row asks the same of the active model: with its
+  // files gone a start is refused. An active model outside the catalog names no files, so it is not on the drive.
+  const onDrive = (m: ModelManifest | null | undefined): boolean =>
+    m != null && manifestFilesPresent(ctx.paths.rootPath, m)
+  // #933: what the checksum cache already knows about a present model's files: `damaged` (a check found a mismatch) or
+  // `unverified` (no checksum on record, outside developer leniency), both refused at every start, so the row says so
+  // and the totals leave it out (`loadedAtOnceMb`; loaded beats it). Cache only (`knownFileVerdict` hashes nothing),
+  // over a READ-ONLY view of the `checksumCache` this snapshot has already read (A S-A8: the settings store's `get`
+  // re-reads settings per file and can write them). The leniency is the one every start uses (`developerLeniency`).
+  const fileHashes = checksumCacheView(settings.checksumCache, ctx.paths.rootPath)
+  const lenient = developerLeniency(ctx, settings.developerMode)
+  const fileCheck = (m: ModelManifest | null | undefined): ModelFileVerdict =>
+    m != null && onDrive(m)
+      ? knownFileVerdict(m, ctx.paths.rootPath, { developerMode: lenient, hashStore: fileHashes })
+      : 'ok'
+  const chatResident = chatModelResident(ctx, activeId)
   let model: PerformanceSnapshot['placement']['model'] = null
   const activeManifest = activeId ? manifests.find((m) => m.id === activeId) ?? null : null
+  const chatFileCheck = fileCheck(activeManifest)
   if (activeId) {
     model = {
       id: activeId,
-      sizeOnDiskGb: gib(activeManifest ?? undefined) ?? 0,
+      // #914: a model outside the catalog has no size the app knows. Null says so; the old `0` printed "0.0 GB".
+      sizeOnDiskGb: gib(activeManifest ?? undefined),
+      // #914 code review: computed once here, for "Your model" — its files are on this drive, or it is resident
+      // right now (loaded beats `onDrive`, as on the rows). The screen then claims no size on disk and no fit.
+      onDrive: onDrive(activeManifest) || chatResident,
+      // #933: its row's verdict; a resident model is in memory whatever the cache says (loaded beats it).
+      fileCheck: chatResident ? 'ok' : chatFileCheck,
       contextTokens: contextFor(activeId) ?? settings.contextTokens
     }
   }
@@ -1027,7 +1075,8 @@ function buildPlacement(
   const observed = mine && matchesConfig(mine) ? mine : null
   const observedMismatch =
     mine && !matchesConfig(mine) ? { contextTokens: mine.contextTokens, backend: mine.backend, at: mine.at } : null
-  // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
+  // Every model the app can hold (benchmark.md "Models on this computer"), each marked with whether its files are on
+  // this drive (#914, owner decision G-5 (c); see `onDrive` below): chat and translation
   // auto-fit onto the card; images and voice are pinned to the processor by design (contention
   // immunity; vision/runtime.ts, embeddings/e5.ts — the embedder half of "document search" is
   // pinned too). The reranker half of document search instead follows its own headroom-gated
@@ -1042,10 +1091,32 @@ function buildPlacement(
   // landed on the CPU backend, translation when its sidecar's posture is the forced
   // `--device none` (`deviceStatus().device === 'cpu'`, the session fallback latch) or its last
   // start's load log put no buffer on a graphics device (`gpuBuffers === false`, #671).
-  const byRole = (role: ModelManifest['role']): ModelManifest | undefined => manifests.find((m) => m.role === role)
-  const embeddingsManifest = settings.activeEmbeddingModelId
-    ? (manifests.find((m) => m.id === settings.activeEmbeddingModelId) ?? byRole('embeddings'))
-    : byRole('embeddings')
+  // #848 review: a role's model is the one the app composes (`pickManifestForRole`, the function behind
+  // `resolveModelByRole`: the flagged default, else the first in walk order), so a row can never name a model the
+  // app does not run. #890: the embeddings row too (no composer reads `activeEmbeddingModelId`), and the images row
+  // names the images pick (`pickVisionManifest`, the same rule over the vision models on the drive), the model
+  // `getVisionStatus` runs whenever it verifies (one whose files fail their check is passed over there).
+  const byRole = (role: ModelManifest['role']): ModelManifest | undefined => pickManifestForRole(manifests, role)
+  const translationManifest = byRole('translation')
+  const rerankerManifest = byRole('reranker')
+  const embeddingsManifest = byRole('embeddings')
+  const transcriberManifest = byRole('transcriber')
+  // With no vision model on the drive the row still names the catalog's (every model the app can hold). #933 (A S-A7):
+  // like `getVisionStatus`, the row passes over a candidate whose files the cache knows are damaged (or have no
+  // checksum on record) for the next one; with none that passes, it names the first, which then says so. Loaded beats
+  // the verdict, as on every row (#933 review N1): while the images service holds a model, the row names THAT model
+  // (`loadedModelId`: the pick, or the next candidate when the pick was passed over at its start), so its name, size and
+  // "loaded now" describe the one in memory. A service that cannot say which (an unknown id) leaves the pick.
+  const visionLoaded = ctx.vision?.isLoaded?.() ?? false
+  const visionLoadedId = visionLoaded ? (ctx.vision?.loadedModelId?.() ?? null) : null
+  const loadedVision =
+    visionLoadedId != null ? manifests.find((m) => m.id === visionLoadedId && m.role === 'vision') : undefined
+  const visionManifest =
+    loadedVision ??
+    (visionLoaded ? undefined : visionCandidates(manifests, ctx.paths.rootPath).find((m) => fileCheck(m) === 'ok')) ??
+    pickVisionManifest(manifests, ctx.paths.rootPath) ??
+    byRole('vision')
+  // Each row's `onDrive` is the presence rule defined with `model` above (#914).
   const cardEligible = nextStartUsesGpu(memory)
   const chatDevice: ResidentModelRow['device'] = cardEligible && observed?.backend !== 'cpu' ? 'gpu' : 'cpu'
   const translation = ctx.translator?.deviceStatus?.() ?? null
@@ -1053,7 +1124,6 @@ function buildPlacement(
   // its `N/N layers` split is no evidence: a forced-CPU start and a PC with no usable card print it.
   const translationDevice: ResidentModelRow['device'] =
     cardEligible && !(translation != null && translationRanOnProcessor(translation)) ? 'gpu' : 'cpu'
-  const chatResident = chatModelResident(ctx, activeId)
   // #476: Wave 8 ruling (d)'s resident posture (`Reranker.devicePosture()`, the `isLoaded?`
   // pattern) — the SAME two reads the 'reranker' row below uses, hoisted so `rerankerOnCard` can
   // share them without re-deriving.
@@ -1064,6 +1134,8 @@ function buildPlacement(
       role: 'chat',
       modelId: activeId,
       sizeOnDiskGb: model?.sizeOnDiskGb ?? null,
+      onDrive: onDrive(activeManifest),
+      fileCheck: chatFileCheck,
       device: chatDevice,
       loaded: chatResident,
       lifetime: 'session',
@@ -1072,8 +1144,10 @@ function buildPlacement(
     },
     {
       role: 'translation',
-      modelId: byRole('translation')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('translation')),
+      modelId: translationManifest?.id ?? null,
+      sizeOnDiskGb: gib(translationManifest),
+      onDrive: onDrive(translationManifest),
+      fileCheck: fileCheck(translationManifest),
       device: translationDevice,
       loaded: translation?.live ?? false,
       lifetime: 'idle',
@@ -1083,18 +1157,22 @@ function buildPlacement(
     },
     {
       role: 'vision',
-      modelId: byRole('vision')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('vision')),
+      modelId: visionManifest?.id ?? null,
+      sizeOnDiskGb: gib(visionManifest),
+      onDrive: onDrive(visionManifest),
+      fileCheck: fileCheck(visionManifest),
       device: 'cpu',
-      loaded: ctx.vision?.isLoaded?.() ?? false,
+      loaded: visionLoaded,
       lifetime: 'idle',
       gpuLayers: null,
       totalLayers: null
     },
     {
       role: 'reranker',
-      modelId: byRole('reranker')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('reranker')),
+      modelId: rerankerManifest?.id ?? null,
+      sizeOnDiskGb: gib(rerankerManifest),
+      onDrive: onDrive(rerankerManifest),
+      fileCheck: fileCheck(rerankerManifest),
       // Wave 8 ruling (d): the resident sidecar's ACTUAL posture, or — when nothing is resident
       // — the posture a cold start would take now (`Reranker.devicePosture()`, the `isLoaded?`
       // pattern). A `Reranker` without that optional member reports `'cpu'` here.
@@ -1108,6 +1186,8 @@ function buildPlacement(
       role: 'embeddings',
       modelId: embeddingsManifest?.id ?? null,
       sizeOnDiskGb: gib(embeddingsManifest),
+      onDrive: onDrive(embeddingsManifest),
+      fileCheck: fileCheck(embeddingsManifest),
       device: 'cpu',
       loaded: ctx.embedder?.isLoaded?.() ?? false,
       lifetime: 'session',
@@ -1116,8 +1196,10 @@ function buildPlacement(
     },
     {
       role: 'transcriber',
-      modelId: byRole('transcriber')?.id ?? null,
-      sizeOnDiskGb: gib(byRole('transcriber')),
+      modelId: transcriberManifest?.id ?? null,
+      sizeOnDiskGb: gib(transcriberManifest),
+      onDrive: onDrive(transcriberManifest),
+      fileCheck: fileCheck(transcriberManifest),
       device: 'cpu',
       loaded: false,
       lifetime: 'per-use',

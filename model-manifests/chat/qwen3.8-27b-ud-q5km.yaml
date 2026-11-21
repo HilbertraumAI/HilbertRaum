@@ -21,6 +21,16 @@ recommended_ram_gb: 32
 # VRAM identical, 4 percent decode cost) and its URL is live. qwen3.6-27b-q5 returns to
 # rank 1 (it keeps the all-time F1 record .3573, recorded honestly there).
 recommendation_rank: 3
+# Processor path (model-benchmarks.md §6.7): measured too slow without a graphics card, so never
+# the automatic pick there. Still selectable, and unchanged on a card and on Apple Silicon.
+recommendation_rank_cpu: 0
+# Card rank (model-benchmarks.md §6.8, owner call 2026-11-20): below the Gemma 4 31B (94.6 against
+# 90.0 on the 2026-11 answer-quality study) and below its own UD-Q4_K_M sibling (89.9, about level,
+# 3 GiB less on the card), so a card that cannot hold the 31B takes the UD-Q4_K_M.
+recommendation_rank_gpu: 2
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048 with the MTP draft head; b12110, full offload 66/66 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 20316
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
 # Context cache at 8k under the app launch, recomputed 2026-09-07 for ONE server slot (issue #319:

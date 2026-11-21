@@ -4,8 +4,11 @@
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
 - Every model is described by a **manifest** (YAML) under `model-manifests/`, so models can change
   without code changes (spec §3.3).
-- Models are verified by **SHA-256** before use (spec §7.4). Unverified models are rejected unless
-  developer mode is on.
+- Models are verified by **SHA-256** (spec §7.4). The chat model is hashed at its start (a cached
+  hash counts). The search and voice models are hashed before their first start in a workspace; the
+  image, translation and re-ranking models are not hashed at their start, but none of them starts a
+  file a check found damaged (#913). Unverified models (a placeholder hash) are rejected unless
+  developer mode is on and the drive policy allows it, for every role.
 
 ## Default model family
 **Qwen3 dense instruct**, quantized **GGUF**, run via `llama.cpp`. Apache-2.0 for many variants.
@@ -24,6 +27,7 @@
 | Chat (fast-tier 2B) | Qwen3.5 2B (UD-Q4_K_XL) | ~1.3 GB | 8 GB | — (rank 0) | **Qwen3.5 fast-tier (issue #48).** CPU-only speed tier. Text-only, not bundled. **§9 eval (ratified 2026-08-03, §9.3): FAILED — worst unanswerable-discipline of all models scored (should not be recommended anywhere, rank stays 0); the 0.8B dominates it.** |
 | Chat (new 4B) | Qwen3.5 4B (UD-Q4_K_XL) | ~2.9 GB | 8 GB | — (rank 3) | **Recommended at 8–11 GB** (≤12 GB from the newest-Qwen promotion, owner decision 2026-07-12, `model-benchmarks.md` §6.4, until #153 gave 12–15 GB to Gemma 4 E2B on 2026-08-09). unsloth Dynamic-2.0 quant; thinking-by-default (Deep applies). §9 eval standing recorded honestly in the manifest (F1 under the Qwen3-4B incumbent, EM comparable); b9849 load observed through the app 2026-07-12. Vision model run text-only. |
 | Chat (Qwen3.5 9B) | Qwen3.5 9B (UD-Q4_K_XL) | ~6.0 GB | 12 GB | — (rank 3) | **Recommended at 16–23 GB** today (the RAM path below); 16–20 GB at the newest-Qwen promotion (2026-07-12, §6.4). unsloth Dynamic-2.0 quant. §9 eval standing recorded in the manifest (edges Ministral on F1/EM within cross-run tolerance, ranked under it only on the hallucination-trap axis); ran on the b9849 binary in the #48 tester eval; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 6.57 GiB vulkan). Text-only, not bundled. |
+| Chat (Qwen3.5 9B Q3) | Qwen3.5 9B (UD-Q3_K_XL) | ~5.1 GB | 12 GB | not auto-picked (rank 0) | **Added 2026-11-20 as a selectable model; rank 0 until the owner decides.** Same base model, same unsloth repository and same licence review basis as the UD-Q4_K_XL sibling. Benchmark study 2 suite score 83.2 against the sibling's 86.1. On a Ryzen 7 5800H laptop with a 6 GB RTX 3060: 5.5 to 6.0 tok/s on CPU (sibling 5.1), 25 of 33 layers on the card and 13.8 to 17.0 tok/s with the card on (sibling 20 of 33, 8.6 to 8.8); peak working set 6.67 GiB on CPU. Prompt-cache smoke RESTORED. `host_mapped_weights_mib` not yet measured (no full-offload start so far). Evidence `eval/results/hardware/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/q3kxl-manifest-20261120.md`. Text-only, not bundled. |
 | Chat (Qwen3.5 27B) | Qwen3.5 27B (UD-Q4_K_XL) | ~17.6 GB | 24 GB | — (rank 0) | **Qwen3.5 wave (2026-07-01).** High-end dense challenger; superseded at its tier by the Qwen3.6 27B pair (below) before ever being promoted. Text-only, opt-in (not bundled). |
 | Chat (Qwen3.6 27B Q4) | Qwen3.6 27B Q4_K_M | ~16.8 GB | 20 GB | — (rank 1) | **Ranked and selectable, not the auto-pick.** Tier history: held 24 GB 2026-07-12..2026-08-16, lost it to the Qwen3.8 handover (§9.4), took it back on 2026-08-20 when upstream deleted the Qwen3.8 files, and handed it to `qwen3.8-27b-ud-q4km` the same day when the §9.5 successor wave measured the replacement and the owner ratified the handover — so rank 3 → 1. NOTE it still out-decodes the successor (tg 40.1 vs 32.4 t/s) at quality inside cross-run uncertainty; its own URL + LFS hash re-verified live 2026-08-20. Productized 2026-07-12 from a local-test stub: unsloth Q4_K_M, real HF-LFS hash, apache-2.0 review; hallucinations 0 on the v3 rescore; **§9.1 in-app smoke PASSED all legs 2026-07-30** (peak RSS 16.87 GiB vulkan). Still ranked + selectable. Text-only, not bundled. |
 | Chat (Qwen3.6 27B Q5) | Qwen3.6 27B Q5_K_M | ~19.5 GB | 24 GB | — (rank 1) | **Ranked and selectable, not the auto-pick** — same tier history as the Q4 sibling (rank 3 → 1 when the §9.5 successor wave gave ≥32 GB to `qwen3.8-27b-ud-q5km`), and it never stopped being the harness top scorer. Still the all-time top scorer of the grounded-QA harness (F1 .3573, zero unanswerable-set hallucinations) — the handover is the §6.4 generational call, not a quality verdict. **§9.1 smoke PASSED 2026-07-30** (peak RSS 19.38 GiB vulkan). Text-only, not bundled. |
@@ -86,6 +90,23 @@ Sizes/RAM come from each manifest
 > partially offloads (`model-benchmarks.md` §6.6 rule 6). The "Auto-tier" column above is the declared
 > `recommended_profiles` (kept as-is); the live recommendation is `recommendation_rank` +
 > RAM-best-fit (or the card's free-memory-best-fit on a discrete GPU).
+>
+> **Processor path (2026-11-20, `model-benchmarks.md` §6.7).** A computer whose next start runs
+> from RAM without a usable graphics card (memory class `cpu`) no longer takes the RAM path above.
+> Its picks rest on the 2026-11 answer-quality study and on measured processor speed, through the
+> optional `recommendation_rank_cpu`: **8–11 GB → Qwen3 4B 2507, 12–15 GB → Gemma 4 E4B,
+> 16–23 GB → Qwen3.5 9B, ≥24 GB → Gemma 4 26B-A4B**. A benchmark under 5 tok/s steps along the
+> manifest's `step_down_to` chain (26B-A4B → 9B → E4B → E2B, 2507 → E2B). The dense 12B to
+> 31B models carry `recommendation_rank_cpu: 0` there (selectable, never the automatic pick).
+> Ministral 3 8B went from rank 2 to 0 on every path the same day. The RAM path above now
+> describes Apple Silicon and the no-fit fallback of the card path only.
+>
+> **Card path (2026-11-20, `model-benchmarks.md` §6.8).** On a discrete card the need is the
+> runtime's measured `projected_graphics_need_mib` plus its 1 GiB margin, and the pick is the
+> highest card-ranked model (`recommendation_rank_gpu`) that fits: **6 GB → Gemma 4 E4B, 8 GB →
+> Qwen3.5 9B, 12 and 16 GB → Gemma 4 12B, 20 GB → Qwen3.8 27B UD-Q4_K_M, 24 GB → Gemma 4 31B**, the
+> RAM floor permitting (under 12 GB of RAM: Qwen3 4B 2507). A model that an earlier start on this
+> machine placed only partly on the card is not picked for it again.
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
 12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in
@@ -247,6 +268,12 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
 no-RAM picker), `recommendation_rank` (a finite number, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
+`recommendation_rank_cpu` (a number ≥ 0; replaces `recommendation_rank` when the next start runs
+from the processor, 0 = never the automatic pick there; `model-benchmarks.md` §6.7),
+`step_down_to` (the id of the chat model the processor and card paths step to after a slow
+benchmark on this one; §6.7, §6.8), `recommendation_rank_gpu` (a number ≥ 0; replaces
+`recommendation_rank` on a discrete card; §6.8), `projected_graphics_need_mib` (a number ≥ 0; the
+runtime's own fit projection under the app's launch, which replaces the derived card estimate; §6.8),
 `supports_thinking_mode` (below), `bundled_on_preconfigured_drive` (below),
 `speculative_decoding` (below), `disable_prompt_cache` (below),
 a `download` block (below),
@@ -258,8 +285,81 @@ manifest's YAML comment carrying its arithmetic; `model-benchmarks.md` §6.6),
 `host_mapped_weights_mib` (number ≥ 0, #321; the weights that stay host-mapped on a full offload,
 which the same estimate subtracts — absent charges the whole file to the card), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
-vision role + mmproj projector" below), and an optional **`files:` list** (below, #310). Unknown
-extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
+vision role + mmproj projector" below), an optional **`files:` list** (below, #310),
+`min_app_version` (below, #847) and `default_for_role` (below, #848). Unknown extra keys (e.g.
+`supports_tools`, `dimensions`) are ignored by the validator.
+
+- **`default_for_role`** (optional boolean, default `false`, #848) makes THIS manifest its role's model.
+  `resolveModelByRole` (the embedder, the reranker, the transcriber, the translator) takes the first
+  manifest of the role that sets it, else the first of the role in walk order. The images model applies
+  the same rule to the vision manifests whose files are ALL on the drive (`pickVisionManifest`, #890): the
+  flagged one when it is there, else the first one there. Images runs that model; when its files are there
+  but fail their check, it runs the next vision model on the drive (`visionCandidates`), so it never goes
+  dark while another model would run. Discovery walks
+  `model-manifests/` depth first, each folder's entry names in code-unit order, on every OS (FAT/exFAT,
+  ext4 and APFS do not list a folder sorted, NTFS does), so the order no longer depends on the drive. The
+  committed embedder, `multilingual-e5-small-q8`, sets it, so an embeddings manifest a later release or a
+  user adds never re-points the embedder; that would ask the user to re-index the whole library. The flag
+  decides whether or not the flagged model's file is present: with the E5 weight missing the app runs on the
+  mock embedder even when another embeddings model is installed, deliberately (its vectors would not match
+  the index; rag-design "Embedding during ingestion"). To move the default, move the flag. At most one
+  manifest per role sets it (`committed-catalog.test.ts`). It is accepted on chat, where nothing reads it
+  (the active chat model is the user's pick). The workspace's `activeEmbeddingModelId` setting does not
+  choose the embedder (known-limitations.md). The flag decides among the USABLE manifests only: when no
+  usable manifest of the role is flagged (none ever was, or the flagged one is invalid or, for an older app,
+  for a newer HilbertRaum), the first usable manifest of the role in walk order is the model, another
+  embedder included. **Frozen constraint:** a release must never make the `default_for_role` manifest
+  unusable for an older build (no `min_app_version` on it, no field change that build rejects) without
+  flagging a usable replacement in the same release. One function, `pickManifestForRole`
+  (`shared/manifest.ts`), is this rule for what the app composes (`resolveModelByRole`), the images model
+  (`getVisionStatus`, over the vision manifests on the drive), the Performance screen's role rows and the
+  AI Model screen's ★ on an embeddings card. That ★ marks the composed model when
+  it fits this machine's RAM, and no embeddings card otherwise (the ★ is runnable by construction).
+- **Fields an older app reads are ignored where they are inert, never rejected (#848, D848-3).** A
+  manifest field this release reads must not make a later release's manifest vanish from it: a field that
+  does nothing for a role is accepted there (`default_for_role` on chat). The older rule that rejects
+  `speculative_decoding` and `disable_prompt_cache` outside chat predates this principle and stays as
+  shipped. A later release that needs either on another role uses `min_app_version` (below).
+
+- **A manifest for a newer HilbertRaum (#847)** is not invalid. A `role` this build does not know (a
+  non-empty string outside the six roles) or a `min_app_version` above the running app routes the file,
+  before any validation, to a separate `unsupported` list in `discoverManifests`. Only its display fields
+  are read: `id` and `display_name` (required), and when present `role`, `family`, `size_on_disk_gb` and
+  the drive-relative `local_path` / `mmproj.local_path` / `files[].local_path` (each under the same
+  containment rule, because their existence is checked). Everything else is ignored, since this build
+  cannot know which of its own rules a later role or field follows. The entry never joins the model list
+  anything selects from, so it is never recommended, verified, downloaded or started (the main process
+  refuses it as an unknown model, `main.models.unknown`: "This model is no longer in this drive's model
+  list", in the interface language, #930). The Models screen lists it, with nothing to act on, in a trailing "Needs a
+  newer HilbertRaum" section, and on "On this drive" when every declared file exists (design-guidelines
+  §15). A missing, blank or non-string `role`, or a missing `id` / `display_name`, is still invalid. Such
+  entries share the models' id space, and a manifest this app can use ALWAYS keeps its id, whatever the walk
+  order (F-847-4): a same-id entry for a newer HilbertRaum is reported as a duplicate and not listed (among
+  entries for a newer HilbertRaum, the first in walk order wins). A role this build does not know includes a
+  typo in a hand-written manifest (`role: Chat`): it reads "Needs a newer HilbertRaum" too, since the two
+  cannot be told apart. The sell gate counts every such manifest as a problem: a Kit ships its own app.
+  Builds up to v0.1.65 reject these manifests, so there they still vanish.
+- **`min_app_version`** (optional, exactly `MAJOR.MINOR.PATCH`, #847) names the oldest HilbertRaum a
+  manifest is for. It is read BEFORE validation, so a later release can mark ANY manifest as not for older
+  apps: a new field rule, a new enum value, or a model its pinned engine cannot load. An older app (from the
+  release that added this field on) then lists it as above instead of validating it. Parts compare as
+  numbers (`0.1.100` is newer than `0.1.65`). It is fail-safe: a value that is not exactly
+  `MAJOR.MINOR.PATCH` (a pre-release minimum such as `0.2.0-beta`, a fourth part, a leading zero, a `v`,
+  a YAML number), or an app that does not know its own version, counts as newer. An app version with a
+  pre-release suffix is older than its release (`0.1.66-beta.1` does not meet `0.1.66`); build metadata
+  (`+…`) is ignored. On the ONLY manifest of an id the field hides that model from every older app (an
+  embedder hidden that way means the mock embedder there), so never add it to an id older apps run.
+  Shipping it in a SECOND file with the same id, beside the manifest older apps can use, is safe for them:
+  a usable manifest always keeps its id (above). Builds up to v0.1.65 ignore the field and use the
+  manifest. No committed manifest sets it. The app compares it with `app.getVersion()`, the sell gate
+  with its `--app-version`. The skills gate (a skill's `compatibility.minAppVersion`, `skillNeedsNewerApp`)
+  makes the same comparison (`appOlderThanMinimum`, `shared/app-version.ts`, #896; the frozen model gate
+  keeps its own copy, and a unit test holds the two to one answer): parts compare as numbers, and a
+  pre-release app is older than its own release, so a skill and a model with the same minimum get the same
+  answer on every version both can read. It still differs as an older courtesy gate:
+  it is fail-open (an app version it cannot read, such as `''`, is compatible), and it reads both sides
+  leniently (the app by its leading `MAJOR.MINOR.PATCH`, so `0.1.66.4` reads as `0.1.66`; a validated
+  minimum with a leading zero, `01.1.66`, compares as numbers).
 
 - **`files`** (optional, #310) declares the ADDITIONAL required files of this model's weight
   beyond `local_path`/`sha256`, which stay mandatory and PRIMARY — shard 1, the file
@@ -295,7 +395,8 @@ extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
     shards`). Non-shard files in `files:` are unaffected — the field is generic, not
     shard-specific.
   An invalid manifest (any of the above) is logged and skipped by `discoverManifests` — never
-  listed, never installed, never startable. `manifestFiles()` appends every `files[]` entry as
+  listed, never installed, never startable. (A manifest for a newer HilbertRaum is not invalid: it is
+  listed for display only, see above.) `manifestFiles()` appends every `files[]` entry as
   `kind: 'extra'`, so install state, the verify/download-progress byte totals, the drive verifier,
   `checksums.json`, and the download planner all account for the whole weight with no further
   change (see "The in-app downloader" and `docs/data-contracts.md`). **Not done in this wave**: no
@@ -306,7 +407,9 @@ extra keys (e.g. `supports_tools`, `dimensions`) are ignored by the validator.
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
 - **`sha256`** is lower-case hex (64 chars). A non-hex placeholder (e.g. `REPLACE_WITH_REAL_HASH`)
-  marks a model whose hash is not yet known; such a file is only usable in developer mode.
+  marks a model whose hash is not yet known; such a file is only usable in developer mode on a drive
+  whose policy allows unverified models. The AI Model screen shows such a model as **No checksum**
+  (#932, "Model states" below).
 - **`runtime`/`format`**: the supported pairs are `llama_cpp`/`gguf` (chat, embeddings, reranker,
   vision) and `whisper_cpp`/`ggml` (the transcriber); any other runtime/format pair yields the
   `unsupported` state.
@@ -379,7 +482,31 @@ Computed by `services/models.ts` with this precedence:
 `unsupported` → `missing` (any required file absent) → `checksum_failed` (a hash mismatch on any
 required file, or a placeholder hash outside developer mode) → `installed`. "Required files" is
 every entry `manifestFiles()` enumerates — the weight, a vision model's mmproj, and any #310
-`files:` entries — not just the primary. The active running model is shown as `running`.
+`files:` entries — not just the primary. The active running model is shown as `running`. A manifest for
+a newer HilbertRaum (#847, above) is listed as `unsupported` too, display-only: `ModelInfo.role` is
+`'unknown'` (its declared role rides `declaredRole`), `needsNewerApp: true`, never recommended, no
+`download`, and `filesPresent` says whether every file it declares exists (existence only, no hash).
+
+`checksum_failed` covers two facts, and the screens tell them apart without a new state:
+
+- **A file failed its check** (a cached or computed digest differs from the manifest's). The AI Model
+  card says **Can't verify** and offers its Download (the repair).
+- **No checksum on record** (a placeholder hash, outside developer leniency; decided from the manifest
+  before any file is read). `buildModelList` flags the model `ModelInfo.noChecksum: true`
+  (`hasPlaceholderHash`, #932). The card says **No checksum**, with a hint that the model runs only in
+  developer mode on a drive whose policy allows unverified models, and offers no Download: a new copy
+  cannot give the manifest a checksum. A mixed manifest (a real-hash GGUF beside a placeholder
+  projector) is flagged too, even when its GGUF is damaged: the placeholder decides the state before
+  the GGUF is read, and the model stays refused until every file has a checksum, so the card hides the
+  Download that would fetch the GGUF (#933 review N2).
+
+`ModelState`, the start verdict (`checkModelBeforeStart`: `ok` | `damaged`) and every role's start gate
+are the same for both, so both are refused at every start. The images, translation and search copy still
+calls both "damaged" ([`known-limitations.md`](known-limitations.md)). The Performance screen reads the same two facts per row,
+from the checksum cache only (`knownFileVerdict`, never a hash; `ResidentModelRow.fileCheck`: `damaged` |
+`unverified` | `ok`, #933). Such a row's pill says **failed its file check** or **no checksum on record**
+instead of "not loaded", and the row adds nothing to "Everything loaded at once" or the graphics-card
+lines unless the model is loaded. A file nobody has checked yet reads `ok` there, as on the AI Model card.
 
 ## License review gate
 ```yaml
@@ -685,13 +812,13 @@ executables embed an application manifest (UTF-8 code page, long paths; upstream
 SHA-256 values are the official GitHub Releases API `digest` for tag `b12110` AND were confirmed
 against a local download on 2026-11-07; `fetch-runtime` re-verifies each archive before extraction.
 
-| Asset | SHA-256 | Notes |
-|---|---|---|
-| `llama-b12110-bin-win-vulkan-x64.zip` | `9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f` | MIT; Vulkan full build (default win build); ships LLVM `libomp.dll` + `LICENSE-LLVM-OpenMP`; `llama-connect.exe` left out |
-| `llama-b12110-bin-win-cpu-x64.zip` | `98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2` | MIT; pure-CPU safety net; same `libomp.dll` + licence file; `llama-connect.exe` left out |
-| `llama-b12110-bin-macos-arm64.tar.gz` | `4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662` | MIT; Metal (mac arm64); `llama-connect` left out |
-| `llama-b12110-bin-ubuntu-vulkan-x64.tar.gz` | `a5d741940956ec62e8783aee7e5a4c7c761af867d6f027c3277a51e1a3ac59b0` | MIT; Vulkan full build (default linux build); `llama-connect` left out |
-| `llama-b12110-bin-ubuntu-x64.tar.gz` | `368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55` | MIT; pure-CPU safety net; `llama-connect` left out |
+| Asset | SHA-256 | Bytes | Notes |
+|---|---|---|---|
+| `llama-b12110-bin-win-vulkan-x64.zip` | `9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f` | 37,661,146 | MIT; Vulkan full build (default win build); ships LLVM `libomp.dll` + `LICENSE-LLVM-OpenMP`; `llama-connect.exe` left out |
+| `llama-b12110-bin-win-cpu-x64.zip` | `98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2` | 24,708,445 | MIT; pure-CPU safety net; same `libomp.dll` + licence file; `llama-connect.exe` left out |
+| `llama-b12110-bin-macos-arm64.tar.gz` | `4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662` | 16,650,691 | MIT; Metal (mac arm64); `llama-connect` left out |
+| `llama-b12110-bin-ubuntu-vulkan-x64.tar.gz` | `a5d741940956ec62e8783aee7e5a4c7c761af867d6f027c3277a51e1a3ac59b0` | 35,858,360 | MIT; Vulkan full build (default linux build); `llama-connect` left out |
+| `llama-b12110-bin-ubuntu-x64.tar.gz` | `368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55` | 23,051,958 | MIT; pure-CPU safety net; `llama-connect` left out |
 
 **License-review record — llama.cpp b11146 runtime assets (HISTORICAL — the prior pin; status: approved,
 reviewed 2026-09-27, issue #512):** the pin was bumped b9849 → **b11146** (2026-09-23, upstream
@@ -797,8 +924,11 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   silently shipped. Then update
 >   `version` + the per-OS asset `url`s (asset names vary per release) from the
 >   [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), download each
->   asset, promote its real SHA-256 into `sha256`, re-verify the llama.cpp facts the app depends on
->   (`architecture.md` GPU record "llama.cpp facts"), write the licence record above, and
+>   asset, promote its real SHA-256 into `sha256` and its byte count into `size_bytes` (#843: the
+>   GitHub Releases API asset `size`, read in the same call as the `digest`; the in-app engine
+>   dialog shows it, and the licence record's Bytes column repeats it), re-verify the llama.cpp facts
+>   the app depends on (`architecture.md` GPU record "llama.cpp facts"), write the licence record
+>   above, re-check the dialog's licence line below against the new archives, and
 >   regenerate `DRIVE-NOTICES.md` — as a deliberate, reviewed change. A real-hash mismatch makes
 >   `fetch-runtime` delete the archive and fail.
 >   **Re-capture the SSE fixtures** (`apps/desktop/tests/fixtures/chat-sse-*-<pin>.txt`,
@@ -813,9 +943,10 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 
 ### Download hosts (#769)
 
-Every host a committed URL names. This is an **inventory, not an allowlist**: the app and the
-scripts fetch from whatever host a drive's yaml names (`security-model.md` S4 declined a
-download-host allowlist), and a download follows redirects to hosts no file names (the Hugging
+Every host a committed URL names. This is an **inventory, not an allowlist** (`security-model.md`
+S4 declined a download-host allowlist). The scripts fetch from whatever host a drive's yaml names,
+and so does the app for models and the OCR files; its engine downloads read the app's own
+`runtime-sources.yaml` (#842). A download also follows redirects to hosts no file names (the Hugging
 Face and GitHub storage CDNs, `mirror.download.kiwix.org`). `committed-catalog.test.ts` holds both
 columns to the committed files exactly, so a new host is a deliberate edit of this table. A model
 manifest's URLs are its `download.url`, `mmproj.download.url` and every `files[].download.url`,
@@ -848,12 +979,25 @@ transcriber CLI (`whisper-cli`), fetched with `fetch-runtime --family whisper_cp
 `v1.8.6`). The upstream release ships prebuilt binaries for **Windows only** (R-W1); the
 pinned asset:
 
-| Asset | SHA-256 | Notes |
-|---|---|---|
-| `whisper-bin-x64.zip` (v1.8.6) | `b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822` | MIT; plain-CPU build; binaries nest under `Release/` (the fetch scripts flatten); ships `SDL2.dll` (zlib license — permissive, attribution-free; used only by the demo tools, redistributed as part of the upstream archive) |
+| Asset | SHA-256 | Bytes | Notes |
+|---|---|---|---|
+| `whisper-bin-x64.zip` (v1.8.6) | `b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822` | 4,093,849 | MIT; plain-CPU build; binaries nest under `Release/` (the fetch scripts flatten); ships `SDL2.dll` (zlib license — permissive, attribution-free; used only by the demo tools, redistributed as part of the upstream archive) |
 
 mac/linux whisper builds are compiled from the same MIT source at the pinned tag by the
 drive builder (no new licenses; see `drive-layout.md`).
+
+**What the in-app engine dialog states (#843).** Installing, updating or reinstalling the engine
+from the AI Model screen first shows each archive the job will fetch: its version, size (the pin's
+`size_bytes`; both families' byte counts are the GitHub Releases API asset `size`, read
+2026-11-18 in the same call as the `digest`), full download address and licence. The licence
+line is code-side (`SIDECAR_FAMILY_SPECS` in `assets.ts`, never the drive's yaml) and follows
+the records above: llama.cpp **MIT**, on Windows "MIT, includes Apache-2.0 WITH LLVM-exception
+(libomp.dll)"; whisper.cpp **MIT**, on Windows "MIT, includes zlib (SDL2.dll)". Its link is the
+upstream `LICENSE` at the pinned tag. Both are pre-reviewed, so the dialog asks for no
+acknowledgement (the OCR pattern; the knowledge-pack tools' GPL consent is the exception). A pin
+bump that changes what an archive bundles changes this line in the same PR. **To bump the
+whisper.cpp release:** capture the new asset's `sha256` and `size_bytes` the same way, and
+re-run the checks the yaml header lists.
 
 **License-review record — Whisper model weights (status: approved, reviewed 2026-06-11):**
 OpenAI's Whisper models are **MIT** (github.com/openai/whisper LICENSE). The shipped
@@ -893,7 +1037,9 @@ has its own narrow installer (`services/ocr-install.ts`). Its trust anchor is **
 `OCR_PINS` table carries each language's sha256 and exact size, drift-tested against the table
 below and the committed yaml (`tests/unit/ocr-pins.test.ts`); the yaml contributes only the
 download URL (its `dest` is ignored — the destination is always `ocr/<lang>.traineddata.gz`), and
-a yaml whose sha256 differs from the pin is refused. **Changing the pinned data version therefore
+an entry whose sha256 differs from the pin is never used. Each file comes from the drive's yaml
+when its entry matches the pin, else from the app's own copy; with no matching entry in either,
+the install is refused (#841). **Changing the pinned data version therefore
 means editing three places together:** the yaml `ocr:` block, this table, and `OCR_PINS` — the
 drift test fails until they agree.
 
@@ -1127,8 +1273,10 @@ line, so a hand-made manifest that relies on a hand-placed projector leaves out 
 `BLOCK  <id>: <the validator's message>`, fetch no file of that model whatever is on disk and whatever
 `--accept-license` says, carry on with the next model and exit 1. Install state
 (`services/models.ts`) requires **every** declared file — the GGUF, the mmproj, and any `files:`
-entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
-treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)
+entries — present + SHA-256-verified. The builds that predate the `vision` role reject such a
+manifest, so it vanishes there (the claim that they show it as `unsupported` was never true); since
+#847 a role a build does not know is listed as needing a newer HilbertRaum instead ("A manifest for a
+newer HilbertRaum" above). The shard-completeness rule (#310)
 applies to `local_path`, not to `mmproj.local_path` — a sharded projector is not (yet) a case the
 validator enforces (the committed-catalog row "declares no shard-pattern path whose sibling series is
 incomplete" covers it, and a control shows it firing).
@@ -1187,9 +1335,11 @@ download:
 
 Everything else rides the existing schema. Install state (`services/models.ts`) is role-agnostic
 (present + SHA-256-verified ⇒ `installed`); `selectModel` **refuses** it ("used automatically") — it
-activates by **presence** via `resolveModelByRole('translation')` once the weight is verified, exactly
-like reranker/vision. An older build that predates the role treats the manifest as `unsupported`
-(forward-compatible, the same rollout as vision/transcriber). On the Models screen it renders as an
+activates by **presence** via `resolveModelByRole('translation')` once the weight is on the drive,
+exactly like reranker/vision. Nothing hashes it at its start; a weight a check found damaged is refused
+there with its own message (#913). The builds that predate the role reject such a manifest, so it vanishes there;
+since #847 a role a build does not know is listed as needing a newer HilbertRaum instead. On the Models
+screen it renders as an
 automatic-role card (no Select/Start), downloadable behind the license-acknowledgement gate below.
 
 **Architecture facts this rests on (verified 2026-07-05).** TranslateGemma is **plain Gemma 3**

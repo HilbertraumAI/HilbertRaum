@@ -24,6 +24,7 @@ import type { en } from './en'
 //   lock / unlock              → sperren / entsperren
 //   password                   → Passwort
 //   settings                   → Einstellungen
+//   demo mode                  → Demo-Modus (hyphenated everywhere, #829)
 //   plaintext (developer) mode → unverschlüsselt (Entwickler)
 //
 // EP-1 review glossary (P5 native pass — MIRROR of the canonical record in
@@ -197,7 +198,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.runtime.gpu': '{model} · GPU ({name})',
   'chat.runtime.cpu': '{model} · CPU',
   'chat.runtime.cpuCompat': '{model} · CPU (Kompatibilitätsmodus)',
-  'chat.runtime.demo': '{model} · Demomodus',
+  'chat.runtime.demo': '{model} · Demo-Modus',
   'chat.runtime.title':
     'Das KI-Modell, das in diesem Chat antwortet, und ob es auf der Grafikkarte (GPU) oder ' +
     'dem Prozessor (CPU) läuft. Details: Einstellungen → Diagnose.',
@@ -1250,6 +1251,11 @@ export const de: Record<keyof typeof en, string> = {
   'models.library.translation': 'Übersetzung',
   'models.library.images': 'Bilder',
   'models.library.voice': 'Spracheingabe',
+  'models.newerApp.heading': 'Neuere HilbertRaum-Version nötig',
+  'models.newerApp.badge': 'Neuere App nötig',
+  'models.newerApp.hint':
+    'Dieses Modell ist für eine neuere HilbertRaum-Version. Aktualisiere die App auf diesem ' +
+    'Computer, um es zu nutzen.',
   'models.library.memory': 'Mindestarbeitsspeicher: {size}',
   'models.library.clear': 'Filter zurücksetzen',
   'models.library.showVariants': 'Alle Varianten anzeigen ({count})',
@@ -1274,10 +1280,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.state.installed': 'Installiert',
   'models.state.missing': 'Nicht heruntergeladen',
   'models.state.checksumFailed': 'Nicht prüfbar',
+  'models.state.noChecksum': 'Keine Prüfsumme',
   'models.state.unsupported': 'Nicht unterstützt',
   'models.state.notRecommended': 'Nicht empfohlen',
   'models.state.ready': 'Bereit',
   'models.state.running': 'Läuft',
+  'models.noChecksum.hint':
+    'Für dieses Modell ist keine Prüfsumme hinterlegt. Es läuft deshalb nur im Entwicklermodus auf ' +
+    'einem Laufwerk, dessen Richtlinie ungeprüfte Modelle erlaubt.',
   'models.badge.notResponding': 'Reagiert nicht',
   'models.notRespondingHint': 'Das KI-Modell antwortet nicht mehr. Ein Neustart behebt das meistens.',
   'models.restart': 'Neu starten',
@@ -1376,6 +1386,18 @@ export const de: Record<keyof typeof en, string> = {
   'models.engine.downloadingNoTotal': 'KI-Engine wird heruntergeladen…',
   'models.engine.verifying': 'KI-Engine wird geprüft…',
   'models.engine.extracting': 'KI-Engine wird entpackt…',
+  'models.engineConfirm.chatEngine': 'KI-Engine (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Sprach-Engine (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'Ausweichversion nur für den Prozessor',
+  'models.engineConfirm.version': 'Version',
+  'models.engineConfirm.total': 'Gesamtgröße',
+  'models.engineConfirm.licenseIncludes': '{license}, enthält {bundled}',
+  'models.engineConfirm.hint':
+    'Jede Datei wird von der angezeigten Adresse heruntergeladen und vor der Verwendung mit ihrer ' +
+    'erwarteten Prüfsumme verglichen. Nichts über dich oder deine Dokumente wird gesendet.',
+  'models.engineConfirm.updateNote':
+    'Dein Modell antwortet weiter, solange der Download läuft. Nur während die Dateien ersetzt ' +
+    'werden, pausiert es einige Sekunden.',
   // Hinweis nur zur Sprach-Engine: die Chat-Engine ist installiert (Chat funktioniert echt);
   // nur die optionale Sprach-Engine (whisper.cpp) fehlt — daher ein ruhiger Info-Hinweis, kein
   // „Demo-Modus“-Alarm. Nutzt dieselben Download-Job-Schlüssel (Fortschritt/Wiederholen/Richtlinie).
@@ -1439,7 +1461,8 @@ export const de: Record<keyof typeof en, string> = {
     'Auf diesem Betriebssystem kann die App die Sprach-Engine noch nicht installieren — dieses ' +
     'Modell ermöglicht hier deshalb weder Spracheingabe noch Audio-Import.',
   'models.vision.installed':
-    'Installiert — wird automatisch im Bereich „Bilder“ verwendet. Hier gibt es nichts zu starten.',
+    'Installiert — der Bereich „Bilder“ wählt sein KI-Bildmodell automatisch aus. Hier gibt es ' +
+    'nichts zu starten.',
   'models.vision.notInstalled':
     'Wird nach der Installation automatisch im Bereich „Bilder“ verwendet — keine Einrichtung nötig.',
   'models.vision.goToImages': 'Zu den Bildern',
@@ -1995,6 +2018,12 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.model_download_started': 'Download gestartet',
   'diag.audit.model_download_verified': 'Download verifiziert',
   'diag.audit.model_download_failed': 'Download fehlgeschlagen',
+  'diag.audit.engine_install_started': 'Download von Engine oder Werkzeugen gestartet',
+  'diag.audit.engine_install_finished': 'Engine oder Werkzeuge installiert',
+  'diag.audit.engine_install_failed': 'Installation von Engine oder Werkzeugen fehlgeschlagen',
+  'diag.audit.ocr_install_started': 'Download der OCR-Dateien gestartet',
+  'diag.audit.ocr_install_finished': 'OCR-Dateien installiert',
+  'diag.audit.ocr_install_failed': 'Installation der OCR-Dateien fehlgeschlagen',
   'diag.audit.document_imported': 'Dokument importiert',
   'diag.audit.document_reindexed': 'Dokument neu indexiert',
   'diag.audit.document_deleted': 'Dokument gelöscht',
@@ -2012,6 +2041,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.workspace_unlock_failed': 'Entsperrversuch fehlgeschlagen',
   'diag.audit.workspace_lock_failed': 'Sperrversuch fehlgeschlagen (Arbeitsbereich blieb geöffnet)',
   'diag.audit.workspace_password_changed': 'Arbeitsbereich-Passwort geändert',
+  'diag.audit.workspace_working_copy_lost': 'Letzte Änderungen verloren',
   'diag.audit.settings_changed': 'Einstellungen geändert',
   'diag.audit.local_api_toggled': 'Lokale API ein- oder ausgeschaltet',
   'diag.audit.policy_warning': 'Richtlinien-Hinweis',
@@ -2129,6 +2159,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.model.title': 'Dein Modell',
   'perf.model.line.one': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
   'perf.model.line.other': '{model} · {size} GB auf dem Laufwerk · Kontext von {context} Token',
+  'perf.model.lineNoSize.one': '{model} · Kontext von {context} Token',
+  'perf.model.lineNoSize.other': '{model} · Kontext von {context} Token',
   'perf.model.none': 'Noch kein Modell ausgewählt. Wähle eines auf dem KI-Modell-Bildschirm.',
   'perf.model.need': 'Belegt {need} GB mit diesem Kontext.',
   'perf.model.needEstimate':
@@ -2182,11 +2214,15 @@ export const de: Record<keyof typeof en, string> = {
   'perf.models.device.processor': 'Prozessor',
   'perf.models.loaded': 'jetzt geladen',
   'perf.models.notLoaded': 'nicht geladen',
+  'perf.models.notOnDrive': 'nicht auf diesem Laufwerk',
+  'perf.models.damaged': 'Dateiprüfung nicht bestanden',
+  'perf.models.noChecksum': 'keine Prüfsumme hinterlegt',
   'perf.models.lifetime.session': 'bleibt geladen',
   'perf.models.lifetime.idle': 'wird bei Leerlauf entladen',
   'perf.models.lifetime.per-use': 'läuft nur während der Arbeit',
   'perf.models.split': '{gpuLayers} von {layers} Schichten auf der Karte',
   'perf.models.card': 'Grafikkarte: Chat {chat} GB + Übersetzung {translation} GB, von {vram} GB.',
+  'perf.models.cardChat': 'Grafikkarte: Chat {chat} GB, von {vram} GB.',
   'perf.models.cardReranker': 'Grafikkarte: Ranking {reranker} GB, von {vram} GB.',
   'perf.models.cardBoth':
     'Beide sind gerade auf der Karte. Das später gestartete bekam den Rest und läuft langsamer; stoppe und starte es, sobald das andere entladen ist.',
@@ -2420,6 +2456,27 @@ export const de: Record<keyof typeof en, string> = {
     'auf diesem Laufwerk.',
   'gate.unlock.submit': 'Entsperren',
   'gate.unlock.submitBusy': 'Wird entsperrt…',
+  'gate.unlock.workingCopyLost':
+    'Die Arbeitsdatei des Arbeitsbereichs auf dem Laufwerk wurde entfernt oder beschädigt. Dein ' +
+    'Arbeitsbereich bleibt so erhalten, wie er beim letzten Sperren oder Schließen der App war; ' +
+    'Änderungen seitdem sind verloren.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum hat deinen Arbeitsbereich beim letzten Schließen nicht gesperrt, zum Beispiel weil ' +
+    'das Laufwerk entfernt wurde, der Computer keinen Strom mehr hatte oder die App zwangsweise ' +
+    'beendet wurde. Dein Arbeitsbereich öffnet sich so, wie er beim letzten Sperren war; falls du ' +
+    'seitdem etwas geändert hast, ist es verloren. Beende HilbertRaum beim nächsten Mal, bevor du ' +
+    'das Laufwerk entfernst.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum konnte deinen Arbeitsbereich beim letzten Schließen nicht sperren, weil das ' +
+    'Laufwerk voll war. Dein Arbeitsbereich öffnet sich so, wie er beim letzten Sperren war; falls ' +
+    'du seitdem etwas geändert hast, ist es verloren. Stell sicher, dass auf dem Laufwerk Platz frei ' +
+    'ist, bevor du weitermachst: Sonst kann auch das nächste Sperren deine Änderungen nicht ' +
+    'speichern.',
+  'gate.unlock.encryptedFileMissing':
+    'Die verschlüsselte Datei des Arbeitsbereichs fehlte auf dem Laufwerk, deshalb hat HilbertRaum ' +
+    'die unverschlüsselte Kopie behalten, die deine letzte Sitzung hinterlassen hat. Entsperre ' +
+    'jetzt, um sie wieder zu verschlüsseln, und finde dann heraus, was die Datei entfernt hat, zum ' +
+    'Beispiel ein Synchronisations- oder Aufräumprogramm.',
   'gate.welcome.title': 'Willkommen',
   'gate.welcome.intro':
     'Das ist dein privater KI-Arbeitsbereich. Chatte mit einem KI-Modell und stelle Fragen ' +
@@ -2486,6 +2543,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb konnte dieses Dokument nicht indexiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — versuch es danach erneut.',
   'main.ingest.engineLibraryMissing': 'Die KI-Engine kann auf diesem Computer nicht laufen, weil die Systembibliothek {library} fehlt. Im Bereich „KI-Modell“ steht, wie du das behebst — versuch es danach erneut.',
   'main.ingest.voiceEngineCannotRun': 'Die Sprach-Engine kann auf diesem Computer nicht laufen, deshalb konnte diese Aufnahme nicht transkribiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — indexiere das Dokument danach neu.',
+  'main.ingest.voiceModelPathUnsupported':
+    'Unter Windows kann die Sprach-Engine das Transkriptionsmodell nicht öffnen, weil ein Ordner- ' +
+    'oder Dateiname im Pfad des Modells einen Umlaut, einen Akzent oder ein anderes ' +
+    'Nicht-ASCII-Zeichen enthält. Lege das Modell unter einem Pfad ohne solche Zeichen ab, passe ' +
+    'seinen Eintrag im Manifest des Modells an und indexiere das Dokument danach neu.',
   // #634: das Suchmodell (der E5-Embedder) ist ausgefallen — gewählt nach der Art des Fehlers, nie
   // nach seinem Text (der Text eines Startfehlers nennt die Modelldatei mit absolutem Pfad).
   'main.ingest.searchModelTimeout':
@@ -2588,6 +2650,29 @@ export const de: Record<keyof typeof en, string> = {
     'Dein Browser verbindet sich mit dieser Website.',
   'main.dialog.openLink.open': 'Öffnen',
   'main.dialog.openLink.cancel': 'Abbrechen',
+  'main.dialog.unsavedReview.title':
+    'Einige Änderungen an der Prüfung konnten nicht gespeichert werden.',
+  'main.dialog.unsavedReview.message':
+    'Einige Änderungen an der Prüfung konnten nicht gespeichert werden.',
+  'main.dialog.unsavedReview.detail':
+    'Wenn du jetzt schließt, gehen sie verloren. Prüfe, ob das Laufwerk noch angeschlossen ist und ' +
+    'freien Speicherplatz hat, und versuch es dann erneut.',
+  'main.dialog.unsavedReview.tryAgain': 'Erneut versuchen',
+  'main.dialog.unsavedReview.keepOpen': 'Offen lassen',
+  'main.dialog.unsavedReview.closeAnyway': 'Trotzdem schließen',
+  'main.dialog.taskRunning.title': 'Eine Dokumentaufgabe ist noch nicht fertig.',
+  'main.dialog.taskRunning.message': 'Eine Dokumentaufgabe ist noch nicht fertig.',
+  'main.dialog.taskRunning.detailOcr':
+    'Wenn du jetzt schließt, wird das Lesen des Scans abgebrochen, und die bisher gelesenen Seiten ' +
+    'gehen verloren.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Wenn du jetzt schließt, wird die Übersetzung abgebrochen, und der bisher übersetzte Teil geht ' +
+    'verloren.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Wenn du jetzt schließt, werden die laufenden und wartenden Dokumentaufgaben abgebrochen, und ' +
+    'ihre bisherige Arbeit geht verloren.',
+  'main.dialog.taskRunning.keepOpen': 'Offen lassen',
+  'main.dialog.taskRunning.closeAnyway': 'Trotzdem schließen',
   'main.workspace.wrongPassword':
     'Dieses Passwort hat deinen Arbeitsbereich nicht entsperrt. Prüf es und versuch es ' +
     'noch einmal.',
@@ -2597,6 +2682,28 @@ export const de: Record<keyof typeof en, string> = {
     'beschädigt und konnten nicht geöffnet werden. Das Passwort erneut einzugeben hilft ' +
     'nicht. Lege keinen neuen Arbeitsbereich an — lass die Dateien unverändert und stelle ' +
     'den Ordner „workspace“ aus einem Backup wieder her.',
+  'main.workspace.vaultMissing':
+    'Dein Passwort ist richtig, aber die verschlüsselte Datei des Arbeitsbereichs fehlt auf dem ' +
+    'Laufwerk, und es ist keine Kopie übrig, aus der sie sich wiederherstellen ließe. Lege keinen ' +
+    'neuen Arbeitsbereich an. Lege die Datei an ihren Platz zurück oder stelle den Ordner ' +
+    '„workspace“ aus einem Backup wieder her.',
+  'main.workspace.descriptorMissing':
+    'Die Datei mit dem Schlüssel deines Arbeitsbereichs (config/workspace.json) fehlt auf dem ' +
+    'Laufwerk oder lässt sich nicht lesen, deshalb kann kein Passwort den Arbeitsbereich öffnen. ' +
+    'Lege keinen neuen Arbeitsbereich an. Lege die Datei an ihren Platz zurück oder stelle sie aus ' +
+    'einem Backup wieder her.',
+  'main.workspace.descriptorUnreadable':
+    'Die Datei mit dem Schlüssel deines Arbeitsbereichs (config/workspace.json) lässt sich nicht ' +
+    'lesen, und die verschlüsselte Datei des Arbeitsbereichs fehlt auf dem Laufwerk, deshalb kann ' +
+    'kein Passwort den Arbeitsbereich öffnen. Lösche die Schlüsseldatei nicht. Stelle beide Dateien ' +
+    'aus einem Backup wieder her oder lies in der Anleitung zur Fehlerbehebung nach, bevor du neu ' +
+    'anfängst.',
+  'main.workspace.vaultOpenFailed':
+    'Dein Passwort ist richtig, aber HilbertRaum konnte das Öffnen des Arbeitsbereichs ' +
+    'nicht abschließen. Der verschlüsselte Arbeitsbereich auf dem Laufwerk ist unverändert. ' +
+    'Sorge für freien Speicherplatz auf dem Laufwerk und versuch es dann noch einmal. Wenn ' +
+    'das nach einem Update begonnen hat, kann die vorherige HilbertRaum-Version ihn ' +
+    'weiterhin öffnen.',
   // #242: see en.ts — the recovery file is held by another program; nothing is lost.
   'main.workspace.recoveryBlocked':
     'Der Arbeitsbereich konnte noch nicht geöffnet werden: Ein anderes Programm hält eine ' +
@@ -2608,6 +2715,12 @@ export const de: Record<keyof typeof en, string> = {
     'aktualisiere die App, um ihn zu öffnen. Es wurde nichts verändert.',
   'main.workspace.createFailed': 'Der Arbeitsbereich konnte nicht erstellt werden.',
   'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
+  'main.workspace.exists':
+    'Auf diesem Laufwerk gibt es bereits einen Arbeitsbereich, deshalb wurde kein neuer angelegt. ' +
+    'Entsperre ihn mit seinem Passwort.',
+  'main.workspace.plaintextNotAllowed':
+    'Ein Arbeitsbereich ohne Passwort ist hier nicht erlaubt. Lege den Arbeitsbereich stattdessen ' +
+    'mit einem Passwort an.',
   'main.workspace.newPasswordTooShort':
     'Das neue Passwort muss mindestens {min} Zeichen lang sein.',
   'main.workspace.unlockBeforeChange':
@@ -2618,6 +2731,9 @@ export const de: Record<keyof typeof en, string> = {
     'Das Passwort konnte nicht geändert werden. Dein aktuelles Passwort funktioniert weiterhin.',
   'main.workspace.busyPasswordChange':
     'Das Passwort des Arbeitsbereichs wird gerade geändert. Versuch es gleich noch einmal.',
+  'main.workspace.busyDocumentWork':
+    'Es werden noch Dokumente importiert oder neu indexiert. Warte, bis das fertig ist, und versuch ' +
+    'es dann noch einmal.',
   // full-audit 2026-07-11 CODE-1a: the lock re-encrypt failed (typically a full drive).
   'main.workspace.lockFailed':
     'Der Arbeitsbereich konnte nicht gesperrt werden — er bleibt geöffnet und deine Daten ' +
@@ -2822,7 +2938,7 @@ export const de: Record<keyof typeof en, string> = {
     'Download verworfen. Beim nächsten Start beginnt er von vorn.',
   'main.engine.alreadyRunning': 'Die KI-Engine wird bereits heruntergeladen.',
   'main.engine.noSources':
-    'Auf diesem Laufwerk wurden keine Engine-Quellen gefunden (runtime-sources.yaml fehlt).',
+    'In dieser Kopie von HilbertRaum wurden keine Engine-Quellen gefunden (runtime-sources.yaml fehlt).',
   'main.engine.noHostBuild': 'Für diesen Computer ist keine KI-Engine verfügbar.',
   'main.engine.alreadyInstalled': 'Die KI-Engine ist bereits installiert.',
   'main.engine.unknownJob': 'Unbekannter Engine-Download.',
@@ -2863,6 +2979,15 @@ export const de: Record<keyof typeof en, string> = {
   // #516: das Update hält die Engine für den Dateitausch an, das würde laufende Arbeit abbrechen.
   'main.engine.updateBusy':
     'Die KI-Engine wird gerade verwendet (eine Antwort, ein Import, eine Übersetzung oder eine Dokumentaufgabe läuft). Versuche das Update erneut, wenn sie fertig ist.',
+  // #986: siehe en.ts — vor jeder Änderung abgelehnt; Zahlen wie bei main.download.notEnoughSpace.
+  'main.engine.notEnoughSpace':
+    'Auf diesem Laufwerk ist nicht genug Speicherplatz frei: Die Engine braucht entpackt {needed}, ' +
+    'frei sind {free}. Gib auf dem Laufwerk Speicherplatz frei und versuche es dann erneut.',
+  // #986: siehe en.ts — der Tausch per Umbenennen wurde verweigert; die installierte Kopie blieb, oder beide
+  // Kopien blieben, und der nächste Versuch (oder Start) setzt die neue ein.
+  'main.engine.filesInUse':
+    'Die Engine konnte nicht ersetzt werden, weil ein anderes Programm eine ihrer Dateien verwendet ' +
+    '(zum Beispiel ein Virenscanner). Bitte versuche es in einer Minute erneut.',
   // #410: der In-App-Installer für die OCR-Sprachdateien (services/ocr-install.ts).
   'main.ocr.badRequest':
     'Die Anfrage zum Herunterladen der OCR-Dateien wurde nicht verstanden. Bitte versuche es ' +
@@ -2872,9 +2997,10 @@ export const de: Record<keyof typeof en, string> = {
     'Auf diesem Laufwerk gibt es keine Download-Liste für die OCR-Dateien. Ergänze sie ' +
     'stattdessen mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
   'main.ocr.sourcesMismatch':
-    'Die Download-Liste für die OCR-Dateien auf diesem Laufwerk passt nicht zu dieser Version ' +
-    'von HilbertRaum, deshalb wurde nichts heruntergeladen. Ergänze die Dateien stattdessen ' +
-    'mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
+    'Weder die Download-Liste für die OCR-Dateien auf diesem Laufwerk noch die in dieser Kopie von ' +
+    'HilbertRaum nennt die Dateien, die diese Version verwendet, deshalb wurde nichts ' +
+    'heruntergeladen. Ergänze die Dateien stattdessen mit den Einrichtungsskripten des Laufwerks ' +
+    '(„fetch-runtime --family ocr“).',
   'main.ocr.alreadyInstalled':
     'Die OCR-Dateien liegen bereits auf diesem Laufwerk. Wenn die Texterkennung trotzdem ' +
     'nicht angeboten wird, starte HilbertRaum neu.',
@@ -2926,6 +3052,17 @@ export const de: Record<keyof typeof en, string> = {
     'noch einmal zu transkribieren.',
   'main.models.noManifests':
     'Auf diesem Laufwerk wurde keine Modellliste gefunden — der Ordner model-manifests fehlt.',
+  'main.models.unknown': 'Dieses Modell steht nicht mehr in der Modellliste dieses Laufwerks.',
+  'main.models.notChat': '„{name}“ ist kein Chat-Modell und kann hier nicht gestartet werden.',
+  'main.models.startDamaged':
+    'Das Modell „{name}“ hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es im ' +
+    'Bereich „KI-Modell“ erneut herunter.',
+  'main.models.startMissing':
+    'Das Modell „{name}“ kann nicht gestartet werden: Die Modelldatei ist noch nicht auf diesem ' +
+    'Laufwerk.',
+  'main.models.startNeedsRam':
+    'Das Modell „{name}“ braucht mindestens {min} GB RAM; dieser Computer hat etwa {ram} GB. Wähle ' +
+    'ein kleineres Modell — die Qualität bleibt top.',
   'main.models.autoSelected':
     'Dieses Modell wird automatisch verwendet, sobald es installiert ist — es gibt nichts ' +
     'auszuwählen.',
@@ -2962,6 +3099,12 @@ export const de: Record<keyof typeof en, string> = {
   'main.dictation.tooLong': 'Diese Aufnahme ist zu lang für ein Diktat. Importiere lange Aufnahmen stattdessen als Audiodatei im Bereich „Dokumente“.',
   'main.dictation.busy': 'Das letzte Diktat wird noch transkribiert — einen Moment.',
   'main.dictation.engineCannotRun': 'Die Sprach-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
+  'main.dictation.voiceModelPathUnsupported':
+    'Unter Windows kann die Sprach-Engine eines ihrer Modelle (das Transkriptionsmodell oder das ' +
+    'Modell zur Erkennung von Sprachaktivität) nicht öffnen, weil ein Ordner- oder Dateiname im Pfad ' +
+    'dieses Modells einen Umlaut, einen Akzent oder ein anderes Nicht-ASCII-Zeichen enthält. Lege ' +
+    'das Modell unter einem Pfad ohne solche Zeichen ab, passe seinen Eintrag im Manifest des ' +
+    'Modells an und versuch es dann noch einmal.',
   'main.preflight.readOnly':
     'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
     'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in der ' +
@@ -3332,6 +3475,9 @@ export const de: Record<keyof typeof en, string> = {
   'images.avail.noModel': 'Bildverständnis braucht ein lokales KI-Bildmodell auf diesem Laufwerk.',
   'images.avail.noRuntime': 'Bildverständnis braucht zuerst die installierte KI-Engine.',
   'images.avail.incompatible': 'Das KI-Bildmodell dieses Laufwerks braucht eine neuere KI-Engine.',
+  'images.avail.damaged':
+    'Das KI-Bildmodell dieses Laufwerks hat die Dateiprüfung nicht bestanden. Lade es im Bereich ' +
+    '„KI-Modell“ erneut herunter.',
   'images.avail.cta': 'Zum KI-Modell',
   'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)“ im Bereich „Dokumente“.',
   'images.drop.title': 'Bild hier ablegen',
@@ -3388,6 +3534,9 @@ export const de: Record<keyof typeof en, string> = {
     'Das KI-Bildmodell konnte nicht starten. Versuch es erneut oder wähle ein anderes Modell.',
   // #530: another model would not help — the OS refused the engine program.
   'images.err.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
+  'images.err.modelDamaged':
+    'Das KI-Bildmodell hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es im ' +
+    'Bereich „KI-Modell“ erneut herunter.',
   'images.err.emptyResponse':
     'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
   // #120 Punkt 1: eine LEERE Frage ist ein Eingabeproblem, keine leere Modellantwort.
@@ -3498,6 +3647,9 @@ export const de: Record<keyof typeof en, string> = {
     'Das Übersetzungsmodell konnte nicht starten — möglicherweise ist zu wenig Arbeitsspeicher frei. Schließe andere Programme oder starte HilbertRaum neu und versuche es dann erneut.',
   // #530: not a memory problem — the OS refused the engine program.
   'translate.err.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
+  'translate.err.modelDamaged':
+    'Das Übersetzungsmodell hat die Dateiprüfung nicht bestanden und wurde nicht gestartet. Lade es ' +
+    'im Bereich „KI-Modell“ erneut herunter.',
   'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
   'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.',
   // #160 (BE-3): die endliche Eingabegrenze (TRANSLATE_MAX_TEXT_CHARS — Zahl synchron halten).
@@ -3578,12 +3730,18 @@ export const de: Record<keyof typeof en, string> = {
   'review.rename.save': 'Speichern',
   'review.loading': 'Prüfung wird geladen…',
   'review.notFound': 'Diese Prüfung wurde nicht gefunden. Möglicherweise wurde sie gelöscht.',
+  'review.openFailed': 'Diese Prüfung konnte nicht geöffnet werden.',
   'review.question.toggle': 'Frage',
   'review.answerPane.aria': 'Zu prüfende Antwort',
   'review.autosave.saving': 'Wird gespeichert…',
   'review.autosave.saved': 'Gespeichert',
   'review.autosave.error': 'Einige Änderungen konnten noch nicht gespeichert werden.',
   'review.autosave.retry': 'Erneut versuchen',
+  'review.unsaved.body':
+    'Einige Änderungen an „{title}“ konnten noch nicht gespeichert werden, deshalb wurde die andere ' +
+    'Prüfung nicht geöffnet. Du kannst es erneut versuchen oder die Änderungen verwerfen und die ' +
+    'andere Prüfung öffnen.',
+  'review.unsaved.discard': 'Änderungen verwerfen und öffnen',
   'review.evidence.title': 'Nachweise',
   'review.evidence.captionRelevance':
     'Die angezeigten Quellen sind die Auszüge, die dem lokalen KI-Modell für diese Antwort vorlagen.',
@@ -3769,6 +3927,7 @@ export const de: Record<keyof typeof en, string> = {
   'review.export.done': 'Nachweispaket exportiert.',
   'review.export.error':
     'Das Nachweispaket konnte nicht exportiert werden. Es wurde keine Datei geschrieben.',
+  'review.export.failed': 'Der Export des Nachweispakets wurde nicht abgeschlossen.',
   'review.export.copyHash': 'SHA-256 kopieren',
   'review.export.hashCopied': 'SHA-256 in die Zwischenablage kopiert.',
 

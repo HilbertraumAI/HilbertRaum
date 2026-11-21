@@ -16,8 +16,40 @@ import { engineProblems } from '../services/runtime/engine-load'
 import { saveTextExport } from './save-export'
 import { notifyPerformanceChanged, PERFORMANCE_SETTINGS_KEYS } from './performance-notify'
 import { RERANKER_POSTURE_SETTINGS_KEYS, rerankerPostureInputsChanged } from '../services/rag/device-posture'
+import { SETTINGS_WRITERS, type MainSettingsKey, type RendererSettingsPatch } from '../../shared/settings-writers'
 
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
+
+/**
+ * #868: the part of a renderer's settings patch the renderer may write. A key `SETTINGS_WRITERS` marks
+ * `main` (the workspace's mode, the active model ids, the benchmark, placement and GPU records, the
+ * checksum cache) is dropped whatever its value, and so is a key that is no setting at all; the rest of
+ * the patch is kept, never refused: a refusal would show the user a save error for a renderer bug they
+ * cannot fix, and lose the keys that were fine.
+ *
+ * The result is a fresh object built from own keys only, so `__proto__` or `constructor` in the patch
+ * cannot slip through the prototype. A key whose value is `undefined` writes nothing, so it is left out
+ * of the result too, even a renderer-owned one: kept, it would still fire the hooks below (a
+ * `settings_changed` audit event for a change that never happened, a Performance push, a local-API
+ * re-apply). The log line names a dropped key only when it is a settings key (a fixed name from the
+ * table) and its value is defined (the #858 rule); a key that is no setting is only counted, so
+ * nothing the renderer made up reaches the log.
+ */
+function rendererWritablePatch(raw: Record<string, unknown>): RendererSettingsPatch {
+  const kept: Array<[string, unknown]> = []
+  const mainOwned: MainSettingsKey[] = []
+  let notSettings = 0
+  for (const key of Object.keys(raw)) {
+    if (raw[key] === undefined) continue
+    if (!Object.hasOwn(SETTINGS_WRITERS, key)) notSettings++
+    else if (SETTINGS_WRITERS[key as keyof AppSettings] === 'renderer') kept.push([key, raw[key]])
+    else mainOwned.push(key as MainSettingsKey)
+  }
+  if (mainOwned.length > 0 || notSettings > 0) {
+    log.warn('Settings update ignored keys the renderer may not write', { mainOwned, notSettings })
+  }
+  return Object.fromEntries(kept) as RendererSettingsPatch
+}
 
 // IPC for app/drive status + settings, the privacy policy surface (`getPolicy`),
 // and the policy-aware `offlineMode` (spec §9.1, §3.6).
@@ -161,34 +193,31 @@ export function registerCoreIpc(ctx: AppContext): void {
     return getSettings(ctx.db)
   })
 
-  ipcHandle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
+  ipcHandle(IPC.updateSettings, (_e, raw: unknown) => {
     requireUnlocked()
     // BE-1 (full-audit 2026-07-10): shape-check the patch BEFORE touching it —
     // `Object.keys(null)` threw a raw TypeError out of the handler; reject junk with the
     // friendly localized copy instead (the sibling registrars' validation style).
-    if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
       throw new Error(tMain('main.settings.invalidPatch'))
     }
+    // #868 (after #858, which did this for `workspaceMode` alone): only the keys SETTINGS_WRITERS
+    // gives the renderer pass, and every hook below reads this filtered patch.
+    const patch = rendererWritablePatch(raw as Record<string, unknown>)
     log.info('Settings updated', Object.keys(patch))
     // Read BEFORE the write so local_api_toggled records only a REAL flip — key-presence
     // alone would log phantom enable/disable events for rejected-junk or same-value
     // patches, polluting the exported audit trail's forensic value.
     const localApiBefore = 'localApiEnabled' in patch ? getSettings(ctx.db).localApiEnabled : null
-    // Step 4-4 (Wave 4 ruling (a)) / step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped
-    // Opus review of step 4-6's finding C2): same REAL-flip discipline, now for the
-    // gpuMode/gpuAutoDisabled gate and activeModelId — the settings keys Wave 7 ruling (a)
-    // named. A change to any of them suspends the sidecar (never the permanent stop()) as an
-    // EARLY release, so its NEXT rerank() gets a head start on re-evaluating the posture rather
-    // than waiting for its own use-time check to notice. Since Wave 8 ruling (a), the sidecar's
-    // posture no longer reads `activeModelId` at all (it reads the runtime's COMMITTED model,
-    // `rag/device-posture.ts`) — this hook's `activeModelId` branch is a proxy signal that a
-    // switch was requested, not a read of a posture input; the reranker's own use-time re-check
-    // (`reranker/llama.ts`'s `resolveServer`, Wave 8 ruling (b)(Q)) is what actually keeps the
-    // posture correct at every moment. `activeEmbeddingModelId` is not a posture-adjacent signal
-    // and never triggers this (`RERANKER_POSTURE_SETTINGS_KEYS`). `rerankerPostureInputsChanged`
-    // is the ONE shared predicate `registerModelIpc.ts`'s `models:select`/`models:use` call too,
-    // from all three channels this fix must cover — never three independent copies of the
-    // condition.
+    // Step 4-4 (Wave 4 ruling (a)): same REAL-flip discipline for the reranker's posture. A real
+    // `gpuMode` change suspends the sidecar (never the permanent stop()) as an EARLY release, so
+    // its NEXT rerank() gets a head start on re-evaluating the posture rather than waiting for its
+    // own use-time check to notice; that re-check (`reranker/llama.ts`'s `resolveServer`, Wave 8
+    // ruling (b)(Q)) is what keeps the posture correct at every moment. Since #868 `gpuMode` is the
+    // only posture key a renderer patch can carry (`RERANKER_POSTURE_SETTINGS_KEYS`): `gpuAutoDisabled`
+    // and `activeModelId` are main-owned, and `models:select` / `runtime:use` make the
+    // `activeModelId` call themselves (`registerModelIpc.ts`), through the same shared predicate
+    // `rerankerPostureInputsChanged`, never a second copy of the condition.
     const postureBefore = RERANKER_POSTURE_SETTINGS_KEYS.some((k) => k in patch)
       ? (({ gpuMode, gpuAutoDisabled, activeModelId }) => ({ gpuMode, gpuAutoDisabled, activeModelId }))(
           getSettings(ctx.db)
@@ -208,9 +237,10 @@ export function registerCoreIpc(ctx: AppContext): void {
     // Keep the main-side cached UI language in step with the setting (D-L3) — the
     // post-validation value, so junk patches can't move it.
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)
-    // The Performance snapshot reads a few settings keys (the active slots, the context
-    // override, the GPU mode); a patch touching one pushes the screen's re-read. Deliberately
-    // NOT every settings write — the screen has no interest in the UI language or the theme.
+    // The Performance snapshot reads a few settings keys this channel can carry (the context
+    // size, its override, the GPU mode); a patch touching one pushes the screen's re-read.
+    // Deliberately NOT every settings write — the screen has no interest in the UI language or
+    // the theme.
     if (PERFORMANCE_SETTINGS_KEYS.some((k) => k in patch)) notifyPerformanceChanged()
 
     // Local API start/stop/re-port on a live settings change (the seam precedent above).

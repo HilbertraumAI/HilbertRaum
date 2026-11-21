@@ -20,15 +20,17 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
   }
 })
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { stringify } from 'yaml'
 import { isRealSha256 } from '../../src/shared/manifest'
 import {
   EngineDownloadManager,
+  engineFolderDeletesSettled,
   engineStatus,
+  extractWithTar,
   hostRuntimeArch,
   hostRuntimeOs,
   loadRuntimeSources,
@@ -58,6 +60,7 @@ import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../s
 import { tMain } from '../../src/main/services/i18n'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
+import { makeTarGz, makeZip } from '../helpers/archives'
 import { verifierInert } from '../helpers/binary-fixtures'
 import { committedRuntimeSources } from '../helpers/catalog'
 import { bodyFetch, hangingFetch, routedFetch, runToEnd } from '../helpers/download-fixtures'
@@ -70,7 +73,7 @@ import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 // network seam), the verify-before-trust flow (placeholder honesty, mismatch discard), the
 // extract → flatten → marker install, and the host build selection. The network + the
 // extraction are injected (a fake fetch + a fake extractor that drops the binary) so the
-// suite stays zero-network and never shells out.
+// suite stays zero-network. Only the #856 rows shell out, to the OS's own tar.
 
 const BODY = 'llama-server-release-archive-bytes'
 const REAL_SHA = createHash('sha256').update(BODY).digest('hex')
@@ -483,10 +486,15 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     expect(existsSync(markerFor(rootPath))).toBe(false)
   })
 
-  // Unlike a tar that fails by itself (#752): the user stopped this one, and #530's "files damaged"
-  // report plus the #532 reinstall are its documented way back.
-  it('a cancelled extraction leaves the half-extracted folder as it is', async () => {
+  // #986: the extraction runs in `<os>.new/`, so a cancel of it touches nothing installed. It used to
+  // leave the half-extracted files in the install folder, over the deleted old copy (#530's "files
+  // damaged" was the way back).
+  it('a cancelled extraction leaves the installed engine as it was and no half copy (#986)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
+    const dir = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, BIN_NAME), 'old binary')
+    writeRuntimeMarker(dir, { version: 'bold', backend: 'cpu', os: HOST_OS, arch: HOST_ARCH })
     const reached = deferred()
     const extractImpl: ExtractFn = (_archive, destDir, signal) =>
       new Promise((_resolve, reject) => {
@@ -496,16 +504,20 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
         })
       })
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
-    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'] })
     await within(reached.promise, 'the extraction writing its first file')
     mgr.cancel(started.jobId)
     expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
-    expect(readFileSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME), 'utf8')).toBe('half')
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    await engineFolderDeletesSettled()
+    expect(readFileSync(join(dir, BIN_NAME), 'utf8')).toBe('old binary')
+    expect(JSON.parse(readFileSync(markerFor(rootPath), 'utf8')).version).toBe('bold')
+    expect(existsSync(`${dir}.new`)).toBe(false)
   })
 
-  it('a cancel that arrives after the files are complete finishes the install and records it (#516)', async () => {
-    // The old copy is already gone and the new one is whole: skipping the marker would leave a
-    // working engine without a version record, which no update offers to replace.
+  it('a cancel that arrives after the extraction, before the swap, is honoured: nothing is replaced (#986)', async () => {
+    // #516 used to finish this install, because the old copy was already gone by then. With the staged
+    // swap nothing installed has been touched until the first rename, so the cancel stands.
     const { rootPath, manifestsDir } = makeDrive()
     const { extractImpl, release } = gatedExtract(false)
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
@@ -513,8 +525,12 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     await waitForStatus(mgr, started.jobId, 'extracting')
     mgr.cancel(started.jobId)
     release()
-    expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
-    expect(existsSync(markerFor(rootPath))).toBe(true)
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    await engineFolderDeletesSettled()
+    expect(existsSync(markerFor(rootPath))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+    expect(existsSync(`${join(rootPath, 'runtime', 'llama.cpp', HOST_OS)}.new`)).toBe(false)
   })
 
   it('refuses a chat-engine install while a model runtime is running — fetch never called', async () => {
@@ -764,8 +780,8 @@ describe('extraction bounds + concurrency (F-33)', () => {
     let releaseExtract: () => void = () => undefined
     const wedged = new Promise<void>((r) => (releaseExtract = r))
     // A wedged tar that only settles when we let it — and then, like `extractWithTar`, rejects
-    // for a job that was cancelled meanwhile (a late cancel after a COMPLETE extraction finishes
-    // the install instead, #516 — pinned below).
+    // for a job that was cancelled meanwhile (a cancel after a COMPLETE extraction is honoured too
+    // since #986 — pinned above).
     const neverExtract: ExtractFn = async (_a, destDir, signal) => {
       await wedged
       if (signal?.aborted) throw new Error('tar extraction cancelled')
@@ -1139,6 +1155,61 @@ describe('resolveTarBinary (CWD-binary-planting hardening, vuln-scan 2026-06-21)
   })
 })
 
+// #856: the real default extractor, through the OS's own tar. Windows' bsdtar converts the paths
+// on its command line through the ANSI code page, so an engine install under a Cyrillic or
+// Japanese folder failed with "Error opening archive" on a Western Windows (code page 1252, as on
+// this suite's Windows machines). Each archive is the platform's release format (.zip on Windows,
+// .tar.gz elsewhere), with a nested folder as the whisper zip and the posix tarballs have.
+const OS_TAR = resolveTarBinary()
+describe.skipIf(!isAbsolute(OS_TAR))('extractWithTar with the OS tar (#856)', () => {
+  const ARCHIVE = process.platform === 'win32' ? 'engine.zip' : 'engine.tar.gz'
+  const archiveBytes = (): Buffer => {
+    const top = { name: BIN_NAME, data: Buffer.from('top-level binary') }
+    const nested = { name: 'Release/nested.txt', data: Buffer.from('nested file') }
+    return process.platform === 'win32'
+      ? makeZip([top, nested])
+      : makeTarGz([top, { name: 'Release/', dir: true }, nested])
+  }
+
+  /** An empty `<temp root>/<folder>/runtime/llama.cpp`, the shape of an install target. */
+  function target(folder: string): string {
+    const dir = join(mkdtempSync(join(tmpdir(), 'hr-engine-tar-')), folder, 'runtime', 'llama.cpp')
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  /** The archive written into `dir` as `name`, as the installer downloads it. */
+  function archiveIn(dir: string, name = ARCHIVE): string {
+    writeFileSync(join(dir, name), archiveBytes())
+    return join(dir, name)
+  }
+
+  function expectExtracted(dir: string): void {
+    expect(readFileSync(join(dir, BIN_NAME), 'utf8')).toBe('top-level binary')
+    expect(readFileSync(join(dir, 'Release', 'nested.txt'), 'utf8')).toBe('nested file')
+  }
+
+  it('extracts into a folder named in Cyrillic and Japanese', async () => {
+    const dir = target('Олена 日本')
+    await extractWithTar(archiveIn(dir), dir)
+    expectExtracted(dir)
+  })
+
+  it('extracts an archive named "-", which tar would otherwise read as stdin', async () => {
+    const dir = target('dash')
+    await extractWithTar(archiveIn(dir, '-'), dir)
+    expectExtracted(dir)
+  })
+
+  // Its absolute path would have to go on tar's command line, through the code page again.
+  it('refuses an archive kept outside the target, before tar runs', async () => {
+    const dir = target('outside')
+    const elsewhere = archiveIn(mkdtempSync(join(tmpdir(), 'hr-engine-tar-src-')))
+    await expect(extractWithTar(elsewhere, dir)).rejects.toThrow(/must sit in the folder/)
+    expect(readdirSync(dir)).toEqual([])
+  })
+})
+
 // F-32 (full-audit 2026-07-16): the in-use guard covered only the CHAT runtime — but the
 // embedder/reranker/vision/translation sidecars all execute the SAME runtime/llama.cpp/<os>/
 // binary an install pre-cleans, and whisper-cli runs for hours mid-import from
@@ -1378,7 +1449,7 @@ describe('engine updates (#516)', () => {
     })
     const job = await runToEnd(mgr, started.jobId)
     // The terminal status lands before the cleanup; the manager stays busy until both are done (F-33).
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     // At the pause both archives were downloaded and verified, and both old installs untouched.
     expect(seenAtPause).toEqual({ archives: 2, mainMarker: 'b150', cpuMarker: 'b150', held: true })
     // …and a refused pause releases the gate like every other outcome.
@@ -1390,26 +1461,32 @@ describe('engine updates (#516)', () => {
     expect([...zips(llamaDir(rootPath)), ...zips(cpuDir(rootPath))]).toEqual([])
   })
 
-  it('a job that stops part-way still reports what it replaced: the main build swapped, the cpu/ net failed', async () => {
+  // #986 review: phase 2 installs a family's cpu/ net before its main build (its archive sits inside the
+  // main folder, which the main build's swap moves), so here the net is swapped and the main build fails.
+  it('a job that stops part-way still reports what it replaced: the cpu/ net swapped, the main build failed', async () => {
     const { rootPath, manifestsDir } = makeUpdateDrive()
     await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
     await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
     const mgr = new EngineDownloadManager({
       fetchImpl: okFetch,
       extractImpl: async (archive, destDir, signal) => {
-        if (destDir === cpuDir(rootPath)) throw new Error('tar exited with code 1')
+        // #986: each archive unpacks into its staging folder beside the install.
+        if (destDir === `${llamaDir(rootPath)}.new`) throw new Error('tar exited with code 1')
         await familyExtract(archive, destDir, signal)
       }
     })
-    const installedFamilies: string[][] = []
-    mgr.onInstalled((families) => installedFamilies.push(families))
+    const installed_: Array<[string[], Partial<Record<string, string[]>>]> = []
+    mgr.onInstalled((families, programs) => installed_.push([families, programs]))
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
     await runToEnd(mgr, started.jobId)
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     expect(mgr.get(started.jobId).status).toBe('failed')
-    expect(markerVersion(llamaDir(rootPath))).toBe('b200')
-    // The new main build is on the drive, so its consumers hear of it (re-arm, probe refresh).
-    expect(installedFamilies).toEqual([['llama_cpp']])
+    // The failed main build left the installed one as it was; the new net sits inside it.
+    expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+    expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
+    expect(markerVersion(cpuDir(rootPath))).toBe('b200')
+    // The new net is on the drive, so its consumers hear of it (its old verdict goes, #678).
+    expect(installed_).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
     expect(engineSpawnsHeld('llama_cpp')).toBe(false)
   })
 
@@ -1420,7 +1497,7 @@ describe('engine updates (#516)', () => {
     const mgr = new EngineDownloadManager({
       fetchImpl: okFetch,
       extractImpl: async (archive, destDir, signal) => {
-        if (destDir === whisperDir(rootPath)) throw new Error('tar exited with code 1')
+        if (destDir === `${whisperDir(rootPath)}.new`) throw new Error('tar exited with code 1')
         await familyExtract(archive, destDir, signal)
       }
     })
@@ -1435,7 +1512,7 @@ describe('engine updates (#516)', () => {
       reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
     })
     await runToEnd(mgr, started.jobId)
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     expect(mgr.get(started.jobId).status).toBe('failed')
     expect(installed).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
   })
@@ -1459,6 +1536,6 @@ describe('engine updates (#516)', () => {
       }
     })
     await runToEnd(mgr, second.jobId)
-    await vi.waitFor(() => expect(settled).toEqual(['whisper_cpp:done', 'llama_cpp:failed']))
+    await vi.waitFor(() => expect(settled).toEqual(['whisper_cpp:done', 'llama_cpp:failed']), { timeout: hangBudgetMs(5000) })
   })
 })

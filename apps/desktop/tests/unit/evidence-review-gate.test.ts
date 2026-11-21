@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  deriveReadyGate,
-  parseGenerationSnapshot,
-  parseSourceSnapshots
-} from '../../src/main/services/evidence-reviews'
-import { isReviewEligible } from '../../src/shared/evidence-review'
+import { parseGenerationSnapshot, parseSourceSnapshots } from '../../src/main/services/evidence-reviews'
+import { deriveReadyGate, isReviewEligible } from '../../src/shared/evidence-review'
 import type { AnswerBlockKind, CoverageInfo, ReviewDecision } from '../../src/shared/types'
 
 // EP-1 Phase 0 (plan §5) — the D-7 ready-gate derivation matrix + the pure tolerant
@@ -197,99 +193,5 @@ describe('isReviewEligible (spec §9.1 — the shared entry-point rule)', () => 
     expect(isReviewEligible({ role: 'user', citations })).toBe(false)
     expect(isReviewEligible({ role: 'assistant' })).toBe(false)
     expect(isReviewEligible({ role: 'assistant', citations: [] }, { mode: 'chat' })).toBe(false)
-  })
-})
-
-// ---- Renderer gate mirror ≡ main gate (Phase-2 review FIX-4) ----------------------------
-// The renderer's `computeReadyGate` (lib/reviewSession.ts) recomputes the D-7 gate for
-// optimistic in-between states while main's `deriveReadyGate` stays authoritative at rest
-// and on markReady. Both are pure — this matrix PINS their equivalence so the mirror can
-// never drift silently (heading exemption, NULL blockKind, selections, N/A-counts-as-
-// decided, mixed, empty).
-import { computeReadyGate } from '../../src/renderer/lib/reviewSession'
-import type { EvidenceReviewItem } from '../../src/shared/types'
-
-function mirrorItem(
-  kind: 'block' | 'selection',
-  decision: ReviewDecision,
-  blockKind: AnswerBlockKind | null = null
-): EvidenceReviewItem {
-  return {
-    id: `${kind}-${decision}-${blockKind ?? 'null'}-${Math.random()}`,
-    reviewId: 'r1',
-    ordinal: 0,
-    kind,
-    blockKey: 'b0',
-    blockKind,
-    startOffset: null,
-    endOffset: null,
-    textSnapshot: 'x',
-    decision,
-    reviewerNote: null,
-    links: [],
-    createdAt: 'now',
-    updatedAt: 'now'
-  }
-}
-
-describe('computeReadyGate ≡ deriveReadyGate (renderer mirror equivalence, FIX-4)', () => {
-  const MATRIX: EvidenceReviewItem[][] = [
-    [],
-    [mirrorItem('block', 'not_reviewed', 'paragraph')],
-    [mirrorItem('block', 'not_applicable', 'paragraph')], // N/A counts as decided
-    [mirrorItem('block', 'not_reviewed', 'heading')], // heading exempt
-    [mirrorItem('block', 'supported', 'heading')], // decided heading still exempt from required
-    [mirrorItem('block', 'not_reviewed', null)], // NULL kind → required (safe direction)
-    [mirrorItem('selection', 'not_reviewed', 'paragraph')], // selections never gate
-    [mirrorItem('selection', 'supported', null)],
-    [
-      // mixed: heading(N/A) + decided para + undecided list_item + selection + NULL-kind decided
-      mirrorItem('block', 'not_applicable', 'heading'),
-      mirrorItem('block', 'supported', 'paragraph'),
-      mirrorItem('block', 'not_reviewed', 'list_item'),
-      mirrorItem('selection', 'not_reviewed', 'paragraph'),
-      mirrorItem('block', 'follow_up', null)
-    ],
-    [
-      // fully decided mixed set
-      mirrorItem('block', 'partly_supported', 'paragraph'),
-      mirrorItem('block', 'not_supported', 'table'),
-      mirrorItem('block', 'follow_up', 'fence'),
-      mirrorItem('block', 'not_applicable', 'blockquote')
-    ]
-  ]
-
-  it('every matrix row produces IDENTICAL gates from both implementations', () => {
-    for (const items of MATRIX) {
-      expect(computeReadyGate(items)).toEqual(deriveReadyGate(items))
-    }
-  })
-
-  it('every decision × blockKind × kind combination agrees (exhaustive single-item sweep)', () => {
-    const decisions: ReviewDecision[] = [
-      'supported',
-      'partly_supported',
-      'not_supported',
-      'follow_up',
-      'not_reviewed',
-      'not_applicable'
-    ]
-    const kinds: Array<AnswerBlockKind | null> = [
-      'paragraph',
-      'list_item',
-      'heading',
-      'fence',
-      'table',
-      'blockquote',
-      null
-    ]
-    for (const kind of ['block', 'selection'] as const) {
-      for (const decision of decisions) {
-        for (const blockKind of kinds) {
-          const items = [mirrorItem(kind, decision, blockKind)]
-          expect(computeReadyGate(items)).toEqual(deriveReadyGate(items))
-        }
-      }
-    }
   })
 })

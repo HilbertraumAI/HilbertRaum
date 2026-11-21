@@ -186,24 +186,32 @@ model's own context-cache estimate (a per-model manifest field, default 0.5 GiB)
 1,024 MiB), RAM always a hard gate. `budgetMb` comes from the **budget device**
 (`selectBudgetDevice` / `nextStartMemory` in `services/performance.ts`: the largest probed card at
 or above the runtime's own 5,120 MiB gate and not integrated by name — never the first device the
-driver listed); on **unified memory** (Apple Silicon) and on a machine **without a usable card**
-— including one with graphics acceleration switched off in Settings, or auto-disabled after a
-crash — it is RAM-best-fit (`recommendModelIdByRam`: the largest model whose comfortable RAM
-fits, ties on `recommendation_rank`). The profile-based `recommendModelId(manifests, profile,
-'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). With the committed
-manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`,
-8 GB → `qwen3.5-4b-ud-q4kxl`, 12–16 GB → `qwen3.5-9b-ud-q4kxl`, 20 GB → `qwen3.8-27b-ud-q4km`, 24 GB
-and up → `qwen3.8-27b-ud-q5km` (§6.6's 30-point grid; the 6, 8, 12 and 24 GB points were verified
-on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — while the 20 GB point and the
+driver listed); on **unified memory** (Apple Silicon) it is RAM-best-fit
+(`recommendModelIdByRam`: the largest model whose comfortable RAM fits, ties on
+`recommendation_rank`); on a machine **without a usable card** — including one with graphics
+acceleration switched off in Settings, or auto-disabled after a crash — it is the processor path
+(`recommendModelIdForProcessor`, `model-benchmarks.md` §6.7: the same stages with
+`recommendation_rank_cpu` in place of the rank, and a step-down that follows the manifest's
+`step_down_to` chain). The profile-based `recommendModelId(manifests, profile,
+'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). Since
+`model-benchmarks.md` §6.8 (2026-11-20) the need is the manifest's measured
+`projected_graphics_need_mib` plus the 1 GiB margin where a manifest carries one, the order
+follows `recommendation_rank_gpu`, and a model an earlier start placed only partly on this card is
+not picked for it again. With the committed
+manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `gemma4-e4b-it-qat-q4`,
+8 GB → `qwen3.5-9b-ud-q4kxl`, 12–16 GB → `gemma4-12b-it-qat-q4`, 20 GB → `qwen3.8-27b-ud-q4km`, 24 GB
+and up → `gemma4-31b-it-qat-q4` (the 30-point grid in `committed-catalog.test.ts`; the 6, 8 and 12 GB points were verified
+on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — and the 24 GB pick loaded 61/61 on the RTX 3090 on
+2026-11-20 (§6.8), while the 20 GB point and the
 Gemma 12B / MoE estimate bands remain predicted, no such card being available); by RAM:
 
-| Measured RAM | Chat model |
-|---|---|
-| < 12 GB | `qwen3.5-4b-ud-q4kxl` |
-| 12–15 GB | `gemma4-e2b-it-qat-q4` |
-| 16–23 GB | `qwen3.5-9b-ud-q4kxl` |
-| 24 GB | `qwen3.8-27b-ud-q4km` |
-| ≥ 32 GB | `qwen3.8-27b-ud-q5km` |
+| Measured RAM | Unified memory (RAM pick) | No usable card (processor path, §6.7) |
+|---|---|---|
+| < 12 GB | `qwen3.5-4b-ud-q4kxl` | `qwen3-4b-instruct-2507-q4` |
+| 12–15 GB | `gemma4-e2b-it-qat-q4` | `gemma4-e4b-it-qat-q4` |
+| 16–23 GB | `qwen3.5-9b-ud-q4kxl` | `qwen3.5-9b-ud-q4kxl` |
+| 24 GB | `qwen3.8-27b-ud-q4km` | `gemma4-26b-a4b-it-qat-q4` |
+| ≥ 32 GB | `qwen3.8-27b-ud-q5km` | `gemma4-26b-a4b-it-qat-q4` |
 
 (This is the newest-Qwen promotion, owner decision 2026-07-12; handed to the Qwen3.8 pair 2026-08-16;
 handed BACK on 2026-08-20 when upstream deleted the Qwen3.8 files; and RESTORED the same day to
@@ -731,7 +739,11 @@ cannot support one. `speedIsApprox` / `speedBasisNote` in `PerformanceScreen.tsx
 source for all three.
 **Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
 is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
-size on disk and the context it launches with, then gives one verdict against this computer's
+size on disk (left out for a model outside the catalog, whose size the app does not know — it
+read "0.0 GB" before #914 — and for one that is not here, whose row says so) and the context it
+launches with, then, for a model that is here (`placement.model.onDrive`, computed in
+`buildPlacement`: on this drive or resident now; one that is not gets no verdict and the pill "not
+on this drive", #914 code review), gives one verdict against this computer's
 **memory class** (`nextStartMemory` in `services/performance.ts`; its test-only flags-at-default
 wrapper `memoryClassOf` was removed in #656): `discrete` = a usable graphics card whose VRAM is the budget;
 `unified` = Apple Silicon (darwin + arm64), one pool shared by CPU and GPU, budget = Metal's
@@ -918,8 +930,42 @@ exactly that split (PR #303 audit L8), so "these rows last for this session" is 
 **Models on this computer** (a card between the observed rows and the other computers; 2026-09-05,
 owner direction, placed BELOW "Observed while you worked" because what the machine actually did
 outranks what it could hold): the card is shared and the processor's RAM is shared, so the screen lists EVERY model
-the app can hold, one row per role (`PerformanceSnapshot.placement.models`, `ResidentModelRow`):
-chat and translation auto-fit onto the card (`device: 'gpu'`) — under the CURRENT configuration
+the app can hold, one row per role (`PerformanceSnapshot.placement.models`, `ResidentModelRow`).
+Chat names the active model; every other row names the role's model the app composes
+(`pickManifestForRole`: the manifest flagged `default_for_role`, else the first of the role in walk
+order, #848), never a setting no composer reads (`activeEmbeddingModelId`, #890). The images row
+names the images pick (`pickVisionManifest`, the same rule over the vision models whose files are
+all on the drive, the model `getVisionStatus` runs whenever it verifies, #890), and the catalog's
+vision model when none is on the drive. **A row whose files are not on this drive is marked so and
+left out of the processor total** (#914, owner decision G-5 (c); `ResidentModelRow.onDrive` =
+`manifestFilesPresent`, presence only, never a hash): it keeps naming its model and size, so the
+screen still shows what that model would take before it is downloaded, but it reads "not on this
+drive" in place of "not loaded", and `loadedAtOnceMb` adds nothing for it, because nothing will
+load it. `totals.ramAllMb` is `null` only when nothing is installed; a drive whose every model
+runs on the card gives 0 (an estimated chat spill is not counted until a start is observed). The
+screen leaves the line and its pill out whenever the total would read "0.0 GB" at its one decimal
+(below 0.05 GiB), where it would only mislead. **Loaded beats `onDrive`** (#914 code review): a
+row whose model is resident (a weight deleted while the runtime holds it open, a manifest removed
+under a running model) reads "loaded now" and counts, whatever its files say. The chat row asks
+the same of the active model (with its files gone a start is refused); an active model outside
+the catalog has no size (`sizeOnDiskGb: null`, never `0`) and names no files, so it is not on the
+drive either.
+**A row on the drive that every start refuses is marked so and left out too** (#933;
+`ResidentModelRow.fileCheck`): `damaged` when the checksum cache holds a digest for one of its files
+that is not the manifest's ("Check all model files" found it damaged; the row reads "failed its
+file check"), `unverified` when the manifest has a placeholder hash and developer leniency is off
+(the row reads "no checksum on record", the AI Model card's "No checksum"), else `ok`. The verdict
+is the cache's only: `knownFileVerdict` (`services/models.ts`) is synchronous and hashes nothing
+(a `statSync`, the in-memory cache, a read-only view of the `checksumCache` the snapshot has
+already read; it never writes settings), so a file nobody has checked yet is `ok`. A file check that changes
+this verdict pushes the screen (#959, the push list below), so the row turns to "failed its file check" without a reopen. Such a row adds
+nothing to `totals.ramAllMb` and is not added to a graphics-card line; **loaded beats it**, as it
+beats `onDrive`. "Your model" carries the same verdict (`placement.model.fileCheck`, `ok` while
+resident) and makes no fit claim for a refused model; its line keeps the size on disk. The images
+row passes over a vision candidate the cache knows is refused for the next one, as
+`getVisionStatus` does.
+Chat and translation auto-fit onto the card (`device: 'gpu'`) —
+under the CURRENT configuration
 (PR #303 audit DR1; the memory class alone used to decide): the row says `'cpu'` on a machine
 without a usable card, when the GPU is switched off (`gpuMode: 'off'`) or auto-disabled, when the
 chat's matching observed start landed on the CPU backend, or when the translation sidecar's
@@ -945,7 +991,11 @@ row carries its observed layer split when live, and only while the row itself sa
 `--device none` and a start with no usable graphics device both print `offloaded 49/49 layers to
 GPU`, so before #671 a processor row read "processor · 49 of 49 layers on the card". Three contributors can each show a summary line
 (the chat+translation pair counts as one line): the chat+translation card line (sizes against
-VRAM, shown only while a row actually goes to the card, with the START-ORDER warning when both
+VRAM, shown only while a row actually goes to the card and both models are here — on this drive or
+loaded — with a size; #914: with no chat model selected it read "chat  GB", and a translation model
+named from the catalog only was counted on a card it never reaches; with the chat model here and on
+the card but no translation model here, the chat-only line `perf.models.cardChat` keeps the card
+figure — with the START-ORDER warning when both
 are resident on it — `chatAndTranslationOnCard` needs both rows to say `'gpu'`, the active chat
 model resident with its observed start on the GPU and at least one layer offloaded (or no
 observation under a GPU-eligible configuration), and the translation sidecar live with layers on
@@ -957,7 +1007,8 @@ on the card; the warning badge (`bothOnCard`, true whenever two or more of chat,
 the reranker are genuinely resident on the card) can appear on either card line, not only when
 the contending pair is chat+translation; and the processor: everything loadable at once against
 RAM, **class-aware since the PR
-#303 audit (DR5, owner ruling; `loadedAtOnceMb` in `services/performance.ts`)** — on the `cpu`
+#303 audit (DR5, owner ruling; `loadedAtOnceMb` in `services/performance.ts`)**, and over the
+rows on this drive only since #914 — on the `cpu`
 class every row's size; on `discrete` the rows that run on the processor plus the active model's
 OBSERVED partial-offload spill (the CPU-side model + cache bytes of a measured partial start; an
 estimate, a full offload or an unknown split add 0), the live translation sidecar's spill
@@ -1048,10 +1099,21 @@ runtime's transitions
 resident-sidecar transitions for the "Models on this computer" rows (`onResidencyChange` on
 `E5Embedder`, `LlamaReranker`, `TranslationRuntime`, `VisionRuntime` forwarded by
 `VisionService`: lazy start landed, idle teardown, suspend/stop, unexpected exit — the services
-stay Electron-free, the subscriptions live in `initBackend`); and the settings keys the snapshot
-reads when they change through `models:select` / `models:use` or `settings:update`
-(`PERFORMANCE_SETTINGS_KEYS`: the active slots, `contextTokens`, `contextTokensOverride`,
-`gpuMode` — not every settings write). No coalescing main-side; the renderer serialises its
+stay Electron-free, the subscriptions live in `initBackend`); a model download that reaches `done`
+(#914: the rows say which models are on this drive; `registerDownloadIpc` pushes after the
+`onModelInstalled` selectors re-ran, and a failed or cancelled download pushes nothing); a file check that CHANGES a model's file verdict
+(#959: `knownVerdicts` before and after the pass, one push per pass that moved at least one verdict, none for a pass
+that only confirms the cache): the `listModels` handler (full, lazy or cancelled pass), `verifyModel` (the verdict is
+captured BEFORE its invalidate, so a damaged-to-intact flip counts), and the start check of the search and voice
+models (`createModelStartCheck`'s injected `onVerdictChanged`, wired in `main/index.ts`; the service never imports
+electron). The chat start gate in `startModelRuntime` needs no push of its own: its start request (#599) is released
+after the file check, refused start or not, and that release is a runtime change, which already pushes (measured in
+the real app). A hash of 64 MiB or more also pushes through its read-speed sample, which is why only smaller or faster
+hashes needed this; and the
+settings keys the snapshot reads when they change: the active slots through `models:select` /
+`runtime:use`, and `contextTokens`, `contextTokensOverride` and `gpuMode` through `settings:update`
+(`PERFORMANCE_SETTINGS_KEYS` — not every settings write; since #868 that channel drops the
+active slots, which are main-owned). No coalescing main-side; the renderer serialises its
 refetches.
 
 **The screen's half of that contract** (`PerformanceScreen.tsx`): it subscribes to
@@ -1225,8 +1287,12 @@ example a launcher stamp file); the monotonic column gives clean intra-process d
 
 Events: `app_ready`, `backend_init_done`, `window_ready_to_show`, `gate_visible` (the
 one renderer mark, allowlisted at the IPC boundary), `vault_unlocked` (kdf / decrypt
-split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / encrypt / shred
-split), `install_state_done` (with `cacheHit`, separating a real multi-GB hash from a
+split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / probe / encrypt / shred
+split + DB bytes; `probeMs` is the #876 structural check of the working file before it is
+encrypted, about 4 ms on a warm cache for a 365 MiB or a 1.4 GiB workspace, 6 ms under Electron 43),
+`vault_stage_check` (#973: `checkMs` and `stageBytes` of the unlock's one authenticate pass over a staged
+`.enc.new` that no rekey journal lists; only in that state),
+`install_state_done` (with `cacheHit`, separating a real multi-GB hash from a
 size+mtime cache hit), `checksum_start` / `checksum_done` (issue #106: one pair per
 REAL full-file hash wherever it runs — the cached model-weight path and the download
 verify alike — with a shared `seq` to pair interleaved hashes, `{modelId, file:

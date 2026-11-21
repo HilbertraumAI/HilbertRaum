@@ -37,6 +37,7 @@ import {
 import type { AppContext } from '../../src/main/services/context'
 import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const ROOT = process.env.HILBERTRAUM_DICTATION_SMOKE?.trim() ?? ''
 const AUDIO_DIR = process.env.HILBERTRAUM_WHISPER_AUDIO?.trim() ?? ''
@@ -79,7 +80,7 @@ describe.skipIf(!enabled)('Dictation smoke (manual, real whisper-cli over the di
           modelPath: modelPath!,
           vadModelPath: existsSync(vadModelPath) ? vadModelPath : null
         }),
-        workspace: { isUnlocked: () => true }
+        workspace: workspaceStandIn()
       } as unknown as AppContext
       registerDictationIpc(ctx)
 

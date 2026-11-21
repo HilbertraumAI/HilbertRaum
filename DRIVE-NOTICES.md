@@ -54,6 +54,7 @@ model: qwen3.5-2b-ud-q4kxl apache-2.0
 model: qwen3.5-35b-a3b-ud-q4kxl apache-2.0
 model: qwen3.5-4b-ud-q4kxl apache-2.0
 model: qwen3.5-9b-q8 apache-2.0
+model: qwen3.5-9b-ud-q3kxl apache-2.0
 model: qwen3.5-9b-ud-q4kxl apache-2.0
 model: qwen3.6-27b-q4 apache-2.0
 model: qwen3.6-27b-q5 apache-2.0
@@ -2122,7 +2123,7 @@ says so instead. A `license_review.status` other than `approved` is noted on the
 line — such a model is never pre-loaded on a sold drive (the sell gate requires an
 approved review for every model a drive ships).
 
-### apache-2.0 (29 models)
+### apache-2.0 (30 models)
 
 Licensed under the Apache License 2.0 — the full text is reproduced once in the
 "Apache License 2.0" section at the end of this file.
@@ -2147,6 +2148,7 @@ Licensed under the Apache License 2.0 — the full text is reproduced once in th
 - Qwen3.5 35B-A3B (UD-Q4_K_XL) (`qwen3.5-35b-a3b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-35B-A3B/blob/main/LICENSE)
 - Qwen3.5 4B (UD-Q4_K_XL) (`qwen3.5-4b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE)
 - Qwen3.5 9B Q8_0 (`qwen3.5-9b-q8`) — license: apache-2.0 — no license URL recorded: a local-test entry; no drive ships or downloads this weight
+- Qwen3.5 9B (UD-Q3_K_XL) (`qwen3.5-9b-ud-q3kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE)
 - Qwen3.5 9B (UD-Q4_K_XL) (`qwen3.5-9b-ud-q4kxl`) — upstream: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE)
 - Qwen3.6 27B Q4_K_M (`qwen3.6-27b-q4`) — upstream: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE)
 - Qwen3.6 27B Q5_K_M (`qwen3.6-27b-q5`) — upstream: https://huggingface.co/unsloth/Qwen3.6-27B-GGUF — license: apache-2.0 (https://huggingface.co/Qwen/Qwen3.6-27B/blob/main/LICENSE)

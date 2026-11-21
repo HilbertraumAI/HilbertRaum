@@ -8,12 +8,18 @@ import {
   buildPolicyJson
 } from '../../src/main/services/drive'
 import { SUPPORTED_RUNTIME_FORMATS } from '../../src/main/services/models'
-import { SIDECAR_FAMILY_SPECS, sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
+import { SIDECAR_FAMILY_SPECS, compareRuntimeVersions, sidecarBinaryName, sidecarFamilySpec } from '../../src/main/services/assets'
 import { isRealSha256 } from '../../src/shared/manifest'
 import { KIT_PLATFORMS, type RuntimeFamily } from '../../src/shared/runtime-sources'
-import { DRIVE_LICENSE_ARTIFACTS, KIT_PLATFORM_SPECS } from '../../src/main/services/commercial-drive'
+import {
+  DRIVE_LICENSE_ARTIFACTS,
+  KIT_PLATFORM_SPECS,
+  USER_DATA_CONFIG_FILES,
+  USER_DATA_DIRS
+} from '../../src/main/services/commercial-drive'
 import { REPO_ROOT, modelManifestDocs, repoText } from '../helpers/repo-files'
 import { extractScriptArray } from '../helpers/script-legs'
+import { MARKER_ROWS } from '../helpers/fetch-runtime-markers'
 import { committedRuntimeSources } from '../helpers/catalog'
 
 // Drift guard (audit H5 / M-A1). The drive layout, the format version, and the runtime
@@ -213,6 +219,17 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
   })
 })
 
+// #873: fetch-runtime keeps an engine newer than the drive's pin, in the order the app uses (#516). script-execution.test.ts
+// runs the shared table on both twins; this row holds the app's own `compareRuntimeVersions` to the same table, so the
+// twins and the app cannot drift apart. Green on master by design: it guards the table, the script rows guard the scripts.
+describe('TS ↔ shell-script drift (engine version order, #873)', () => {
+  it.each(MARKER_ROWS.map((row) => [row.title, row] as const))('%s: the app orders the two the same way', (_title, row) => {
+    expect(compareRuntimeVersions(row.marker.version, row.pin)).toBe(row.order)
+    const kept = row.order === 1 && !row.flags.includes('Commercial') && !row.flags.includes('AllowDowngrade')
+    expect(row.expect === 'skip-newer').toBe(kept)
+  })
+})
+
 // --- Kiwix-tools corresponding-source bundle (#339 P8-4) ----------------------------
 // The builder twins gained their own un-numbered step (-KiwixSourceDir/--kiwix-source-dir):
 // install the source bundle via the node helper, then fetch the kiwix_tools binaries for
@@ -261,6 +278,41 @@ describe('TS ↔ shell-script drift (drive license artifacts, LIC-1)', () => {
     ['scripts/build-commercial-drive.sh', 'LICENSE_ARTIFACTS=(']
   ])('%s spells exactly the canonical artifact list', (rel, header) => {
     expect(extractScriptArray(repoText(rel), header)).toEqual([...DRIVE_LICENSE_ARTIFACTS])
+  })
+})
+
+// --- The knowledge-pack tools' install folders (#986 review 2) ------------------------
+// The Kit gate twins name a leftover `<dir>.new`/`.old` beside every pinned build. The knowledge-pack
+// tools have no row in the runtime matrix (optional family), so the twins list their folders apart; a
+// list behind the yaml stops naming a leftover the canonical gate refuses.
+describe('TS ↔ shell-script drift (knowledge-pack tools folders, #986)', () => {
+  const yamlKiwixDirs = (): string[] => {
+    const builds = committedRuntimeSources().families?.kiwix_tools?.builds ?? []
+    return [...new Set(builds.map((b) => b.extractTo))].sort()
+  }
+  it.each([
+    ['scripts/build-commercial-drive.ps1', '$KiwixToolsDirs = @('],
+    ['scripts/build-commercial-drive.sh', 'KIWIX_TOOLS_DIRS=(']
+  ])('%s lists every pinned kiwix_tools install folder', (rel, header) => {
+    expect(yamlKiwixDirs().length).toBeGreaterThan(0)
+    expect(extractScriptArray(repoText(rel), header).sort()).toEqual(yamlKiwixDirs())
+  })
+})
+
+// --- No user data on a sold drive (#893) ---------------------------------------------
+// The builder's native pre-flight re-states the sell gate's user-data rule
+// (commercial-drive.ts `userDataArtifacts`): the folders that must hold nothing and the config
+// names a used workspace leaves. A native problem alone makes the build NOT SELLABLE, so a twin
+// that drifts either way is wrong: one list longer refuses a drive the canonical gate passes,
+// one list shorter stops naming a leftover.
+describe('TS ↔ shell-script drift (user-data rules, #893)', () => {
+  it.each([
+    ['scripts/build-commercial-drive.ps1', '$UserDataDirs = @(', USER_DATA_DIRS],
+    ['scripts/build-commercial-drive.sh', 'USER_DATA_DIRS=(', USER_DATA_DIRS],
+    ['scripts/build-commercial-drive.ps1', '$UserDataConfigFiles = @(', USER_DATA_CONFIG_FILES],
+    ['scripts/build-commercial-drive.sh', 'USER_DATA_CONFIG_FILES=(', USER_DATA_CONFIG_FILES]
+  ] as const)('%s %s spells exactly the canonical list', (rel, header, canonical) => {
+    expect(extractScriptArray(repoText(rel), header)).toEqual([...canonical])
   })
 })
 

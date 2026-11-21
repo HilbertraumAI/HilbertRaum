@@ -58,7 +58,7 @@ function perfSnapshot(): PerformanceSnapshot {
       memoryClass: 'discrete',
       ramMb: 16_077,
       vramMb: 24_822,
-      model: { id: 'qwen', sizeOnDiskGb: 5.8, contextTokens: 8192 },
+      model: { id: 'qwen', sizeOnDiskGb: 5.8, onDrive: true, contextTokens: 8192 },
       recommendedContextTokens: 8192,
       observed: null,
       observedMismatch: null,

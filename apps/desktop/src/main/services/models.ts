@@ -4,16 +4,23 @@ import { totalmem } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
+  declaresUnknownRole,
   isRealSha256,
+  manifestNeedsNewerApp,
+  parseUnsupportedManifest,
+  pickManifestForRole,
   validateManifest,
   type ModelManifest,
-  type ModelRole
+  type ModelRole,
+  type UnsupportedManifest
 } from '../../shared/manifest'
 import type {
+  AppSettings,
   GpuDevice,
   HardwareProfile,
   MemoryClass,
   ModelDownloadInfo,
+  ModelFileVerdict,
   ModelInfo,
   ModelPlacement,
   ModelState,
@@ -66,10 +73,36 @@ export interface DiscoveredManifest {
   sourceFile: string
 }
 
+/** #847: a manifest for a newer HilbertRaum found on the drive (display only; see `UnsupportedManifest`). */
+export interface DiscoveredUnsupported {
+  manifest: UnsupportedManifest
+  sourceFile: string
+}
+
 export interface DiscoveryResult {
   manifests: DiscoveredManifest[]
+  /**
+   * #847: manifests for a newer HilbertRaum, listed instead of dropped. Never in `manifests`, so nothing that
+   * selects, starts, verifies or downloads a model can reach one; the Models screen lists them, the sell gate
+   * counts them as a defect. One id space with `manifests`, where a usable manifest always keeps its id
+   * (F-847-4): a same-id entry here is reported in `errors` as a duplicate instead.
+   */
+  unsupported: DiscoveredUnsupported[]
   /** One human-readable line per file that failed to parse/validate. */
   errors: string[]
+}
+
+/**
+ * #847 (a+): the app version a manifest's `min_app_version` is compared with. ONE module-level value, set
+ * once at startup from `app.getVersion()` (main/index.ts) and by the sell gate from its `--app-version`,
+ * instead of a parameter on 13 call sites, where one forgotten caller would treat a too-new manifest as
+ * usable. Until it is set the version is unknown, and a manifest naming a `min_app_version` is listed as
+ * needing a newer HilbertRaum (`manifestNeedsNewerApp` is fail-safe).
+ */
+let manifestAppVersion = ''
+
+export function setManifestAppVersion(version: string): void {
+  manifestAppVersion = version
 }
 
 /**
@@ -77,7 +110,8 @@ export interface DiscoveryResult {
  * Manifests are committed to git, so they sit at the repo/app root. Packaging places
  * them under resources; the drive launchers set HILBERTRAUM_MANIFESTS_DIR to the drive's copy
  * (one source of truth with the verify/fetch scripts). A set-but-missing override
- * falls back to the walk-up instead of blanking the model list.
+ * falls back to the walk-up instead of blanking the model list. The override steers the model
+ * list only: the engine pins come from {@link resolveBundledManifestsDir} (#842).
  */
 export function resolveManifestsDir(startDir: string, override?: string): string | null {
   const env = override?.trim()
@@ -94,10 +128,35 @@ export function resolveManifestsDir(startDir: string, override?: string): string
   return null
 }
 
-/** Recursively collect manifest file paths under a directory. */
+/**
+ * The app's OWN `model-manifests/` (#842): the engine pins, and the OCR installer's second list (per
+ * file, #841). No override ever
+ * reaches it. A packaged build takes exactly `<resources>/model-manifests` (the `extraResources` copy)
+ * and null when that is missing: a walk-up could climb out of the app to a user-writable folder above
+ * it, the drive's own copy included. A dev build takes the checkout's, by the walk-up.
+ */
+export function resolveBundledManifestsDir(opts: {
+  isPackaged: boolean
+  resourcesPath: string
+  appPath: string
+}): string | null {
+  if (!opts.isPackaged) return resolveManifestsDir(opts.appPath)
+  const dir = join(opts.resourcesPath, 'model-manifests')
+  return existsSync(dir) && statSync(dir).isDirectory() ? dir : null
+}
+
+/**
+ * Recursively collect manifest file paths under a directory, every folder's entries in CODE-UNIT order (#848).
+ * The walk order is every first-of-role pick (the embedder, reranker, transcriber, translator), the ★ tie-breaks
+ * and the winner of a duplicate id, and only NTFS lists a folder sorted: FAT/exFAT (a Kit), ext4 and APFS do not.
+ * A plain `<` comparison, never `localeCompare` (ICU and locale dependent), so every OS and UI language agree.
+ */
 function collectManifestFiles(dir: string): string[] {
   const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  )
+  for (const entry of entries) {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       out.push(...collectManifestFiles(full))
@@ -139,8 +198,10 @@ function extname(name: string): string {
  */
 export function discoverManifests(manifestsDir: string): DiscoveryResult {
   const manifests: DiscoveredManifest[] = []
+  const unsupported: DiscoveredUnsupported[] = []
   const errors: string[] = []
-  const seenIds = new Map<string, string>()
+  const seenIds = new Map<string, string>() // the manifests this app can use
+  const seenNewer = new Map<string, string>() // #847: the entries for a newer HilbertRaum
   const timed = perfEnabled()
   const startedAt = timed ? performance.now() : 0
   let readMs = 0
@@ -163,6 +224,25 @@ export function discoverManifests(manifestsDir: string): DiscoveryResult {
       raw = parseYaml(text)
     } catch (err) {
       errors.push(`${file}: YAML parse error — ${String(err)}`)
+      continue
+    }
+    // #847: a manifest for a newer HilbertRaum is listed, not validated (this build cannot know the rules a
+    // later release applies) and not dropped. The (a+) `min_app_version` is read first: it overrides whatever
+    // else the manifest says. Among these the first file in walk order wins; against a usable manifest of the
+    // same id it always loses (F-847-4, after the loop).
+    if (manifestNeedsNewerApp(raw, manifestAppVersion) || declaresUnknownRole(raw)) {
+      const parsed = parseUnsupportedManifest(raw)
+      if (!parsed.ok || !parsed.entry) {
+        errors.push(`${file}: ${parsed.errors.join('; ')}`)
+        continue
+      }
+      const dupOf = seenNewer.get(parsed.entry.id)
+      if (dupOf) {
+        errors.push(`${file}: duplicate id "${parsed.entry.id}" (also in ${dupOf})`)
+        continue
+      }
+      seenNewer.set(parsed.entry.id, file)
+      unsupported.push({ manifest: parsed.entry, sourceFile: file })
       continue
     }
     const result = validateManifest(raw)
@@ -188,7 +268,16 @@ export function discoverManifests(manifestsDir: string): DiscoveryResult {
       readMs: Math.round(readMs)
     })
   }
-  return { manifests, errors }
+  // #847 (F-847-4, frozen): a manifest this app can use ALWAYS keeps its id, whatever the walk order. A same-id
+  // entry for a newer HilbertRaum (e.g. a later release's file for the same model) is the duplicate, never the
+  // model's replacement: otherwise an earlier-sorting newer file would leave no usable manifest of that id (no
+  // embedder: the mock fallback) where builds up to v0.1.65 keep the model. One id space: every loser is an error.
+  const listed = unsupported.filter(({ manifest: entry, sourceFile }) => {
+    const usable = seenIds.get(entry.id)
+    if (usable) errors.push(`${sourceFile}: duplicate id "${entry.id}" (also in ${usable}, which this app can use)`)
+    return !usable
+  })
+  return { manifests, unsupported: listed, errors }
 }
 
 /**
@@ -353,6 +442,9 @@ export interface HashStore {
   set(path: string, entry: CachedHash): void
   delete(path: string): void
 }
+
+/** #933: a hash cache that can only be read (`checksumCacheView`): it has no way to write. */
+export type HashStoreReader = Pick<HashStore, 'get'>
 
 const hashCache = new Map<string, CachedHash>()
 
@@ -629,6 +721,25 @@ export function createSettingsHashStore(getDb: () => Db, rootPath: string): Hash
 }
 
 /**
+ * #933 (A S-A8): a READ-ONLY view of a `checksumCache` the caller has already read (the Performance snapshot's
+ * `settings`), keyed like `createSettingsHashStore` (drive-relative, a legacy absolute key still honoured). Unlike
+ * that store's `get`, it never reads settings again and never writes: the store adopts a legacy key with a settings
+ * write, which a display getter must not do.
+ */
+export function checksumCacheView(
+  cache: AppSettings['checksumCache'] | null | undefined,
+  rootPath: string
+): HashStoreReader {
+  return {
+    get(path) {
+      // A row corrupted to `checksumCache: null` reads as an empty cache (the store's BE-1 belt).
+      const entry = cache?.[driveRelKey(rootPath, path)] ?? cache?.[path]
+      return entry ? { size: entry.size, mtimeMs: entry.mtimeMs, actual: entry.sha256 } : null
+    }
+  }
+}
+
+/**
  * SHA-256 of a file, cached by (path, size, mtimeMs) — memory first, then `store`.
  * `onProgress` fires only on a real cache MISS (a cache hit does no I/O), so callers can
  * weight the verification bar by the bytes actually hashed. Concurrent calls for the
@@ -732,16 +843,64 @@ async function sha256FileCached(
  * (honest state) and only SKIPS the multi-GB hash for genuinely un-cached weights.
  */
 function cachedHashFor(filePath: string, store?: HashStore): boolean {
+  return cachedHashOf(filePath, store) !== null
+}
+
+/**
+ * The LIVE cached digest of this file (L1 memory, then the L2 store, matching its current size+mtime), or null when
+ * there is none. Hashes nothing. #913 (S-913-1): the lazy path reads it to honour a cached MISMATCH on any one file of
+ * a model, which a full check that stopped at that file left as the only cached entry.
+ */
+function cachedHashOf(filePath: string, store?: HashStoreReader): string | null {
   let st: ReturnType<typeof statSync>
   try {
     st = statSync(filePath)
   } catch {
-    return false
+    return null
   }
   const hit = hashCache.get(filePath)
-  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return true
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
   const persisted = store?.get(filePath)
-  return !!persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs
+  return persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs ? persisted.actual : null
+}
+
+/**
+ * #933: what the checksum cache already knows about a model's files, synchronously and without hashing anything by
+ * construction (a `statSync`, an in-memory lookup and a `store.get` per file, never `sha256File`): a placeholder hash
+ * outside developer leniency is `unverified`; a live cached digest that differs from the manifest's is `damaged` (a
+ * check found it so); anything else is `ok` (verified, or not checked yet). The same two facts `computeInstallState`'s
+ * lazy branch turns into `checksum_failed`, so the Performance rows and the AI Model card agree. A path that escapes
+ * the drive root names no file on it: `ok` here (the presence rule already reads it as absent).
+ */
+export function knownFileVerdict(
+  manifest: ModelManifest,
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStoreReader }
+): ModelFileVerdict {
+  let files: ManifestFile[]
+  try {
+    files = manifestFiles(rootPath, manifest)
+  } catch {
+    return 'ok'
+  }
+  if (files.some((f) => !isRealSha256(f.sha))) return opts.developerMode ? 'ok' : 'unverified'
+  for (const f of files) {
+    const actual = cachedHashOf(f.path, opts.hashStore)
+    if (actual !== null && actual !== f.sha) return 'damaged'
+  }
+  return 'ok'
+}
+
+/**
+ * #959: `knownFileVerdict` for a list of manifests, keyed by manifest id: the before and after of a pass that may
+ * write the checksum cache. Same guarantees: synchronous, never hashes.
+ */
+export function knownVerdicts(
+  manifests: readonly ModelManifest[],
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStoreReader }
+): Map<string, ModelFileVerdict> {
+  return new Map(manifests.map((m) => [m.id, knownFileVerdict(m, rootPath, opts)]))
 }
 
 /** Verify a weight file against its expected SHA-256 (cached by size+mtime). `label`
@@ -853,6 +1012,19 @@ export function manifestFiles(rootPath: string, manifest: ModelManifest): Manife
   return files
 }
 
+/**
+ * #932: does any file this manifest declares (the GGUF, the mmproj projector, the `files:` list: the files
+ * `manifestFiles` lists) carry a placeholder hash, so it has no checksum on record? From the manifest alone, no I/O.
+ */
+export function hasPlaceholderHash(manifest: ModelManifest): boolean {
+  const hashes = [
+    manifest.sha256,
+    ...(manifest.mmproj ? [manifest.mmproj.sha256] : []),
+    ...(manifest.files ?? []).map((f) => f.sha256)
+  ]
+  return hashes.some((sha) => !isRealSha256(sha))
+}
+
 export interface InstallStateOptions {
   /** When true, skip checksum verification for placeholder/dev hashes. */
   developerMode: boolean
@@ -871,7 +1043,7 @@ export interface InstallStateOptions {
    * NOT relaxed: `startModelRuntime` re-verifies the model it actually launches, and the
    * Models screen's explicit "Check all model files" action (#382) + the ship-time gates
    * (verify-models --strict / assertCommercialDrive) still hash fully. A cached hash is
-   * still used when present.
+   * still used when present: a cached mismatch on any one file reports `checksum_failed` (#913).
    */
   skipHash?: boolean
   /**
@@ -882,6 +1054,23 @@ export interface InstallStateOptions {
    * the §7.4 start gate, `verifyModel` and the ship-time gates, which stay uncancellable.
    */
   signal?: AbortSignal
+}
+
+/**
+ * #890: the synchronous part of `computeInstallState`, its first two steps in the same order: the runtime/format is
+ * one this app supports, and EVERY file the manifest declares (`manifestFiles`: GGUF, mmproj, `files:`) exists. So
+ * true means the state is past `unsupported` and `missing`; it verifies no hash. A path that escapes the drive root
+ * (`safeDrivePath` throws) names no file on the drive, so it counts as absent rather than throwing to the caller.
+ */
+export function manifestFilesPresent(rootPath: string, manifest: ModelManifest): boolean {
+  if (!isSupportedRuntimeFormat(manifest.runtime, manifest.format)) return false
+  let files: ManifestFile[]
+  try {
+    files = manifestFiles(rootPath, manifest)
+  } catch {
+    return false
+  }
+  return files.every((f) => existsSync(f.path))
 }
 
 /**
@@ -916,10 +1105,15 @@ export async function computeInstallState(
   }
 
   // RT-3: on the lazy (chat) path, report a present weight as installed without hashing —
-  // unless a live cache hit can answer for ALL files for free. The start gate re-verifies the
-  // launched model, so an unhashed-but-present non-active model is display-only here.
-  if (opts.skipHash && !files.every((f) => cachedHashFor(f.path, opts.hashStore))) {
-    return 'installed'
+  // unless the cache can answer for free. A live cached MISMATCH on ANY file decides
+  // `checksum_failed` (#913, S-913-1): a full check stops at the first damaged file, so a damaged
+  // vision GGUF leaves its projector unhashed, and the lazy pass right after "Check all model
+  // files" must not flip it back to installed. A cached MATCH decides nothing until EVERY file
+  // has one. The chat start gate re-verifies the model it launches.
+  if (opts.skipHash) {
+    const cached = files.map((f) => cachedHashOf(f.path, opts.hashStore))
+    if (cached.some((actual, i) => actual !== null && actual !== files[i].sha)) return 'checksum_failed'
+    if (cached.some((actual) => actual === null)) return 'installed'
   }
 
   // Verify each file, accumulating the progress byte offset across files so the first-run
@@ -947,6 +1141,63 @@ export async function computeInstallState(
     }
   }
   return 'installed'
+}
+
+/** #913: what the start check says about a model's files. `damaged` refuses the start; `ok` keeps today's start. */
+export type ModelStartVerdict = 'ok' | 'damaged'
+
+/**
+ * #913: the start check of one model by its manifest id, as the composition root builds it (`main/index.ts`): the
+ * manifest, the policy-aware developer leniency and the workspace hash store. `hash: false` reads the cache only;
+ * `hash: true` hashes a file the cache does not know. `signal` aborts a hash in progress.
+ */
+export type ModelStartCheck = (
+  modelId: string,
+  /** `manifest`: the one the service was composed with, when the caller holds it (no folder read). */
+  opts: { hash: boolean; signal?: AbortSignal; manifest?: ModelManifest }
+) => Promise<ModelStartVerdict>
+
+/** #913: one service's start check, bound to its model and its hashing choice (`compose-services.ts`). */
+export type BoundModelStartCheck = (signal?: AbortSignal) => Promise<ModelStartVerdict>
+
+/**
+ * #913 (C §913.3): the check every non-chat role runs at its cold start, inside its single-flight start and before it
+ * spawns, so a file a check found damaged never starts in any role (the chat start gate does its own full hash). Over
+ * `computeInstallState` with the same leniency as chat: `hash: false` is the `skipHash` read (a cached mismatch on any
+ * file, or a placeholder hash outside developer mode, is `damaged`; nothing is hashed), `hash: true` is the full check
+ * (the search and voice models, whose bad output is stored in the index: G-4 (d2), seconds once per workspace).
+ *
+ * Only a proven case refuses (the #876 rule): a missing or unsupported file is `ok` here, and so is a check that could
+ * not finish (a read error), which is logged; the start then fails or runs as it always did. An abort rejects with
+ * the hash's own `HashAbortedError`, so a lock or quit during the hash ends the start at once.
+ */
+export async function checkModelBeforeStart(
+  manifest: ModelManifest,
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStore; hash: boolean; signal?: AbortSignal }
+): Promise<ModelStartVerdict> {
+  let state: ModelState
+  try {
+    state = await computeInstallState(manifest, rootPath, {
+      developerMode: opts.developerMode,
+      hashStore: opts.hashStore,
+      skipHash: !opts.hash,
+      signal: opts.signal
+    })
+  } catch (err) {
+    if (isHashAborted(err) || opts.signal?.aborted) throw err
+    log.warn('Model start check could not finish; starting as before', {
+      modelId: manifest.id,
+      // The code or the name only: a file system error's message names the weight file by its path.
+      error: err instanceof Error ? ((err as NodeJS.ErrnoException).code ?? err.name) : 'unknown'
+    })
+    return 'ok'
+  }
+  if (state === 'checksum_failed') {
+    log.warn('Model start refused: a file of the model failed its check', { modelId: manifest.id })
+    return 'damaged'
+  }
+  return 'ok'
 }
 
 /**
@@ -1161,7 +1412,7 @@ export const VRAM_WORKING_SHARE = 0.15
 /**
  * The context-cache term for a manifest that carries no `estimated_context_cache_gib`, GiB
  * (8k tokens on a 27B measured 0.5 under an earlier launch; decision 11 makes the figure
- * per-model — eight manifests carry their own figure, everything else defaults).
+ * per-model — nine manifests carry their own figure, everything else defaults).
  */
 export const VRAM_DEFAULT_CONTEXT_CACHE_GIB = 0.5
 /**
@@ -1182,7 +1433,14 @@ export function weightsMib(m: ModelManifest): number {
 }
 
 /**
- * What the runtime needs ON THE CARD to hold every layer of this model, MiB:
+ * What the runtime needs ON THE CARD to hold every layer of this model, MiB.
+ *
+ * **Since model-benchmarks.md §6.8 (2026-11-20) a manifest's `projected_graphics_need_mib` decides
+ * when it is present:** the figure llama.cpp's own fit prints ("projected to use N MiB of device
+ * memory") under the app's launch, plus the same 1 GiB margin. Every manifest the card path can
+ * pick carries one (pinned in `committed-catalog.test.ts`). The DERIVED estimate below is the
+ * fallback for a manifest without one (a model added before it is measured, or installed by hand),
+ * and the rest of this comment is its history:
  *
  *     (weights − hostMapped) × 1.15  +  contextCache  +  1 GiB fit margin
  *
@@ -1212,8 +1470,10 @@ export function weightsMib(m: ModelManifest): number {
  * too-large one costs a smaller recommendation. What is NOT modelled well is the 15 % share itself:
  * the measured compute buffers run 416–569 MiB across models from 3.3 to 19.8 GB (they scale with
  * ubatch and hidden width, not with file size), so the share reads 149 MiB on the E2B and 2,730 on
- * Q5. Replacing it with a flat term was considered and REJECTED for now: it flips the 8 GB row to
- * the 9B, against #318 leg 2's measured 31/33 partial offload there.
+ * Q5. Replacing it with a flat term was considered and REJECTED (2026-09): it flipped the 8 GB row
+ * to the 9B, against #318 leg 2's measured 31/33 partial offload there. §6.8 settled that row
+ * differently: on the 9B's measured projection the 8 GB row IS the 9B, which #391 leg 2 measured at
+ * 33/33 on that card, and a partial start there now demotes it (`landedPartlyOnCard`).
  *
  * `hostMappedWeightsMib` is measured per model (see the field's doc comment: read off a FULL-OFFLOAD
  * start's `CPU_Mapped model buffer size`), optional, and clamped to the weight total — a manifest
@@ -1223,6 +1483,9 @@ export function weightsMib(m: ModelManifest): number {
  * catalog. That analysis retires the "GGUF header" half of §5 item 22 (e).
  */
 export function estimateGraphicsNeedMib(m: ModelManifest): number {
+  // §6.8: a manifest that carries the runtime's own projection is judged by it. It is the figure
+  // llama.cpp's fit compares with the card's free memory, so only the fit margin is added.
+  if (m.projectedGraphicsNeedMib !== undefined) return m.projectedGraphicsNeedMib + VRAM_FIT_MARGIN_MIB
   const w = weightsMib(m)
   const onCard = w - Math.min(m.hostMappedWeightsMib ?? 0, w)
   const cacheGib = m.estimatedContextCacheGib ?? VRAM_DEFAULT_CONTEXT_CACHE_GIB
@@ -1311,46 +1574,69 @@ function eligibleOrder(a: ModelManifest, b: ModelManifest): number {
 
 /**
  * Graphics-memory-aware recommendation — RULE C (model-benchmarks.md §6.6 as amended by the
- * PR #308 audit, decision 1). On a computer whose next start uses a discrete card:
+ * PR #308 audit, decision 1), and since §6.8 (2026-11-20) the card path. On a computer whose next
+ * start uses a discrete card:
  *
- *   1. `base` = the RAM pick, computed WITHOUT the speed signal (`recommendModelIdByRam`, its
- *      stage logic untouched — the tier ratifications are the RAM picker's).
- *   2. eligible(m) = fits the card (`fitsGraphicsMemory` at `budgetMib`) AND passes the RAM floor
- *      (`recommended_min_ram_gb` ≤ RAM; the Models screen refuses to start a model over it, and
- *      the pick must never point at a refused model). Unknown RAM keeps the floor open, as the
- *      pre-rule-C card path did. `candidate = base` when base is eligible — the established
- *      recommendation stands wherever the card can hold it (decision 2: the 9B, not Gemma 12B,
- *      where both fit). Otherwise `candidate` = the highest-RANKED eligible model, ties by
- *      comfortable tier then size — ranked models ONLY (a rank-0 model is never the automatic
- *      pick, #326). Otherwise (no ranked model eligible: a small or nearly full card beside a big
- *      catalog) `candidate = base` — the documented no-fit fallback:
- *      the RAM pick partially offloads, which is still the catalog's best answer.
- *   3. The §6.5 speed step-down applies ONCE, to `candidate`, restricted to the eligible pool on
- *      both ends (`applySpeedSignal` with `eligible`): a crawl measured on a model the card cannot
- *      hold never lowers a fitting pick (R2), and the step never lands on a model that fails the
- *      RAM floor or the card (R1). A no-fit fallback therefore never steps — nothing eligible
- *      exists to step to.
+ *   1. `base` = the RAM pick of the ORDINARY ranks, computed WITHOUT the speed signal
+ *      (`recommendModelIdByRam`, its stage logic untouched — the tier ratifications are the RAM
+ *      picker's). It is the no-fit fallback in both modes below.
+ *   2. eligible(m) = fits the card (`fitsGraphicsMemory` at `budgetMib`, the manifest's measured
+ *      projection where it carries one) AND passes the RAM floor (`recommended_min_ram_gb` ≤ RAM;
+ *      the Models screen refuses to start a model over it, and the pick must never point at a
+ *      refused model; unknown RAM keeps the floor open, as the pre-rule-C card path did) AND was
+ *      not seen landing only partly on this card (`landedPartlyOnCard`, §6.8 point 3).
+ *      - **With card ranks** (any manifest of the role carries `recommendation_rank_gpu`, §6.8):
+ *        they replace the ordinary ranks here, and `candidate` = the highest-ranked eligible
+ *        model outright. §6.6 decision 2 ("the RAM pick stands wherever the card can hold it")
+ *        is retired for such a catalog.
+ *      - **Without card ranks** (rule C unchanged): `candidate = base` when base is eligible
+ *        (decision 2: the 9B, not Gemma 12B, where both fit); otherwise the highest-ranked
+ *        eligible model.
+ *      Either way ties go by comfortable tier then size, ranked models ONLY (a rank-0 model is
+ *      never the automatic pick, #326), and with no ranked model eligible (a small or nearly full
+ *      card beside a big catalog) `candidate = base`: the RAM pick partially offloads, which is
+ *      still the catalog's best answer.
+ *   3. A slow speed reading moves `candidate` once, restricted to the eligible pool on both ends:
+ *      with card ranks first along its `step_down_to` chain (`followStepDownChain`, §6.8 point 4);
+ *      otherwise, or off the chain, the §6.5 step (`applySpeedSignal` with `eligible`). A crawl
+ *      measured on a model the card cannot hold never lowers a fitting pick (R2), and the step
+ *      never lands on a model that fails the RAM floor or the card (R1). A no-fit fallback
+ *      therefore never steps — nothing eligible exists to step to.
  *
  * Unknown / non-positive budget → the RAM path with the signal, exactly as before. Unified and
- * cpu classes never reach this function (`recommendChatModelId`), so their picks are unchanged.
+ * cpu classes never reach this function (`recommendChatModelId`): unified takes the RAM pick, cpu
+ * the processor path (§6.7).
  */
 export function recommendModelIdByVram(
   manifests: ModelManifest[],
   budgetMib: number,
   ramGb: number,
   role: ModelRole = 'chat',
-  speedSignal?: PickerSpeedSignal | null
+  speedSignal?: PickerSpeedSignal | null,
+  card?: CardEvidence | null
 ): string | null {
   if (!Number.isFinite(budgetMib) || budgetMib <= 0) return recommendModelIdByRam(manifests, ramGb, role, speedSignal)
-  const candidates = manifests.filter((m) => m.role === role)
+  // §6.8: a catalog that carries card ranks is ranked by them here, and then the highest-ranked
+  // model that fits the card is the pick outright (the "base stands" branch below is skipped). A
+  // catalog without them is rule C, unchanged.
+  const cardRanked = manifests.some((m) => m.role === role && m.recommendationRankGpu !== undefined)
+  const view = cardRanked
+    ? manifests.map((m) =>
+        m.recommendationRankGpu !== undefined ? { ...m, recommendationRank: m.recommendationRankGpu } : m
+      )
+    : manifests
+  const candidates = view.filter((m) => m.role === role)
   const ramKnown = Number.isFinite(ramGb) && ramGb > 0
   const eligible = (m: ModelManifest): boolean =>
-    fitsGraphicsMemory(m, budgetMib) && (!ramKnown || m.recommendedMinRamGb <= ramGb)
+    fitsGraphicsMemory(m, budgetMib) &&
+    (!ramKnown || m.recommendedMinRamGb <= ramGb) &&
+    !landedPartlyOnCard(m, budgetMib, card)
 
+  // The no-fit fallback is the RAM pick of the ordinary ranks: with nothing on the card, RAM decides.
   const baseId = recommendModelIdByRam(manifests, ramGb, role)
   const base = baseId ? candidates.find((m) => m.id === baseId) : undefined
   let candidate: ModelManifest | undefined
-  if (base && eligible(base)) {
+  if (!cardRanked && base && eligible(base)) {
     candidate = base
   } else {
     // STRICTLY ranked (owner decision 2026-09-06, issue #326): a rank-0 model is never the
@@ -1360,7 +1646,150 @@ export function recommendModelIdByVram(
     candidate = pool[0] ?? base
   }
   if (!candidate) return null
+  // §6.8: with card ranks a slow reading follows the pick's named chain first (a no-fit fallback
+  // never steps: nothing eligible exists to step to); what the chain does not cover is §6.5.
+  if (cardRanked && eligible(candidate)) {
+    const stepped = followStepDownChain(candidates, candidate.id, speedSignal, (m) => m.recommendationRank > 0 && eligible(m))
+    if (stepped !== undefined) return stepped
+  }
   return applySpeedSignal(candidates, candidate, speedSignal, eligible).id
+}
+
+/**
+ * The named step-down (model-benchmarks.md §6.7, used by the card path too since §6.8): follow
+ * each manifest's `step_down_to` from the no-signal pick `startId`, over models `usable` admits.
+ *
+ *   - no slow reading, or none on a model → `startId` (nothing moves);
+ *   - the measured model lies on the chain and has a usable target → that target;
+ *   - the measured model is the END of a chain that was followed → it stays the recommendation;
+ *   - the measured model is not on the chain, or is the start with no usable target of its own →
+ *     `undefined`: the caller's §6.5 rule decides.
+ */
+function followStepDownChain(
+  candidates: ModelManifest[],
+  startId: string,
+  signal: PickerSpeedSignal | null | undefined,
+  usable: (m: ModelManifest) => boolean
+): string | undefined {
+  const tps = signal?.tokensPerSecond
+  const measuredId = signal?.measuredModelId
+  if (tps == null || tps <= 0 || tps >= SLOW_PICK_TOKENS_PER_SECOND || !measuredId) return startId
+  const byId = new Map(candidates.map((m) => [m.id, m]))
+  const target = (m: ModelManifest): ModelManifest | undefined => {
+    const next = m.stepDownTo ? byId.get(m.stepDownTo) : undefined
+    return next && usable(next) ? next : undefined
+  }
+  const seen = new Set<string>()
+  let current = byId.get(startId)
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id)
+    const next = target(current)
+    if (current.id === measuredId) {
+      if (next) return next.id
+      return current.id === startId ? undefined : current.id
+    }
+    current = next
+  }
+  return undefined
+}
+
+/**
+ * The chat recommendation for a computer whose next start runs from the PROCESSOR (memory class
+ * `cpu`: no usable graphics card, or the GPU switched off) — model-benchmarks.md §6.7.
+ *
+ * Two differences from the plain RAM pick, both carried by the catalog and not by this code:
+ *
+ *   1. RANK. A manifest's `recommendation_rank_cpu` replaces its `recommendation_rank` here. The
+ *      stage logic is `recommendModelIdByRam`'s, untouched (capacity first, rank inside a band,
+ *      ranked models only): a model measured too slow on a processor carries 0 and drops out of
+ *      the ranked pool, a model that suits a processor carries its own rank. A catalog without the
+ *      field gives exactly the RAM pick.
+ *   2. STEP-DOWN. A benchmark under `SLOW_PICK_TOKENS_PER_SECOND` on a model that lies on the
+ *      pick's `step_down_to` chain recommends that model's own target. The chain is followed
+ *      from the no-signal pick, so the answer is still a function of RAM and the one measurement
+ *      (nothing is stored), yet a second slow benchmark on the stepped model steps again: the
+ *      9B's chain ends at the fastest ranked model instead of one band below. A target the
+ *      machine's RAM floor refuses, or one that is not ranked here, ends the chain. A crawl on a
+ *      model that is NOT on the chain falls back to the §6.5 rule (one band below the pick, and an
+ *      oversized model is no signal), so a catalog without chains behaves as before. Unlike §6.5
+ *      the chain also applies to a runnable-stage pick: its targets are named, not inferred.
+ */
+export function recommendModelIdForProcessor(
+  manifests: ModelManifest[],
+  ramGb: number,
+  speedSignal?: PickerSpeedSignal | null
+): string | null {
+  const view = manifests.map((m) =>
+    m.recommendationRankCpu !== undefined ? { ...m, recommendationRank: m.recommendationRankCpu } : m
+  )
+  const baseId = recommendModelIdByRam(view, ramGb, 'chat')
+  if (baseId === null) return null
+  const chat = view.filter((m) => m.role === 'chat')
+  const stepped = followStepDownChain(chat, baseId, speedSignal, (m) => m.recommendationRank > 0 && m.recommendedMinRamGb <= ramGb)
+  if (stepped !== undefined) return stepped
+  return recommendModelIdByRam(view, ramGb, 'chat', speedSignal)
+}
+
+/**
+ * What earlier starts on THIS computer's card showed (model-benchmarks.md §6.8): the persisted
+ * placement per model id, already limited by the caller to this machine, and the two context
+ * settings `launchContextTokens` reads. The picker reads it to drop a model that was seen landing
+ * only partly on the card.
+ */
+export interface CardEvidence {
+  placements: Readonly<Record<string, Pick<ModelPlacement, 'backend' | 'gpuLayers' | 'totalLayers' | 'contextTokens' | 'gpuFreeAtStartMb'>>>
+  /** `AppSettings.contextTokensOverride`, or null when the manifests' own context applies. */
+  contextTokensOverride?: number | null
+  /**
+   * `AppSettings.contextTokens`, the legacy window a manifest without its own
+   * (`recommended_context_tokens: 0`) launches with. Absent → unknown, and such a manifest's
+   * next window is unbounded for the evidence rule.
+   */
+  contextTokens?: number
+}
+
+/**
+ * The card evidence the settings hold for THIS machine (`here`, a `machineKey`): a placement
+ * stamped with another machine's key supplies nothing, an unstamped one stays eligible, like the
+ * probe. One function for every seam that feeds the picker, so they cannot disagree.
+ */
+export function cardEvidenceFor(
+  s: { modelPlacements: Record<string, ModelPlacement>; contextTokensOverride: number | null; contextTokens: number },
+  here: string | null
+): CardEvidence {
+  const placements: Record<string, ModelPlacement> = {}
+  for (const [id, p] of Object.entries(s.modelPlacements ?? {})) {
+    if (here == null || p.machineKey == null || p.machineKey === here) placements[id] = p
+  }
+  return { placements, contextTokensOverride: s.contextTokensOverride ?? null, contextTokens: s.contextTokens }
+}
+
+/** How far below the present budget a start's free memory may lie and still count as "the same card state", MiB. */
+export const PARTIAL_EVIDENCE_TOLERANCE_MIB = 256
+
+/**
+ * Did an earlier start of this model land only PARTLY on the card, under conditions that still
+ * hold (§6.8)? The estimate says what should fit; this is what did. The record counts when
+ *   - it is a card start with fewer layers on the card than the model has,
+ *   - its context was no larger than the one the next start launches with (a partial offload at
+ *     a larger context proves nothing about a smaller one; the next window is
+ *     `launchContextTokens`', the one precedence `startModelRuntime` launches with), and
+ *   - the card had at least as much free memory then as the budget offers now, within
+ *     `PARTIAL_EVIDENCE_TOLERANCE_MIB` (a start beside a game that filled the card must not
+ *     demote the model for good). An unknown free figure counts: the layers are the evidence.
+ * A later start of the same model that lands fully overwrites the record and lifts the exclusion.
+ */
+export function landedPartlyOnCard(m: ModelManifest, budgetMib: number, card: CardEvidence | null | undefined): boolean {
+  const seen = card?.placements[m.id]
+  if (!seen || seen.backend !== 'gpu') return false
+  if (seen.gpuLayers == null || seen.totalLayers == null || seen.gpuLayers >= seen.totalLayers) return false
+  const launchContext = launchContextTokens(
+    { contextTokens: card?.contextTokens ?? Number.POSITIVE_INFINITY, contextTokensOverride: card?.contextTokensOverride },
+    m
+  )
+  if (seen.contextTokens > launchContext) return false
+  const free = seen.gpuFreeAtStartMb
+  return free == null || free >= budgetMib - PARTIAL_EVIDENCE_TOLERANCE_MIB
 }
 
 /** What the chat picker needs to know about the computer's memory (benchmark.md "Your model"). */
@@ -1374,11 +1803,14 @@ export interface PickerMemory {
    * there is no card / the figure is unknown (→ the RAM pick).
    */
   budgetMb: number | null
+  /** Earlier starts on this machine's card (§6.8); absent or null → the fit estimate alone decides. */
+  card?: CardEvidence | null
 }
 
 /**
  * The chat recommendation for this computer: rule C against the card's budget on a discrete
- * card, by RAM on unified memory (one pool) and on a machine without a usable card.
+ * card, the processor path (§6.7) on a machine whose next start runs from RAM without a card,
+ * and by RAM on unified memory (one pool) and on a discrete class whose budget is unknown.
  */
 export function recommendChatModelId(
   manifests: ModelManifest[],
@@ -1386,8 +1818,9 @@ export function recommendChatModelId(
   speedSignal?: PickerSpeedSignal | null
 ): string | null {
   if (memory.memoryClass === 'discrete' && memory.budgetMb != null && memory.budgetMb > 0) {
-    return recommendModelIdByVram(manifests, memory.budgetMb, memory.ramGb, 'chat', speedSignal)
+    return recommendModelIdByVram(manifests, memory.budgetMb, memory.ramGb, 'chat', speedSignal, memory.card)
   }
+  if (memory.memoryClass === 'cpu') return recommendModelIdForProcessor(manifests, memory.ramGb, speedSignal)
   return recommendModelIdByRam(manifests, memory.ramGb, 'chat', speedSignal)
 }
 
@@ -1484,6 +1917,8 @@ export interface BuildModelListOptions {
    */
   memoryClass?: MemoryClass
   graphicsBudgetMb?: number | null
+  /** Earlier starts on this machine's card (§6.8, `cardEvidenceFor`); omitted → the estimate alone. */
+  cardEvidence?: CardEvidence | null
   /**
    * Optional verification-progress sink. Called once per model that will be hashed (with
    * a 1-based step index + the byte-weighted overall totals), throttled within a file by
@@ -1525,19 +1960,66 @@ export interface ModelListResult {
   manifestErrors: string[]
 }
 
+/** #847: the ids of the manifests for a newer HilbertRaum already logged this session (one line per new id). */
+const newerAppIdsLogged = new Set<string>()
+
+/**
+ * #847: the display-only `ModelInfo` of a manifest for a newer HilbertRaum. `role: 'unknown'` keeps it out of
+ * every role branch of the screen (never a fake known role: `'chat'` would make it a chat-model candidate),
+ * `state: 'unsupported'`, never recommended, no `download` (no Download button, no size to confirm), and
+ * `filesPresent` = every file it declares exists (existence only, no hash; the presence contract of the
+ * "On this drive" view, design-guidelines §15).
+ */
+function newerAppModelInfo(entry: UnsupportedManifest, rootPath: string): ModelInfo {
+  let filesPresent = entry.localPaths.length > 0
+  try {
+    for (const rel of entry.localPaths) {
+      if (!statSync(safeDrivePath(rootPath, rel), { throwIfNoEntry: false })?.isFile()) filesPresent = false
+    }
+  } catch {
+    filesPresent = false // an unreadable path reads as absent, never as a broken list
+  }
+  return {
+    id: entry.id,
+    displayName: entry.displayName,
+    family: entry.family ?? '',
+    role: 'unknown',
+    format: '',
+    runtime: '',
+    license: '',
+    sizeOnDiskGb: entry.sizeOnDiskGb ?? 0,
+    recommendedMinRamGb: 0,
+    recommendedRamGb: 0,
+    recommendedContextTokens: 0,
+    localPath: entry.localPaths[0] ?? '',
+    state: 'unsupported',
+    recommended: false,
+    startableAsMock: false,
+    insufficientRam: false,
+    needsNewerApp: true,
+    ...(entry.role ? { declaredRole: entry.role } : {}),
+    filesPresent
+  }
+}
+
 /** Discover manifests and compute the full ModelInfo[] for the Models screen. */
 export async function buildModelList(opts: BuildModelListOptions): Promise<ModelListResult> {
-  const { manifests, errors } = discoverManifests(opts.manifestsDir)
+  const { manifests, unsupported, errors } = discoverManifests(opts.manifestsDir)
   const all = manifests.map((m) => m.manifest)
   const ram = opts.machineRamGb
   // RAM-best-fit recommendation (it can never point at a RAM-gated model); the §6.5 speed
   // signal applies to the chat pick only.
   const recommendedChat = recommendChatModelId(
     all,
-    { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null },
+    { memoryClass: opts.memoryClass ?? 'cpu', ramGb: ram, budgetMb: opts.graphicsBudgetMb ?? null, card: opts.cardEvidence ?? null },
     opts.speedSignal
   )
-  const recommendedEmbed = recommendModelIdByRam(all, ram, 'embeddings')
+  // #848 review: an embeddings card has nothing to select (the app composes its own pick), so its ★ marks the model
+  // the app composes (`pickManifestForRole`, the flagged default), never another embeddings manifest the RAM ranking
+  // would prefer; and only when it fits this machine's RAM, because the ★ is runnable by construction.
+  const embedPick = pickManifestForRole(all, 'embeddings')
+  const recommendedEmbed =
+    embedPick && Number.isFinite(ram) && ram > 0 && embedPick.recommendedMinRamGb <= ram ? embedPick.id : null
 
   // RT-3 lazy mode: when `onlyVerifyModelId` is present, hash only that model; report every
   // other present weight without hashing. `'onlyVerifyModelId' in opts` distinguishes a
@@ -1574,7 +2056,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // the one that was mid-hash — is reported WITHOUT hashing, which is exactly what RT-3
   // lazy verification reports for a present weight. Nothing is lost and nothing is faked:
   // what finished before the cancel is in the checksum cache, the rest is simply unchecked
-  // and the §7.4 start gate still re-verifies whatever the user launches.
+  // and the §7.4 start gate still re-verifies the chat model the user launches (the other roles
+  // refuse a file a check found damaged, #913).
   let cancelled = false
   for (let i = 0; i < manifests.length; i++) {
     const { manifest } = manifests[i]
@@ -1646,7 +2129,26 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     const startableAsMock =
       state === 'missing' && manifest.role === 'chat' && opts.developerMode
     const insufficientRam = manifest.recommendedMinRamGb > ram
-    models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
+    const info = toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam)
+    // #932: `computeInstallState` decides a placeholder hash before any file is read, so `checksum_failed` with a
+    // placeholder in the manifest means "no checksum on record", never a file that failed its check. Only the card's
+    // words and its repair action follow this flag; the state and every start gate stay as they are.
+    if (state === 'checksum_failed' && hasPlaceholderHash(manifest)) info.noChecksum = true
+    models.push(info)
+  }
+  // #847: the manifests for a newer HilbertRaum, after every model this build can use. Logged apart from the
+  // invalid ones (they are not broken), once per id per session rather than on every Models-screen refresh. Each
+  // line names the manifest file and the role as written (local app.log; the invalid-manifest warning names files
+  // too): a role TYPO ("embedding", "Chat") lands here, not in that warning, and must stay findable.
+  for (const { manifest: entry } of unsupported) models.push(newerAppModelInfo(entry, opts.rootPath))
+  for (const { manifest: entry, sourceFile } of unsupported) {
+    if (newerAppIdsLogged.has(entry.id)) continue
+    newerAppIdsLogged.add(entry.id)
+    log.info('Model manifest for a newer HilbertRaum listed', {
+      file: sourceFile,
+      role: entry.role === null ? null : entry.role.slice(0, 64),
+      ...(entry.minAppVersion !== null ? { minAppVersion: entry.minAppVersion.slice(0, 32) } : {})
+    })
   }
   // Terminal event so the bar settles to 100% even if the last throttled callback landed
   // a chunk short of the total.
@@ -1681,7 +2183,8 @@ export interface SelectResult {
 export function selectModel(db: Db, manifestsDir: string, modelId: string): SelectResult {
   const { manifests } = discoverManifests(manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
-  if (!found) throw new Error(`Unknown model id: ${modelId}`)
+  // #930: in the interface language, without the id (users never see ids; the select handler logs it).
+  if (!found) throw new Error(tMain('main.models.unknown'))
 
   if (found.manifest.role !== 'chat' && found.manifest.role !== 'embeddings') {
     throw new Error(tMain('main.models.autoSelected'))

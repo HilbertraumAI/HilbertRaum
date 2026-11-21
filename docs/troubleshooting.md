@@ -46,10 +46,10 @@ should not appear at all.
 
 ## Linux: the AppImage does not start
 
-**On a prepared drive, start the launcher, not the AppImage.** `start-hilbertraum.sh` makes the
-AppImage executable for you and points the app at the drive's workspace. Started on its own, the
-AppImage does not find the drive and opens a separate, empty workspace in your home folder; your
-data on the drive is untouched, so quit and use the launcher. If double-clicking the launcher opens
+**On a prepared drive, start the launcher.** `start-hilbertraum.sh` makes the AppImage executable
+for you and points the app at the drive's workspace. An AppImage started on its own from the drive
+finds the drive's workspace too (before #858 it opened a separate, empty workspace in your home
+folder; the data on the drive was untouched). If double-clicking the launcher opens
 it in a text editor or does nothing, open a terminal in the drive's top folder and run
 `./start-hilbertraum.sh`. The terminal also shows any error message that a double-click hides.
 
@@ -136,11 +136,12 @@ the app cannot override them.
 **"Some of its files on this drive are missing or damaged".** A library that the engine keeps next
 to its program could not be loaded, which usually means an interrupted copy. Choose **Install the
 AI engine again** in the banner (for the voice engine: **Install the voice engine again**, under
-the speech model). It downloads a fresh copy, checks it against its pinned checksum, replaces the
-engine folder and starts your model again. On a Kit it replaces the part that could not start: the
-main engine, its `cpu/` safety net, or both. If the download fails or you cancel it, the copy on the
-drive stays as it was. Like every download, it needs **Allow internet access…** in Settings; if
-the button is greyed out, the line under it says why.
+the speech model). It downloads a fresh copy, checks it against its pinned checksum, unpacks and
+checks it beside the engine folder, swaps it in and starts your model again. On a Kit it replaces
+the part that could not start: the main engine, its `cpu/` safety net, or both. If the download
+fails, you cancel it, or the new copy cannot be unpacked or swapped in, the copy on the drive stays
+as it was (#986). Like every download, it needs **Allow internet access…** in Settings; if the
+button is greyed out, the line under it says why.
 
 If the drive does not allow downloads (an offline Kit), or this computer has no internet:
 - On a drive someone prepared for you, ask them to copy the engine folder again.
@@ -175,8 +176,21 @@ and tested with. It still works; the update brings it to the version the app exp
 
 - **To update:** choose **Update** in the notice on the **AI Model** screen. The new version
   downloads and is checked against its pinned checksum first, while your model keeps answering.
-  Then the models pause for a few seconds while the files are replaced, and the selected model
-  starts again. If the download fails or you cancel it, the engine on the drive stays as it was.
+  Then the models pause for a few seconds while the new version is unpacked beside the old one and
+  swapped in, and the selected model starts again. If the download fails, you cancel it before the
+  swap, or the new version cannot be unpacked or swapped in, the engine on the drive stays as it
+  was and keeps working (#986).
+- **"There is not enough free space on this drive: the engine needs … once unpacked":** the app
+  checks this before it touches anything, so the engine on the drive is unchanged. Free up at least
+  the space it names (the old version is removed only after the new one is in place, so both fit at
+  once for a moment), then choose Update again. The same check runs before an install or a reinstall.
+- **"The engine could not be replaced because another program is using one of its files":** often
+  an antivirus program scanning the new files. The app waited and tried again, then put the old
+  engine back. Rarely even that is refused: the AI Model screen then says the engine is missing, and
+  both copies wait on the drive. Wait a minute and try again (in that case with **Install the AI
+  engine**): the app first puts the new copy in place, so nothing is lost; restarting the app does
+  the same. If the other program still holds the folder, the app says so again and changes nothing;
+  wait a little longer, or restart the computer. If it keeps happening, see whether your antivirus program reports the engine's files.
 - **"The AI engine is in use right now":** an answer, an import, a translation or a document task is
   running. Wait until it has finished, then choose Update again.
 - **The button is greyed out:** like every download, the update needs **Allow internet access…** in
@@ -228,6 +242,20 @@ and restart the app. On a **prepared drive** this message is genuine drive polic
 
 ---
 
+## Downloads fail on a company network or behind antivirus
+
+Since #564 the in-app downloads trust the certificates installed on the computer (the operating
+system's store, usable roots only) as well as the app's own. A released build no longer reads
+`NODE_EXTRA_CA_CERTS`. A proxy or an antivirus product that inspects encrypted connections works
+when it also put its root certificate in the operating system's store, which most do. If it only
+set the variable, every download fails.
+
+Install the proxy's or the antivirus product's root certificate in the operating system's store
+(your IT department usually does this). A download is still checked against its SHA-256, so
+nothing unverified installs. See [`known-limitations.md`](known-limitations.md) for the details.
+
+---
+
 ## "Offline Mode is ON — is something wrong?"
 
 **No. That is the intended state.** HilbertRaum runs the AI model on this computer and
@@ -263,20 +291,22 @@ can't run on this computer"**, a file is not missing — see the entry of that n
 
 ---
 
-## "… can't be started — its model file isn't installed on this drive yet."
+## "… can't be started: its model file isn't on this drive yet."
 
 The model's weight file is missing from the `models/` folder (the AI Model screen shows it as
 **Not downloaded**). Add the file (above), or choose a model already shown as **Installed**. The app
-only downloads a model when you explicitly ask it to on the AI Model screen.
+only downloads a model when you explicitly ask it to on the AI Model screen. The message is in your
+interface language.
 
 ---
 
-## A model shows "checksum failed"
+## A model shows "Can't verify"
 
-A required file on the drive doesn't match the expected fingerprint in its manifest — for a
-model whose weight is more than one file (#310), `verify-models` names the specific offending
-file (with a `(mmproj)` or `(file N/M)` label) rather than just the model. The file may be
-incomplete or corrupted. Re-copy the named weight file, then run the verifier:
+A required file on the drive doesn't match the expected fingerprint in its manifest. Starting it
+says it "failed its file check". For a model whose weight is more than one file (#310),
+`verify-models` names the specific offending file (with a `(mmproj)` or `(file N/M)` label) rather
+than just the model. The file may be incomplete or corrupted. Re-copy the named weight file, then
+run the verifier:
 
 ```powershell
 .\scripts\verify-models.ps1 -Target E:\         # Windows
@@ -288,7 +318,16 @@ scripts/verify-models.sh --target /Volumes/HILBERTRAUM   # macOS/Linux
 On a developer drive, unverified models are allowed; a commercial drive requires a matching
 checksum.
 
-**If an in-app download stalls near the end (~95%) and then "checksum failed" after Resume**, the
+**If the card says "No checksum" instead**, nothing is wrong with the file: the model's manifest
+has a placeholder in place of a real checksum, as a model you add yourself does until you capture
+its hash. There is no Download button, because a new copy cannot give the manifest a checksum. To
+use the model, either write its real `sha256` into the manifest with `scripts/verify-models.sh
+--generate` (or the `.ps1`), or turn on Developer mode on a drive whose policy allows unverified
+models. The Performance screen says "no checksum on record" for the same model. The Images and
+Translate screens, and the app's log when it refuses to start such a chat model on its own, still
+say it failed its file check (see [`known-limitations.md`](known-limitations.md)).
+
+**If an in-app download stalls near the end (~95%) and then shows "Can't verify" after Resume**, the
 manifest's fingerprint or `size_bytes` doesn't match the real upstream file — re-copying won't help
 (BUG dl-size-cap-2026-07-03). This affected the manually-selectable **Qwen3.5 27B / 35B-A3B** entries,
 whose hashes were wrong and whose `size_bytes` were understated by ~5–8%, so the (then-exact) download
@@ -303,22 +342,69 @@ with internet to write the true `sha256` + `size_bytes` back into the manifest.
 ## I forgot my workspace password
 
 Encrypted workspaces are protected by your password, which is **never stored**. If you forget
-it, the data **cannot be recovered** — this is by design. Create a new workspace to start over
-(your old encrypted data remains on the drive but unreadable).
+it, the data **cannot be recovered** — this is by design.
 
-Before you do: read the message on the unlock screen carefully. "That password didn't unlock
-your workspace" means the password was wrong. If it instead says the workspace data is
-**damaged**, your password is fine and creating a new workspace is the wrong move — see the
-next section.
+Before you do anything: read the message on the unlock screen carefully. "That password didn't
+unlock your workspace" means the password was wrong. If it says anything else, your password may
+well be right, and starting over is the wrong move: see the sections below for "the workspace
+data on the drive is damaged", "could not finish opening", "the encrypted workspace file is
+missing" and "the file that holds your workspace's key".
+
+HilbertRaum has no reset, and it never creates a new workspace over an existing one: while a
+workspace is on the drive, the lock screen only asks for its password. To start over, you set the
+old workspace aside by hand (issue #931):
+
+1. **Quit HilbertRaum.**
+2. **On the drive, move `config/workspace.json` and the whole `workspace/` folder, together, off
+   the drive**: for example into a folder `old-workspace/` on your computer, as
+   `old-workspace/config/workspace.json` and `old-workspace/workspace/`. If you run HilbertRaum
+   without a Kit (a release download started on its own), the two are in the app's data folder
+   instead (on Windows `%APPDATA%\@hilbertraum\desktop`; see "How the app finds its data" in
+   [`drive-layout.md`](drive-layout.md), the app-data fallback): move them out of that folder.
+   - **Move both.** With only one of them moved, the app still shows the unlock screen, and the
+     right password then reads as a missing file.
+   - **Move, don't delete.** Together, and only together, they still open with the old password
+     if you remember it later.
+   - **Leave the rest of `config/` where it is.** `drive.json`, `policy.json` and
+     `checksums.json` belong to the drive, not to the workspace. A `config/working-copy-lost.json`
+     can be there too: leaving it is harmless, since creating the new workspace removes it.
+3. **Start HilbertRaum.** The lock screen now offers to create a workspace: create the new one
+   with a new password.
+
+What stays on the drive and works as before: your AI models, the AI engine, the knowledge packs in
+the drive's `zim/` folder, the OCR files and your skills (skills you added yourself come back
+switched off; switch them on in Settings → Skills). A knowledge pack you added from a place
+outside the drive's `zim/` folder was recorded in the old workspace only: add it again. The
+first start of each model checks its file again, and the speed measurement runs again, as on a
+new drive.
+
+What stays behind in the moved folder, readable only with the old password: the old chats,
+documents and their stored copies, images, reviews, projects, settings and activity. The old
+workspace's diagnostics log is in `logs/`, encrypted under the old key: the new workspace starts
+a new log in its place, so move `logs/` along too if you want to keep the old one. Everything you
+moved is encrypted, except a `workspace/hilbertraum.sqlite.recovery` if there is one, which holds
+the old workspace in readable form (see "The encrypted workspace file was missing from the drive"
+below): moving it to a computer copies that readable file there. A `workspace/zim-transient/`
+folder is not encrypted either while it holds anything, but it lists only the titles and file
+paths of your knowledge packs, none of your content.
+
+To go back to the old workspace (you remember its password): quit HilbertRaum, move the new
+workspace's `config/workspace.json` and `workspace/` away the same way, put the old pair back in
+their places, start the app and unlock with the old password. (If you put the pair back while
+HilbertRaum is still open, it is not overwritten: **Create workspace** is refused, and the lock
+screen switches to the unlock screen, #954.) **Never combine one workspace's
+`config/workspace.json` with another workspace's `workspace/` folder**: neither password opens
+that pair, and with the new password the lock screen says the workspace data is damaged.
 
 ---
 
 ## "Your password is correct, but the workspace data on the drive is damaged"
 
-This message (issue #208) means the app verified your password and decrypted the workspace,
-but what came out is not a readable database — the encrypted file itself was damaged at some
-earlier point. Retyping the password cannot help, and this is deliberately **not** worded as
-a password problem.
+This message (issue #208) means the app verified your password, but the encrypted workspace
+file failed its integrity check (its bytes changed after it was written, for example a copy
+that was cut short), or it decrypted to something that is not a readable database — the
+encrypted file itself was damaged at some earlier point. Retyping the password cannot help,
+and this is deliberately **not** worded as a password problem.
 
 What to do:
 
@@ -338,7 +424,48 @@ version, delete its app file from the drive, and only then start the new one (se
 versions on the drive" below). If the app says **"This workspace was written by a newer
 HilbertRaum — update the app to open it."**, you started an older copy on a workspace a newer copy has
 already opened: nothing was changed — update (or start the newer copy) and the workspace opens
-normally. Copies up to 0.1.59 cannot give that message; they open the workspace anyway.
+normally. Copies up to 0.1.59 cannot give that message; they open the workspace anyway. The
+same message also covers the encrypted workspace's own files (issue #845): its
+`config/workspace.json` or its encrypted data in a format a newer copy wrote. The unlock screen
+shows it whatever password you type, because the older copy cannot check a password in a format
+it does not know; your password is not the problem, and nothing was changed. Copies up to 0.1.65
+cannot give it for those files. It also covers a readable copy of the workspace that a newer copy
+left on the drive (issue #985): `workspace/hilbertraum.sqlite.recovery`, after a lock that failed,
+for example on a full drive. The older copy keeps that file as it is and does not open it, so the
+newer copy's last session is not lost: start the newer copy and unlock, and it encrypts the file
+again. Here the message comes after the password is checked. If no newer copy ever ran on this
+drive, that file may be damaged instead: to open the workspace at its last lock with this copy,
+quit HilbertRaum, move `workspace/hilbertraum.sqlite.recovery` off the drive, and unlock again.
+Keep that file somewhere safe: it is your workspace's data, not encrypted. Copies up to 0.1.65 can
+delete such a file when they cannot read it. Creating a new workspace is refused with the same
+message while such a file is on the drive. When that file is older than the encrypted workspace
+file (the newer copy already opened and locked the workspace since), the older copy opens the
+workspace without the message, leaves the file as it is and notes it in the diagnostics log. It is
+still your workspace's data, not encrypted: the newer copy removes it at its next unlock, and this
+copy replaces it if a later lock fails.
+
+---
+
+## "Your password is correct, but HilbertRaum could not finish opening the workspace"
+
+This message (issue #844) means the password was right and the workspace decrypted to a
+readable database, but opening it could not finish. Each version of the app may update the
+workspace's internal layout when it first opens it, and that step needs some free space on
+the drive. Typical causes: a nearly full drive, a USB connection that dropped, or a fault in a
+new version's update step. Nothing is damaged: the failed open does not change the encrypted
+workspace on the drive.
+
+What to do:
+
+- Free some space on the drive, then unlock again.
+- If the drive was unplugged or is flaky, reconnect it and try again.
+- If this started right after an update, the previous release can still open the workspace,
+  because the failed update did not convert it. Put that release back **in place of** the new
+  one (never both side by side, see "Two app versions on the drive" below), and report the
+  issue.
+
+Before #844 this case showed the "damaged … restore from a backup" message above, although
+nothing was damaged.
 
 ---
 
@@ -350,8 +477,13 @@ then keeps the workspace **open and usable**, and nothing is lost.
 
 What to do: free some space on the drive (delete files you no longer need, or move a large
 model off the drive via the AI Model screen), then press **Lock now** again. Quitting the app
-retries the lock too. Even if the app closes before a lock ever succeeds, your newest data is
-kept safely on the drive and secured at the next unlock — you don't lose the session's work.
+retries the lock too, but **free space before you quit**: whether a quit on a full drive keeps the
+session depends on where the lock stopped. If only the re-encrypt failed, the app closes the
+workspace's database cleanly, and your newest data is secured at the next unlock. If the drive is
+so full that the session's last changes could not even be written into the database file, the
+quit cannot lock the workspace or close it cleanly either: the next start opens it as it was the
+last time it was locked, those changes are lost, and the unlock screen says so (see "HilbertRaum
+didn't lock your workspace the last time it closed" below).
 
 The lock stops the AI model (and every other engine) before it re-encrypts, so after a failed
 lock the model comes back the same way it does after an unlock: automatically in the
@@ -359,6 +491,180 @@ background when **Start the selected model automatically** is on (Chat shows "St
 moment and then the composer again), or by hand on the AI Model screen when that setting is off.
 The local API, if you have it switched on, comes back as well. Everything else — document
 search, the reranker, translation, voice input, OCR, knowledge packs — restarts on its next use.
+
+---
+
+## "The workspace's working file on the drive was removed or damaged"
+
+You see this on the unlock screen right after a lock, or the next time you start HilbertRaum when
+it happened as the app closed (**Settings → Diagnostics (advanced) → Activity** then records it
+when you unlock, as "Recent changes lost"). While the workspace was open, something
+outside HilbertRaum deleted or overwrote its working file on the drive: a cleanup tool, a second
+copy of the app started from another place, a failing drive. Nothing newer than the last secured
+copy was left, so the app locked the workspace as it was the last time it was locked or the app
+was closed. The changes made since then are lost; everything before is intact.
+
+What to do: if another copy of HilbertRaum is open on this drive (started from another folder
+or another computer), close it first. Then unlock as usual and carry on. If it happens again,
+find what else touches the drive's `workspace` folder, and check the drive for errors.
+
+---
+
+## "HilbertRaum didn't lock your workspace the last time it closed"
+
+You see this on the unlock screen when HilbertRaum ended while the workspace was open, without
+locking it: the drive was pulled out, the computer lost power, or the app was stopped by force
+(Task Manager, a kill). The session's working copy was left on the drive unencrypted, so this
+start removed it securely, as it always does in that case, and opened the workspace as it was the
+last time it was locked. Any changes made after that are lost; everything before is intact.
+**Settings → Diagnostics (advanced) → Activity** records it when you unlock, as "Recent changes
+lost".
+
+If the message says HilbertRaum **couldn't lock your workspace because the drive was full**, the
+drive had less free space than a lock of that session needs (room for the session's working
+files), measured at this start, before the working copy was removed. That is how a quit on a full drive ends (see "Could not lock the workspace" above). Make
+sure the drive has free space before you continue (delete files you no longer need, or move a large
+model off the drive via the AI Model screen), or the next session ends the same way. The message
+stays until you unlock, even if you have already freed space. The app can't see why the last
+session ended, only how much room is left: if the drive was also pulled out or the power was lost,
+the message still names the full drive.
+
+What to do: unlock as usual and redo what you changed after the last lock. Next time, quit
+HilbertRaum, or press **Lock now**, and wait for the window to close before you remove the drive.
+
+---
+
+## "The encrypted workspace file was missing from the drive"
+
+You see this on the unlock screen when HilbertRaum started and found the workspace's encrypted
+file, `workspace/hilbertraum.sqlite.enc`, gone from the drive, while the copy your last session
+worked on was still there. Something outside HilbertRaum removed the encrypted file: a sync or
+backup tool, a cleanup tool, a person tidying the drive, or a disk check that moved it into a
+`FOUND.000` folder. HilbertRaum never deletes it on its own.
+
+That working copy is now the only copy of your workspace, so the app kept it, as
+`workspace/hilbertraum.sqlite.recovery`, instead of removing it (issue #911). While it waits there
+it is **not encrypted**.
+
+What to do:
+
+- Unlock with your usual password. The app encrypts the copy again as the workspace's encrypted
+  file and opens the workspace as your last session left it. In rare cases the last changes of that
+  session are missing, or a damaged copy is not kept (see `docs/known-limitations.md`).
+- Unlock first. Don't put an older copy of the encrypted file back before you unlock: if that copy
+  carries a newer file date than the kept one, the app takes it for the newest, and the changes of
+  your last session are lost.
+- Then find out what removed the file, so it does not happen again: for example a sync tool that
+  mirrors the drive, or a cleanup tool that removes large files.
+- If you can't unlock it any more (you forgot the password), the kept copy is your workspace in
+  readable form, and the app no longer removes it at the next start. Delete
+  `workspace/hilbertraum.sqlite.recovery` yourself if you don't want it on the drive.
+
+---
+
+## "Your password is correct, but the encrypted workspace file is missing from the drive"
+
+This message (issue #911) means the app checked your password, and it is right, but the
+workspace's encrypted file, `workspace/hilbertraum.sqlite.enc`, is not on the drive, and no copy
+was left to restore it from. Something outside HilbertRaum removed it (see the section above).
+Retyping the password cannot help.
+
+What to do:
+
+- **Do not create a new workspace**, and do not delete anything: a new workspace cannot read the
+  documents you imported, and it replaces what a recovery needs.
+- Look for the file first: in the recycle bin or trash, in a sync tool's deleted or conflict
+  files, or in a `FOUND.000` folder at the drive's root after a disk check (its files are named
+  like `FILE0000.CHK`; the workspace is usually the largest). Put it back as
+  `workspace/hilbertraum.sqlite.enc` and unlock again.
+- Otherwise restore the `workspace/` folder from a backup and unlock with your current password.
+  Leave `config/` as it is: it holds the wrapped key that opens the workspace, and it follows your
+  password. Only a backup made before the first password change on a workspace that an older
+  version created needs its own `config/` folder too; then unlock with that backup's password.
+
+You can also see this message when an older version of HilbertRaum (0.1.65 or earlier) started on
+the drive after the encrypted file went missing: those versions removed the copy the last session
+left. Before #911 this case only ever said "Could not open the workspace."
+
+---
+
+## "The file that holds your workspace's key (config/workspace.json) is missing from the drive or can't be read"
+
+You see this on the unlock screen, whatever password you type, when the workspace's encrypted file,
+`workspace/hilbertraum.sqlite.enc`, is on the drive, but `config/workspace.json` is not, or it is
+there and damaged (for example a copy that was cut short). That small file holds what your password
+unlocks: the key the workspace is encrypted with, itself encrypted under your password. Without it
+no password can open the workspace, and the app cannot even check whether the password is right.
+Something outside HilbertRaum removed or changed it: a sync or cleanup tool, a person tidying the
+drive, or a fresh start by hand that moved `workspace/` but not `config/workspace.json` (see "I
+forgot my workspace password" above). Before #807 this case only said "Could not open the
+workspace."
+
+What to do:
+
+- **Do not create a new workspace**, and do not delete anything: a new workspace gets a new key,
+  and the documents and data you have can then never be opened.
+- Look for the file: in the recycle bin or trash, in a sync tool's deleted or conflict files, or in
+  the folder you moved an old workspace into. Put it back as `config/workspace.json` and unlock
+  again.
+- Otherwise restore `config/workspace.json` from a backup of this same workspace, and unlock with
+  the password the workspace had when that backup was made. A `workspace.json` from another
+  workspace opens nothing: the lock screen then reads it as a wrong password or as damaged data.
+  One exception: a backup made before the first password change on a workspace that an older
+  version created belongs only with the `workspace/` folder of that same backup.
+
+---
+
+## "The file that holds your workspace's key (config/workspace.json) can't be read, and the encrypted workspace file isn't on the drive"
+
+You see this on the unlock screen, whatever password you type, when `config/workspace.json` is on
+the drive but can't be read, and the workspace's encrypted file, `workspace/hilbertraum.sqlite.enc`,
+is not there. The create step shows it too when such a file appears on the drive while it is open.
+No password can open anything then: the key file holds the key, and the encrypted
+file holds the data. The lock screen does not offer a new workspace either, because other parts of
+the old one may still be on the drive: a `workspace/hilbertraum.sqlite.recovery` (the readable copy
+a session left, see "The encrypted workspace file was missing from the drive" above), a
+`workspace/hilbertraum.sqlite.enc.new`, or your stored documents in `workspace/documents/`. Before
+#955 this case only said "Could not open the workspace."
+
+What to do:
+
+- **Don't delete the key file**, and keep a copy of it. It can be damaged in a way that can be
+  repaired: a key file that was edited by hand or by a tool (a bracket removed, text a sync tool
+  added) can often be put right. (A UTF-8 byte-order mark that an editor such as Windows PowerShell
+  5.1 or an older Notepad adds no longer makes the file unreadable, issue #974. A file saved as
+  UTF-16, the default of PowerShell 5.1's `>` and `Out-File`, still does.)
+- Look for the encrypted file first, as "Your password is correct, but the encrypted workspace file
+  is missing from the drive" above describes: the recycle bin or trash, a sync tool's deleted or
+  conflict files, a `FOUND.000` folder. Put it back as `workspace/hilbertraum.sqlite.enc`.
+- Otherwise restore both, `config/workspace.json` and the `workspace/` folder, from a backup of this
+  workspace, and unlock with the password it had when the backup was made.
+- To start over instead, set the old workspace aside as "I forgot my workspace password" above
+  describes: quit HilbertRaum and move **both** `config/workspace.json` and the whole `workspace/`
+  folder off the drive, together. With only the key file moved, the rest of the old workspace stays
+  in `workspace/`, and the new workspace would remove parts of it as leftovers.
+
+---
+
+## "Could not create the workspace."
+
+You see this on the lock screen's "Create your password" step when the new workspace could not be
+written to the drive: the drive is full or write-protected, or another program, often an antivirus
+program, held one of the new files.
+
+What to do:
+
+- Free some space or close that program, then press **Create workspace** again.
+- If the lock screen then says "A workspace already exists on this drive, so no new one was created"
+  and shows **Unlock your workspace**, the first try got far enough to save the workspace's key file:
+  unlock with the password you chose the first time (a different one typed on the retry does not
+  open it). Restarting HilbertRaum shows the same unlock screen.
+- If it keeps failing, check that the drive is writable on this computer (not locked, not mounted
+  read-only) and has free space.
+
+If the lock screen switched to **Unlock your workspace** because a `config/workspace.json` was put on
+the drive by mistake while the create step was open, and you removed that file again, restart
+HilbertRaum to get the create step back: until then every unlock says "Could not open the workspace."
 
 ---
 
@@ -382,6 +688,11 @@ What to do:
   the recovery, so once the hold is gone it succeeds and your newest data is restored.
 - If it keeps happening, quit the app, safely eject and re-attach the drive (which releases any
   lingering handle), then start the app and unlock.
+
+The same message also appears when the workspace's encrypted file is missing and the app cannot
+yet set aside the copy your last session left (see "The encrypted workspace file was missing from
+the drive" above), usually because the drive is full or another program is reading the workspace:
+free some space or close that program, then unlock again.
 
 ---
 
@@ -535,7 +846,7 @@ a row has no **Try again**: it would read the same pictures and fail again.
 If the row says *"…needs the OCR files, which are not on this drive"*, the drive has no OCR
 language files yet (commercially-built drives already include them). Use the row's **Download
 OCR files** button (or *"Text recognition for scans and photos (optional)"* on the **AI Model**
-screen): confirm the files (German, English and the page-orientation data, about 8 MB), and once they are downloaded and
+screen): confirm the files (German, English and the page-orientation data, about 8.6 MB), and once they are downloaded and
 checked, text recognition starts **without a restart** — the row then offers **Make searchable
 (OCR)**. A photo that failed for the same reason reads with **Try again** afterwards. The download
 follows the usual gates: if the button is greyed out, the drive policy or **Settings → Allow
@@ -545,10 +856,14 @@ Without internet (or on a drive you set up yourself), add the files instead by r
 `prepare-drive --with-assets`, or fetch only the OCR family with `fetch-runtime --family ocr`
 (`.ps1 -Family ocr` on Windows) — see [`packaging.md`](packaging.md). **Files added this way
 while the app is running are noticed at the next start** — restart the app after adding them.
-If the row names only this setup route and offers no download button, the drive has no usable
-OCR download list — its `model-manifests/runtime-sources.yaml` pins different OCR files than this
-version of the app accepts (the app checks the files against checksums built into it); use the
-script route, or update the app.
+A drive set up with an older version of the app is fine: when the drive's OCR download list
+(`model-manifests/runtime-sources.yaml`) lacks a file this version uses, or names another
+version of it, the app takes that file from its own list (it checks every file against checksums
+built into it). If the row still names only this setup route and offers no download button,
+neither list carries the right files, which points to a damaged app folder. Copy this version of
+HilbertRaum onto the drive again, or refresh the drive's list with `prepare-drive` from the
+matching release and then use the script route (the script reads the drive's list, so on its own
+it fetches only what that older list names).
 
 ---
 
@@ -580,6 +895,18 @@ corrupted file, or a password-protected document. Supported types: txt, md, pdf,
 csv/tsv, audio recordings (wav, mp3, flac, ogg — needs the speech model), and photos of
 pages (png, jpg, jpeg — needs the OCR files). Other files in the same import still succeed.
 
+### "On Windows, the voice engine cannot open the transcription model because a folder or file name in the model’s path contains …"
+
+A folder or the file name in the path of the speech model or its voice-activity model (its
+`local_path` below `models/`) has an umlaut, an accent or another non-ASCII character, which the
+pinned voice engine cannot read on Windows (#869). The models that come with the app are stored
+under plain ASCII paths, so this only happens with a model you added through your own manifest.
+Move the model file to a path of plain letters, digits, `-`, `_` and `.` below `models/`, change
+its `local_path` in the manifest to match, then re-index the recording (or dictate again). The app's own folders may have any name (for example app data under
+`C:\Users\Jürgen\AppData\Roaming\HilbertRaum`), and so may your recordings: a recording whose
+name the voice engine cannot read is copied into the workspace for the transcription and shredded
+right after.
+
 ---
 
 ## The app won't start from the drive
@@ -592,10 +919,20 @@ pages (png, jpg, jpeg — needs the OCR files). Other files in the same import s
 - On Windows, the portable `.exe` may take a few seconds on first launch — wait for the window.
 - On macOS, the launcher unpacks the app once from the drive's `.app.zip` into
   `~/Library/Caches/HilbertRaum/` on this Mac (a folder named after the zip) and starts it from
-  there; your workspace stays on the drive. If it says **"found no .app inside it"**, the zip on
-  the drive is damaged: copy it to the drive again. If it says the app unpacked earlier **"is
-  incomplete"**, delete the folder it names (in Finder: **Go → Go to Folder…**, paste the path);
-  the next start unpacks a fresh copy.
+  there; your workspace stays on the drive. If it says **"found no .app inside it"** or that the
+  app inside it **"lacks its program file"**, the zip on the drive is damaged: copy it to the drive
+  again. If it says the app unpacked earlier **"is incomplete"**, delete the folder it names (in
+  Finder: **Go → Go to Folder…**, paste the path); the next start unpacks a fresh copy. If it
+  says **"An earlier unpack at … could not be removed"**, delete the folder it names the same way
+  (macOS asks for an administrator password when a start with `sudo` made it), then start again.
+  If it says **"Could not create …"**, free space on this Mac's disk, or check that you can write
+  to `~/Library/Caches/HilbertRaum/` (or the folder that holds it), then start again.
+  A launcher that stops with **"Could not unpack …"** after a long wait has often run out of
+  disk space too: free space first.
+  Double-clicked the launcher again while it was unpacking?
+  Both windows unpack, and the app opens once. An older launcher could leave an incomplete copy
+  when that happened: if the app quits right away every time on this Mac, delete the folder named
+  after the zip in `~/Library/Caches/HilbertRaum/` the same way.
 - Check that the drive has free space and is writable. The app shows a friendly note on the Home
   screen if the drive is read-only, low on space, or slow (none of these block you).
 - If the drive was just prepared, confirm `config/drive.json` exists at the drive root.
@@ -735,9 +1072,9 @@ your drive. If the screen shows a calm *"Image understanding needs a local visio
 drive"* card, choose **Go to AI Model**: it opens the AI Model screen on the vision model. Download
 it there — it's an optional download, like the larger chat models, so internet access must be
 enabled in Settings (see the User Guide §5). There is nothing to start afterwards: the vision model
-has no **Use** button, and its row says it is used automatically on the Images screen. This is
-**not** OCR: for a scanned PDF or a document you want to search, use the document's **Make
-searchable (OCR)** action instead (above).
+has no **Use** button, and its row says the Images screen picks its vision model automatically.
+This is **not** OCR: for a scanned PDF or a document you want to search, use the document's
+**Make searchable (OCR)** action instead (above).
 
 If you drop a PDF on the Images screen, it says *"This screen reads one picture, not a PDF"* and
 offers **Go to Documents**. Add the PDF there; if it is a scan, use **Make searchable (OCR)** on
@@ -995,7 +1332,15 @@ pack server, which has no password of its own; locking or quitting stops it.
 Everything is on the drive:
 - `workspace/` — your encrypted/plaintext database (chats, documents, embeddings).
 - `logs/app.log` (`app.log.enc` on an encrypted workspace — the diagnostics log is encrypted at
-  rest, same as your data) — local logs only; never uploaded.
-- `models/` — model weights. `config/` — drive settings/policy.
+  rest, same as your data) — local logs only; never uploaded. When you copy or save the log for
+  support (**Settings → Diagnostics (advanced) → Recent logs**, **Copy** or **Save to file…**),
+  the drive and your home folder show as `<drive>` and `<home>`, this computer's account name as
+  `<user>` wherever it appears, and account names in the usual folder paths from another computer
+  as `<user>` too. The rest of each path stays, so support can still see which file failed
+  (`<drive>\runtime\llama.cpp\win\llama-server.exe`). A name in an unusual place can remain, for
+  example in a folder you named yourself, so read a log before you share it. The log on the drive
+  keeps the full paths.
+- `models/` — model weights. `config/` — drive settings/policy, and `workspace.json`, which holds
+  your encrypted workspace's key (encrypted under your password): it belongs with `workspace/`.
 
 See [`drive-layout.md`](drive-layout.md) for the full layout.

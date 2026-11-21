@@ -27,6 +27,100 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-21 — the 2026-11-20 follow-ups wave 5 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-21, when the wave closed (PR #972 merged as `17dc517d`, the last
+of PRs #967–#972); a short outcome entry with the open follow-ups (#973–#983) replaces it there. Its records
+are listed in that entry. Citations of this entry now resolve here. Text below is byte-identical to what was
+removed.
+
+_2026-11-20 — **Follow-ups wave 5 (#952–#964, the follow-ups wave 4 left): in progress.** Six PRs: T #957 #960, S #958 #959, V #954 #955 #956, G #962 #963, N #952 #953, L #964 #961; plan and ledger in `tmp/followups-wave-5/` (gitignored). This line becomes the outcome entry when the wave closes._
+
+## 2026-11-20 — the closed 2026-10-14 #678 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-20 (preamble budget, making room for the follow-ups wave 5 line). Its
+record is unchanged: see the "Engine load failures" §11 record it cites. Nothing in it is still open. Citations of this
+entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **#678 — "Install the AI engine again" replaces what the OS refused, the `cpu/` net included; Check again checks the `cpu/` net (`fix/678-cpu-net-reinstall`).** On a Kit, rungs 1–2 dying of
+the model (a damaged weight) and rung 3 refused left a verdict only the `cpu/` net reported. The reinstall re-fetched the main build and the verdict came back with its offer (the loop); with an import done,
+the embedder on the healthy main build refused it outright; Check again checked the main build and said "runs again". Now the reinstall replaces the refused builds (owner call taken as the issue recommended),
+a helper never blocks a `cpu/`-only repair, a fresh `cpu/` copy counts for `afterInstall`, Check again checks `cpu/` when it is the only reporter, and the IPC gate refuses an `afterInstall` verdict (#670's residual).
+Real app (scratch Kit roots, b11146, a truncated 4B): master failed all three; the fix replaced `cpu/` only and closed the loop. Record: "Engine load failures" §11. Open: none (residuals there)._
+
+## 2026-11-20 — the 2026-11-20 follow-ups wave 4 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-20, when the wave closed (PR #951 merged as `c6689dad`, the last
+of PRs #940–#946, #949 and #951); a short outcome entry with the open follow-ups (#952–#964) replaces it there.
+Its records are listed in that entry. Citations of this entry now resolve here. Text below is byte-identical
+to what was removed.
+
+_2026-11-20 — **Follow-ups wave 4 (the open issues fixable in this repo now: #930–#936 left by follow-ups wave 3, #918 item 3, the older follow-ups #807, #828, #829, #831–#834 and #564, and #939 found by the wave's research): in progress.** Nine PRs, one per work package: W1 #930/#932/#933 (model verdicts), W2 #935/#936 (closing during a document task), W3 #807/#931 (typed workspace refusals, translated leads over raw library text, the reset procedure), W4 #831/#834/#939 (whole-document skills on turns their engine doesn't take, the every-mention chip, the map step's question; #830 measured and closed with docs), W5 #828/#829, W6 #918, W7 #832/#934, W8 #833, W9 #564. Owner calls 2026-11-20, as recommended: a window close that quits asks first while an OCR run or a document translation is running or queued, explicit quits and Lock now do not (#935); a model with no checksum on record gets its own state on the AI Model card and no start gate changes (#932); #834 ships with #939; the downloaders trust the OS certificate store, then the NODE_OPTIONS fuse goes off (#564). Not in this wave: #849 (app-update plan), #800 (next pin bump), #809 parts B and C, #810, #811, #813, #814, and the feature and hardware issues. Done: W5 (#828, #829), W8 (#833), W3 (#807, #931; and a reason for a missing workspace key file)._
+
+## 2026-11-20 — the 2026-11-19 follow-ups wave 3 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-20, when the wave closed (PR #937 merged as `968e00af`, the last
+of PRs #922–#929 and #937); a short outcome entry with the open follow-ups (#930–#936) replaces it there. Its
+records are unchanged and listed in that entry. Citations of this entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-11-19 — **Follow-ups wave 3 (the follow-ups #910–#920 left by follow-ups wave 2): open.** Eight PRs in this order: W1 #916 + #920, W2 #910 + #912 + #917, W3 #911, W6 #918, W7 #919, W4 #913, W5 #914, W8 #915. Owner calls 2026-11-19, as recommended: released builds ship a menu without Reload or developer tools, with the menu bar hidden on Windows and Linux (#912); a start that finds no encrypted copy of the workspace keeps the last unencrypted one until the next unlock re-encrypts it (#911); a model a check found damaged never starts, and the search and voice models are hashed before their first start (#913); Performance rows for models not on the drive are marked and left out of the total (#914). Open: all eight PRs; then the wave review and the close (retire this line)._
+
+## 2026-11-19 — the 2026-11-18 follow-ups wave 2 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-19, when the wave closed (PR #909 merged as `54b8620a`, the last
+of PRs #902–#909); a short outcome entry with the open follow-ups (#910–#920) replaces it there. Its
+records are unchanged and listed in that entry. Citations of this entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-11-18 — **Follow-ups wave 2 (the follow-ups #887–#899 and #901 left by the follow-ups wave): open.** Eight PRs in this order: W1 #895 + #891 + #894, W2 #901 + #889, W4 #893 + #887, W6 #899, W7 #890 + #896, W3 #888, W5 #892 (before the next release tag: the #875 marker it extends is unreleased), W8 #898 + #897. Owner calls 2026-11-18, as recommended: a close-time review save that fails asks Try again / Keep open / Close anyway (#888); the next start says when an unclean end lost the session, and names a full drive (#892); a pre-release app does not meet its own release as a skill minimum, as already for models (#896). Open: all eight PRs; then the wave review and the close (retire this line)._
+## 2026-11-18 — the closed 2026-10-14 DEP-7 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-11-18 (preamble budget, making room for the follow-ups wave 2 line). Its
+record is unchanged: architecture.md "Dependabot triage — design record (wave DEP-7)". Its one open item, the
+PDF gold set (corpus not on this machine), is still noted by the 2026-11-10 #792 entry; #698 was fixed. Citations
+of this entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-14 — **DEP-7 — Dependabot alerts #124–#127 triaged: one fixed, three dismissed with written reasons (`fix/dep7-alerts-124-127`).** #125 (high): source-map-js 1.2.1 → 1.2.2, lockfile only, one entry, build tooling
+only (nothing ships). #127: sprintf-js has no patched release; the Kit carries it only for mammoth's CLI, and `extractRawText` from the packaged `app.asar` loads 154 modules, none from argparse or sprintf-js. #124/#126: katex
+0.16.47 has no patch on its line, every dependent's range stops before 0.17, and nothing sets KaTeX's `trust`; the advisory needs a prototype-pollution bug the renderer is not known to have. Owner calls: dismiss #127 as not used
+and #124/#126 as a tolerable risk (posted by the owner), no `overrides`, the `~0.16.47` pin stays. Two pins guard those premises (each red under its mutation). Found: KaTeX's output skips rehype-sanitize (`trust` is its gate;
+security-model), and the renderer bundles KaTeX twice (#698). Record: architecture.md "Dependabot triage — design record (wave DEP-7)". Open: the PDF gold set (corpus not on this machine); #698 fixed, above._
+
+## 2026-11-18 — the 2026-11-18 follow-ups wave entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-18, when the wave closed (PR #886 merged as `eab53ae0`, the last
+of PRs #878–#886); a short outcome entry with the open follow-ups (#887–#899) replaces it there. Its
+records are unchanged and listed in that entry. Citations of this entry now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-11-18 — **Follow-ups wave (the review + export and vault + local API audit follow-ups, plus the app-update analysis issues): open.** Nine PRs in this order: W1 doc drift (#850, parts of #840/#861), W7 #869, W2 #845, W5 #837 + #838, W4 #868, W3 #876 + #875, W6 #843 + #873, W8 #846 + #847 + #848, W9 close-out (#839, #840, #860, #861). #849 stays with the app-update plan. Merged 2026-11-18: W1 #878, W7 #879, W2 #880, W5 #881, W4 #882, W6 #883, W3 #884, W8 #885 (closed #850, #869, #845, #837, #838, #868, #843, #873, #876, #875, #846, #847, #848). Open: W9 = PR #886 (#839, #840, #860, #861); then the wave review and the close (retire this line)._
+
+## 2026-11-18 — the two closed 2026-11-16 test audit entries retired verbatim (follow-ups wave opened)
+
+Retired from `BUILD_STATE.md` on 2026-11-18, when the follow-ups wave opened; a single wave line there names their open
+follow-ups (#837–#840, #860, #861) and replaces them. Citations of these two outcome entries now resolve here. Text below
+is byte-identical to what was removed.
+
+_2026-11-16 — **Vault + local API test audit: closed 2026-11-16.** PR #857 merged as `03d5a180`; follow-ups #858 (workspace hardening), #860 (coverage gaps) and #861 (doc drift) are open, and #859 (the local API stop label) is fixed. The entry is retired verbatim to `docs/build-log.md`; the vault and local API test conventions it added are in CONTRIBUTING.md._
+
+_2026-11-16 — **Evidence review + export test audit: closed 2026-11-16.** PR #836 merged as `c9017830`; follow-ups #837 (review save failures), #838 (export writers), #839 (coverage gaps), #840 (doc drift) are open. The entry is retired verbatim to `docs/build-log.md`; test inventory: architecture.md "Evidence Pack / Review Mode — design record" §7._
+
+## 2026-11-16 — the 2026-11-16 vault + local API test audit entry retired verbatim (PR #857 merged)
+
+Retired from `BUILD_STATE.md` on 2026-11-16, when PR #857 merged as `03d5a180`; a short outcome entry with the open
+follow-ups replaces it there. Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-11-16 — **Vault + local API test audit: PR #857 open; follow-ups #858 (workspace hardening), #859 (local API stop label), #860 (coverage gaps), #861 (doc drift).** The 31 vault and local API suites go from 383 to 358 tests in 30 files (`workspace-init` folded into the workspace unit suite), and `ipc-lock-coverage` gains a locking pass (16 → 30 tests) that drives the lock latch for the 14 IPC families in its module list. Assertions that passed on broken code are repaired (no test pinned the local API to loopback; the encryption-required veto was never isolated; the settings write gate read back through a second normaliser), the shared setup moved to `tests/helpers/` (vault-fixtures, local-api-harness), 19 `as never` casts went (ratchet 32 → 13), and #832 is done for five more suites. The audit found #853 (fixed by PR #854)._
+
+## 2026-11-16 — the 2026-11-16 evidence review + export test audit entry retired verbatim (PR #836 merged)
+
+Retired from `BUILD_STATE.md` on 2026-11-16, when PR #836 merged as `c9017830`; a short outcome entry with the open
+follow-ups replaces it there. Its record is unchanged: architecture.md "Evidence Pack / Review Mode — design record" §7 (the
+test inventory). Citations of that entry now resolve here. Text below is byte-identical to what was removed.
+
+_2026-11-16 — **Evidence review + export test audit: PR #836 open; follow-ups #837 (review save failures), #838 (export writers), #839 (coverage gaps), #840 (doc drift).** The 34 review and export suites go from 476 to 447 tests (full suite 10,879 → 10,850, same run time): duplicate proofs removed, about 70 assertions that could pass on broken code repaired, ten untested contracts pinned, the shared setup moved to `tests/helpers/` (evidence-fixtures, fake-print-window, regenerate-fixtures, review-screen). The `__reviewItemRowRenderCounts` seam, six test-only exports and a test-only parameter are gone; #832 is done for these suites. Test inventory: architecture.md "Evidence Pack / Review Mode — design record" §7._
+
 ## 2026-11-15 — the 2026-11-14 open-issues wave entry retired verbatim (wave closed)
 
 Retired from `BUILD_STATE.md` on 2026-11-15, when the wave closed (PR #827 merged as `a102ec32`, the last

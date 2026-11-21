@@ -22,7 +22,7 @@ import {
 } from '../../src/renderer/lib/translateSession'
 import type { DocTaskStatus, TranslateJob, ImportJobStatus } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
@@ -39,6 +39,7 @@ afterEach(() => {
   clearTranslateSession()
   clearDocTaskSession()
   vi.restoreAllMocks()
+  assertNoUnexpectedApiCalls()
 })
 
 const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
@@ -930,7 +931,7 @@ describe('fileTranslateSession — poll-failure tolerance (#157 / DT-4)', () => 
       await driveToTranslating(api)
 
       for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(400)
-      await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'))
+      await vi.waitFor(() => expect(getFileTranslate().state).toBe('done'), { timeout: hangBudgetMs(5000) })
       expect(getFileTranslate().output).toBe('Hello world.')
       expect(api.cancelDocTask).not.toHaveBeenCalled()
     } finally {

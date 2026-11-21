@@ -13,10 +13,12 @@ import { join } from 'node:path'
 // not covered by an enumerating test (so a future unguarded handler would slip the net).
 //
 // This is the GENERALIZED structural test: it drives each DB-touching register*Ipc module
-// against a LOCKED ctx and asserts EVERY non-exempt handler refuses with the friendly copy
-// ("Workspace is locked." — note the PERIOD; the raw vault-getter string has " — unlock it
-// first."). It also asserts the read-only / in-memory channels (getLogTail, getRuntimeStatus)
-// STILL resolve when locked (pre-unlock diagnostics + runtime status must work at the gate).
+// in two postures (`POSTURES`): a LOCKED ctx, and an open workspace mid-lock (`isUnlocked()`
+// still true, the AUD-02 `isLocking()` latch set). In each it asserts EVERY non-exempt handler
+// refuses with the friendly copy ("Workspace is locked." — note the PERIOD; the raw
+// vault-getter string has " — unlock it first."). It also asserts the read-only / in-memory
+// channels (getLogTail, getRuntimeStatus) STILL resolve when locked (pre-unlock diagnostics +
+// runtime status must work at the gate).
 //
 // Modules with their own dedicated locked-vault rejection tests (translate, dictation) and the
 // pre-unlock modules are listed in COVERED_ELSEWHERE below, each with its
@@ -68,17 +70,20 @@ import { IPC } from '../../src/shared/ipc'
 import { t } from '../../src/shared/i18n'
 import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
+import type { WorkspaceAdmission } from '../../src/main/services/workspace-vault'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 /** A LOCKED ctx with just enough shape for each module to REGISTER and for the documented
  *  read-only/in-memory channels to run. Every DB-touching handler must refuse at its
- *  requireUnlocked() preamble (the first statement) before any of this matters. */
-function lockedCtx(tmp: string): AppContext {
+ *  requireUnlocked() preamble (the first statement) before any of this matters. `workspace` is the
+ *  posture the guards read (see `POSTURES`). */
+function lockedCtx(tmp: string, workspace: WorkspaceAdmission = workspaceStandIn({ unlocked: false })): AppContext {
   return {
     trustedSenders: ANY_SENDER,
-    workspace: { isUnlocked: () => false },
+    workspace,
     paths: { workspacePath: tmp, rootPath: tmp, configPath: join(tmp, 'config.json') },
     runtime: {
       status: () => ({ running: false, modelId: null, backend: null }),
@@ -163,7 +168,9 @@ const MODULES: Array<{
   {
     name: 'registerEvidenceReviewsIpc',
     register: registerEvidenceReviewsIpc,
-    exempt: new Set<string>()
+    exempt: new Set<string>(),
+    // #839 F5: every evidence channel, not only the one the IPC suite drives, says the module's own sentence.
+    lockedCopy: t('en', 'main.evidenceReviews.locked')
   },
   // local-api wave P4: all three channels read or write the access-key table in the
   // workspace DB (mint / copy / rotate) — none may answer a locked vault.
@@ -181,6 +188,8 @@ const MODULES: Array<{
       registerImagesIpc(
         ctx,
         new VisionService({
+          isWorkspaceLocking: () => false,
+          checkModel: async () => 'ok',
           getStatus: async () => ({ available: false, reason: 'no-model' }),
           createRuntime: () => {
             throw new Error('a locked workspace builds no vision runtime')
@@ -230,14 +239,27 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerTranslateIpc:
     'translate-ipc.test.ts (locked-vault rejection of translateStart — a start lazily respawns the suspended sidecar; cancel/getActive are safe non-DB reads, intentionally ungated)',
   registerWorkspaceIpc:
-    'workspace-ipc.test.ts — IS the lock/unlock/create/rekey gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design)',
+    'workspace-ipc.test.ts — IS the lock/unlock/create gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design). The password change answers a result, not a throw: its refusal during a lock teardown (the AUD-02 latch) is lock-admission-race.test.ts "refuses changeWorkspacePassword while the lock teardown is parked"',
   registerDictationIpc:
-    'dictation-ipc.test.ts (locked-vault rejection; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
+    'dictation-ipc.test.ts (locked-vault and mid-lock (AUD-02 latch) rejection, #860 L6; S3 full-audit-2026-06-30 — writes a transient plaintext WAV into the documents dir, so it is lock-gated, not pre-unlock)',
   registerDownloadIpc:
     'pre-unlock by design — model downloads run at the setup gate; its only ctx.db read is guarded behind ctx.workspace.isUnlocked()',
   registerEngineIpc:
     'pre-unlock by design — engine-binary downloads run at the setup gate; every ctx.db read is guarded (gates()\'s allowNetwork read behind ctx.workspace.isUnlocked(), the #339 pack reconcile behind workspaceAdmitsWork). Its ocr:* channels (#410): ocr:install is refused while locked through that gates() read — ocr-install.test.ts "OCR install via IPC (#410) › refuses while the workspace is locked, before any fetch"; ocr:status / ocr:getJob / ocr:cancel read only the drive and the in-memory job'
 }
+
+// AUD-02: the two postures a content guard must refuse. Locked: the DB is closed. Mid-lock: "Lock now" keeps the DB OPEN
+// for its whole multi-second teardown, so `isUnlocked()` is still true and only the latch (`isLocking()`, read through
+// `workspaceAdmitsWork`) says no. A guard regressed to a bare `isUnlocked()` admits the call there; the handler then
+// runs on into a ctx with no `db` and fails some other way, or resolves, and the row reds. This pass proves each
+// module's FIRST guard; that the real controller arms the latch before the teardown's first await is
+// lock-admission-race.test.ts's, over a parked real lock.
+// Built per row (the stand-in is stateful: a handler that called `shutdown()` on a refusal path would otherwise turn the
+// mid-lock posture into a locked one for every later module).
+const POSTURES: ReadonlyArray<readonly [string, () => WorkspaceAdmission]> = [
+  ['when locked', () => workspaceStandIn({ unlocked: false })],
+  ['while a lock is under way (AUD-02 latch)', () => workspaceStandIn({ locking: true })]
+]
 
 describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', () => {
   let tmp: string
@@ -247,29 +269,31 @@ describe('IPC lock-guard coverage across modules (F16 / TEST-N8 generalized)', (
     ipcState.handlers.clear()
   })
 
-  for (const mod of MODULES) {
-    it(`${mod.name}: every DB-touching handler refuses with the friendly copy when locked`, async () => {
-      ipcState.handlers.clear()
-      ipcState.dialogOpens = 0
-      mod.register(lockedCtx(tmp))
-      const channels = [...handlers.keys()]
-      expect(channels.length).toBeGreaterThan(0) // the module registered something
-      let checked = 0
-      for (const ch of channels) {
-        if (mod.exempt.has(ch)) continue
-        // Throwaway args — requireUnlocked() is the FIRST statement of every DB-touching
-        // handler, so the refusal is arg-shape-independent.
-        await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.toThrow(mod.lockedCopy ?? /Workspace is locked\./)
-        // …and never the raw vault-getter string ("Workspace is locked — unlock it first.").
-        await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.not.toThrow(/unlock it first/i)
-        checked++
-      }
-      // Guard against an exempt set that accidentally swallows the whole surface.
-      expect(checked).toBeGreaterThan(0)
-      // No picker opened the OS dialog while locked: a gate that runs only after the dialog still
-      // refuses above, but the dialog was already on screen (#681).
-      expect(ipcState.dialogOpens).toBe(0)
-    })
+  for (const [posture, makeWorkspace] of POSTURES) {
+    for (const mod of MODULES) {
+      it(`${mod.name}: every DB-touching handler refuses with the friendly copy ${posture}`, async () => {
+        ipcState.handlers.clear()
+        ipcState.dialogOpens = 0
+        mod.register(lockedCtx(tmp, makeWorkspace()))
+        const channels = [...handlers.keys()]
+        expect(channels.length).toBeGreaterThan(0) // the module registered something
+        let checked = 0
+        for (const ch of channels) {
+          if (mod.exempt.has(ch)) continue
+          // Throwaway args — requireUnlocked() is the FIRST statement of every DB-touching
+          // handler, so the refusal is arg-shape-independent.
+          await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.toThrow(mod.lockedCopy ?? /Workspace is locked\./)
+          // …and never the raw vault-getter string ("Workspace is locked — unlock it first.").
+          await expect(invoke(handlers, ch, 'x', 'y', 'z')).rejects.not.toThrow(/unlock it first/i)
+          checked++
+        }
+        // Guard against an exempt set that accidentally swallows the whole surface.
+        expect(checked).toBeGreaterThan(0)
+        // No picker opened the OS dialog while locked: a gate that runs only after the dialog still
+        // refuses above, but the dialog was already on screen (#681).
+        expect(ipcState.dialogOpens).toBe(0)
+      })
+    }
   }
 
   it('read-only / in-memory channels still resolve when locked (getLogTail, getRuntimeStatus, the chat stream registry)', async () => {

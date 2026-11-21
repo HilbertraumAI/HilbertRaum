@@ -25,9 +25,10 @@ import type { Translator } from '../../src/renderer/components/translator'
 import { appShellStubs } from '../helpers/app-shell'
 import { deferred } from '../helpers/deferred'
 import { stubHomeApi } from '../helpers/home-screen'
-import { ENGINE_INSTALLED, engineJob, modelsScreenStubs, stubModelsApi } from '../helpers/model-fixtures'
+import { ENGINE_INSTALLED, engineJob, enginePreview, modelsScreenStubs, stubModelsApi } from '../helpers/model-fixtures'
 import { laptopResult } from '../helpers/performance-screen'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { diagnosticsEngineStubs } from '../helpers/settings-diagnostics'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { STOPPED_RUNTIME, appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
@@ -38,7 +39,10 @@ import { STOPPED_RUNTIME, appStatus, driveStatus, makePolicyStatus, performanceS
 // Diagnostics (line + copy report), Performance's graphics tile and the Images error-code copy.
 // Copy is asserted against the catalog (`t('en', key)`), not hard-coded English.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  assertNoUnexpectedApiCalls()
+})
 
 const en = (key: Parameters<typeof t>[1], params?: Record<string, string | number>): string =>
   t('en', key, params)
@@ -254,6 +258,8 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       ),
       ...(opts.downloadEngine ? { downloadEngine: opts.downloadEngine } : {}),
       ...(opts.getEngineJob ? { getEngineJob: opts.getEngineJob } : {}),
+      // #843: what the reinstall's confirmation states (one archive is enough for these rows).
+      getEnginePlan: vi.fn(async () => enginePreview({ kind: 'reinstall' })),
       getAppStatus: vi.fn(async () => appStatus({ engineProblems: opts.problems() })),
       getEngineStatus: vi.fn(async () => opts.engine ?? ENGINE_INSTALLED),
       onEngineProblemsChanged: vi.fn((cb: () => void) => {
@@ -362,6 +368,8 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       // The fix leads; Check again (for a fix made elsewhere) follows it.
       expect(reinstall.compareDocumentPosition(check) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       await user.click(reinstall)
+      // #843: it asks first, under the action's own name.
+      await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: en('models.engineProblem.reinstall') }))
       expect(downloadEngine).toHaveBeenCalledWith({ families: ['llama_cpp'], reinstall: true })
       // The progress is this banner's: the missing-engine banner never shows a reinstall.
       expect(await within(banner()).findByText(en('models.engine.progress', { pct: 50 }))).toBeInTheDocument()
@@ -369,7 +377,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       // Checking a program that is being replaced would say nothing.
       expect(within(banner()).getByRole('button', { name: en('models.engineProblem.check') })).toBeDisabled()
       // Main drops the verdict as the job ends, and the banner with it — the toast says what happened.
-      expect(await screen.findByText(en('models.engineProblem.reinstalled'), {}, { timeout: hangBudgetMs(4000) })).toBeInTheDocument()
+      expect(await screen.findByText(en('models.engineProblem.reinstalled'))).toBeInTheDocument()
     })
 
     it.each([
@@ -426,6 +434,7 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       const hint = reinstall.closest('.engine-problem-hint') as HTMLElement
       const installBanner = screen.getByText(en('models.engine.title')).closest('.banner') as HTMLElement
       await user.click(reinstall)
+      await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: en('models.engineProblem.voiceReinstall') }))
       expect(downloadEngine).toHaveBeenCalledWith({ families: ['whisper_cpp'], reinstall: true })
       expect(await within(hint).findByText(en('models.engine.progress', { pct: 50 }))).toBeInTheDocument()
       // The install banner does not claim that job, and waits for it: one engine job at a time.
@@ -532,7 +541,9 @@ describe('App — runtime notice target (#530)', () => {
         : vi.fn(async () => status()),
       getDriveStatus: vi.fn(async () => driveStatus()),
       getRuntimeInstall: vi.fn(async () => null),
-      getLogTail: vi.fn(async () => [])
+      getLogTail: vi.fn(async () => []),
+      // The 'Details' row navigates on to Settings → Diagnostics, which reads the snapshot.
+      getPerformance: vi.fn(async () => performanceSnapshot())
     })
     stubApi(shell)
     render(<App />)
@@ -613,20 +624,19 @@ describe('Settings → Diagnostics — engine problem line (#530)', () => {
 
   function stubDiagnostics(problems: EngineProblem[]): void {
     lastCopied = null
-    stubApi({
+    stubApi(diagnosticsEngineStubs({
       getAppStatus: vi.fn(async () => appStatus({ appVersion: '0.1.20', engineProblems: problems })),
       getDriveStatus: vi.fn(async () => driveStatus()),
       getRuntimeStatus: vi.fn(async () => STOPPED_RUNTIME),
       getRuntimeInstall: vi.fn(async () => null),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       getPerformance: vi.fn(async () => performanceSnapshot()),
-      onEngineProblemsChanged: vi.fn(() => () => {}),
       getLogTail: vi.fn(async () => []),
       copyToClipboard: vi.fn(async (text: string) => {
         lastCopied = text
         return true
       })
-    })
+    }))
   }
 
   const renderDiagnostics = (): void => {

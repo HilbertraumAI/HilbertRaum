@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -63,7 +63,6 @@ import type { AppSettings, BenchmarkProgressStep, ImageAnalyzeRequest, Performan
 import { modelPlacement } from '../helpers/benchmark-records'
 import { fakeSpawn } from '../helpers/fake-sidecar'
 import { invoke, makeEvent } from '../helpers/ipc'
-import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 import {
   CARDS,
   CATALOG_MANIFESTS,
@@ -76,8 +75,13 @@ import {
   loadSample,
   performanceChangedSpy,
   pinPlatform,
-  seededDb
+  seededDb,
+  writeChatManifest
 } from '../helpers/performance-fixture'
+import { hangBudgetMs } from '../helpers/hang-budget'
+import { sha256, writeDriveFile } from '../helpers/manifest-fixtures'
+import { createSettingsHashStore } from '../../src/main/services/models'
+import { createModelStartCheck } from '../../src/main/services/model-start-check'
 
 const here = () => {
   const root = freshRoot()
@@ -383,7 +387,7 @@ describe('resident sidecars', () => {
         }
       }
     }
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer, isWorkspaceLocking: () => false, checkModel: async () => 'ok' })
     const pushes = vi.fn()
     service.onResidencyChange(pushes)
     const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
@@ -394,7 +398,7 @@ describe('resident sidecars', () => {
     }
 
     service.analyze(req, emit)
-    await vi.waitFor(() => expect(emit.done).toHaveBeenCalled())
+    await vi.waitFor(() => expect(emit.done).toHaveBeenCalled(), { timeout: hangBudgetMs(5000) })
 
     expect(fire).not.toBeNull()
     fire!()
@@ -415,11 +419,9 @@ describe('settings keys the snapshot reads', () => {
   describe('through settings:update', () => {
     pinPlatform('win32', 'x64') // the `gpuMode` row reads the class, which reads the platform
 
-    const embeddings = (id: string): Record<string, unknown> => rawManifest({ id, role: 'embeddings', local_path: `models/embeddings/${id}.gguf` })
     /** A card machine whose active model is outside the catalog, so its context is the settings default. */
     function snapshotInputs() {
       const { ctx, db } = here()
-      ctx.manifestsDir = manifestsDirWith(embeddings('first-embedder'), embeddings('second-embedder'))
       updateSettings(db, { activeModelId: 'some-model', gpuProbe: { devices: [CARDS.RTX_3090], probedAt: '2026-09-05T00:00:00Z', machineKey: hereKey() } })
       registerCoreIpc(ctx)
       return ctx
@@ -427,10 +429,9 @@ describe('settings keys the snapshot reads', () => {
     const context = (s: PerformanceSnapshot): unknown => s.placement.model?.contextTokens
 
     // Each row reads the figure the key moves: a key that stops feeding the snapshot fails here, so
-    // this is no copy of PERFORMANCE_SETTINGS_KEYS.
+    // this is no copy of PERFORMANCE_SETTINGS_KEYS. The active slots are main-owned since #868: they
+    // move through `models:select` / `runtime:use` (the row above), never through this channel.
     it.each<[keyof AppSettings, Partial<AppSettings>, (s: PerformanceSnapshot) => unknown]>([
-      ['activeModelId', { activeModelId: 'another-model' }, (s) => s.placement.model?.id],
-      ['activeEmbeddingModelId', { activeEmbeddingModelId: 'second-embedder' }, (s) => s.placement.models.find((r) => r.role === 'embeddings')?.modelId],
       ['contextTokens', { contextTokens: 2048 }, context],
       ['contextTokensOverride', { contextTokensOverride: 16_384 }, context],
       ['gpuMode', { gpuMode: 'off' }, (s) => s.placement.memoryClass]
@@ -478,5 +479,134 @@ describe('the performance_get mark', () => {
     const report = execFileSync(process.execPath, ['--no-warnings', script, '--log', join(dir, 'perf.log')], { encoding: 'utf8' })
     expect(report).toContain('2 performance_get · 0 scans by other callers')
     expect(report).toContain('of which: manifest scan')
+  })
+})
+
+// #959: a file check that changes a verdict pushes the Performance refresh, once per pass. The files here
+// are tiny (under the 64 MiB the read-speed observer needs for a sample), so the observer's own push stays silent
+// and every push counted below comes from the verdict diff.
+describe('a file check that changes a verdict (#959)', () => {
+  const GOOD = 'the bytes the manifest expects'
+  const BAD = GOOD.toUpperCase() // same length: a "put back from a backup" file keeps its size
+
+  /** A chat model whose manifest hash is of GOOD; its weight holds `content` (BAD: a check finds it damaged). */
+  function chatModel(root: string, id: string, content: string): string {
+    writeChatManifest(join(root, 'model-manifests'), {
+      id,
+      display_name: id,
+      size_on_disk_gb: 1,
+      recommended_min_ram_gb: 1,
+      recommended_ram_gb: 1,
+      local_path: `models/chat/${id}.gguf`,
+      sha256: sha256(GOOD)
+    })
+    writeDriveFile(root, `models/chat/${id}.gguf`, content)
+    return join(root, 'models', 'chat', `${id}.gguf`)
+  }
+
+  function withModels(models: Record<string, string>) {
+    const { ctx, db } = here()
+    const root = ctx.paths.rootPath
+    const files = Object.fromEntries(Object.entries(models).map(([id, content]) => [id, chatModel(root, id, content)]))
+    ctx.manifestsDir = join(root, 'model-manifests')
+    ;(ctx.runtime as unknown as { activeModelId: () => string | null }).activeModelId = () => null
+    registerModelIpc(ctx)
+    return { ctx, db, files }
+  }
+
+  const listModels = (lazy?: boolean, runId?: string, event = makeEvent()) =>
+    electronState.handlers.get(IPC.listModels)!(event, lazy, runId)
+  const verifyModel = (id: string) => electronState.handlers.get(IPC.verifyModel)!(makeEvent(), id)
+
+  it('a full pass that finds a file damaged pushes once; the next pass, which only reads the cache, pushes nothing', async () => {
+    withModels({ 'chat-a': BAD, 'chat-b': GOOD })
+    const spy = performanceChangedSpy()
+    await listModels()
+    expect(spy).toHaveBeenCalledTimes(1)
+    await listModels()
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a full pass over intact files pushes nothing', async () => {
+    withModels({ 'chat-a': GOOD, 'chat-b': GOOD })
+    const spy = performanceChangedSpy()
+    await listModels()
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('a lazy pass pushes when it hashes the active model and finds it damaged, and not again', async () => {
+    const { db } = withModels({ 'chat-a': BAD, 'chat-b': BAD })
+    updateSettings(db, { activeModelId: 'chat-a' })
+    const spy = performanceChangedSpy()
+    await listModels(true)
+    expect(spy).toHaveBeenCalledTimes(1)
+    await listModels(true)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a pass cancelled after it found one file damaged still pushes once', async () => {
+    withModels({ 'chat-a': BAD, 'chat-b': GOOD })
+    const spy = performanceChangedSpy()
+    const event = makeEvent()
+    // The second hashing model's first progress event is the moment chat-a is done: cancel there.
+    event.sender.send.mockImplementation((_channel: string, p: { modelId?: string; runId?: string }) => {
+      if (p?.modelId === 'chat-b') void electronState.handlers.get(IPC.cancelModelVerify)!(makeEvent(), p.runId)
+    })
+    await listModels(false, 'run-1', event)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('Verify checksum pushes when it finds a damaged file, again when a put-back file makes it intact, and not when nothing changes', async () => {
+    const { ctx, db, files } = withModels({ 'chat-a': BAD })
+    const spy = performanceChangedSpy()
+
+    await verifyModel('chat-a') // nothing known -> damaged
+    expect(spy).toHaveBeenCalledTimes(1)
+    await verifyModel('chat-a') // still damaged: the same verdict
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    // The good file is put back (a restore from a backup) and the cache still holds the old mismatch for its
+    // size and mtime: the stale entry that only a forced re-hash clears.
+    writeFileSync(files['chat-a'], GOOD)
+    const st = statSync(files['chat-a'])
+    createSettingsHashStore(() => db, ctx.paths.rootPath).set(files['chat-a'], {
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      actual: sha256(BAD)
+    })
+    await verifyModel('chat-a') // damaged -> intact, which only a capture BEFORE the invalidate can see
+    expect(spy).toHaveBeenCalledTimes(2)
+    await verifyModel('chat-a') // intact again
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  describe('the start check of the search and voice models', () => {
+    function startCheck(models: Record<string, string>) {
+      const { ctx, db } = withModels(models)
+      const onVerdictChanged = vi.fn()
+      const check = createModelStartCheck({
+        manifestsDir: ctx.manifestsDir,
+        paths: ctx.paths,
+        isDev: true,
+        getSettings: () => getSettings(db),
+        getDb: () => db,
+        onVerdictChanged
+      })
+      return { check, onVerdictChanged }
+    }
+
+    it('calls onVerdictChanged once when a hashing check finds a file damaged, and not for the same check again', async () => {
+      const { check, onVerdictChanged } = startCheck({ 'chat-a': BAD })
+      await expect(check('chat-a', { hash: true })).resolves.toBe('damaged')
+      expect(onVerdictChanged).toHaveBeenCalledTimes(1)
+      await expect(check('chat-a', { hash: true })).resolves.toBe('damaged')
+      expect(onVerdictChanged).toHaveBeenCalledTimes(1)
+    })
+
+    it('stays silent when the check finds the file intact', async () => {
+      const { check, onVerdictChanged } = startCheck({ 'chat-ok': GOOD })
+      await expect(check('chat-ok', { hash: true })).resolves.toBe('ok')
+      expect(onVerdictChanged).not.toHaveBeenCalled()
+    })
   })
 })

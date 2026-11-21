@@ -10,6 +10,7 @@ import type { EvidenceExportFormat, EvidenceExportRecord } from '../../../shared
 import { sha256Of } from '../assets'
 import { getEvidenceReview, recordEvidenceExport } from '../evidence-reviews'
 import type { Db } from '../db'
+import { fileNameStem } from '../text'
 import { computeEvidenceReviewFreshness } from './freshness'
 import {
   buildEvidencePackModel,
@@ -141,16 +142,15 @@ export function packFormatForDestination(
   return requested
 }
 
-/** Filename-safe slug from the review title (the exportConversation idiom): letters,
- *  numbers, space, `_`, `-`; empty → the neutral fallback. The extension follows the
- *  requested format (P6). The title is CONTENT — it may end up in the user-chosen file
- *  name, which is exactly why the path/name never reaches audit or logs. */
+/** The suggested file name of a pack: the review title through the shared file-name rule
+ *  (`fileNameStem` in services/text.ts, #899, the one the chat and document exports use): composed
+ *  (NFC); letters with their marks, numbers, space, `_`, `-`; whole characters up to 60 code
+ *  points, so the cut never leaves half an astral letter, trimmed after the cut (#839); the neutral
+ *  `evidence-pack` when no letter or number is left. The extension follows the requested format
+ *  (P6). The title is CONTENT — it may end up in the user-chosen file name, which is exactly why the
+ *  path/name never reaches audit or logs. */
 export function suggestedPackFileName(title: string, format: EvidenceExportFormat): string {
-  const safe = title
-    .replace(/[^\p{L}\p{N} _-]/gu, '')
-    .trim()
-    .slice(0, 60)
-  return `${safe.length > 0 ? safe : 'evidence-pack'}${PACK_FILE_EXTENSION[format]}`
+  return `${fileNameStem(title, { fallback: 'evidence-pack' })}${PACK_FILE_EXTENSION[format]}`
 }
 
 /**
@@ -221,6 +221,10 @@ export async function writePackFileAtomic(
   const tmpPath = packTmpPath(destPath, packId)
   try {
     const fd = await openFileAsync(tmpPath, 'w')
+    // #838: the FIRST error wins. The close used to sit in a `finally`, so a close that failed
+    // after a failed write replaced the write's error — and the pack export shows the raw
+    // message to the user. Boxed, so a thrown `undefined` still counts as a failure.
+    let failure: { err: unknown } | null = null
     try {
       const bytes = typeof content === 'string' ? Buffer.from(content, 'utf8') : content
       const { bytesWritten } = await fd.write(bytes, 0, bytes.length, null)
@@ -230,11 +234,18 @@ export async function writePackFileAtomic(
         throw new Error(`evidence export: short write (${bytesWritten}/${bytes.length} bytes)`)
       }
       await fd.sync()
-    } finally {
-      // Never `.catch(() => {})` here: an unclosed handle would keep the tmp sibling locked
-      // on Windows and defeat the cleanup below. A close failure is a real failure.
-      await fd.close()
+    } catch (err) {
+      failure = { err }
     }
+    // Always closed, never `.catch(() => {})`: an unclosed handle would keep the tmp sibling
+    // locked on Windows and defeat the cleanup below. A close failure after a good write is a
+    // real failure.
+    try {
+      await fd.close()
+    } catch (closeErr) {
+      if (!failure) throw closeErr
+    }
+    if (failure) throw failure.err
     const onDisk = await readFileAsync(tmpPath)
     const hash = sha256Of(onDisk)
     await renameAsync(tmpPath, destPath)

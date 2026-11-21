@@ -1377,19 +1377,24 @@ describe('#372 — an unloadable model is latched for the session and named when
 })
 
 // #372 wiring pin: the download-complete seam clears the latch for the model that just landed.
-// `main/index.ts` is composition (no unit harness), so the wiring is pinned by source text: the
-// handler must call `clearModelLoadLatch(<its model id>)` as its FIRST statement — before
-// `if (!ctx) return`, the embedder reset and the transcriber/translator refreshes, any of which can
-// return early or throw inside the download manager's swallowing hook.
+// `main/index.ts` is composition (no unit harness): it hands the hook to `afterModelInstalled`
+// (`services/compose-services.ts`, #913), and that function must call `clearModelLoadLatch(<its
+// model id>)` as its FIRST statement, before the transcriber refresh and the re-arm, any of which
+// can throw inside the download manager's swallowing hook. Both halves are pinned by source text.
 describe('#372 wiring pin: ctx.onModelInstalled re-arms the model before anything in the handler can return or throw', () => {
   const indexSrc = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
-  const handlerStart = indexSrc.indexOf('ctx.onModelInstalled = (')
-  const handlerSrc = indexSrc.slice(handlerStart, indexSrc.indexOf('\n  }\n', handlerStart))
+  const composeSrc = readFileSync(join(__dirname, '../../src/main/services/compose-services.ts'), 'utf8')
+  const fnStart = composeSrc.indexOf('export function afterModelInstalled(')
+  const fnSrc = composeSrc.slice(fnStart, composeSrc.indexOf('\n}\n', fnStart))
 
-  it("clearModelLoadLatch(modelId) is the handler's first statement — before anything that can return or throw", () => {
-    expect(handlerSrc).toMatch(/ctx\.onModelInstalled = \(modelId\) => \{/) // also proves the handler was found
-    const firstStatement = handlerSrc
-      .slice(handlerSrc.indexOf('{') + 1)
+  it('index.ts hands the hook to afterModelInstalled', () => {
+    expect(indexSrc).toMatch(/ctx\.onModelInstalled = \(modelId\) => afterModelInstalled\(ctx as AppContext, modelId\)/)
+  })
+
+  it("clearModelLoadLatch(modelId) is afterModelInstalled's first statement, before anything that can throw", () => {
+    expect(fnStart).toBeGreaterThan(-1) // also proves the function was found
+    const firstStatement = fnSrc
+      .slice(fnSrc.indexOf('{') + 1)
       .split('\n')
       .map((line) => line.trim())
       .find((line) => line !== '' && !line.startsWith('//'))

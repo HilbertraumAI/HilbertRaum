@@ -375,7 +375,7 @@ All errors are OpenAI-shaped: `{"error": {"message": …, "type": …, "code": �
 | 503 / in-band | `model_not_loaded` | No model is running — also a request in flight when the user **stops** the model (#600) | A human must start one |
 | 503 / in-band | `model_starting` | A model is loading or its files are being checked first (#599) — also a request in flight when the user **switches** models (#600) | Retry after `Retry-After` |
 | 503 | `workspace_locked` | The workspace is locked | Retry once it is unlocked |
-| 503 / in-band | `server_stopped` | The endpoint is shutting down (lock or quit) | Reconnect later |
+| 503 / in-band | `server_stopped` | The endpoint is shutting down (lock, quit, turned off) or moving to another port | Reconnect later |
 
 `Retry-After` on `busy` / `model_starting` / `preempted_by_user` is derived from the machine's
 **measured** tokens-per-second when one is available for the running model, and is 30 s otherwise;
@@ -395,7 +395,7 @@ it is clamped to 5–180 s.
 | Body total | **120 s** from the end of the header phase (#255) | A slow but steady trickle resets the idle timer forever; sixteen of them would exhaust the listener. The 1 MB body cap ends a fast body long before |
 | Generation | **no timeout** | A legitimate CPU generation can run for minutes; Node's 300 s default would kill it. Wedge detection is done app-side instead, and ends the request with 502 `runtime_unresponsive` (a stream that already sent text gets a `runtime_error` frame instead) when the model server: has not taken up the request after **180 s**; sends nothing at all for **120 s**, or shows no progress through the prompt for **10 minutes**, before its first token; or stops producing text for **30 s** in mid-answer (#594, #598) |
 | SSE reader stall | 15 s of unrelieved backpressure → the request is aborted and the slot reclaimed | One stalled reader must not wedge the model |
-| Concurrent connections | 16 | Cheap flood ceiling |
+| Concurrent connections | 16 per listener: one on 127.0.0.1 and one on ::1, so up to 32 at once | Cheap flood ceiling |
 | Outside requests generating at once | **1** (plus one waiting up to ~30 s) | [§7](#7-sharing-one-model-with-yourself) |
 
 **A client disconnect aborts the generation** in both modes — an abandoned request never burns a
@@ -406,7 +406,8 @@ multi-minute answer nobody will read.
 There is one model and one machine, so the rules are explicit rather than emergent:
 
 - **One outside request generates at a time.** A second one waits up to about 30 seconds; if the
-  first is still going it gets **429 `busy`** with a `Retry-After`. A third is refused immediately
+  first is still going it gets **429 `busy`** with a `Retry-After` (or 503 `server_stopped` if the
+  endpoint stops meanwhile). A third is refused immediately
   rather than left hanging — on slow CPU hardware a deeper queue is a silent multi-minute stall,
   not politeness.
 - **Your own use always wins.** If you start an in-app chat while an outside request is
@@ -417,8 +418,10 @@ There is one model and one machine, so the rules are explicit rather than emerge
   comparisons, extraction), skill runs, and the hardware benchmark hold the model for their whole
   multi-step run; the endpoint waits or answers `busy` honestly instead of slipping into the gap
   between two steps of a background job.
-- **Lock and quit stop the endpoint first**, before the model sidecars come down. A stream running
-  at that moment ends with `server_stopped`.
+- **Lock and quit stop the endpoint first**, before the model sidecars come down. A request
+  running or waiting at that moment ends with `server_stopped` (503 before any bytes, in-band
+  after), and so does a request that arrives while the endpoint stops. Turning the endpoint off
+  or moving it to another port answers the same way.
 - **Stopping or switching the model** in HilbertRaum ends a request that is running on it **before** the
   model goes away, with the code that says what happened: `model_not_loaded` after a stop, `model_starting`
   (with `Retry-After`) after a switch or an engine update (the model comes back by itself) — as a 503
@@ -499,7 +502,8 @@ See [`../PRIVACY.md`](../PRIVACY.md) for the full statement.
 | Port number | **4980** | Range 1024–65535, clamped. 4980 avoids the ports Ollama (11434) and LM Studio (1234) use |
 
 Changing any of these applies immediately — the listener starts, stops, or re-binds to the new
-port without a restart.
+port without a restart. A request still running or waiting on the old port ends with
+`server_stopped`.
 
 **Drive policy** (`config/policy.json`, key `network.allow_local_api`) is a **ceiling**: the
 effective state is `policy AND your setting`. A policy can only restrict, never enable.
@@ -539,7 +543,7 @@ the honest answer is to leave the feature off. Nothing else in the app depends o
 | [`user-guide.md`](user-guide.md) | The end-user walkthrough ("Use HilbertRaum from other apps") |
 | `apps/desktop/src/main/services/local-api/` | `server.ts` (listener + lifecycle), `handlers.ts` (pipeline checks, parsing, envelopes), `admission.ts` (the single external slot), `token.ts` (access key), `lifecycle.ts` (start seams) |
 | `apps/desktop/src/shared/local-api.ts` | The shared derivations: `localApiEffectivelyEnabled`, `localApiServerAddress`, `isStrictLoopbackHostname`, the port clamp, `LOCAL_API_SETTINGS_KEYS` |
-| `apps/desktop/tests/**/local-api-*.test.ts` | The pinned behaviour: bind posture, the check matrix in both auth modes, zero CORS headers, streaming and non-streaming paths, error mapping, pre-emption closing without `[DONE]`, the counted-byte body cap, drain-timeout reclaim, lock/quit ordering, rotation aborting live streams, and a no-content sentinel grepped out of every log and status surface |
+| `apps/desktop/tests/**/local-api-*.test.ts` | The pinned behaviour: bind posture (the listen calls themselves), the check matrix in both auth modes and the order of its checks, zero CORS headers, streaming and non-streaming paths, error mapping, pre-emption closing without `[DONE]`, the counted-byte body cap, drain-timeout reclaim, the listener's §6.7 limits by value (the 1 MB body cap, header phase, body idle and total, no generation timeout, SSE reader stall, 16 connections; not the app-side wedge bounds), rotation aborting live streams, and a no-content sentinel grepped out of every log and status surface. The lock/quit ordering (the endpoint stops before the sidecars) is pinned outside them: `lock-admission-race.test.ts` "stops the local API BEFORE the sidecar suspends …" (lock) and `shutdown.test.ts` "aborts in-flight streams BEFORE stopping the runtime, then detaches the log, then locks" (quit) |
 
 **Contract stability.** The wire shape above is what external apps code against; treat it as
 public API. Additive changes (a new optional field, a new error `code`) are fine; changing an

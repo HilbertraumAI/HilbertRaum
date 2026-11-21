@@ -40,7 +40,8 @@ valid and lets the real embedder swap in unchanged (Phase 10).
 1. **Select / expand.** `expandPathsWithSource()` turns a user selection into a flat file list
    through the asynchronous, budget-bounded walk `expandPathsBoundedAsync` (#274; the synchronous
    `expandPaths` stays only as the tests' reference walk, #687):
-   folders are walked recursively (supported extensions only); explicitly-picked files are
+   folders are walked recursively (supported extensions only, read from the title the file will
+   import under, step 2); explicitly-picked files are
    always included (an unsupported one surfaces later as `failed`). The walk **follows
    symlinked directories** (intended — ING-4), but guards against a **symlink cycle**
    (`a/loop -> ..`): it tracks the real path of every directory on the *current recursion
@@ -50,10 +51,23 @@ valid and lets the real embedder swap in unchanged (Phase 10).
    leaving every acyclic walk's expansion set byte-identical — a symlink to a *distinct*
    directory is not an ancestor, so it is still followed.
 2. **Queue.** `createQueuedDocument()` inserts a `documents` row (`status = queued`,
-   `original_path`, guessed `mime_type`, `size_bytes`).
+   `title`, `original_path`, guessed `mime_type`, `size_bytes`). The `title` is the file name
+   without the spaces it ends in, and without its trailing dots when a supported extension is
+   then left (`importedFileTitle`, #918): `notes.txt ` and `report.pdf.` import as `notes.txt`
+   and `report.pdf`, while "Washington, D.C." and "v2.1" keep their names. macOS and Linux allow
+   such names, and so do Node, Git Bash and WSL on NTFS; Explorer, cmd and PowerShell strip them. On Windows the file picker lists such a file under
+   "All files" but cannot open it (an OS limit; a typed path loses its trailing space), so a drop or a
+   folder import hands the app such a file. Every later
+   reader (the parser, the MIME type, the stored copy's name, the exports) takes the extension
+   from this title, so they all agree.
 3. **Extract.** `processDocument()` copies the original into the workspace
-   (`workspace/documents/<id><ext>` → `stored_path`), records `sha256` + `size_bytes`,
-   selects a `DocumentParser` by extension, and extracts ordered text **segments**.
+   (`workspace/documents/<id><ext>` → `stored_path`, `<ext>` from the title), records `sha256` +
+   `size_bytes`, selects a `DocumentParser` by the title's extension, and extracts ordered text
+   **segments**. In an encrypted workspace the first parse reads the original directly, unless the
+   original's own extension is not the title's (its name ended in a space or a dot): then it reads
+   a decrypted `<id>.parse<ext>` copy, the re-index transient, shredded the same way (#918). The
+   preview, when the stored copy is gone and it falls back to the original, does the same in both
+   modes: it reads a `<id>.parse-preview-<uuid><ext>` copy of that original, shredded on the way out.
 4. **Chunk.** `chunkSegments()` splits each segment into overlapping token windows.
 5. **Persist.** Old chunks + embeddings (if re-indexing) are removed, new chunks inserted
    into `chunks`.
@@ -331,7 +345,19 @@ change) is clean. Rows are tagged with **`embedder.id`**, the id search scopes b
 change is always detectable. (As first built, the tag was `settings.activeEmbeddingModelId`
 with `embedder.id` as the fallback; §10 "Embedder-visibility honesty" stopped passing the setting
 into ingestion — it lives on as the selected manifest — and #660 removed the `embeddingModelId`
-override that no production caller set any more.)
+override that no production caller set any more.) **Which manifest is the embedder (#848):** the
+embeddings manifest flagged `default_for_role: true` (the committed E5 sets it), else the first
+embeddings manifest in walk order (`discoverManifests` takes each folder's entry names in code-unit
+order, on every file system). Before #848 it was simply the first the folder listing returned, so on a
+FAT/exFAT Kit a second embeddings manifest could flip the embedder by file-creation order, mark every
+document stale and, if that model's file was missing, fall back to the mock embedder. The flag decides
+whether or not the flagged model's file is present: with the E5 weight missing the app composes the MOCK
+embedder even when another embeddings model is installed. That is the deliberate choice (research option
+D, "prefer an installed manifest", was declined): the vectors in the index carry the E5's id and live in
+its space, so switching silently to another model would mark every document stale, and again when the E5
+returns; the mock leaves the index untouched until the E5 is downloaded again. The workspace's
+`activeEmbeddingModelId` setting still does not choose it (settings are unreadable before unlock, when
+the embedder is composed); honouring a workspace choice belongs to the deferred embedder swap.
 
 ### `embeddings` table (spec §8) + BLOB encoding (LOCKED)
 
@@ -1870,8 +1896,9 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   answer, the turn is labelled as top-k since #736 — see the next bullet.)
   Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
   read (since #649, for list asks: an aggregation ask over one fitting document is read whole). **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
-  knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
-  (top-k answers it at zero model calls when nothing matches); a legacy, partly chunked document (its
+  knowledge packs (the whole read never queries them, so it would silently drop the packs); a filler
+  question about the last answer such as "Sure?" or «Alles?» (since #963 other small talk gets the short
+  small-talk reply before any of this, §19); a legacy, partly chunked document (its
   sections are not its whole text). The #80 classification is unchanged (decided before retrieval); the
   #641 notices are relevance-only — a whole read has every section in the prompt, so neither can be
   true. The answer's sources keep their `[Sn]` (§14.4 "#643 amendment"). Owner calls, all as
@@ -2409,6 +2436,79 @@ join → reduce). Beyond the hard ceiling the tail stays honestly beginning-only
 lever, not unbounded — the dominant cost is one map call per window on CPU, covered by the Phase 3 progress
 notice).
 
+**The map and fold steps see the question (#939, follow-ups wave 4; #952 and #953, follow-ups wave 5; owner
+calls 2026-11-20).** The map and fold prompts carried the skill fence but never the question: `mapUserPrompt`
+asked for "every detail the task needs" for "the task described below", which is the fence. So a question the
+whole-document engine takes that is not the skill's deliverable ("Find every mention of 'indemnity'" under
+Contract Brief) was answered from notes taken for the brief, under a whole-document coverage label: over a
+19-section lease with three indemnity articles, qwen3-4b-instruct-q4 named one and qwen3.5-9b-ud-q4kxl said there
+was no mention. With no skill (the #642 tree summary) the same prompt named "the task described below" with
+nothing below it (#952). **The rule as built (wave 5 owner call G-2, option A):** `streamWholeDocMapReduce`
+decides the notes' target in the core, in one expression: the user's request is a target when `notesForRequest ===
+true || skillFence === null || skillFenceMode === 'first-paragraph'` (the caller's flag, no skill, or a fence cut to
+its paragraph 1), so no caller can build a prompt with no task. With **no skill**, the user's request is the notes'
+only target; the no-fence prompt is the request layout with
+the fence left out ("to answer the user request below … note every detail the user request needs", then `User
+request:` from `userRequestBlock`, then the part). Under **any whole-document skill, bundled or the user's own**,
+`registerRagIpc` sets `wholeDocumentNotesForRequest` unless the question asks for the skill's report:
+`isReportShaped(question)` (`skills/vocabulary.ts`: the report half of the needle veto's deliverable shapes,
+"summar", "minutes", "brief", "review", «Protokoll» and the rest, or a summarize chip) or
+`asksForSummary(question)` (`analysis/router.ts`, the router's own summary reading, which also catches the split
+German verb of «Fasse alle Beschlüsse zusammen»; the report shapes don't, and #939 had kept it out through the
+same reading). With the flag, the map and fold prompts carry the question under the reduce's own label, `User
+request:`, before the fence, and their instruction adds "and everything the user request asks about" (the map:
+"when it asks to find or list something, note each place with its exact wording"); the task clause stays word for
+word. A report request keeps the prompts as they were, byte for byte, list word or not ("Summarize this
+contract", the summarize chip, "Summarize all the decisions", «Erstelle das Protokoll mit allen Beschlüssen»,
+"Write the minutes including every action item"). A bundled skill's fall-through turn carries paragraph 1 of its
+fence only (#632, #831: the heading and honesty rules, no task), so the core takes the question there too (the
+rule's third term above, wave 5 review round), on the request layout with paragraph 1 after the
+request; What Changed? over one document with a ready deep index is the case that reaches it. A skill with no
+analysis engine (a fence-only user skill) on the tree route keeps the prompts as they were, by design: its fence
+is the task its author wrote, and it has no flag. The report words are English and German plus the chip, so a
+report request typed in the eight newer interface languages takes the question too (G-A3); the fence, not the
+question, sets the report's format. The reduce prompt is the same in every shape: it carried the question before #939. Wave 4 had shipped the flag
+narrower (a bundled skill, a list question by the router's `asksForList`, and no report); wave 5 removed
+`asksForList`, which then had no caller. **Why (lane A, wave 5: GTX 1070 Ti, b9849, qwen3-4b-instruct-q4 at a
+4,096 window and qwen3.5-9b-ud-q4kxl at 8,192, one run per turn and variant plus a second run of two 9B turns,
+every map, fold and reduce call dumped):** the fence, not the question, makes a map step write the report. With
+master's prompt, every 4B map call under Meeting Minutes wrote the whole eight-section minutes for its part, "Not
+stated" rows included, and stopped at the 512-token cap; Deadline & Obligation Finder and Contract Brief wrote
+their tables the same way. With the question on, the notes shrank for a question that is not the report. Wave
+4's Meeting Minutes loss was run-to-run noise: "Write the meeting minutes" with the question off and on gave 4 →
+6 of 8 on the 4B and 8 → 8, then 7 → 7, on the 9B. A question that is not the report gained, and both models'
+master answers claimed absences that were false: "Tell me about the parking rules" under Contract Brief 1 → 6 and
+3 → 6 of 6 (4B, 9B; the 4B's turn took 51 s instead of 87 s, its notes now inside the reduce budget); "Tell me
+about the insurance requirements" under Deadline & Obligation Finder 3 → 4 of 5 (4B); a user skill's "List every
+deadline in this contract" 0 → 5 and 0 → 10 of 12. With no skill, over an 80,608-word portfolio of ten leases
+with an auto-built deep index, the notes kept as many facts for "Summarize this document" (4B 10 → 11, 9B 12 → 12
+of 30) and far more for a focused summary, "Summarize the rent and the notice deadline of each lease" (4B 10 → 19,
+9B 6 → 25), whose answers rose from 1 to 9 of 31 on the 4B (its badge from "beginning" to "whole") and from 7 to
+18 on the 9B. The no-skill map step runs only when the level-1 summaries span more than one map window: on a
+4,096 window that is every auto-built tree (from about 16,000 words), on 8,192 only documents past about 85,000
+words or a tree built on a smaller window. **Wave 4's measurements (#939, history; master `5dc4e058` against the
+branch before the gate, one run per question; another program shared the GPU from the master 4B turns on, so no
+time is compared):** the English chip under Contract Brief went from 1/3 to 3/3 indemnity articles on the 4B and
+from 0/3 to 3/3 on the 9B; the German chip, read whole since #834, found 3/3 on the 9B and 0/3 on the 4B on both
+builds (a German term in an English lease). Meeting Minutes over a 14-section transcript lost facts, 5 → 2 of 8 on
+the 4B and 8 → 6 of 8 on the 9B, which is why wave 4 gated the question; wave 5's re-run above showed that loss to
+be noise. Contract Brief's summary gained facts, 4 → 7 of 11 on the 4B and 4 → 6 of 11 on the 9B. **Cost:** the
+question was already reserved in every window (`reserveWords`, the fold's overhead), so window size and count stay
+the same (a row pins it); each map or fold call adds the question and about 40 tokens of instruction. No cache keys
+on these prompts or their notes (`summary_cache` holds the deep-index build's node summaries, which this path only
+reads). Tests: `rag-whole-doc-compare.test.ts` (the #939/#953 describe: the chip in en, de and es, "List every
+deadline" and "List all action items" carry the request on every map call, the chip over a ready deep index too;
+a user skill's list question, "Tell me about the parking rules", "Explain the termination rules" and «Enumera todos
+los plazos» carry it before the fence with the task kept; five report requests, a user skill's among them, and
+four report requests with a list word send master's prompt for the skill's own fence, `asPreRequestMapPrompt`;
+the #952 describe: no skill over a ready deep index, en and de, every map step on the no-fence prompt, and What
+Changed? over one document, every map step with the request before paragraph 1), `rag-whole-doc-tree.test.ts`
+(master's whole map and fold prompts with a skill, `masterMapPrompt`, and the no-skill ones, `noFenceMapPrompt`,
+byte for byte, both frozen in `tests/helpers/whole-doc-fixtures.ts`; the window pin at 4,096; a paragraph-1 fence
+takes the request), `rag-whole-doc-mapreduce.test.ts` (the flag on, and no skill, map and fold) and `skills-vocabulary.test.ts`
+(`isReportShaped`). Residuals, the 9B's list clause over a document whose clauses repeat among them:
+[`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
+
 **Residuals** (see `known-limitations.md`): a document beyond the **hard** ceiling (~100 pages) is still
 beginning-only (INPUT, tree territory); a deliverable long enough to still be cut after the 2-cap keeps the
 honest OUTPUT-truncated badge; 2–24 map calls (+ fold) of latency on a large analysis (with the Phase 3
@@ -2421,6 +2521,66 @@ ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation, and the
 chunk map-reduce), `§4` (Phase 2 — adaptive reduce budget), `§5` (Phase 3 — progress notice), `§6` (Phase 4 —
 continue-generation) **all map to §14.10**. Architecture-level summary: `architecture.md` §20 ("Skill-aware
 whole-document analysis", "Large documents").
+
+#### 14.10.1 Map-step wording measured (2026-11-21; #978, #979, #980 item 1)
+
+Three open reports asked for a rewording of the whole-document prompts: #978 (the 9B fills a list's notes with
+one repeated clause), #979 (the 4B copies the skill's report template into every map note) and #980 item 1 (the
+reduce's "following the task instructions exactly" line on a turn with no whole fence). A real-model session
+measured candidate wordings against today's prompts; **none passed the gates set beforehand, so nothing ships and
+the prompts stay as they are.**
+
+**Candidates.** List clause (map step, request-with-skill layout): V1 `distinct`, "note each distinct item once,
+with its exact wording and every place it appears" in place of "note each place with its exact wording"; V1+V2
+`distinctOnce`, V1 plus "When a clause repeats in this part, note it once, with every place it appears." Map fence
+(bundled whole-fence turns only; reduce, window reserve and window count unchanged): W1 `p1`, the skill's heading
+and first paragraph plus the user request on every map and fold call; W2 `outline`, W1 plus the skill's `## `
+section heading lines. Reduce line: R1 `request`, "complete the user request from the notes" for a reduce with
+no whole fence.
+
+**Setup.** `qwen3-4b-instruct-q4` at 4,096 and `qwen3.5-9b-ud-q4kxl` at 8,192, llama.cpp b9849 Vulkan, GTX 1070
+Ti, network off, two runs per cell (one for some 9B cells), 86 cells, every answer read by hand against fixed
+fact lists. Gates: #978, 9B "List every deadline" at least 10 of 12 on both runs with no loop, 4B at least 8 of
+12 with the whole badge, the indemnity chip 3 of 3 on both models, the user-skill turn not below the earlier
+measurement; #979, 4B Meeting Minutes 8 of 8 sections and at least 4 of 8 facts, Contract Brief summary at least
+4 of 11, map notes not cut on at least half of the 4B map calls, no 9B loss beyond 2 facts; #980, 4B portfolio
+question at least 7 of 31, 9B at least 16 of 31. A difference counted only at 3 or more facts, or a badge or loop
+change.
+
+| Turn (facts) | Variant | 4B run 1, run 2 | 9B run 1, run 2 |
+|---|---|---|---|
+| DOF list (12) | master | 8, 9 (loop) | 11, 11 |
+| | V1 | 8, 9 (loop) | 2, 4 |
+| | V1+V2 | 5, 7 (loop) | 8, 11 |
+| Meeting Minutes (8) | master | 2, 5 (recursion) | 8 |
+| | W1 | 4, 2 (recursion) | 8 |
+| | W2 | 2, 2 | 8 |
+| DOF list under #979 (12) | W1 | 6, 8 | 7 |
+| | W2 | 7 (loop), 7 (loop) | 8 |
+| Contract Brief summary (11) | master | 5, 5 | 6 |
+| | W1 | 6, 8 | 4 |
+| | W2 | 8, 6 | 6 |
+| Portfolio question (31) | master | 6, 10 | 17, 15 |
+| | R1 | 10, 6 | 17, 16 |
+
+**Verdicts.** #978: V1 broke the 9B list it targeted (the "every place it appears" wording made it write one
+"14 days" row per article until the 512-token cap) and dropped one indemnity article on a 4B run; V1+V2 failed the
+9B (8 on run 1), the 4B (5, 7) and the user-skill turn (9B 5). #979: W1 failed the 4B Meeting Minutes gate on run 2
+(2 of 8, recursion to the output cap) and lost 4 facts on the 9B list; W2 failed the 4B minutes on both runs, the
+uncut-notes gate (8 of 28 maps) and looped on the 4B list both times. #980 item 1: R1 failed the 4B bar on run 2
+(6 of 31), gained nothing over master on either model, added one 9B run-on loop, and left the deadline-to-wrong-
+lease mix-up untouched; the single-reduce case (no map step) wrote the same 7 of 11 either way.
+
+**The one positive signal.** W1 did what #979 asked of the map step: on the 4B, template-copy lines in the map
+notes fell from 175 to 22, "Not stated" filler rows from 88 to 0, and uncut map outputs rose from 6 to 14 of 28.
+The final answers did not improve, so it is a lead for a future design with its own measurement, not a change.
+
+**Variance dominates.** Master's 9B did not reproduce #978's loss this session: 11 and 11 of 12 with no loop,
+against 3 and 0 on the same prompt in the earlier session. Two runs per cell cannot rank wordings that differ by a
+few facts; if #978 is revisited, re-measure master over more runs first. Also seen on master and on variants alike:
+false "the text covers only Part 1" remarks from the 9B under a whole badge, 4B answers that never say they cover
+only the beginning, and 4B recursion of the minutes' "Formal minutes version". The user-facing residuals are in
+[`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
 
 ## 15. Context budgeting + conversation compaction — design record (Phases 0–2)
 
@@ -2473,6 +2633,11 @@ helper subtracts the reserve + system prompt + question scaffold + per-excerpt f
 explicit budget is unaffected); `min()` keeps large-window models at the full 2500 and only constrains
 small ones. Teeth: `rag-pipeline-floor.test.ts` asserts a small launched window packs strictly fewer
 excerpts than a large one.
+
+**The fence allowance is the fence that is sent (#962, 2026-11-21).** The reserve the helper subtracts for
+the turn's skill fence is the fence the turn sends: a bundled whole-document skill's fall-through turn
+(#632, #831), whose fence carries paragraph 1 only, reserves paragraph 1, and the fence placement reads the
+same `fenceMode`. Design record §15.9.
 
 ### 15.2 Token accounting + the compaction trigger (§4.2/§4.3, R9)
 
@@ -2728,6 +2893,76 @@ context size."* All four observations were real seams:
 4096-token model: the whole-doc budget is `(window − reserve − framing) ÷ 1.5` ≈ 2–3 pages (§15.1) — the
 new context-size picker is the remedy the report asked for.
 
+### 15.9 The fence allowance is the fence that is sent (#962, follow-ups wave 5, owner call G-8, 2026-11-21)
+
+**Decision (Option 2).** Every budget of a grounded turn reserves the skill fence that the turn sends.
+`wholeDocumentBudgetTokens`, `retrievalExcerptBudgetTokens` and `wholeDocumentFitBudgetTokens`
+(`rag/index.ts`) take an optional `fenceMode`; absent means `'full'`, so every other caller is
+byte-identical. `generateGroundedAnswer` reads `opts.skillFenceMode` once, into one `fenceMode`, and uses
+it for the allowance (the relevance excerpt budget, the whole-read fit, the compare fit) and for the
+placement after retrieval. The small-document read in `registerRagIpc` (`wholeReadFor`, #643) passes the
+turn's `skillFenceMode` too, so the IPC layer and `generateGroundedAnswer` decide "fits" against the same
+number and a "fits" never turns into a truncated read and an unasked-for chunk map-reduce. The needle
+check stays sized for the whole fence, on purpose: it asks whether the engine's own read, which carries
+the whole fence, would truncate. Option 1 (rag only) was not taken: it left one fence-blind budget on the
+turn.
+
+**The facts it rests on.** Since #632 and #831 a bundled whole-document skill's fall-through turn (the
+engine declined it: a question outside the skill's vocabulary over several documents; small talk that does
+not get the short small-talk reply, which since #963 is only a filler question about the last answer such
+as "Sure?" or «Alles?» or a bare acceptance such as "ok" or «Alles bitte», §14.5 and §19; the needle
+downgrade) sends paragraph 1 of its fence, but the allowance kept measuring the whole fence. Per
+skill, at the question "When is the notice deadline?" (units are `approxPromptTokens`, about 1.3 per
+word):
+
+| Skill | Whole fence | Paragraph 1 | Freed | Excerpt budget at 4,096 (whole → paragraph 1) | At 8,192 |
+|---|---|---|---|---|---|
+| What Changed? | 819 | 481 | 338 | 1,078 → 1,304 | 2,500 → 2,500 |
+| Contract Brief | 600 | 255 | 345 | 1,224 → 1,454 | 2,500 → 2,500 |
+| Meeting Minutes | 727 | 325 | 402 | 1,140 → 1,408 | 2,500 → 2,500 |
+| Share-Safe Review | 817 | 416 | 401 | 1,080 → 1,347 | 2,500 → 2,500 |
+| Deadline & Obligation Finder | 589 | 247 | 342 | 1,232 → 1,460 | 2,500 → 2,500 |
+
+A 500-token section costs 650 units, so on a 4,096 window one passage fit beside the whole fence and two
+fit beside paragraph 1. Above about 6,000 tokens of window the 2,500-token `ragMaxContextTokens` setting
+binds both ways, so nothing changes there. In wave 4's real-model runs (llama.cpp b9849, GTX 1070 Ti) the
+4B read 1 section of a 19-section lease (and of a 14-section meeting record) under every skill and
+stated the asked fact on none of the four single-fact turns; an emulation that sends the same prompt the
+fix now sends (a user skill whose whole body is paragraph 1) read 2 sections and stated it on 3 of 4. The
+9B, on 8,192, read 3 sections either way.
+
+**The invariant: one `fenceMode` for the allowance and the placement.** Nothing after the budgets can
+shrink the excerpts: `fitMessagesToContext` keeps the grounded turn mandatory and drops only history
+(§15.1). The placement (`skillFenceBudgetTokens`) measures the fence-less grounded turn at 1.3 tokens per
+word without the 1.5 German headroom, so it always finds room for a larger fence than the allowance
+reserved; the allowance is the only real guard on the fence's share of the window. With the placement
+built fuller than the allowance, the budget contract (everything but the excerpts at 1.3 per word, plus
+1.5 × the excerpts, plus the 1,024-token answer reserve) came to 4,114–4,118 of 4,096 tokens, and under
+German-dense text the answer is cut at the window.
+
+**What changes, as built.** Only a capped fall-through turn on a window below about 6,000 tokens: a
+single-fact question over a long document reads one more passage (two at 4,096), and one document
+between the two fit budgets (for What Changed? at 4,096 about 1,270 to 1,500 units, framing included) is
+read whole by the small-document read, where it got the passage search before (#643's rule: one
+document that fits is read whole). User skills, which keep their whole fence, turns with no skill, the
+engines' own reads and the map-reduce rescues (`whole-doc-tree.ts` already sized its reserve by the fence
+it sends) are unchanged. No KV-cache cost: in a documents chat the fence rides in the user turn, and
+`GROUNDED_SYSTEM_PROMPT` is unchanged.
+
+**Accepted cost (G-8).** On a 4,096 window the freed room goes to a passage, not to older history. Under
+Share-Safe Review and What Changed?, a follow-up's grounded turn then fills the history budget
+(`fitMessagesToContext` estimates 1.95 tokens per word: about 3,030 to 3,130 of 3,072), so it keeps no
+earlier turn, where it kept them before; Contract Brief, Meeting Minutes and Deadline & Obligation Finder
+keep them. The same rule already applied to any document turn whose passages fill the budget.
+
+**Proof.** `rag-whole-doc-compare.test.ts`, the #831 describe: per capped skill, the fall-through passage
+search over a long lease at 4,096 reads as many passages as the user twin whose body is paragraph 1
+(master: one against two, all five skills); the budget contract holds and paragraph 1 is placed
+untrimmed; the user twin with Contract Brief's whole body still reserves its whole fence; at 8,192 the
+bundled turn reads as many passages as the whole-fence reservation. The #632 describe: a document between
+the two fit budgets is read whole under What Changed? and stays on the passage search under its
+whole-body user twin.
+
 ## 16. Evidence-review snapshot read-model — how EP-1 freezes §8/§14 honestly (EP-1 Phase 1)
 
 The Evidence Pack / Review Mode wave (EP-1; design record + §-anchor legend in
@@ -2836,8 +3071,10 @@ exist; snapshotted `documentSha256` → does the CURRENT stored `documents.sha25
 by ingestion) still equal it — the check never re-hashes and never opens a source file, so
 it is cheap, offline, and works identically in an encrypted workspace. The answer text
 compares exactly (`messages.content` vs `answer_snapshot`); coverage compares on a fixed
-semantic projection (mode/counts/tree status/tier/truncated/unparsed/fullyChunked —
-`nodeIds` and unknown extras are display plumbing, not claims, and never flag drift).
+semantic projection (mode, chunksCovered/chunksTotal, treeStatus, treeLevels, tier, truncated,
+unparsedChunks, fullyChunked, and the #643 `labelledExcerpts` stamp only when set). `nodeIds` and
+unknown extras are display plumbing, not claims, and never flag drift; the field set is
+compile-checked against `CoverageInfo` (AUD-19).
 
 Per-source verdicts inherit §16.2's honesty split: resolved + row + both hashes →
 `unchanged`/`changed`; resolved + row gone → `missing`; unresolved identity or an absent
@@ -5202,7 +5439,7 @@ Implementation (ruling (c)): ONE shared main-process predicate, `rerankerPosture
 discipline the existing `gpuMode`/`gpuAutoDisabled` hook already used, now generalised rather than
 copied. Called from all three channels the ruling names: `registerCoreIpc.ts`'s `settings:update`
 handler (generalised in place) and both of `registerModelIpc.ts`'s `selectModel` call sites
-(`models:select`, `models:use`), which reach `activeModelId` through `services/models.ts`'s
+(`models:select`, `runtime:use`), which reach `activeModelId` through `services/models.ts`'s
 `selectModel` → `updateSettings`, bypassing `settings:update`'s own hook entirely — the same three
 channels `notifyPerformanceChanged()` already fans out to. Every call site calls `suspend()`,
 never `stop()`, fire-and-forget with the existing `.catch` + `log.warn` shape.
@@ -5244,7 +5481,7 @@ input is now the runtime's COMMITTED model, never `activeModelId`; the posture c
 by construction (Q, G, T); the sidecar's lifecycle is hardened; the Performance screen stops
 misreporting the reranker's device.** The scoped Opus review of step 4-7 (finding C3) showed that
 `activeModelId` was never a safe posture input: it is a proxy for "the chat model that will be
-loaded", true only once `models:use`'s multi-GB weight hash and subsequent load finish, and false
+loaded", true only once `runtime:use`'s multi-GB weight hash and subsequent load finish, and false
 for the ENTIRE window before that. On the project's own measured GTX 1070 Ti a 9B → 4B switch
 during that window could cold-start the reranker on the GPU beside the still-resident 9B — the
 exact VRAM contention the headroom gate exists to prevent. Option B′: `resolveRerankerDevicePosture`
@@ -6073,3 +6310,84 @@ replaced with a mechanical citation check.
 This closes the retrieval-research effort described above; nothing in it changes what the app
 ships today, and everything in it describes one internal question bank, one archive and one
 machine — not the app in general and not any other product.
+
+## 19. Small talk in a documents chat — design record (#963, follow-ups wave 5, owner call G-1, 2026-11-21)
+
+**Decision (option a2).** A small-talk message in a documents chat ("Danke!", "Thanks!", «Merci !», "How
+are you?") gets one short model reply that reads nothing. `isSmallTalkReply` (`skills/vocabulary.ts`)
+decides, and `generateSmallTalkReply` (`rag/index.ts`) answers. The branch sits in the ask handler of
+`registerRagIpc`, right after the refusal of an explicit skill that no longer resolves (#132) and before
+any scope, skill-engine, router, classifier or knowledge-pack work.
+
+**The facts it rests on.** `isSmallTalk` only opted small talk out of the whole-document reads (A3): the
+engines of the five bundled whole-document skills, the small-document read (#643), the tool-skill
+inversion and the offer gate. The turn then took the passage search, whose prompt frames any message as a
+question over the excerpts ("Question: Danke!" and the passages), and the models summarized them. In wave
+4's runs (llama.cpp b9849, GTX 1070 Ti, qwen3-4b-instruct-q4 and qwen3.5-9b-ud-q4kxl) 3 of the 4
+thank-yous with no skill (two per model) got a summary of the document, and none of the 8 under a skill
+got an acknowledgement: each was a summary of 79 to 231 words, in 7.6 to 13.6 s on the 4B and 21.7 to
+31.6 s on the 9B. The persisted reply carried 1 or 2 citations, `relevance` coverage and
+the skill stamp, so Sources and the coverage meter sat under a thank-you; with no passage above the
+similarity floor it got "I couldn't find this in your documents"; with knowledge packs in scope it ran the
+pack arm (a query-expansion model call, then the archive search) and answered from articles.
+
+**The gate.** `isSmallTalkReply` holds for a whole-message chit-chat QUESTION to the assistant
+(`SMALL_TALK_QUESTION_FORMS`, with or without its question mark: "How are you?", «Wie geht's?», "What can
+you do?", «¿Qué tal?»). Any other message with a question mark anywhere in it (ASCII, the full-width one
+of an IME, the interrobang and its kin, the Arabic one, the Spanish «¿») reads the documents. Without one,
+a whole-message thanks, greeting, goodbye or praise formula (`SMALL_TALK_SOCIAL_FORMS`: «Passt», "Vale
+gracias", "Thanks a lot") takes the reply, an acceptance formula (`SMALL_TALK_ACCEPT_FORMS`: «vale», «de
+acuerdo», «ok va bene», «peki», «всё понятно», «будь ласка») does not, and a message of small-talk words
+takes it only when one of them is a social word (`SMALL_TALK_SOCIAL_WORDS`: thanks, a greeting, a goodbye,
+laughter, praise; the rest, `SMALL_TALK_FILLER_WORDS`, are acceptances and fillers such as "ok", "sure",
+"all", «bitte», «klar», «claro», «certo», «tamam», «ладно»; a word that can be either is a filler). It is
+stricter than `isSmallTalk` on purpose: a question about the last answer is made of small-talk words too
+("Sure?", «Alles?», «Bitte?» for "pardon?", "Sure? Thanks", «Passt?»), and so is an answer to the
+assistant's own question or offer ("All", «Alles bitte», «Claro»); both read the documents, with the
+conversation. The opt-outs keep `isSmallTalk`, which reads the union of the lists (G-11 kept «Alles gut?»
+as small talk for them). The question-mark test is one character class, so it is linear. Review round
+(follow-ups wave 5, findings G-1 to G-3): a "?" followed by more words, a non-ASCII question mark, a
+thanks or acknowledgement formula with a question mark, and an acceptance word alone had all taken the
+reply.
+
+**The reply, as built.** The system prompt `SMALL_TALK_SYSTEM_PROMPT` is `BASE_SYSTEM_PROMPT` and two fixed
+English lines (model-facing, like `GROUNDING_RULES`; no catalog): the message is small talk in a chat about
+the user's documents, no document text comes with it, reply briefly in one or two sentences in the
+message's language without summarizing, quoting or citing a document. The user turn is the message alone:
+no history (a reply that saw the conversation could continue it without the documents), no fence, no
+excerpts, no compaction pre-pass. `temperature` is `GROUNDED_TEMPERATURE` (0) and the cap
+`SMALL_TALK_MAX_TOKENS` (200); a reply cut there is badged as cut off. The reply is persisted with no
+citations, coverage, knowledge-pack outcomes or skill stamp, so it renders as a plain bubble with no
+Sources, no coverage meter, no skill glyph and no pack notice, and the composer's selected skill stays
+selected. It runs through `withChatStream`, `withRegenerateGuard` and the chat slot like every answer: Stop
+keeps the partial marked "Reply stopped", lock and quit end it, a failure leaves the message unanswered for
+"Send again", a failed regenerate brings the previous reply back, and a stream that completed with no
+token throws `EmptyCompletionError` (CB-4). The meter gets the real usage (the two messages).
+
+**What stays unchanged.** Every grounded prompt, `GROUNDED_SYSTEM_PROMPT` included, byte for byte; the
+renderer, IPC, preload, the `Message` shape and the catalogs. The knowledge-pack acceptance set holds no
+small talk (0 of the 100 questions of `eval/rag_de_en.jsonl`), so the §17 shipping rule is not triggered.
+The local API has no route to the documents, so it is not affected.
+
+**Residuals (accepted).** An offer the assistant made and the user accepts with praise alone ("Great",
+«Super», «Perfetto») gets the short reply, not the offer (before #963 it got a summary); "ok", "sure", «bitte»
+and the other acceptance words read the documents with the conversation. A question to the assistant
+keeps the reply with its question mark. The reply sees no earlier turn. "Review" still shows under it, as
+under every answer in a documents chat (a separate product call).
+
+**Not taken.** (a1) a plain chat turn (`generateAssistantMessage`): its prompt tells the model to answer
+from its own knowledge, so "ok" after an offer could continue from the history without the documents, and
+it can run the compaction pre-pass. (a3) a2 with the history: the same continuation risk. (b) a grounding
+rule: it changes every grounded turn's system prompt, still runs the search and still persists Sources and
+coverage under the reply. (c) a canned reply: a new key in ten catalogs, one line for "hi", "bye" and "tell
+me a joke", in the interface language rather than the message's.
+
+**Proof.** `rag-whole-doc-compare.test.ts` (the #963 describe: «Danke!», "Thanks!", «Merci !» and "How are
+you?" with no skill, under Contract Brief, What Changed? over two documents and a user skill with no
+engine; the reply's system prompt is `SMALL_TALK_SYSTEM_PROMPT` and carries none of the grounding rules; no
+earlier turn after an answer; "Sure?", «Alles?», "Sure? Thanks", «Alles bitte» and a real question still read
+the documents; "ok" after the assistant's offer reads them with the conversation;
+the rewritten small-talk rows of the #632 and #831 describes), `rag-whole-doc-skill.test.ts` and
+`rag-whole-read.test.ts` (the rewritten small-talk rows; knowledge packs in scope: no pack search, no pack
+outcome), `rag-regenerate-ipc.test.ts` (Stop, "Send again", regenerate), `skills-vocabulary.test.ts`
+(`isSmallTalkReply`).

@@ -27,6 +27,7 @@ import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { appendTurns, compactionRuntime } from '../helpers/compaction-fixtures'
 import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -35,7 +36,7 @@ function makeCtx(db: Db, runtime: ModelRuntime | null, manifestsDir: string | nu
     trustedSenders: ANY_SENDER,
     db,
     manifestsDir,
-    workspace: { isUnlocked: () => true },
+    workspace: workspaceStandIn(),
     runtime: { active: () => runtime, activeModelId: () => runtime?.modelId ?? null }
   } as unknown as AppContext
 }

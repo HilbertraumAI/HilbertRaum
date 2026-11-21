@@ -19,6 +19,14 @@ recommended_ram_gb: 32
 # boxes; catalog REMOVAL deliberately not taken (shipped in v0.1.55). All §9.1 legs PASSED
 # 2026-07-30 including the previously-owed first load smoke (in-app, b9849 linux-vulkan).
 recommendation_rank: 0
+# Card rank (model-benchmarks.md §6.8, owner call 2026-11-20): 94.6 on the 2026-11 answer-quality
+# study, the highest of the catalog and 4.6 points above the Qwen3.8 27B UD-Q5_K_M, at 35 tok/s on
+# the RTX 3090 (UD-Q5_K_M: 50 with MTP). The pick on a card that holds it, which is a 24 GB card.
+# The ordinary rank above stays 0: without a card and on Apple Silicon nothing changes.
+recommendation_rank_gpu: 3
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 61/61 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 20616
 recommended_context_tokens: 8192
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server;
 # `enable_thinking: false` suppresses cleanly (0 reasoning chars, content intact). Deep vs

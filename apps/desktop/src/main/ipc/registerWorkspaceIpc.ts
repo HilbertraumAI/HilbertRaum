@@ -2,11 +2,19 @@ import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
+  PlaintextNotAllowedError,
   VaultBusyError,
   VaultDamagedError,
+  VaultDescriptorMissingError,
+  VaultDescriptorUnreadableError,
+  VaultMissingError,
+  VaultOpenFailedError,
   VaultRecoveryBlockedError,
+  WorkspaceExistsError,
   WrongPasswordError,
-  workspaceAdmitsWork
+  isVaultNewerError,
+  workspaceAdmitsWork,
+  type WorkingCopyLossCause
 } from '../services/workspace-vault'
 import { prepareFirstBenchmark, scheduleFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
@@ -20,6 +28,7 @@ import { isWorkspaceNewerError } from '../services/db'
 import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
+import { failureForLog } from '../services/failure-for-log'
 import { perfMark, perfMs } from '../services/perf'
 import {
   MIN_PASSWORD_LENGTH,
@@ -59,6 +68,19 @@ function attachLogKey(ctx: AppContext): void {
   }
 }
 
+/** What was lost, per cause, for the app.log line the unlock writes after a loss (#875, #892; English, content-free:
+ *  app.log is for support, not translated). The audit event carries the cause itself. `unclean-full` says what the start
+ *  measured, not the cause it suggests: a power cut on a drive that full reads the same. */
+const LOSS_LOG_TEXT: Record<WorkingCopyLossCause, string> = {
+  lock: 'the working file was gone or no longer a database',
+  startup: 'the working file was no longer a database',
+  unclean: 'the app ended without locking the workspace',
+  'unclean-full':
+    'the app ended without locking the workspace, and at the next start the free space on the drive was below the ' +
+    'size of the workspace',
+  recovery: 'the recovery copy a failed lock left was no longer a database'
+}
+
 /** Upper bound on how long the lock handler waits for a cancelled doc-task to unwind (TA-1). */
 const LOCK_TASK_SETTLE_TIMEOUT_MS = 5_000
 
@@ -72,7 +94,7 @@ async function awaitActiveDocTaskSettled(ctx: AppContext): Promise<void> {
   try {
     settle = ctx.docTasks?.awaitActiveTaskSettled?.()
   } catch (err) {
-    log.error('Error awaiting doc-task settle on lock', String(err))
+    log.error('Error awaiting doc-task settle on lock', failureForLog(err))
     return
   }
   if (!settle) return
@@ -99,7 +121,7 @@ async function awaitSkillRunsSettled(ctx: AppContext): Promise<void> {
     const settled = await (ctx.skillRuns?.awaitSettled(LOCK_TASK_SETTLE_TIMEOUT_MS) ?? true)
     if (!settled) log.warn('Lock: a skill run was still running at the settle bound')
   } catch (err) {
-    log.error('Error settling skill runs on lock', String(err))
+    log.error('Error settling skill runs on lock', failureForLog(err))
   }
 }
 
@@ -122,7 +144,7 @@ async function settleAndSweepPlaintextOps(ctx: AppContext): Promise<void> {
     const swept = ops.sweepRegistered()
     if (swept > 0) log.info('Lock: swept registered plaintext transients', { swept })
   } catch (err) {
-    log.error('Error settling plaintext operations on lock', String(err))
+    log.error('Error settling plaintext operations on lock', failureForLog(err))
   }
 }
 
@@ -166,7 +188,33 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
         unconfirmedChildren: report.unconfirmedChildren
       })
   } catch (err) {
-    log.error('Error settling knowledge-pack operations on lock', String(err))
+    log.error('Error settling knowledge-pack operations on lock', failureForLog(err))
+  }
+}
+
+/**
+ * #876 review round 2: log each site that judged a workspace file by its SQLite header because the probe could not read
+ * its structure for a reason that is not damage (the file was then treated as before the probe existed). Which site and
+ * SQLite's code only; the controller keeps them until a handler that can log (a lock, an unlock, a password change).
+ */
+function logProbeFallbacks(ctx: AppContext): void {
+  for (const note of ctx.workspace.takeProbeFallbacks?.() ?? []) {
+    log.warn('A workspace file was judged by its SQLite header: the structural check could not run', note)
+  }
+}
+
+/**
+ * #973 (a log line, no audit type, as #911's): what the last unlock did with a staged copy of the database that no rekey
+ * journal listed: removed it, because it does not open under this workspace's key (a create cut short by a crash left
+ * it, or it came from another workspace), or left it, because it could be neither read nor removed. Logged on the
+ * unlock's success and failure paths alike (review round 2 F4). Fixed words only: no path, no file name.
+ */
+function logStageOutcome(ctx: AppContext): void {
+  const outcome = ctx.workspace.takeStageOutcome?.()
+  if (outcome === 'removed') {
+    log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
+  } else if (outcome === 'left') {
+    log.warn('Workspace unlock: left a staged copy of the database that could be neither read nor removed (#973)')
   }
 }
 
@@ -181,18 +229,56 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     if (typeof password !== 'string') {
       return { ok: false, reason: 'wrong_password', message: tMain('main.workspace.wrongPassword') }
     }
+    // #858: an unlock on a workspace that is already open verifies nothing: the controller returns
+    // early, deliberately, so an unlock landing mid-teardown cannot re-open the admission window
+    // (AUD-02). Answer with the state and stop. Running the post-unlock steps here would record a
+    // `workspace_unlocked` audit event for a password nobody checked, fold the persisted
+    // diagnostics log into a buffer that already holds it (duplicating it), and restart the model,
+    // the local API and the knowledge-pack session.
+    if (ctx.workspace.isUnlocked()) return { ok: true, state: ctx.workspace.getState() }
     try {
       const unlockT0 = performance.now()
       const state = ctx.workspace.unlock(password)
       perfMark('unlock_done', { totalMs: perfMs(unlockT0) })
+      // #936 review SF-2: no quit is under way while someone unlocks, or creates the workspace (#955 item 4: the create
+      // seam below releases it too; the close guard holds the document-task queue only inside its save or behind its
+      // window-modal dialog), so a quit hold still set here is stale (a quit cancelled outside the guard): clear it, so
+      // it can never block this session's document tasks.
+      ctx.docTasks?.releaseQueueHold()
       // The vault key is live now — adopt it for the diagnostics log so it is encrypted at
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
       attachLogKey(ctx)
       log.info('Workspace unlocked')
+      // #911 (owner decision D5: a log line, no audit type): the start found `.enc` missing and kept the only copy, and
+      // this unlock encrypted it again. Content-free; it is the one trace that something removed the file.
+      if (ctx.workspace.takeRestoredMissingEnc?.()) {
+        log.warn('The encrypted workspace file was missing; the copy the last session left was encrypted again')
+      }
+      logStageOutcome(ctx)
+      logProbeFallbacks(ctx)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
+      // #985 (review round 3 F3; a log line, no audit type): this unlock opened `.enc` beside a copy of the workspace a
+      // newer HilbertRaum wrote and that `.enc` is newer than (a spent leftover). It stays on the drive unencrypted until
+      // a later failed lock's salvage replaces it or a newer build's unlock shreds it. Fixed words only.
+      if (ctx.workspace.takeNewerRecoveryLeft?.()) {
+        log.warn('Workspace unlock: left an older, unencrypted copy of the workspace that a newer HilbertRaum wrote (#985)')
+      }
+      // #875: the last session's changes were lost: the previous lock finished at the last saved state
+      // (often at quit, with no lock screen to say so and no log that outlived it), the start swept the
+      // working file (or, #892, the session the app ended without locking: a power cut, a pulled drive, a
+      // kill, a quit on a full drive, which leaves no log at all), or this unlock discarded a broken recovery
+      // copy. Now there is a database and a log key to record it in, once. Content-free: which loss (`cause`)
+      // and, for a recorded one, when.
+      const lost = ctx.workspace.takeWorkingCopyLost?.() ?? null
+      if (lost) {
+        const meta = { cause: lost.cause, ...(lost.lostAt ? { lostAt: lost.lostAt } : {}) }
+        const what = LOSS_LOG_TEXT[lost.cause]
+        log.warn(`The changes since the last saved state were lost: ${what}`, meta)
+        ctx.audit?.('workspace_working_copy_lost', 'Changes since the last saved state were lost', meta)
+      }
       // Settings are readable now — main-side emissions follow the user's language.
       refreshUiLanguage(ctx)
       // The first-run / moved-drive benchmark and the model auto-start, in the P7 order (PR #303
@@ -221,6 +307,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       startKnowledgePackSession(ctx)
       return { ok: true, state }
     } catch (err) {
+      logStageOutcome(ctx) // #973 (review round 2 F4): a staged copy removed before a later step failed
       // instanceof PLUS the name: the production rollup bundle can contain a second,
       // tree-shaken copy of workspace-vault (module-id quirk), and the class thrown by
       // the vault is then not the class this file imported — instanceof alone made the
@@ -236,18 +323,91 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.wrongPassword')
         }
       }
-      // #208: the password VERIFIED but `.enc` did not decrypt to an openable database.
+      // #208: the password VERIFIED but `.enc` did not decrypt to an openable database (or, #860 V5b,
+      // failed its GCM tag: only changed bytes can, once the password verified).
       // This must never wear the wrong-password/openFailed copy: the reporter's vault was
       // destroyed and three releases' worth of "check your password" pointed them at the
       // troubleshooting step (create a new workspace) that would have erased the evidence.
       // instanceof PLUS the name — same bundle-duplication quirk as WrongPasswordError.
       if (err instanceof VaultDamagedError || (err instanceof Error && err.name === 'VaultDamagedError')) {
-        log.error('Workspace unlock failed: vault damaged (password verified, data unreadable)')
+        // Which damage (#860 V5b: a failed authentication, or #208: not a database) goes to the log only.
+        log.error('Workspace unlock failed: vault damaged (password verified, data unreadable)', {
+          damage: (err as VaultDamagedError).damage
+        })
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (vault damaged)')
         return {
           ok: false,
           reason: 'vault_damaged',
           message: tMain('main.workspace.vaultDamaged')
+        }
+      }
+      // #844: the password verified and SQLite found a database, but opening it could not finish
+      // (an upgrade step: a full drive, an I/O error, a bug in a new step). The open does not rewrite
+      // `.enc` (only a `.recovery` roll-forward before it can, with a fresher snapshot), so this
+      // must not wear the damaged copy and send the user looking for a backup. The log gets
+      // the error's `failure` (the cause's kind and SQLite's fixed description): the error never
+      // holds the cause's message, which a backfill can fill with stored text.
+      // instanceof PLUS the name — the bundle-duplication quirk again.
+      if (err instanceof VaultOpenFailedError || (err instanceof Error && err.name === 'VaultOpenFailedError')) {
+        log.error(
+          'Workspace unlock failed: the database could not finish opening (password verified)',
+          (err as VaultOpenFailedError).failure
+        )
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (could not finish opening)')
+        return {
+          ok: false,
+          reason: 'vault_open_failed',
+          message: tMain('main.workspace.vaultOpenFailed')
+        }
+      }
+      // #911: the password verified, but the encrypted workspace file is missing and no copy was left to restore it
+      // from. Before, this was a raw ENOENT that read "Could not open the workspace." on every try. The copy warns
+      // against a new workspace, which would replace the data key the stored documents need. The log line names no
+      // path. instanceof PLUS the name: the bundle-duplication quirk again.
+      if (err instanceof VaultMissingError || (err instanceof Error && err.name === 'VaultMissingError')) {
+        log.error('Workspace unlock failed: the encrypted workspace file is missing (password verified)')
+        // #911 (D3, SF-2): the unlock shredded a kept copy whose structure was damaged. Content-free, no path.
+        if ((err as VaultMissingError).keptCopyDiscarded) {
+          log.warn('Workspace unlock: a kept copy that could not be restored was removed')
+        }
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (encrypted file missing)')
+        return {
+          ok: false,
+          reason: 'vault_missing',
+          message: tMain('main.workspace.vaultMissing')
+        }
+      }
+      // #807 (C-S2): the encrypted workspace file is there, but its descriptor (`config/workspace.json`, which holds
+      // the wrapped key) is missing or unreadable, so no password can open it; refused before the password was checked.
+      // Before, this was a plain English error that read "Could not open the workspace." on every try. The copy names
+      // the file and warns against a new workspace. The log line names no path. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultDescriptorMissingError ||
+        (err instanceof Error && err.name === 'VaultDescriptorMissingError')
+      ) {
+        log.error('Workspace unlock failed: the workspace descriptor is missing or unreadable (encrypted file present)')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (descriptor missing)')
+        return {
+          ok: false,
+          reason: 'vault_descriptor_missing',
+          message: tMain('main.workspace.descriptorMissing')
+        }
+      }
+      // #955 item 1: `config/workspace.json` is on the drive but cannot be read, and the encrypted workspace file is not
+      // beside it, so no password can open anything here. Before, a plain English error that read "Could not open the
+      // workspace." on every try. Its own copy says not to delete the key file (a file damaged by an edit can often be
+      // repaired; #974: a byte-order mark alone no longer makes it unreadable) and never that no data is left: a
+      // `.recovery`, an `.enc.new` or stored documents may still be on the drive. The log line names no path. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultDescriptorUnreadableError ||
+        (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')
+      ) {
+        log.error('Workspace unlock failed: the workspace descriptor is unreadable and no encrypted file is beside it')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (descriptor unreadable)')
+        return {
+          ok: false,
+          reason: 'vault_descriptor_unreadable',
+          message: tMain('main.workspace.descriptorUnreadable')
         }
       }
       // #242: the startup salvage is blocked — another program holds the recovery file the
@@ -258,13 +418,30 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         err instanceof VaultRecoveryBlockedError ||
         (err instanceof Error && err.name === 'VaultRecoveryBlockedError')
       ) {
-        log.warn('Workspace unlock refused: a recovery file is held by another program')
+        // #911 widened what blocks: also a stat of `.enc` that fails other than ENOENT, and a `-wal` the start's replay
+        // could not empty while `.enc` is missing (a full drive, another program reading the file).
+        log.warn(
+          'Workspace unlock refused: the startup recovery is blocked (a held recovery file, or a workspace file it ' +
+            'could not read or replay)'
+        )
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (recovery blocked)')
         return {
           ok: false,
           reason: 'vault_recovery_blocked',
           message: tMain('main.workspace.recoveryBlocked')
         }
+      }
+      // #845: the vault's own format (its descriptor, KDF, `.enc` frame or rekey journal) was written
+      // by a NEWER build: refused before the password was checked and before anything was written. The
+      // same reason + copy as #247 (update the app; nothing was changed), with a log line naming the
+      // artifact and the version found. Name-based like the arms above (bundle-duplication quirk).
+      if (isVaultNewerError(err)) {
+        log.warn('Workspace unlock refused: the vault format was written by a newer build', {
+          what: err.what,
+          found: err.found
+        })
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
+        return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
       }
       // #247: the password verified but the database was written by a NEWER build. Its own
       // reason + copy (update the app); the vault is untouched and nothing was written.
@@ -276,7 +453,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
         return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
       }
-      log.error('Workspace unlock failed', String(err))
+      // #956: a file error (a roll-forward or a rekey recovery that cannot write) logs its code and system call, never
+      // its message, which names the drive's paths; any other error keeps its message (`failureForLog`).
+      log.error('Workspace unlock failed', failureForLog(err))
       ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')
       return { ok: false, reason: 'error', message: tMain('main.workspace.openFailed') }
     }
@@ -307,6 +486,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       try {
         const state = ctx.workspace.create(password, mode)
+        // #936 review SF-2, #955 item 4: like an unlock, a create is no moment of a quit (the close guard holds the
+        // document-task queue only inside its save or behind its window-modal dialog, and `create` runs synchronously on
+        // the main thread), so a quit hold still set here is stale (a quit called off outside the guard): clear it, so
+        // it can never block this session's document tasks.
+        ctx.docTasks?.releaseQueueHold()
         // Encrypted: adopt the fresh vault key for the log. Plaintext_dev: switch the log to
         // the plain file (`attachLogKey` dispatches on the workspace mode).
         attachLogKey(ctx)
@@ -339,13 +523,41 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           })
           return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
         }
-        // Plaintext refused by policy, and create-over-an-existing-vault (would wipe
-        // the user's data), are expected refusals — surface the real message.
-        const message = err instanceof Error ? err.message : String(err)
-        if (/not permitted|already exists/i.test(message)) {
-          return { ok: false, reason: 'refused', message }
+        // #807: the two expected refusals are typed, each with its own reason, which the gate renders in its own
+        // language (D-17). A workspace is already on the drive: a new one would replace the user's data with an empty
+        // vault. instanceof PLUS the name, the bundle-duplication quirk (see the unlock catch).
+        // Review V F-3: a key file that appeared under the create form but cannot be read, with no `.enc` beside it:
+        // the unlock's own refusal (an unlock form would answer it on every try), with the same copy. The log line
+        // names no path.
+        if (
+          err instanceof VaultDescriptorUnreadableError ||
+          (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')
+        ) {
+          log.warn('Workspace create refused: the workspace descriptor is unreadable and no encrypted file is beside it')
+          return {
+            ok: false,
+            reason: 'vault_descriptor_unreadable',
+            message: tMain('main.workspace.descriptorUnreadable')
+          }
         }
-        log.error('Workspace create failed', message)
+        if (err instanceof WorkspaceExistsError || (err instanceof Error && err.name === 'WorkspaceExistsError')) {
+          log.warn('Workspace create refused: a workspace already exists on the drive')
+          return { ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') }
+        }
+        // A workspace without a password, which the policy or the build does not allow (the gate offers the switch only
+        // when it is allowed, so only a direct call gets here).
+        if (
+          err instanceof PlaintextNotAllowedError ||
+          (err instanceof Error && err.name === 'PlaintextNotAllowedError')
+        ) {
+          log.warn('Workspace create refused: a workspace without a password is not allowed')
+          return { ok: false, reason: 'plaintext_not_allowed', message: tMain('main.workspace.plaintextNotAllowed') }
+        }
+        // Anything else failed the create (#807, C S-1: a Node file error such as an `EPERM … rename` while an
+        // antivirus holds the new file used to match the old `/not permitted|already exists/` wording and reach the
+        // gate raw, with absolute paths, and unlogged). The log line names no path: a file error logs its code and
+        // system call only; any other error keeps its message (#844's open failure adds what failed, its `failure`).
+        log.error('Workspace create failed', failureForLog(err))
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }
@@ -391,6 +603,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         const key = ctx.workspace.encryptionKey()
         if (key) rekeyVaultLog(key)
         log.info('Workspace password changed') // never the passwords, in any branch
+        logProbeFallbacks(ctx)
         // Audit: id-free, content-free, success only.
         ctx.audit?.('workspace_password_changed', 'Workspace password changed')
         return { ok: true, state }
@@ -406,10 +619,19 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
             message: tMain('main.workspace.wrongCurrentPassword')
           }
         }
+        // Document work holds the vault: the vault's own `tMain` text (#807: in main's language, like every refusal
+        // on the open workspace's Settings card).
         if (err instanceof VaultBusyError || (err instanceof Error && err.name === 'VaultBusyError')) {
           return { ok: false, reason: 'refused', message: err.message }
         }
-        log.error('Workspace password change failed', String(err))
+        // Everything else, including the #845 refusals (the descriptor on disk is a newer build's, or no
+        // longer the one this session unlocked; nothing was written), reads "change failed, your current
+        // password still works": true, and the gate's "update the app to open it" would be wrong on an
+        // open workspace. #956: a file error (the descriptor's temp, a document sidecar or a stored copy the rekey
+        // stages) logs its code and system call, never its message, which names the path; any other error keeps its
+        // message (`failureForLog`).
+        log.error('Workspace password change failed', failureForLog(err))
+        logProbeFallbacks(ctx)
         return {
           ok: false,
           reason: 'error',
@@ -654,10 +876,24 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // surface for the rest of the session with nothing to explain it. One disarm point covers
     // this path and any other throw out of the teardown.
     attachLogKey(ctx)
-    log.error('Workspace lock failed — workspace stays unlocked', String(err))
+    // #956: `VaultLockError` is content-free; what caused it (`ENOSPC`, `EPERM`, …) rides along as its `failure`
+    // (S-5: before, the line named no cause at all). No path, no message of the cause.
+    log.error('Workspace lock failed — workspace stays unlocked', failureForLog(err))
+    logProbeFallbacks(ctx)
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))
   }
+  // #855: the working file was gone or no longer a database, so the lock finished at the last good
+  // `.enc` and the workspace is LOCKED (key zeroed, no handle). Not a failure: the latch stays
+  // armed and nothing restarts, as after any lock; the lock screen shows the notice. There is no
+  // database to audit it in now: the controller keeps the notice until the next unlock (and a
+  // marker carries it across a quit, #875), and that unlock records `workspace_working_copy_lost`.
+  // This line is buffered like any line logged while locked; it persists if the user unlocks in
+  // this session.
+  if (state.lockNotice === 'working_copy_lost') {
+    log.warn('Workspace locked at its last saved state: the working file was gone or no longer a database')
+  }
+  logProbeFallbacks(ctx)
   log.info('Workspace locked (sidecars stopped)')
   return state
 }

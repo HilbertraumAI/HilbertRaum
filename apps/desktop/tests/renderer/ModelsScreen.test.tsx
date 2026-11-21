@@ -21,7 +21,7 @@ import {
 } from '../../src/shared/types'
 import { t, tCount } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
-import { ENGINE_MISSING, engineJob, modelInfo, stubModelsApi } from '../helpers/model-fixtures'
+import { ENGINE_MISSING, engineJob, enginePreview, modelInfo, stubModelsApi } from '../helpers/model-fixtures'
 import { catalogOf } from '../helpers/i18n-catalogs'
 import { renderInLanguage } from '../helpers/render-language'
 import { assertNoUnexpectedApiCalls } from '../helpers/renderer'
@@ -177,6 +177,18 @@ describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Se
       await screen.findByText('Qwen3 4B Instruct')
       expect(screen.queryByText(/No longer available for download/)).not.toBeInTheDocument()
     })
+  })
+
+  // #933 review N4 (#932): a model with no checksum on record has no Download, so it must not raise the network-gate
+  // banner either: the banner would blame the drive policy for a button that is not there.
+  it('does not raise the network-gate banner for a model with no checksum on record (#932)', async () => {
+    stub({
+      models: [model({ state: 'checksum_failed', noChecksum: true })],
+      policy: policyStatus({ downloadsAllowed: false, settingOn: true })
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.queryByText(/disabled by this drive’s policy/)).not.toBeInTheDocument()
   })
 })
 
@@ -345,7 +357,8 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
     render(<ModelsScreen />)
     await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
     expect(screen.getByText('Installed')).toBeInTheDocument()
-    expect(screen.getByText(/used automatically on the Images screen/i)).toBeVisible()
+    // #914: true whether this is the drive's only vision model or one of several (the Images screen runs one pick).
+    expect(screen.getByText(/the Images screen picks its vision model automatically/i)).toBeVisible()
     // Selecting/starting a vision model would claim the CHAT runtime slot and throw
     // (registerModelIpc rejects a non-chat role) — those actions must not exist here.
     expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
@@ -790,6 +803,67 @@ describe('ModelsScreen — installed and catalog library views', () => {
   })
 })
 
+// #847: a model for a newer HilbertRaum (a role this build does not know, or a `min_app_version` above this app) is
+// listed in its own trailing section, with nothing to act on, instead of vanishing. Frozen old-reader contract: the
+// app-update plan's Appendix B.
+describe('ModelsScreen — a model for a newer HilbertRaum (#847)', () => {
+  const newer = (over: Partial<ModelInfo>): ModelInfo =>
+    model({
+      role: 'unknown',
+      declaredRole: 'hologram',
+      needsNewerApp: true,
+      state: 'unsupported',
+      family: 'holo',
+      download: undefined,
+      ...over
+    })
+  const heading = (): string => t('en', 'models.newerApp.heading')
+
+  it('lists it last under its own heading, with the hint and nothing to download, use or verify', async () => {
+    const user = userEvent.setup()
+    stub({
+      models: [
+        model({ id: 'chat-ok', displayName: 'Chat OK', state: 'installed' }),
+        newer({ id: 'holo-here', displayName: 'Holo Here', filesPresent: true }),
+        newer({ id: 'holo-elsewhere', displayName: 'Holo Elsewhere', filesPresent: false })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Chat OK')
+
+    // On this drive: only the one whose files are here.
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
+    const onDrive = within(screen.getByRole('region', { name: heading() }))
+    expect(onDrive.getByText('Holo Here')).toBeVisible()
+    expect(onDrive.queryByText('Holo Elsewhere')).not.toBeInTheDocument()
+    expect(onDrive.getByText(t('en', 'models.newerApp.badge'))).toBeVisible()
+    expect(onDrive.getByText(t('en', 'models.newerApp.hint'))).toBeVisible()
+    expect(onDrive.queryAllByRole('button')).toEqual([])
+    expect(onDrive.queryByText(t('en', 'models.tech.summary'))).not.toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent).at(-1)).toBe(heading())
+    expect(screen.getByText(tCount('en', 'models.library.results', 2))).toBeInTheDocument() // counted with the rows
+
+    // Browse lists both; the family options never offer its family.
+    await user.click(screen.getByRole('radio', { name: 'Browse models' }))
+    expect(within(screen.getByRole('region', { name: heading() })).getByText('Holo Elsewhere')).toBeVisible()
+    const families = within(screen.getByRole('combobox', { name: 'Family' }))
+      .getAllByRole('option')
+      .map((o) => o.textContent)
+    expect(families).not.toContain('holo')
+
+    // It is no task's model: a task filter hides the section.
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'chat')
+    expect(screen.queryByRole('region', { name: heading() })).not.toBeInTheDocument()
+  })
+
+  it('is listed even when nothing else matches: no "no models" message hides it', async () => {
+    stub({ models: [newer({ id: 'holo-only', displayName: 'Holo Only', filesPresent: false })] })
+    render(<ModelsScreen />)
+    expect(await screen.findByText('Holo Only')).toBeVisible()
+    expect(screen.queryByText(t('en', 'models.library.noAlternatives'))).not.toBeInTheDocument()
+  })
+})
+
 // #527: the composer's dictation hint ("Get the speech model") opens this screen through the
 // 'models:voice' deep link. It used to land on "On this drive" — where a missing speech model, by
 // definition, is not listed — so the user had to find Browse and the Voice task themselves.
@@ -1224,7 +1298,7 @@ describe('ModelsScreen — search, tasks and model variants', () => {
     render(<ModelsScreen />)
     await user.click(await screen.findByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
-    expect(await screen.findByText(t('en', shown), undefined, { timeout: 3000 })).toBeVisible()
+    expect(await screen.findByText(t('en', shown))).toBeVisible()
     expect(screen.queryByText(t('en', notShown))).not.toBeInTheDocument()
   })
 
@@ -1405,7 +1479,7 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     // (the leave-and-return resume affordance) cannot leak a live job into later tests.
     expect(await screen.findByText(/Downloading…|Verifying/)).toBeInTheDocument()
     expect(
-      await screen.findByRole('button', { name: 'Download' }, { timeout: 3000 })
+      await screen.findByRole('button', { name: 'Download' })
     ).toBeInTheDocument()
   })
 
@@ -1531,7 +1605,7 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
     // "another download is running" gate); our getDownloadJob drains it on the first poll, so
     // wait for the button to enable before clicking.
     const downloadBtn = await screen.findByRole('button', { name: 'Download' })
-    await waitFor(() => expect(downloadBtn).toBeEnabled(), { timeout: 3000 })
+    await waitFor(() => expect(downloadBtn).toBeEnabled())
     await user.click(downloadBtn)
     await user.click(screen.getByRole('button', { name: 'Start download' }))
     await user.click(await screen.findByRole('button', { name: 'Cancel download' }))
@@ -1592,13 +1666,13 @@ describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () =>
 
     // Wait out any leaked live job (see the cancel test above) so Download is clickable.
     const downloadBtn = await screen.findByRole('button', { name: 'Download' })
-    await waitFor(() => expect(downloadBtn).toBeEnabled(), { timeout: 3000 })
+    await waitFor(() => expect(downloadBtn).toBeEnabled())
     await user.click(downloadBtn)
     await user.click(screen.getByRole('button', { name: 'Start download' }))
 
     // The first poll flips the job queued→done → the completion refresh runs → listModels
     // rejects → the friendly message (transport prefix stripped) lands on the error banner.
-    expect(await screen.findByText('refresh exploded', undefined, { timeout: 3000 })).toBeInTheDocument()
+    expect(await screen.findByText('refresh exploded')).toBeInTheDocument()
     // The remembered job ends terminal ('done'), so nothing live leaks into later tests.
   })
 })
@@ -2051,7 +2125,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     current = { ...current, status: 'failed', error: 'server closed the connection' }
 
     expect(
-      await screen.findByText('refresh exploded', undefined, { timeout: 3000 })
+      await screen.findByText('refresh exploded')
     ).toBeInTheDocument()
     expect(panel().getByText('server closed the connection')).toBeVisible()
     // #315 — the failed refresh left the previous model list (and its row) in place, so the
@@ -2151,7 +2225,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       job: () => current,
       downloadModel: async () => {
         if (rejectNext) {
-          throw new Error("Error invoking remote method 'models:download': Error: start refused")
+          throw new Error("Error invoking remote method 'downloads:start': Error: start refused")
         }
         return current
       }
@@ -2338,7 +2412,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     await screen.findByText(first.displayName)
     await user.click(within(cardFor(first.displayName)).getByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
-    await waitFor(() => expect(panel().getByText('late failure')).toBeVisible(), { timeout: 4000 })
+    await waitFor(() => expect(panel().getByText('late failure')).toBeVisible())
 
     await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
@@ -2374,9 +2448,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     current = { ...current, status: 'failed', error: 'failed while away' }
 
     render(<ModelsScreen />) // …and coming back resumes the remembered job and shows its result
-    await waitFor(() => expect(panel().getByText('failed while away')).toBeVisible(), {
-      timeout: 3000
-    })
+    await waitFor(() => expect(panel().getByText('failed while away')).toBeVisible())
     // #315 — Browse lists the row regardless of state, so it is on screen here too: the panel
     // does not repeat the name, the row still carries it.
     expect(panel().queryByText(entry.displayName)).toBeNull()
@@ -2486,9 +2558,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       expect(panel().queryByText(bystander.displayName)).not.toBeInTheDocument()
       expect(panel().getByRole('button', { name: t('en', 'models.download.cancel') })).toBeEnabled()
       // …and the poll resumes against the adopted id, not a remembered one.
-      await waitFor(() => expect(api.getDownloadJob).toHaveBeenCalledWith(live.jobId), {
-        timeout: 3000
-      })
+      await waitFor(() => expect(api.getDownloadJob).toHaveBeenCalledWith(live.jobId))
     })
 
     it('shows an undismissed failed result again — named, with its error and gated actions', async () => {
@@ -2503,7 +2573,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       await user.click(screen.getByRole('button', { name: 'Start download' }))
       current = { ...current, status: 'failed', error: 'connection reset' }
       expect(
-        await panel().findByText('connection reset', undefined, { timeout: 3000 })
+        await panel().findByText('connection reset')
       ).toBeVisible()
 
       mainSide = [current]
@@ -2540,7 +2610,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       await user.click(screen.getByRole('button', { name: 'Start download' }))
       current = { ...current, status: 'failed', error: 'dismissed for good' }
       mainSide = [current]
-      await user.click(await panel().findByRole('button', { name: DISMISS }, { timeout: 3000 }))
+      await user.click(await panel().findByRole('button', { name: DISMISS }))
       // Dismiss told the MAIN process too — which is why its list comes back empty.
       expect(api.dismissDownloadJob).toHaveBeenCalledWith(current.jobId)
       mainSide = []
@@ -2568,8 +2638,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
             ? { ...current, status: 'done', receivedBytes: 1000 }
             : { ...current, status: 'cancelled' }
         await waitFor(
-          () => expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument(),
-          { timeout: 3000 }
+          () => expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
         )
 
         reload(view)
@@ -2593,7 +2662,7 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       entry = { ...entry, state: 'installed' }
       current = { ...current, status: 'failed', error: 'verification failed' }
 
-      const retry = await panel().findByRole('button', { name: RETRY }, { timeout: 3000 })
+      const retry = await panel().findByRole('button', { name: RETRY })
       expect(retry).toBeDisabled()
       expect(retry).toHaveAttribute('title', t('en', 'models.download.retryInstalled'))
       expect(panel().getByText(t('en', 'models.download.retryInstalled'))).toBeVisible()
@@ -2745,6 +2814,32 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
     expect(
       card.getByText(t('en', 'models.download.withdrawn', { reason: WITHDRAWN.withdrawn }))
     ).toBeVisible()
+  })
+
+  // #932 (G-2 (d), A S-A9): a model with no checksum on record (`noChecksum`, decided main-side from the manifest) is
+  // not a damaged file. Its card says "No checksum" and what the model needs, and offers no Download even with a
+  // download block: a download cannot give the manifest a checksum, and main refuses it. A damaged file keeps both.
+  it('a no-checksum card names what it needs and offers no Download; a damaged card keeps "Can’t verify" and Download (#932)', async () => {
+    const healthy = variant('healthy', 'Healthy model', { state: 'installed' })
+    const placeholder = variant('placeholder', 'Placeholder model', {
+      family: 'gemma4',
+      state: 'checksum_failed',
+      noChecksum: true
+    })
+    const damaged = variant('damaged', 'Damaged model', { family: 'llama3', state: 'checksum_failed' })
+    stubLibrary({ models: () => [healthy, placeholder, damaged] })
+    render(<ModelsScreen />)
+    await screen.findByText(placeholder.displayName)
+
+    const card = within(cardFor(placeholder.displayName))
+    expect(card.getByText(t('en', 'models.state.noChecksum'))).toBeVisible()
+    expect(card.getByText(t('en', 'models.noChecksum.hint'))).toBeVisible()
+    expect(card.queryByText(t('en', 'models.state.checksumFailed'))).not.toBeInTheDocument()
+    expect(card.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+    const control = within(cardFor(damaged.displayName))
+    expect(control.getByText(t('en', 'models.state.checksumFailed'))).toBeVisible()
+    expect(control.queryByText(t('en', 'models.noChecksum.hint'))).not.toBeInTheDocument()
+    expect(control.getByRole('button', { name: 'Download' })).toBeEnabled()
   })
 
   it('a damaged-only drive still starts in Browse, and On this drive lists the damaged row', async () => {
@@ -3046,10 +3141,14 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
           missingFamilies: ['llama_cpp']
         })
       ),
-      downloadEngine
+      downloadEngine,
+      getEnginePlan: vi.fn(async () => enginePreview())
     })
     render(<ModelsScreen />)
     await user.click(await screen.findByRole('button', { name: 'Install AI engine' }))
+    // #843: the action asks first; Confirm sends the same argument-less request.
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Install AI engine' }))
     expect(downloadEngine).toHaveBeenCalledTimes(1)
     expect(downloadEngine).toHaveBeenCalledWith()
     expect(downloadEngine.mock.calls[0]).toHaveLength(0)
@@ -3317,12 +3416,14 @@ describe('ModelsScreen — engine download Cancel (SH-1, #144)', () => {
       getEngineStatus: vi.fn(async () => ENGINE_MISSING),
       getEngineJob: vi.fn(async () => live),
       downloadEngine,
-      cancelEngineDownload
+      cancelEngineDownload,
+      getEnginePlan: vi.fn(async () => enginePreview())
     })
     render(<ModelsScreen />)
 
-    // The demo-mode warning offers the install; starting it shows progress + Cancel.
+    // The demo-mode warning offers the install; confirming it (#843) shows progress + Cancel.
     await user.click(await screen.findByRole('button', { name: 'Install AI engine' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Install AI engine' }))
     // Pre-fix TEETH: the live branch rendered ONLY the Progress — no Cancel existed anywhere.
     const cancelBtn = await screen.findByRole('button', { name: 'Cancel download' })
     await user.click(cancelBtn)

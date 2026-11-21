@@ -5,7 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { clearSkillDetailRequest, consumeSkillDetailRequest } from '../../src/renderer/lib/skillDetailRequest'
 import { DEFAULT_SETTINGS, type RuntimeStatus, type SkillInfo } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { chatScreenStubs } from '../helpers/chat-screen'
 import { makeSkillInfo, makeConversation as conv } from '../helpers/chat-fixtures'
 
 // #46 — the ChatScreen wiring for the first-selection skill info card: the FIRST pick of a skill
@@ -26,6 +27,7 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   clearSkillDetailRequest()
+  assertNoUnexpectedApiCalls()
   window.localStorage.clear()
 })
 
@@ -40,7 +42,7 @@ async function mount(
     ...DEFAULT_SETTINGS,
     ...patch
   }))
-  stubApi({
+  stubApi(chatScreenStubs({
     listConversations: vi.fn(async () => [conv()]),
     getRuntimeStatus: vi.fn(async () => status()),
     listMessages: vi.fn(async () => []),
@@ -52,7 +54,7 @@ async function mount(
     setConversationDefaultSkill: vi.fn(async () => {}),
     getSettings,
     updateSettings
-  })
+  }))
   render(<ChatScreen onNavigate={over.onNavigate ?? (() => {})} />)
   await user.click(await screen.findByText('My chat'))
   return { updateSettings, getSettings, user }
