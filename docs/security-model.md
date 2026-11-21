@@ -830,22 +830,32 @@ Copy hands out (`readLogTail`), and the file Save to file writes (`readLogFull`)
   (`<app>`). The longest folder goes first, so a drive root inside the home folder reads `<drive>`.
   A folder matches in every spelling a line can carry: `\` or `/` separators, JSON's doubled
   backslashes, the `\\?\` long form and a `file:` URL. A Windows folder matches in any letter
-  case. A folder matches whole segments only: `C:\Users\x` never takes the start of
-  `C:\Users\xavier`. When the workspace is on the app's data folder (no Kit), the root reads
+  case, and so does a macOS one under `/Users` or `/Volumes` (APFS ignores case by default). A
+  folder matches whole segments only: `C:\Users\x` never takes the start of `C:\Users\xavier`, nor
+  of `C:\Users\x y`. When the workspace is on the app's data folder (no Kit), the root reads
   `<app-data>`.
 - **Other absolute paths lose the part that names someone.** A profile's account segment becomes
-  `<user>` (`C:\Users\<user>\…`, an 8.3 short name such as `PETERS~1` too, `/Users/<user>/…`,
-  `/home/<user>/…`, `/media/<user>/…`, WSL's `/mnt/c/Users/<user>/…`). A mounted volume's name
-  becomes `<volume>` (`/Volumes/<volume>/…`, `/media/<user>/<volume>/…`, `/mnt/<volume>/…`). A
-  network path's server and share become `\\<server>\<share>\…`.
+  `<user>`: `C:\Users\<user>\…` (an 8.3 short name such as `PETERS~1` too), `/Users/<user>/…`,
+  `/home/<user>/…`, `/var/home/<user>/…`, `/media/<user>/…`, WSL's `/mnt/c/Users/<user>/…`, and a
+  profile anywhere in a network path (`\\pc\c$\Users\<user>`, `\\wsl$\Ubuntu\home\<user>`). A
+  mounted volume's name becomes `<volume>` (`/Volumes/<volume>/…`, `/media/<user>/<volume>/…`,
+  `/mnt/<volume>/…`). A network path's server and share become `\\<server>\<share>\…`.
 
 The rest of the path stays, so support still sees which file failed:
-`<drive>\runtime\llama.cpp\win\llama-server.exe`. Relative paths, file names, `http(s)` URLs and
-ordinary text are left alone, and redacting a redacted line changes nothing. The second pass works
-from path shapes, so it hides accounts, volumes and servers, not every folder name: a path on another
-drive outside a profile (`D:\Private\letter.pdf`) keeps its folders. A full 10 MB log redacts in about
-70 ms; the live log is capped at 2 MB. The console copy of each line (shown in the terminal of a dev
-run, or of an app started from a terminal) is not redacted: the app does not hand it out.
+`<drive>\runtime\llama.cpp\win\llama-server.exe`. Relative paths, file names, `http(s)` URLs,
+device paths (`\\.\pipe\…`), a `//` in prose and ordinary text are left alone, and redacting a
+redacted line changes nothing. A sentence's period stays outside the path (`<home>.`).
+
+The second pass works from path shapes, so it hides accounts, volumes and servers, not every folder
+name: a path on another drive outside a profile (`D:\Private\letter.pdf`) keeps its folders. A name
+of several words (`Anna Schmidt`) counts as one segment when a separator, a closing quote or a
+backtick follows it, or when a quote opened the path. After an unquoted path the words are a
+sentence: `C:\Users\peter is missing` hides `peter` only. The other way round, a sentence that runs
+straight on to a closing quote after an unquoted path (`"saved to C:\\Users\\peter and done"`) is
+taken as part of the name and hidden with it; that loses a few words, never shows a name. A full
+10 MB log redacts in about 85 ms; the live log is capped at 2 MB. The console copy of each line
+(shown in the terminal of a dev run, or of an app started from a terminal) is not redacted: the app
+does not hand it out.
 
 ### Design record — encrypted log (2026-06-13)
 

@@ -67,7 +67,8 @@ describe('known roots become placeholders (#975 pass 1)', () => {
     expect(redactLogText(`spawn ${path} ENOENT {"cwd":"${path}"}`, LINUX)).toBe(
       `spawn ${placeholder}/logs/app.log ENOENT {"cwd":"${placeholder}/logs/app.log"}`
     )
-    expect(redactLogText(`file://${path}`, LINUX)).toBe(`file://${placeholder}/logs/app.log`)
+    // The URL keeps its third slash, as the Windows form does (`file:///<drive>/…`).
+    expect(redactLogText(`file://${path}`, LINUX)).toBe(`file:///${placeholder}/logs/app.log`)
   })
 
   it('a root alone, at the end of a JSON field, and a bare drive root (a Kit at E:\\)', () => {
@@ -172,6 +173,65 @@ describe('generic shapes hide the account, volume and server (#975 pass 2)', () 
   })
 })
 
+// #975 review round 1: a name with spaces, a profile deeper in a network path, a sentence's period, letter case on
+// macOS, and shapes that only look like network paths.
+describe('names with spaces, deeper profiles and look-alikes (#975)', () => {
+  it('a root never takes the start of a segment that goes on after a space', () => {
+    const peter: LogRedactionRoots = { home: 'C:\\Users\\Peter' }
+    expect(redactLogText("open 'C:\\Users\\Peter Smith\\x'", peter)).toBe("open 'C:\\Users\\<user>\\x'")
+    expect(redactLogText('{"p":"C:\\\\Users\\\\Peter Smith\\\\x"}', peter)).toBe('{"p":"C:\\\\Users\\\\<user>\\\\x"}')
+    expect(redactLogText("open 'C:\\Users\\Peter Smith'", peter)).toBe("open 'C:\\Users\\<user>'")
+    expect(redactLogText('/Volumes/KIT 1/runtime/x', { driveRoot: '/Volumes/KIT' })).toBe('/Volumes/<volume>/runtime/x')
+    // A sentence after an unquoted root is no part of it.
+    expect(redactLogText('C:\\Users\\Peter is missing', peter)).toBe('<home> is missing')
+  })
+
+  it.each<[string, string, string]>([
+    ['before a closing quote', "open 'C:\\Users\\Anna Schmidt'", "open 'C:\\Users\\<user>'"],
+    ['before a JSON closing quote', '{"cwd":"C:\\\\Users\\\\Anna Schmidt"}', '{"cwd":"C:\\\\Users\\\\<user>"}'],
+    ['a macOS home before a closing quote', "'/Users/Anna Schmidt'", "'/Users/<user>'"],
+    ['before a backtick', '`/home/Anna Schmidt`', '`/home/<user>`'],
+    ['at the end of a quoted path cut short', "open 'C:\\Users\\Anna Schmidt", "open 'C:\\Users\\<user>"],
+    ['before a period in a quoted path', "'C:\\Users\\Anna Schmidt. Next'", "'C:\\Users\\<user>. Next'"]
+  ])('a profile name of several words ends the path %s', (_where, line, expected) => {
+    expect(redactLogText(line, NONE)).toBe(expected)
+  })
+
+  it.each<[string, string, string]>([
+    ['under an admin share', '\\\\pc\\c$\\Users\\peter\\x', '\\\\<server>\\<share>\\Users\\<user>\\x'],
+    ['in WSL', '\\\\wsl$\\Ubuntu\\home\\peter\\x', '\\\\<server>\\<share>\\home\\<user>\\x'],
+    ['in WSL (wsl.localhost)', '\\\\wsl.localhost\\Ubuntu\\home\\peter\\x', '\\\\<server>\\<share>\\home\\<user>\\x'],
+    ['JSON-escaped', '{"p":"\\\\\\\\pc\\\\c$\\\\Users\\\\peter\\\\x"}', '{"p":"\\\\\\\\<server>\\\\<share>\\\\Users\\\\<user>\\\\x"}'],
+    ['with forward slashes after a quote', "'//pc/c$/Users/peter/x'", "'//<server>/<share>/Users/<user>/x'"],
+    ['as a file URL', 'file://pc/c$/Users/peter/x', 'file://<server>/<share>/Users/<user>/x'],
+    ['as a file URL a few folders down', 'file://nas/data/team/home/peter/x', 'file://<server>/<share>/team/home/<user>/x'],
+    ['a few folders down', '\\\\nas\\data\\Shared Folders\\home\\Anna Schmidt\\x', '\\\\<server>\\<share>\\Shared Folders\\home\\<user>\\x']
+  ])('a profile deeper in a network path hides the account: %s', (_what, line, expected) => {
+    expect(redactLogText(line, NONE)).toBe(expected)
+  })
+
+  it('a sentence’s period stays outside the path', () => {
+    expect(redactLogText('Could not find C:\\Users\\peter.', { home: 'C:\\Users\\peter' })).toBe('Could not find <home>.')
+    expect(redactLogText('Could not find C:\\Users\\peter. Retrying', { home: 'C:\\Users\\peter' })).toBe(
+      'Could not find <home>. Retrying'
+    )
+    expect(redactLogText('Could not find C:\\Users\\peter.', NONE)).toBe('Could not find C:\\Users\\<user>.')
+    expect(redactLogText('Could not find /home/peter.', NONE)).toBe('Could not find /home/<user>.')
+  })
+
+  it('macOS homes and volumes match in any letter case; a Linux home does not', () => {
+    expect(redactLogText('/users/peter/x', { home: '/Users/peter' })).toBe('<home>/x')
+    expect(redactLogText('/volumes/kit/x', { driveRoot: '/Volumes/KIT' })).toBe('<drive>/x')
+    expect(redactLogText('/users/peter/x /VOLUMES/Kit/y', NONE)).toBe('/users/<user>/x /VOLUMES/<volume>/y')
+    expect(redactLogText('/HOME/peter/x', { home: '/home/peter' })).toBe('/HOME/peter/x')
+  })
+
+  it('a Fedora Silverblue home (/var/home) hides the account; /root names none', () => {
+    expect(redactLogText('open /var/home/peter/.config/x', NONE)).toBe('open /var/home/<user>/.config/x')
+    expect(redactLogText('open /root/.config/x', NONE)).toBe('open /root/.config/x')
+  })
+})
+
 describe('what is no absolute path stays as it is (#975)', () => {
   it.each<[string, string]>([
     ['a model file name', 'Model qwen3-4b-instruct-q4.gguf started {"port":8080}'],
@@ -180,7 +240,11 @@ describe('what is no absolute path stays as it is (#975)', () => {
     ['a relative path', 'runtime/llama.cpp/win/llama-server.exe and runtime\\llama.cpp\\win\\llama-server.exe'],
     ['a sentence with a slash', 'Copy and/or save the log; 3/4 done, read/write.'],
     ['a time stamp and a skill id', '2026-11-21T10:00:00.000Z [INFO] skill fence {"skillId":"app:meeting-minutes"}'],
-    ['a POSIX path with no account', 'spawn /usr/bin/tesseract in /var/folders/zz/T/hr-1']
+    ['a POSIX path with no account', 'spawn /usr/bin/tesseract in /var/folders/zz/T/hr-1'],
+    ['a Windows pipe', 'connect \\\\.\\pipe\\hilbertraum-1 failed'],
+    ['a protocol-relative link in prose', 'see the docs and //cdn/x for more'],
+    ['a JSON-escaped rooted path (\\runtime\\x)', '{"p":"\\\\runtime\\\\x"}'],
+    ['a doubled separator after a drive letter', 'copy C:\\\\temp\\x and <drive>\\\\cache\\y']
   ])('%s', (_what, line) => {
     expect(redactLogText(line, NONE)).toBe(line)
     expect(redactLogText(line, WIN)).toBe(line)
@@ -194,7 +258,9 @@ describe('redacting twice changes nothing (#975)', () => {
     '{"root":"C:\\\\Users\\\\xavi\\\\HilbertRaum Kit","p":"\\\\\\\\PETERS-PC\\\\share\\\\docs"}',
     'file:///C:/Users/xavi/HilbertRaum%20Kit/a C:\\Users\\PETERS~1\\x',
     'spawn /media/peter/Kit/runtime/x /Volumes/Kit/a /mnt/usbstick/b /home/xavi/c',
-    '\\\\?\\UNC\\PETERS-PC\\Users\\peter\\x file://PETERS-PC/share/d'
+    '\\\\?\\UNC\\PETERS-PC\\Users\\peter\\x file://PETERS-PC/share/d',
+    "open 'C:\\Users\\Anna Schmidt' C:\\Users\\peter is missing. \\\\wsl$\\Ubuntu\\home\\peter\\x",
+    '/users/peter/x /Volumes/KIT 1/y /var/home/peter/z file:///home/xavi/a "//pc/c$/Users/peter/x"'
   ]
   it.each(lines.flatMap((line) => [WIN, LINUX, NONE].map((roots) => [line, roots] as const)))('%s', (line, roots) => {
     const once = redactLogText(line, roots)
