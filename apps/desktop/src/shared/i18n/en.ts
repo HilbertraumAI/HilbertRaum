@@ -2738,8 +2738,8 @@ export const en = {
     "can't be read, so no password can open the workspace. Do not create a new workspace. Put the " +
     'file back, or restore it from a backup.',
   // #955 item 1: the descriptor file is on the drive but can't be read, and `.enc` is not beside it. Never "no data is
-  // left": a `.recovery`, a staged `.enc.new` or stored documents may still need that key. A file saved with a
-  // byte-order mark reads as unreadable and can be repaired, hence "don't delete".
+  // left": a `.recovery`, a staged `.enc.new` or stored documents may still need that key. A file damaged by an edit
+  // can often be repaired, hence "don't delete" (#974: a byte-order mark alone no longer makes it unreadable).
   'main.workspace.descriptorUnreadable':
     'The file that holds your workspace\'s key (config/workspace.json) can\'t be read, and the ' +
     'encrypted workspace file isn\'t on the drive, so no password can open the workspace. Don\'t ' +
@@ -3010,6 +3010,17 @@ export const en = {
   // #516: the update pauses the engine for the file swap, which would cut off work in progress.
   'main.engine.updateBusy':
     'The AI engine is in use right now (an answer, an import, a translation or a document task is running). Try the update again when it has finished.',
+  // #986: refused before anything is touched — the archives' unpacked size (from the archives
+  // themselves) against the drive's free space; the figures follow main.download.notEnoughSpace.
+  'main.engine.notEnoughSpace':
+    'There is not enough free space on this drive: the engine needs {needed} once unpacked, and ' +
+    '{free} is free. Free up space on the drive, then try again.',
+  // #986: the staged swap's rename was refused after its retries (a file held in the folder). The
+  // installed copy was put back; or, when even that was refused, both copies were kept, and the retry
+  // (or the next start) moves the new one in, so "try again" holds either way.
+  'main.engine.filesInUse':
+    'The engine could not be replaced because another program is using one of its files (an ' +
+    'antivirus scan, for example). Please try again in a minute.',
   // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
   // errors and refusals, localized at emission (i18n record §3.3 rule 2).
   'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',

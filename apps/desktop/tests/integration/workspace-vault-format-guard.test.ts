@@ -2,20 +2,23 @@ import { describe, it, expect } from 'vitest'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join, relative } from 'node:path'
-import { openDatabase } from '../../src/main/services/db'
+import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
-import { decrypt, deriveKey, verifyKey } from '../../src/main/services/security/crypto'
+import { decrypt, deriveKey, generateDataKey, verifyKey } from '../../src/main/services/security/crypto'
 import {
   RECOVERY_SUFFIX,
   REKEY_JOURNAL_NAME,
   REKEY_SUFFIX,
   VaultDescriptorMissingError,
+  WORKING_COPY_LOST_MARKER,
   WorkspaceController,
   WorkspaceExistsError,
   cleanSidecars,
   encryptFile,
   readVaultDescriptorChecked,
+  rewrapVaultKey,
   shredFile,
+  stageRekey,
   unlockEncryptedVault,
   vaultFormatVerdict
 } from '../../src/main/services/workspace-vault'
@@ -30,6 +33,7 @@ import {
   setFrameMagic,
   thrownBy,
   unlockedController,
+  writeNewerSchema,
   type FreshVaultPaths
 } from '../helpers/vault-fixtures'
 
@@ -66,6 +70,8 @@ function snapshot(root: string): Record<string, string> {
   return out
 }
 
+const sha = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex')
+
 /** A staged `.enc.new` in this build's frame (`HRAUMEN1`), but under a key no descriptor wraps: if it were ever
  *  swapped in, `.enc` would change, and the vault would be lost. Its plaintext source lies outside the hashed tree. */
 function stagedFrame(vp: FreshVaultPaths): string {
@@ -80,6 +86,15 @@ function stagedFrame(vp: FreshVaultPaths): string {
 function rekeyJournal(vp: FreshVaultPaths, version: unknown, staged: string[]): string {
   const path = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
   writeFileSync(path, JSON.stringify({ version, staged, remove: [] }, null, 2), 'utf8')
+  return path
+}
+
+/** The three bytes of a UTF-8 byte-order mark (U+FEFF), which some editors and tools put in front of a file (#974). */
+const BOM = Buffer.from([0xef, 0xbb, 0xbf])
+
+/** The file at `path` with a byte-order mark put in front of it, the rest byte for byte (#974). */
+function prependBom(path: string): string {
+  writeFileSync(path, Buffer.concat([BOM, readFileSync(path)]))
   return path
 }
 
@@ -170,6 +185,19 @@ describe('a vault a newer build wrote is refused at startup and at unlock, and l
         arrange: (vp) => {
           const staged = stagedFrame(vp)
           return [staged, rekeyJournal(vp, 2, [staged])]
+        },
+        what: 'journal',
+        found: 2
+      }
+    ],
+    [
+      // #974: Node keeps a byte-order mark when it decodes UTF-8, and `JSON.parse` refuses it, so the format verdict
+      // read no version, and the recovery swapped the stage in and quarantined the journal as unreadable.
+      'a rekey journal of version 2 saved with a byte-order mark, and a staged .enc.new beside a v2 descriptor (before: read as no journal, swapped in)',
+      {
+        arrange: (vp) => {
+          const staged = stagedFrame(vp)
+          return [staged, prependBom(rekeyJournal(vp, 2, [staged]))]
         },
         what: 'journal',
         found: 2
@@ -299,6 +327,126 @@ describe('a vault a newer build wrote is refused at startup and at unlock, and l
   })
 })
 
+// #985 (W-66): a working copy or `.recovery` a NEWER build left, stamped above this build's schema version, whose schema
+// this SQLite cannot parse: every schema read fails with SQLITE_CORRUPT, so the probe called it damaged, and the start's
+// salvage, the start with `.enc` missing and the unlock's roll-forward shredded it (the newer build's last session, or
+// the whole workspace). Each is now kept byte for byte, and the unlock refuses it as the open refuses a newer database
+// (`WorkspaceNewerError` → `workspace_newer`, "written by a newer HilbertRaum") before anything is written. No #875 marker
+// and no loss notice: nothing was lost.
+describe('a working copy or .recovery a newer build stamped is kept, never discarded (#985)', () => {
+  const recoveryOf = (vp: FreshVaultPaths): string => `${vp.dbPath}${RECOVERY_SUFFIX}`
+  const NEWER = { name: 'WorkspaceNewerError', found: SCHEMA_VERSION + 1 }
+
+  it('a failed lock’s working copy: the start keeps it as .recovery, the unlock refuses it, both files byte for byte', () => {
+    const vp = lockedVault('fmtguard-985', PW)
+    failedLockState(vp, 7171, PW) // closed, newer than `.enc` (backdated): the salvage signature
+    writeNewerSchema(vp.dbPath)
+    const working = sha(vp.dbPath)
+    const enc = sha(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(vp.dbPath)).toBe(false)
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(ctl.getState()).toEqual({ state: 'locked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true })
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
+      expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(existsSync(vp.dbPath)).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('the only copy, with .enc missing: the start keeps it as .recovery, the unlock refuses it, the copy byte for byte', () => {
+    const vp = lockedVault('fmtguard-985', PW)
+    failedLockState(vp, 7171, PW)
+    writeNewerSchema(vp.dbPath)
+    rmSync(vp.encPath)
+    const working = sha(vp.dbPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(ctl.discardedOnlyCopy()).toBe(false)
+      // Review round 2 R8: no "the encrypted file is missing, your password brings it back" notice: this unlock answers
+      // "written by a newer HilbertRaum" for this copy instead.
+      expect(ctl.getState()).toEqual({ state: 'locked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true })
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(existsSync(vp.encPath)).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  /** A `.recovery` a newer build stamped, `olderBy` ms older than the (backdated) `.enc` when positive, else newer. */
+  function newerRecovery(olderBy: number): FreshVaultPaths {
+    const vp = lockedVault('fmtguard-985', PW)
+    failedLockState(vp, 7171, PW) // `.enc` backdated 60 s
+    writeNewerSchema(vp.dbPath)
+    renameSync(vp.dbPath, recoveryOf(vp))
+    if (olderBy > 0) backdate(recoveryOf(vp), olderBy)
+    return vp
+  }
+
+  // One that may hold the freshest data (newer than `.enc`) is refused before anything is written.
+  it('a .recovery newer than .enc: the unlock refuses it before anything is written, every file byte for byte', () => {
+    const vp = newerRecovery(0)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      const before = snapshot(vp.root)
+      expect(before['workspace/hilbertraum.sqlite.recovery']).toBeDefined()
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
+      expect(ctl.isUnlocked()).toBe(false)
+      expect(snapshot(vp.root)).toEqual(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R6: one older than a present `.enc` is a spent leftover (the newer build's own unlock consumed it and
+  // a later lock made `.enc` newer). Refusing it would block every unlock for good; shredding it is not this build's to
+  // judge. It is left as it is, and the workspace opens at `.enc`.
+  it('a .recovery older than .enc (a spent leftover): the unlock opens the workspace and leaves the copy byte for byte', () => {
+    const vp = newerRecovery(120_000)
+    const copy = sha(recoveryOf(vp))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.unlock(PW).state).toBe('unlocked')
+      expect(sha(recoveryOf(vp))).toBe(copy)
+      ctl.lock()
+      expect(sha(recoveryOf(vp))).toBe(copy)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 F3 (FU-V1): with only a newer build's `.recovery` on the drive (its key file and `.enc` gone), the
+  // state reads `uninitialized`. A create used to commit a new workspace and then answer "newer", and every unlock of it
+  // refused on that copy. It is refused before anything is written.
+  it('a create over a drive that holds only a newer build’s .recovery is refused, nothing written', () => {
+    const vp = newerRecovery(0)
+    rmSync(vp.descriptorPath)
+    rmSync(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState().state).toBe('uninitialized')
+      const before = snapshot(vp.root)
+      expect(thrownBy(() => ctl.create('brand-new-password', 'encrypted'))).toEqual(NEWER)
+      expect(snapshot(vp.root)).toEqual(before)
+      expect(ctl.isUnlocked()).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+})
+
 // Startup's verdict must not outlive the files it judged (W2 review finding 2): once the newer artifact is gone while
 // the app runs, the next unlock or create re-judges the disk, and startup's skipped work (the failed-lock salvage)
 // runs before anything is decrypted.
@@ -403,6 +551,65 @@ describe('a password change re-reads the descriptor on disk before it writes (#8
     } finally {
       ctl.shutdown()
     }
+  })
+})
+
+// #974: Node keeps a UTF-8 byte-order mark when it decodes a file, and `JSON.parse` refuses it, so each of the vault's
+// small JSON state files read as unreadable with one in front (the descriptor: the golden table above; the format
+// verdict's read of the rekey journal: the newer-journal row of the first table). One mark is removed before the
+// parse, by all four readers; the app writes none.
+describe('the vault state files read past one byte-order mark (#974)', () => {
+  it('a password change cut short after its commit, its journal saved with a byte-order mark: the start rolls it forward and quarantines nothing', () => {
+    const vp = lockedVault('fmtguard-974', PW, { legacyV1: true })
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 7474 })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'next-password', FAST_KDF) // the COMMIT; the crash comes before the swap
+    db.close()
+    key.fill(0)
+    dataKey.fill(0)
+    shredFile(vp.dbPath) // the session the crash left, as the start's sweep removes it
+    cleanSidecars(vp.dbPath)
+    const journal = prependBom(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+      expect(existsSync(journal)).toBe(false)
+      expect(existsSync(`${journal}.corrupt`)).toBe(false)
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(7474)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('the #875 marker saved with a byte-order mark is still this build’s: the lock screen shows its notice, the unlock consumes it', () => {
+    const vp = lockedVault('fmtguard-974', PW)
+    const enc = readFileSync(vp.encPath).subarray(8, 20).toString('base64') // the IV of `.enc`'s frame, which a marker names
+    const marker = join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER)
+    writeFileSync(marker, Buffer.concat([BOM, Buffer.from(JSON.stringify({ v: 1, enc, cause: 'lock' }), 'utf8')]))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+      ctl.unlock(PW)
+      expect(ctl.takeWorkingCopyLost()).toEqual({ cause: 'lock', lostAt: expect.any(String) })
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // One mark only: the mark alone, or two marks in front of the JSON, is no file any build wrote.
+  it.each<[string, (json: Buffer) => Buffer]>([
+    ['the mark alone', () => BOM],
+    ['two marks in front of the JSON', (json) => Buffer.concat([BOM, BOM, json])]
+  ])('a key file holding %s still reads as unreadable', (_case, bytes) => {
+    const vp = lockedVault('fmtguard-974', PW)
+    writeFileSync(vp.descriptorPath, bytes(readFileSync(vp.descriptorPath)))
+    expect(readVaultDescriptorChecked(vp.descriptorPath)).toEqual({ kind: 'unreadable' })
   })
 })
 
@@ -513,12 +720,22 @@ describe('what is not newer (#845)', () => {
   // The golden descriptors (tests/fixtures/vault-golden/PROVENANCE.md): written by the released v0.1.65 and v0.1.50
   // code itself, on a scratch root, with a throwaway password. The release's key schedule must hold (derive, verify,
   // unwrap), a vault built around its data key must unlock and lock, and the descriptor must stay byte for byte.
+  // #974: so must one an editor saved again with a UTF-8 byte-order mark in front (Windows PowerShell 5.1
+  // `Set-Content -Encoding utf8`, older Notepad): it read as unreadable, and the unlock said the key file was missing.
   it.each([
-    ['v0.1.65', 'golden-throwaway-v0.1.65', 'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4'],
-    ['v0.1.50', 'golden-throwaway-v0.1.50', '1d524326f2f0721c282a2c26fddb1b22518b66929aabd9d3932ddf25a41a0a4c']
-  ])('the descriptor %s wrote reads as current, unlocks and stays byte for byte', (tag, password, sha256) => {
-    const fixture = readFileSync(join(__dirname, '..', 'fixtures', 'vault-golden', `${tag}-workspace.json`))
-    expect(createHash('sha256').update(fixture).digest('hex')).toBe(sha256) // the bytes PROVENANCE.md records
+    ['v0.1.65', 'v0.1.65', 'golden-throwaway-v0.1.65', 'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4', false],
+    ['v0.1.50', 'v0.1.50', 'golden-throwaway-v0.1.50', '1d524326f2f0721c282a2c26fddb1b22518b66929aabd9d3932ddf25a41a0a4c', false],
+    [
+      'v0.1.65, saved again with a byte-order mark (#974),',
+      'v0.1.65',
+      'golden-throwaway-v0.1.65',
+      'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4',
+      true
+    ]
+  ])('the descriptor %s wrote reads as current, unlocks and stays byte for byte', (_label, tag, password, sha256, bom) => {
+    const golden = readFileSync(join(__dirname, '..', 'fixtures', 'vault-golden', `${tag}-workspace.json`))
+    expect(createHash('sha256').update(golden).digest('hex')).toBe(sha256) // the bytes PROVENANCE.md records
+    const fixture = bom ? Buffer.concat([BOM, golden]) : golden
     const vp = freshVaultPaths('fmtguard-golden')
     writeFileSync(vp.descriptorPath, fixture)
     const read = readVaultDescriptorChecked(vp.descriptorPath)
@@ -554,6 +771,404 @@ describe('what is not newer (#845)', () => {
       expect(getSettings(ctl.requireDb()).contextTokens).toBe(8192)
       ctl.lock()
       expect(readFileSync(vp.descriptorPath).equals(fixture)).toBe(true)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+})
+
+// #973: a create stages its database as `.enc.new` (the rekey suffix) with no journal, before its commit (the key file).
+// A crash between the two leaves that file. Under a v2 descriptor every build rolled ANY `.enc.new` forward at the start,
+// so a workspace put back into the same folder (troubleshooting's "go back" steps, #807, #931) had its `.enc` shredded
+// and replaced by an empty database under a key nothing holds, and every unlock then said "damaged". Now a staged
+// database no journal lists, beside an `.enc` that is there, waits for the unlock, which keeps it only when it
+// authenticates under the data key; and a start with no key file, no `.enc` and no journal removes it.
+describe('a staged database no rekey journal vouches for (#973)', () => {
+  const stagedOf = (vp: FreshVaultPaths): string => `${vp.encPath}${REKEY_SUFFIX}`
+
+  /** A locked workspace under `PW` that holds `contextTokens: 5151`. */
+  function workspaceWithMarker(label: string): FreshVaultPaths {
+    const vp = lockedVault(label, PW)
+    const ctl = unlockedController(vp, PW)
+    updateSettings(ctl.requireDb(), { contextTokens: 5151 })
+    ctl.lock()
+    return vp
+  }
+
+  /** What a create cut short between its stage and its commit leaves at `.enc.new`: a seeded database under a random
+   *  data key that no key file wraps (another workspace's `.enc` has exactly that shape). */
+  const leftoverStage = (): Buffer => readFileSync(lockedVault('fmtguard-973-leftover', 'other-password').encPath)
+
+  it.each<[string, () => { vp: FreshVaultPaths; ctl: WorkspaceController; before: Record<string, string> }]>([
+    [
+      'put back while the app was closed',
+      () => {
+        const vp = workspaceWithMarker('fmtguard-973')
+        writeFileSync(stagedOf(vp), leftoverStage())
+        const before = snapshot(vp.root)
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init() // the next start
+        return { vp, ctl, before }
+      }
+    ],
+    [
+      'put back under the create form while the app runs',
+      () => {
+        const vp = freshVaultPaths('fmtguard-973')
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        expect(ctl.getState().state).toBe('uninitialized')
+        const src = workspaceWithMarker('fmtguard-973-src')
+        copyFileSync(src.descriptorPath, vp.descriptorPath)
+        copyFileSync(src.encPath, vp.encPath)
+        writeFileSync(stagedOf(vp), leftoverStage())
+        return { vp, ctl, before: snapshot(vp.root) }
+      }
+    ]
+  ])('a crash leftover beside a workspace %s: the start and a wrong password leave both, the password opens the workspace', (_when, arrange) => {
+    const { vp, ctl, before } = arrange()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      expect(ctl.getState()).toMatchObject({ state: 'locked', mode: 'encrypted' })
+      expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false) // removed: it does not open under this workspace's key
+      expect(ctl.takeStageOutcome()).toBe('removed')
+      expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+      ctl.lock()
+      const reopened = unlockedController(vp, PW)
+      expect(getSettings(reopened.requireDb()).contextTokens).toBe(5151)
+      reopened.shutdown()
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // The control: a password change of a build before #241 (which wrote no journal), cut short after its commit, left the
+  // staged database under the new data key beside the old `.enc`. It authenticates under that key, so the unlock rolls
+  // it forward, as every start did before.
+  it('a journal-less stage that opens under the data key (a password change before #241, cut short after its commit) rolls forward', () => {
+    const vp = lockedVault('fmtguard-973', PW, { legacyV1: true })
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 6262 })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'next-password', FAST_KDF) // the COMMIT; the crash comes before the swap
+    db.close()
+    key.fill(0)
+    dataKey.fill(0)
+    shredFile(vp.dbPath) // the session the crash left, as the start's sweep removes it
+    cleanSidecars(vp.dbPath)
+    rmSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)) // a build before #241 wrote none
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6262)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('a create cut short leaves its stage on an empty drive: the start removes it, and a workspace put back later opens', () => {
+    const vp = freshVaultPaths('fmtguard-973')
+    // 1. A create killed between its stage and its commit: the staged database, and a write temp of an encrypt.
+    writeFileSync(stagedOf(vp), leftoverStage())
+    writeFileSync(`${stagedOf(vp)}.tmp`, 'the write temp of an encrypt cut short')
+    // 2. The restart: the create form, and nothing left of the stage.
+    const first = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    first.init()
+    expect(first.getState().state).toBe('uninitialized')
+    expect(existsSync(stagedOf(vp))).toBe(false)
+    expect(existsSync(`${stagedOf(vp)}.tmp`)).toBe(false)
+    // 3. A workspace put back while the app is closed. 4. The next start, and the unlock.
+    const src = workspaceWithMarker('fmtguard-973-src')
+    copyFileSync(src.descriptorPath, vp.descriptorPath)
+    copyFileSync(src.encPath, vp.encPath)
+    const ctl = unlockedController(vp, PW)
+    try {
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // The removal is narrow: with a key file, an `.enc` or a rekey journal there, the stage may be that workspace's, and
+  // the start leaves it byte for byte.
+  it.each<[string, (vp: FreshVaultPaths) => void]>([
+    ['a key file that cannot be read', (vp) => writeFileSync(vp.descriptorPath, '{ not json', 'utf8')],
+    ['an .enc without its key file', (vp) => writeFileSync(vp.encPath, leftoverStage())],
+    ['a rekey journal that lists it', (vp) => void rekeyJournal(vp, 1, [stagedOf(vp)])]
+  ])('the start leaves a stage beside %s', (_case, plantOne) => {
+    const vp = freshVaultPaths('fmtguard-973')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    plantOne(vp)
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(snapshot(vp.root)).toEqual(before)
+  })
+
+  // A file at the staged name that is no frame of this build's at all cannot be a staged copy of this workspace: the
+  // unlock removes it as it removes one that fails its tag, and opens `.enc`. (A newer frame is refused earlier, #845;
+  // one a hold keeps from being read refuses as "try again", and one that cannot be read otherwise is left as it is:
+  // vault-recovery-guards.test.ts and the directory row below.)
+  it.each<[string, (staged: string) => void]>([
+    [
+      'a file in another frame (PAIDENC1)',
+      (staged) => {
+        writeFileSync(staged, leftoverStage())
+        setFrameMagic(staged, 'PAIDENC1')
+      }
+    ],
+    ['a frame cut short inside its header', (staged) => writeFileSync(staged, Buffer.from('HRAUMEN1cut', 'latin1'))]
+  ])('beside a workspace, %s at the staged name: the start leaves it, the unlock removes it and opens the workspace', (_case, plantStage) => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    plantStage(stagedOf(vp))
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+      expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+      expect(ctl.takeStageOutcome()).toBe('removed') // for the unlock's one log line, once
+      expect(ctl.takeStageOutcome()).toBeNull()
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  /** A v1 workspace whose password change (to `next-password`) committed and then stopped before its swap, with the
+   *  session holding `contextTokens: marker` staged and the working file shredded; the journal as this build writes it. */
+  function committedMigration(marker: number, opts: { backdateEnc?: boolean } = {}): FreshVaultPaths {
+    const vp = lockedVault('fmtguard-973', PW, { legacyV1: true })
+    if (opts.backdateEnc) backdate(vp.encPath)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: marker })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'next-password', FAST_KDF) // the COMMIT; the crash comes before the swap
+    db.close()
+    key.fill(0)
+    dataKey.fill(0)
+    return vp
+  }
+
+  /** A journal entry spelled for the same workspace under another drive root (a Kit that came back under another letter
+   *  or mount point), or any other workspace's: the same folder and file names, another absolute path. */
+  const underOtherRoot = (vp: FreshVaultPaths, path: string): string =>
+    join(process.platform === 'win32' ? 'Q:\\Kit' : '/media/other/Kit', relative(vp.root, path))
+
+  // Review round 3 F1: a journal vouches for the staged database only by its full path. With the exact path the start
+  // rolls the committed change forward as before. An entry under another drive root (the Kit came back under another
+  // letter after the change was cut short) leaves the stage in doubt: the unlock authenticates it under the data key and
+  // rolls it forward, the same outcome, one read slower. (Round 2 matched by the folder and file names, which every
+  // workspace shares: see the stale-journal row below.)
+  it.each<[string, boolean]>([
+    ['the exact path: the start rolls it forward as before', false],
+    ['another drive root: the start leaves it, the unlock authenticates it and rolls it forward', true]
+  ])('a committed password change whose journal names its stage by %s', (_case, otherRoot) => {
+    const vp = committedMigration(6363)
+    shredFile(vp.dbPath)
+    cleanSidecars(vp.dbPath)
+    if (otherRoot) {
+      const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+      const written = JSON.parse(readFileSync(journal, 'utf8')) as { staged: string[] }
+      const staged = written.staged.map((path) => underOtherRoot(vp, path))
+      expect(staged.some((path) => path.endsWith('hilbertraum.sqlite.enc.new'))).toBe(true)
+      writeFileSync(journal, JSON.stringify({ ...written, staged }, null, 2), 'utf8')
+    }
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(stagedOf(vp))).toBe(otherRoot) // rolled forward at the start, or left for the unlock
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6363)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+      expect(ctl.takeStageOutcome()).toBeNull()
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 3 F1 (the regression round 2 brought): a stale journal (one `applyPendingRekey` keeps for good because
+  // its entries look unreachable, or one a restored folder brings back) names `…/workspace/hilbertraum.sqlite.enc.new`
+  // under another drive root, as every workspace's journal does. It must not vouch for a foreign stage beside a real
+  // `.enc`: the start leaves `.enc` byte for byte, and the unlock removes the stage.
+  it('a stale journal that names a stage under another drive root never vouches for a crash leftover', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    rekeyJournal(vp, 1, [underOtherRoot(vp, stagedOf(vp)), underOtherRoot(vp, join(dirname(vp.dbPath), 'elsewhere', 'legacy.pdf.enc.new'))])
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+      expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+      expect(ctl.takeStageOutcome()).toBe('removed')
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R2: the start judges an unclean end (#892, a crash with the session's sidecars live) against the
+  // `.enc` that is there. With a stage in doubt it cannot know yet which snapshot the unlock opens, so it holds the loss
+  // instead of recording it: the unlock records it when it opens `.enc` as it is (the stage foreign), and drops it when
+  // the stage rolls forward (the stage holds that session).
+  it('an unclean end beside a crash leftover: the loss is held at the start, and recorded when the unlock removes the leftover', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    backdate(vp.encPath)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 9191 })
+    db.close()
+    key.fill(0)
+    writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(vp.dbPath)).toBe(false) // swept, as before
+      expect(ctl.getState()).not.toHaveProperty('lockNotice') // held, not shown
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151) // `.enc` as it was: the session is lost
+      expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 3 F2: the unlock settles the hold whatever it finds. Here the leftover is gone before the unlock (a
+  // tidy tool, by hand), so the unlock judges no stage; `.enc` is still the snapshot the loss was judged against, so the
+  // loss is recorded, once. The hold is not carried on: a later clean session beside another leftover reports nothing.
+  it('an unclean end beside a crash leftover that is gone before the unlock: the loss is recorded once, and never again', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    backdate(vp.encPath)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 9191 })
+    db.close()
+    key.fill(0)
+    writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState()).not.toHaveProperty('lockNotice') // held
+      rmSync(stagedOf(vp)) // gone before the unlock
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
+      expect(ctl.takeWorkingCopyLost()).toBeNull()
+      updateSettings(ctl.requireDb(), { contextTokens: 4242 })
+      ctl.lock() // a clean session
+      writeFileSync(stagedOf(vp), leftoverStage()) // another leftover turns up
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(4242)
+      expect(ctl.takeStageOutcome()).toBe('removed')
+      expect(ctl.takeWorkingCopyLost()).toBeNull() // no notice for a session that lost nothing
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('an unclean end beside a journal-less stage that opens under the data key: the unlock rolls it forward and records no loss', () => {
+    const vp = committedMigration(6464, { backdateEnc: true })
+    rmSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)) // a build before #241 wrote none
+    writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(vp.dbPath)).toBe(false) // swept, as before
+      expect(ctl.getState()).not.toHaveProperty('lockNotice')
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6464) // the stage held the session
+      expect(ctl.takeWorkingCopyLost()).toBeNull()
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R7: the #985 refusal of a `.recovery` a newer build stamped comes before the staged-file check, so a
+  // stage in doubt beside it stays as it was: a `workspace_newer` unlock writes nothing.
+  it('a .recovery newer than .enc beside a staged leftover: the refusal writes nothing, the stage included', () => {
+    const vp = lockedVault('fmtguard-973', PW)
+    failedLockState(vp, 7171, PW) // `.enc` backdated 60 s
+    writeNewerSchema(vp.dbPath)
+    renameSync(vp.dbPath, `${vp.dbPath}${RECOVERY_SUFFIX}`)
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      const before = snapshot(vp.root)
+      expect(before['workspace/hilbertraum.sqlite.enc.new']).toBeDefined()
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual({ name: 'WorkspaceNewerError', found: SCHEMA_VERSION + 1 })
+      expect(snapshot(vp.root)).toEqual(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R4: a staged name that can be neither read as a frame nor removed (a directory there: EISDIR on every
+  // OS) is left exactly as it is, and the unlock opens `.enc`. It never blocks every unlock with "try again".
+  it('a directory at the staged name beside a workspace: the unlock leaves it as it is and opens the workspace', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    mkdirSync(stagedOf(vp))
+    writeFileSync(join(stagedOf(vp), 'held'), 'x')
+    const enc = sha(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(readdirSync(stagedOf(vp))).toEqual(['held'])
+      expect(readFileSync(join(stagedOf(vp), 'held'), 'utf8')).toBe('x')
+      expect(ctl.takeStageOutcome()).toBe('left')
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R5: once the unlock has removed a foreign staged database, the rest of the staged set gets what the
+  // start's recovery would have given it with that file gone (master's start rolled all of it forward together with the
+  // leftover): the document twin is swapped in, the journal cleared or, unreadable, quarantined. While the database
+  // stage is in doubt, the start leaves all of it, the journal that does not list the database stage included.
+  it.each<[string, (vp: FreshVaultPaths, docStage: string) => void, boolean]>([
+    ['a journal that lists only the document twin', (vp, docStage) => void rekeyJournal(vp, 1, [docStage]), false],
+    ['a journal that cannot be read', (vp) => writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME), '{ not json', 'utf8'), true]
+  ])('a crash leftover beside %s and a staged document twin: the unlock removes the leftover, then swaps the document in', (_case, journalOf, quarantined) => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    const doc = plant(join(dirname(vp.dbPath), 'documents', 'a.pdf.enc'), 'stored copy')
+    const docStage = plant(`${doc}${REKEY_SUFFIX}`, 'staged copy')
+    journalOf(vp, docStage)
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before) // in doubt: the staged set, the journal and the document as they were
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+      expect(readFileSync(doc, 'utf8')).toBe('staged copy')
+      expect(existsSync(docStage)).toBe(false)
+      const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+      expect(existsSync(journal)).toBe(false)
+      expect(existsSync(`${journal}.corrupt`)).toBe(quarantined)
     } finally {
       ctl.shutdown()
     }

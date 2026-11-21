@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest'
 import { closeSync, constants, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { openDatabase, probeDatabaseFile, walAwaitsCheckpoint } from '../../src/main/services/db'
+import { SCHEMA_VERSION, openDatabase, probeDatabaseFile, walAwaitsCheckpoint } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { tempRoot } from '../helpers/db-fixtures'
-import { oversizedFirstCell, plantProbeTrap } from '../helpers/vault-fixtures'
+import { oversizedFirstCell, plantProbeTrap, writeNewerSchema } from '../helpers/vault-fixtures'
 
 // #876: the lock's guard, the #855 lost-copy verdict, the init() salvage, the `.recovery` roll-forward and the v1 rekey
 // stage all decide "is this file a database?" before they encrypt it over `.enc` or shred it. A 16-byte header check
@@ -199,6 +199,24 @@ describe('probeDatabaseFile (#876)', () => {
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
     db.close()
     expect(probeDatabaseFile(path)).toEqual({ verdict: 'unchecked', code: expect.stringMatching(/^sqlite 1\b/) })
+    expect(readdirSync(dirname(path))).toEqual(['hilbertraum.sqlite'])
+  })
+
+  // #985 (W-66): a newer build's schema can hold text this SQLite cannot parse, which fails every schema read with
+  // SQLITE_CORRUPT, so the probe called such a file damaged and three callers discarded it. The header's schema stamp
+  // (`user_version`, offset 60, signed) above this build's is `newer`, read before SQLite opens the file. The same
+  // unparseable row under this build's own stamp stays damage: a later release that ships such text must bump the stamp.
+  it.each<[string, { userVersion: number; unparseable: boolean }, object]>([
+    ['stamped one above this build, over a schema row this SQLite cannot parse, is newer', { userVersion: SCHEMA_VERSION + 1, unparseable: true }, { verdict: 'newer', found: SCHEMA_VERSION + 1 }],
+    ['stamped one above this build, over the app schema, is newer', { userVersion: SCHEMA_VERSION + 1, unparseable: false }, { verdict: 'newer', found: SCHEMA_VERSION + 1 }],
+    ['stamped with the version of this build, over a schema row this SQLite cannot parse, is damaged',{ userVersion: SCHEMA_VERSION, unparseable: true }, { verdict: 'damaged' }],
+    ['stamped -1 (the stamp is signed), over the app schema, is a database', { userVersion: -1, unparseable: false }, { verdict: 'database' }]
+  ])('a database %s (#985), and stays byte-identical', (_what, stamp, verdict) => {
+    const { path } = appDatabase()
+    writeNewerSchema(path, stamp)
+    const before = sha(path)
+    expect(probeDatabaseFile(path)).toEqual(verdict)
+    expect(sha(path)).toBe(before)
     expect(readdirSync(dirname(path))).toEqual(['hilbertraum.sqlite'])
   })
 })

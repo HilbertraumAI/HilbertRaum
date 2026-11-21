@@ -30,6 +30,8 @@ import {
   probeDatabaseFile,
   sqliteJudgedDamaged,
   walAwaitsCheckpoint,
+  SCHEMA_VERSION,
+  WorkspaceNewerError,
   type DatabaseFileProbe,
   type WalCheckpointRetry
 } from './db'
@@ -50,6 +52,7 @@ import {
   isKnownKdfAlgo,
   newerFrameError,
   VaultNewerError,
+  isVaultNewerError,
   type VaultNewerWhat,
   BLOB_MAGIC,
   BLOB_IV_BYTES,
@@ -240,6 +243,8 @@ function openFailure(err: unknown): unknown {
  * Content-free ON PURPOSE (like `VaultLockError`): the IPC layer maps it to the
  * `vault_recovery_blocked` result + `main.workspace.recoveryBlocked`. The retry is simply
  * the next unlock — `unlock()` re-runs the salvage first, so it clears once the hold is gone.
+ * #973: also thrown by `unlockEncryptedVault` when it cannot read a staged `.enc.new` it must
+ * judge (a hold on the file): nothing is changed, and the next unlock checks it again.
  */
 export class VaultRecoveryBlockedError extends Error {
   constructor() {
@@ -347,8 +352,9 @@ export class VaultDescriptorMissingError extends Error {
 }
 
 /**
- * Thrown by `unlockEncryptedVault` when `config/workspace.json` is on the drive but cannot be read (not JSON, a field
- * missing, or a UTF-8 byte-order mark in front of it) and the encrypted workspace file is NOT beside it (#955 item 1):
+ * Thrown by `unlockEncryptedVault` when `config/workspace.json` is on the drive but cannot be read (not JSON, or a field
+ * missing; #974: one UTF-8 byte-order mark in front of it no longer counts) and the encrypted workspace file is NOT
+ * beside it (#955 item 1):
  * no password can open anything here, yet the drive is not empty of a workspace either (a `.recovery` copy, a staged
  * `.enc.new` or stored documents may be under the key that file holds), so the create flow stays refused too.
  * Thrown before any password check and before anything is written. Content-free ON PURPOSE: the IPC layer maps it to
@@ -406,6 +412,17 @@ function numericVersion(v: unknown): number | null {
 }
 
 /**
+ * #974: `JSON.parse` of a small state file's text after ONE leading U+FEFF is removed. Node's `utf8` decoding keeps a
+ * UTF-8 byte-order mark, and `JSON.parse` refuses it, so a file an editor or a tool saved with one (Windows PowerShell
+ * 5.1 `Set-Content -Encoding utf8`, older Notepad, some sync and backup tools) read as unreadable although its JSON was
+ * intact. The readers of the descriptor, the rekey journal and the #875 marker use it; the app writes none of them with
+ * a BOM. A second mark, or a file holding only the mark, still throws.
+ */
+function parseJsonText(text: string): unknown {
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+}
+
+/**
  * What `config/workspace.json` holds (#845): no file (`absent`), a file that does not parse or lacks a field this
  * build needs (`unreadable`, e.g. a v2 without its wrapped data key), a format a NEWER build wrote (`newer`), or a
  * descriptor this build reads (`ok`).
@@ -429,7 +446,7 @@ export function readVaultDescriptorChecked(descriptorPath: string): VaultDescrip
   if (!existsSync(descriptorPath)) return { kind: 'absent' }
   let raw: unknown
   try {
-    raw = JSON.parse(readFileSync(descriptorPath, 'utf8'))
+    raw = parseJsonText(readFileSync(descriptorPath, 'utf8'))
   } catch {
     return { kind: 'unreadable' }
   }
@@ -504,7 +521,7 @@ function rekeyJournalVersion(vaultPaths: VaultPaths): unknown {
   const path = rekeyJournalPath(vaultPaths)
   if (!existsSync(path)) return undefined
   try {
-    return (JSON.parse(readFileSync(path, 'utf8')) as { version?: unknown } | null)?.version
+    return (parseJsonText(readFileSync(path, 'utf8')) as { version?: unknown } | null)?.version
   } catch {
     return undefined
   }
@@ -740,6 +757,41 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
       /* already closed */
     }
     if (out !== null) closeSync(out)
+  }
+}
+
+/**
+ * #973: does the frame at `path` authenticate under `key`? The same streaming AES-256-GCM pass as {@link decryptFile},
+ * with nothing written: each chunk of plaintext is zeroed and dropped, and only the tag check at the end decides. A
+ * vault frame is one GCM stream with one tag, so this proves the whole file is ciphertext under that key. False when
+ * the tag fails (another key, or bytes that changed), and when the file is no frame of this build's at all (too short for
+ * a frame header, or a magic other than `HRAUMEN1`): neither can be a staged copy under any key here. A frame a newer
+ * build wrote throws its `VaultNewerError` (the unlock's format verdict refuses one before this runs), and an I/O error
+ * throws as it is: a file that cannot be read is never judged. SYNCHRONOUS, like the unlock that calls it.
+ */
+function authenticatesUnder(path: string, key: Buffer): boolean {
+  const fd = openSync(path, 'r')
+  try {
+    const headerLen = BLOB_MAGIC.length + BLOB_IV_BYTES + BLOB_TAG_BYTES
+    const header = Buffer.alloc(headerLen)
+    const got = readSync(fd, header, 0, headerLen, null)
+    const magic = classifyFrameMagic(header.subarray(0, got))
+    if (magic === 'newer') throw newerFrameError(header)
+    if (got < headerLen || magic !== 'current') return false
+    const iv = header.subarray(BLOB_MAGIC.length, BLOB_MAGIC.length + BLOB_IV_BYTES)
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(header.subarray(BLOB_MAGIC.length + BLOB_IV_BYTES, headerLen))
+    const buf = Buffer.alloc(FILE_CHUNK_BYTES)
+    let bytes: number
+    while ((bytes = readSync(fd, buf, 0, buf.length, null)) > 0) decipher.update(buf.subarray(0, bytes)).fill(0)
+    try {
+      decipher.final().fill(0) // throws here when the tag does not verify
+    } catch {
+      return false
+    }
+    return true
+  } finally {
+    closeSync(fd)
   }
 }
 
@@ -989,7 +1041,10 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
  *     (docs/security-model.md "Lock failure & durability");
  *   • the file is a database SQLite can read (`probeDatabaseFile`, #876): a failed shred's
  *     random-overwrite, or a file whose header survived but whose structure did not, must
- *     never be re-encrypted over the good `.enc`.
+ *     never be re-encrypted over the good `.enc`. #985: a file a NEWER build stamped (its
+ *     `user_version` above this build's, `newer`) is kept the same way, whatever its schema
+ *     holds: this build cannot judge it, so it is never `'discarded'`. The unlock refuses
+ *     to roll it forward (`WorkspaceNewerError`), and a newer build's unlock rolls it forward.
  *
  * Returns what happened, because the caller's next step depends on it (#242): `'preserved'`
  * (moved aside; sweep safe), `'not-needed'` (no such file; sweep safe), `'swept-unclean'` (#892:
@@ -1065,7 +1120,8 @@ export function preserveNewerPlaintext(vaultPaths: VaultPaths, onProbeFallback?:
  *   • the working file or its `-wal` is strictly NEWER than `.enc`: every unlock decrypts the working file after the
  *     lock that wrote `.enc`, so a session that ended unlocked always is; older is derived data;
  *   • the working file starts like a database ({@link startsLikeDatabase}): the session's own file, whole or torn
- *     mid-checkpoint. That is exactly when {@link probeDatabaseFile} answers `database`, `damaged` or `unchecked`, the
+ *     mid-checkpoint. That is exactly when {@link probeDatabaseFile} answers `database`, `damaged`, `unchecked` or
+ *     (#985) `newer`, the
  *     answers this check needs, at a fraction of the cost (one 100-byte read instead of the structural walk: 0.13 ms
  *     against 3.6 ms on a warm 28 MB working file, far more on a cold stick), and with no probe fallback to note for a
  *     check that salvages nothing. A shred survivor (no header: our shred never leaves one), a file that cannot be
@@ -1093,13 +1149,26 @@ const SQLITE_DATABASE_HEADER_BYTES = 100
 
 /** #892: does the file at `path` start like a database: a whole 100-byte database header that begins with the SQLite
  *  magic? The first step of {@link probeDatabaseFile}, alone: every file it lets through, the probe answers
- *  `database`, `damaged` or `unchecked`. Throws when the file cannot be read (the caller's doubt). */
+ *  `database`, `damaged`, `unchecked` or (#985) `newer`. Throws when the file cannot be read (the caller's doubt). */
 function startsLikeDatabase(path: string): boolean {
   const fd = openSync(path, 'r')
   try {
     const header = Buffer.alloc(SQLITE_DATABASE_HEADER_BYTES)
     if (readSync(fd, header, 0, header.length, 0) < header.length) return false
     return header.subarray(0, SQLITE_FILE_MAGIC.length).equals(SQLITE_FILE_MAGIC)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** #985 (review round 2 R8): the schema stamp (`user_version`: header offset 60, a big-endian signed 32-bit integer) in
+ *  the 100-byte database header at `path`, or 0 for a file shorter than the header. Throws when the file cannot be read. */
+function headerSchemaStamp(path: string): number {
+  const fd = openSync(path, 'r')
+  try {
+    const header = Buffer.alloc(SQLITE_DATABASE_HEADER_BYTES)
+    if (readSync(fd, header, 0, header.length, 0) < header.length) return 0
+    return header.readInt32BE(60)
   } finally {
     closeSync(fd)
   }
@@ -1136,9 +1205,11 @@ function encryptedFileState(vaultPaths: VaultPaths): EncryptedFileStat['state'] 
  *     session's last commits sit there, and the main file alone lacks them. A `-wal` that still holds commits after
  *     the replay (a full drive, another connection reading it) blocks the start, all three files kept (`'failed'`, as
  *     #242). A database SQLite calls damaged goes on to the probe;
- *   - a file that reads as a database (`database`, or `unchecked` judged by its header) is moved to `<db>.recovery`,
- *     which the next unlock with the right password rolls forward over the missing `.enc` (every build since 0.1.47
- *     does): `'kept-only-copy'`. One whose structure is `damaged` (a real copy: its header reads) is
+ *   - a file that reads as a database (`database`, `unchecked` judged by its header, or, #985, `newer`: a newer
+ *     build's copy, kept whatever its schema holds) is moved to `<db>.recovery`, which the next unlock with the right
+ *     password rolls forward over the missing `.enc` (every build since 0.1.47 does; this build's unlock refuses a
+ *     `newer` one, which a newer build's unlock rolls forward): `'kept-only-copy'`. One whose structure is `damaged`
+ *     (a real copy: its header reads) is
  *     `'discarded-only-copy'`: the sweep shreds it, the start reports it for one log line, and the unlock then says
  *     the file is missing. A shred survivor or a file gone meanwhile is nothing to keep (`'not-needed'`). One the
  *     probe cannot read blocks, with nothing removed.
@@ -1261,7 +1332,7 @@ function readWorkingCopyLostMarker(vaultPaths: VaultPaths): WorkingCopyLostMarke
     return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? { kind: 'absent' } : { kind: 'other' }
   }
   try {
-    const m = JSON.parse(text) as { v?: unknown; enc?: unknown; cause?: unknown } | null
+    const m = parseJsonText(text) as { v?: unknown; enc?: unknown; cause?: unknown } | null
     if (m?.v === WORKING_COPY_LOST_VERSION && typeof m.enc === 'string') {
       return { kind: 'current', enc: m.enc, cause: markedLossCause(m.cause) }
     }
@@ -1292,7 +1363,13 @@ function writeWorkingCopyLostMarker(
     }
     renameSync(tmp, path)
   } catch (err) {
-    rmSync(tmp, { force: true })
+    // Best-effort, as `encryptFile`'s (#975 review nit): a temp this cannot remove (a directory at its name, a hold)
+    // threw from `rm` here and replaced the error being reported.
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* the write's own failure is the one that propagates */
+    }
     throw err
   }
 }
@@ -1467,7 +1544,7 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
+    const parsed = parseJsonText(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
     if (parsed.version !== REKEY_JOURNAL_VERSION) {
       return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
     }
@@ -1694,6 +1771,14 @@ export function discardPendingRekey(vaultPaths: VaultPaths): void {
  * descriptor + staged files ⇒ committed ⇒ roll FORWARD (the new password's files win);
  * v1 descriptor ⇒ uncommitted ⇒ roll BACK (the old password + old files stay intact).
  * A journal with nothing left staged still needs the roll-forward's deletions (#241).
+ *
+ * #973: except a staged database the descriptor cannot vouch for ({@link stageInDoubt}): a journal-less `.enc.new`
+ * beside an `.enc` that is there, under a v2 descriptor. A create stages its database under this suffix with no
+ * journal, so a create cut short by a crash leaves one, and a workspace put back into the same folder later had its
+ * `.enc` shredded and replaced by it: an empty database under a key nothing holds. This recovery holds no key, so it
+ * leaves the whole staged set (and any journal) as it is; the unlock decides once it has the data key
+ * ({@link resolveStageInDoubt}). Journal'd stages, a v1 descriptor and a staged file with `.enc` gone (a create or a
+ * swap cut short after the commit) go on as before.
  */
 export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDescriptor | null): void {
   // encryptFile's own atomic-write temp for the staged DB (a crash mid-stage leaves it;
@@ -1703,9 +1788,126 @@ export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDes
   rmSync(`${rekeyJournalPath(vaultPaths)}.tmp`, { force: true })
   if (stagedRekeyFiles(vaultPaths).length === 0 && !existsSync(rekeyJournalPath(vaultPaths))) return
   if (descriptor && descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
+    if (stageInDoubt(vaultPaths)) return // #973: the unlock resolves it under the data key
     applyPendingRekey(vaultPaths)
   } else {
     discardPendingRekey(vaultPaths)
+  }
+}
+
+/**
+ * #973: is the staged database `.enc.new` one the descriptor cannot vouch for? It is, when no rekey journal lists it (no
+ * journal, or one that names other files or cannot be read) and `.enc` is not proven gone (a stat that says anything
+ * but ENOENT, the #911 rule: only ENOENT proves it is not there). A v1 → v2 password change journals its stage since
+ * #241; a create stages with no journal, as builds before #241 did for a password change, so the file alone does not
+ * tell a committed change from a create's leftover. With `.enc` gone it is no doubt: a create or a swap cut short after
+ * its commit left the staged file as the only snapshot, and it rolls forward at the start as before.
+ * A journal entry lists the stage only by its full path, folded as {@link pathKey} folds it (review round 3 F1). The
+ * file and folder names are the same in every workspace this app writes, so a match by name alone would let any
+ * journal vouch for any stage: a stale one (kept for good when its entries look unreachable, or brought back with a
+ * restored folder) rolled a foreign stage over `.enc` with no key. An entry written under another drive letter or mount
+ * point therefore leaves the stage in doubt, and the unlock authenticates it and rolls it forward when it opens: the
+ * same outcome, one read slower.
+ */
+function stageInDoubt(vaultPaths: VaultPaths): boolean {
+  const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  if (!existsSync(staged)) return false
+  if (encryptedFileState(vaultPaths) === 'missing') return false
+  const listed = (readRekeyJournal(vaultPaths)?.staged ?? []).some((entry) => pathKey(entry) === pathKey(staged))
+  return !listed
+}
+
+/** #973: what the unlock did with a staged database in doubt ({@link resolveStageInDoubt}): rolled it forward (it
+ *  authenticates), removed it (it does not, or is no frame of this build's), or left it (it could not be judged or
+ *  removed; the unlock opens `.enc` as it is). */
+export type StageInDoubtOutcome = 'rolled-forward' | 'removed' | 'left'
+
+/**
+ * #973: the unlock's answer to {@link stageInDoubt}, once the password verified and the v2 data key is unwrapped. A
+ * staged database that authenticates under that key ({@link authenticatesUnder}) is this workspace's (a password change
+ * of a build before #241, cut short after its commit), and the staged set rolls forward exactly as the start's recovery
+ * would have. One that fails its tag is ciphertext under a key nothing holds (a create's leftover, a copy from another
+ * workspace), and one that is no frame of this build's (cut short, another magic) is no staged copy at all: either is
+ * removed (a plain delete, as {@link discardPendingRekey} does), and the unlock opens `.enc` as it is. The rest of the
+ * staged set then gets what the start's recovery would have given it with that file gone (review round 2 R5: the
+ * journal's entries and its deletions, the in-store twins by scan). A read the check cannot make splits by its code
+ * (review round 2 R4, round 3 F4): ENOENT, the file gone since the check, is no stage; EISDIR or ENOTDIR, a folder at
+ * the name, is no data at all, so it is left exactly as it is and the unlock opens `.enc` (never blocked for good);
+ * any other code (a hold: EBUSY, EPERM, EACCES; an I/O error: EIO) may be a stage this workspace needs, so it changes
+ * nothing and refuses the unlock with `VaultRecoveryBlockedError`, the #242 "try again" answer, before the `.recovery`
+ * block can roll anything over `.enc`. A delete that fails leaves the file too: it stays a doubt, which no start rolls
+ * forward and the next unlock checks again. `note` hears the outcome as soon as it is true (before a later step of the unlock can fail), for the
+ * held loss (R2) and the IPC's one log line (F4). The pass is timed as `vault_stage_check` (R9).
+ */
+function resolveStageInDoubt(
+  vaultPaths: VaultPaths,
+  descriptor: VaultDescriptor,
+  dataKey: Buffer,
+  note?: (outcome: StageInDoubtOutcome) => void
+): void {
+  if (!stageInDoubt(vaultPaths)) return
+  const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  const checkT0 = performance.now()
+  let authentic: boolean
+  try {
+    authentic = authenticatesUnder(staged, dataKey)
+  } catch (err) {
+    if (isVaultNewerError(err)) throw err
+    const code = (err as NodeJS.ErrnoException | null)?.code
+    if (code === 'ENOENT') return // gone since the check: no stage
+    if (code !== 'EISDIR' && code !== 'ENOTDIR') throw new VaultRecoveryBlockedError() // a hold or an I/O error
+    note?.('left') // a folder at the name: no data
+    return
+  } finally {
+    perfMark('vault_stage_check', { checkMs: perfMs(checkT0), stageBytes: fileSizeOrNull(staged) })
+  }
+  if (authentic) {
+    applyPendingRekey(vaultPaths)
+    note?.('rolled-forward')
+    return
+  }
+  try {
+    rmSync(staged, { force: true })
+  } catch {
+    /* best-effort: see above */
+    note?.('left')
+    return
+  }
+  note?.('removed')
+  recoverPendingRekey(vaultPaths, descriptor) // R5: no longer in doubt, so what the start would have done
+}
+
+/**
+ * #973 (narrow): a create cut short before its commit (a crash or power loss between its stage and its key file) leaves
+ * a `.enc.new` with no key file, no `.enc` and no rekey journal beside it. The start reports that state as
+ * `uninitialized`, and the next create overwrites the file anyway. Removed here with its write temp, so a workspace put
+ * back into the same folder later can meet it under neither this build's start nor an older build's, which rolls any
+ * `.enc.new` forward under a v2 descriptor. Each of the three is proven absent by a stat that says ENOENT. Best-effort:
+ * a file that stays is overwritten by the next create, and the unlock checks it ({@link resolveStageInDoubt}) if a
+ * workspace comes back first. Nothing else is touched.
+ * Residual (review round 2 R3, owner decision: the discard stays): the same state is left by a create that committed
+ * and then lost its key file before the rename, and that stage only ever holds the fresh, empty workspace the create
+ * built. The one double fault that loses data: a v1 → v2 password change by a build before #241 (0.1.50–0.1.59, which
+ * wrote no journal) cut short between the shred of `.enc` and the rename of its stage, and then the key file removed
+ * before the next start: the stage was the only copy of that workspace.
+ */
+function discardOrphanedStage(vaultPaths: VaultPaths): void {
+  const absent = (path: string): boolean => {
+    try {
+      statSync(path)
+      return false
+    } catch (err) {
+      return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+    }
+  }
+  if (!absent(vaultPaths.descriptorPath) || !absent(vaultPaths.encPath) || !absent(rekeyJournalPath(vaultPaths))) return
+  const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
+  for (const leftover of [staged, `${staged}.tmp`]) {
+    try {
+      rmSync(leftover, { force: true })
+    } catch {
+      /* best-effort: see above */
+    }
   }
 }
 
@@ -1813,11 +2015,14 @@ export function createEncryptedVaultOnDisk(
   // journal's own suffix), and only then write the descriptor — the single atomic COMMIT
   // POINT (writeVaultDescriptor is fsync + rename). A crash BEFORE it leaves neither a
   // descriptor nor an `.enc`, so init() still reports `uninitialized` and onboarding
-  // retries (a crash leaves the staged file behind: the retry overwrites it, but a
-  // workspace put back into the same folder first would have it rolled over its `.enc` —
-  // the crash variant of #954's S-1, open as its own issue). A crash AFTER it is the
-  // committed-rekey crash state: `recoverPendingRekey` rolls the staged file forward on the
-  // next init()/unlock. The descriptor used to be written FIRST — a crash mid-create then
+  // retries. The crash leaves the staged file behind (#973, the crash variant of #954's
+  // S-1): the next start removes it (`discardOrphanedStage`: no key file, no `.enc`, no
+  // journal), and one a workspace put back first meets is never rolled over that `.enc`
+  // unchecked: the start leaves it (`stageInDoubt`), and the unlock keeps it only when it
+  // authenticates under the put-back workspace's data key (`resolveStageInDoubt`). A crash
+  // AFTER the commit is the committed-rekey crash state with `.enc` absent:
+  // `recoverPendingRekey` rolls the staged file forward on the next init()/unlock. The
+  // descriptor used to be written FIRST — a crash mid-create then
   // bricked onboarding behind the misleading "restore workspace.json" hint (the actual
   // repair was deleting it). NB the `legacyV1` fixture path shares this ordering but not
   // the roll-forward (recovery is v2-gated); it exists only so tests can build migration
@@ -1825,8 +2030,8 @@ export function createEncryptedVaultOnDisk(
   //
   // #954 S-1: a create that FAILS before the commit (the descriptor's temp cannot be written
   // or renamed, a full drive, the re-check below) removes what it staged before it rethrows:
-  // `.enc.new` is ciphertext under a key nothing holds, and the next start's rekey recovery
-  // rolls ANY `.enc.new` forward under a v2 descriptor, so a workspace put back later into
+  // `.enc.new` is ciphertext under a key nothing holds, and every build before #973 rolls ANY
+  // `.enc.new` forward under a v2 descriptor at its start, so a workspace put back later into
   // the same folder would have its `.enc` shredded and replaced by this empty one. Removed:
   // the staged file and the two write temps (`.enc.new.tmp`, `workspace.json.tmp`: temps
   // nothing reads), once the encrypt has returned. A failure before that (the open, #247, or
@@ -1884,6 +2089,27 @@ export function createEncryptedVaultOnDisk(
   }
 }
 
+/** #985: the probe of the `.recovery` copy, or null when there is none. */
+function probeRecoveryCopy(vaultPaths: VaultPaths): DatabaseFileProbe | null {
+  const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
+  return existsSync(recoveryPath) ? probeDatabaseFile(recoveryPath) : null
+}
+
+/**
+ * #985 (review round 2 R6): may the `.recovery` copy hold fresher data than `.enc`? Not when `.enc` is there and strictly
+ * newer by mtime: that is a spent leftover, as the CODE-1b roll-forward judges one. Yes in every other case (`.enc`
+ * missing or not judged, the copy as new or newer, its own age unreadable): any doubt keeps the copy.
+ */
+function recoveryMayBeFreshest(vaultPaths: VaultPaths): boolean {
+  const enc = statEncryptedFile(vaultPaths)
+  if (enc.state !== 'present') return true
+  try {
+    return statSync(`${vaultPaths.dbPath}${RECOVERY_SUFFIX}`).mtimeMs >= enc.mtimeMs
+  } catch {
+    return true
+  }
+}
+
 /** The in-memory result of a successful unlock. */
 export interface UnlockedVault {
   db: Db
@@ -1896,6 +2122,9 @@ export interface UnlockedVault {
   recoveryDiscarded: boolean
   /** #911: `.enc` was missing, and this unlock encrypted the `.recovery` copy the start kept as the new `.enc`. */
   restoredMissingEnc: boolean
+  /** #985 (review round 3 F3): a `.recovery` copy a newer build stamped, older than `.enc` (a spent leftover), was left
+   *  in place, unencrypted. */
+  newerRecoveryLeft: boolean
 }
 
 /**
@@ -1904,7 +2133,8 @@ export interface UnlockedVault {
  * and open the database. Throws `WrongPasswordError` on a bad password (the GCM verifier
  * fails, the DB is never touched). Before the password is even checked: `VaultNewerError` when a
  * vault artifact is in a format a newer build wrote (#845). After the password verified:
- * `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247), `VaultDamagedError` when `.enc`
+ * `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` copy a newer build
+ * stamped that may hold the freshest data, before the staged-file check, the roll-forward or any shred), `VaultDamagedError` when `.enc`
  * fails its tag (#860 V5b) or SQLite finds no database or a corrupt one (#208),
  * `VaultOpenFailedError` when the open could not finish otherwise (#844), and `VaultMissingError` when there is no `.enc`
  * and no `.recovery` copy to roll forward over it (#911).
@@ -1912,7 +2142,10 @@ export interface UnlockedVault {
 export function unlockEncryptedVault(
   vaultPaths: VaultPaths,
   password: string,
-  onProbeFallback?: ProbeFallbackNote
+  onProbeFallback?: ProbeFallbackNote,
+  /** #973: hears what this unlock did with a staged database in doubt, as soon as it did it (also when a later step
+   *  fails). */
+  onStageInDoubt?: (outcome: StageInDoubtOutcome) => void
 ): UnlockedVault {
   // #845: FIRST, before the rekey recovery, the `.recovery` roll-forward, the sidecar clean or the decrypt can write
   // anything, and independent of the password (a newer format's verifier may differ): a vault a newer build wrote is
@@ -1932,7 +2165,8 @@ export function unlockEncryptedVault(
     throw new Error('No encrypted workspace to unlock')
   }
   // A crash during a password change must be resolved BEFORE any decrypt: the descriptor
-  // decides whether staged `.new` files roll forward (committed) or are discarded.
+  // decides whether staged `.new` files roll forward (committed) or are discarded. #973: a staged
+  // database it cannot vouch for waits for the data key below, so a wrong password leaves it as it is.
   recoverPendingRekey(vaultPaths, descriptor)
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const kdfT0 = performance.now()
@@ -1944,6 +2178,15 @@ export function unlockEncryptedVault(
     // leave the derived key sitting in the heap.
     key.fill(0)
     throw new WrongPasswordError()
+  }
+  // #985 (W-66; review round 2 R6, R7): a `.recovery` copy a NEWER build stamped is judged now, after the password
+  // verified and before anything below can write (the staged-file check, the roll-forward, a shred). One that may hold
+  // the freshest data refuses the unlock, as the open refuses a newer database (#247); one older than a present `.enc`
+  // is a spent leftover, left as it is by the roll-forward below. The probe is kept for that block.
+  const recoveryProbe = probeRecoveryCopy(vaultPaths)
+  if (recoveryProbe?.verdict === 'newer' && recoveryMayBeFreshest(vaultPaths)) {
+    key.fill(0)
+    throw new WorkspaceNewerError(recoveryProbe.found)
   }
   // #858: from here on, EVERY failure zeroes the file key (the catch below), not only the named
   // ones. A corrupt wrapped data key used to leave the KEK in the heap; a tag-failing `.enc`, a
@@ -1962,6 +2205,11 @@ export function unlockEncryptedVault(
     if (descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
       fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
       key.fill(0)
+      // #973: a staged `.enc.new` no journal vouches for, which the rekey recovery above left as it was: rolled
+      // forward when it authenticates under the data key, removed when it does not (or is no frame of this build's),
+      // refused as "try again" when a hold keeps it from being read, left when it can be neither read nor removed.
+      // Before the `.recovery` block, so that block judges the `.enc` this unlock opens.
+      resolveStageInDoubt(vaultPaths, descriptor, fileKey, onStageInDoubt)
     }
     // full-audit 2026-07-11 CODE-1b — roll a preserved newer working file FORWARD now that
     // the key exists: re-encrypt it over the stale `.enc` (encryptFile is atomic tmp→rename
@@ -1985,6 +2233,7 @@ export function unlockEncryptedVault(
     const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
     let recoveryDiscarded = false
     let restoredMissingEnc = false
+    let newerRecoveryLeft = false
     // #911 (code review): `.enc` is judged ONCE, by the start's rule: only ENOENT is missing. `existsSync` read any other
     // stat failure (a delete-pending file on Windows, EPERM, EBUSY) as "missing", so a spent `.recovery` could be
     // encrypted over a good `.enc`.
@@ -2003,16 +2252,24 @@ export function unlockEncryptedVault(
       let fresher: boolean | null = null
       try {
         // A probe that cannot decide (a hold, the file vanishing) is the probe error handled below.
-        const probe = probeDatabaseFile(recoveryPath)
+        const probe = recoveryProbe ?? probeDatabaseFile(recoveryPath)
         if (probe.verdict === 'unknown' || probe.verdict === 'gone') {
           throw new Error(`The .recovery probe could not decide (${probe.verdict})`)
         }
+        // #985 (W-66): this unlock never rolls forward or shreds a copy a NEWER build stamped: it cannot judge its
+        // schema. One that may be the freshest data was refused before the key was used (above); one that gets here
+        // is a spent leftover older than `.enc` (review round 2 R6), kept as it is, and the unlock goes on. It stays the
+        // workspace's data unencrypted until a later failed lock's salvage replaces it (REL-1's pre-shred) or a newer
+        // build's unlock shreds it as spent (review round 3 F3), so the IPC logs that it was left.
+        const spentNewer = probe.verdict === 'newer'
+        newerRecoveryLeft = spentNewer
         const newer =
+          !spentNewer &&
           probe.verdict !== 'not-database' &&
           (enc.state === 'missing' || statSync(recoveryPath).mtimeMs > enc.mtimeMs)
         // A structure SQLite cannot read for a reason that is not damage: judged by the header, as
         // before (#876 review round 2).
-        fresher = readsAsDatabase(probe, 'recovery', onProbeFallback) && newer
+        fresher = spentNewer ? null : readsAsDatabase(probe, 'recovery', onProbeFallback) && newer
         // #875: our own shred never leaves a header, so a newer copy whose header reads but whose
         // structure does not was the failed lock's session, and shredding it loses that session.
         recoveryDiscarded = probe.verdict === 'damaged' && newer
@@ -2101,7 +2358,7 @@ export function unlockEncryptedVault(
       throw openFailure(err)
     }
     if (recoveryDiscarded) shredFile(recoveryPath)
-    return { db, key: fileKey, descriptor, recoveryDiscarded, restoredMissingEnc }
+    return { db, key: fileKey, descriptor, recoveryDiscarded, restoredMissingEnc, newerRecoveryLeft }
   } catch (err) {
     if (openedDb) {
       try {
@@ -2129,14 +2386,17 @@ export type ProbeFallbackNote = (site: ProbeFallbackSite, code: string) => void
 /**
  * #876: does a site treat the file as a database? `database` does; `unchecked` (review round 2) does too, exactly as
  * the header check before the probe did (the probe read the header, only its structural read could not run), and the
- * fallback is reported. Everything else does not.
+ * fallback is reported. #985: so does `newer`, a file a newer build stamped: the salvage keeps it (`preserved`,
+ * `kept-only-copy`), and the lock and the rekey stage encrypt it as before (the session's own file cannot be newer:
+ * `openDatabase` refuses one). The unlock's `.recovery` roll-forward refuses it before it gets here. Everything else
+ * does not.
  */
 function readsAsDatabase(probe: DatabaseFileProbe, site: ProbeFallbackSite, onProbeFallback?: ProbeFallbackNote): boolean {
   if (probe.verdict === 'unchecked') {
     onProbeFallback?.(site, probe.code ?? 'unknown')
     return true
   }
-  return probe.verdict === 'database'
+  return probe.verdict === 'database' || probe.verdict === 'newer'
 }
 
 /** What a lock found at the working file after the close (#876): whether the `-wal` still holds commits after the one
@@ -2382,6 +2642,36 @@ export class WorkspaceController {
   /** #911: the last successful unlock encrypted the kept copy as the new `.enc`, for the IPC to log once
    *  ({@link takeRestoredMissingEnc}). */
   private _restoredMissingEnc = false
+  /** #973: what the last unlock did with a staged `.enc.new` in doubt, when it removed or left it (not when it rolled it
+   *  forward), for the IPC to log once ({@link takeStageOutcome}), whether the unlock then succeeded or not. */
+  private _stageOutcome: Exclude<StageInDoubtOutcome, 'rolled-forward'> | null = null
+  /**
+   * #973 (review round 2 R2): a loss {@link init} judged (it then shredded that session) while a staged database was in
+   * doubt. The recovery swapped nothing, so the unlock decides which snapshot opens: held here, not marked, until it
+   * does ({@link noteStageInDoubt}). In memory only: a restart before that unlock forgets it.
+   */
+  private _heldStageLoss: { cause: MarkedLossCause; enc: string | null } | null = null
+  /** #973: told by the unlock what it did with the staged database in doubt. `.enc` opens as it is (the stage removed
+   *  or left): the held loss is the one it was judged against, recorded as the start would have. It rolled forward:
+   *  the stage holds that session's copy, so no loss is proven, and the hold is dropped. */
+  private readonly noteStageInDoubt = (outcome: StageInDoubtOutcome): void => {
+    const held = this._heldStageLoss
+    this._heldStageLoss = null
+    if (outcome === 'rolled-forward') return
+    this._stageOutcome = outcome
+    if (held !== null) this.markWorkingCopyLost(held.cause, held.enc)
+  }
+  /** #973 (review round 3 F2): a successful unlock settles a loss still held, because this unlock did not judge the stage
+   *  (it was gone by then, or a journal now lists it). Recorded while `.enc` is still the snapshot it was judged against
+   *  (the same frame IV), dropped otherwise (a roll-forward replaced `.enc`); never carried past this unlock, so a later
+   *  stage cannot bring it back as a notice about a session that lost nothing. */
+  private settleHeldStageLoss(): void {
+    const held = this._heldStageLoss
+    this._heldStageLoss = null
+    if (held !== null && (held.enc === null || frameIvOf(this.vaultPaths.encPath) === held.enc)) {
+      this.markWorkingCopyLost(held.cause, held.enc)
+    }
+  }
   /** #911: the disk state behind {@link _encMissingKept}: `.enc` absent (ENOENT) and a `.recovery` copy waiting that
    *  starts like a database (the #892 header read, 100 bytes: cheap, and read only at {@link init} and after a failed
    *  unlock, never per {@link getState}). One that does not is no copy to keep: the unlock shreds it and says the file
@@ -2389,7 +2679,10 @@ export class WorkspaceController {
   private encMissingKeptOnDisk(): boolean {
     if (encryptedFileState(this.vaultPaths) !== 'missing') return false
     try {
-      return startsLikeDatabase(`${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+      const kept = `${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`
+      // #985 (review round 2 R8): a copy a newer build stamped is not one this unlock encrypts again: it answers
+      // "written by a newer HilbertRaum" instead, so no notice promises it.
+      return startsLikeDatabase(kept) && headerSchemaStamp(kept) <= SCHEMA_VERSION
     } catch {
       return false // absent, or unreadable
     }
@@ -2397,6 +2690,9 @@ export class WorkspaceController {
   /** #911: this start found the only copy with `.enc` missing and its structure damaged, and swept it
    *  ({@link discardedOnlyCopy}). */
   private _discardedOnlyCopy = false
+  /** #985 (review round 3 F3): the last successful unlock left a spent `.recovery` a newer build stamped in place, for the
+   *  IPC to log once ({@link takeNewerRecoveryLeft}). */
+  private _newerRecoveryLeft = false
   /** #875: what the last successful unlock consumed, for the IPC to record once ({@link takeWorkingCopyLost}). */
   private _lostAtPreviousLock: { cause: WorkingCopyLossCause; lostAt: string | null } | null = null
   /** #876 review round 2: sites that judged a file by its header because the probe could not read its structure (not
@@ -2638,17 +2934,28 @@ export class WorkspaceController {
       // rekey recovery, which may have swapped `.enc`.
       // `.enc`'s frame is read once here, after the recovery, for the comparison, the marker and the adopt.
       const enc = frameIvOf(this.vaultPaths.encPath)
-      if (salvage === 'discarded') this.markWorkingCopyLost('startup', enc)
+      // #973 (review round 2 R2): a staged database still in doubt means the recovery swapped nothing, and the unlock
+      // decides which snapshot opens. The loss is proven only when that is `.enc` as it is, so it is held for the
+      // unlock (`noteStageInDoubt`) instead of marked.
+      const inDoubt = stageInDoubt(this.vaultPaths)
+      const mark = (cause: MarkedLossCause, iv: string | null): void => {
+        if (inDoubt) this._heldStageLoss = { cause, enc: iv }
+        else this.markWorkingCopyLost(cause, iv)
+      }
+      if (salvage === 'discarded') mark('startup', enc)
       else if (unclean !== null && unclean.enc !== null && enc === unclean.enc) {
-        this.markWorkingCopyLost(unclean.cause, enc)
+        mark(unclean.cause, enc)
       } else if (unclean === null && heldLoss !== null && heldLoss.enc !== null && enc === heldLoss.enc) {
         // Review V F-2: what an earlier run judged and shredded, then stopped before recording (see above).
-        this.markWorkingCopyLost(heldLoss.cause, enc)
+        mark(heldLoss.cause, enc)
       }
       this._unrecordedStartLoss = null
       this.adoptWorkingCopyLostMarker(enc)
       return // locked; await unlock
     }
+    // #973 (narrow): a create's staged `.enc.new` that a crash left with no key file, no `.enc` and no rekey journal.
+    // `vaultExistsOnDisk` reads neither file it removes, so the state is `uninitialized` before and after.
+    discardOrphanedStage(this.vaultPaths)
     if (this.vaultExistsOnDisk()) {
       // An encrypted vault exists but its descriptor is missing/corrupt. Stay LOCKED:
       // do not open a plaintext DB over it, and (via getState/create) never offer the
@@ -2753,12 +3060,31 @@ export class WorkspaceController {
     return lost
   }
 
+  /** #985 (review round 3 F3): whether the last successful unlock left a `.recovery` copy a newer build stamped, older
+   *  than `.enc` (a spent leftover), in place: the workspace's data unencrypted on the drive. Returns it once, for the
+   *  IPC's one content-free log line (no audit type). */
+  takeNewerRecoveryLeft(): boolean {
+    const left = this._newerRecoveryLeft
+    this._newerRecoveryLeft = false
+    return left
+  }
+
   /** #911: whether the last successful unlock encrypted the copy a start kept over a missing `.enc` as the new `.enc`.
    *  Returns it once, for the IPC to log now that there is a log key (owner decision D5: a log line, no audit type). */
   takeRestoredMissingEnc(): boolean {
     const restored = this._restoredMissingEnc
     this._restoredMissingEnc = false
     return restored
+  }
+
+  /** #973: whether the last unlock removed a staged `.enc.new` that does not open under this workspace's key (a create
+   *  cut short by a crash left it, or it came from another workspace), or left one it could neither judge nor remove;
+   *  null otherwise. Returns it once, for the IPC's one content-free log line (no audit type, as #911's), on the
+   *  unlock's success and failure paths alike (review round 2 F4). */
+  takeStageOutcome(): Exclude<StageInDoubtOutcome, 'rolled-forward'> | null {
+    const outcome = this._stageOutcome
+    this._stageOutcome = null
+    return outcome
   }
 
   /** #875: a lock finished at the last snapshot, or a start swept the last session's broken working file (or, #892, the
@@ -2786,6 +3112,7 @@ export class WorkspaceController {
   /** #875: a successful unlock opened `.enc`: the notice has been seen, and this build's marker, which can name no
    *  other snapshot now, is removed. Records what was consumed for {@link takeWorkingCopyLost}. */
   private consumeWorkingCopyLost(): void {
+    this.settleHeldStageLoss() // #973 (review round 3 F2): first, so a loss it records is consumed here once
     if (this._workingCopyLost !== null) {
       let lostAt: string | null = null
       try {
@@ -2824,14 +3151,14 @@ export class WorkspaceController {
     }
     let unlocked: UnlockedVault
     try {
-      unlocked = unlockEncryptedVault(this.vaultPaths, password, this.noteProbeFallback)
+      unlocked = unlockEncryptedVault(this.vaultPaths, password, this.noteProbeFallback, this.noteStageInDoubt)
     } catch (err) {
       // #911: a failed unlock can end the state the notice is about (a damaged kept copy shredded; a roll-forward that
       // wrote `.enc` before the open failed, #844), never start it, so a notice shown is re-read from the disk.
       if (this._encMissingKept) this._encMissingKept = this.encMissingKeptOnDisk()
       throw err
     }
-    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc } = unlocked
+    const { db, key, descriptor, recoveryDiscarded, restoredMissingEnc, newerRecoveryLeft } = unlocked
     this._db = db
     this.key = key
     this.descriptor = descriptor
@@ -2840,6 +3167,7 @@ export class WorkspaceController {
     // #911: the kept copy is `.enc` again (or there was none to keep), so the notice is over.
     this._encMissingKept = false
     this._restoredMissingEnc = restoredMissingEnc
+    this._newerRecoveryLeft = newerRecoveryLeft
     // #875: a loss this unlock made itself (a broken `.recovery` shredded) is recorded the same way.
     if (recoveryDiscarded && this._lostAtPreviousLock === null) this._lostAtPreviousLock = { cause: 'recovery', lostAt: null }
     // (#858: `unlockEncryptedVault` re-stamped `workspaceMode`, inside its failure guard.)
@@ -2873,12 +3201,21 @@ export class WorkspaceController {
       }
       throw new WorkspaceExistsError()
     }
+    // #985 (review round 2 F3): a working file or `.recovery` a NEWER build stamped is that build's data (its last
+    // session, or with its key file and `.enc` gone, the whole workspace). A create here would commit a new workspace
+    // whose every unlock then refuses on that copy, so it is refused first, before anything is written (the create IPC
+    // answers `workspace_newer`).
+    for (const path of [this.vaultPaths.dbPath, `${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`]) {
+      const probe = probeDatabaseFile(path)
+      if (probe.verdict === 'newer') throw new WorkspaceNewerError(probe.found)
+    }
     // #875: no vault is here, so a marker a wiped one left names no snapshot of the workspace about to be created.
     // Startup reads the marker only beside a vault, so nothing else would remove it, and a reset drive would carry it.
     // The record in memory goes with it (review round 2), so the new workspace's first lock shows no notice of the old.
     removeWorkingCopyLostMarker(this.vaultPaths)
     this._workingCopyLost = null
     this._lostAtPreviousLock = null
+    this._heldStageLoss = null // #973: nor a loss a start held for a stage beside the wiped one
     if (mode === 'plaintext_dev') {
       if (!this.allowPlaintext()) throw new PlaintextNotAllowedError()
       this.openPlaintext()
@@ -3104,6 +3441,8 @@ export class WorkspaceController {
         // Review round 2: the lock carried what it found (its one probe, and the WAL after its retry),
         // so the file is judged once; only a failure before that judgement (the close itself) probes
         // here. A structure the probe could not read (not damage) is a database, as the header said.
+        // #985: a file a newer build stamped (`newer`) is never lost either: it is kept as it is, with
+        // the closed handle (the re-open below would refuse it), and the next start's salvage keeps it.
         const judged = err instanceof LockStoppedError ? err.verdict : null
         const probe = judged?.probe ?? probeDatabaseFile(dbPath)
         if (!judged?.probe && probe.verdict === 'unchecked') this.noteProbeFallback('lock', probe.code ?? 'unknown')

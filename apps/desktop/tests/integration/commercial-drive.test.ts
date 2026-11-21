@@ -935,6 +935,33 @@ describe('assertCommercialDrive', () => {
       expect((await assertCommercialDrive(root, [chat], sources(), null, null, kit())).ok).toBe(true)
     })
 
+    // #986: an engine install interrupted on the drive leaves `<os>.new` or `<os>.old` beside a pinned
+    // build until the app's next start there; a second engine copy no other check looks at.
+    it.each([
+      { leftover: 'win.new', build: 'win/x64 vulkan' },
+      { leftover: 'win.old', build: 'win/x64 vulkan' },
+      { leftover: 'win/cpu.new', build: 'win/x64 cpu' },
+      { leftover: 'win/cpu.old', build: 'win/x64 cpu' }
+    ])('fails a Kit with a leftover $leftover from an interrupted engine install (#986)', async ({ leftover, build }) => {
+      const root = tempDir('hilbertraum-commercial-rt-swap-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      provisionApp(root)
+      const dir = join(root, 'runtime', 'llama.cpp', ...leftover.split('/'))
+      writeInstall(dir, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
+      const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(false)
+      expect(res.problems.filter((p) => p.includes('interrupted engine install'))).toEqual([
+        expect.stringContaining(`build ${build}: runtime/llama.cpp/${leftover} is left from an interrupted engine install`)
+      ])
+      rmSync(dir, { recursive: true })
+      expect((await assertCommercialDrive(root, [chat], sources(), null, null, kit())).ok).toBe(true)
+    })
+
     it('fails when a pinned build has NO install marker', async () => {
       const root = tempDir('hilbertraum-commercial-rt-missing-')
       writePolicy(root, buildPolicyJson())

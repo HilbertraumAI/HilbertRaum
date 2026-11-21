@@ -203,6 +203,21 @@ function logProbeFallbacks(ctx: AppContext): void {
   }
 }
 
+/**
+ * #973 (a log line, no audit type, as #911's): what the last unlock did with a staged copy of the database that no rekey
+ * journal listed: removed it, because it does not open under this workspace's key (a create cut short by a crash left
+ * it, or it came from another workspace), or left it, because it could be neither read nor removed. Logged on the
+ * unlock's success and failure paths alike (review round 2 F4). Fixed words only: no path, no file name.
+ */
+function logStageOutcome(ctx: AppContext): void {
+  const outcome = ctx.workspace.takeStageOutcome?.()
+  if (outcome === 'removed') {
+    log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
+  } else if (outcome === 'left') {
+    log.warn('Workspace unlock: left a staged copy of the database that could be neither read nor removed (#973)')
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
@@ -239,11 +254,18 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       if (ctx.workspace.takeRestoredMissingEnc?.()) {
         log.warn('The encrypted workspace file was missing; the copy the last session left was encrypted again')
       }
+      logStageOutcome(ctx)
       logProbeFallbacks(ctx)
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
+      // #985 (review round 3 F3; a log line, no audit type): this unlock opened `.enc` beside a copy of the workspace a
+      // newer HilbertRaum wrote and that `.enc` is newer than (a spent leftover). It stays on the drive unencrypted until
+      // a later failed lock's salvage replaces it or a newer build's unlock shreds it. Fixed words only.
+      if (ctx.workspace.takeNewerRecoveryLeft?.()) {
+        log.warn('Workspace unlock: left an older, unencrypted copy of the workspace that a newer HilbertRaum wrote (#985)')
+      }
       // #875: the last session's changes were lost: the previous lock finished at the last saved state
       // (often at quit, with no lock screen to say so and no log that outlived it), the start swept the
       // working file (or, #892, the session the app ended without locking: a power cut, a pulled drive, a
@@ -285,6 +307,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       startKnowledgePackSession(ctx)
       return { ok: true, state }
     } catch (err) {
+      logStageOutcome(ctx) // #973 (review round 2 F4): a staged copy removed before a later step failed
       // instanceof PLUS the name: the production rollup bundle can contain a second,
       // tree-shaken copy of workspace-vault (module-id quirk), and the class thrown by
       // the vault is then not the class this file imported — instanceof alone made the
@@ -372,9 +395,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       // #955 item 1: `config/workspace.json` is on the drive but cannot be read, and the encrypted workspace file is not
       // beside it, so no password can open anything here. Before, a plain English error that read "Could not open the
-      // workspace." on every try. Its own copy says not to delete the key file (a file saved with a byte-order mark
-      // reads as unreadable and can be repaired) and never that no data is left: a `.recovery`, an `.enc.new` or
-      // stored documents may still be on the drive. The log line names no path. instanceof PLUS the name, as above.
+      // workspace." on every try. Its own copy says not to delete the key file (a file damaged by an edit can often be
+      // repaired; #974: a byte-order mark alone no longer makes it unreadable) and never that no data is left: a
+      // `.recovery`, an `.enc.new` or stored documents may still be on the drive. The log line names no path. instanceof PLUS the name, as above.
       if (
         err instanceof VaultDescriptorUnreadableError ||
         (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')

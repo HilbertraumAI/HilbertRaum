@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { existsSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
@@ -87,6 +87,10 @@ const failures = vi.hoisted(() => ({
    *  are written at `path`: a workspace's key file copied back while the create derives its key and stages its
    *  database, after the checks at its start and before its commit. */
   putBackDescriptorOnStage: null as { path: string; bytes: Buffer } | null,
+  /** #973: openSync throws this error code for the staged database (`…/hilbertraum.sqlite.enc.new`) while set: `EBUSY`
+   *  for an antivirus or indexer hold on the file the unlock must read under the data key, `ENOENT` for a file gone since
+   *  the check, `EIO` for a failing drive. Its existence still reads true. */
+  openThrowOnStagedEnc: null as string | null,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
   hits: {
@@ -99,7 +103,8 @@ const failures = vi.hoisted(() => ({
     encStat: 0,
     openSyncWorking: 0,
     renameStagedEnc: 0,
-    putBackOnStage: 0
+    putBackOnStage: 0,
+    openSyncStaged: 0
   }
 }))
 
@@ -156,6 +161,11 @@ vi.mock('node:fs', async (importOriginal) => {
       if (failures.openThrowOnWorkingFile && String(path).endsWith('hilbertraum.sqlite')) {
         failures.hits.openSyncWorking += 1
         throw errnoError('EBUSY', 'EBUSY: resource busy or locked, open (held working file)')
+      }
+      const stagedCode = failures.openThrowOnStagedEnc
+      if (stagedCode !== null && String(path).endsWith('.sqlite.enc.new')) {
+        failures.hits.openSyncStaged += 1
+        throw errnoError(stagedCode, `${stagedCode}: open (the staged database)`)
       }
       const fd = actual.openSync(path, flags, mode)
       if (failures.enospcOnEncTmpWrite && String(path).endsWith('.enc.tmp')) failures.encTmpFds.add(fd)
@@ -222,6 +232,7 @@ beforeEach(() => {
   failures.openThrowOnWorkingFile = false
   failures.renameThrowOnStagedEnc = false
   failures.putBackDescriptorOnStage = null
+  failures.openThrowOnStagedEnc = null
   failures.hits = {
     renameSync: 0,
     openSync: 0,
@@ -232,7 +243,8 @@ beforeEach(() => {
     encStat: 0,
     openSyncWorking: 0,
     renameStagedEnc: 0,
-    putBackOnStage: 0
+    putBackOnStage: 0,
+    openSyncStaged: 0
   }
   ipcState.handlers.clear()
 })
@@ -449,7 +461,8 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       encStat: 0,
       openSyncWorking: 0,
       renameStagedEnc: 0,
-      putBackOnStage: 0
+      putBackOnStage: 0,
+      openSyncStaged: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -804,7 +817,9 @@ describe('a file error while a workspace is created (#807)', () => {
     }
     expect(failures.hits.renameStagedEnc).toBe(1)
     expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.createFailed') })
-    // Neither the root nor a vault file name, raw or as JSON escapes a Windows path, reaches the log.
+    // Neither the root nor a vault file name, raw or as JSON escapes a Windows path, reaches the log. `readLogTail`
+    // redacts what it hands out (#975), which hides a Windows profile's account segment: the root's own folder name,
+    // which it keeps, still shows a path.
     const logged = readLogTail(100_000).slice(linesBefore)
     const failure = logged.filter((line) => line.includes('Workspace create failed'))
     expect(failure).toHaveLength(1)
@@ -814,6 +829,7 @@ describe('a file error while a workspace is created (#807)', () => {
     for (const line of logged) {
       expect(line).not.toContain(vp.root)
       expect(line).not.toContain(escapedRoot)
+      expect(line).not.toContain(basename(vp.root))
       expect(line).not.toContain('hilbertraum.sqlite')
     }
     // The create did not finish, but it committed its key file: nothing is open, and the state reads `locked` (#954: a
@@ -850,6 +866,126 @@ describe('a file error while a workspace is created (#807)', () => {
     expect(existsSync(vp.encPath)).toBe(false)
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(ctl.getState().state).toBe('locked')
+    ctl.shutdown()
+  })
+})
+
+// #973: the unlock judges a staged `.enc.new` that no journal lists (a create's leftover beside a workspace put back
+// into its folder) by reading it under the data key. A read it cannot make (an antivirus or indexer hold) changes
+// nothing and answers "try again" (`vault_recovery_blocked`, the #242 answer), never the generic open failure; once the
+// hold is gone, the next unlock removes the leftover and opens the workspace.
+describe('a staged database the unlock cannot read (#973)', () => {
+  it('a held staged copy beside a workspace answers vault_recovery_blocked, every file byte for byte; the retry opens it', async () => {
+    const vp = lockedVault('recovery-guards-973', 'pw')
+    const seed = unlockedController(vp, 'pw')
+    updateSettings(seed.requireDb(), { contextTokens: 5151 })
+    seed.lock()
+    const staged = `${vp.encPath}.new`
+    writeFileSync(staged, readFileSync(lockedVault('recovery-guards-973-leftover', 'other-pw').encPath))
+    const files = [vp.descriptorPath, vp.encPath, staged]
+    const before = files.map((path) => readFileSync(path))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true)) // the start leaves it
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    failures.openThrowOnStagedEnc = 'EBUSY'
+    let blocked: unknown
+    try {
+      blocked = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+    } finally {
+      failures.openThrowOnStagedEnc = null
+    }
+    expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
+    expect(blocked).toEqual({ ok: false, reason: 'vault_recovery_blocked', message: tMain('main.workspace.recoveryBlocked') })
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(ctl.isUnlocked()).toBe(false)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    expect(existsSync(staged)).toBe(false)
+    ctl.shutdown()
+  })
+
+  /** A locked workspace under `pw` holding `contextTokens: 5151`, with another workspace's `.enc` (a create's leftover)
+   *  at the staged name, and the bytes of its key file, `.enc` and stage. */
+  function workspaceBesideLeftover(): { vp: VaultPaths; staged: string; files: string[]; before: Buffer[] } {
+    const vp = lockedVault('recovery-guards-973', 'pw')
+    const seed = unlockedController(vp, 'pw')
+    updateSettings(seed.requireDb(), { contextTokens: 5151 })
+    seed.lock()
+    const staged = `${vp.encPath}.new`
+    writeFileSync(staged, readFileSync(lockedVault('recovery-guards-973-leftover', 'other-pw').encPath))
+    const files = [vp.descriptorPath, vp.encPath, staged]
+    return { vp, staged, files, before: files.map((path) => readFileSync(path)) }
+  }
+
+  // Review round 2 R4, round 3 F4: the read failure splits by its code. A file gone since the check (ENOENT) is no stage:
+  // nothing to judge, the workspace opens. A folder at the name (EISDIR) is no data: left, and `.enc` opens
+  // (workspace-vault-format-guard.test.ts). Every other failure, a hold or an I/O error, may hide a stage this workspace
+  // needs: the unlock refuses as "try again" and changes nothing.
+  it('a staged copy gone between the check and the read (ENOENT) is no stage: the unlock opens the workspace, nothing logged', () => {
+    const { vp, files, before } = workspaceBesideLeftover()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    failures.openThrowOnStagedEnc = 'ENOENT'
+    try {
+      expect(ctl.unlock('pw').state).toBe('unlocked')
+    } finally {
+      failures.openThrowOnStagedEnc = null
+    }
+    expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    expect(ctl.takeStageOutcome()).toBeNull()
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+    ctl.shutdown()
+  })
+
+  // Round 2 left such a stage and went on; with a failed lock's `.recovery` waiting, that roll-forward ran first, and an
+  // authenticating stage could later roll over the session it had restored (Fable round 2, P6). Now the refusal comes
+  // before the `.recovery` block: nothing is written, and the retry restores the session.
+  it('a staged copy that fails to read with EIO answers vault_recovery_blocked; a waiting .recovery and every file byte for byte', async () => {
+    const vp = lockedVault('recovery-guards-973', 'pw')
+    failedLockState(vp, 7171, 'pw') // a closed working file newer than `.enc`: the start keeps it as `.recovery`
+    const staged = `${vp.encPath}.new`
+    writeFileSync(staged, readFileSync(lockedVault('recovery-guards-973-leftover', 'other-pw').encPath))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    const files = [vp.descriptorPath, vp.encPath, staged, `${vp.dbPath}${RECOVERY_SUFFIX}`]
+    const before = files.map((path) => readFileSync(path))
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    failures.openThrowOnStagedEnc = 'EIO'
+    let result: unknown
+    try {
+      result = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+    } finally {
+      failures.openThrowOnStagedEnc = null
+    }
+    expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
+    expect(result).toEqual({ ok: false, reason: 'vault_recovery_blocked', message: tMain('main.workspace.recoveryBlocked') })
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+    expect(existsSync(vp.dbPath)).toBe(false)
+    ctl.unlock('pw') // the read works again: the leftover is removed, then the failed lock's session rolls forward
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    expect(existsSync(staged)).toBe(false)
+    ctl.shutdown()
+  })
+
+  // The doubt needs `.enc` proven present only by a stat that does not say ENOENT (the #911 rule): one that fails
+  // otherwise (a delete-pending file on Windows) is doubt too, and the start rolls nothing over it.
+  it('a stat of .enc that fails with EPERM at the start: the staged leftover is left, and the unlock removes it once .enc reads again', () => {
+    const { vp, staged, files, before } = workspaceBesideLeftover()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.encDeletePending = true
+    try {
+      ctl.init()
+    } finally {
+      failures.encDeletePending = false
+    }
+    expect(failures.hits.encStat).toBeGreaterThan(0)
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+    expect(existsSync(staged)).toBe(false)
     ctl.shutdown()
   })
 })

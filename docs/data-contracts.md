@@ -1222,7 +1222,11 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `readVaultDescriptorChecked(path) → { kind: 'absent' | 'unreadable' | 'newer' (what, found) | 'ok'
   (descriptor) }` (#845); `readVaultDescriptor` is its back-compat face (`ok` → the descriptor, else
   null; a newer descriptor still counts as "a vault exists" for `isDescriptorUnreadable`, so no create
-  over it); `writeVaultDescriptor` (atomic: temp + fsync + rename). `vaultPathsFrom({configPath,dbPath,logsPath?})` →
+  over it); `writeVaultDescriptor` (atomic: temp + fsync + rename). **Byte-order mark (#974):** the
+  readers of `config/workspace.json`, `workspace/rekey-journal.json` (the format verdict's and the
+  recovery's) and `config/working-copy-lost.json` remove one leading U+FEFF before `JSON.parse`; a
+  second mark, or a file holding only the mark, still reads as unreadable. No writer writes a mark.
+  `vaultPathsFrom({configPath,dbPath,logsPath?})` →
   `VaultPaths { descriptorPath, encPath = <dbPath>.enc, dbPath, logsPath? }` (`logsPath` is optional
   and additive — older callers omit it; without it the rekey does not account for the rotated log).
 - **Rekey journal (on-disk, #241):** `workspace/rekey-journal.json` — `{ version: 1, staged: string[],
@@ -1238,6 +1242,31 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   leaves `images/` and out-of-store twins staged (a current build finishes them); a completed
   migration is a plain v2 vault. Constants: `REKEY_JOURNAL_NAME`, `IMAGES_DIR_NAME`,
   `DOCUMENTS_DIR_NAME`, `ROTATED_ENCRYPTED_LOG_NAME` (`app.1.log.enc`, deleted at the commit).
+  **Staged database in doubt (#973):** `recoverPendingRekey` leaves the whole staged set (and the
+  journal) as it is when a v2 descriptor sits beside a `hilbertraum.sqlite.enc.new` that no journal
+  lists and an `.enc` that is there (any stat answer but ENOENT); a journal entry lists it only by
+  its full path, folded as `pathKey` folds it (review round 3: a match by the folder and file names,
+  which every workspace shares, let a stale journal vouch for a foreign stage), so an entry written
+  under another drive letter or mount point leaves the stage in doubt, for the unlock to authenticate.
+  `unlockEncryptedVault(…, onStageInDoubt?)` resolves it
+  after the data key is unwrapped: the module-private `authenticatesUnder(path, key) → boolean` (one
+  GCM pass, nothing written; false when the tag fails or the file is no `HRAUMEN1` frame, cut short
+  or another magic; a newer frame throws `VaultNewerError`) true → `applyPendingRekey` (outcome
+  `rolled-forward`), false → the file is deleted, then `recoverPendingRekey` runs again for the rest of
+  the staged set (`removed`); a read that fails with ENOENT is no stage, with EISDIR or ENOTDIR (a
+  folder at the name), like a delete that fails, leaves the file as it is and opens `.enc` (`left`),
+  and with any other code (EBUSY, EPERM, EACCES, EIO, …) throws `VaultRecoveryBlockedError`
+  (→ `vault_recovery_blocked`, nothing changed, before the `.recovery` roll-forward).
+  `onStageInDoubt(outcome: StageInDoubtOutcome)` hears the outcome as soon as it is true, also when a
+  later step of the unlock fails; the pass is timed as the perf mark `vault_stage_check` (`checkMs`,
+  `stageBytes`). While a stage is in doubt at `init()`, a loss the start judged (#875 `startup`, #892
+  `unclean`) is held in memory instead of marked; the controller marks it when the outcome is
+  `removed` or `left`, drops it on `rolled-forward`, and settles a hold no outcome reached at the
+  next successful unlock (recorded while `.enc`'s frame IV is still the one it was judged against,
+  dropped otherwise); it is never carried past that unlock, and a create clears it.
+  `WorkspaceController.init()` removes a stray `.enc.new`
+  and `.enc.new.tmp` when there is no descriptor file, no `.enc` and no journal (each ENOENT); the
+  state stays `uninitialized`. No on-disk shape changes.
   `createImageSession(db, dir, req, cipher, beginWork?)` — the optional fifth argument is the
   document-work lease factory (`() => ctl.beginDocumentWork()`), taken before the first await.
 - **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename; `decryptFile` throws
@@ -1249,7 +1278,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   only, builds a v1 descriptor); `unlockEncryptedVault(vaultPaths, password) → { db, key, descriptor }`
   (format verdict → verify → decrypt → open). It throws **`VaultNewerError`** before the password is
   checked (#845); **`WrongPasswordError`** when the verifier fails; after the password verified,
-  `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247), **`VaultDamagedError`** when `.enc`
+  `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` the
+  probe calls `newer` that may hold the freshest data, right after the password check and before the
+  staged-file check, the roll-forward or any shred), **`VaultDamagedError`** when `.enc`
   fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
   its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
   and `VaultOpenFailedError` when the open could not finish otherwise (#844).
@@ -1268,8 +1299,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   refuses the lock. `stageRekey` refuses the same pending WAL (no retry: its connection is open).
   **`probeDatabaseFile(path)`**
   (`services/db.ts`, #876) → `{ verdict: 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'
-  | 'unchecked', code? }`: the
-  header through `node:fs`, then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
+  | 'unchecked', code? } | { verdict: 'newer', found }`: the
+  header through `node:fs` (#985: a schema stamp, `user_version` at offset 60 read as a signed
+  big-endian 32-bit integer, above `SCHEMA_VERSION` answers `newer` with the stamp as `found`,
+  before SQLite opens the file), then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
   `\\?\` long form on Windows) that reads the schema, the first row of every table and the last row
   of every rowid table, then the root-page header of every index through `node:fs`. It reads the
   main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file.
@@ -1286,8 +1319,19 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   the controller keeps the notes, `takeProbeFallbacks()` returns them once, and the lock, unlock and
   password-change handlers log each ("A workspace file was judged by its SQLite header …"). The one
   verdict for the lock's guard and its #855 verdict, the startup salvage, the
-  `.recovery` roll-forward and `stageRekey`. `sqliteJudgedDamaged(err)` (the #844 classifier)
-  lives beside it.
+  `.recovery` roll-forward and `stageRekey`. **`newer` is never discarded** (#985): the salvage
+  keeps the file as `.recovery` (`preserved`, or `kept-only-copy` with `.enc` missing; no #875
+  marker; with `.enc` missing no `encrypted_file_missing` notice), the unlock throws
+  `WorkspaceNewerError(found)` (→ `workspace_newer`) for a `.recovery` that may hold the freshest
+  data (`.enc` missing or not judged, or the copy at least as new by mtime) right after the password
+  check, before the staged-file check, the roll-forward or any shred, and keeps one older than a
+  present `.enc` (a spent leftover) as it is, unencrypted, with `UnlockedVault.newerRecoveryLeft`
+  set (the controller's `takeNewerRecoveryLeft()` returns it once, for one content-free log line, no
+  audit type; the copy stays until a later failed lock's salvage replaces it or a newer build's
+  unlock shreds it as spent), the create
+  refuses with the same error while a working file or `.recovery` probes `newer`, and the lock and
+  `stageRekey` read it as a database.
+  `sqliteJudgedDamaged(err)` (the #844 classifier) lives beside it.
   `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that
   allows it and a dev build; the `developerMode` setting plays no part (it lives in the encrypted DB).
 - **Vault format versions (#845):** `vaultFormatVerdict(vaultPaths) → { kind: 'ok' } | { kind:
@@ -1310,6 +1354,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   | `workspace/rekey-journal.json` | any numeric `version` above 1 (2, 2.5), whatever the descriptor says (`journal`) | unparseable or another `version`: quarantined as `.corrupt` |
   | `logs/app.log.enc`, `logs/app.1.log.enc` | a `newer` `app.log.enc`: `logging.ts` keeps the session's log in memory and never persists or rotates over it; a `newer` `app.1.log.enc`: only the rotation onto it is skipped (the live `app.log.enc` keeps persisting, up to the 2 MB buffer cap) | a corrupt or foreign-key log: started fresh (overwritten), as before |
 
+  **The plaintext working copy** (`workspace/hilbertraum.sqlite`, its `.recovery`) is judged by
+  `probeDatabaseFile`, not by this verdict: a schema stamp above `SCHEMA_VERSION` is `newer`, kept by
+  the start and refused by the unlock with `WorkspaceNewerError` (#985, see the probe above).
+
   **Not part of the vault:** startup's ZIM transient sweep still runs before the verdict is read
   (`main/index.ts`): it deletes the knowledge-pack reader's temporary listing files under
   `workspace/zim-transient/` (a newer build's included), which never hold workspace data.
@@ -1329,7 +1377,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   any build's password change; never stage `.enc.new` (or any `*.enc.new`) under a v2 descriptor
   before the commit point — every shipped build rolls a staged file forward under a v2 descriptor and
   quarantines a journal it cannot read, so a newer build's uncommitted stage would end up under a key
-  that exists nowhere; `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
+  that exists nowhere (from #973 on, a journal-less `.enc.new` beside an existing `.enc` is rolled
+  forward only once it authenticates under the unwrapped data key, and deleted when its tag fails,
+  but the builds before it remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
   unrecognised header), and a later frame version is one ASCII digit `2`–`9` after `HRAUMEN` (any other byte
   there reads as damage from #845 on).
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
@@ -1344,7 +1394,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
   locked or in plaintext), `takeWorkingCopyLost()` (#875, below), `discardedOnlyCopy()` (#911),
   `takeRestoredMissingEnc()` (#911,
-  below).
+  below), `takeStageOutcome() → 'removed' | 'left' | null` (#973: the last unlock removed a staged
+  `.enc.new` that does not open under the data key, or left one it could neither judge nor remove;
+  returned once, for the unlock IPC's one content-free log line on its success and failure paths, no
+  audit type).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
   what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
@@ -1479,7 +1532,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   wording and reach the gate raw);
   `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
-  other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing) — retry once the hold clears, nothing lost;
+  other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing; since #973 also
+  a staged `.enc.new` in doubt that the unlock cannot read: a hold, or an I/O error such as EIO) —
+  retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
   written by a NEWER build — nothing written, update the app; since #845 also the unlock refused
   because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages
@@ -1497,7 +1552,12 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   it, and on a complete schema a second open changes nothing; a HIGHER value throws the typed `WorkspaceNewerError` with the handle closed and the
   file byte-identical. Bump `SCHEMA_VERSION` only for a change an older build must not open.
   Builds ≤ 0.1.59 never read the stamp, so it protects only pairs whose older build is newer
-  than PR #289;
+  than PR #289. **Later-writer rule (#985, frozen for every later release):** schema text an older
+  SQLite cannot parse (a newer clause in an index, a trigger, a generated column, a table option)
+  ships only together with a bump of `SCHEMA_VERSION`. An older build's SQLite fails every schema
+  read of such a file with CORRUPT ("malformed database schema"), and from #985 on its start and
+  unlock keep a working copy or `.recovery` only when the stamp says `newer`: without the bump that
+  file reads as damaged and is discarded. Builds before #985 discard it either way;
   `lockWorkspace` → `WorkspaceStateInfo`, with `lockNotice: 'working_copy_lost'` when the lock
   finished at the last good snapshot because the working file was gone or no longer a database
   (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock, and
@@ -1745,9 +1805,13 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   fail the install: an audit fault is logged and dropped. Metadata `{ jobId, kind:
   'install'|'update'|'reinstall', families, versions: { <family>: <pin> }, sizeBytes: number|null, trigger:
   'user' }`; a failure adds `reason` (`cancelled`, `networkOff`, `checksumMismatch`, `fileMissing`,
-  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, and `internal` for an exception no
+  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, since #986 `noSpace` (no room to
+  unpack, refused before anything was touched) and `filesInUse` (the swap's rename was refused and the
+  installed copy put back), and `internal` for an exception no
   step caught — the job then ends `failed` instead of staying in a live status) and, for `download`, `cause`
-  (`failureReason`: `network`, `http-404`, `write`, …). `ocr_install_started | ocr_install_finished |
+  (`failureReason`: `network`, `http-404`, `write`, …); for `noSpace` (#986) the two byte counts its message
+  named, `neededBytes` and `freeBytes` (from the new `EngineJobEnd.space?: { neededBytes, freeBytes }`).
+  `ocr_install_started | ocr_install_finished |
   ocr_install_failed` come from `services/ocr-install.ts` through the new `StartOcrInstallOptions.audit?`
   sink, which `registerEngineIpc` wires to `ctx.audit` adding the same `trigger: 'user'`: `{ jobId,
   languages, bytes, trigger }`, plus `outcome` when finished and `reason` (the `main.ocr.*` key's last
@@ -2514,6 +2578,31 @@ whole renderer-visible surface.
   `licenseRepo`; `license` is now set for the two required families too), `sizeBytes` from the pin's
   `size_bytes`, which every committed llama.cpp and whisper.cpp build now carries. The renderer sends
   Confirm's request unchanged to `engine:download`: main keeps no consent token.
+  **#986 additions (the staged engine swap; no IPC, no preload, no schema change; `architecture.md` "In-app
+  engine updates" §6):** `EngineJobEndReason` (`runtime-download.ts`) gains `noSpace` and `filesInUse`, and
+  `EngineJobEnd` gains `space?: EngineSpaceShortfall = { neededBytes, freeBytes }` (set for `noSpace`); the
+  job's `error` is `main.engine.notEnoughSpace` (`{needed}`, `{free}`, the model downloader's unit rules) or
+  `main.engine.filesInUse` (new keys, all ten catalogs). **Behaviour change:** a cancel is honoured until the
+  swap's first rename, even after the extraction (it used to finish the install, #516), and arrives too late
+  after it; a failed step leaves the installed copy as it was (it used to leave none, #752). New exports:
+  `assets.ts` `EngineSwapDirs { live, staging, previous }` + `engineSwapDirs(rootPath, extractTo)` (the exact
+  `<live>.new` / `<live>.old` siblings, contained by `resolveWithinRoot`; refuses an install folder that is
+  the drive root), `planInFolder(plan, dir)` (the plan rebased, same marker keys), `engineFolderComplete(plan,
+  dir?)` (the marker parses AND every file its `binaries` map records is present; the plan's required files
+  only for a marker without the map, review round 2); `InstallStep.cpuNet?` (a main build's net plan, which a
+  job recovers, guards and carries whatever it installs); `runtime-download.ts` `stageEngineInstall(plan,
+  stagingDir, { extract?, signal?, log? })` (extract + checks + hashes + flush + marker inside `stagingDir`;
+  the app-update plan's W-30 install reuses it), `engineFolderDeletesSettled()`, `recoverEngineSwaps(rootPath,
+  manifestsDir, { platform?, arch?, log?, warn? })` (called in `index.ts` before any engine is resolved,
+  what it could not do through `warn`; every engine job runs the same rule on its folders before phase 1;
+  never throws); `fs-retry.ts` `renameWithRetry(from, to, platform?)` + `renameMayClear(err, platform?)` +
+  `RENAME_RETRY_BUDGET_MS` (12 s of waits, EPERM/EACCES/EBUSY on Windows only) + `removeRetry(platform?)`
+  (`rm`'s `maxRetries`/`retryDelay` within the same budget, Windows only); phase 2 installs a family's
+  `cpu/` net before its main build; `archive-size.ts`
+  `extractedArchiveBytes(path, clusterBytes)` (zip central directory or tar.gz ustar headers, each file
+  rounded to the unit; null for anything it cannot size, Zip64 included). `assertCommercialDrive` fails
+  `runtimeCurrent` (or `optionalRuntimesConsistent`) for a leftover `<extract_to>.new` / `.old` beside a
+  pinned build, and the Kit gate scripts' pre-flight says so too.
 - **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
   (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
   all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:

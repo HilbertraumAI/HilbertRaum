@@ -2979,6 +2979,15 @@ export const de: Record<keyof typeof en, string> = {
   // #516: das Update hält die Engine für den Dateitausch an, das würde laufende Arbeit abbrechen.
   'main.engine.updateBusy':
     'Die KI-Engine wird gerade verwendet (eine Antwort, ein Import, eine Übersetzung oder eine Dokumentaufgabe läuft). Versuche das Update erneut, wenn sie fertig ist.',
+  // #986: siehe en.ts — vor jeder Änderung abgelehnt; Zahlen wie bei main.download.notEnoughSpace.
+  'main.engine.notEnoughSpace':
+    'Auf diesem Laufwerk ist nicht genug Speicherplatz frei: Die Engine braucht entpackt {needed}, ' +
+    'frei sind {free}. Gib auf dem Laufwerk Speicherplatz frei und versuche es dann erneut.',
+  // #986: siehe en.ts — der Tausch per Umbenennen wurde verweigert; die installierte Kopie blieb, oder beide
+  // Kopien blieben, und der nächste Versuch (oder Start) setzt die neue ein.
+  'main.engine.filesInUse':
+    'Die Engine konnte nicht ersetzt werden, weil ein anderes Programm eine ihrer Dateien verwendet ' +
+    '(zum Beispiel ein Virenscanner). Bitte versuche es in einer Minute erneut.',
   // #410: der In-App-Installer für die OCR-Sprachdateien (services/ocr-install.ts).
   'main.ocr.badRequest':
     'Die Anfrage zum Herunterladen der OCR-Dateien wurde nicht verstanden. Bitte versuche es ' +

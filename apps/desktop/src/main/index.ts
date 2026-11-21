@@ -1,10 +1,12 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
+import { recoverEngineSwaps } from './services/runtime-download'
 import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
 import { createMainWindowCloseGuard, holdQueueOnQuit, trackQuitRequests } from './close-guard'
@@ -27,6 +29,7 @@ import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
+import { addLogRedactionRoots, currentAccountNames, setLogRedactionRoots } from './services/log-redact'
 import { initPerf, perfMark, perfMs } from './services/perf'
 import { createTrustedSenders } from './ipc/guarded-handle'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
@@ -140,6 +143,17 @@ const isDev = !app.isPackaged
 // disk under the unsuffixed path (CHANGELOG notes the move).
 if (isDev) app.setPath('userData', `${app.getPath('userData')}-dev`)
 
+// #975: what Diagnostics shows and Copy / Save log hand out names these folders by placeholder (`<app-data>`, …) and
+// this computer's account as `<user>` (services/log-redact.ts). Registered here, before anything in the start can log
+// or fail; the drive root is added once `resolvePaths` has found it (initBackend). The log at rest keeps the paths.
+setLogRedactionRoots({
+  appData: app.getPath('userData'),
+  home: homedir(),
+  temp: tmpdir(),
+  app: [dirname(app.getPath('exe')), process.resourcesPath, app.getAppPath()],
+  account: currentAccountNames()
+})
+
 // #208: refuse to run a second instance on the same userData. Two live instances destroy
 // an encrypted vault: the second one's startup crash-sweep random-overwrites the first
 // one's plaintext working DB in place (on Windows the overwrite passes SQLite's share
@@ -215,6 +229,8 @@ function initBackend(): void {
     envRoot: driveRoot.root,
     fallbackRoot: app.getPath('userData')
   })
+  // #975: the drive root joins the roots registered at the top of this module, before anything here touches the drive.
+  addLogRedactionRoots({ driveRoot: paths.rootPath })
   ensureWorkspaceDirs(paths)
   initLogging(paths.logsPath)
   // #982: the core dump filter ran before logging existed (`initLogging` starts an empty buffer); a refusal is
@@ -338,6 +354,16 @@ function initBackend(): void {
     appPath: app.getAppPath()
   })
   log.info('Model manifests directory', { manifestsDir, bundledManifestsDir })
+  // #986: an engine install swaps its folders by rename; a kill, an unplug or a crash between the
+  // renames leaves `<os>.new`/`<os>.old` beside the install. Finish or roll that back NOW, before
+  // anything resolves an engine binary: the transcriber slot below is chosen once, from whether
+  // whisper-cli is there, and the engine check (`startEngineCheck`) spawns the chat engine. Renames
+  // only on this path (milliseconds); deletes run in the background. Reads the app's own pins (#842).
+  recoverEngineSwaps(paths.rootPath, bundledManifestsDir, {
+    log: (m, meta) => log.info(m, meta),
+    // A refused move or delete, or a failure: the layout waits for the next start, worth a warning.
+    warn: (m, meta) => log.warn(m, meta)
+  })
 
   // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
   // Both are opt-in by availability — the selectors return the real backend only when

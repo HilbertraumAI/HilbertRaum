@@ -371,6 +371,38 @@ export function newerPlaintext<T extends VaultPaths>(vp: T): T {
   return vp
 }
 
+/**
+ * #985: the workspace database at `path` (it holds the app schema) as a NEWER build can leave it: `PRAGMA user_version`
+ * set to `userVersion` (default one above this build's `SCHEMA_VERSION`) and, with `unparseable` (the default), one
+ * index whose `sqlite_schema` text this SQLite cannot parse. Then `PRAGMA user_version` still reads, and every schema
+ * read fails with SQLITE_CORRUPT ("malformed database schema"), as app-update review 4 measured. Through a raw handle
+ * (no migrations), closed again: as the last connection it checkpoints the WAL into the file and removes both sidecars.
+ * The unparseable text is written by patching the file's bytes after the close (`CREATE INDEX` → `CREATE INDEZ`, the
+ * same length, so no page layout changes), not through `PRAGMA writable_schema`: a node:sqlite build that runs SQLite
+ * in defensive mode refuses that write ("table sqlite_master may not be modified"; CI's Windows Node 24 runner).
+ */
+export function writeNewerSchema(path: string, opts: { userVersion?: number; unparseable?: boolean } = {}): void {
+  const unparseable = opts.unparseable ?? true
+  const raw = openRawDb(path)
+  try {
+    raw.exec(`PRAGMA user_version = ${opts.userVersion ?? SCHEMA_VERSION + 1};`)
+    if (unparseable) raw.exec('CREATE INDEX w985_future ON settings(key);')
+  } finally {
+    raw.close()
+  }
+  if (!unparseable) return
+  const bytes = readFileSync(path)
+  const from = Buffer.from('CREATE INDEX w985_future', 'utf8')
+  const to = Buffer.from('CREATE INDEZ w985_future', 'utf8')
+  let patched = 0
+  for (let at = bytes.indexOf(from); at >= 0; at = bytes.indexOf(from, at + from.length)) {
+    to.copy(bytes, at)
+    patched++
+  }
+  if (patched === 0) throw new Error('writeNewerSchema: the index text was not found in the database file')
+  writeFileSync(path, bytes)
+}
+
 export interface WorkspaceIpcCtxOptions {
   /** `ctx.runtime.stop` (default: resolves at once). */
   stopRuntime?: () => Promise<void>

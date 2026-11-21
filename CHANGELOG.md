@@ -107,14 +107,40 @@ from its first public `1.0.0` release onward.
   proxy certificate was set only there, downloads fail until it is installed on the computer,
   which your IT department can do. Every downloaded file is still checked against a fixed checksum
   before use (#564).
+- **A log you copy or save for support hides your folders and your account name.** Copy and Save
+  to file… in Settings → Diagnostics (advanced) → Recent logs handed out full paths, such as
+  `C:\Users\<your name>\AppData\…`. Now the drive, your home folder and the app's data and
+  temporary folders show as `<drive>`, `<home>`, `<app-data>` and `<temp>`, and this computer's
+  account name shows as `<user>` wherever it appears, as do account names in the usual folder paths
+  from another computer. The rest of each path stays, so support can still see which file failed.
+  A name in an unusual place can remain, for example in a folder you named yourself, so read a log
+  before you share it. The log on the drive keeps the full paths (#975).
 
 ### Fixed
 
+- **A failed AI engine update or reinstall no longer leaves the drive with no engine.** Installing,
+  updating or reinstalling an engine deleted the engine on the drive first and then unpacked the new
+  one in its place. If the drive filled up, an antivirus program held one of the new files, or the
+  computer slept or the drive was unplugged during that step, there was no engine at all, and chat
+  stopped until it was downloaded again. Now the new engine is unpacked and checked beside the old
+  one, and only then swapped in, so a failure or a cancel leaves the old engine as it was and
+  working. Before it touches anything, the app checks that the drive has room for the unpacked
+  engine and says how much it needs if not. If a security program holds a file, the app waits a
+  few seconds and tries again, and otherwise puts the old engine back and says so (if even that is
+  refused, trying again finishes the swap once the other program lets go). If the app stopped in the middle of the swap, the next
+  start finishes it or puts the old engine back.
+  Cancel now stops an update until the swap begins, even after the files were unpacked (#986).
 - **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
   workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
   a password, creating the workspace replaced that file, and with it the only key that opens that
   workspace. Creating is now refused. A setup that failed partway also no longer leaves a file
   behind that the next start would write over a workspace you put back into the same folder (#954).
+- **A workspace you put back after a setup that a crash cut short now opens.** When a crash or a
+  power cut stopped the setup of a new workspace, it left a file behind in `workspace/`. If you then
+  copied a workspace back into the same folder (its `config/workspace.json` and its encrypted file),
+  the next start could replace that workspace with the leftover file, and every unlock said the
+  workspace was damaged, for good. The next start now removes the leftover, and the unlock checks
+  such a file against your workspace's key before it uses it (#973).
 - **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
   source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
   letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the
@@ -142,6 +168,10 @@ from its first public `1.0.0` release onward.
   backup. And when creating a workspace finds
   one on the drive after all, the lock screen no longer asks you to restart: it switches to the
   unlock screen for that workspace at once (#955).
+- **A key file saved with a byte-order mark opens.** If `config/workspace.json` was saved by a
+  program that adds a byte-order mark in front of the text (Windows PowerShell 5.1, older versions
+  of Notepad, some sync tools), the lock screen said the file can't be read, and no password could
+  open the workspace. It now opens normally (#974).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When
   Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
   running, the next document task in line started during that wait and was stopped a moment
@@ -192,6 +222,12 @@ from its first public `1.0.0` release onward.
   workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
   encrypted. When no copy was left, the lock screen now says so, and that you should not create a
   new workspace (#911).
+- **A copy of your workspace that a later version left on the drive is kept.** If a later version
+  of HilbertRaum could not lock the workspace when it closed (on a full drive, for example) and you
+  then start this version on the same drive, this version could delete the readable copy that held
+  the later version's last session, or the whole workspace when its encrypted file was missing
+  too. It now keeps that copy as it is, and the unlock says the workspace was written by a newer
+  HilbertRaum: start the newer version to open it (#985).
 - **A workspace file you put back while the app is open keeps your newest changes.** Putting
   `config/workspace.json` back while the lock screen was open, as the lock screen advises when it is
   missing, and then unlocking could open the workspace at its last saved state and drop the newer

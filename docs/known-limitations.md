@@ -1766,9 +1766,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   repetitive text can still be lost ("List all action items" over a transcript where twenty
   near-identical commitments surround the three real ones found none of them, with or without the
   question in the notes); on a 9B model, a list request over a document whose clauses repeat can fill
-  the notes with the repeated clause and miss the real items (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12 with the
-  question in the notes, 11 and 10 without, two runs each; left for a separate fix); and when the notes
-  had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
+  the notes with the repeated clause and miss the real items in some runs (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12
+  in one session, 11 and 11 in a later one on the same prompt); two rewordings of the list instruction made it
+  worse, so the prompt stays as it is. A 4B model's notes on a long document copy the skill's report format
+  into every part, and its answers can loop or invent details; a shorter map prompt cut the copying but did
+  not improve the answers, so that stays too ([`rag-design.md`](rag-design.md) §14.10.1); and when the
+  notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
   The answer still says it read the whole document, which is true of what it read, not of what the notes
   kept.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
@@ -3693,8 +3696,9 @@ reports and phase plans were working papers; their full text lives in git histor
   `runtime/kiwix-tools/<os>/` by hand still works as a last-resort fallback, but leaves no
   marker, so it resolves through the hashless `skip-legacy` verifier path (residual R-1) instead
   of integrity verification — and it is replaced **wholesale** the first time someone installs
-  the family from inside the app or the script (the installer pre-cleans the family's directory
-  before extracting), so a manually provisioned drive is not stranded, only superseded. The
+  the family from inside the app or the script (the in-app installer builds a fresh copy beside it
+  and swaps it in, #986; the script pre-cleans the family's directory before extracting), so a
+  manually provisioned drive is not stranded, only superseded. The
   in-app install needs **Settings → Allow internet access for downloads and updates** on
   and a drive policy that permits downloads (the same gate models and the engine use). Linux and
   macOS builders without the in-app path use the script.
