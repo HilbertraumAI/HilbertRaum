@@ -506,6 +506,21 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).not.toContain('mac@b9999')
       })
 
+      // #986 review: a leftover that is a link whose target is gone is still a leftover (the canonical
+      // gate lstats it). The PowerShell twin looks at the entry itself, not its target.
+      it('names a leftover that is a dangling link (#986)', () => {
+        const root = scriptRoot('script-swap-link-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        const gone = mkdtempSync(join(tmpdir(), 'hilbertraum-script-gone-'))
+        mkdirSync(join(root, 'runtime', 'llama.cpp'), { recursive: true })
+        symlinkSync(gone, join(root, 'runtime', 'llama.cpp', 'win.old'), process.platform === 'win32' ? 'junction' : 'dir')
+        rmSync(gone, { recursive: true, force: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/llama.cpp/win.old is left from an interrupted engine install')
+      })
+
       it('rejects an unknown platform label before doing anything (exit 2)', () => {
         const root = scriptRoot('script-plat-')
         const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-arm64'])

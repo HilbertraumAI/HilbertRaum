@@ -451,7 +451,9 @@ if (-not $DryRun) {
       # the install until the app's next start there finishes or rolls back the swap. A Kit must
       # not ship either: it is a second engine copy (assertCommercialDrive parity). Exact names.
       foreach ($swapLeft in @("$rtDir.new", "$rtDir.old")) {
-        if (Test-Path -LiteralPath (Join-Path $Target $swapLeft)) {
+        # Get-Item -Force sees the entry itself, a dangling link or junction too (Test-Path follows a
+        # symbolic link to its missing target); the .sh twin tests -e || -L, the canonical gate lstat.
+        if (Get-Item -LiteralPath (Join-Path $Target $swapLeft) -Force -ErrorAction SilentlyContinue) {
           $problems += "runtime: $swapLeft is left from an interrupted engine install (start the app on this drive once, or delete it)"
         }
       }
