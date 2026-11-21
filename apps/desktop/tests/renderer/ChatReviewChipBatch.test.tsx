@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { act, waitFor, cleanup, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type { Conversation, Message } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
-import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
+import { chatScreenStubs, conversationRow, deferred, renderChatScreen } from '../helpers/chat-screen'
 import { assistantMsg, makeConversation, userMsg } from '../helpers/chat-fixtures'
 import { makeSummary } from '../helpers/evidenceReview'
 import { t } from '../../src/shared/i18n'
@@ -217,5 +219,68 @@ describe('#976 — a review on an answer with no sources keeps its chip', () => 
     await waitFor(() => expect(document.querySelectorAll('.msg-block.assistant')).toHaveLength(1))
     await settleUntilQuiescent(() => read.mock.calls.length)
     expect(read).not.toHaveBeenCalled()
+  })
+})
+
+// Review round 1 (O5): the once-per-conversation rule of #976. The read is remembered per conversation (`reviewReadForRef`),
+// forgotten on a switch, and a new answer without sources does not ask again.
+describe('#976 — the first read is once per conversation open', () => {
+  const NO_SOURCES = (id: string, conversationId: string): Message =>
+    assistantMsg(id, 'I could not find this in your documents.', { conversationId })
+  const docsConv = (id: string, title: string): Conversation => makeConversation({ id, title, modelId: 'm1', mode: 'documents' })
+
+  it('switching away while the other conversation is still reading, and back, reads the first one again and keeps its review', async () => {
+    const pendingB = deferred<ReturnType<typeof makeSummary>[]>()
+    const read = vi.fn(async (id: string) => (id === 'c2' ? pendingB.promise : [makeSummary({ id: 'r-a1', messageId: 'a1' })]))
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [docsConv('c1', 'Alpha chat'), docsConv('c2', 'Beta chat')]),
+        listMessages: vi.fn(async (id: string) => [userMsg(`q-${id}`, 'Thanks!'), NO_SOURCES(id === 'c1' ? 'a1' : 'b1', id)]),
+        getEvidenceReviewSummariesForConversation: read
+      })
+    )
+    const user = userEvent.setup()
+    renderChatScreen({ onOpenReview: () => {} })
+    await screen.findByText('Alpha chat')
+    await user.click(conversationRow('Alpha chat'))
+    expect(await screen.findByRole('button', { name: t('en', 'review.action.continue') })).toBeInTheDocument()
+    expect(read.mock.calls.filter((c) => c[0] === 'c1')).toHaveLength(1)
+
+    // Beta's read never lands before the user goes back.
+    await user.click(conversationRow('Beta chat'))
+    await waitFor(() => expect(read).toHaveBeenCalledWith('c2'))
+    await user.click(conversationRow('Alpha chat'))
+    await waitFor(() => expect(read.mock.calls.filter((c) => c[0] === 'c1').length).toBeGreaterThan(1))
+    expect(await screen.findByRole('button', { name: t('en', 'review.action.continue') })).toBeInTheDocument()
+    pendingB.resolve([])
+  })
+
+  it('a re-render and a new answer without sources do not read again', async () => {
+    const read = vi.fn(async (_id: string) => [] as ReturnType<typeof makeSummary>[])
+    const history = [userMsg('q1', 'Thanks!'), NO_SOURCES('a1', 'c1')]
+    const askDocuments = vi.fn(async () => {
+      history.push(userMsg('q2', 'And the deposit?'), NO_SOURCES('a2', 'c1'))
+      return NO_SOURCES('a2', 'c1')
+    })
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [docsConv('c1', 'Alpha chat')]),
+        listMessages: vi.fn(async () => [...history]),
+        getEvidenceReviewSummariesForConversation: read,
+        askDocuments
+      })
+    )
+    const user = userEvent.setup()
+    const view = renderChatScreen({ initialConversationId: 'c1', onOpenReview: () => {} })
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+    await settleUntilQuiescent(() => read.mock.calls.length)
+    view.rerender(<ChatScreen onOpenReview={() => {}} initialConversationId="c1" onNavigate={() => {}} />)
+
+    await user.type(await screen.findByRole('textbox'), 'And the deposit?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(askDocuments).toHaveBeenCalled())
+    await waitFor(() => expect(document.querySelectorAll('.msg-block.assistant')).toHaveLength(2))
+    await settleUntilQuiescent(() => read.mock.calls.length)
+    expect(read).toHaveBeenCalledTimes(1)
   })
 })
