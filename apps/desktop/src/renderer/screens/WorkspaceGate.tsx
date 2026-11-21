@@ -128,15 +128,6 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
   // the field and `!canSubmit` disables the submit button focus was sitting on, dead-ending
   // keyboard users (autoFocus fires only at mount). The retry path re-focuses the field.
   const unlockInputRef = useRef<HTMLInputElement>(null)
-  // #955 item 3: the create refusal that switched the gate to its unlock form. It is carried across the switch and set
-  // once the unlock form's always-mounted error region is in the tree, so it reads as a text change inside a region
-  // that was already there: a region inserted already holding its text is missed by many screen readers (#436, M-U1).
-  const carriedError = useRef<string | null>(null)
-  useEffect(() => {
-    if (creating || carriedError.current === null) return
-    setError(carriedError.current)
-    carriedError.current = null
-  }, [creating])
   useEffect(() => {
     if (!creating) return // the UNLOCK path focuses its own field via autoFocus — don't disturb it.
     if (phase === 'password') passwordInputRef.current?.focus()
@@ -202,8 +193,9 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
   /**
    * #955 item 3: after a create refused as `workspace_exists`, re-read main's state. A workspace is on the drive after
    * all (main reads `locked`; its unlock runs the start's steps), so hand the state to the parent, which shows the
-   * unlock form; the refusal goes with it. False (the create form keeps the refusal) without a parent to tell, when the
-   * read fails, or when main still reads another state.
+   * unlock form; the refusal goes with it, into the error region the two forms share (see the password card below).
+   * False (the create form keeps the refusal) without a parent to tell, when the read fails, or when main still reads
+   * another state.
    */
   async function switchedToUnlock(refusal: string): Promise<boolean> {
     if (!onStateChange) return false
@@ -214,7 +206,7 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
       return false
     }
     if (next?.state !== 'locked') return false
-    carriedError.current = refusal
+    setError(refusal)
     onStateChange(next)
     return true
   }
@@ -269,49 +261,9 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
     </div>
   )
 
-  // ---- Unlock: a single calm screen -------------------------------------------
-  if (!creating) {
-    const noticeKey = lockNoticeKey(state)
-    return (
-      // #955 item 3: keyed, so a create form that switches here (a workspace was on the drive after all) is replaced,
-      // not reused: the two forms' fields sit at the same places, and a reused field takes no `autoFocus`.
-      <div className="gate-shell" key="unlock">
-        <form className="gate-card card" onSubmit={(e) => void submit(e)}>
-          {brand}
-          <h1>{t('gate.unlock.title')}</h1>
-          <p className="hint">{t('gate.unlock.hint')}</p>
-          {/* #855: a lock finished at the last good snapshot because the working file was gone or
-              damaged. The state carries it until the next unlock: on what that lock returned, and
-              (#875) on getWorkspaceState() at the next start too, from the marker it left. #892: or
-              the start swept the session the app left when it ended without a lock, in words of
-              its own (and with the free-space advice when the drive was too full to lock). */}
-          {noticeKey !== null && <Banner tone="warning">{t(noticeKey)}</Banner>}
-          <div className="gate-fields">
-            <PasswordField
-              placeholder={t('gate.passwordPlaceholder')}
-              value={password}
-              autoFocus
-              inputRef={unlockInputRef}
-              autoComplete="current-password"
-              show={showPassword}
-              onToggleShow={() => setShowPassword((v) => !v)}
-              onChange={setPassword}
-              t={t}
-            />
-          </div>
-          {/* SH-2 (#145): always-mounted so the FIRST wrong-password failure is announced. */}
-          <ErrorBanner message={error} t={t} />
-          <Button type="submit" variant="primary" disabled={!canSubmit || busy}>
-            {busy ? t('gate.unlock.submitBusy') : t('gate.unlock.submit')}
-          </Button>
-        </form>
-      </div>
-    )
-  }
+  // ---- Create: the first run's welcome, finishing and starter steps ------------
 
-  // ---- Create: the 3-step first run --------------------------------------------
-
-  if (phase === 'welcome') {
+  if (creating && phase === 'welcome') {
     return (
       <div className="gate-shell">
         <div className="gate-card card">
@@ -329,7 +281,7 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
     )
   }
 
-  if (phase === 'finishing') {
+  if (creating && phase === 'finishing') {
     // Once weight hashing starts (a progress event with real work) the bare spinner gives
     // way to a determinate, byte-weighted bar with a "model N of M" label; before that —
     // and when everything is cached (no events) — the calm hint stays.
@@ -371,7 +323,7 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
     )
   }
 
-  if (phase === 'starter') {
+  if (creating && phase === 'starter') {
     return (
       <div className="gate-shell">
         <div className="gate-card card">
@@ -401,66 +353,104 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
     )
   }
 
-  // phase === 'password'
+  // ---- The password card: the create step (phase 'password') and the unlock screen --------
+  //
+  // One form for both (#955 item 3, walk round). A create refused because a workspace is on the drive after all
+  // switches this card to the unlock screen, and the card keeps its always-mounted error region (SH-2) across the
+  // switch, so the refusal arrives as a text change inside a region that was there before (#436, M-U1). A separate
+  // unlock form, mounted by the switch, put in a region already holding the text: in the real app its insertion and its
+  // text came in the same frame. Each child keeps its slot in both modes, so the DOM of each mode is what it was; the
+  // fields are keyed by mode, so the unlock field mounts fresh and takes its `autoFocus` (a reused create field takes
+  // none).
   const strength = passwordStrength(password)
+  const noticeKey = creating ? null : lockNoticeKey(state)
   return (
     <div className="gate-shell">
       <form className="gate-card card" onSubmit={(e) => void submit(e)}>
         {brand}
-        <h1>{t('gate.create.title')}</h1>
-        <p className="hint">{t('gate.create.hint')}</p>
+        <h1>{creating ? t('gate.create.title') : t('gate.unlock.title')}</h1>
+        <p className="hint">{creating ? t('gate.create.hint') : t('gate.unlock.hint')}</p>
 
-        {state.plaintextAllowed && (
-          <Switch
-            checked={mode === 'plaintext_dev'}
-            onChange={(on) => setMode(on ? 'plaintext_dev' : 'encrypted')}
-            label={t('gate.create.plaintextToggle')}
-          />
-        )}
+        {creating
+          ? state.plaintextAllowed && (
+              <Switch
+                checked={mode === 'plaintext_dev'}
+                onChange={(on) => setMode(on ? 'plaintext_dev' : 'encrypted')}
+                label={t('gate.create.plaintextToggle')}
+              />
+            )
+          : // #855: a lock finished at the last good snapshot because the working file was gone or
+            // damaged. The state carries it until the next unlock: on what that lock returned, and
+            // (#875) on getWorkspaceState() at the next start too, from the marker it left. #892: or
+            // the start swept the session the app left when it ended without a lock, in words of
+            // its own (and with the free-space advice when the drive was too full to lock).
+            noticeKey !== null && <Banner tone="warning">{t(noticeKey)}</Banner>}
 
-        {usingPassword && (
-          <div className="gate-fields">
+        {creating ? (
+          usingPassword && (
+            <div className="gate-fields" key="create-fields">
+              <PasswordField
+                placeholder={t('gate.passwordPlaceholder')}
+                value={password}
+                inputRef={passwordInputRef}
+                autoComplete="new-password"
+                show={showPassword}
+                onToggleShow={() => setShowPassword((v) => !v)}
+                onChange={setPassword}
+                t={t}
+              />
+              {password.length > 0 && <PasswordStrengthMeter strength={strength} t={t} />}
+              {strength.hintKey && <p className="hint">{t(strength.hintKey, strength.hintParams)}</p>}
+              <PasswordField
+                placeholder={t('gate.create.confirmPlaceholder')}
+                value={confirm}
+                autoComplete="new-password"
+                show={showPassword}
+                onChange={setConfirm}
+                t={t}
+              />
+              {confirm.length > 0 && confirm !== password && (
+                <p className="hint warn">{t('password.mismatch')}</p>
+              )}
+            </div>
+          )
+        ) : (
+          <div className="gate-fields" key="unlock-fields">
             <PasswordField
               placeholder={t('gate.passwordPlaceholder')}
               value={password}
-              inputRef={passwordInputRef}
-              autoComplete="new-password"
+              autoFocus
+              inputRef={unlockInputRef}
+              autoComplete="current-password"
               show={showPassword}
               onToggleShow={() => setShowPassword((v) => !v)}
               onChange={setPassword}
               t={t}
             />
-            {password.length > 0 && <PasswordStrengthMeter strength={strength} t={t} />}
-            {strength.hintKey && <p className="hint">{t(strength.hintKey, strength.hintParams)}</p>}
-            <PasswordField
-              placeholder={t('gate.create.confirmPlaceholder')}
-              value={confirm}
-              autoComplete="new-password"
-              show={showPassword}
-              onChange={setConfirm}
-              t={t}
-            />
-            {confirm.length > 0 && confirm !== password && (
-              <p className="hint warn">{t('password.mismatch')}</p>
-            )}
           </div>
         )}
 
-        {mode === 'plaintext_dev' && (
+        {creating && mode === 'plaintext_dev' && (
           <Banner tone="warning">{t('gate.create.plaintextWarning')}</Banner>
         )}
 
-        {/* SH-2 (#145): always-mounted so the FIRST create-flow failure is announced. */}
+        {/* SH-2 (#145): always-mounted so the FIRST failure is announced, and kept across the switch above. */}
         <ErrorBanner message={error} t={t} />
 
-        <div className="gate-actions">
-          <Button variant="ghost" disabled={busy} onClick={() => setPhase('welcome')}>
-            {t('gate.create.back')}
-          </Button>
+        {creating ? (
+          <div className="gate-actions">
+            <Button variant="ghost" disabled={busy} onClick={() => setPhase('welcome')}>
+              {t('gate.create.back')}
+            </Button>
+            <Button type="submit" variant="primary" disabled={!canSubmit || busy}>
+              {busy ? t('gate.create.submitBusy') : t('gate.create.submit')}
+            </Button>
+          </div>
+        ) : (
           <Button type="submit" variant="primary" disabled={!canSubmit || busy}>
-            {busy ? t('gate.create.submitBusy') : t('gate.create.submit')}
+            {busy ? t('gate.unlock.submitBusy') : t('gate.unlock.submit')}
           </Button>
-        </div>
+        )}
       </form>
     </div>
   )

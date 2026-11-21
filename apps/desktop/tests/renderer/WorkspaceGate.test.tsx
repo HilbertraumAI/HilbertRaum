@@ -393,8 +393,9 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
 // #955 item 3: a create refused because a workspace is on the drive after all (its key file copied back while the
 // create form was up). The form used to stay until a restart, and its copy said "Restart HilbertRaum". Main now reads
 // `locked` (its unlock runs the start's steps over that vault), so the gate re-reads the state and hands it to its parent,
-// which shows the unlock form. The refusal arrives in the unlock form's own always-mounted alert region, after that
-// region is in the document: a region inserted already holding its text is missed by many screen readers (#436).
+// which shows the unlock form. Walk round: the create step and the unlock screen are one card, so the alert region the
+// create step mounted is the very element that receives the refusal; a region mounted by the switch got its text in the
+// same frame in the real app, which many screen readers miss (#436, M-U1).
 describe('WorkspaceGate — a create refused because a workspace is on the drive (#955 item 3)', () => {
   it('re-reads the state and shows the unlock form, the refusal arriving in its alert region, focus on its field', async () => {
     const user = userEvent.setup()
@@ -412,18 +413,15 @@ describe('WorkspaceGate — a create refused because a workspace is on the drive
     await toPasswordStep(user)
     await user.type(screen.getByPlaceholderText('Password'), 'longenough')
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
-    const added: MutationRecord[] = []
-    const observer = new MutationObserver((records) => added.push(...records))
-    observer.observe(document.body, { childList: true, subtree: true })
+    // The create step's own region, in the document and empty before the refusal.
+    const region = screen.getByRole('alert')
+    expect(region).toBeEmptyDOMElement()
     await user.click(screen.getByRole('button', { name: /create workspace/i }))
 
     expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
-    const region = screen.getByRole('alert')
-    await waitFor(() => expect(region).toHaveTextContent(t('en', 'main.workspace.exists')))
-    added.push(...observer.takeRecords())
-    observer.disconnect()
-    // The text came as a change inside the region, not with the region's own insertion.
-    expect(added.some((record) => record.target === region && record.addedNodes.length > 0)).toBe(true)
+    // The same element after the switch, the refusal now inside it.
+    expect(screen.getByRole('alert')).toBe(region)
+    expect(region).toHaveTextContent(t('en', 'main.workspace.exists'))
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Password'))
     expect(getWorkspaceState).toHaveBeenCalledTimes(1)
     expect(onUnlocked).not.toHaveBeenCalled()

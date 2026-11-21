@@ -644,7 +644,13 @@ export function encryptFile(srcPath: string, destPath: string, key: Buffer): voi
       }
       out = null
     }
-    rmSync(tmp, { force: true })
+    // Walk round: best-effort, as `encryptFileAsync`'s is. A temp this cannot remove (a directory at its name, a hold)
+    // threw `ERR_FS_EISDIR` from `rm` here and replaced the error being reported (an `open` EISDIR, an ENOSPC).
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* the encrypt's own failure is the one that propagates */
+    }
     throw err
   } finally {
     try {

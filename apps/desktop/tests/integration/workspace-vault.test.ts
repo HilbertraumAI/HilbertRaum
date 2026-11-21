@@ -360,6 +360,23 @@ describe('streaming file crypto (M5)', () => {
     expect(decrypted.equals(plaintext)).toBe(true)
   })
 
+  // Walk round (#956's lock line in the real app): an encrypt that fails removes its temp best-effort. A directory at
+  // the temp's name failed the open (EISDIR), and the cleanup's own `rm` of that directory threw `ERR_FS_EISDIR` over
+  // it, so the lock's log line named the cleanup, not the cause.
+  it('an encrypt whose temp is a directory rethrows the open error, not the cleanup’s', () => {
+    const src = tmpFile('plain.bin', randomBytes(64))
+    const enc = `${src}.enc`
+    mkdirSync(`${enc}.tmp`)
+    let thrown: NodeJS.ErrnoException | null = null
+    try {
+      encryptFile(src, enc, randomBytes(32))
+    } catch (err) {
+      thrown = err as NodeJS.ErrnoException
+    }
+    expect({ code: thrown?.code, syscall: thrown?.syscall }).toEqual({ code: 'EISDIR', syscall: 'open' })
+    expect(existsSync(enc)).toBe(false)
+  })
+
   it('an in-memory serializeBlob file decrypts via the streamed decryptFile (old vaults)', () => {
     const key = randomBytes(32)
     const plaintext = randomBytes(1024 * 1024 + 3)
