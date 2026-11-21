@@ -800,10 +800,11 @@ matching the unencrypted dev DB.
 in readable form, so the workspace's failure lines carry no paths: the create's content-free line
 (#807) is the rule for every failure line of the unlock, the password change, the lock and the quit
 teardown (`main/shutdown.ts`), through `failureForLog` (`services/failure-for-log.ts`). A Node file
-error, one with a `syscall`, `path` or `dest`, or with an errno code alone, logs its kind, code and
-system call, never its message, which names the drive's or the user profile's paths. The system call
-is kept only as a bare name: a spawn error's names the binary's path. Any other error keeps its
-message. A refused lock's `VaultLockError` carries what caused it (`failure`: where the lock stopped
+error, one with a `syscall`, `path` or `dest`, or with an errno code (`E…`) or a Node `ERR_FS_*` code
+alone (a `cpSync` refusal carries only that), logs its kind, code and system call, never its message,
+which names the drive's or the user profile's paths. The system call is kept only as a bare name: a
+spawn error's names the binary's path. Any other error keeps its message, other Node `ERR_*` codes
+included (`ERR_SQLITE_ERROR` keeps SQLite's fixed text). A refused lock's `VaultLockError` carries what caused it (`failure`: where the lock stopped
 and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. About
 25 other main-process log lines still write an error's whole text (a separate issue).
 

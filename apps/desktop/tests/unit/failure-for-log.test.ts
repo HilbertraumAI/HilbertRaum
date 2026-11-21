@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { causeFailure, failureForLog } from '../../src/main/services/failure-for-log'
+import { tempRoot } from '../helpers/db-fixtures'
 
 // #956: the one rule every workspace and quit failure line follows (registerWorkspaceIpc's arms, shutdown.ts's, the
 // VaultLockError cause). A file error's message names the drive's or the profile's paths, and app.log is what
@@ -29,6 +32,27 @@ describe('failureForLog (#956)', () => {
   it('an errno code alone makes a file error (N-8)', () => {
     const err = Object.assign(new Error(`EPERM: operation not permitted, rename '${ROOT}\\x.enc.new'`), { code: 'EPERM' })
     expect(failureForLog(err)).toEqual({ error: 'Error', code: 'EPERM', syscall: null })
+  })
+
+  // Security review V S-2: Node's own `ERR_FS_*` errors are file errors too. A real one from `cpSync` carries no
+  // `syscall`, `path` or `dest`, and its message names the source and the target ("Cannot copy … to a subdirectory of
+  // self …").
+  it('a Node ERR_FS_* error (a real cpSync refusal) logs its code, never its message or path', () => {
+    const root = tempRoot('failure-for-log')
+    const dir = join(root, 'copied-folder')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'f'), 'f')
+    let err: unknown = null
+    try {
+      cpSync(dir, join(dir, 'sub'), { recursive: true })
+    } catch (caught) {
+      err = caught
+    }
+    expect((err as NodeJS.ErrnoException | null)?.code).toBe('ERR_FS_CP_EINVAL')
+    const fields = failureForLog(err)
+    expect(fields).toEqual({ error: (err as Error).name, code: 'ERR_FS_CP_EINVAL', syscall: null })
+    expect(logged(fields)).not.toContain('copied-folder')
+    expect(logged(fields)).not.toContain(basename(root))
   })
 
   // A spawn error's `syscall` is `spawn <binary path>` (runtime/sidecar.ts `errnoCode`): only a bare name is kept.

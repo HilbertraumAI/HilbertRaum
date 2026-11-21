@@ -2351,8 +2351,9 @@ export class WorkspaceController {
   /** #845: what {@link init} found a newer build wrote (the vault format verdict), or null. While set, `init()` has
    *  written nothing, the workspace reports locked, and every unlock refuses with `VaultNewerError`. */
   private _vaultNewer: { what: VaultNewerWhat; found: string | number } | null = null
-  /** Review V F-2: the last {@link init} ran its steps to their end (false before the first, and after one that threw
-   *  part-way). Read by {@link vaultAppearedSinceStart}. */
+  /** Review V F-2: the last {@link init} ran its steps to their end (false before the first, after one that threw
+   *  part-way, and, security review V S-1, after one that stopped at a newer-format verdict or a blocked salvage).
+   *  Read by {@link vaultAppearedSinceStart} only. */
   private _startStepsDone = false
   /** Review V F-2: a loss {@link init} judged (it then shredded that session) and has not recorded yet: an `init()` that
    *  stops between the sweep and the record leaves it for the next one (`enc`: the frame IV it was judged against). */
@@ -2564,7 +2565,9 @@ export class WorkspaceController {
   init(): void {
     this._startStepsDone = false
     this.runStartSteps()
-    this._startStepsDone = true
+    // Security review V S-1: a run that stopped at a newer-format verdict or a blocked salvage skipped the steps and
+    // wrote nothing, so it is not "done" (a create's `readFormat()` can clear that verdict later without running them).
+    this._startStepsDone = this._vaultNewer === null && !this._recoveryBlocked
   }
 
   /** The steps of {@link init}. */

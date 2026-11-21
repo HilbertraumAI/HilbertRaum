@@ -1562,6 +1562,25 @@ describe('a workspace put back after the start (#954, #955)', () => {
     expect(readFileSync(`${vp.encPath}${REKEY_SUFFIX}`).equals(leftover)).toBe(true)
   })
 
+  // Security review V S-1 (probe S9; the first review's N-1): the start found a newer build's rekey journal and skipped
+  // its steps (#845). The journal goes away, and a create (a direct IPC call: the lock screen offers none while locked)
+  // clears the verdict through `readFormat()`, adopts the descriptor and is refused. The unlock after it must still run
+  // the start's salvage, or it decrypts `.enc` over the newer working file of the last session.
+  it('a newer verdict that clears, then a refused create: the unlock still keeps the newer working file (#845)', () => {
+    const vp = lockedVault('vault', 'pw')
+    failedLockState(vp, 7171, 'pw') // a working file newer than `.enc`: the only copy of the last session
+    const journal = join(dirname(vp.encPath), 'rekey-journal.json')
+    writeFileSync(journal, JSON.stringify({ version: 99 }))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.newerVaultFormat()).not.toBeNull()
+    rmSync(journal) // a backup restored, the newer copy rolled back
+    expect(thrownBy(() => ctl.create('brand-new-pw', 'encrypted')).name).toBe('WorkspaceExistsError')
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    ctl.lock()
+  })
+
   // Review V F-3 (probe P2): an unreadable key file that appears under the create form, with no `.enc`. The create
   // answered "unlock it with its password" and every unlock then said no password can open it; the create now answers
   // what the unlock answers, and the file stays as it was.

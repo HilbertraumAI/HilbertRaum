@@ -23,6 +23,11 @@ type ErrorFields = {
  *  `ERR_SQLITE_ERROR` keeps its message and SQLite's fixed description. */
 const ERRNO_CODE = /^E[A-Z0-9]+$/
 
+/** Node's own file-system codes (`ERR_FS_EISDIR`, `ERR_FS_CP_EINVAL`, …): security review V S-2, a `cpSync` error
+ *  carries one with no `syscall`, `path` or `dest`, and its message names both paths. Only this family: every other
+ *  `ERR_*` (`ERR_SQLITE_ERROR`) keeps its message. */
+const NODE_FS_CODE = /^ERR_FS_[A-Z0-9_]+$/
+
 /** A bare system-call name (`open`, `rename`, `copyfile`, `scandir`). A spawn error's `syscall` is `spawn <binary
  *  path>`, so anything else is dropped. */
 const BARE_SYSCALL = /^[a-z_]+$/
@@ -33,14 +38,14 @@ export function bareSyscall(syscall: unknown): string | null {
 }
 
 /**
- * True for a Node file or system error: one carrying a `syscall`, a `path` or a `dest`, or an errno code (N-8: an
- * error built with only `code: 'EPERM'` still has the path in its message).
+ * True for a Node file or system error: one carrying a `syscall`, a `path` or a `dest`, an errno code (N-8: an error
+ * built with only `code: 'EPERM'` still has the path in its message), or a Node `ERR_FS_*` code.
  */
 export function isFileError(err: unknown): boolean {
   const e = err as ErrorFields
   if (e == null || typeof e !== 'object') return false
   if (e.syscall !== undefined || e.path !== undefined || e.dest !== undefined) return true
-  return typeof e.code === 'string' && ERRNO_CODE.test(e.code)
+  return typeof e.code === 'string' && (ERRNO_CODE.test(e.code) || NODE_FS_CODE.test(e.code))
 }
 
 /**
