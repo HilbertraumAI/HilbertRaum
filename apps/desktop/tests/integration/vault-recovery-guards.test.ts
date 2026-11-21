@@ -83,6 +83,10 @@ const failures = vi.hoisted(() => ({
   /** #807 (C S-1): renameSync throws Node's own EPERM, with its absolute paths, for the create's last step (the staged
    *  `.enc.new` onto `.sqlite.enc`): an antivirus or indexer holding the new file on Windows. */
   renameThrowOnStagedEnc: false,
+  /** #954: right after the create's stage lands (`encryptFile`'s rename of `.enc.new.tmp` onto `.enc.new`), these bytes
+   *  are written at `path`: a workspace's key file copied back while the create derives its key and stages its
+   *  database, after the checks at its start and before its commit. */
+  putBackDescriptorOnStage: null as { path: string; bytes: Buffer } | null,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
   hits: {
@@ -94,7 +98,8 @@ const failures = vi.hoisted(() => ({
     statSync: 0,
     encStat: 0,
     openSyncWorking: 0,
-    renameStagedEnc: 0
+    renameStagedEnc: 0,
+    putBackOnStage: 0
   }
 }))
 
@@ -128,6 +133,13 @@ vi.mock('node:fs', async (importOriginal) => {
           errnoError('EPERM', `EPERM: operation not permitted, rename '${String(from)}' -> '${String(to)}'`),
           { errno: -4048, syscall: 'rename', path: String(from), dest: String(to) }
         )
+      }
+      const putBack = failures.putBackDescriptorOnStage
+      if (putBack && String(from).endsWith('.enc.new.tmp') && String(to).endsWith('.enc.new')) {
+        actual.renameSync(from, to)
+        actual.writeFileSync(putBack.path, putBack.bytes)
+        failures.hits.putBackOnStage += 1
+        return
       }
       return actual.renameSync(from, to)
     }),
@@ -209,6 +221,7 @@ beforeEach(() => {
   failures.encDeletePending = false
   failures.openThrowOnWorkingFile = false
   failures.renameThrowOnStagedEnc = false
+  failures.putBackDescriptorOnStage = null
   failures.hits = {
     renameSync: 0,
     openSync: 0,
@@ -218,7 +231,8 @@ beforeEach(() => {
     statSync: 0,
     encStat: 0,
     openSyncWorking: 0,
-    renameStagedEnc: 0
+    renameStagedEnc: 0,
+    putBackOnStage: 0
   }
   ipcState.handlers.clear()
 })
@@ -434,7 +448,8 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       statSync: 0,
       encStat: 0,
       openSyncWorking: 0,
-      renameStagedEnc: 0
+      renameStagedEnc: 0,
+      putBackOnStage: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -741,6 +756,31 @@ describe('the start over an encrypted file that is missing or cannot be read (#9
     expect(existsSync(recoveryPath)).toBe(false)
     ctl.lock()
   })
+
+  // Review V F-4: "the encrypted workspace file isn't on the drive" (`vault_descriptor_unreadable`) needs a stat that
+  // says ENOENT. Beside an unreadable key file, a delete-pending `.enc` (EPERM on a stat, false from `existsSync`) proves
+  // neither: the unlock fails as before ("Could not open the workspace."), and the create is refused as a workspace on
+  // the drive, never with that copy.
+  it('a stat of .enc that fails with EPERM beside an unreadable key file never says the encrypted file is missing', async () => {
+    const vp = lockedVault('recovery-guards', 'pw')
+    writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    failures.encDeletePending = true
+    let unlocked: unknown
+    let created: unknown
+    try {
+      unlocked = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+      created = (await invoke(handlers, IPC.createWorkspace, 'long-enough-pw', 'encrypted')).result
+    } finally {
+      failures.encDeletePending = false
+    }
+    expect(failures.hits.encStat).toBeGreaterThan(0)
+    expect(unlocked).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.openFailed') })
+    expect(created).toEqual({ ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') })
+    ctl.shutdown()
+  })
 })
 
 // #807 (C S-1): the create IPC used to recognise its two refusals by their English wording, `/not permitted|already
@@ -776,10 +816,40 @@ describe('a file error while a workspace is created (#807)', () => {
       expect(line).not.toContain(escapedRoot)
       expect(line).not.toContain('hilbertraum.sqlite')
     }
-    // The create did not finish: nothing is open, and the lock screen still offers the create (a retry overwrites the
-    // staged files; a restart rolls them forward).
+    // The create did not finish, but it committed its key file: nothing is open, and the state reads `locked` (#954: a
+    // key file is on the drive), so a retry is refused and the lock screen shows its unlock form, where the password
+    // just chosen opens the workspace once the start's steps roll the staged file into place (#955 item 2; a restart
+    // does the same). Before #954 the state read `uninitialized` and the retry rewrote the key file just committed.
     expect(ctl.isUnlocked()).toBe(false)
-    expect(ctl.getState().state).toBe('uninitialized')
+    expect(ctl.getState().state).toBe('locked')
+    ctl.shutdown()
+  })
+
+  // #954 (owner call G-7 A): the commit replaces whatever is at the descriptor's name, and the key derivation and the
+  // stage before it take about half a second. A key file copied back inside that window passes the checks at the
+  // create's start; the re-check right before the commit refuses it, and the staged file goes too (S-1: left, the next
+  // start would roll it over the `.enc` of that workspace once it is back). The copy lands as the stage's last rename
+  // finishes, between the two checks.
+  it('a key file put back while the create stages its database is refused at the commit, nothing staged left (#954)', async () => {
+    const vp = freshVaultPaths('recovery-guards-create')
+    const putBack = readFileSync(lockedVault('recovery-guards-src', 'pw').descriptorPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    failures.putBackDescriptorOnStage = { path: vp.descriptorPath, bytes: putBack }
+    let result: unknown
+    try {
+      result = (await invoke(handlers, IPC.createWorkspace, 'long-enough-pw', 'encrypted')).result
+    } finally {
+      failures.putBackDescriptorOnStage = null
+    }
+    expect(failures.hits.putBackOnStage).toBe(1)
+    expect(result).toEqual({ ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') })
+    expect(readFileSync(vp.descriptorPath).equals(putBack)).toBe(true)
+    expect(existsSync(`${vp.encPath}.new`)).toBe(false)
+    expect(existsSync(vp.encPath)).toBe(false)
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(ctl.getState().state).toBe('locked')
     ctl.shutdown()
   })
 })

@@ -2608,6 +2608,11 @@ export const nl: UiCatalog<'nl'> = {
     'Het bestand met de sleutel van je werkruimte (config/workspace.json) ontbreekt op de schijf of ' +
     'is niet leesbaar, dus geen enkel wachtwoord kan de werkruimte openen. Maak geen nieuwe ' +
     'werkruimte aan. Zet het bestand terug of herstel het vanuit een back-up.',
+  'main.workspace.descriptorUnreadable':
+    'Het bestand met de sleutel van je werkruimte (config/workspace.json) is niet leesbaar en het ' +
+    'versleutelde bestand van de werkruimte ontbreekt op de schijf, dus geen enkel wachtwoord kan de ' +
+    'werkruimte openen. Verwijder het sleutelbestand niet. Herstel beide bestanden vanuit een ' +
+    'back-up, of lees de handleiding voor probleemoplossing voordat je opnieuw begint.',
   'main.workspace.vaultOpenFailed':
     'Je wachtwoord klopt, maar HilbertRaum kon het openen van de werkruimte niet afronden. ' +
     'De versleutelde werkruimte op de schijf is ongewijzigd gebleven. Zorg dat er vrije ' +
@@ -2624,8 +2629,8 @@ export const nl: UiCatalog<'nl'> = {
   'main.workspace.createFailed': 'De werkruimte kon niet worden aangemaakt.',
   'main.workspace.passwordTooShort': 'Het wachtwoord moet minstens {min} tekens lang zijn.',
   'main.workspace.exists':
-    'Op deze schijf staat al een werkruimte, dus er is geen nieuwe aangemaakt. Start HilbertRaum ' +
-    'opnieuw om de werkruimte te ontgrendelen met het wachtwoord van die werkruimte.',
+    'Op deze schijf staat al een werkruimte, dus er is geen nieuwe aangemaakt. Ontgrendel die ' +
+    'werkruimte met het wachtwoord dat erbij hoort.',
   'main.workspace.plaintextNotAllowed':
     'Een werkruimte zonder wachtwoord is hier niet toegestaan. Maak de werkruimte in plaats daarvan ' +
     'aan met een wachtwoord.',

@@ -2804,6 +2804,12 @@ export const fr: UiCatalog<'fr'> = {
     'disque ou illisible, et aucun mot de passe ne peut donc ouvrir l’espace de travail. Ne créez ' +
     'pas de nouvel espace de travail. Remettez le fichier à sa place ou restaurez-le à partir d’une ' +
     'sauvegarde.',
+  'main.workspace.descriptorUnreadable':
+    'Le fichier qui contient la clé de votre espace de travail (config/workspace.json) est illisible ' +
+    'et le fichier chiffré de l’espace de travail est absent du disque. Aucun mot de passe ne peut ' +
+    'donc ouvrir l’espace de travail. Ne supprimez pas le fichier de clé. Restaurez les deux ' +
+    'fichiers à partir d’une sauvegarde, ou consultez le guide de dépannage avant de repartir de ' +
+    'zéro.',
   'main.workspace.vaultOpenFailed':
     'Votre mot de passe est correct, mais HilbertRaum n’a pas pu terminer l’ouverture de ' +
     'l’espace de travail. L’espace de travail chiffré sur le disque est resté tel quel. ' +
@@ -2823,7 +2829,7 @@ export const fr: UiCatalog<'fr'> = {
   'main.workspace.passwordTooShort': 'Le mot de passe doit comporter au moins {min} caractères.',
   'main.workspace.exists':
     'Un espace de travail existe déjà sur ce disque, aucun nouvel espace n’a donc été créé. ' +
-    'Redémarrez HilbertRaum pour le déverrouiller avec son mot de passe.',
+    'Déverrouillez-le avec son mot de passe.',
   'main.workspace.plaintextNotAllowed':
     'Un espace de travail sans mot de passe n’est pas autorisé ici. Créez l’espace de travail avec ' +
     'un mot de passe.',

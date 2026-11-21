@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync
+} from 'node:fs'
 
 // IPC-layer tests for registerWorkspaceIpc — the exception→result mapping the unlock gate
 // depends on (a wrong password / policy refusal / weak password must be a NORMAL
@@ -240,6 +251,25 @@ describe('registerWorkspaceIpc', () => {
     registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { docTasks: manager } }))
     try {
       expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [doc] })
+      expect(manager.getDocTask(jobId).state).toBe('running')
+      expect((await waitTerminal(manager, jobId)).state).toBe('done')
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // #955 item 4: the create seam had no release. A first-run create is no moment of a quit either, so a hold left set
+  // before it kept every document task of the new workspace queued for the session.
+  it('a create clears a quit hold left set: the next document task runs (#955 item 4)', async () => {
+    const w = docTaskWorld('wsipc-hold')
+    const doc = await importWords(w, 50)
+    const manager = docTaskManager(w, { getRuntime: () => docTaskRuntime() })
+    manager.holdQueueForQuit()
+    const ctrl = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: { docTasks: manager } }))
+    try {
+      expect((await invoke(handlers, IPC.createWorkspace, 'brand-new-pw', 'encrypted')).result).toMatchObject({ ok: true })
       const { jobId } = manager.startDocTask({ kind: 'summary', documentIds: [doc] })
       expect(manager.getDocTask(jobId).state).toBe('running')
       expect((await waitTerminal(manager, jobId)).state).toBe('done')
@@ -719,6 +749,29 @@ describe('registerWorkspaceIpc', () => {
   })
 })
 
+describe('a workspace put back under the create form (#954)', () => {
+  // #954, #955 item 3 (main side): a key file copied back under an open create form. The create is refused, and the
+  // state the lock screen re-reads says `locked`, so it shows its unlock form; that form then tells the truth: the
+  // workspace's `.enc` is still elsewhere (the #911 copy), and once it is back the same session opens it.
+  it('a key file put back under the create form: create refused, the state locked, and the workspace opens once complete (#954)', async () => {
+    const vp = freshVaultPaths('wsipc')
+    const ctrl = startedOn(vp)
+    const other = lockedVault('wsipc', PW)
+    copyFileSync(other.descriptorPath, vp.descriptorPath)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    try {
+      const { result } = await invoke(handlers, IPC.createWorkspace, 'brand-new-pw', 'encrypted')
+      expect(result).toEqual({ ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') })
+      expect(((await invoke(handlers, IPC.getWorkspaceState)).result as WorkspaceStateInfo).state).toBe('locked')
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'vault_missing' })
+      copyFileSync(other.encPath, vp.encPath)
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+})
+
 // UI-languages owner call D-17 (a), and the wave's code review: the first-run gate shows a
 // failed unlock or create in ITS language, from `reason`, with the key its tables
 // (`shared/workspace-failure-keys.ts`) hold: a copy of the choice each branch of the handlers
@@ -793,6 +846,17 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
         }
       }
     ],
+    // #955 item 1: the key file is there but cannot be read, and no `.enc` is beside it. Answered for any password.
+    vault_descriptor_unreadable: [
+      {
+        how: 'a config/workspace.json that is not JSON, with no .enc beside it',
+        arrange: () => {
+          const vp = freshVaultPaths('wsipc')
+          writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+          return { workspace: startedOn(vp), args: [PW] }
+        }
+      }
+    ],
     // #844: a healthy database whose open's upgrade step cannot finish is not damage.
     vault_open_failed: [
       {
@@ -854,6 +918,18 @@ describe('main’s unlock/create failure copy is the copy the gate’s tables pi
     vault_damaged: NEVER_SENT,
     vault_missing: NEVER_SENT,
     vault_descriptor_missing: NEVER_SENT,
+    // Review V F-3: an unreadable key file that appeared under the create form, with no `.enc`: the unlock's refusal.
+    vault_descriptor_unreadable: [
+      {
+        how: 'a config/workspace.json that is not JSON put under the create form, with no .enc',
+        arrange: () => {
+          const vp = freshVaultPaths('wsipc')
+          const workspace = startedOn(vp)
+          writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+          return { workspace, args: ['longenough', 'encrypted'] }
+        }
+      }
+    ],
     vault_open_failed: NEVER_SENT,
     vault_recovery_blocked: NEVER_SENT,
     workspace_newer: [
@@ -1267,7 +1343,9 @@ describe('the typed workspace refusals are recognised by name too (#807)', () =>
   it.each<[string, 'create' | 'unlock', WorkspaceFailureReason, MessageKey]>([
     ['WorkspaceExistsError', 'create', 'workspace_exists', 'main.workspace.exists'],
     ['PlaintextNotAllowedError', 'create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
-    ['VaultDescriptorMissingError', 'unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing']
+    ['VaultDescriptorMissingError', 'unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing'],
+    ['VaultDescriptorUnreadableError', 'unlock', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable'],
+    ['VaultDescriptorUnreadableError', 'create', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable']
   ])('a %s from another copy of the module answers %s %s', async (name, call, reason, key) => {
     const thrower = (): never => {
       throw named(name)
@@ -1307,5 +1385,138 @@ describe('the log line of a create that failed for another reason than a file er
     expect(logged).toHaveLength(1)
     expect(logged[0]).toContain('"error":"TypeError"')
     expect(logged[0]).toContain(JSON.stringify(cause).slice(1, -1))
+  })
+})
+
+// #956: the unlock, password-change and lock arms logged `String(err)`, and a Node file error's text names the drive's
+// or the profile's absolute paths, which Diagnostics → Copy and Save log hand out. Each arm now logs `failureForLog`
+// (its rule is failure-for-log.test.ts's): these rows hold the wiring, each with a real file error (a directory where a
+// temp file goes) or a stand-in that throws what Node throws.
+describe('a workspace failure line names no path (#956)', () => {
+  /** The log lines written after `marker` that contain `needle`. */
+  function linesAfter(marker: string, needle: string): string[] {
+    const all = readLogTail(100_000)
+    return all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes(needle))
+  }
+  /** Neither `root` nor its JSON-escaped spelling (a Windows path inside a JSON log field) is in `line`. */
+  const namesNoPath = (line: string, root: string): boolean =>
+    !line.includes(root) && !line.includes(JSON.stringify(root).slice(1, -1))
+  /** What Node throws for a file operation: code, syscall, path, and a message naming the path. */
+  const nodeFileError = (code: string, syscall: string, path: string): NodeJS.ErrnoException =>
+    Object.assign(new Error(`${code}: failed, ${syscall} '${path}'`), { code, syscall, path, errno: -1 })
+  const mark = (): string => {
+    const marker = `#956 marker ${randomUUID()}`
+    log.info(marker)
+    return marker
+  }
+
+  it('an unlock whose roll-forward meets a file error logs its code, not the path', async () => {
+    const vp = lockedVault('wsipc', PW)
+    failedLockState(vp, 7171, PW) // a working file newer than `.enc`: the start keeps it, the unlock re-encrypts it
+    const ctrl = startedOn(vp)
+    mkdirSync(`${vp.encPath}.tmp`) // encryptFile's temp: EISDIR, Node's error naming the path
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'error' })
+      const lines = linesAfter(marker, 'Workspace unlock failed')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('EISDIR')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      ctrl.shutdown()
+    }
+  })
+
+  it('a password change whose key file write meets a file error logs its code, not the path', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const ctrl = unlockedController(vp, PW)
+    mkdirSync(`${vp.descriptorPath}.tmp`) // writeVaultDescriptor's temp: EISDIR
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      const { result } = await invoke(handlers, IPC.changeWorkspacePassword, PW, 'another-password')
+      expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.changeFailed') })
+      const lines = linesAfter(marker, 'Workspace password change failed')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('EISDIR')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // The lock's four settle steps never throw by their callees' contracts (`awaitActiveTaskSettled` swallows,
+  // `awaitSettled` "never rejects"); a stand-in that breaks the contract with a file error reaches each arm.
+  it.each<[string, string, (error: Error) => Record<string, unknown>]>([
+    [
+      'document-task',
+      'Error awaiting doc-task settle on lock',
+      (error) => ({
+        docTasks: {
+          abortActiveBuild: () => {},
+          cancelAllDocTasks: () => {},
+          awaitActiveTaskSettled: () => {
+            throw error
+          }
+        }
+      })
+    ],
+    [
+      'skill-run',
+      'Error settling skill runs on lock',
+      (error) => ({ skillRuns: { cancelAll: () => {}, awaitSettled: async () => Promise.reject(error) } })
+    ],
+    [
+      'plaintext-operation',
+      'Error settling plaintext operations on lock',
+      (error) => ({
+        plaintextOps: { abortAll: () => {}, size: () => 0, sweepRegistered: () => 0, awaitSettled: async () => Promise.reject(error) }
+      })
+    ],
+    [
+      'knowledge-pack',
+      'Error settling knowledge-pack operations on lock',
+      (error) => ({
+        zimOps: { abortAll: () => {}, size: () => 0, sweepRegistered: () => 0, awaitSettled: async () => Promise.reject(error) }
+      })
+    ]
+  ])('a lock whose %s settle throws a file error logs its code, not the path', async (_step, needle, extra) => {
+    const vp = lockedVault('wsipc', PW)
+    const ctrl = unlockedController(vp, PW)
+    const error = nodeFileError('EBUSY', 'unlink', join(dirname(vp.dbPath), 'documents', 'held.parse'))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl, { extra: extra(error) }))
+    const marker = mark()
+    expect((await invoke(handlers, IPC.lockWorkspace)).result).toMatchObject({ state: 'locked' })
+    const lines = linesAfter(marker, needle)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('EBUSY')
+    expect(namesNoPath(lines[0], vp.root)).toBe(true)
+  })
+
+  // S-5: the failed lock's line said only "Could not lock the workspace"; the cause support needs was dropped.
+  it('a failed lock logs what caused it (ENOSPC), still with no path (S-5)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const fullDrive = (_src: string, dest: string): void => {
+      throw nodeFileError('ENOSPC', 'write', `${dest}.tmp`)
+    }
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, fullDrive)
+    ctrl.init()
+    ctrl.unlock(PW)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      await expect(invoke(handlers, IPC.lockWorkspace)).rejects.toThrow(tMain('main.workspace.lockFailed'))
+      const lines = linesAfter(marker, 'Workspace lock failed')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('"code":"ENOSPC"')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      try {
+        ctrl.shutdown() // open again after the failed lock; the seam fails this lock too
+      } catch {
+        /* expected: VaultLockError */
+      }
+    }
   })
 })

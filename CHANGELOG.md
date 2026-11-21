@@ -110,6 +110,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
+  workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
+  a password, creating the workspace replaced that file, and with it the only key that opens that
+  workspace. Creating is now refused. A setup that failed partway also no longer leaves a file
+  behind that the next start would write over a workspace you put back into the same folder (#954).
 - **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
   source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
   letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the
@@ -130,6 +135,13 @@ from its first public `1.0.0` release onward.
   failed because another program, such as antivirus, held one of its new files, the lock screen
   showed the system's own English error with the full path of the file on the drive; it now says
   "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
+- **The lock screen says when the workspace's key file can't be read and the encrypted file is
+  gone.** With `config/workspace.json` damaged and the encrypted workspace file not on the drive,
+  every unlock said "Could not open the workspace." The lock screen now says so, also when you try to
+  create a workspace then, and that you should not delete the key file but restore both files from a
+  backup. And when creating a workspace finds
+  one on the drive after all, the lock screen no longer asks you to restart: it switches to the
+  unlock screen for that workspace at once (#955).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When
   Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
   running, the next document task in line started during that wait and was stopped a moment
@@ -167,6 +179,11 @@ from its first public `1.0.0` release onward.
   full to lock. The changes made after the last lock were lost then too, and until now the next
   start said nothing. When the drive is too full, the message asks you to free space first, so the
   next session doesn't end the same way (#892).
+- **Error lines in the diagnostics log no longer contain your drive's or your user folder's paths.**
+  When unlocking, changing the password, locking or quitting failed on a file, the line in the
+  diagnostics log, which Copy and Save log hand out, carried the file's full path, which can include
+  your user name. It now names the error's code, such as `ENOSPC`, and a lock that fails now says what
+  caused it (#956).
 - **A workspace whose encrypted file was removed from the drive is no longer lost.** If something
   outside HilbertRaum deleted the workspace's encrypted file (a sync or cleanup tool, a disk check)
   and the app then started, it also removed the unencrypted copy your last session left, and the
@@ -175,6 +192,11 @@ from its first public `1.0.0` release onward.
   workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
   encrypted. When no copy was left, the lock screen now says so, and that you should not create a
   new workspace (#911).
+- **A workspace file you put back while the app is open keeps your newest changes.** Putting
+  `config/workspace.json` back while the lock screen was open, as the lock screen advises when it is
+  missing, and then unlocking could open the workspace at its last saved state and drop the newer
+  changes the drive still held from a lock that had failed. The unlock now first runs the same
+  checks a start runs (#955).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;

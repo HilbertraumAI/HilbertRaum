@@ -796,6 +796,18 @@ under the **same vault key as the database and the document cache** (AES-256-GCM
 `app.1.log.enc`). On a `plaintext_dev` workspace the log stays a plain rotating `app.log`,
 matching the unencrypted dev DB.
 
+**Workspace failure lines name no path (#956).** Diagnostics → Copy and Save log hand the log out
+in readable form, so the workspace's failure lines carry no paths: the create's content-free line
+(#807) is the rule for every failure line of the unlock, the password change, the lock and the quit
+teardown (`main/shutdown.ts`), through `failureForLog` (`services/failure-for-log.ts`). A Node file
+error, one with a `syscall`, `path` or `dest`, or with an errno code (`E…`) or a Node `ERR_FS_*` code
+alone (a `cpSync` refusal carries only that), logs its kind, code and system call, never its message,
+which names the drive's or the user profile's paths. The system call is kept only as a bare name: a
+spawn error's names the binary's path. Any other error keeps its message, other Node `ERR_*` codes
+included (`ERR_SQLITE_ERROR` keeps SQLite's fixed text). A refused lock's `VaultLockError` carries what caused it (`failure`: where the lock stopped
+and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. About
+25 other main-process log lines still write an error's whole text (a separate issue).
+
 ### Design record — encrypted log (2026-06-13)
 
 The wrinkle is **timing**: logging starts at app launch, *before* the vault is unlocked, so the
@@ -1465,6 +1477,35 @@ password. Four guards close this:
   nothing new creates over a vault. With no reset in the app, the way to start over after a
   forgotten password is by hand: `config/workspace.json` and `workspace/` set aside together
   (troubleshooting, "I forgot my workspace password", #931).
+- **A key file put back is never replaced, and a vault that appears is opened like a start (#954,
+  #955).** The create's check read the descriptor the start had read, so a valid
+  `config/workspace.json` copied back while the lock screen showed its create form (its `.enc` still
+  elsewhere) was replaced by the new workspace's, and with it the only wrapped copy of that
+  workspace's data key. The check now also reads the descriptor file live, as `getState()` does:
+  any `config/workspace.json` makes the state `locked` and refuses the create (the plaintext create
+  too, S-4). A vault seen at the start still counts on its own for the session, so a drive that drops
+  out never turns the lock screen into the create form. The `createEncryptedVaultOnDisk` belt refuses
+  a descriptor file as well as an `.enc`, before it opens anything, and checks both again right
+  before its commit (the descriptor write), because the key derivation and the stage before it take
+  about half a second. What is left is the moment between that check and the rename (owner call
+  G-7 A: a hard-link no-clobber gains nothing on exFAT Kits, and a `wx` claim would leave a 0-byte
+  descriptor after a crash, breaking CODE-14's order). A create that fails before its commit removes
+  what it staged (`.enc.new`, `.enc.new.tmp`, `workspace.json.tmp`) once its encrypt has returned;
+  an encrypt that fails removes only its own temp, so a staged file that was there before is not
+  touched. Left behind, the next start's rekey recovery rolled the `.enc.new` forward under a v2
+  descriptor, over the `.enc` of a workspace put back into the same folder, which then read as
+  damaged (S-1). A crash between the stage and the commit still leaves the file (a separate issue).
+  A refused create writes nothing. A descriptor the last `init()` did not adopt (put back after the
+  start, as the #807 copy advises, or one it could not read), or one whose `init()` threw part-way
+  (a held file in the rekey recovery), gets the start's steps (the salvage, the sweep, the rekey
+  recovery, the notices) before an unlock decrypts anything: the unlock used to decrypt the `.enc`
+  over a working file newer than it (S-2). A loss such a run judged and swept before it stopped is
+  recorded by the run that finishes, against the same `.enc`. A descriptor file that cannot be read,
+  with no `.enc` beside it (a stat says ENOENT; any other stat failure proves nothing), throws
+  `VaultDescriptorUnreadableError` → `vault_descriptor_unreadable`, at the unlock and at a create
+  over such a file. Its copy says not to delete the key file and never that no data is left: a
+  `.recovery`, an `.enc.new` or stored documents may still be there, and a file saved with a UTF-8
+  byte-order mark reads as unreadable (a separate issue).
 
 ### Vault format versions (#845)
 

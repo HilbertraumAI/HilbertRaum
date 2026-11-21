@@ -4,7 +4,7 @@ import { render, screen, cleanup, within, waitFor } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { getVisionSession, loadSession, clearVisionSession } from '../../src/renderer/lib/visionSession'
-import type { WorkspaceStateInfo } from '../../src/shared/types'
+import type { WorkspaceActionResult, WorkspaceStateInfo } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { LOCKED_ENCRYPTED_WORKSPACE, UNLOCKED_ENCRYPTED_WORKSPACE, appShellStubs } from '../helpers/app-shell'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
@@ -217,5 +217,38 @@ describe('the gate at start (#875)', () => {
     expect(screen.getByText('workspace config unreadable')).toBeInTheDocument()
     expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Password')).not.toBeInTheDocument()
+  })
+})
+
+describe('the gate after a refused create (#955 item 3)', () => {
+  // #955 item 3: App hands the gate main's new state. A create refused because a workspace is on the drive after all
+  // (its key file copied back while the create form was up) shows the unlock form in the same session; App used to
+  // give the gate only `onUnlocked`, so the create form stayed up until a restart.
+  it('switches to the unlock form, with the refusal, when a create finds a workspace on the drive (#955 item 3)', async () => {
+    const uninitialized: WorkspaceStateInfo = { state: 'uninitialized', mode: null, plaintextAllowed: false, encryptionRequired: true }
+    let reads = 0
+    const getWorkspaceState = vi.fn(
+      async (): Promise<WorkspaceStateInfo> => (reads++ === 0 ? uninitialized : LOCKED_ENCRYPTED_WORKSPACE)
+    )
+    const createWorkspace = vi.fn(
+      async (): Promise<WorkspaceActionResult> => ({
+        ok: false,
+        reason: 'workspace_exists',
+        message: t('en', 'main.workspace.exists')
+      })
+    )
+    stubApi(appShellStubs({ getWorkspaceState, createWorkspace, perfMark: vi.fn() }))
+
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: t('en', 'gate.welcome.start') }))
+    await user.type(await screen.findByPlaceholderText(t('en', 'gate.passwordPlaceholder')), 'longenough')
+    await user.type(screen.getByPlaceholderText(t('en', 'gate.create.confirmPlaceholder')), 'longenough')
+    await user.click(screen.getByRole('button', { name: t('en', 'gate.create.submit') }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(await screen.findByText(t('en', 'main.workspace.exists'))).toBeInTheDocument()
+    expect(createWorkspace).toHaveBeenCalledTimes(1)
+    expect(getWorkspaceState).toHaveBeenCalledTimes(2) // App's at start, the gate's after the refusal
   })
 })

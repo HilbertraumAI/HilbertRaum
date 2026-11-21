@@ -2700,6 +2700,11 @@ export const it: UiCatalog<'it'> = {
     'Il file con la chiave della tua area di lavoro (config/workspace.json) manca dall’unità o non è ' +
     'leggibile, quindi nessuna password può aprire l’area di lavoro. Non creare una nuova area di ' +
     'lavoro. Rimetti il file al suo posto o ripristinalo da un backup.',
+  'main.workspace.descriptorUnreadable':
+    'Il file con la chiave della tua area di lavoro (config/workspace.json) non è leggibile e il ' +
+    'file crittografato dell’area di lavoro manca dall’unità, quindi nessuna password può aprire ' +
+    'l’area di lavoro. Non eliminare il file della chiave. Ripristina entrambi i file da un backup, ' +
+    'oppure consulta la guida alla risoluzione dei problemi prima di ricominciare da capo.',
   'main.workspace.vaultOpenFailed':
     'La tua password è corretta, ma HilbertRaum non è riuscito a completare l’apertura ' +
     'dell’area di lavoro. L’area di lavoro crittografata sull’unità è rimasta com’era. ' +
@@ -2716,8 +2721,8 @@ export const it: UiCatalog<'it'> = {
   'main.workspace.createFailed': 'Non è stato possibile creare l’area di lavoro.',
   'main.workspace.passwordTooShort': 'La password deve avere almeno {min} caratteri.',
   'main.workspace.exists':
-    'Su questa unità esiste già un’area di lavoro, quindi non ne è stata creata una nuova. Riavvia ' +
-    'HilbertRaum per sbloccarla con la sua password.',
+    'Su questa unità esiste già un’area di lavoro, quindi non ne è stata creata una nuova. Sbloccala ' +
+    'con la sua password.',
   'main.workspace.plaintextNotAllowed':
     'Qui non è consentita un’area di lavoro senza password. Crea l’area di lavoro con una password.',
   'main.workspace.newPasswordTooShort': 'La nuova password deve avere almeno {min} caratteri.',

@@ -6,6 +6,7 @@ import {
   VaultBusyError,
   VaultDamagedError,
   VaultDescriptorMissingError,
+  VaultDescriptorUnreadableError,
   VaultMissingError,
   VaultOpenFailedError,
   VaultRecoveryBlockedError,
@@ -27,6 +28,7 @@ import { isWorkspaceNewerError } from '../services/db'
 import { getSettings } from '../services/settings'
 import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
+import { failureForLog } from '../services/failure-for-log'
 import { perfMark, perfMs } from '../services/perf'
 import {
   MIN_PASSWORD_LENGTH,
@@ -92,7 +94,7 @@ async function awaitActiveDocTaskSettled(ctx: AppContext): Promise<void> {
   try {
     settle = ctx.docTasks?.awaitActiveTaskSettled?.()
   } catch (err) {
-    log.error('Error awaiting doc-task settle on lock', String(err))
+    log.error('Error awaiting doc-task settle on lock', failureForLog(err))
     return
   }
   if (!settle) return
@@ -119,7 +121,7 @@ async function awaitSkillRunsSettled(ctx: AppContext): Promise<void> {
     const settled = await (ctx.skillRuns?.awaitSettled(LOCK_TASK_SETTLE_TIMEOUT_MS) ?? true)
     if (!settled) log.warn('Lock: a skill run was still running at the settle bound')
   } catch (err) {
-    log.error('Error settling skill runs on lock', String(err))
+    log.error('Error settling skill runs on lock', failureForLog(err))
   }
 }
 
@@ -142,7 +144,7 @@ async function settleAndSweepPlaintextOps(ctx: AppContext): Promise<void> {
     const swept = ops.sweepRegistered()
     if (swept > 0) log.info('Lock: swept registered plaintext transients', { swept })
   } catch (err) {
-    log.error('Error settling plaintext operations on lock', String(err))
+    log.error('Error settling plaintext operations on lock', failureForLog(err))
   }
 }
 
@@ -186,41 +188,7 @@ async function settleAndCleanZimTransients(ctx: AppContext): Promise<void> {
         unconfirmedChildren: report.unconfirmedChildren
       })
   } catch (err) {
-    log.error('Error settling knowledge-pack operations on lock', String(err))
-  }
-}
-
-/**
- * What a failed create logs (#807, C S-1). A Node system error (one carrying a `syscall`, `path` or `dest`: a file
- * error) logs only its kind, code and system call: its message names the drive's absolute paths
- * (`EPERM: operation not permitted, rename 'C:\…\hilbertraum.sqlite.enc.new' -> …`). Any other error keeps its message
- * (review round: a bug in a post-create step, a `TypeError`, must still say what went wrong), with SQLite's result code
- * and fixed description, or a #844 open failure's own content-free `failure`.
- */
-function createFailureForLog(err: unknown): Record<string, unknown> {
-  const e = err as {
-    name?: unknown
-    message?: unknown
-    code?: unknown
-    syscall?: unknown
-    path?: unknown
-    dest?: unknown
-    errcode?: unknown
-    errstr?: unknown
-    failure?: object
-  } | null
-  const kind = typeof e?.name === 'string' ? e.name : typeof err
-  const code = typeof e?.code === 'string' ? e.code : null
-  const systemError = e != null && (e.syscall !== undefined || e.path !== undefined || e.dest !== undefined)
-  if (systemError) return { error: kind, code, syscall: typeof e.syscall === 'string' ? e.syscall : null }
-  const message = err instanceof Error ? err.message : String(err)
-  if (e?.failure && typeof e.failure === 'object') return { error: kind, message, ...e.failure }
-  return {
-    error: kind,
-    message,
-    code,
-    sqliteCode: typeof e?.errcode === 'number' ? e.errcode : null,
-    sqlite: typeof e?.errstr === 'string' ? e.errstr : null
+    log.error('Error settling knowledge-pack operations on lock', failureForLog(err))
   }
 }
 
@@ -257,9 +225,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       const unlockT0 = performance.now()
       const state = ctx.workspace.unlock(password)
       perfMark('unlock_done', { totalMs: perfMs(unlockT0) })
-      // #936 review SF-2: no quit is under way while someone unlocks (the close guard holds the document-task queue
-      // only inside its save or behind its window-modal dialog), so a quit hold still set here is stale (a quit
-      // cancelled outside the guard): clear it, so it can never block this session's document tasks.
+      // #936 review SF-2: no quit is under way while someone unlocks, or creates the workspace (#955 item 4: the create
+      // seam below releases it too; the close guard holds the document-task queue only inside its save or behind its
+      // window-modal dialog), so a quit hold still set here is stale (a quit cancelled outside the guard): clear it, so
+      // it can never block this session's document tasks.
       ctx.docTasks?.releaseQueueHold()
       // The vault key is live now — adopt it for the diagnostics log so it is encrypted at
       // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
@@ -401,6 +370,23 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           message: tMain('main.workspace.descriptorMissing')
         }
       }
+      // #955 item 1: `config/workspace.json` is on the drive but cannot be read, and the encrypted workspace file is not
+      // beside it, so no password can open anything here. Before, a plain English error that read "Could not open the
+      // workspace." on every try. Its own copy says not to delete the key file (a file saved with a byte-order mark
+      // reads as unreadable and can be repaired) and never that no data is left: a `.recovery`, an `.enc.new` or
+      // stored documents may still be on the drive. The log line names no path. instanceof PLUS the name, as above.
+      if (
+        err instanceof VaultDescriptorUnreadableError ||
+        (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')
+      ) {
+        log.error('Workspace unlock failed: the workspace descriptor is unreadable and no encrypted file is beside it')
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (descriptor unreadable)')
+        return {
+          ok: false,
+          reason: 'vault_descriptor_unreadable',
+          message: tMain('main.workspace.descriptorUnreadable')
+        }
+      }
       // #242: the startup salvage is blocked — another program holds the recovery file the
       // last session's newest data must be moved onto, so opening now would decrypt the
       // stale snapshot over it. Its own reason + copy (close the holder, retry; nothing is
@@ -444,7 +430,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (newer workspace)')
         return { ok: false, reason: 'workspace_newer', message: tMain('main.workspace.newer') }
       }
-      log.error('Workspace unlock failed', String(err))
+      // #956: a file error (a roll-forward or a rekey recovery that cannot write) logs its code and system call, never
+      // its message, which names the drive's paths; any other error keeps its message (`failureForLog`).
+      log.error('Workspace unlock failed', failureForLog(err))
       ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')
       return { ok: false, reason: 'error', message: tMain('main.workspace.openFailed') }
     }
@@ -475,6 +463,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       try {
         const state = ctx.workspace.create(password, mode)
+        // #936 review SF-2, #955 item 4: like an unlock, a create is no moment of a quit (the close guard holds the
+        // document-task queue only inside its save or behind its window-modal dialog, and `create` runs synchronously on
+        // the main thread), so a quit hold still set here is stale (a quit called off outside the guard): clear it, so
+        // it can never block this session's document tasks.
+        ctx.docTasks?.releaseQueueHold()
         // Encrypted: adopt the fresh vault key for the log. Plaintext_dev: switch the log to
         // the plain file (`attachLogKey` dispatches on the workspace mode).
         attachLogKey(ctx)
@@ -510,6 +503,20 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // #807: the two expected refusals are typed, each with its own reason, which the gate renders in its own
         // language (D-17). A workspace is already on the drive: a new one would replace the user's data with an empty
         // vault. instanceof PLUS the name, the bundle-duplication quirk (see the unlock catch).
+        // Review V F-3: a key file that appeared under the create form but cannot be read, with no `.enc` beside it:
+        // the unlock's own refusal (an unlock form would answer it on every try), with the same copy. The log line
+        // names no path.
+        if (
+          err instanceof VaultDescriptorUnreadableError ||
+          (err instanceof Error && err.name === 'VaultDescriptorUnreadableError')
+        ) {
+          log.warn('Workspace create refused: the workspace descriptor is unreadable and no encrypted file is beside it')
+          return {
+            ok: false,
+            reason: 'vault_descriptor_unreadable',
+            message: tMain('main.workspace.descriptorUnreadable')
+          }
+        }
         if (err instanceof WorkspaceExistsError || (err instanceof Error && err.name === 'WorkspaceExistsError')) {
           log.warn('Workspace create refused: a workspace already exists on the drive')
           return { ok: false, reason: 'workspace_exists', message: tMain('main.workspace.exists') }
@@ -527,7 +534,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // antivirus holds the new file used to match the old `/not permitted|already exists/` wording and reach the
         // gate raw, with absolute paths, and unlogged). The log line names no path: a file error logs its code and
         // system call only; any other error keeps its message (#844's open failure adds what failed, its `failure`).
-        log.error('Workspace create failed', createFailureForLog(err))
+        log.error('Workspace create failed', failureForLog(err))
         return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }
@@ -597,8 +604,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // Everything else, including the #845 refusals (the descriptor on disk is a newer build's, or no
         // longer the one this session unlocked; nothing was written), reads "change failed, your current
         // password still works": true, and the gate's "update the app to open it" would be wrong on an
-        // open workspace. The log line carries the error's own content-free message.
-        log.error('Workspace password change failed', String(err))
+        // open workspace. #956: a file error (the descriptor's temp, a document sidecar or a stored copy the rekey
+        // stages) logs its code and system call, never its message, which names the path; any other error keeps its
+        // message (`failureForLog`).
+        log.error('Workspace password change failed', failureForLog(err))
         logProbeFallbacks(ctx)
         return {
           ok: false,
@@ -844,7 +853,9 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
     // surface for the rest of the session with nothing to explain it. One disarm point covers
     // this path and any other throw out of the teardown.
     attachLogKey(ctx)
-    log.error('Workspace lock failed — workspace stays unlocked', String(err))
+    // #956: `VaultLockError` is content-free; what caused it (`ENOSPC`, `EPERM`, …) rides along as its `failure`
+    // (S-5: before, the line named no cause at all). No path, no message of the cause.
+    log.error('Workspace lock failed — workspace stays unlocked', failureForLog(err))
     logProbeFallbacks(ctx)
     ctx.audit?.('workspace_lock_failed', 'Workspace lock failed (workspace stays unlocked)')
     throw new Error(tMain('main.workspace.lockFailed'))

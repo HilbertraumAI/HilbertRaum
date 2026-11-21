@@ -33,6 +33,8 @@ export const UNLOCK_FAILURE_KEYS = {
   vault_damaged: 'main.workspace.vaultDamaged',
   vault_missing: 'main.workspace.vaultMissing',
   vault_descriptor_missing: 'main.workspace.descriptorMissing',
+  // #955 item 1: the descriptor file is there but unreadable, and no `.enc` beside it.
+  vault_descriptor_unreadable: 'main.workspace.descriptorUnreadable',
   vault_open_failed: 'main.workspace.vaultOpenFailed',
   vault_recovery_blocked: 'main.workspace.recoveryBlocked',
   workspace_newer: 'main.workspace.newer',
@@ -51,6 +53,8 @@ export const CREATE_FAILURE_KEYS = {
   vault_damaged: null,
   vault_missing: null,
   vault_descriptor_missing: null,
+  // Review V F-3: an unreadable key file that appeared under the create form with no `.enc`: the unlock's own copy.
+  vault_descriptor_unreadable: 'main.workspace.descriptorUnreadable',
   vault_open_failed: null,
   vault_recovery_blocked: null,
   workspace_newer: 'main.workspace.newer',

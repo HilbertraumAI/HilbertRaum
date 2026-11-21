@@ -798,3 +798,38 @@ describe('overall teardown deadline (#238 / #230)', () => {
     }
   })
 })
+
+// #956: the quit teardown's failure lines follow the workspace lock's rule (`failureForLog`, whose rule is
+// failure-for-log.test.ts's): a Node file error logs its code and bare system call, never its message, which names the
+// drive's paths and lands in the log Diagnostics hands out. The two arms a real file error reaches: the lock at quit and
+// the synchronous emergency lock (a session end, a crash), both meeting a full drive at the re-encrypt.
+describe('a quit failure line names no path (#956)', () => {
+  const tmp = join('C:', 'Users', 'someone', 'HilbertRaum', 'workspace', 'hilbertraum.sqlite.enc.tmp')
+  const fullDrive = (): Error =>
+    Object.assign(new Error(`ENOSPC: no space left on device, write '${tmp}'`), { code: 'ENOSPC', syscall: 'write', path: tmp })
+
+  type QuitLog = { error: (message: string, meta?: unknown) => void; info: (message: string, meta?: unknown) => void }
+
+  it.each<[string, (ctx: AppContext, log: QuitLog) => Promise<void> | void]>([
+    ['the lock at quit', (ctx, log) => performShutdown(ctx, { inFlightStreams: new Map(), detachVaultKey: () => {}, log })],
+    ['the emergency lock', (ctx, log) => emergencyLock(ctx, { detachVaultKey: () => {}, killSidecarChildren: () => {}, log })]
+  ])('%s logs a file error by its code, not its path', async (_arm, run) => {
+    const ctx = {
+      ...fakeCtx([]),
+      workspace: workspaceStandIn(
+        {},
+        {
+          shutdown: () => {
+            throw fullDrive()
+          }
+        }
+      )
+    } as unknown as AppContext
+    const errors: Array<[string, unknown]> = []
+    await run(ctx, { error: (message: string, meta?: unknown) => void errors.push([message, meta]), info: () => undefined })
+    const lock = errors.filter(([message]) => /lock/i.test(message))
+    expect(lock).toHaveLength(1)
+    expect(lock[0][1]).toEqual({ error: 'Error', code: 'ENOSPC', syscall: 'write' })
+    expect(JSON.stringify(errors)).not.toContain('hilbertraum.sqlite')
+  })
+})
