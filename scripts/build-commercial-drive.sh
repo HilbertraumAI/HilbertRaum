@@ -434,6 +434,14 @@ if [[ $DRY_RUN -eq 0 ]]; then
       rt_backend="${rt_rest%%|*}"
       rt_bin="${rt_rest#*|}"
       RT_VERSION="$LLAMA_VERSION"; [[ "$rt_family" == "whisper" ]] && RT_VERSION="$WHISPER_VERSION"
+      # #986: an engine install interrupted on this drive leaves <dir>.new or <dir>.old beside
+      # the install until the app's next start there finishes or rolls back the swap. A Kit must
+      # not ship either: it is a second engine copy (assertCommercialDrive parity). Exact names.
+      for swap_left in "$rt_dir.new" "$rt_dir.old"; do
+        if [[ -e "$TARGET/$swap_left" || -L "$TARGET/$swap_left" ]]; then
+          PROBLEMS+=("runtime: $swap_left is left from an interrupted engine install (start the app on this drive once, or delete it)")
+        fi
+      done
       marker_file="$TARGET/$rt_dir/.hilbertraum-runtime.json"
       bin_file="$TARGET/$rt_dir/$rt_bin"
       if [[ ! -f "$bin_file" ]]; then

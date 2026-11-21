@@ -447,6 +447,14 @@ if (-not $DryRun) {
     )) {
       $rtDir = $rt.dir
       $rtVersion = $famVersions[$rt.family]
+      # #986: an engine install interrupted on this drive leaves <dir>.new or <dir>.old beside
+      # the install until the app's next start there finishes or rolls back the swap. A Kit must
+      # not ship either: it is a second engine copy (assertCommercialDrive parity). Exact names.
+      foreach ($swapLeft in @("$rtDir.new", "$rtDir.old")) {
+        if (Test-Path -LiteralPath (Join-Path $Target $swapLeft)) {
+          $problems += "runtime: $swapLeft is left from an interrupted engine install (start the app on this drive once, or delete it)"
+        }
+      }
       $markerFile = Join-Path $Target "$rtDir/.hilbertraum-runtime.json"
       $binFile = Join-Path $Target "$rtDir/$($rt.bin)"
       if (-not (Test-Path -LiteralPath $binFile)) {

@@ -489,6 +489,23 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).not.toContain('Done. Test the drive')
       })
 
+      // #986: an engine install interrupted on the drive leaves `<dir>.new` / `<dir>.old` beside a pinned
+      // build until the app's next start there. The native pre-flight names it (the canonical gate does too).
+      it('names a leftover from an interrupted engine install beside a pinned build (#986)', () => {
+        const root = scriptRoot('script-swap-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'win.new'), { recursive: true })
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'linux', 'cpu.old'), { recursive: true })
+        // Not a name the swap uses (the app-update plan's own folder): exact names only.
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'mac@b9999.new'), { recursive: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/llama.cpp/win.new is left from an interrupted engine install')
+        expect(out).toContain('runtime: runtime/llama.cpp/linux/cpu.old is left from an interrupted engine install')
+        expect(out).not.toContain('mac@b9999')
+      })
+
       it('rejects an unknown platform label before doing anything (exit 2)', () => {
         const root = scriptRoot('script-plat-')
         const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-arm64'])
