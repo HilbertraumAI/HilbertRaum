@@ -207,6 +207,9 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
     }
     if (next?.state !== 'locked') return false
     setError(refusal)
+    // Review R F-2: the card keeps its state across the switch, so "Show password" chosen on the create step would
+    // leave the other workspace's password field unmasked; the unlock field starts masked, as on any unlock screen.
+    setShowPassword(false)
     onStateChange(next)
     return true
   }

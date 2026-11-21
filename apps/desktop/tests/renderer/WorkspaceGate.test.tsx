@@ -397,8 +397,9 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
 // create step mounted is the very element that receives the refusal; a region mounted by the switch got its text in the
 // same frame in the real app, which many screen readers miss (#436, M-U1).
 describe('WorkspaceGate — a create refused because a workspace is on the drive (#955 item 3)', () => {
-  it('re-reads the state and shows the unlock form, the refusal arriving in its alert region, focus on its field', async () => {
-    const user = userEvent.setup()
+  /** The gate in a parent that keeps its state as App does, on the create step with a valid password typed; main
+   *  answers the create with `workspace_exists` and reads `locked` afterwards. */
+  async function onRefusableCreate(user: ReturnType<typeof userEvent.setup>) {
     const createWorkspace = vi.fn(
       async (): Promise<WorkspaceActionResult> => ({ ok: false, reason: 'workspace_exists', message: 'main’s text' })
     )
@@ -413,6 +414,12 @@ describe('WorkspaceGate — a create refused because a workspace is on the drive
     await toPasswordStep(user)
     await user.type(screen.getByPlaceholderText('Password'), 'longenough')
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+    return { getWorkspaceState, onUnlocked }
+  }
+
+  it('re-reads the state and shows the unlock form, the refusal arriving in its alert region, focus on its field', async () => {
+    const user = userEvent.setup()
+    const { getWorkspaceState, onUnlocked } = await onRefusableCreate(user)
     // The create step's own region, in the document and empty before the refusal.
     const region = screen.getByRole('alert')
     expect(region).toBeEmptyDOMElement()
@@ -425,6 +432,19 @@ describe('WorkspaceGate — a create refused because a workspace is on the drive
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Password'))
     expect(getWorkspaceState).toHaveBeenCalledTimes(1)
     expect(onUnlocked).not.toHaveBeenCalled()
+  })
+
+  // Review R F-2: the card keeps its state across the switch. "Show password" turned on at the create step left the
+  // unlock field unmasked, so the other workspace's password was typed in clear text.
+  it('starts the unlock field masked although "Show password" was on at the create step', async () => {
+    const user = userEvent.setup()
+    await onRefusableCreate(user)
+    await user.click(screen.getByRole('button', { name: /show password/i }))
+    expect(screen.getByPlaceholderText('Password')).toHaveAttribute('type', 'text')
+    await user.click(screen.getByRole('button', { name: /create workspace/i }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Password')).toHaveAttribute('type', 'password')
   })
 })
 
