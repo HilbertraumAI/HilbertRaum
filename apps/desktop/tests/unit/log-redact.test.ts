@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest'
-import { redactLogText, type LogRedactionRoots } from '../../src/main/services/log-redact'
+import { describe, it, expect, afterEach } from 'vitest'
+import { homedir, userInfo } from 'node:os'
+import {
+  accountNamesFrom,
+  addLogRedactionRoots,
+  currentAccountNames,
+  logRedactionRoots,
+  redactLogText,
+  setLogRedactionRoots,
+  type LogRedactionRoots
+} from '../../src/main/services/log-redact'
 
 // #975 (owner decision G-4 b, the exit rule): every line the diagnostics log hands out (the Diagnostics panel, Copy,
 // Save log) goes through `redactLogText`, so it names no absolute path and no account. The log at rest keeps them. These
@@ -205,6 +214,7 @@ describe('names with spaces, deeper profiles and look-alikes (#975)', () => {
     ['with forward slashes after a quote', "'//pc/c$/Users/peter/x'", "'//<server>/<share>/Users/<user>/x'"],
     ['as a file URL', 'file://pc/c$/Users/peter/x', 'file://<server>/<share>/Users/<user>/x'],
     ['as a file URL a few folders down', 'file://nas/data/team/home/peter/x', 'file://<server>/<share>/team/home/<user>/x'],
+    ['as a file URL on a home$ share', 'file://fs01/home$/peter/x', 'file://<server>/<share>/<user>/x'],
     ['a few folders down', '\\\\nas\\data\\Shared Folders\\home\\Anna Schmidt\\x', '\\\\<server>\\<share>\\Shared Folders\\home\\<user>\\x']
   ])('a profile deeper in a network path hides the account: %s', (_what, line, expected) => {
     expect(redactLogText(line, NONE)).toBe(expected)
@@ -229,6 +239,129 @@ describe('names with spaces, deeper profiles and look-alikes (#975)', () => {
   it('a Fedora Silverblue home (/var/home) hides the account; /root names none', () => {
     expect(redactLogText('open /var/home/peter/.config/x', NONE)).toBe('open /var/home/<user>/.config/x')
     expect(redactLogText('open /root/.config/x', NONE)).toBe('open /root/.config/x')
+  })
+})
+
+// #975 review round 2 (F1, F2, F4): this computer's account is a known value. Wherever its name appears as a whole
+// token, whatever the shape around it, it becomes `<user>`.
+describe('this computer’s account, wherever it appears (#975)', () => {
+  it.each<[string, string, string, string]>([
+    ['an apostrophe in the name', "O'Brien", "open 'C:\\Users\\O'Brien\\AppData\\x'", "open 'C:\\Users\\<user>\\AppData\\x'"],
+    ['a comma in the name, JSON-escaped', 'Smith, Anna', '{"p":"C:\\\\Users\\\\Smith, Anna\\\\AppData"}', '{"p":"C:\\\\Users\\\\<user>\\\\AppData"}'],
+    ['a name of two words at the end of an unquoted path', 'Anna Schmidt', 'Error: spawn C:\\Users\\Anna Schmidt ENOENT', 'Error: spawn C:\\Users\\<user> ENOENT'],
+    ['a redirected folder on a server', 'peter', "open '\\\\fs01\\data\\peter\\Documents\\x.pdf'", "open '\\\\<server>\\<share>\\<user>\\Documents\\x.pdf'"],
+    ['a home under a path prefix', 'peter', 'open /srv/nfs/peter/x', 'open /srv/nfs/<user>/x'],
+    ['a temp folder named after the account', 'peter', '{"error":"D:\\\\Temp\\\\peter is full"}', '{"error":"D:\\\\Temp\\\\<user> is full"}'],
+    ['in prose, any letter case', 'peter', 'Signed in as PETER.', 'Signed in as <user>.']
+  ])('%s', (_what, account, line, expected) => {
+    expect(redactLogText(line, { account })).toBe(expected)
+  })
+
+  it('only as a whole token: a longer word, a host name or a dotted name keeps it', () => {
+    const line = 'host peter-laptop, user petersen, mail peter.smith@example.org, file x.peter, id peter_2'
+    expect(redactLogText(line, { account: 'peter' })).toBe(line)
+  })
+
+  it('a name shorter than 3 characters or a common word is left to the path rules', () => {
+    expect(redactLogText('al opened the admin panel; C:\\Users\\al\\x', { account: ['al', 'admin'] })).toBe(
+      'al opened the admin panel; C:\\Users\\<user>\\x'
+    )
+    for (const word of ['user', 'users', 'administrator', 'owner', 'guest', 'default', 'public', 'root', 'test', 'app', 'home']) {
+      expect(redactLogText(`the ${word} folder`, { account: word })).toBe(`the ${word} folder`)
+    }
+  })
+
+  it('never touches a placeholder, whatever the account is called', () => {
+    const roots: LogRedactionRoots = {
+      driveRoot: 'E:\\',
+      appData: 'C:\\ProgramData\\HilbertRaum',
+      account: ['drive', 'server', 'share', 'volume', 'temp', 'data', 'app-data']
+    }
+    expect(redactLogText('E:\\x \\\\nas\\kits\\y /Volumes/KIT/z C:\\ProgramData\\HilbertRaum\\w', roots)).toBe(
+      '<drive>\\x \\\\<server>\\<share>\\y /Volumes/<volume>/z <app-data>\\w'
+    )
+  })
+
+  it('the longest name goes first, so a shorter name inside it leaves no part behind', () => {
+    expect(redactLogText('open /srv/Anna Schmidt/x for Anna', { account: ['Anna', 'Anna Schmidt'] })).toBe(
+      'open /srv/<user>/x for <user>'
+    )
+  })
+
+  it('a known folder keeps its own placeholder; the account elsewhere becomes <user>', () => {
+    const roots: LogRedactionRoots = { home: 'C:\\Users\\peter', account: 'peter' }
+    expect(redactLogText('C:\\Users\\peter\\x and /mnt/c/Users/peter/y and peter', roots)).toBe(
+      '<home>\\x and /mnt/c/Users/<user>/y and <user>'
+    )
+  })
+
+  it('currentAccountNames names the signed-in account and the home folder’s own name', () => {
+    const names = currentAccountNames()
+    const home = homedir().split(/[\\/]/).filter(Boolean).pop() as string
+    expect(names).toContain(home)
+    expect(names).toContain(userInfo().username)
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it.each<[string, string | null, string | null, string[]]>([
+    ['a profile folder with a domain suffix', 'peter', 'C:\\Users\\peter.CORP', ['peter', 'peter.CORP']],
+    ['a renamed account', 'anna', '/Users/annaschmidt', ['anna', 'annaschmidt']],
+    ['the same name twice', 'anna', '/home/anna/', ['anna']],
+    ['no account entry', null, '/home/anna', ['anna']],
+    ['a home at the file system root', 'svc', '/', ['svc']]
+  ])('accountNamesFrom: %s', (_what, username, home, expected) => {
+    expect(accountNamesFrom(username, home)).toEqual(expected)
+  })
+})
+
+// #975 review round 2 (F1, F2, F3, F5, F7): other computers' accounts in more path shapes, and a root that pass 2
+// could not hide.
+describe('other computers’ accounts in more shapes (#975)', () => {
+  it.each<[string, string, string]>([
+    ['an apostrophe in a Windows profile', "open 'C:\\Users\\O'Brien\\AppData\\x'", "open 'C:\\Users\\<user>\\AppData\\x'"],
+    ['an apostrophe in a macOS home', "open '/Users/o'brien/Library/x'", "open '/Users/<user>/Library/x'"],
+    ['an apostrophe in a volume name', "open '/Volumes/Peter's Kit/runtime/x'", "open '/Volumes/<volume>/runtime/x'"],
+    ['a home$ share', "open '\\\\fs01\\home$\\peter\\Documents\\x.pdf'", "open '\\\\<server>\\<share>\\<user>\\Documents\\x.pdf'"],
+    ['a users$ share', "open '\\\\fs01\\users$\\peter\\Documents\\x.pdf'", "open '\\\\<server>\\<share>\\<user>\\Documents\\x.pdf'"],
+    ['a profiles share', "open '\\\\fs01\\profiles\\peter.V6\\AppData\\x'", "open '\\\\<server>\\<share>\\<user>\\AppData\\x'"],
+    ['a profile$ share in JSON', '{"error":"open \'\\\\\\\\fs01\\\\Profile$\\\\peter\\\\x\'"}', '{"error":"open \'\\\\\\\\<server>\\\\<share>\\\\<user>\\\\x\'"}'],
+    ['a homes folder deeper down', "open '\\\\contoso.com\\dfs\\homes\\peter\\x'", "open '\\\\<server>\\<share>\\homes\\<user>\\x'"],
+    ['a home$ share in JSON', '{"error":"open \'\\\\\\\\fs01\\\\home$\\\\peter\\\\Documents\\\\x.pdf\'"}', '{"error":"open \'\\\\\\\\<server>\\\\<share>\\\\<user>\\\\Documents\\\\x.pdf\'"}'],
+    ['a Linux home under /nfs', "open '/nfs/home/peter/x'", "open '/nfs/home/<user>/x'"],
+    ['a Linux home under /export', 'open /export/home/peter/x', 'open /export/home/<user>/x'],
+    ['a macOS home behind the firmlink', "open '/System/Volumes/Data/Users/peter/Library/x'", "open '/System/Volumes/Data/Users/<user>/Library/x'"],
+    ['a macOS network home', 'open /Network/Servers/srv/Users/peter/x', 'open /Network/Servers/srv/Users/<user>/x'],
+    ['an error code after a profile path', '{"error":"Error: spawn C:\\\\Users\\\\peter ENOENT"}', '{"error":"Error: spawn C:\\\\Users\\\\<user> ENOENT"}'],
+    ['a manual mount with no user folder', "open '/media/KIT/runtime/llama.cpp/linux/llama-server'", "open '/media/<volume>/runtime/llama.cpp/linux/llama-server'"]
+  ])('%s', (_what, line, expected) => {
+    expect(redactLogText(line, NONE)).toBe(expected)
+  })
+
+  it('a profile behind a path prefix inside an http(s) URL stays', () => {
+    for (const line of ['see https://example.org/nfs/home/peter/x', 'GET http://host:8080/a/Users/peter/b']) {
+      expect(redactLogText(line, NONE)).toBe(line)
+    }
+  })
+
+  it.each<[string, string, string]>([
+    ['words and a closing quote', '{"error":"C:\\\\work\\\\kit is not writable"}', '{"error":"<drive> is not writable"}'],
+    ['words and a JSON newline', '{"error":"check failed\\nC:\\\\work\\\\kit not found\\nnext"}', '{"error":"check failed\\n<drive> not found\\nnext"}']
+  ])('a root no generic shape could hide keeps its placeholder before %s', (_what, line, expected) => {
+    expect(redactLogText(line, { driveRoot: 'C:\\work\\kit' })).toBe(expected)
+  })
+})
+
+// #975 review round 2 (F9): the main process registers the roots that do not depend on the drive first, and adds the
+// drive root once it resolves.
+describe('the root registry (#975)', () => {
+  afterEach(() => setLogRedactionRoots({}))
+
+  it('addLogRedactionRoots adds to what is registered; setLogRedactionRoots replaces it', () => {
+    setLogRedactionRoots({ home: 'C:\\Users\\xavi', account: 'xavi' })
+    addLogRedactionRoots({ driveRoot: 'E:\\' })
+    expect(redactLogText('C:\\Users\\xavi\\x E:\\y xavi', logRedactionRoots())).toBe('<home>\\x <drive>\\y <user>')
+    setLogRedactionRoots({ driveRoot: 'E:\\' })
+    expect(redactLogText('C:\\Users\\xavi\\x E:\\y', logRedactionRoots())).toBe('C:\\Users\\<user>\\x <drive>\\y')
   })
 })
 
@@ -260,9 +393,11 @@ describe('redacting twice changes nothing (#975)', () => {
     'spawn /media/peter/Kit/runtime/x /Volumes/Kit/a /mnt/usbstick/b /home/xavi/c',
     '\\\\?\\UNC\\PETERS-PC\\Users\\peter\\x file://PETERS-PC/share/d',
     "open 'C:\\Users\\Anna Schmidt' C:\\Users\\peter is missing. \\\\wsl$\\Ubuntu\\home\\peter\\x",
-    '/users/peter/x /Volumes/KIT 1/y /var/home/peter/z file:///home/xavi/a "//pc/c$/Users/peter/x"'
+    '/users/peter/x /Volumes/KIT 1/y /var/home/peter/z file:///home/xavi/a "//pc/c$/Users/peter/x"',
+    "open 'C:\\Users\\O'Brien\\x' \\\\fs01\\home$\\peter\\y /nfs/home/peter/z /media/KIT/runtime/w peter ENOENT"
   ]
-  it.each(lines.flatMap((line) => [WIN, LINUX, NONE].map((roots) => [line, roots] as const)))('%s', (line, roots) => {
+  const ACCOUNT: LogRedactionRoots = { ...WIN, account: ['xavi', 'peter', 'drive', 'server', "O'Brien"] }
+  it.each(lines.flatMap((line) => [WIN, LINUX, NONE, ACCOUNT].map((roots) => [line, roots] as const)))('%s', (line, roots) => {
     const once = redactLogText(line, roots)
     expect(redactLogText(once, roots)).toBe(once)
   })
