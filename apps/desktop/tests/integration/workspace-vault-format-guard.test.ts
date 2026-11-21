@@ -960,26 +960,61 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
     return vp
   }
 
-  // Review round 2 R1: the journal keeps the absolute paths of the drive it was written on. A Kit that comes back under
-  // another drive letter or mount point after a password change was cut short still has its journal'd stage rolled
-  // forward at the start, as before, and is never taken for a leftover.
-  it('a journal written under another drive root still lists the stage: the start rolls it forward as before', () => {
+  /** A journal entry spelled for the same workspace under another drive root (a Kit that came back under another letter
+   *  or mount point), or any other workspace's: the same folder and file names, another absolute path. */
+  const underOtherRoot = (vp: FreshVaultPaths, path: string): string =>
+    join(process.platform === 'win32' ? 'Q:\\Kit' : '/media/other/Kit', relative(vp.root, path))
+
+  // Review round 3 F1: a journal vouches for the staged database only by its full path. With the exact path the start
+  // rolls the committed change forward as before. An entry under another drive root (the Kit came back under another
+  // letter after the change was cut short) leaves the stage in doubt: the unlock authenticates it under the data key and
+  // rolls it forward, the same outcome, one read slower. (Round 2 matched by the folder and file names, which every
+  // workspace shares: see the stale-journal row below.)
+  it.each<[string, boolean]>([
+    ['the exact path: the start rolls it forward as before', false],
+    ['another drive root: the start leaves it, the unlock authenticates it and rolls it forward', true]
+  ])('a committed password change whose journal names its stage by %s', (_case, otherRoot) => {
     const vp = committedMigration(6363)
     shredFile(vp.dbPath)
     cleanSidecars(vp.dbPath)
-    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
-    const written = JSON.parse(readFileSync(journal, 'utf8')) as { staged: string[] }
-    const otherRoot = process.platform === 'win32' ? 'Z:\\Kit' : '/media/other/Kit'
-    const staged = written.staged.map((path) => join(otherRoot, relative(vp.root, path)))
-    expect(staged.some((path) => path.endsWith('hilbertraum.sqlite.enc.new'))).toBe(true)
-    writeFileSync(journal, JSON.stringify({ ...written, staged }, null, 2), 'utf8')
+    if (otherRoot) {
+      const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+      const written = JSON.parse(readFileSync(journal, 'utf8')) as { staged: string[] }
+      const staged = written.staged.map((path) => underOtherRoot(vp, path))
+      expect(staged.some((path) => path.endsWith('hilbertraum.sqlite.enc.new'))).toBe(true)
+      writeFileSync(journal, JSON.stringify({ ...written, staged }, null, 2), 'utf8')
+    }
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     try {
-      expect(existsSync(stagedOf(vp))).toBe(false) // rolled forward at the start, without any key
+      expect(existsSync(stagedOf(vp))).toBe(otherRoot) // rolled forward at the start, or left for the unlock
       ctl.unlock('next-password')
       expect(getSettings(ctl.requireDb()).contextTokens).toBe(6363)
+      expect(existsSync(stagedOf(vp))).toBe(false)
       expect(ctl.takeStageOutcome()).toBeNull()
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 3 F1 (the regression round 2 brought): a stale journal (one `applyPendingRekey` keeps for good because
+  // its entries look unreachable, or one a restored folder brings back) names `…/workspace/hilbertraum.sqlite.enc.new`
+  // under another drive root, as every workspace's journal does. It must not vouch for a foreign stage beside a real
+  // `.enc`: the start leaves `.enc` byte for byte, and the unlock removes the stage.
+  it('a stale journal that names a stage under another drive root never vouches for a crash leftover', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    rekeyJournal(vp, 1, [underOtherRoot(vp, stagedOf(vp)), underOtherRoot(vp, join(dirname(vp.dbPath), 'elsewhere', 'legacy.pdf.enc.new'))])
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(stagedOf(vp))).toBe(false)
+      expect(sha(vp.encPath)).toBe(before['workspace/hilbertraum.sqlite.enc'])
+      expect(ctl.takeStageOutcome()).toBe('removed')
     } finally {
       ctl.shutdown()
     }
@@ -1008,6 +1043,41 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
       ctl.unlock(PW)
       expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151) // `.enc` as it was: the session is lost
       expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 3 F2: the unlock settles the hold whatever it finds. Here the leftover is gone before the unlock (a
+  // tidy tool, by hand), so the unlock judges no stage; `.enc` is still the snapshot the loss was judged against, so the
+  // loss is recorded, once. The hold is not carried on: a later clean session beside another leftover reports nothing.
+  it('an unclean end beside a crash leftover that is gone before the unlock: the loss is recorded once, and never again', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    backdate(vp.encPath)
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 9191 })
+    db.close()
+    key.fill(0)
+    writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+    writeFileSync(stagedOf(vp), leftoverStage())
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState()).not.toHaveProperty('lockNotice') // held
+      rmSync(stagedOf(vp)) // gone before the unlock
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
+      expect(ctl.takeWorkingCopyLost()).toBeNull()
+      updateSettings(ctl.requireDb(), { contextTokens: 4242 })
+      ctl.lock() // a clean session
+      writeFileSync(stagedOf(vp), leftoverStage()) // another leftover turns up
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(4242)
+      expect(ctl.takeStageOutcome()).toBe('removed')
+      expect(ctl.takeWorkingCopyLost()).toBeNull() // no notice for a session that lost nothing
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
     } finally {
       ctl.shutdown()
     }

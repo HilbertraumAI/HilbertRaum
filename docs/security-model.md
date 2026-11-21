@@ -1330,14 +1330,19 @@ explicitly:
   folder later had its `.enc` shredded and replaced by an empty database under a key nothing holds,
   and every unlock then said "damaged". Two rules close it (owner decision G-1, option 2 plus a
   narrow option 3). First, a staged `.enc.new` that no rekey journal lists, beside an `.enc` that is
-  there (any stat answer but ENOENT), under a v2 descriptor, is a doubt. A journal entry counts by
-  the workspace folder and the file name, not by its absolute path: a Kit that comes back under
-  another drive letter or mount point keeps its journal'd stage. The start's recovery holds
+  there (any stat answer but ENOENT), under a v2 descriptor, is a doubt. A journal entry lists the
+  stage only by its full path (folded as for every journal entry): the folder and file names are the
+  same in every workspace, so a match by name let a stale journal (one kept because its entries look
+  unreachable, or one a restored folder brings) vouch for a foreign stage. A Kit that comes back under
+  another drive letter or mount point after a change was cut short therefore has its stage in doubt,
+  and the unlock rolls it forward once it authenticates. The start's recovery holds
   no key, so it leaves the whole staged set as it is, and so does the unlock's recovery before the
   password check (a wrong password changes nothing). A loss the start judged meanwhile (#875, #892:
-  the session it swept) is held, not shown, until the unlock says which snapshot opens: it is
-  recorded when `.enc` opens as it is, and dropped when the stage rolls forward (the stage holds that
-  session). The hold is in memory, so a restart before that unlock forgets the notice. Once the
+  the session it swept) is held, not shown, until the next successful unlock settles it: recorded
+  when `.enc` is still the snapshot it was judged against (the stage removed, left, or gone by then),
+  dropped when the stage rolled forward (the stage holds that session) or `.enc` changed otherwise.
+  It is never carried past that unlock. The hold is in memory, so a restart before that unlock
+  forgets the notice. Once the
   password verified and the data key is
   unwrapped, the unlock streams the staged file through the AES-256-GCM decipher with no output
   (`authenticatesUnder`; a vault frame is one GCM stream with one tag, so one pass proves the whole
@@ -1348,10 +1353,12 @@ explicitly:
   recovery would have given it without that file. A file that is no frame of this build's at
   all (cut short inside its header, another magic; a newer frame is refused earlier, #845) cannot be
   a staged copy of this workspace and is deleted the same way. A read the pass cannot make splits by
-  its cause: a file gone since the check is no stage; a hold (EBUSY, EPERM, EACCES) changes nothing
-  and refuses the unlock with the #242 "try again" answer (`vault_recovery_blocked`); anything else
-  (a directory at the name, an I/O error), and a delete that fails, leaves the file exactly as it
-  is, and the unlock opens `.enc`, so it never blocks for good. The unlock logs one content-free
+  its cause: a file gone since the check is no stage; a folder at the name (EISDIR, ENOTDIR) is no
+  data, so it is left exactly as it is and the unlock opens `.enc` (never blocked for good); any
+  other failure (a hold: EBUSY, EPERM, EACCES; an I/O error such as EIO) may hide a stage this
+  workspace needs, so it changes nothing and refuses the unlock with the #242 "try again" answer
+  (`vault_recovery_blocked`), before the `.recovery` roll-forward could write over `.enc`. A delete
+  that fails leaves the file too, and the unlock opens `.enc`. The unlock logs one content-free
   line when it deleted or left such a file, also when a later step of that unlock fails (no audit
   type, as #911's). The cost is one read of the staged file, only in this state, timed as the perf
   mark `vault_stage_check` (about 1.5 s for 500 MB on a warm NVMe drive in review; expect 5 to 17 s

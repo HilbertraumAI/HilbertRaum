@@ -1244,22 +1244,26 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `DOCUMENTS_DIR_NAME`, `ROTATED_ENCRYPTED_LOG_NAME` (`app.1.log.enc`, deleted at the commit).
   **Staged database in doubt (#973):** `recoverPendingRekey` leaves the whole staged set (and the
   journal) as it is when a v2 descriptor sits beside a `hilbertraum.sqlite.enc.new` that no journal
-  lists and an `.enc` that is there (any stat answer but ENOENT); a journal entry lists it when its
-  last two path segments (the workspace folder and the file name, case-folded, either separator)
-  match, so a journal written under another drive letter or mount point still counts.
+  lists and an `.enc` that is there (any stat answer but ENOENT); a journal entry lists it only by
+  its full path, folded as `pathKey` folds it (review round 3: a match by the folder and file names,
+  which every workspace shares, let a stale journal vouch for a foreign stage), so an entry written
+  under another drive letter or mount point leaves the stage in doubt, for the unlock to authenticate.
   `unlockEncryptedVault(…, onStageInDoubt?)` resolves it
   after the data key is unwrapped: the module-private `authenticatesUnder(path, key) → boolean` (one
   GCM pass, nothing written; false when the tag fails or the file is no `HRAUMEN1` frame, cut short
   or another magic; a newer frame throws `VaultNewerError`) true → `applyPendingRekey` (outcome
   `rolled-forward`), false → the file is deleted, then `recoverPendingRekey` runs again for the rest of
-  the staged set (`removed`); a read that fails with ENOENT is no stage, with EBUSY/EPERM/EACCES
-  throws `VaultRecoveryBlockedError` (→ `vault_recovery_blocked`, nothing changed), with anything
-  else (EISDIR, EIO), like a delete that fails, leaves the file as it is and opens `.enc` (`left`).
+  the staged set (`removed`); a read that fails with ENOENT is no stage, with EISDIR or ENOTDIR (a
+  folder at the name), like a delete that fails, leaves the file as it is and opens `.enc` (`left`),
+  and with any other code (EBUSY, EPERM, EACCES, EIO, …) throws `VaultRecoveryBlockedError`
+  (→ `vault_recovery_blocked`, nothing changed, before the `.recovery` roll-forward).
   `onStageInDoubt(outcome: StageInDoubtOutcome)` hears the outcome as soon as it is true, also when a
   later step of the unlock fails; the pass is timed as the perf mark `vault_stage_check` (`checkMs`,
   `stageBytes`). While a stage is in doubt at `init()`, a loss the start judged (#875 `startup`, #892
   `unclean`) is held in memory instead of marked; the controller marks it when the outcome is
-  `removed` or `left` and drops it on `rolled-forward`.
+  `removed` or `left`, drops it on `rolled-forward`, and settles a hold no outcome reached at the
+  next successful unlock (recorded while `.enc`'s frame IV is still the one it was judged against,
+  dropped otherwise); it is never carried past that unlock, and a create clears it.
   `WorkspaceController.init()` removes a stray `.enc.new`
   and `.enc.new.tmp` when there is no descriptor file, no `.enc` and no journal (each ENOENT); the
   state stays `uninitialized`. No on-disk shape changes.
@@ -1529,7 +1533,7 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
   other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing; since #973 also
-  a staged `.enc.new` in doubt that a hold keeps the unlock from reading: EBUSY, EPERM, EACCES) —
+  a staged `.enc.new` in doubt that the unlock cannot read: a hold, or an I/O error such as EIO) —
   retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
   written by a NEWER build — nothing written, update the app; since #845 also the unlock refused

@@ -1802,30 +1802,19 @@ export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDes
  * #241; a create stages with no journal, as builds before #241 did for a password change, so the file alone does not
  * tell a committed change from a create's leftover. With `.enc` gone it is no doubt: a create or a swap cut short after
  * its commit left the staged file as the only snapshot, and it rolls forward at the start as before.
+ * A journal entry lists the stage only by its full path, folded as {@link pathKey} folds it (review round 3 F1). The
+ * file and folder names are the same in every workspace this app writes, so a match by name alone would let any
+ * journal vouch for any stage: a stale one (kept for good when its entries look unreachable, or brought back with a
+ * restored folder) rolled a foreign stage over `.enc` with no key. An entry written under another drive letter or mount
+ * point therefore leaves the stage in doubt, and the unlock authenticates it and rolls it forward when it opens: the
+ * same outcome, one read slower.
  */
 function stageInDoubt(vaultPaths: VaultPaths): boolean {
   const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
   if (!existsSync(staged)) return false
   if (encryptedFileState(vaultPaths) === 'missing') return false
-  const listed = (readRekeyJournal(vaultPaths)?.staged ?? []).some((entry) => namesSameStage(entry, staged))
+  const listed = (readRekeyJournal(vaultPaths)?.staged ?? []).some((entry) => pathKey(entry) === pathKey(staged))
   return !listed
-}
-
-/**
- * #973 (review round 2 R1): does a rekey journal entry name the staged database at `staged`? Compared by the last two
- * path segments (the workspace folder and the file), case-folded, never by the absolute path alone: the journal keeps
- * the absolute paths of the drive it was written on, and a Kit comes back under another letter or mount point (E: → F:,
- * `/media/…`), or on another OS (either separator).
- */
-function namesSameStage(entry: string, staged: string): boolean {
-  const tail = (path: string): string =>
-    path
-      .split(/[\\/]+/)
-      .filter((segment) => segment !== '')
-      .slice(-2)
-      .join('/')
-      .toLowerCase()
-  return tail(entry) === tail(staged)
 }
 
 /** #973: what the unlock did with a staged database in doubt ({@link resolveStageInDoubt}): rolled it forward (it
@@ -1842,11 +1831,12 @@ export type StageInDoubtOutcome = 'rolled-forward' | 'removed' | 'left'
  * removed (a plain delete, as {@link discardPendingRekey} does), and the unlock opens `.enc` as it is. The rest of the
  * staged set then gets what the start's recovery would have given it with that file gone (review round 2 R5: the
  * journal's entries and its deletions, the in-store twins by scan). A read the check cannot make splits by its code
- * (review round 2 R4): ENOENT, the file gone since the check, is no stage; a hold (EBUSY, EPERM, EACCES) changes nothing
- * and refuses the unlock with `VaultRecoveryBlockedError`, the #242 "try again" answer; anything else (EISDIR, EIO) can
- * be neither judged nor removed as a frame, so it is left exactly as it is and the unlock opens `.enc`, never blocked
- * for good. A delete that fails leaves the file too: it stays a doubt, which no start rolls forward and the next unlock
- * checks again. `note` hears the outcome as soon as it is true (before a later step of the unlock can fail), for the
+ * (review round 2 R4, round 3 F4): ENOENT, the file gone since the check, is no stage; EISDIR or ENOTDIR, a folder at
+ * the name, is no data at all, so it is left exactly as it is and the unlock opens `.enc` (never blocked for good);
+ * any other code (a hold: EBUSY, EPERM, EACCES; an I/O error: EIO) may be a stage this workspace needs, so it changes
+ * nothing and refuses the unlock with `VaultRecoveryBlockedError`, the #242 "try again" answer, before the `.recovery`
+ * block can roll anything over `.enc`. A delete that fails leaves the file too: it stays a doubt, which no start rolls
+ * forward and the next unlock checks again. `note` hears the outcome as soon as it is true (before a later step of the unlock can fail), for the
  * held loss (R2) and the IPC's one log line (F4). The pass is timed as `vault_stage_check` (R9).
  */
 function resolveStageInDoubt(
@@ -1865,8 +1855,8 @@ function resolveStageInDoubt(
     if (isVaultNewerError(err)) throw err
     const code = (err as NodeJS.ErrnoException | null)?.code
     if (code === 'ENOENT') return // gone since the check: no stage
-    if (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES') throw new VaultRecoveryBlockedError()
-    note?.('left')
+    if (code !== 'EISDIR' && code !== 'ENOTDIR') throw new VaultRecoveryBlockedError() // a hold or an I/O error
+    note?.('left') // a folder at the name: no data
     return
   } finally {
     perfMark('vault_stage_check', { checkMs: perfMs(checkT0), stageBytes: fileSizeOrNull(staged) })
@@ -2671,6 +2661,17 @@ export class WorkspaceController {
     this._stageOutcome = outcome
     if (held !== null) this.markWorkingCopyLost(held.cause, held.enc)
   }
+  /** #973 (review round 3 F2): a successful unlock settles a loss still held, because this unlock did not judge the stage
+   *  (it was gone by then, or a journal now lists it). Recorded while `.enc` is still the snapshot it was judged against
+   *  (the same frame IV), dropped otherwise (a roll-forward replaced `.enc`); never carried past this unlock, so a later
+   *  stage cannot bring it back as a notice about a session that lost nothing. */
+  private settleHeldStageLoss(): void {
+    const held = this._heldStageLoss
+    this._heldStageLoss = null
+    if (held !== null && (held.enc === null || frameIvOf(this.vaultPaths.encPath) === held.enc)) {
+      this.markWorkingCopyLost(held.cause, held.enc)
+    }
+  }
   /** #911: the disk state behind {@link _encMissingKept}: `.enc` absent (ENOENT) and a `.recovery` copy waiting that
    *  starts like a database (the #892 header read, 100 bytes: cheap, and read only at {@link init} and after a failed
    *  unlock, never per {@link getState}). One that does not is no copy to keep: the unlock shreds it and says the file
@@ -3111,6 +3112,7 @@ export class WorkspaceController {
   /** #875: a successful unlock opened `.enc`: the notice has been seen, and this build's marker, which can name no
    *  other snapshot now, is removed. Records what was consumed for {@link takeWorkingCopyLost}. */
   private consumeWorkingCopyLost(): void {
+    this.settleHeldStageLoss() // #973 (review round 3 F2): first, so a loss it records is consumed here once
     if (this._workingCopyLost !== null) {
       let lostAt: string | null = null
       try {
@@ -3213,6 +3215,7 @@ export class WorkspaceController {
     removeWorkingCopyLostMarker(this.vaultPaths)
     this._workingCopyLost = null
     this._lostAtPreviousLock = null
+    this._heldStageLoss = null // #973: nor a loss a start held for a stage beside the wiped one
     if (mode === 'plaintext_dev') {
       if (!this.allowPlaintext()) throw new PlaintextNotAllowedError()
       this.openPlaintext()

@@ -916,9 +916,10 @@ describe('a staged database the unlock cannot read (#973)', () => {
     return { vp, staged, files, before: files.map((path) => readFileSync(path)) }
   }
 
-  // Review round 2 R4: the read failure splits by its code. A file gone since the check (ENOENT) is no stage: nothing to
-  // judge, the workspace opens. Any other failure that is no hold (EIO, a failing drive) can be neither judged nor removed
-  // as a frame: the file is left exactly as it is, the workspace opens at `.enc`, and one content-free line says so.
+  // Review round 2 R4, round 3 F4: the read failure splits by its code. A file gone since the check (ENOENT) is no stage:
+  // nothing to judge, the workspace opens. A folder at the name (EISDIR) is no data: left, and `.enc` opens
+  // (workspace-vault-format-guard.test.ts). Every other failure, a hold or an I/O error, may hide a stage this workspace
+  // needs: the unlock refuses as "try again" and changes nothing.
   it('a staged copy gone between the check and the read (ENOENT) is no stage: the unlock opens the workspace, nothing logged', () => {
     const { vp, files, before } = workspaceBesideLeftover()
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
@@ -936,12 +937,19 @@ describe('a staged database the unlock cannot read (#973)', () => {
     ctl.shutdown()
   })
 
-  it('a staged copy that fails to read with EIO is left as it is: the unlock opens the workspace and logs one line, no path', async () => {
-    const { vp, staged, before } = workspaceBesideLeftover()
+  // Round 2 left such a stage and went on; with a failed lock's `.recovery` waiting, that roll-forward ran first, and an
+  // authenticating stage could later roll over the session it had restored (Fable round 2, P6). Now the refusal comes
+  // before the `.recovery` block: nothing is written, and the retry restores the session.
+  it('a staged copy that fails to read with EIO answers vault_recovery_blocked; a waiting .recovery and every file byte for byte', async () => {
+    const vp = lockedVault('recovery-guards-973', 'pw')
+    failedLockState(vp, 7171, 'pw') // a closed working file newer than `.enc`: the start keeps it as `.recovery`
+    const staged = `${vp.encPath}.new`
+    writeFileSync(staged, readFileSync(lockedVault('recovery-guards-973-leftover', 'other-pw').encPath))
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
+    const files = [vp.descriptorPath, vp.encPath, staged, `${vp.dbPath}${RECOVERY_SUFFIX}`]
+    const before = files.map((path) => readFileSync(path))
     registerWorkspaceIpc(workspaceIpcCtx(ctl))
-    const linesBefore = readLogTail(100_000).length
     failures.openThrowOnStagedEnc = 'EIO'
     let result: unknown
     try {
@@ -950,13 +958,12 @@ describe('a staged database the unlock cannot read (#973)', () => {
       failures.openThrowOnStagedEnc = null
     }
     expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
-    expect(result).toMatchObject({ ok: true })
-    expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
-    expect(readFileSync(staged).equals(before[2])).toBe(true)
-    const lines = readLogTail(100_000).slice(linesBefore).filter((line) => line.includes('left a staged copy'))
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).not.toContain(vp.encPath)
-    expect(lines[0]).not.toContain('.enc')
+    expect(result).toEqual({ ok: false, reason: 'vault_recovery_blocked', message: tMain('main.workspace.recoveryBlocked') })
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+    expect(existsSync(vp.dbPath)).toBe(false)
+    ctl.unlock('pw') // the read works again: the leftover is removed, then the failed lock's session rolls forward
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(7171)
+    expect(existsSync(staged)).toBe(false)
     ctl.shutdown()
   })
 
