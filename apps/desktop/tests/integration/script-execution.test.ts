@@ -489,6 +489,52 @@ for (const leg of SCRIPT_LEGS) {
         expect(out).not.toContain('Done. Test the drive')
       })
 
+      // #986: an engine install interrupted on the drive leaves `<dir>.new` / `<dir>.old` beside a pinned
+      // build until the app's next start there. The native pre-flight names it (the canonical gate does too).
+      it('names a leftover from an interrupted engine install beside a pinned build (#986)', () => {
+        const root = scriptRoot('script-swap-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'win.new'), { recursive: true })
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'linux', 'cpu.old'), { recursive: true })
+        // Not a name the swap uses (the app-update plan's own folder): exact names only.
+        mkdirSync(join(root, 'runtime', 'llama.cpp', 'mac@b9999.new'), { recursive: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/llama.cpp/win.new is left from an interrupted engine install')
+        expect(out).toContain('runtime: runtime/llama.cpp/linux/cpu.old is left from an interrupted engine install')
+        expect(out).not.toContain('mac@b9999')
+      })
+
+      // #986 review 2: the knowledge-pack tools have no row in the runtime matrix (optional family), and
+      // their install can be interrupted all the same.
+      it('names a leftover beside the knowledge-pack tools too (#986)', () => {
+        const root = scriptRoot('script-swap-kiwix-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        mkdirSync(join(root, 'runtime', 'kiwix-tools', 'linux.old'), { recursive: true })
+        mkdirSync(join(root, 'runtime', 'kiwix-tools', 'win.new'), { recursive: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/kiwix-tools/linux.old is left from an interrupted engine install')
+        expect(out).toContain('runtime: runtime/kiwix-tools/win.new is left from an interrupted engine install')
+      })
+
+      // #986 review: a leftover that is a link whose target is gone is still a leftover (the canonical
+      // gate lstats it). The PowerShell twin looks at the entry itself, not its target.
+      it('names a leftover that is a dangling link (#986)', () => {
+        const root = scriptRoot('script-swap-link-')
+        writeDriveFile(root, 'model-manifests/runtime-sources.yaml', runtimeSourcesYaml(REAL_SHA))
+        const gone = mkdtempSync(join(tmpdir(), 'hilbertraum-script-gone-'))
+        mkdirSync(join(root, 'runtime', 'llama.cpp'), { recursive: true })
+        symlinkSync(gone, join(root, 'runtime', 'llama.cpp', 'win.old'), process.platform === 'win32' ? 'junction' : 'dir')
+        rmSync(gone, { recursive: true, force: true })
+        const r = leg.run(builder, [f('Target'), root, f('VerifyOnly')])
+        const out = outputOf(r)
+        expect(r.status, out).toBe(1)
+        expect(out).toContain('runtime: runtime/llama.cpp/win.old is left from an interrupted engine install')
+      })
+
       it('rejects an unknown platform label before doing anything (exit 2)', () => {
         const root = scriptRoot('script-plat-')
         const r = leg.run(builder, [f('Target'), root, f('VerifyOnly'), f('Platforms'), 'win-arm64'])

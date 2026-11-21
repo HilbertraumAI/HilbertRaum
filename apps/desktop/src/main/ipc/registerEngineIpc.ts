@@ -55,7 +55,7 @@ import { isModelStarting } from '../../shared/runtime-status'
  * still STARTING (full-audit 2026-07-11 CODE-13, review follow-up): `activeModelId()` is
  * null during a multi-GB load — the manager commits `current` only after health — but the
  * loading child is ALREADY executing from the llama_cpp dir, so an engine install begun
- * mid-start would still rimraf it. `status().startingModelId` names the in-flight start.
+ * mid-start would still replace it. `status().startingModelId` names the in-flight start.
  * A model answering on the built-in DEMO runtime does not count (#532, the CODE-13 polish
  * candidate): the mock never executes the engine dir, and it is exactly what runs while the
  * engine is missing or refused — so the install or the repair the user needs is no longer
@@ -157,7 +157,7 @@ function refusedBuilds(families: readonly EngineFamily[]): Partial<Record<Engine
 /**
  * Is ANY llama-server-backed sidecar's install dir in live use (F-32)? The E5 embedder, reranker,
  * vision and translation sidecars all execute the SAME `runtime/llama.cpp/<os>/` binary a
- * llama_cpp (re-)install pre-cleans — not just the chat runtime CODE-13 covered. The CODE-11
+ * llama_cpp (re-)install replaces — not just the chat runtime CODE-13 covered. The CODE-11
  * per-family sidecar PID registry is the cheap unified signal (a live child ⇒ its family is in
  * use). Exported for the engine-download suite.
  */
@@ -189,7 +189,7 @@ const AUDIT_TRIGGER = 'user'
 function engineAuditMetadata(
   job: EngineDownloadJob,
   preview: EngineDownloadPreview,
-  end?: Pick<EngineJobEnd, 'reason' | 'cause'>
+  end?: Pick<EngineJobEnd, 'reason' | 'cause' | 'space'>
 ): Record<string, unknown> {
   const versions: Record<string, string> = {}
   for (const item of preview.items) versions[item.family] = item.version
@@ -203,7 +203,9 @@ function engineAuditMetadata(
     sizeBytes: preview.totalBytes,
     trigger: AUDIT_TRIGGER,
     ...(end?.reason ? { reason: end.reason } : {}),
-    ...(end?.cause ? { cause: end.cause } : {})
+    ...(end?.cause ? { cause: end.cause } : {}),
+    // #986: a `noSpace` end's two byte counts, the figures its message named.
+    ...(end?.space ? { neededBytes: end.space.neededBytes, freeBytes: end.space.freeBytes } : {})
   }
 }
 
@@ -427,7 +429,7 @@ export function registerEngineIpc(
       ...request,
       // #678: what the reinstall replaces — the builds the OS refused, the `cpu/` net included.
       ...(request.reinstall ? { reinstallBuilds: refusedBuilds(request.families ?? []) } : {}),
-      // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
+      // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install replaces the dir the
       // LIVE chat sidecar executes from — the manager refuses a job that would touch it
       // while a model runtime is up OR still starting (friendly copy; stop the model first).
       // The demo runtime is not "up" here (#532): it never executes that dir.
@@ -438,7 +440,7 @@ export function registerEngineIpc(
       // family still proceed, and so does a repair of the `cpu/` net alone (#678: no sidecar runs it).
       llamaSidecarActive: llamaSidecarInUse(),
       whisperActive: whisperSidecarInUse(),
-      // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install pre-cleans the dir a live
+      // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install replaces the dir a live
       // kiwix-serve / kiwix-manage child executes from — refused while one is registered.
       kiwixToolsActive: kiwixToolsInUse()
     })

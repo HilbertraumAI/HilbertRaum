@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
 import { healEngineLoadState, startEngineCheck } from './services/engine-health'
+import { recoverEngineSwaps } from './services/runtime-download'
 import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
 import { createMainWindowCloseGuard, holdQueueOnQuit, trackQuitRequests } from './close-guard'
@@ -344,6 +345,16 @@ function initBackend(): void {
     appPath: app.getAppPath()
   })
   log.info('Model manifests directory', { manifestsDir, bundledManifestsDir })
+  // #986: an engine install swaps its folders by rename; a kill, an unplug or a crash between the
+  // renames leaves `<os>.new`/`<os>.old` beside the install. Finish or roll that back NOW, before
+  // anything resolves an engine binary: the transcriber slot below is chosen once, from whether
+  // whisper-cli is there, and the engine check (`startEngineCheck`) spawns the chat engine. Renames
+  // only on this path (milliseconds); deletes run in the background. Reads the app's own pins (#842).
+  recoverEngineSwaps(paths.rootPath, bundledManifestsDir, {
+    log: (m, meta) => log.info(m, meta),
+    // A refused move or delete, or a failure: the layout waits for the next start, worth a warning.
+    warn: (m, meta) => log.warn(m, meta)
+  })
 
   // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
   // Both are opt-in by availability — the selectors return the real backend only when

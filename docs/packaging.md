@@ -69,7 +69,8 @@ master pipeline** that produces a finished, sellable drive (see the last section
     settling `run()` counts as busy. That NARROWS the second-install-into-the-same-dir window to the
     ≤2 s SIGKILL grace (the extractor rejects after signalling the child, not after its exit; a tar
     wedged in uninterruptible I/O can outlive even that) — an accepted residual: rejecting only after
-    the child's exit would reintroduce the unbounded wait this fix removes.
+    the child's exit would reintroduce the unbounded wait this fix removes. Since #986 such a late
+    tar writes into the staging folder `<os>.new/`, never the install folder.
     **`tar` runs from inside the target and gets `-xf ./<archive>`, with no `-C`** (#856), on every
     host. Windows' tar (bsdtar) converts the paths on its command line through the ANSI code page,
     so under a Cyrillic or Japanese folder on a Western Windows an absolute archive path failed with
@@ -79,10 +80,17 @@ master pipeline** that produces a finished, sellable drive (see the last section
     from the yaml's `version` is not checked. The `./` keeps a name starting with `-` from meaning
     stdin and one holding a `:` from meaning GNU tar's `host:file`. `extractWithTar` refuses an
     archive kept anywhere else, since its path would have to go on the command line again.
-    **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install pre-cleans the dir EVERY
+    **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install replaces the dir EVERY
     llama-server sidecar runs from (chat + embedder + reranker + vision + translation), so it is
     refused while any of them has a live child; a `whisper_cpp` install is refused mid-transcription/
     dictation. Installs touching only the OTHER family still proceed.
+    **Staged swap (#986).** The install never deletes first: each archive is moved into
+    `<extract_to>.new/`, extracted and checked there and marked last, then swapped in by rename
+    (`<extract_to>` → `.old`, `.new` → `<extract_to>`, the `cpu/` net carried over, `.old` deleted after
+    the job); a failure leaves the installed copy as it was. Before anything is touched the job checks
+    the drive's free space against the archives' unpacked size, read from the archives themselves
+    (`main.engine.notEnoughSpace`). The next start finishes or rolls back an interrupted swap. Design:
+    `architecture.md` "In-app engine updates" §6; layout: `drive-layout.md`.
 - **Model weights** — GGUF files under `models/`, resolved from each manifest's declared paths
   (`local_path` plus, since #310, any `files:` entries — every one relative to the drive root) via
   `weightPath(rootPath, manifest)` / `manifestFiles(rootPath, manifest)`. They are **git-ignored**;

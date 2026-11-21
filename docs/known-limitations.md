@@ -3668,8 +3668,9 @@ reports and phase plans were working papers; their full text lives in git histor
   `runtime/kiwix-tools/<os>/` by hand still works as a last-resort fallback, but leaves no
   marker, so it resolves through the hashless `skip-legacy` verifier path (residual R-1) instead
   of integrity verification — and it is replaced **wholesale** the first time someone installs
-  the family from inside the app or the script (the installer pre-cleans the family's directory
-  before extracting), so a manually provisioned drive is not stranded, only superseded. The
+  the family from inside the app or the script (the in-app installer builds a fresh copy beside it
+  and swaps it in, #986; the script pre-cleans the family's directory before extracting), so a
+  manually provisioned drive is not stranded, only superseded. The
   in-app install needs **Settings → Allow internet access for downloads and updates** on
   and a drive policy that permits downloads (the same gate models and the engine use). Linux and
   macOS builders without the in-app path use the script.

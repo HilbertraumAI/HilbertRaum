@@ -136,11 +136,12 @@ the app cannot override them.
 **"Some of its files on this drive are missing or damaged".** A library that the engine keeps next
 to its program could not be loaded, which usually means an interrupted copy. Choose **Install the
 AI engine again** in the banner (for the voice engine: **Install the voice engine again**, under
-the speech model). It downloads a fresh copy, checks it against its pinned checksum, replaces the
-engine folder and starts your model again. On a Kit it replaces the part that could not start: the
-main engine, its `cpu/` safety net, or both. If the download fails or you cancel it, the copy on the
-drive stays as it was. Like every download, it needs **Allow internet access…** in Settings; if
-the button is greyed out, the line under it says why.
+the speech model). It downloads a fresh copy, checks it against its pinned checksum, unpacks and
+checks it beside the engine folder, swaps it in and starts your model again. On a Kit it replaces
+the part that could not start: the main engine, its `cpu/` safety net, or both. If the download
+fails, you cancel it, or the new copy cannot be unpacked or swapped in, the copy on the drive stays
+as it was (#986). Like every download, it needs **Allow internet access…** in Settings; if the
+button is greyed out, the line under it says why.
 
 If the drive does not allow downloads (an offline Kit), or this computer has no internet:
 - On a drive someone prepared for you, ask them to copy the engine folder again.
@@ -175,8 +176,21 @@ and tested with. It still works; the update brings it to the version the app exp
 
 - **To update:** choose **Update** in the notice on the **AI Model** screen. The new version
   downloads and is checked against its pinned checksum first, while your model keeps answering.
-  Then the models pause for a few seconds while the files are replaced, and the selected model
-  starts again. If the download fails or you cancel it, the engine on the drive stays as it was.
+  Then the models pause for a few seconds while the new version is unpacked beside the old one and
+  swapped in, and the selected model starts again. If the download fails, you cancel it before the
+  swap, or the new version cannot be unpacked or swapped in, the engine on the drive stays as it
+  was and keeps working (#986).
+- **"There is not enough free space on this drive: the engine needs … once unpacked":** the app
+  checks this before it touches anything, so the engine on the drive is unchanged. Free up at least
+  the space it names (the old version is removed only after the new one is in place, so both fit at
+  once for a moment), then choose Update again. The same check runs before an install or a reinstall.
+- **"The engine could not be replaced because another program is using one of its files":** often
+  an antivirus program scanning the new files. The app waited and tried again, then put the old
+  engine back. Rarely even that is refused: the AI Model screen then says the engine is missing, and
+  both copies wait on the drive. Wait a minute and try again (in that case with **Install the AI
+  engine**): the app first puts the new copy in place, so nothing is lost; restarting the app does
+  the same. If the other program still holds the folder, the app says so again and changes nothing;
+  wait a little longer, or restart the computer. If it keeps happening, see whether your antivirus program reports the engine's files.
 - **"The AI engine is in use right now":** an answer, an import, a translation or a document task is
   running. Wait until it has finished, then choose Update again.
 - **The button is greyed out:** like every download, the update needs **Allow internet access…** in

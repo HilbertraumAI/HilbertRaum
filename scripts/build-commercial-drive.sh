@@ -434,6 +434,14 @@ if [[ $DRY_RUN -eq 0 ]]; then
       rt_backend="${rt_rest%%|*}"
       rt_bin="${rt_rest#*|}"
       RT_VERSION="$LLAMA_VERSION"; [[ "$rt_family" == "whisper" ]] && RT_VERSION="$WHISPER_VERSION"
+      # #986: an engine install interrupted on this drive leaves <dir>.new or <dir>.old beside
+      # the install until the app's next start there finishes or rolls back the swap. A Kit must
+      # not ship either: it is a second engine copy (assertCommercialDrive parity). Exact names.
+      for swap_left in "$rt_dir.new" "$rt_dir.old"; do
+        if [[ -e "$TARGET/$swap_left" || -L "$TARGET/$swap_left" ]]; then
+          PROBLEMS+=("runtime: $swap_left is left from an interrupted engine install (start the app on this drive once, or delete it)")
+        fi
+      done
       marker_file="$TARGET/$rt_dir/.hilbertraum-runtime.json"
       bin_file="$TARGET/$rt_dir/$rt_bin"
       if [[ ! -f "$bin_file" ]]; then
@@ -451,6 +459,23 @@ if [[ $DRY_RUN -eq 0 ]]; then
   else
     PROBLEMS+=("model-manifests/runtime-sources.yaml missing on the drive")
   fi
+fi
+# #986: the knowledge-pack tools are optional, so the matrix above has no row for them, but an engine
+# install interrupted on this drive leaves their swap folders just the same (assertCommercialDrive
+# parity; script-drift.test.ts holds this list to runtime-sources.yaml). Exact names only.
+KIWIX_TOOLS_DIRS=(
+  'runtime/kiwix-tools/win'
+  'runtime/kiwix-tools/mac'
+  'runtime/kiwix-tools/linux'
+)
+if [[ $DRY_RUN -eq 0 ]]; then
+  for kt_dir in "${KIWIX_TOOLS_DIRS[@]}"; do
+    for swap_left in "$kt_dir.new" "$kt_dir.old"; do
+      if [[ -e "$TARGET/$swap_left" || -L "$TARGET/$swap_left" ]]; then
+        PROBLEMS+=("runtime: $swap_left is left from an interrupted engine install (start the app on this drive once, or delete it)")
+      fi
+    done
+  done
 fi
 # OCR asset gate (Phase 38, assertCommercialDrive parity): every pinned ocr file must
 # be present with a matching sha256 (plain files — the hash IS the install state).

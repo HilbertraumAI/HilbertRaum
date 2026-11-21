@@ -1805,9 +1805,13 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   fail the install: an audit fault is logged and dropped. Metadata `{ jobId, kind:
   'install'|'update'|'reinstall', families, versions: { <family>: <pin> }, sizeBytes: number|null, trigger:
   'user' }`; a failure adds `reason` (`cancelled`, `networkOff`, `checksumMismatch`, `fileMissing`,
-  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, and `internal` for an exception no
+  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, since #986 `noSpace` (no room to
+  unpack, refused before anything was touched) and `filesInUse` (the swap's rename was refused and the
+  installed copy put back), and `internal` for an exception no
   step caught — the job then ends `failed` instead of staying in a live status) and, for `download`, `cause`
-  (`failureReason`: `network`, `http-404`, `write`, …). `ocr_install_started | ocr_install_finished |
+  (`failureReason`: `network`, `http-404`, `write`, …); for `noSpace` (#986) the two byte counts its message
+  named, `neededBytes` and `freeBytes` (from the new `EngineJobEnd.space?: { neededBytes, freeBytes }`).
+  `ocr_install_started | ocr_install_finished |
   ocr_install_failed` come from `services/ocr-install.ts` through the new `StartOcrInstallOptions.audit?`
   sink, which `registerEngineIpc` wires to `ctx.audit` adding the same `trigger: 'user'`: `{ jobId,
   languages, bytes, trigger }`, plus `outcome` when finished and `reason` (the `main.ocr.*` key's last
@@ -2574,6 +2578,31 @@ whole renderer-visible surface.
   `licenseRepo`; `license` is now set for the two required families too), `sizeBytes` from the pin's
   `size_bytes`, which every committed llama.cpp and whisper.cpp build now carries. The renderer sends
   Confirm's request unchanged to `engine:download`: main keeps no consent token.
+  **#986 additions (the staged engine swap; no IPC, no preload, no schema change; `architecture.md` "In-app
+  engine updates" §6):** `EngineJobEndReason` (`runtime-download.ts`) gains `noSpace` and `filesInUse`, and
+  `EngineJobEnd` gains `space?: EngineSpaceShortfall = { neededBytes, freeBytes }` (set for `noSpace`); the
+  job's `error` is `main.engine.notEnoughSpace` (`{needed}`, `{free}`, the model downloader's unit rules) or
+  `main.engine.filesInUse` (new keys, all ten catalogs). **Behaviour change:** a cancel is honoured until the
+  swap's first rename, even after the extraction (it used to finish the install, #516), and arrives too late
+  after it; a failed step leaves the installed copy as it was (it used to leave none, #752). New exports:
+  `assets.ts` `EngineSwapDirs { live, staging, previous }` + `engineSwapDirs(rootPath, extractTo)` (the exact
+  `<live>.new` / `<live>.old` siblings, contained by `resolveWithinRoot`; refuses an install folder that is
+  the drive root), `planInFolder(plan, dir)` (the plan rebased, same marker keys), `engineFolderComplete(plan,
+  dir?)` (the marker parses AND every file its `binaries` map records is present; the plan's required files
+  only for a marker without the map, review round 2); `InstallStep.cpuNet?` (a main build's net plan, which a
+  job recovers, guards and carries whatever it installs); `runtime-download.ts` `stageEngineInstall(plan,
+  stagingDir, { extract?, signal?, log? })` (extract + checks + hashes + flush + marker inside `stagingDir`;
+  the app-update plan's W-30 install reuses it), `engineFolderDeletesSettled()`, `recoverEngineSwaps(rootPath,
+  manifestsDir, { platform?, arch?, log?, warn? })` (called in `index.ts` before any engine is resolved,
+  what it could not do through `warn`; every engine job runs the same rule on its folders before phase 1;
+  never throws); `fs-retry.ts` `renameWithRetry(from, to, platform?)` + `renameMayClear(err, platform?)` +
+  `RENAME_RETRY_BUDGET_MS` (12 s of waits, EPERM/EACCES/EBUSY on Windows only) + `removeRetry(platform?)`
+  (`rm`'s `maxRetries`/`retryDelay` within the same budget, Windows only); phase 2 installs a family's
+  `cpu/` net before its main build; `archive-size.ts`
+  `extractedArchiveBytes(path, clusterBytes)` (zip central directory or tar.gz ustar headers, each file
+  rounded to the unit; null for anything it cannot size, Zip64 included). `assertCommercialDrive` fails
+  `runtimeCurrent` (or `optionalRuntimesConsistent`) for a leftover `<extract_to>.new` / `.old` beside a
+  pinned build, and the Kit gate scripts' pre-flight says so too.
 - **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
   (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
   all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:

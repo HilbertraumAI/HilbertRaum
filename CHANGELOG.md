@@ -118,6 +118,18 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A failed AI engine update or reinstall no longer leaves the drive with no engine.** Installing,
+  updating or reinstalling an engine deleted the engine on the drive first and then unpacked the new
+  one in its place. If the drive filled up, an antivirus program held one of the new files, or the
+  computer slept or the drive was unplugged during that step, there was no engine at all, and chat
+  stopped until it was downloaded again. Now the new engine is unpacked and checked beside the old
+  one, and only then swapped in, so a failure or a cancel leaves the old engine as it was and
+  working. Before it touches anything, the app checks that the drive has room for the unpacked
+  engine and says how much it needs if not. If a security program holds a file, the app waits a
+  few seconds and tries again, and otherwise puts the old engine back and says so (if even that is
+  refused, trying again finishes the swap once the other program lets go). If the app stopped in the middle of the swap, the next
+  start finishes it or puts the old engine back.
+  Cancel now stops an update until the swap begins, even after the files were unpacked (#986).
 - **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
   workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
   a password, creating the workspace replaced that file, and with it the only key that opens that

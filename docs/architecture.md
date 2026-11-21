@@ -5382,7 +5382,9 @@ restart, install. Three things blocked an in-app repair:
 2. **Main build only.** The reinstall re-fetches the default build; the pre-clean keeps `cpu/`
    as it always has. The in-app installer never installs `cpu/`, even on a first install, and the
    startup check probes the main binary. *Amended by #678 (§11): the reinstall replaces the builds
-   the OS refused, the `cpu/` net included; a first install still never fetches `cpu/`.*
+   the OS refused, the `cpu/` net included; a first install still never fetches `cpu/`. Amended by
+   #986 ("In-app engine updates" §6): there is no pre-clean any more; the main build's swap carries
+   `cpu/` from the replaced copy into the new one.*
 3. **The voice engine gets the same action**, on its quiet hint (§11.17 decision 5).
 4. **One click**, like the existing "Install AI engine" button. The drive's copy is replaced only
    after the new archive downloaded and matched its pinned SHA-256; a cancelled or failed download
@@ -5395,7 +5397,9 @@ restart, install. Three things blocked an in-app repair:
   `main.engine.nothingToRepair`. `EngineDownloadManager.start` installs the named families
   whether or not they are current; a named family with no build here is `main.engine.noHostBuild`.
   Everything else is the ordinary flow: the gates, download, SHA-256 verify, pre-clean (keeps
-  `cpu/`), extract, marker, verifier cache invalidation.
+  `cpu/`), extract, marker, verifier cache invalidation. *Since #986 ("In-app engine updates" §6)
+  the ordinary flow is a staged swap: extract, check and mark in `<os>.new/`, then swap it in and
+  carry `cpu/` over; a failed reinstall leaves the damaged copy as it was.*
 - **Status and job:** `EngineStatus.reinstallableFamilies` lists the required families that are on
   the drive and have a build here. `EngineDownloadJob.families` and `.reinstall` let the screen
   attribute a job's progress to the surface that started it (data-contracts.md).
@@ -5877,8 +5881,10 @@ cites it as "In-app engine updates"._
   so it never downgrades and never replaces an unrecorded engine. The job carries `update: true`.
 - **Two phases, for every job.** `run()` downloads and verifies every archive first (`fetchArchive`),
   leaving the installed engine untouched and usable. Only then does it call
-  `StartEngineDownloadOptions.beforeReplace` and replace each install (`replaceInstall`: pre-clean,
-  which keeps `cpu/` and the archives, then extract, flatten, completeness check, marker).
+  `StartEngineDownloadOptions.beforeReplace` and replace each install (`replaceInstall`). *Amended by
+  #986 (§6): between the phases the job checks the free space; each install is then a staged swap
+  (extract, flatten, completeness check and marker in `<os>.new/`, then two renames), no longer a
+  pre-clean followed by an extraction in place.*
   - A failure or cancel in phase 1 replaces nothing.
   - Archives not yet extracted when the job stops are deleted.
   - **The spawn gate** (`runtime/spawn-gate.ts`, review fix). From `beforeReplace` to the last
@@ -5898,7 +5904,10 @@ cites it as "In-app engine updates"._
     also never reached the sweep, so its links stayed. A user's cancel of a running tar is the
     exception (see below), but not one that lands on a SEC-2 refusal: that clears too. The residual: a
     refused archive that wrote into `cpu/` is not undone, since the net is kept whole; reaching it
-    takes a tampered `runtime-sources.yaml`, which can name any archive anyway.
+    takes a tampered `runtime-sources.yaml`, which can name any archive anyway. *Amended by #986
+    (§6): a failed install now leaves the PREVIOUS install exactly as it was, and no `.new`. The failed
+    copy is only ever in `<os>.new/`, which is deleted (a first install still leaves nothing that
+    reads as installed); the clear-up, `clearFailedInstall` and the `cpu/` residual are gone.*
   - **A job that stops part-way still reports what it replaced** (review fix). If the main build was
     swapped and a later step (the `cpu/` net, the voice engine) failed or was cancelled, `onInstalled`
     fires for the replaced families, so the new binary's consumers are re-armed and the probe
@@ -5908,7 +5917,11 @@ cites it as "In-app engine updates"._
     folder surfaces as #530 "files damaged", which the #532 reinstall repairs. A cancel that lands
     after `install()` finished arrives too late to stop anything: the old copy is gone and the new
     one is whole, so the marker is written and the job reports done. Skipping the marker used to
-    leave a working engine with no version record, which no update offers to replace.
+    leave a working engine with no version record, which no update offers to replace. *Superseded
+    by #986 (§6): nothing installed is touched before the swap's first rename, so a cancel is
+    honoured until then, after the extraction too (the copy in `.new` is deleted), and arrives too
+    late after it (the step finishes, marker included). A cancelled extraction no longer leaves a
+    half-extracted install folder.*
 - **The pause** (`registerEngineIpc.ts` `startEngineUpdate`):
   1. **Refused up front** while work runs (`engineUpdateBusy` → `main.engine.updateBusy`):
      - any `modelBusyLane` (an answer, a document task, a skill run, the benchmark);
@@ -6011,9 +6024,9 @@ voice engine was missing.
   a private in-flight counter). One in flight at the pause is cut off and fails, and the user retries
   it. Document translations, image analyses, generations and article saves are all waited for.
 - **An `unknown` engine** (no marker, or an unorderable tag) is reported in Diagnostics but never
-  offered an update. The in-app installer no longer leaves one behind (a late cancel now records the
-  install). One copied by hand heals through the #532 repair if the OS refuses it, or through the
-  scripts.
+  offered an update. The in-app installer no longer leaves one behind (since #986 it marks every copy
+  before it swaps it in, and a cancel leaves the old copy). One copied by hand heals through the #532
+  repair if the OS refuses it, or through the scripts.
 - **The knowledge-pack tools are reported, not updated** (decision 3). Their consent dialog installs a
   missing copy only, and their spawn sites are not behind the spawn gate (no in-app update replaces them).
 - **The ModelsScreen runtime poll** (see "Engine load failures" §8) can show the card's earlier state
@@ -6043,6 +6056,164 @@ Tests:
 - `EngineUpdate.test.tsx`: the notice, both engines, `cpu/` only, five no-notice rows, the
   Diagnostics row and report.
 - `ModelsScreen.test.tsx`: the deep-link row.
+
+### §6 #986 amendment — the staged engine swap (2026-11-21)
+
+_An install, update or reinstall deleted the installed engine and then extracted the new one into
+the same folder, so any failure after the download left no engine: a full drive, an antivirus hold
+on a new file, a sleep, an unplug or a kill during the extraction (#986; measured: the b9849 folder
+was replaced in place, nothing kept). This is the app-update plan's W-67 (T8.5c, PA-225), built
+before the first Kit release freezes the install path, with the four gaps follow-ups wave 6's
+research found in it. Code cites it as "In-app engine updates" §6._
+
+**The facts it rests on** (measured on NTFS, Windows 11, Node 24, follow-ups wave 6 research E):
+- A folder rename is refused with **EPERM** while any file in it or in a sub-folder is open, and with
+  **EBUSY** while a process has its working folder inside. A **running program does not block the
+  rename** of its folder, only its deletion (`unlink` and `rm -rf` of it: EPERM). So a rename swap is
+  more tolerant than the old delete, and the existing stop and refuse rules (the pause, the in-use
+  refusal, the spawn gate) stay: a process left running would keep the old copy from being deleted.
+- Windows never renames a folder onto an existing one (EPERM); POSIX replaces an empty one only.
+- On exFAT a folder lists in creation order and the marker is written last, so a delete cut short
+  keeps the marker over missing files. exFAT itself was not measured (owed on a real stick).
+- No reader enumerates `runtime/<family>/`: every resolver, the verifier, `engineStatus`, the planner,
+  Diagnostics, the GPU probe and the load check use exact paths, so sibling folders are invisible.
+- The zip central directory states each member's unpacked size: for llama.cpp b11183's Windows Vulkan
+  zip its sum, 92,515,613 bytes in 52 files, is exactly what the extraction writes (96,993,280 bytes
+  at exFAT's 128 KiB allocation unit). No pinned archive is Zip64.
+
+**Decisions** (owner, follow-ups wave 6 gate G-5 (a), 2026-11-21): W-67 now, with its gaps closed; the
+free-space figure from the archive itself (no manifest field); two new strings; the sell gate and the
+Kit gate refuse a leftover; a cancel is honoured until the first rename; CE-F10 (run a complete copy
+in place on a read-only drive) stays the app-update plan's.
+
+**The four gaps in W-67, as closed:**
+1. **The `cpu/` net sits inside the main folder** (`<os>/cpu/`), so the main swap moves it to `.old`.
+   The main step carries `.old/cpu` into the new copy when that has none, before `.old` is deleted; a
+   `.old` whose net could not be carried is kept, and the start carries it.
+2. **"A current folder" means a complete one** (the marker parses and every required file is there,
+   `engineFolderComplete`), never mere existence: the install folder can exist empty (prepare-drive,
+   the archive's download, a net's folder).
+3. **Un-mark before deleting:** every delete of a copy removes its marker first.
+   *Review round 2:* a copy is judged by ITS OWN marker: the marker parses and every file its `binaries`
+   map records is there (the plan's list only for a marker without the map). Judged by the current pin's
+   list, an old copy that lacks a file a newer pin adds read as incomplete, and the start deleted it
+   instead of rolling back to it (and finished an update it should have dropped).
+4. **No rename onto an existing folder:** a stale `.old` is deleted (marker first) before the swap, and
+   one that cannot go fails the step before the install folder is touched.
+
+**As built** (`runtime-download.ts`, `assets.ts`, `fs-retry.ts`, `archive-size.ts`):
+- **Room first.** After every archive verified and before the update's pause, `missingRoom` reads each
+  archive's unpacked size (`extractedArchiveBytes`: a zip's central directory, a tar.gz's ustar headers
+  through gunzip; each file rounded up to the volume's allocation unit, statfs `bsize`; one unit per
+  folder) and sums the steps per volume (the replaced copies go only after the job). More than is free:
+  `noSpace`, `main.engine.notEnoughSpace` with both figures, nothing touched and nothing paused. A size
+  it cannot read (Zip64, an unknown format) skips the check with a log line.
+- **Stage** (`stageEngineInstall(plan, stagingDir)`, per step): wait for queued deletes; delete a stale
+  `<os>.new` (marker first); move the verified archive in (#856: tar runs inside the folder with
+  `./<name>`); extract; flatten; remove the left-out executables (#729); the SEC-2 link sweep; delete
+  the archive; every required file present; chmod; hash every file into the marker; flush every file
+  to the device; write the marker LAST, inside `.new`, and flush it (lens F CE-F1: a marker written
+  after the move made a quit there reinstall over the kept copy). Phase 1 is unchanged: the archives
+  still download into the install folder, which a first install creates.
+- **Order (review round 1):** phase 2 installs each family's `cpu/` net BEFORE its main build. The net's
+  archive downloads into `<os>/cpu/`, inside the main folder: with the main build first, its swap moved
+  that archive into `.old/cpu/`, and a refused carry left the net step without it (ENOENT) and the
+  archive inside `cpu/` for good once the start carried `.old/cpu` back. Net first, the net's swap
+  happens inside the old install folder and the main build's carry takes the NEW net across; no archive
+  is ever inside a folder another step renames. The cost: a net step that fails now stops the job before
+  the main build, which then stays as it was (it used to be replaced and the net failed after it).
+- **A retry never deletes what the last attempt kept (review round 1).** Before phase 1, the job runs the
+  start's recovery rule (`recoverEngineFolder`, below) on each of its folders, main build before its net:
+  a swap whose old copy could not be moved back is finished (the new copy moved in), a net a refused
+  carry left in `.old` is carried in. Before phase 1, because phase 1 makes the install folder again for
+  its archive. In phase 2 a step still refuses to delete a `.new` or `.old` that is the only whole copy
+  (the install folder is not) or that holds a `cpu/` net the install folder lacks: it ends `filesInUse`
+  with nothing touched.
+- **Cancel:** checked after the extraction, before the swap, and once more inside the swap right before
+  its first rename (after a stale `.old` was deleted, which can take seconds). Until the swap's first rename a
+  cancel deletes `.new` and replaces nothing (#516's "finish the install" rule had its reason in the
+  old copy being gone, and is retired); after it, the step finishes.
+- **Swap** (`swapEngineFolder`): delete a stale `.old`; `<os>` → `<os>.old`; `<os>.new` → `<os>`. Each
+  rename goes through `renameWithRetry`: on Windows, EPERM, EACCES and EBUSY are tried again with waits
+  of 50 ms doubling to 1 s, 12 s in all; elsewhere the first refusal stands. A refused first rename
+  touches nothing; a refused second one moves `.old` back. Both end the step `filesInUse`
+  (`main.engine.filesInUse`, "try again in a minute") with the installed copy as it was. Only when `.old`
+  cannot be moved back either do both copies stay; the install folder is then gone for the moment. The
+  next job (the screen offers the install) and the next start first finish such a swap with the start's
+  rule, for every folder of the job's families, the main build's nested net folder included (review
+  round 2). Their renames are tried once, without the waits a job's renames get, so "try again in a
+  minute" holds once the holder has let go; while it still holds a folder, the job ends `filesInUse`
+  again with nothing touched. Deletes of a copy (`removeEngineFolder`) get Node's own `rm` retries
+  on Windows, 15 tries of 100 ms more each (12 s), for a scanner still reading a failed copy.
+- **The spawn gate's bound is not the worst case (review round 1).** One step can take the extractor's
+  5 minutes plus several 12 s rename budgets (the archive's move, the flatten, the swap's renames, a move
+  back, the carry), the hashing, the flush and waits on queued deletes, and a job has up to two steps per
+  family, so a job can hold the gate past its 6 minutes. That is enough: the install folder changes only
+  in the swap's renames, so a spawn that stops waiting meets a complete copy, old or new, with two gaps:
+  between the swap's two renames the install folder does not exist, for up to one 12 s rename-retry
+  budget (the spawn finds no program, as with no engine), and between the main build's swap and its carry
+  the new copy has no net for a moment (review round 3). What a spawn let through early can do is run the old copy, which the swap moves
+  to `.old`, where Windows cannot delete it while it runs; the next swap or start deletes it.
+- **After the swap:** the main step carries `cpu/`; the verifier's cached verdicts for the replaced
+  programs are dropped; `.old` is deleted in the background, marker first, once the job has released
+  the spawn gate (a waiting helper starts on the new copy at once). The deletes run one after another
+  (`engineFolderDeletesSettled`), and the next stage and swap wait for them.
+- **Start recovery** (`recoverEngineSwaps`, in `index.ts` as soon as the pins are known, before the
+  transcriber slot and the engine check resolve a binary): for every family's host build, the main
+  build before its net, and only the exact names `<os>.new` and `<os>.old` (never a pattern: frozen in
+  the first Kit release, it must leave the app-update plan's `<os>@<pin>/` alone):
+  - install complete → carry `.old/cpu` when the install has no whole net (main build), delete `.new`
+    and `.old`;
+  - else `.new` complete → move the incomplete install to `.old`, `.new` in, carry, delete `.old`;
+  - else `.old` complete → move the incomplete install to `.new`, `.old` back, delete `.new`;
+  - else delete both (an incomplete `.old`'s `cpu/` carried first).
+
+  An incomplete leftover already at the spare name is deleted first, synchronously and marker first
+  (its `cpu/` net carried into the install folder before); it used to make the start give up, so a
+  broken install folder stayed broken on every start (review round 1). When the spare name holds a
+  WHOLE copy, the incomplete install folder holds no engine and is the one deleted (its `cpu/` net carried
+  into the copy about to move in first): two whole copies beside an empty install folder used to stay
+  for good, every start and every job (review round 2).
+
+  The `cpu/` carry (start and job) moves the net when the install's `cpu/` is not a WHOLE net by its own
+  marker, deleting an incomplete one first (an empty `cpu/` used to shadow the only net in `.old`, which
+  then went). Before carrying out of a copy, a net swap left unfinished inside it (`<copy>/cpu.new`,
+  `cpu.old`) is finished or rolled back there, so whole nets never go with the copy (review round 2).
+
+  Renames run synchronously, once each: a refusal is logged as a warning and the layout left as it is,
+  never worse (a refused `.new` → install falls back to a complete `.old`). Deletes run in the
+  background. It never throws. A refused rename on a drive that cannot be written is where CE-F10 would hook (pointing the
+  family's resolver at the complete copy); not built.
+- **Gates:** `assertCommercialDrive` fails a Kit with a leftover `<extract_to>.new` or `.old` beside any
+  pinned build (the net's `cpu.new` / `cpu.old` included), and the Kit gate scripts' pre-flight
+  (`build-commercial-drive.{ps1,sh}`) names it too, the knowledge-pack tools' folders included (their own
+  list, held to the yaml by `script-drift.test.ts`). Its advice "start the app on this drive once" works
+  for the builder's own OS only: the start recovers this host's builds.
+
+**Residuals.** exFAT and an antivirus holding a new file are not measured here (the owed T8.5c walk on
+a real stick). The start's renames, and the job's own recovery's, are tried once, without retries (the
+start never waits on a lock): a refused one waits for the next start or job. With a junction at the
+install folder (dev kits only; a real Kit has no links there), the swap renames the junction itself to
+`.old` and moves a real folder in, and the main build's carry then moves `cpu/` out of the junction's
+TARGET into the new folder: the target loses its net (on another volume the carry fails, EXDEV, and
+`.old` stays for the start). Deleting `.old` then unlinks the link and never enters it, so the old copy
+stays on the link's target, orphaned: no folder the app reads points at it any more. A dangling symbolic link at a leftover name is what the PowerShell Kit
+gate's `Get-Item -Force` check is for; this machine cannot create one (no symlink privilege), so only
+the junction case is exercised here. Not modelled: two hosts writing one drive at once.
+
+Tests: `engine-swap.test.ts` (eighteen crash layouts run through the recovery, the incomplete spare,
+two whole copies beside an empty install, a net swap inside `.old`, a pin that adds a file and an empty
+`cpu/` included; a job over two whole copies and a retry that plans the main build alone; the exact-names, marker-first, refused-rename and warning rows; in a job: the `cpu/` carry and
+the marker inside `.new` at the first rename, stale leftovers, a held handle waited out on Windows, the
+rollback, the stranded case and its retry, a retry that fails after a keep-both, a job after a refused
+carry, a refused carry with both builds in one job, a first install, a net-only reinstall, a cancel
+before, during and just before the swap, no room with nothing touched or paused, the OS tar in `.new`);
+`engine-extract-containment.test.ts` (each failing archive as a first install and over an installed
+engine, which stays identical; a `.new` that cannot be deleted); `engine-download.test.ts` (the cancel
+rows, the part-way rows on `.new`); `engine-consent-ipc.test.ts` (the #532 reinstall keeps `cpu/`: the
+carry's regression row); `install-audit.test.ts` (`noSpace` with its byte counts); `fs-retry.test.ts`;
+`archive-size.test.ts`; `assets.test.ts` (the swap folders); `commercial-drive.test.ts` and
+`script-execution.test.ts` (the leftover refusals).
 
 
 ## Internationalization — design record (Phases 39–42)
@@ -7046,7 +7217,9 @@ runtime** (`runtime/factory.ts` — "no llama-server binary on the drive"), whic
 hits when downloading a model into a dev/incomplete drive. `services/runtime-download.ts`
 `EngineDownloadManager` closes that gap: it resolves the host build (`selectHostBuild`), then
 **download → verify → clean → extract → flatten → write the `.hilbertraum-runtime.json`
-marker** — mirroring the canonical `fetch-runtime` scripts, but in-app. The network
+marker** — mirroring the canonical `fetch-runtime` scripts, but in-app. *Since #986 ("In-app
+engine updates" §6) there is no clean: download → verify → room check → extract, flatten, check
+and mark in `<os>.new/` → swap it in by rename; the next start finishes an interrupted swap.* The network
 (`fetchImpl`) and the archive extraction (`extractImpl`, default `tar -xf`, which covers the
 .zip/.tar.gz host assets via bsdtar/GNU tar) are **injected seams**, so the unit suite stays
 zero-network; only the #856 rows run the OS's own tar (packaging.md, the in-app engine

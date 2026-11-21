@@ -3010,6 +3010,17 @@ export const en = {
   // #516: the update pauses the engine for the file swap, which would cut off work in progress.
   'main.engine.updateBusy':
     'The AI engine is in use right now (an answer, an import, a translation or a document task is running). Try the update again when it has finished.',
+  // #986: refused before anything is touched — the archives' unpacked size (from the archives
+  // themselves) against the drive's free space; the figures follow main.download.notEnoughSpace.
+  'main.engine.notEnoughSpace':
+    'There is not enough free space on this drive: the engine needs {needed} once unpacked, and ' +
+    '{free} is free. Free up space on the drive, then try again.',
+  // #986: the staged swap's rename was refused after its retries (a file held in the folder). The
+  // installed copy was put back; or, when even that was refused, both copies were kept, and the retry
+  // (or the next start) moves the new one in, so "try again" holds either way.
+  'main.engine.filesInUse':
+    'The engine could not be replaced because another program is using one of its files (an ' +
+    'antivirus scan, for example). Please try again in a minute.',
   // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
   // errors and refusals, localized at emission (i18n record §3.3 rule 2).
   'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',
