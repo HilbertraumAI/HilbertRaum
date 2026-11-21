@@ -1382,10 +1382,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   counts as a thanks, so an offer accepted with "Great" or «Super» alone gets the short reply, not the list:
   ask for it in words, or with "ok". A thank-you that names what it thanks for also gets the short reply, in the
   ten languages (#983, owner call G-8): "Thanks for the summary", "Thanks for the help!", "Great job!", «Danke für die
-  Hilfe», «Merci pour le résumé», «Özet için teşekkürler». The shape is closed: a thanks, "for", one noun for what the
-  assistant gave (summary, minutes, report, list, answer, help, work and the like), at most a closing word; or a
-  praise word and that noun, with a thanks after it at most. Any other word keeps the request ("Thanks, now write the
-  minutes", "Thanks for the summary of the risks"), and so does a noun first ("Summary, thanks!"). A thank-you longer
+  Hilfe», «Merci pour le résumé», «Özet için teşekkürler». The shape is closed: a thanks, "for", an optional "all", up to two determiners ("the", "your", «il tuo»), an
+  optional praise adjective ("Thanks for the great summary") and one noun for what the assistant gave (summary,
+  minutes, report, list, answer, help, info, work and the like), at most a closing word; Turkish also takes the thanks
+  last or first («Özet için teşekkürler», «Teşekkürler, özet için»). Or an intensifier ("very", «sehr», «muy»), a praise
+  adjective and that noun, written with only spaces between them ("Great summary", «Gute Arbeit», "Very good job"),
+  with a thanks after it at most. A comma, a dash or a full stop between the praise and the noun makes it an
+  acceptance followed by a request, so "Great, list", «Gut, Liste», «Отлично, таблицу» and «Добре, таблицю» read the
+  documents. Praise adverbs («отлично», «świetnie», «чудово») and acceptance words («добре», «gut», «iyi») are no praise
+  adjectives. Any other word keeps the request ("Thanks, now write the minutes", "Thanks for the summary of the
+  risks"), and so does a noun first ("Summary, thanks!"). A thank-you longer
   than that is still taken for a question about the documents (below). **Review evidence (#976):** the action
   shows only under an answer with sources or a coverage line, or one that already has a review, so it is not
   offered under this reply, the fixed no-context reply, a routing answer or a refusal. The deterministic "list

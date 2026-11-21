@@ -827,13 +827,25 @@ interface ThanksLang {
   /** The preposition that links the thanks to what it thanks for ("for", «für», «por»). Empty for Turkish, which
    *  puts «için» after the noun. */
   prep: readonly string[]
-  /** An optional determiner between the preposition and the noun ("the", "your", «die», «deine»). */
+  /** A word before the determiners ("all your help", «für all deine Hilfe»). */
+  predet: readonly string[]
+  /** A determiner between the preposition and the noun ("the", "your", «die», «deine»); up to two in a row
+   *  («il tuo aiuto»). */
   dets: readonly string[]
-  /** ACK_NOUN: what a thank-you or a compliment names, and no more: the answer's kind ("summary", «Protokoll»,
-   *  «résumé») or the assistant's effort ("help", "work", «Hilfe»). One word. */
+  /** ACK_NOUN, nominative: what a thank-you or a compliment names, and no more: the answer's kind ("summary",
+   *  «Protokoll», «résumé») or the assistant's effort ("help", "work", «Hilfe»). One word. Both forms read it. */
   nouns: readonly string[]
-  /** PRAISE: an adjective that praises the noun that follows ("great", «tolle», «génial»). */
+  /** Accusative forms (Russian, Polish, Ukrainian) that only stand as the object after the preposition («за
+   *  таблицу»): never in Form B, where such a noun is the object of an implied request («Отлично, таблицу»). */
+  accusative?: readonly string[]
+  /** A gerund that only stands after the fused «fürs» («Danke fürs Zusammenfassen»), never in Form B. */
+  gerunds?: readonly string[]
+  /** PRAISE: an ATTRIBUTIVE adjective that praises the noun that follows ("great", «tolle», «génial»). No adverb
+   *  and no interjection: «отлично» or «świetnie» alone are "great!", and in Form B they would let "great, <noun>"
+   *  (an acceptance and a request) through. */
   praise: readonly string[]
+  /** One intensifier before the praise ("very good job", «Muy buen trabajo», «Sehr gute Arbeit»). */
+  intensifiers: readonly string[]
 }
 
 const THANKS_LANGS: readonly ThanksLang[] = [
@@ -842,118 +854,138 @@ const THANKS_LANGS: readonly ThanksLang[] = [
     thanks: ['thanks', 'thank you', 'thx', 'ty', 'cheers', 'many thanks', 'thanks a lot', 'thanks so much',
       'thank you very much', 'thank you so much', 'thank you a lot', 'thanks very much'],
     prep: ['for'],
+    predet: ['all'],
     dets: ['the', 'your', 'this', 'that'],
     nouns: ['summary', 'minutes', 'brief', 'review', 'report', 'overview', 'recap', 'list', 'breakdown', 'analysis',
       'comparison', 'table', 'answer', 'reply', 'help', 'explanation', 'info', 'information', 'work', 'job', 'effort'],
-    praise: ['great', 'nice', 'perfect', 'good', 'awesome', 'excellent']
+    praise: ['great', 'nice', 'perfect', 'good', 'awesome', 'excellent'],
+    intensifiers: ['very', 'really', 'so']
   },
   {
     // German ("fürs" is a preposition and its article in one)
     thanks: ['danke', 'danke schön', 'dankeschön', 'danke sehr', 'danke dir', 'vielen dank', 'vielen lieben dank',
       'herzlichen dank', 'besten dank', 'tausend dank'],
     prep: ['für', 'fürs'],
+    predet: ['all'],
     dets: ['die', 'der', 'das', 'den', 'deine', 'ihre', 'diese', 'dieses'],
     nouns: ['zusammenfassung', 'protokoll', 'überblick', 'übersicht', 'analyse', 'bericht', 'prüfung', 'liste',
-      'antwort', 'hilfe', 'erklärung', 'arbeit', 'mühe', 'vergleich', 'zusammenfassen'],
-    praise: ['super', 'toll', 'tolle', 'toller', 'tolles', 'gut', 'gute', 'guter', 'gutes', 'schön', 'schöne',
-      'schöner', 'schönes', 'perfekt', 'perfekte', 'perfekter', 'perfektes', 'klasse', 'prima', 'spitze']
+      'antwort', 'hilfe', 'erklärung', 'arbeit', 'mühe', 'vergleich', 'info', 'infos', 'information',
+      'informationen', 'tabelle'],
+    gerunds: ['zusammenfassen'],
+    praise: ['super', 'tolle', 'toller', 'tolles', 'gute', 'guter', 'gutes', 'schöne', 'schöner', 'schönes',
+      'perfekte', 'perfekter', 'perfektes', 'klasse', 'prima', 'spitze'],
+    intensifiers: ['sehr', 'echt']
   },
   {
     // Spanish
     thanks: ['gracias', 'muchas gracias', 'muchísimas gracias', 'mil gracias'],
     prep: ['por'],
+    predet: [],
     dets: ['el', 'la', 'los', 'las', 'tu', 'tus', 'su', 'sus', 'este', 'esta'],
     nouns: ['resumen', 'acta', 'actas', 'protocolo', 'informe', 'reporte', 'revisión', 'revision', 'panorama',
       'recapitulación', 'lista', 'desglose', 'análisis', 'analisis', 'comparación', 'comparacion', 'tabla',
       'respuesta', 'ayuda', 'explicación', 'explicacion', 'info', 'información', 'informacion', 'trabajo',
       'esfuerzo'],
-    praise: ['genial', 'perfecto', 'perfecta', 'estupendo', 'estupenda', 'excelente', 'buen', 'buena', 'gran']
+    praise: ['genial', 'perfecto', 'perfecta', 'estupendo', 'estupenda', 'excelente', 'buen', 'buena', 'gran'],
+    intensifiers: ['muy']
   },
   {
     // French (an elided article is one token without its apostrophe: «l'aide» → «laide», added below)
     thanks: ['merci', 'merci beaucoup', 'merci bien'],
     prep: ['pour'],
+    predet: [],
     dets: ['le', 'la', 'les', 'ton', 'ta', 'tes', 'votre', 'vos', 'ce', 'cette', 'ces'],
     nouns: ['résumé', 'resume', 'synthèse', 'synthese', 'rapport', 'aperçu', 'apercu', 'récapitulatif',
       'recapitulatif', 'liste', 'analyse', 'comparaison', 'tableau', 'réponse', 'reponse', 'aide', 'explication',
       'info', 'information', 'informations', 'travail', 'effort', 'efforts', 'examen', 'revue', 'bilan'],
-    praise: ['super', 'parfait', 'parfaite', 'génial', 'excellent', 'excellente', 'impeccable', 'bon', 'bonne', 'beau']
+    praise: ['super', 'parfait', 'parfaite', 'génial', 'excellent', 'excellente', 'impeccable', 'bon', 'bonne', 'beau'],
+    intensifiers: ['très', 'tres', 'vraiment']
   },
   {
     // Italian (an elided article: «l'aiuto» → «laiuto», added below)
     thanks: ['grazie', 'grazie mille', 'mille grazie', 'molte grazie', 'tante grazie', 'grazie tante'],
     prep: ['per'],
-    dets: ['il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'una', 'tuo', 'tua', 'questo', 'questa', 'quel', 'quella'],
+    predet: [],
+    dets: ['il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'una', 'tuo', 'tua', 'tuoi', 'tue', 'suo', 'sua', 'vostro',
+      'vostra', 'questo', 'questa', 'quel', 'quella'],
     nouns: ['riassunto', 'verbale', 'rapporto', 'relazione', 'panoramica', 'sintesi', 'riepilogo', 'elenco', 'lista',
       'analisi', 'confronto', 'tabella', 'risposta', 'aiuto', 'spiegazione', 'info', 'informazione', 'informazioni',
       'lavoro', 'impegno', 'sforzo', 'revisione', 'esame'],
     praise: ['ottimo', 'ottima', 'perfetto', 'perfetta', 'fantastico', 'fantastica', 'eccellente', 'super', 'bel',
-      'bella']
+      'bella'],
+    intensifiers: ['molto', 'davvero']
   },
   {
-    // Russian (the noun list holds the nominative and the accusative that «за» takes)
+    // Russian (the accusative that «за» takes is listed apart)
     thanks: ['спасибо', 'спс', 'благодарю', 'большое спасибо', 'спасибо большое', 'огромное спасибо',
       'спасибо вам', 'спасибо тебе', 'большое спасибо вам'],
     prep: ['за'],
+    predet: [],
     dets: ['твой', 'твою', 'твоё', 'твое', 'ваш', 'вашу', 'ваше', 'этот', 'эту', 'это'],
-    nouns: ['резюме', 'протокол', 'обзор', 'отчёт', 'отчет', 'анализ', 'сравнение', 'список', 'таблица', 'таблицу',
-      'ответ', 'помощь', 'объяснение', 'информация', 'информацию', 'работа', 'работу', 'труд', 'сводка', 'сводку',
-      'разбор', 'выжимка', 'выжимку', 'пересказ'],
-    praise: ['отлично', 'прекрасно', 'замечательно', 'супер', 'круто', 'здорово', 'отличный', 'отличная', 'отличное',
-      'прекрасный', 'прекрасная', 'прекрасное', 'замечательный', 'замечательная', 'замечательное', 'хороший',
-      'хорошая', 'хорошее', 'классный', 'классная']
+    nouns: ['резюме', 'протокол', 'обзор', 'отчёт', 'отчет', 'анализ', 'сравнение', 'список', 'таблица', 'ответ',
+      'помощь', 'объяснение', 'информация', 'работа', 'труд', 'сводка', 'разбор', 'выжимка', 'пересказ'],
+    accusative: ['таблицу', 'информацию', 'работу', 'сводку', 'выжимку'],
+    praise: ['отличный', 'отличная', 'отличное', 'прекрасный', 'прекрасная', 'прекрасное', 'замечательный',
+      'замечательная', 'замечательное', 'хороший', 'хорошая', 'хорошее', 'классный', 'классная'],
+    intensifiers: ['очень']
   },
   {
     // Dutch
     thanks: ['bedankt', 'dankjewel', 'dankuwel', 'dankje', 'dank je', 'dank je wel', 'dank u', 'dank u wel',
       'hartelijk bedankt', 'heel erg bedankt', 'hartstikke bedankt'],
     prep: ['voor'],
+    predet: [],
     dets: ['de', 'het', 'een', 'je', 'jouw', 'uw', 'dit', 'deze', 'die', 'dat'],
     nouns: ['samenvatting', 'notulen', 'verslag', 'overzicht', 'analyse', 'lijst', 'vergelijking', 'tabel', 'antwoord',
       'hulp', 'uitleg', 'toelichting', 'informatie', 'info', 'werk', 'moeite', 'inspanning', 'beoordeling', 'review',
       'rapport', 'recap', 'opsomming'],
-    praise: ['mooi', 'mooie', 'geweldig', 'geweldige', 'goed', 'goede', 'prima', 'top', 'super', 'perfecte', 'fijne']
+    praise: ['mooi', 'mooie', 'geweldig', 'geweldige', 'goed', 'goede', 'prima', 'top', 'super', 'perfecte', 'fijne'],
+    intensifiers: ['zeer', 'echt']
   },
   {
-    // Polish (the noun list holds the nominative and the accusative that «za» takes, with the twins typed without
-    // diacritics)
+    // Polish (the accusative that «za» takes is listed apart, with the twins typed without diacritics)
     thanks: ['dziękuję', 'dziekuje', 'dzięki', 'dzieki', 'wielkie dzięki', 'wielkie dzieki', 'bardzo dziękuję',
       'dziękuję bardzo', 'serdecznie dziękuję'],
     prep: ['za'],
+    predet: [],
     dets: ['to', 'ten', 'tę', 'te', 'twoją', 'twoje', 'twój'],
     nouns: ['podsumowanie', 'streszczenie', 'protokół', 'protokol', 'raport', 'przegląd', 'przeglad', 'analiza',
-      'analizę', 'analize', 'lista', 'listę', 'liste', 'zestawienie', 'porównanie', 'porownanie', 'tabela',
-      'tabelę', 'odpowiedź', 'odpowiedz', 'pomoc', 'wyjaśnienie', 'wyjasnienie', 'informacja', 'informację',
-      'informacje', 'praca', 'pracę', 'prace', 'robota', 'wysiłek', 'wysilek', 'ocena', 'ocenę', 'notatka',
-      'notatkę'],
-    praise: ['świetnie', 'swietnie', 'doskonale', 'idealnie', 'świetne', 'swietne', 'świetna', 'swietna',
-      'świetny', 'swietny', 'doskonałe', 'doskonała', 'doskonały', 'super', 'idealne', 'idealna', 'dobra', 'dobre',
-      'dobry', 'fajne', 'fajna']
+      'lista', 'zestawienie', 'porównanie', 'porownanie', 'tabela', 'odpowiedź', 'odpowiedz', 'pomoc',
+      'wyjaśnienie', 'wyjasnienie', 'informacja', 'informacje', 'praca', 'robota', 'wysiłek', 'wysilek', 'ocena',
+      'notatka'],
+    accusative: ['analizę', 'analize', 'listę', 'liste', 'tabelę', 'informację', 'pracę', 'prace', 'ocenę', 'notatkę'],
+    praise: ['świetne', 'swietne', 'świetna', 'swietna', 'świetny', 'swietny', 'doskonałe', 'doskonała', 'doskonały',
+      'super', 'idealne', 'idealna', 'dobra', 'dobre', 'dobry', 'fajne', 'fajna'],
+    intensifiers: ['bardzo']
   },
   {
-    // Turkish: the noun comes first and «için» follows it ("Özet için teşekkürler"); no preposition, so `prep` is empty
+    // Turkish: the noun comes first and «için» follows it ("Özet için teşekkürler"); no preposition, so `prep` is
+    // empty. The thanks may come first as well ("Teşekkürler, özet için").
     thanks: ['teşekkürler', 'tesekkurler', 'teşekkür ederim', 'tesekkur ederim', 'çok teşekkürler',
       'çok teşekkür ederim', 'cok tesekkurler', 'cok tesekkur ederim', 'teşekkür ederiz', 'sağol', 'sağ ol',
       'sağolun', 'sağ olun', 'çok sağol', 'çok sağ ol', 'eyvallah'],
     prep: [],
+    predet: [],
     dets: ['bu', 'şu'],
     nouns: ['özet', 'ozet', 'özetin', 'tutanak', 'rapor', 'analiz', 'liste', 'karşılaştırma', 'tablo', 'cevap',
       'cevabın', 'yanıt', 'yardım', 'yardımın', 'açıklama', 'bilgi', 'emek', 'emeğin', 'çalışma', 'çalışman',
       'çaba', 'inceleme', 'değerlendirme', 'iş'],
-    praise: ['harika', 'süper', 'mükemmel', 'güzel', 'iyi']
+    praise: ['harika', 'süper', 'mükemmel', 'güzel'],
+    intensifiers: ['çok']
   },
   {
-    // Ukrainian (the noun list holds the nominative and the accusative that «за» takes)
+    // Ukrainian (the accusative that «за» takes is listed apart)
     thanks: ['дякую', 'дякуємо', 'дяка', 'спасибі', 'велике спасибі', 'щиро дякую', 'дуже дякую', 'дякую дуже',
       'дякую вам', 'дякую тобі'],
     prep: ['за'],
+    predet: [],
     dets: ['твоє', 'твою', 'твій', 'ваше', 'вашу', 'ваш', 'цей', 'цю', 'це'],
-    nouns: ['резюме', 'протокол', 'огляд', 'звіт', 'аналіз', 'порівняння', 'список', 'таблиця', 'таблицю',
-      'відповідь', 'допомога', 'допомогу', 'пояснення', 'інформація', 'інформацію', 'робота', 'роботу', 'зусилля',
-      'підсумок', 'перевірка', 'перевірку', 'розбір'],
-    praise: ['чудово', 'супер', 'прекрасно', 'ідеально', 'круто', 'відмінно', 'чудовий', 'чудова', 'чудове',
-      'прекрасний', 'прекрасна', 'прекрасне', 'відмінний', 'відмінна', 'відмінне', 'гарний', 'гарна', 'гарне',
-      'добрий', 'добра', 'добре']
+    nouns: ['резюме', 'протокол', 'огляд', 'звіт', 'аналіз', 'порівняння', 'список', 'таблиця', 'відповідь',
+      'допомога', 'пояснення', 'інформація', 'робота', 'зусилля', 'підсумок', 'перевірка', 'розбір'],
+    accusative: ['таблицю', 'допомогу', 'інформацію', 'роботу', 'перевірку'],
+    praise: ['чудовий', 'чудова', 'чудове', 'прекрасний', 'прекрасна', 'прекрасне', 'відмінний', 'відмінна',
+      'відмінне', 'гарний', 'гарна', 'гарне', 'добрий', 'добра'],
+    intensifiers: ['дуже']
   }
 ]
 
@@ -962,25 +994,42 @@ const THANKS_LANGS: readonly ThanksLang[] = [
 const ELIDING_VOWEL = /^[aeiouyàâéèêëîïôùûœ]/u
 const ELIDING_PREPS = new Set(['pour', 'per'])
 
+/** A praise word that is also an acceptance word ("good", «goed») stays in Form B: both are attributive in the
+ *  phrase, and the plain-whitespace rule below already keeps "Good, list" a request. Every other acceptance word
+ *  ("dobrze", «добре», «iyi», «gut») is out of Form B (G-3: an acceptance alone can answer the assistant's own offer). */
+const PRAISE_ALSO_ACCEPTANCE = new Set(['good', 'goed'])
+
 interface ThanksSets {
   thanks: ReadonlySet<string>
   prep: ReadonlySet<string>
+  predet: ReadonlySet<string>
   dets: ReadonlySet<string>
+  /** The nouns Form B and Form A read. */
   nouns: ReadonlySet<string>
+  /** The nouns only Form A reads: the accusative. */
+  accusative: ReadonlySet<string>
+  gerunds: ReadonlySet<string>
   praise: ReadonlySet<string>
+  intensifiers: ReadonlySet<string>
   turkish: boolean
 }
 
 const THANKS_SETS: readonly ThanksSets[] = THANKS_LANGS.map((lang) => {
-  const nouns = lang.nouns.flatMap((n) =>
-    lang.prep.some((p) => ELIDING_PREPS.has(p)) && ELIDING_VOWEL.test(n) ? [n, `l${n}`] : [n]
-  )
+  const elide = (list: readonly string[]): string[] =>
+    list.flatMap((n) => (lang.prep.some((p) => ELIDING_PREPS.has(p)) && ELIDING_VOWEL.test(n) ? [n, `l${n}`] : [n]))
+  const praise = foldedSet(lang.praise)
   return {
     thanks: foldedSet(lang.thanks),
     prep: foldedSet(lang.prep),
+    predet: foldedSet(lang.predet),
     dets: foldedSet(lang.dets),
-    nouns: foldedSet(nouns),
-    praise: foldedSet(lang.praise),
+    nouns: foldedSet(elide(lang.nouns)),
+    accusative: foldedSet(elide(lang.accusative ?? [])),
+    gerunds: foldedSet(lang.gerunds ?? []),
+    praise: new Set(
+      [...praise].filter((p) => !SMALL_TALK_FILLER_WORDS.has(p) || PRAISE_ALSO_ACCEPTANCE.has(p))
+    ),
+    intensifiers: foldedSet(lang.intensifiers),
     turkish: lang.prep.length === 0
   }
 })
@@ -991,51 +1040,98 @@ const THANKS_CLOSING_WORDS = foldedSet([
   'arrivederci', 'doei', 'pa', 'hoşçakal', 'hoşçakalın', 'görüşürüz', 'пока', 'бувай', 'бувайте'
 ])
 
-/** Does `rest` read as one noun, with an optional determiner before it? */
-function isDeterminerNoun(rest: readonly string[], sets: ThanksSets): boolean {
-  const words = rest.length === 2 && sets.dets.has(rest[0]) ? rest.slice(1) : rest
-  return words.length === 1 && sets.nouns.has(words[0])
+/** What a thanks stands for, after the preposition: an optional pre-determiner, up to two determiners, an optional
+ *  praise adjective ("Thanks for the great summary") and ONE noun (an accusative form, or after «fürs» a gerund,
+ *  too). Nothing else, so "the summary of the risks" is no object. */
+function isThanksObject(rest: readonly string[], sets: ThanksSets, fused: boolean): boolean {
+  let k = 0
+  if (k < rest.length && sets.predet.has(rest[k])) k++
+  for (let d = 0; d < 2 && k < rest.length && sets.dets.has(rest[k]); d++) k++
+  if (rest.length - k === 2 && sets.praise.has(rest[k])) k++
+  if (rest.length - k !== 1) return false
+  const noun = rest[k]
+  return sets.nouns.has(noun) || sets.accusative.has(noun) || (fused && sets.gerunds.has(noun))
 }
 
-/** The tokens read as one of the two closed shapes in ONE language, every token accounted for. */
-function matchesThanksFor(tokens: readonly string[], sets: ThanksSets): boolean {
-  // Form A, "thanks for (the) <noun>": the thanks phrase is the head (at most four words).
+/** The tokens read as one of the closed shapes in ONE language, every token accounted for. `tight[i]` says that
+ *  only whitespace stands between token i-1 and token i in the message as typed. */
+function matchesThanksFor(tokens: readonly string[], tight: readonly boolean[], sets: ThanksSets): boolean {
+  // Form A, "thanks for (all) (the) (great) <noun>": the thanks phrase is the head (at most four words).
   if (!sets.turkish) {
     for (let i = 1; i <= 4 && i < tokens.length; i++) {
-      if (sets.thanks.has(tokens.slice(0, i).join(' ')) && sets.prep.has(tokens[i]) && isDeterminerNoun(tokens.slice(i + 1), sets))
+      if (
+        sets.thanks.has(tokens.slice(0, i).join(' ')) &&
+        sets.prep.has(tokens[i]) &&
+        isThanksObject(tokens.slice(i + 1), sets, tokens[i] === 'fürs')
+      )
         return true
     }
   } else {
-    // Form A in Turkish word order: "(bu) <noun> için <thanks phrase>".
+    // Form A in Turkish word order: "(bu) <noun> için <thanks phrase>", or the thanks first: "<thanks>, (bu) <noun> için".
     const at = tokens.findIndex((t) => t === 'için' || t === 'icin')
-    if (at > 0 && sets.thanks.has(tokens.slice(at + 1).join(' ')) && isDeterminerNoun(tokens.slice(0, at), sets)) return true
+    if (at > 0 && sets.thanks.has(tokens.slice(at + 1).join(' ')) && isThanksObject(tokens.slice(0, at), sets, false))
+      return true
+    if (at === tokens.length - 1 && at > 1) {
+      for (let i = 1; i <= 4 && i < at; i++) {
+        if (sets.thanks.has(tokens.slice(0, i).join(' ')) && isThanksObject(tokens.slice(i, at), sets, false)) return true
+      }
+    }
   }
-  // Form B, "<praise> <noun>", with a thanks phrase after it or none ("Great summary, thanks!", "Good job").
-  if (tokens.length >= 2 && sets.praise.has(tokens[0]) && sets.nouns.has(tokens[1])) {
-    const after = tokens.slice(2).join(' ')
+  // Form B, "(very) <praise> <noun>", with a thanks phrase after it or none ("Great summary, thanks!", "Good job").
+  // Only whitespace may stand between the words of the phrase: a comma, a dash or a full stop after the praise
+  // ("Great, list", «Gut, Liste», «Отлично, таблицу») makes an acceptance followed by a request.
+  const k = sets.intensifiers.has(tokens[0]) ? 1 : 0
+  if (
+    tokens.length >= k + 2 &&
+    (k === 0 || tight[1]) &&
+    sets.praise.has(tokens[k]) &&
+    tight[k + 1] &&
+    sets.nouns.has(tokens[k + 1])
+  ) {
+    const after = tokens.slice(k + 2).join(' ')
     if (after === '' || sets.thanks.has(after)) return true
   }
   return false
+}
+
+/** The message's word tokens, as `smallTalkTokens` reads them, with `tight[i]` = only whitespace between token i-1
+ *  and token i (the first token has none). */
+function thanksTokens(question: string): { tokens: string[]; tight: boolean[] } {
+  const plain = foldCase(question).replace(/['’‘´`]/g, '')
+  const tokens: string[] = []
+  const tight: boolean[] = []
+  let last = -1
+  for (const m of plain.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const at = m.index ?? 0
+    tight.push(last >= 0 && /^\s+$/.test(plain.slice(last, at)))
+    tokens.push(m[0])
+    last = at + m[0].length
+  }
+  return { tokens, tight }
 }
 
 /**
  * #983 (follow-ups wave 6, owner call G-8): is the message only a thank-you or a compliment for something the
  * assistant gave — "Thanks for the summary", "Thanks for the help!", "Great job!", «Danke für die Hilfe», «Merci pour
  * le résumé», «Özet için teşekkürler»? A CLOSED shape in each of the ten languages, every token accounted for:
- *   A. a THANKS phrase + "for" + an optional determiner + one ACK_NOUN, and at most a closing word after it; or
- *   B. a PRAISE adjective + one ACK_NOUN, and at most a THANKS phrase after it ("Great summary, thanks!").
+ *   A. a THANKS phrase + "for" + an optional pre-determiner ("all"), up to two determiners, an optional praise
+ *      adjective and one ACK_NOUN, and at most a closing word after it; or
+ *   B. an optional intensifier, a PRAISE adjective and one nominative ACK_NOUN, with only whitespace between them,
+ *      and at most a THANKS phrase after it ("Great summary, thanks!", "Very good job").
  * Never noun-first ("Summary, thanks!", "Minutes please" are requests), and no other word: "Thanks, now write the
- * minutes" and "Thanks for the summary of the risks" keep their ask. A question mark anywhere ends it ("Thanks, can you
+ * minutes" and "Thanks for the summary of the risks" keep their ask. A punctuation mark between the praise and the
+ * noun makes it an acceptance and a request ("Great, list"). A question mark anywhere ends it ("Thanks, can you
  * shorten the summary?"), as it does for every other message `isSmallTalkReply` takes. `isSmallTalk` and
  * `isSmallTalkReply` read this one helper, so a message the reply takes is always small talk to the opt-outs.
  * Deterministic; the message is never logged.
  */
 function isThanksForShape(question: string): boolean {
   if (QUESTION_MARK.test(question)) return false
-  let tokens = smallTalkTokens(question)
+  const read = thanksTokens(question)
+  let tokens = read.tokens
   if (tokens.length > 1 && THANKS_CLOSING_WORDS.has(tokens[tokens.length - 1])) tokens = tokens.slice(0, -1)
   if (tokens.length < 2) return false
-  return THANKS_SETS.some((sets) => matchesThanksFor(tokens, sets))
+  return THANKS_SETS.some((sets) => matchesThanksFor(tokens, read.tight, sets))
 }
 
 /**

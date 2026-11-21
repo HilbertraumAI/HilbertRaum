@@ -6297,11 +6297,18 @@ both read (so the reply stays a subset of small talk; it is tested after the que
 ends the shape for both). It is a closed shape, every token accounted for, in each of the ten languages:
 (A) a THANKS phrase ("thanks", "thank you very much", «vielen Dank», «merci beaucoup», «спасибо большое»,
 «teşekkür ederim») + "for" («für», «fürs», «por», «pour», «per», «за», «voor», «za») + an optional
-determiner + ONE noun that names what the assistant gave (summary, minutes, brief, review, report, overview,
-recap, list, breakdown, analysis, comparison, table, answer, reply, help, explanation, info, work, job,
-effort, and their equivalents), then at most a closing word ("bye", «tschüss»); Turkish puts the noun first
-(«Özet için teşekkürler»); or (B) a PRAISE adjective + that noun, then at most a THANKS phrase ("Great
-summary, thanks!", "Great job!", «Gute Arbeit, danke»). It is never noun-first ("Summary, thanks!",
+pre-determiner ("all"), up to two determiners, an optional praise adjective and ONE noun that names what the assistant
+gave (summary, minutes, brief, review, report, overview, recap, list, breakdown, analysis, comparison, table, answer,
+reply, help, explanation, info, work, job, effort, and their equivalents; the accusative that «за», «za» take, and
+after «fürs» the gerund «Zusammenfassen», only here), then at most a closing word ("bye", «tschüss»); Turkish puts the
+noun first or the thanks first («Özet için teşekkürler», «Teşekkürler, özet için»); or (B) an optional intensifier ("very",
+«sehr», «muy», «очень», «çok»), a PRAISE ADJECTIVE (attributive: no adverb, no interjection, no acceptance word such as
+«gut», «добре», «iyi», except "good" and «goed», which are attributive in their phrase) and one nominative noun, with only
+whitespace between the words, then at most a THANKS phrase ("Great
+summary, thanks!", "Great job!", «Gute Arbeit, danke»). A comma, dash or full stop between the praise and the noun
+ends it: the tokenizer drops punctuation, so "Great, list" and "Great list" were one token list, and an acceptance with
+a request ("Great, list", «Gut, Liste», «Отлично, таблицу», «Добре, таблицю») is the worst case, a request answered with
+a pleasantry (review round 1). It is never noun-first ("Summary, thanks!",
 "Minutes please" are requests), and any other word keeps the request: "Thanks, now write the minutes",
 "Thanks for the summary of the risks", "Thanks for the summary and the minutes". Before #983 these ran a
 whole-document map-reduce with the thank-you as the target (8 calls for "Thanks for the summary" over a long

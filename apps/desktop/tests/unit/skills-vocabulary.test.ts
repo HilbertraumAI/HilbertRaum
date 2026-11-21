@@ -443,6 +443,72 @@ describe('isSmallTalkReply: "thanks for the <noun>" and "great <noun>" (#983)', 
   })
 })
 
+// Review round 1 (follow-ups wave 6): Form B is an attributive phrase, not an acceptance plus a request, and the
+// thank-yous people really type (an article and a possessive, "all your help", an intensifier, the thanks last in Turkish)
+// are inside the shape. The worst case of #983 is a request answered with a pleasantry, so every widening has its
+// must-stay-request twin.
+describe('isSmallTalkReply: Form B holds one phrase, and the common wordings are inside the shape (#983 review round 1)', () => {
+  // The tokenizer drops the comma, so "Great, list" and "Great list" were one token list; the raw text decides.
+  it.each([
+    'Great, list', 'Good, summary', 'Perfect, minutes', 'Great, report', 'Great. Summary', 'Great; list', 'Great — list',
+    'Great summary, now list the deadlines', 'Great, continue', 'Very good job, list the deadlines', 'Very, good job',
+    'Gut, Liste', 'Super, Liste', 'Super, Fristen', 'Gut Liste', 'Gut zusammenfassen, danke', 'Perfekt, Analyse',
+    'Prima, overzicht', 'Top, lijst', 'Goed, samenvatting', 'Dobra, lista', 'Dobra, listę', 'Świetnie, tabelę',
+    'Idealnie, podsumowanie', 'Doskonale, raport', 'İyi, liste', 'Harika, rapor', 'Güzel, tablo',
+    'Отлично, таблицу', 'Отлично таблицу',
+    'Отлично, список', 'Добре, таблицю',
+    'Добре таблиця', 'Чудово, таблицю',
+    'Bon, résumé', 'Perfecto, resumen', 'Genial, lista', 'Perfetto, tabella', 'Ottimo, elenco'
+  ])('%s → an acceptance and a request, not small talk', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(false)
+    expect(isSmallTalk(q), q).toBe(false)
+  })
+
+  it.each([
+    'Great summary', 'Great summary, thanks!', 'Tolle Zusammenfassung', 'Gute Arbeit, danke', 'Super Zusammenfassung, danke!',
+    'Отличная работа, спасибо',
+    'Świetna robota', 'Goed werk', 'Bon travail', 'Ottimo lavoro', 'Harika özet', 'Чудова робота'
+  ])('%s → small talk', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(true)
+    expect(isSmallTalk(q), q).toBe(true)
+  })
+
+  it.each([
+    // a determiner and a possessive, "all", a praise adjective inside the thanks, an intensifier, the Turkish word order
+    'Grazie per il tuo aiuto', "Grazie per l'aiuto", 'Thanks for the great summary', 'Thanks for all your help',
+    'Thanks for all the help', 'Danke für all deine Hilfe', 'Danke für die tolle Hilfe',
+    'Very good job', 'Really great summary', 'So nice work', 'Muy buen trabajo', 'Sehr gute Arbeit', 'Echt tolle Arbeit',
+    'Très bon travail', 'Zeer goed werk', 'Bardzo dobra robota', 'Очень хорошая работа',
+    'Çok güzel özet', 'Дуже гарна робота',
+    'Teşekkürler, özet için', 'Teşekkür ederim, bu özet için',
+    'Danke für die Info', 'Danke für die Tabelle', 'Danke fürs Zusammenfassen'
+  ])('%s → small talk (a wording inside the shape)', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(true)
+    expect(isSmallTalk(q), q).toBe(true)
+  })
+
+  // The twin of every widening: one more word, and it is a request again.
+  it.each([
+    'Thanks for the great summary of the risks', 'Thanks for all your help with the minutes', 'Thanks for some summary',
+    'Thanks for my summary', 'Thanks for the your the help', 'Thanks for all all help', 'Thanks for the great',
+    'Very good job, list the deadlines', 'Very good summary of the contract', 'Very, good job list',
+    'Grazie per il tuo aiuto con il verbale', 'Grazie per il tuo il suo il nostro aiuto',
+    'Danke für all deine Hilfe beim Protokoll', 'Danke für die Zusammenfassen', 'Danke für zusammenfassen',
+    'Sehr gute Arbeit, schreibe jetzt das Protokoll', 'Muy buen trabajo, ahora el acta',
+    'Teşekkürler, özet için şimdi riskleri listele', 'Özet için, teşekkürler ve liste'
+  ])('%s → still a request', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(false)
+  })
+
+  // The accusative forms and the adverbs are no Form B words (they only stand as a request's object, or alone).
+  it('an accusative noun or an adverb makes no Form B phrase, but still follows «за» / «za»', () => {
+    expect(isSmallTalkReply('Спасибо за таблицу')).toBe(true)
+    expect(isSmallTalkReply('Dziękuję za listę')).toBe(true)
+    expect(isSmallTalkReply('Отличная таблицу')).toBe(false)
+    expect(isSmallTalkReply('Dobra liste')).toBe(false)
+  })
+})
+
 describe('W7 — SKA-19 synthesis asks veto the needle (§3.3)', () => {
   it('the extended deliverable synonyms keep a "what is the …" synthesis ask on the whole-doc engine', () => {
     for (const q of [
