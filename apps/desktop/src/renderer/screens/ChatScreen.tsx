@@ -804,8 +804,10 @@ export function ChatScreen({
         // claiming a state we could not verify.
       }
       if (cancelled) return
-      // Only a read that succeeded counts as the first read: after a failure the next run of this effect reads again.
-      if (readOk) reviewReadForRef.current = activeId
+      // A failed read answers nothing: the ids stay unknown and the first read stays owed, so the next run of this
+      // effect reads again. No state is set, so the failure cannot loop by itself.
+      if (!readOk) return
+      reviewReadForRef.current = activeId
       setReviewSummaries((prev) => {
         const next = new Map(prev)
         // Every review the batch returned is kept, and every candidate we asked about is now

@@ -284,9 +284,9 @@ describe('#976 — the first read is once per conversation open', () => {
     expect(read).toHaveBeenCalledTimes(1)
   })
 
-  // Review round 2: a failed read is no first read. The next run of the effect (here a new answer) reads again, and the
-  // review of the earlier answer without sources shows.
-  it('a read that failed is read again on the next run, and then shows the review', async () => {
+  // Reviews round 2 and 3: a failed read is no first read and marks no answer as "no review". The next run of the effect (the
+  // conversation list arriving, a refresh) reads again and the review shows; the failure itself does not loop.
+  it('a read that failed leaves its answers unknown: the next run reads again, shows the review, and stops', async () => {
     const history = [userMsg('q1', 'Thanks!'), NO_SOURCES('a1', 'c1')]
     let calls = 0
     const read = vi.fn(async (_id: string) => {
@@ -294,27 +294,16 @@ describe('#976 — the first read is once per conversation open', () => {
       if (calls === 1) throw new Error('Workspace is locked.')
       return [makeSummary({ id: 'r-a1', messageId: 'a1' })]
     })
-    const askDocuments = vi.fn(async () => {
-      history.push(userMsg('q2', 'And the deposit?'), NO_SOURCES('a2', 'c1'))
-      return NO_SOURCES('a2', 'c1')
-    })
     stubApi(
       chatScreenStubs({
         listConversations: vi.fn(async () => [docsConv('c1', 'Alpha chat')]),
         listMessages: vi.fn(async () => [...history]),
-        getEvidenceReviewSummariesForConversation: read,
-        askDocuments
+        getEvidenceReviewSummariesForConversation: read
       })
     )
-    const user = userEvent.setup()
     renderChatScreen({ initialConversationId: 'c1', onOpenReview: () => {} })
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(1))
-    await settleUntilQuiescent(() => read.mock.calls.length)
-    expect(screen.queryByRole('button', { name: t('en', 'review.action.continue') })).toBeNull()
-
-    await user.type(await screen.findByRole('textbox'), 'And the deposit?')
-    await user.click(screen.getByRole('button', { name: 'Ask' }))
     expect(await screen.findByRole('button', { name: t('en', 'review.action.continue') })).toBeInTheDocument()
+    await settleUntilQuiescent(() => read.mock.calls.length)
     expect(read).toHaveBeenCalledTimes(2)
   })
 })
