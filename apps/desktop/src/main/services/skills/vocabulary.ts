@@ -584,7 +584,9 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
 //       tree or not (SKA-12; a needle past the truncation cut would be missed; top-k finds it anywhere).
 //
 // Both are deliberately conservative. `isSmallTalk` can never fire on a real document question (a question
-// with any content word is not all-filler and matches no whole-question chit-chat form). `isNeedleShaped`
+// with any content word is not all-filler and matches no whole-question chit-chat form, and the closed thanks and
+// praise shapes of `isThanksForShape` ("Thanks for the summary", "Great job!") hold nothing but thanks words, one
+// praise word and one noun for what the assistant gave). `isNeedleShaped`
 // requires an unambiguous lookup interrogative AND the absence of any deliverable verb, because a false
 // needle (a summary sent to top-k) is worse than a false deliverable (a truncated whole read, still honest
 // via W1's in-prompt notice). Privacy: the question is CONTENT — matched here, NEVER logged.
@@ -802,13 +804,15 @@ const SMALL_TALK_EXACT: ReadonlySet<string> = new Set([
  * True when the question is clearly off-topic chatter (greeting / thanks / assistant-meta), so an active
  * analysis skill should NOT default to a whole-document read (A3 opt-out (a), audit §8.2). Conservative by
  * construction: it fires only when the WHOLE question is chatter — every token a filler, or the normalized
- * question is a known chit-chat form — so a genuine document question (which always carries a content word)
+ * question is a known chit-chat form, or a closed thanks / praise shape that names what it thanks for ("Thanks for
+ * the summary", `isThanksForShape`, #983) — so a genuine document question (which always carries a content word)
  * can never be misclassified. Deterministic; no model; the question is never logged.
  */
 export function isSmallTalk(question: string): boolean {
   const tokens = smallTalkTokens(question)
   if (tokens.length === 0) return false
   if (SMALL_TALK_EXACT.has(tokens.join(' '))) return true
+  if (isThanksForShape(question)) return true
   return tokens.every((t) => SMALL_TALK_WORDS.has(t))
 }
 
@@ -816,6 +820,336 @@ export function isSmallTalk(question: string): boolean {
  *  and its kin (U+203D, U+2047–U+2049), the Arabic one (U+061F) and the Spanish opening mark (U+00BF). One character
  *  class, tested once: linear. */
 const QUESTION_MARK = /[?\uFF1F\u203D\u2047\u2048\u2049\u061F\u00BF]/
+
+/** One language's words for the "thanks for X" shapes of `isThanksForShape` (#983, follow-ups wave 6, owner call
+ *  G-8: ten languages, like the small-talk lists above). Every entry is written as the language writes it and read
+ *  through `foldCase` like the small-talk lists (`foldedSet`); a phrase is its words with single spaces. */
+interface ThanksLang {
+  /** THANKS: a whole thanks phrase ("thanks a lot", «vielen Dank», «спасибо большое»). */
+  thanks: readonly string[]
+  /** The preposition that links the thanks to what it thanks for ("for", «für», «por»). Empty for Turkish, which
+   *  puts «için» after the noun. */
+  prep: readonly string[]
+  /** A word before the determiners ("all your help", «für all deine Hilfe»). */
+  predet: readonly string[]
+  /** A determiner between the preposition and the noun ("the", "your", «die», «deine»); up to two in a row
+   *  («il tuo aiuto»). */
+  dets: readonly string[]
+  /** ACK_NOUN, nominative: what a thank-you or a compliment names, and no more: the answer's kind ("summary",
+   *  «Protokoll», «résumé») or the assistant's effort ("help", "work", «Hilfe»). One word. Both forms read it. */
+  nouns: readonly string[]
+  /** Accusative forms (Russian, Polish, Ukrainian) that only stand as the object after the preposition («за
+   *  таблицу»): never in Form B, where such a noun is the object of an implied request («Отлично, таблицу»). */
+  accusative?: readonly string[]
+  /** A gerund that only stands after the fused «fürs» («Danke fürs Zusammenfassen»), never in Form B. */
+  gerunds?: readonly string[]
+  /** PRAISE: an ATTRIBUTIVE adjective that praises the noun that follows ("great", «tolle», «génial»). No adverb
+   *  and no interjection: «отлично» or «świetnie» alone are "great!", and in Form B they would let "great, <noun>"
+   *  (an acceptance and a request) through. */
+  praise: readonly string[]
+  /** One intensifier before the praise ("very good job", «Muy buen trabajo», «Sehr gute Arbeit»). */
+  intensifiers: readonly string[]
+}
+
+const THANKS_LANGS: readonly ThanksLang[] = [
+  {
+    // English
+    thanks: ['thanks', 'thank you', 'thx', 'ty', 'cheers', 'many thanks', 'thanks a lot', 'thanks so much',
+      'thank you very much', 'thank you so much', 'thank you a lot', 'thanks very much'],
+    prep: ['for'],
+    predet: ['all'],
+    dets: ['the', 'your', 'this', 'that'],
+    nouns: ['summary', 'minutes', 'brief', 'review', 'report', 'overview', 'recap', 'list', 'breakdown', 'analysis',
+      'comparison', 'table', 'answer', 'reply', 'help', 'explanation', 'info', 'information', 'work', 'job', 'effort'],
+    praise: ['great', 'nice', 'perfect', 'good', 'awesome', 'excellent'],
+    intensifiers: ['very', 'really', 'so']
+  },
+  {
+    // German ("fürs" is a preposition and its article in one)
+    thanks: ['danke', 'danke schön', 'dankeschön', 'danke sehr', 'danke dir', 'vielen dank', 'vielen lieben dank',
+      'herzlichen dank', 'besten dank', 'tausend dank'],
+    prep: ['für', 'fürs'],
+    predet: ['all'],
+    dets: ['die', 'der', 'das', 'den', 'deine', 'ihre', 'diese', 'dieses'],
+    nouns: ['zusammenfassung', 'protokoll', 'überblick', 'übersicht', 'analyse', 'bericht', 'prüfung', 'liste',
+      'antwort', 'hilfe', 'erklärung', 'arbeit', 'mühe', 'vergleich', 'info', 'infos', 'information',
+      'informationen', 'tabelle'],
+    gerunds: ['zusammenfassen'],
+    praise: ['super', 'tolle', 'toller', 'tolles', 'gute', 'guter', 'gutes', 'schöne', 'schöner', 'schönes',
+      'perfekte', 'perfekter', 'perfektes', 'klasse', 'prima', 'spitze'],
+    intensifiers: ['sehr', 'echt']
+  },
+  {
+    // Spanish
+    thanks: ['gracias', 'muchas gracias', 'muchísimas gracias', 'mil gracias'],
+    prep: ['por'],
+    predet: [],
+    dets: ['el', 'la', 'los', 'las', 'tu', 'tus', 'su', 'sus', 'este', 'esta'],
+    nouns: ['resumen', 'acta', 'actas', 'protocolo', 'informe', 'reporte', 'revisión', 'revision', 'panorama',
+      'recapitulación', 'lista', 'desglose', 'análisis', 'analisis', 'comparación', 'comparacion', 'tabla',
+      'respuesta', 'ayuda', 'explicación', 'explicacion', 'info', 'información', 'informacion', 'trabajo',
+      'esfuerzo'],
+    praise: ['genial', 'perfecto', 'perfecta', 'estupendo', 'estupenda', 'excelente', 'buen', 'buena', 'gran'],
+    intensifiers: ['muy']
+  },
+  {
+    // French (an elided article is one token without its apostrophe: «l'aide» → «laide», added below)
+    thanks: ['merci', 'merci beaucoup', 'merci bien'],
+    prep: ['pour'],
+    predet: [],
+    dets: ['le', 'la', 'les', 'ton', 'ta', 'tes', 'votre', 'vos', 'ce', 'cette', 'ces'],
+    nouns: ['résumé', 'resume', 'synthèse', 'synthese', 'rapport', 'aperçu', 'apercu', 'récapitulatif',
+      'recapitulatif', 'liste', 'analyse', 'comparaison', 'tableau', 'réponse', 'reponse', 'aide', 'explication',
+      'info', 'information', 'informations', 'travail', 'effort', 'efforts', 'examen', 'revue', 'bilan'],
+    praise: ['super', 'parfait', 'parfaite', 'génial', 'excellent', 'excellente', 'impeccable', 'bon', 'bonne', 'beau'],
+    intensifiers: ['très', 'tres', 'vraiment']
+  },
+  {
+    // Italian (an elided article: «l'aiuto» → «laiuto», added below)
+    thanks: ['grazie', 'grazie mille', 'mille grazie', 'molte grazie', 'tante grazie', 'grazie tante'],
+    prep: ['per'],
+    predet: [],
+    dets: ['il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'una', 'tuo', 'tua', 'tuoi', 'tue', 'suo', 'sua', 'vostro',
+      'vostra', 'questo', 'questa', 'quel', 'quella'],
+    nouns: ['riassunto', 'verbale', 'rapporto', 'relazione', 'panoramica', 'sintesi', 'riepilogo', 'elenco', 'lista',
+      'analisi', 'confronto', 'tabella', 'risposta', 'aiuto', 'spiegazione', 'info', 'informazione', 'informazioni',
+      'lavoro', 'impegno', 'sforzo', 'revisione', 'esame'],
+    praise: ['ottimo', 'ottima', 'perfetto', 'perfetta', 'fantastico', 'fantastica', 'eccellente', 'super', 'bel',
+      'bella'],
+    intensifiers: ['molto', 'davvero']
+  },
+  {
+    // Russian (the accusative that «за» takes is listed apart)
+    thanks: ['спасибо', 'спс', 'благодарю', 'большое спасибо', 'спасибо большое', 'огромное спасибо',
+      'спасибо вам', 'спасибо тебе', 'большое спасибо вам'],
+    prep: ['за'],
+    predet: [],
+    dets: ['твой', 'твою', 'твоё', 'твое', 'ваш', 'вашу', 'ваше', 'этот', 'эту', 'это'],
+    nouns: ['резюме', 'протокол', 'обзор', 'отчёт', 'отчет', 'анализ', 'сравнение', 'список', 'таблица', 'ответ',
+      'помощь', 'объяснение', 'информация', 'работа', 'труд', 'сводка', 'разбор', 'выжимка', 'пересказ'],
+    accusative: ['таблицу', 'информацию', 'работу', 'сводку', 'выжимку'],
+    praise: ['отличный', 'отличная', 'отличное', 'прекрасный', 'прекрасная', 'прекрасное', 'замечательный',
+      'замечательная', 'замечательное', 'хороший', 'хорошая', 'хорошее', 'классный', 'классная'],
+    intensifiers: ['очень']
+  },
+  {
+    // Dutch
+    thanks: ['bedankt', 'dankjewel', 'dankuwel', 'dankje', 'dank je', 'dank je wel', 'dank u', 'dank u wel',
+      'hartelijk bedankt', 'heel erg bedankt', 'hartstikke bedankt'],
+    prep: ['voor'],
+    predet: [],
+    dets: ['de', 'het', 'een', 'je', 'jouw', 'uw', 'dit', 'deze', 'die', 'dat'],
+    nouns: ['samenvatting', 'notulen', 'verslag', 'overzicht', 'analyse', 'lijst', 'vergelijking', 'tabel', 'antwoord',
+      'hulp', 'uitleg', 'toelichting', 'informatie', 'info', 'werk', 'moeite', 'inspanning', 'beoordeling', 'review',
+      'rapport', 'recap', 'opsomming'],
+    praise: ['mooi', 'mooie', 'geweldig', 'geweldige', 'goed', 'goede', 'prima', 'top', 'super', 'perfecte', 'fijne'],
+    intensifiers: ['zeer', 'echt']
+  },
+  {
+    // Polish (the accusative that «za» takes is listed apart, with the twins typed without diacritics)
+    thanks: ['dziękuję', 'dziekuje', 'dzięki', 'dzieki', 'wielkie dzięki', 'wielkie dzieki', 'bardzo dziękuję',
+      'dziękuję bardzo', 'serdecznie dziękuję'],
+    prep: ['za'],
+    predet: [],
+    dets: ['to', 'ten', 'tę', 'te', 'twoją', 'twoje', 'twój'],
+    nouns: ['podsumowanie', 'streszczenie', 'protokół', 'protokol', 'raport', 'przegląd', 'przeglad', 'analiza',
+      'lista', 'zestawienie', 'porównanie', 'porownanie', 'tabela', 'odpowiedź', 'odpowiedz', 'pomoc',
+      'wyjaśnienie', 'wyjasnienie', 'informacja', 'informacje', 'praca', 'robota', 'wysiłek', 'wysilek', 'ocena',
+      'notatka'],
+    accusative: ['analizę', 'analize', 'listę', 'liste', 'tabelę', 'informację', 'pracę', 'prace', 'ocenę', 'notatkę'],
+    praise: ['świetne', 'swietne', 'świetna', 'swietna', 'świetny', 'swietny', 'doskonałe', 'doskonała', 'doskonały',
+      'super', 'idealne', 'idealna', 'fajne', 'fajna'],
+    intensifiers: ['bardzo']
+  },
+  {
+    // Turkish: the noun comes first and «için» follows it ("Özet için teşekkürler"); no preposition, so `prep` is
+    // empty. The thanks may come first as well ("Teşekkürler, özet için").
+    thanks: ['teşekkürler', 'tesekkurler', 'teşekkür ederim', 'tesekkur ederim', 'çok teşekkürler',
+      'çok teşekkür ederim', 'cok tesekkurler', 'cok tesekkur ederim', 'teşekkür ederiz', 'sağol', 'sağ ol',
+      'sağolun', 'sağ olun', 'çok sağol', 'çok sağ ol', 'eyvallah'],
+    prep: [],
+    predet: [],
+    dets: ['bu', 'şu'],
+    nouns: ['özet', 'ozet', 'özetin', 'tutanak', 'rapor', 'analiz', 'liste', 'karşılaştırma', 'tablo', 'cevap',
+      'cevabın', 'yanıt', 'yardım', 'yardımın', 'açıklama', 'bilgi', 'emek', 'emeğin', 'çalışma', 'çalışman',
+      'çaba', 'inceleme', 'değerlendirme', 'iş'],
+    praise: ['harika', 'süper', 'mükemmel', 'güzel'],
+    intensifiers: ['çok']
+  },
+  {
+    // Ukrainian (the accusative that «за» takes is listed apart)
+    thanks: ['дякую', 'дякуємо', 'дяка', 'спасибі', 'велике спасибі', 'щиро дякую', 'дуже дякую', 'дякую дуже',
+      'дякую вам', 'дякую тобі'],
+    prep: ['за'],
+    predet: [],
+    dets: ['твоє', 'твою', 'твій', 'ваше', 'вашу', 'ваш', 'цей', 'цю', 'це'],
+    nouns: ['резюме', 'протокол', 'огляд', 'звіт', 'аналіз', 'порівняння', 'список', 'таблиця', 'відповідь',
+      'допомога', 'пояснення', 'інформація', 'робота', 'зусилля', 'підсумок', 'перевірка', 'розбір'],
+    accusative: ['таблицю', 'допомогу', 'інформацію', 'роботу', 'перевірку'],
+    praise: ['чудовий', 'чудова', 'чудове', 'прекрасний', 'прекрасна', 'прекрасне', 'відмінний', 'відмінна',
+      'відмінне', 'гарний', 'гарна', 'гарне', 'добрий', 'добра'],
+    intensifiers: ['дуже']
+  }
+]
+
+/** A noun that begins with a vowel also stands behind an elided article in French and Italian ("pour l'aide",
+ *  "per l'analisi"); the tokenizer drops the apostrophe, so «laide» and «lanalisi» are the tokens to accept. */
+const ELIDING_VOWEL = /^[aeiouyàâéèêëîïôùûœ]/u
+const ELIDING_PREPS = new Set(['pour', 'per'])
+
+/** A praise word that is also an acceptance word ("good", «goed») stays in Form B: both are attributive in the
+ *  phrase, and the plain-whitespace rule below already keeps "Good, list" a request. Every other acceptance word
+ *  ("dobrze", «добре», «iyi», «gut») is out of Form B (G-3: an acceptance alone can answer the assistant's own offer). */
+const PRAISE_ALSO_ACCEPTANCE = new Set(['good', 'goed'])
+
+interface ThanksSets {
+  thanks: ReadonlySet<string>
+  prep: ReadonlySet<string>
+  predet: ReadonlySet<string>
+  dets: ReadonlySet<string>
+  /** The nouns Form B and Form A read. */
+  nouns: ReadonlySet<string>
+  /** The nouns only Form A reads: the accusative. */
+  accusative: ReadonlySet<string>
+  gerunds: ReadonlySet<string>
+  praise: ReadonlySet<string>
+  intensifiers: ReadonlySet<string>
+  turkish: boolean
+}
+
+const THANKS_SETS: readonly ThanksSets[] = THANKS_LANGS.map((lang) => {
+  const elide = (list: readonly string[]): string[] =>
+    list.flatMap((n) => (lang.prep.some((p) => ELIDING_PREPS.has(p)) && ELIDING_VOWEL.test(n) ? [n, `l${n}`] : [n]))
+  const praise = foldedSet(lang.praise)
+  return {
+    thanks: foldedSet(lang.thanks),
+    prep: foldedSet(lang.prep),
+    predet: foldedSet(lang.predet),
+    dets: foldedSet(lang.dets),
+    nouns: foldedSet(elide(lang.nouns)),
+    accusative: foldedSet(elide(lang.accusative ?? [])),
+    gerunds: foldedSet(lang.gerunds ?? []),
+    praise: new Set(
+      [...praise].filter((p) => !SMALL_TALK_FILLER_WORDS.has(p) || PRAISE_ALSO_ACCEPTANCE.has(p))
+    ),
+    intensifiers: foldedSet(lang.intensifiers),
+    turkish: lang.prep.length === 0
+  }
+})
+
+/** The closing word a thank-you may end on, in any language ("Thanks for the summary, bye"). */
+const THANKS_CLOSING_WORDS = foldedSet([
+  'bye', 'goodbye', 'cya', 'tschüss', 'tschau', 'ciao', 'adiós', 'adios', 'chao', 'chau', 'adieu', 'tchao',
+  'arrivederci', 'doei', 'pa', 'hoşçakal', 'hoşçakalın', 'görüşürüz', 'пока', 'бувай', 'бувайте'
+])
+
+/** What a thanks stands for, after the preposition: an optional pre-determiner, up to two determiners, an optional
+ *  praise adjective ("Thanks for the great summary") and ONE noun (an accusative form, or after «fürs» a gerund,
+ *  too). Nothing else, so "the summary of the risks" is no object. */
+function isThanksObject(rest: readonly string[], sets: ThanksSets, fused: boolean): boolean {
+  let k = 0
+  if (k < rest.length && sets.predet.has(rest[k])) k++
+  for (let d = 0; d < 2 && k < rest.length && sets.dets.has(rest[k]); d++) k++
+  if (rest.length - k === 2 && sets.praise.has(rest[k])) k++
+  if (rest.length - k !== 1) return false
+  const noun = rest[k]
+  return sets.nouns.has(noun) || sets.accusative.has(noun) || (fused && sets.gerunds.has(noun))
+}
+
+/** The tokens read as one of the closed shapes in ONE language, every token accounted for. `tight[i]` says that
+ *  only whitespace stands between token i-1 and token i in the message as typed. */
+function matchesThanksFor(tokens: readonly string[], tight: readonly boolean[], sets: ThanksSets): boolean {
+  // Form A, "thanks for (all) (the) (great) <noun>": the thanks phrase is the head (at most four words). Everything
+  // after the preposition is one phrase typed with spaces only: "Thanks for that, summary" and "Thanks for all - minutes"
+  // are a thanks and a request (review round 2).
+  const tightFrom = (from: number, to: number): boolean => tight.slice(from, to).every(Boolean)
+  if (!sets.turkish) {
+    for (let i = 1; i <= 4 && i < tokens.length; i++) {
+      if (
+        sets.thanks.has(tokens.slice(0, i).join(' ')) &&
+        sets.prep.has(tokens[i]) &&
+        tightFrom(i + 1, tokens.length) &&
+        isThanksObject(tokens.slice(i + 1), sets, tokens[i] === 'fürs')
+      )
+        return true
+    }
+  } else {
+    // Form A in Turkish word order: "(bu) <noun> için <thanks phrase>", or the thanks first: "<thanks>, (bu) <noun> için".
+    const at = tokens.findIndex((t) => t === 'için' || t === 'icin')
+    if (
+      at > 0 &&
+      sets.thanks.has(tokens.slice(at + 1).join(' ')) &&
+      tightFrom(1, at + 1) &&
+      isThanksObject(tokens.slice(0, at), sets, false)
+    )
+      return true
+    if (at === tokens.length - 1 && at > 1) {
+      for (let i = 1; i <= 4 && i < at; i++) {
+        if (
+          sets.thanks.has(tokens.slice(0, i).join(' ')) &&
+          tightFrom(i + 1, at + 1) &&
+          isThanksObject(tokens.slice(i, at), sets, false)
+        )
+          return true
+      }
+    }
+  }
+  // Form B, "(very) <praise> <noun>", with a thanks phrase after it or none ("Great summary, thanks!", "Good job").
+  // Only whitespace may stand between the words of the phrase: a comma, a dash or a full stop after the praise
+  // ("Great, list", «Gut, Liste», «Отлично, таблицу») makes an acceptance followed by a request.
+  const k = sets.intensifiers.has(tokens[0]) ? 1 : 0
+  if (
+    tokens.length >= k + 2 &&
+    (k === 0 || tight[1]) &&
+    sets.praise.has(tokens[k]) &&
+    tight[k + 1] &&
+    sets.nouns.has(tokens[k + 1])
+  ) {
+    const after = tokens.slice(k + 2).join(' ')
+    if (after === '' || sets.thanks.has(after)) return true
+  }
+  return false
+}
+
+/** The message's word tokens, as `smallTalkTokens` reads them, with `tight[i]` = only whitespace between token i-1
+ *  and token i (the first token has none). */
+function thanksTokens(question: string): { tokens: string[]; tight: boolean[] } {
+  const plain = foldCase(question).replace(/['’‘´`]/g, '')
+  const tokens: string[] = []
+  const tight: boolean[] = []
+  let last = -1
+  for (const m of plain.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const at = m.index ?? 0
+    tight.push(last >= 0 && /^\s+$/.test(plain.slice(last, at)))
+    tokens.push(m[0])
+    last = at + m[0].length
+  }
+  return { tokens, tight }
+}
+
+/**
+ * #983 (follow-ups wave 6, owner call G-8): is the message only a thank-you or a compliment for something the
+ * assistant gave — "Thanks for the summary", "Thanks for the help!", "Great job!", «Danke für die Hilfe», «Merci pour
+ * le résumé», «Özet için teşekkürler»? A CLOSED shape in each of the ten languages, every token accounted for:
+ *   A. a THANKS phrase + "for" + an optional pre-determiner ("all"), up to two determiners, an optional praise
+ *      adjective and one ACK_NOUN, and at most a closing word after it; or
+ *   B. an optional intensifier, a PRAISE adjective and one nominative ACK_NOUN, with only whitespace between them,
+ *      and at most a THANKS phrase after it ("Great summary, thanks!", "Very good job").
+ * Never noun-first ("Summary, thanks!", "Minutes please" are requests), and no other word: "Thanks, now write the
+ * minutes" and "Thanks for the summary of the risks" keep their ask. A punctuation mark between the praise and the
+ * noun makes it an acceptance and a request ("Great, list"). A question mark anywhere ends it ("Thanks, can you
+ * shorten the summary?"), as it does for every other message `isSmallTalkReply` takes. `isSmallTalk` and
+ * `isSmallTalkReply` read this one helper, so a message the reply takes is always small talk to the opt-outs.
+ * Deterministic; the message is never logged.
+ */
+function isThanksForShape(question: string): boolean {
+  if (QUESTION_MARK.test(question)) return false
+  const read = thanksTokens(question)
+  let tokens = read.tokens
+  if (tokens.length > 1 && THANKS_CLOSING_WORDS.has(tokens[tokens.length - 1])) tokens = tokens.slice(0, -1)
+  if (tokens.length < 2) return false
+  return THANKS_SETS.some((sets) => matchesThanksFor(tokens, read.tight, sets))
+}
 
 /**
  * #963 (follow-ups wave 5 owner call G-1): true when a message in a documents chat gets the short small-talk reply
@@ -830,6 +1164,8 @@ const QUESTION_MARK = /[?\uFF1F\u203D\u2047\u2048\u2049\u061F\u00BF]/
  *     only when one of them is a SOCIAL word ("Ok thanks", «Super, danke!»): "ok", "sure", "all", «bitte», «alles
  *     bitte», «claro» or «ладно» alone can answer the assistant's own question or offer, so they read the documents
  *     with the conversation, as before #963.
+ *   - #983: a thank-you or compliment that names what it thanks for ("Thanks for the summary", "Great job!", «Danke
+ *     für die Hilfe») takes it too, in the closed shape of `isThanksForShape`, in all ten languages.
  * Review round (follow-ups wave 5, findings G-1 to G-3). Deterministic; the message is never logged.
  */
 export function isSmallTalkReply(question: string): boolean {
@@ -838,6 +1174,7 @@ export function isSmallTalkReply(question: string): boolean {
   const form = tokens.join(' ')
   if (SMALL_TALK_QUESTION_FORMS.has(form)) return true
   if (QUESTION_MARK.test(question)) return false
+  if (isThanksForShape(question)) return true
   if (SMALL_TALK_SOCIAL_FORMS.has(form)) return true
   if (SMALL_TALK_ACCEPT_FORMS.has(form)) return false
   return tokens.every((t) => SMALL_TALK_WORDS.has(t)) && tokens.some((t) => SMALL_TALK_SOCIAL_WORDS.has(t))
@@ -871,8 +1208,11 @@ const REPORT_SHAPES: string[] = [
 ]
 
 /** Whole-document LIST-ALL deliverables (EN+DE): "list every …", "all the …", «sämtliche …», «Liste …». A
- *  deliverable for the needle veto (a list is never a single fact), but no report: #939 takes list notes for them. */
-const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'all the', 'everything', 'sämtliche', 'liste', 'auflisten']
+ *  deliverable for the needle veto (a list is never a single fact), but no report: #939 takes list notes for them.
+ *  «liste» is a bare substring as on master: it also matches inside "listen", "listed", "blister" and the German
+ *  plural «Listen», which cannot be told apart from it (a pre-existing false veto, recorded in known-limitations).
+ *  "all the" is the word-bounded `DELIVERABLE_SHAPE_RES` entry below (master matched it inside "shall the"). */
+const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'everything', 'sämtliche', 'liste', 'auflisten']
 
 /** Every deliverable shape the needle veto reads: the report shapes and the list-all shapes. */
 const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHAPES]
@@ -881,7 +1221,47 @@ const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHA
 // trailing-space substrings. 'alle ' could never veto a needle when 'alle' ended the question ("sind das
 // alle?"); \balle\b matches the bare word without hitting 'alles'/'allen' (word boundary before the 's').
 // Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
-const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [/\balle\b/]
+//
+// #981 (follow-ups wave 6): "all the" keeps master's meaning ("all these", "all their", "all those" too: no right
+// anchor) but needs a letter-free left edge, so "shall the", "call the", "install the" and "small the" no longer veto
+// a lookup ("When shall the tenant pay?"). This is the GENERAL veto: it reads every question, as on master.
+const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [/\balle\b/, /(?<![\p{L}\p{N}])all the/u]
+
+// #981 (follow-ups wave 6, G-9): the NEW veto. "each", "every", "which" (German «jede[nmrs]», «welche[nmrs]») and a bare
+// "all" turn a question that is a lookup ONLY through one of the new forms below into a list ("When must each
+// obligation be fulfilled?", "When must all invoices be paid?", "Who was assigned which action items?"). It never reads
+// a question that master's own lookup shapes already match: those stay lookups, so a question that master answered from
+// a few passages ("What is the clause which limits liability?", "First of all, when is the deadline?", "When is each
+// payment due?") is never turned into the whole report by this change (the #981 symptom). All are WORD matches on the
+// lower-cased question. Two exceptions keep a plain lookup a lookup: a FREQUENCY ("each month", "every 3 months",
+// "every other week", «jeden Werktag», «jede weitere Stunde»: the quantifier, at most one number or short modifier,
+// then a time unit; the German endings -tag, -woche, ... count only after «jede[nmrs]») is no
+// list, and a relative or indirect "which"/«welche» right after a comma ("Where does it say, which notice period
+// applies?") asks for one fact. Linear: no nested quantifier.
+const EN_FREQUENCY_MODIFIER =
+  '(?:\\d+|\\d+(?:st|nd|rd|th)|other|single|additional|extra|calendar|business|working|following|next|first|second|third)'
+const EN_TIME_UNIT =
+  '(?:times?|days?|weeks?|months?|quarters?|years?|mornings?|afternoons?|evenings?|nights?|hours?|minutes?|' +
+  'weekdays?|weekends?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)'
+const DE_FREQUENCY_MODIFIER = '(?:\\d+\\.?|weitere[nmrs]?|zweite[nmrs]?|dritte[nmrs]?|andere[nmrs]?|einzelne[nmrs]?)'
+const DE_TIME_UNIT =
+  '(?:mal|\\p{L}*(?:tag|woche|monat|quartal|jahr|stunde|nacht|abend|morgen|wochenende)(?:e|en|n|s)?)'
+const NEW_NEEDLE_VETO_RES: readonly RegExp[] = [
+  /(?<![\p{L}\p{N}])all(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])alle[nmrs]?(?![\p{L}\p{N}])/u,
+  // English: "each" / "every", unless a number or a short modifier and a WHOLE time word follow ("each stage" and "each
+  // outage" hold the letters «tag» and «age» but no time unit; "each employee time sheet" has a noun before "time").
+  new RegExp(
+    `(?<![\\p{L}\\p{N}])(?:each|every)(?![\\p{L}\\p{N}])(?!\\s+(?:${EN_FREQUENCY_MODIFIER}\\s+)?${EN_TIME_UNIT}(?![\\p{L}\\p{N}]))`,
+    'u'
+  ),
+  // German: the endings (-tag, -woche, ...) only after a German quantifier, so «Werktag» and «Geschäftsjahr» are units.
+  new RegExp(
+    `(?<![\\p{L}\\p{N}])jede[nmrs]?(?![\\p{L}\\p{N}])(?!\\s+(?:${DE_FREQUENCY_MODIFIER}\\s+)?${DE_TIME_UNIT}(?![\\p{L}\\p{N}]))`,
+    'u'
+  ),
+  /(?<!,\s*)(?<![\p{L}\p{N}])(?:which|welche[nmrs]?)(?![\p{L}\p{N}])/u
+]
 
 /** Unambiguous single-fact LOOKUP interrogatives (EN+DE) — a "find this one thing" ask. Kept tight (a false
  *  needle is worse than a false deliverable), substring-matched. */
@@ -901,20 +1281,37 @@ const NEEDLE_SHAPES: string[] = [
 // needles; a letter or digit on either side ends the match, as in the module's other Unicode-safe matches.
 const NEEDLE_SHAPE_RES: readonly RegExp[] = [/\bfinde\b/, /(?<![\p{L}\p{N}])find an?(?![\p{L}\p{N}])/u]
 
+// #981 (follow-ups wave 6, G-9 = C2): the lookups the lists above miss, as WORD-anchored forms (a letter or digit on
+// either side ends the match, so "somewhen", «wie schwer ist der» and «wer istanbul» never match). Definite singular
+// only, like «was ist der/die/das»: "Who are the parties?" or "When are the payments due?" are left out on purpose. The
+// German verb-second forms keep English and German routing the same («Wann endet der Vertrag?» next to "When does the
+// contract end?", #582). A question that one of the shapes above matches is a lookup as before; the NEW veto above
+// reads only a question that is a lookup through these forms alone.
+const NEW_NEEDLE_SHAPE_RES: readonly RegExp[] = [
+  /(?<![\p{L}\p{N}])when (?:must|should|was|can|could|shall)(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])who (?:is|was) the(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])wann (?:müssen|sollen|soll|war|wurde|kann|können|endet|beginnt|läuft)(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])wer (?:ist|war) (?:der|die|das)(?![\p{L}\p{N}])/u
+]
+
 /**
  * True when the question is a targeted single-fact LOOKUP rather than a whole-document deliverable (A3
  * classify (b), audit §8.2). Used ONLY to prefer top-k over a TRUNCATED whole-doc read (a needle past the
  * cut would be missed). A deliverable verb vetoes it, so a summary/minutes/compare ask is never a needle.
  * #834: so does the every-mention example chip, recognised by its frame in every catalog (`isMentionChip`,
  * whatever word stands in its quotes): it asks for a list of every mention, and the German one held the
- * needle word «finde» while the other nine held none. Deterministic; the question is never logged.
+ * needle word «finde» while the other nine held none. #981 (follow-ups wave 6) is MONOTONE against master: every
+ * question that was a lookup on master still is one (the only change in that direction is the left edge of "all the");
+ * the new forms only add lookups, and their own each / every / which / all veto reads those added lookups alone.
+ * Deterministic; the question is never logged.
  */
 export function isNeedleShaped(question: string): boolean {
   const q = question.toLowerCase()
   if (isMentionChip(question)) return false
   if (DELIVERABLE_SHAPES.some((s) => q.includes(s)) || DELIVERABLE_SHAPE_RES.some((re) => re.test(q)))
     return false
-  return NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))
+  if (NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))) return true
+  return NEW_NEEDLE_SHAPE_RES.some((re) => re.test(q)) && !NEW_NEEDLE_VETO_RES.some((re) => re.test(q))
 }
 
 /**

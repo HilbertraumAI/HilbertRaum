@@ -102,8 +102,8 @@ interface TranscriptProps {
   onExportTable?: (messageId: string) => void
   /**
    * Open (or continue) the evidence review for one answer (EP-1 plan §7.2, spec §9.1). Rendered
-   * only on `isReviewEligible` assistant turns — assistant ∧ (citations ∨ coverage ∨ documents
-   * conversation via `reviewConversation`). Absent ⇒ the affordance never renders. The
+   * only on `isReviewEligible` assistant turns — assistant ∧ (citations ∨ coverage) — and on
+   * any assistant turn that already has a review in `reviewSummaries` (#976). Absent ⇒ the affordance never renders. The
    * STREAMING gate is the row's shared `actionsDisabled` (a live bubble has no action row at
    * all — only persisted turns reach MessageActions).
    */
@@ -119,8 +119,6 @@ interface TranscriptProps {
    * "Review evidence" vs "Continue review" label + the Draft/Ready chip (spec §9.4).
    */
   reviewSummaries?: ReadonlyMap<string, EvidenceReviewSummary | null>
-  /** The active conversation's mode for the documents-mode eligibility leg (spec §9.1). */
-  reviewConversation?: { mode: 'chat' | 'documents' } | null
   actionsDisabled: boolean
   /**
    * Resolve a skill's per-message glyph title in the UI language (installId → localized title),
@@ -168,7 +166,6 @@ export const Transcript = memo(function Transcript({
   onOpenArticle,
   onSaveArticle,
   reviewSummaries,
-  reviewConversation,
   actionsDisabled,
   resolveSkillTitle,
   progressNotice,
@@ -276,7 +273,6 @@ export const Transcript = memo(function Transcript({
               onOpenArticle={onOpenArticle}
               onSaveArticle={onSaveArticle}
               reviewSummary={reviewSummaries?.get(m.id) ?? null}
-              reviewConversation={reviewConversation}
               actionsDisabled={actionsDisabled}
               resolveSkillTitle={resolveSkillTitle}
               answerSpeed={answerSpeeds?.get(m.id) ?? null}
@@ -391,7 +387,6 @@ const MessageBlock = memo(function MessageBlock({
   onOpenArticle,
   onSaveArticle,
   reviewSummary,
-  reviewConversation,
   actionsDisabled,
   resolveSkillTitle,
   answerSpeed,
@@ -421,14 +416,15 @@ const MessageBlock = memo(function MessageBlock({
   onOpenArticle?: (citation: Citation) => void
   onSaveArticle?: (packId: string, articlePath: string) => Promise<PackArticleSaveResult>
   reviewSummary?: EvidenceReviewSummary | null
-  reviewConversation?: { mode: 'chat' | 'documents' } | null
   actionsDisabled: boolean
   resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
 }): JSX.Element {
   // Review-entry eligibility (spec §9.1) via the ONE shared predicate — the action row and
   // the sources-disclosure footer can never disagree. A persisted turn only; the live
   // streaming bubble never reaches MessageBlock (the caller's streaming gate, P1 handoff).
-  const reviewable = onOpenReview != null && isReviewEligible(m, reviewConversation)
+  // #976 (G-7): an answer with sources or a coverage label, or one that already has a review (so a review made
+  // under a no-context answer keeps its "Continue review" entry and chip).
+  const reviewable = onOpenReview != null && (isReviewEligible(m) || reviewSummary != null)
   const openReview = reviewable ? () => onOpenReview(m.id) : undefined
   // #80: the per-answer skill offer renders only on the LAST assistant turn (SKA-37 — accepting it
   // re-answers via regenerate, which acts on the conversation's last turn). A const so the JSX

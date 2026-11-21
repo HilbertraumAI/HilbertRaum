@@ -118,6 +118,27 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **"When must they give notice?" now gets the date, not a long report.** With a skill such as Share-Safe
+  Review or Contract Brief active and a document too long to read at once, a short question starting
+  "When must …", "When should …", "When can …", "Who is the …" (or the German «Wann müssen …», «Wann endet …»,
+  «Wer ist der …») was answered with the skill's whole report, which took 30 to 65 seconds. It is now
+  answered like "When is the notice period?" already was: from the best-matching passages, in seconds. A
+  question that asks for a list through the new forms ("When must each obligation be fulfilled?", "When must all invoices be
+  paid?") keeps the whole read. Every question that was answered from the best-matching passages before is still answered
+  that way (#981).
+- **"Thanks for the summary" is answered with a short reply, not the summary again.** In a chat about
+  documents, a thank-you or a compliment that names what it thanks you for ("Thanks for the summary",
+  "Thanks for the help!", "Great job!", «Danke für die Hilfe», «Merci pour le résumé», «Gracias por el
+  resumen», «Özet için teşekkürler») used to start a read of the whole document with your thank-you as the
+  task. It now gets the same short reply as "Thanks!", in English, German, Spanish, French, Italian, Dutch,
+  Polish, Turkish, Russian and Ukrainian. A thank-you followed by a request ("Thanks, now write the
+  minutes") is still a request (#983).
+- **"Review evidence" is offered only under answers that have sources to review.** In a chat about documents
+  the button also showed under a short reply to "Thanks!", under "I couldn't find this in your documents"
+  and under an answer that told you to pick a document, where a review has nothing to check. It now shows
+  under an answer with sources or a coverage line, and under any answer you have already started a review
+  for (that review keeps its "Continue review" button). The "list every …" answer that is computed without
+  the model has no sources and no longer offers it (#976).
 - **A failed AI engine update or reinstall no longer leaves the drive with no engine.** Installing,
   updating or reinstalling an engine deleted the engine on the drive first and then unpacked the new
   one in its place. If the drive filled up, an antivirus program held one of the new files, or the

@@ -49,7 +49,6 @@ function renderGuard(opts: Partial<TranscriptProps>): void {
   renderTranscript({
     onAnswerWithoutSkill: noop,
     onOpenReview: noop,
-    reviewConversation: { mode: 'documents' },
     ...opts
   })
 }

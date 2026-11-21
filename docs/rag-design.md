@@ -1514,7 +1514,9 @@ logged or audited; audit events stay ids/kinds/counts._
 > in-prompt partial-document notice, the 1.5 German-subword whole-doc/compare budget divisor, char-based
 > (KMP) chunk de-overlap, and the tree-ceiling `coverage.truncated` flip; **A3** (audit §8.2) inverted the
 > whole-doc gate so an `analysis:`-mode skill over a fully-chunked scope defaults to this engine
-> (`isNeedleShaped` downgrades to top-k only when the whole-doc read would truncate); **R4** (audit §5.1)
+> (`isNeedleShaped` downgrades to top-k only when the whole-doc read would truncate; since #981 it also reads
+> word-anchored "when must/should/…" and «wann endet/müssen/…» forms and an each / every / jede / welche veto on those forms only,
+> see [`known-limitations.md`](known-limitations.md)); **R4** (audit §5.1)
 > made the symmetric-compare pair deterministic (A/B by import date). See §39's §-anchor legend for the
 > `audit §N.M` mapping.
 
@@ -6349,6 +6351,33 @@ as small talk for them). The question-mark test is one character class, so it is
 (follow-ups wave 5, findings G-1 to G-3): a "?" followed by more words, a non-ASCII question mark, a
 thanks or acknowledgement formula with a question mark, and an acceptance word alone had all taken the
 reply.
+**#983 (follow-ups wave 6, owner call G-8):** a thank-you that names what it thanks
+for takes the reply too, through one helper, `isThanksForShape`, that `isSmallTalk` and `isSmallTalkReply`
+both read (so the reply stays a subset of small talk; it is tested after the question-mark test, and a "?"
+ends the shape for both). It is a closed shape, every token accounted for, in each of the ten languages:
+(A) a THANKS phrase ("thanks", "thank you very much", «vielen Dank», «merci beaucoup», «спасибо большое»,
+«teşekkür ederim») + "for" («für», «fürs», «por», «pour», «per», «за», «voor», «za») + an optional
+pre-determiner ("all"), up to two determiners, an optional praise adjective and ONE noun that names what the assistant
+gave (summary, minutes, brief, review, report, overview, recap, list, breakdown, analysis, comparison, table, answer,
+reply, help, explanation, info, work, job, effort, and their equivalents; the accusative that «за», «za» take, and
+after «fürs» the gerund «Zusammenfassen», only here), then at most a closing word ("bye", «tschüss»); Turkish puts the
+noun first or the thanks first («Özet için teşekkürler», «Teşekkürler, özet için»); or (B) an optional intensifier ("very",
+«sehr», «muy», «очень», «çok»), a PRAISE ADJECTIVE (attributive: no adverb, no interjection, no acceptance word such as
+«gut», «добре», «iyi», except "good" and «goed», which are attributive in their phrase) and one nominative noun, with only
+whitespace between the words, then at most a THANKS phrase ("Great
+summary, thanks!", "Great job!", «Gute Arbeit, danke»). A comma, dash or full stop between the praise and the noun, or between the preposition and what follows it ("Thanks for that,
+summary", "Thanks for all - minutes"), ends it: the tokenizer drops punctuation, so "Great, list" and "Great list" were one
+token list, and an acceptance with a request ("Great, list", «Gut, Liste», «Отлично, таблицу», «Добре, таблицю») is the worst
+case, a request answered with a pleasantry (review rounds 1 and 2). It is never noun-first ("Summary, thanks!",
+"Minutes please" are requests), and any other word keeps the request: "Thanks, now write the minutes",
+"Thanks for the summary of the risks", "Thanks for the summary and the minutes". Before #983 these ran a
+whole-document map-reduce with the thank-you as the target (8 calls for "Thanks for the summary" over a long
+lease; the same for "Thanks for the help!" and "Great job!", with the request as the notes' target). The
+lists are per language, so «Danke for the summary» matches none. **The "Sure?" sub-point (W-6):** a filler
+question such as "Sure?" or an acceptance such as «Alles bitte» reads the documents with the bare message
+as the query (retrieval reads no history); when no passage clears the similarity floor, the answer is the
+fixed no-context reply ("I couldn't find this in your documents") with no model call. That is by design
+(G-1 and G-3 stay).
 
 **The reply, as built.** The system prompt `SMALL_TALK_SYSTEM_PROMPT` is `BASE_SYSTEM_PROMPT` and two fixed
 English lines (model-facing, like `GROUNDING_RULES`; no catalog): the message is small talk in a chat about
@@ -6365,15 +6394,19 @@ keeps the partial marked "Reply stopped", lock and quit end it, a failure leaves
 token throws `EmptyCompletionError` (CB-4). The meter gets the real usage (the two messages).
 
 **What stays unchanged.** Every grounded prompt, `GROUNDED_SYSTEM_PROMPT` included, byte for byte; the
-renderer, IPC, preload, the `Message` shape and the catalogs. The knowledge-pack acceptance set holds no
+renderer, IPC, preload, the `Message` shape and the catalogs (as of #963; #976 later narrowed the renderer's Review gate, below). The knowledge-pack acceptance set holds no
 small talk (0 of the 100 questions of `eval/rag_de_en.jsonl`), so the §17 shipping rule is not triggered.
 The local API has no route to the documents, so it is not affected.
 
 **Residuals (accepted).** An offer the assistant made and the user accepts with praise alone ("Great",
 «Super», «Perfetto») gets the short reply, not the offer (before #963 it got a summary); "ok", "sure", «bitte»
 and the other acceptance words read the documents with the conversation. A question to the assistant
-keeps the reply with its question mark. The reply sees no earlier turn. "Review" still shows under it, as
-under every answer in a documents chat (a separate product call).
+keeps the reply with its question mark. The reply sees no earlier turn. **Review (#976, owner call G-7):**
+"Review evidence" is not offered under it: the action shows only under an answer with citations or a
+coverage line, or one that already has a review. The same holds for the fixed no-context reply, a routing
+answer, a refusal and a "use the button" pointer. The deterministic "list every …" answer carries neither
+field and loses the action too (its review had no sources to link); an existing review under any of these
+keeps "Continue review".
 
 **Not taken.** (a1) a plain chat turn (`generateAssistantMessage`): its prompt tells the model to answer
 from its own knowledge, so "ok" after an offer could continue from the history without the documents, and
@@ -6390,4 +6423,9 @@ the documents; "ok" after the assistant's offer reads them with the conversation
 the rewritten small-talk rows of the #632 and #831 describes), `rag-whole-doc-skill.test.ts` and
 `rag-whole-read.test.ts` (the rewritten small-talk rows; knowledge packs in scope: no pack search, no pack
 outcome), `rag-regenerate-ipc.test.ts` (Stop, "Send again", regenerate), `skills-vocabulary.test.ts`
-(`isSmallTalkReply`).
+(`isSmallTalkReply`, and the #983 table: "Thanks for the summary", "Great job!", «Danke für die Hilfe» and
+one pair per newer language, each with the request it must not take: "Thanks, now write the minutes", "Summary,
+thanks!"), `rag-whole-doc-compare.test.ts` (#983 describe: "Thanks for the summary" under Contract Brief over
+a lease too long to read whole is one call on `SMALL_TALK_SYSTEM_PROMPT`; "Thanks, now write the minutes" runs
+the map-reduce), `ChatReviewChipBatch.test.tsx` and `ReviewEntryPoints.test.tsx` (#976). The eval set stays at
+0 of 100 small-talk questions with the new shape.

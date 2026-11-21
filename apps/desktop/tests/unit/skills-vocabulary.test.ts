@@ -363,6 +363,155 @@ describe('isSmallTalkReply — the short small-talk reply (#963)', () => {
   })
 })
 
+// #983 (follow-ups wave 6, G-8): "Thanks for the summary" is a thank-you, not a request for the summary. One closed
+// shape in ten languages, every token accounted for: THANKS + for + an optional determiner + ONE report or effort noun
+// (+ a closing word), or PRAISE + noun (+ THANKS). Never noun-first; no other word. On master these all ran the whole
+// report, or a map-reduce with the thank-you as its target ("Thanks for the help!", "Great job!", «Danke für die Hilfe»).
+describe('isSmallTalkReply: "thanks for the <noun>" and "great <noun>" (#983)', () => {
+  const THANKS_FOR = [
+    // English (W §6 c)
+    'Thanks for the summary', 'Great summary, thanks!', 'Thanks for the minutes', 'Thank you for the brief',
+    'Thanks for the review', 'Nice overview', 'Thanks for the help!', 'Thanks for your help', 'Great job!',
+    'Good job, thanks', 'Nice work', 'Thank you very much for the summary', 'Many thanks for the report',
+    'Thanks so much for your help', 'Thanks for the summary, bye', 'THANKS FOR THE SUMMARY',
+    // German
+    'Danke für die Zusammenfassung', 'Vielen Dank für das Protokoll', 'Super Zusammenfassung, danke!',
+    'Tolle Zusammenfassung', 'Danke für die Hilfe', 'Gute Arbeit, danke', 'Danke fürs Zusammenfassen',
+    'Herzlichen Dank für Ihre Hilfe', 'Danke schön für die Antwort',
+    // the eight newer languages: the same shape, each in its own words
+    'Merci pour le résumé', "Merci pour l'aide", 'Merci beaucoup pour votre travail', 'Excellent travail, merci',
+    'Gracias por el resumen', 'Muchas gracias por la ayuda', 'Buen trabajo, gracias',
+    'Grazie per il riassunto', "Grazie per l'aiuto", 'Ottimo lavoro, grazie',
+    'Спасибо за резюме', 'Большое спасибо за помощь', 'Отличная работа, спасибо',
+    'Bedankt voor de samenvatting', 'Hartelijk bedankt voor de hulp', 'Goed werk, bedankt',
+    'Dziękuję za podsumowanie', 'Dzięki za pomoc', 'Świetna robota, dzięki',
+    'Özet için teşekkürler', 'Yardım için teşekkür ederim', 'ÖZET İÇİN TEŞEKKÜRLER', 'ozet icin tesekkurler',
+    'Harika özet, teşekkürler',
+    'Дякую за резюме', 'Щиро дякую за допомогу', 'Чудова робота, дякую'
+  ]
+
+  it.each(THANKS_FOR)('%s → the short reply, and small talk to the opt-outs', (q) => {
+    expect(isSmallTalkReply(q)).toBe(true)
+    expect(isSmallTalk(q)).toBe(true)
+  })
+
+  const STILL_REQUESTS = [
+    // W §6 c: "Must stay requests"
+    'Summarize the summary', 'Thanks, now write the minutes', 'Thanks — can you shorten the summary?',
+    'Thanks for the summary. Now list every deadline', 'Thanks for the summary of the risks',
+    'Thanks! Tell me about the parking rules', 'Thanks, list every deadline', 'Summary, thanks!', 'Minutes please',
+    'The summary please, thanks',
+    // more than one noun, a verb, a question mark or a noun before the thanks
+    'Thanks for the summary and the minutes', 'Thanks for the summary?', 'Thanks for helping me write the summary',
+    'Great, now the summary', 'Nice, summarize this', 'Danke für die Zusammenfassung, jetzt das Protokoll',
+    'Danke, schreibe jetzt das Protokoll', 'Zusammenfassung, danke!', 'Danke für die Hilfe. Was steht im Vertrag?',
+    // the eight newer languages: the thanks, then a request
+    'Merci, maintenant écris le procès-verbal', 'Merci pour le résumé et le rapport', 'Résumé, merci',
+    'Gracias, ahora redacta el acta', 'Gracias por el resumen del contrato', 'Resumen, gracias',
+    'Grazie, ora scrivi il verbale', 'Grazie per il riassunto del contratto', 'Riassunto, grazie',
+    'Спасибо, теперь составь протокол', 'Спасибо за резюме договора', 'Резюме, спасибо',
+    'Bedankt, schrijf nu de notulen', 'Bedankt voor de samenvatting van het contract', 'Samenvatting, bedankt',
+    'Dziękuję, teraz napisz protokół', 'Dziękuję za podsumowanie umowy', 'Podsumowanie, dziękuję',
+    'Teşekkürler, şimdi tutanağı yaz', 'Özet için teşekkürler, şimdi riskleri listele', 'Özet, teşekkürler',
+    'Дякую, тепер склади протокол', 'Дякую за резюме договору', 'Резюме, дякую',
+    // a noun alone, a thanks alone, the wrong language's "for"
+    'Thanks for', 'Thanks for the', 'for the summary', 'Danke for the summary', 'Dank u voor', 'The summary'
+  ]
+
+  it.each(STILL_REQUESTS)('%s → not the short reply (still a request)', (q) => {
+    expect(isSmallTalkReply(q)).toBe(false)
+  })
+
+  it('the short reply stays a subset of small talk, so no message takes both the reply and a document skill', () => {
+    for (const q of [...THANKS_FOR, ...STILL_REQUESTS]) {
+      if (isSmallTalkReply(q)) expect(isSmallTalk(q), q).toBe(true)
+    }
+  })
+
+  it('a question mark ends the shape for the opt-outs too: "Thanks for the summary?" asks something', () => {
+    for (const q of ['Thanks for the summary?', 'Thanks — can you shorten the summary?', 'Danke für die Hilfe？']) {
+      expect(isSmallTalk(q), q).toBe(false)
+      expect(isSmallTalkReply(q), q).toBe(false)
+    }
+  })
+
+  it('the existing replies and requests keep their verdict', () => {
+    for (const q of ['Danke!', 'Thanks a lot!', 'Great, thanks!', 'Ok thanks', 'How are you?']) expect(isSmallTalkReply(q), q).toBe(true)
+    for (const q of ['Ok, and the deposit?', 'Danke, was ist mit der Kaution?', 'Sure?', 'Alles bitte', 'ok']) {
+      expect(isSmallTalkReply(q), q).toBe(false)
+    }
+  })
+})
+
+// Review round 1 (follow-ups wave 6): Form B is an attributive phrase, not an acceptance plus a request, and the
+// thank-yous people really type (an article and a possessive, "all your help", an intensifier, the thanks last in Turkish)
+// are inside the shape. The worst case of #983 is a request answered with a pleasantry, so every widening has its
+// must-stay-request twin.
+describe('isSmallTalkReply: Form B holds one phrase, and the common wordings are inside the shape (#983 review round 1)', () => {
+  // The tokenizer drops the comma, so "Great, list" and "Great list" were one token list; the raw text decides.
+  it.each([
+    'Great, list', 'Good, summary', 'Perfect, minutes', 'Great, report', 'Great. Summary', 'Great; list', 'Great — list',
+    'Great summary, now list the deadlines', 'Great, continue', 'Very good job, list the deadlines', 'Very, good job',
+    'Gut, Liste', 'Super, Liste', 'Super, Fristen', 'Gut Liste', 'Gut zusammenfassen, danke', 'Perfekt, Analyse',
+    'Prima, overzicht', 'Top, lijst', 'Goed, samenvatting', 'Dobra, lista', 'Dobra, listę', 'Świetnie, tabelę',
+    'Idealnie, podsumowanie', 'Doskonale, raport', 'İyi, liste', 'Harika, rapor', 'Güzel, tablo',
+    'Отлично, таблицу', 'Отлично таблицу',
+    'Отлично, список', 'Добре, таблицю',
+    'Добре таблиця', 'Чудово, таблицю',
+    'Bon, résumé', 'Perfecto, resumen', 'Genial, lista', 'Perfetto, tabella', 'Ottimo, elenco'
+  ])('%s → an acceptance and a request, not small talk', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(false)
+    expect(isSmallTalk(q), q).toBe(false)
+  })
+
+  it.each([
+    'Great summary', 'Great summary, thanks!', 'Tolle Zusammenfassung', 'Gute Arbeit, danke', 'Super Zusammenfassung, danke!',
+    'Отличная работа, спасибо',
+    'Świetna robota', 'Goed werk', 'Bon travail', 'Ottimo lavoro', 'Harika özet', 'Чудова робота'
+  ])('%s → small talk', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(true)
+    expect(isSmallTalk(q), q).toBe(true)
+  })
+
+  it.each([
+    // a determiner and a possessive, "all", a praise adjective inside the thanks, an intensifier, the Turkish word order
+    'Grazie per il tuo aiuto', "Grazie per l'aiuto", 'Thanks for the great summary', 'Thanks for all your help',
+    'Thanks for all the help', 'Danke für all deine Hilfe', 'Danke für die tolle Hilfe',
+    'Very good job', 'Really great summary', 'So nice work', 'Muy buen trabajo', 'Sehr gute Arbeit', 'Echt tolle Arbeit',
+    'Très bon travail', 'Zeer goed werk', 'Bardzo świetna robota', 'Очень хорошая работа',
+    'Çok güzel özet', 'Дуже гарна робота',
+    'Teşekkürler, özet için', 'Teşekkür ederim, bu özet için',
+    'Danke für die Info', 'Danke für die Tabelle', 'Danke fürs Zusammenfassen'
+  ])('%s → small talk (a wording inside the shape)', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(true)
+    expect(isSmallTalk(q), q).toBe(true)
+  })
+
+  // The twin of every widening: one more word, and it is a request again.
+  it.each([
+    'Thanks for the great summary of the risks', 'Thanks for all your help with the minutes', 'Thanks for some summary',
+    'Thanks for my summary', 'Thanks for the your the help', 'Thanks for all all help', 'Thanks for the great',
+    'Very good job, list the deadlines', 'Very good summary of the contract', 'Very, good job list',
+    'Grazie per il tuo aiuto con il verbale', 'Grazie per il tuo il suo il nostro aiuto',
+    'Danke für all deine Hilfe beim Protokoll', 'Danke für die Zusammenfassen', 'Danke für zusammenfassen',
+    'Sehr gute Arbeit, schreibe jetzt das Protokoll', 'Muy buen trabajo, ahora el acta',
+    'Teşekkürler, özet için şimdi riskleri listele', 'Özet için, teşekkürler ve liste'
+  ])('%s → still a request', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(false)
+  })
+
+  // The accusative forms and the adverbs are no Form B words (they only stand as a request's object, or alone).
+  it('an accusative noun or an adverb makes no Form B phrase, but still follows «за» / «za»', () => {
+    expect(isSmallTalkReply('Спасибо за таблицу')).toBe(true)
+    expect(isSmallTalkReply('Dziękuję za listę')).toBe(true)
+    expect(isSmallTalkReply('Отличная таблицу')).toBe(false)
+    expect(isSmallTalkReply('Dobra liste')).toBe(false)
+    // «dobra» is usually "OK" in Polish: «Dobra tabela» is an acceptance and a request, no compliment
+    for (const q of ['Dobra tabela', 'Dobry raport', 'Dobre podsumowanie', 'Dobra lista']) expect(isSmallTalkReply(q), q).toBe(false)
+    expect(isSmallTalkReply('Świetna robota')).toBe(true)
+  })
+})
+
 describe('W7 — SKA-19 synthesis asks veto the needle (§3.3)', () => {
   it('the extended deliverable synonyms keep a "what is the …" synthesis ask on the whole-doc engine', () => {
     for (const q of [
@@ -404,6 +553,304 @@ describe('isNeedleShaped — "find a" is a word (#939 review)', () => {
     ['Can you find a clause about pets?', true]
   ] as const)('%s → %s', (question, expected) => {
     expect(isNeedleShaped(question)).toBe(expected)
+  })
+})
+
+// #981 (follow-ups wave 6, G-9 = C2): "When must they give notice?" is a lookup, not a request for the report. The new
+// forms are WORD-anchored and definite-singular; German verb-second («Wann endet …») routes like the English twin
+// (#582); an each/every/jede/welche veto keeps a list a list. Rows are W §5 (c)'s table ("Should be" column).
+// #981 follow-up: the list-all words are words, not pieces of other words, and "all" is the word (not only "all the").
+describe('isNeedleShaped: "all" and «liste» are words, not substrings (#981)', () => {
+  it.each([
+    'When shall the tenant pay?', 'When is it ok to call the landlord before I give notice?',
+    'When is the tenant going to install the heating?',
+    'When is the small fee due?', 'When is it a call for the tenant?', 'When can I install the lock?',
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it.each([
+    'Show me all the deadlines', 'List all the action items', 'When is all the rent due?',
+    // master's substring "all the" also caught these; a letter after "the" must not let them through (review O2)
+    'How much are all these payments together?', 'What is the total of all their payments?',
+    'What is the sum of all these invoices?',
+    'When must all invoices be paid?', 'When should all of the payments be made?', 'When must all rent be paid?',
+    'Wann ist die Fristenliste fällig?', 'Wann ist die Liste fällig?', 'Wann ist die Aufgabenliste fällig?'
+  ])('%s → a list', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+})
+
+// Review round 1 (follow-ups wave 6): the each/every/jede veto and "which" / «welche».
+// Review round 2 (follow-ups wave 6), the MONOTONICITY rule of #981: every question that master's `isNeedleShaped` answered
+// true is still a lookup on the branch. The change may add lookups (the new forms) and may let "shall the" / "call the" /
+// "install the" through the "all the" veto, but it may never turn a question that master answered from a few passages into
+// the whole report (the #981 symptom). The list holds master's verdicts as literals (computed once at 6a9d5fba from every
+// question quoted in this file's needle tables, the two integration tests, the W research probes and the review's examples:
+// 872 questions, 89 lookups on master, none lost); it does not import master.
+const MASTER_LOOKUPS: readonly string[] = [
+  "what is the weather today?",
+  "how much did I spend?",
+  "wann ist die frist?",
+  "what does the document say about termination?",
+  "is there a renewal clause?",
+  "how much did I spend on groceries?",
+  "how many transactions were there?",
+  "when is the renewal date?",
+  "what is the invoice number?",
+  "is there a termination clause?",
+  "find the payment date",
+  "where is the signature?",
+  "wie viel kostet das?",
+  "wie viele positionen gibt es?",
+  "wo ist die unterschrift?",
+  "gibt es eine kündigungsklausel?",
+  "a \"what is the <synthesis-noun>\" ask is a DELIVERABLE, not a needle (whole-doc synthesis, EN+DE)",
+  "Wie viel habe ich für Lebensmittel ausgegeben?",
+  "Wie viele Buchungen gab es?",
+  "wie viele",
+  "Wann ist sie fällig?",
+  "Was ist die Fälligkeit?",
+  "when is this invoice due?",
+  "Danke für die Hilfe. Was steht im Vertrag?",
+  "the German imperative \"finde\" is a needle even at END of question (was dead as \"finde \")",
+  "wo ich das finde",
+  "finde die Kündigungsfrist",
+  "wie viele Positionen sind es",
+  "Find a deadline in this contract",
+  "find an invoice number",
+  "Can you find a clause about pets?",
+  "When is the small fee due?",
+  "When is it a call for the tenant?",
+  "How much is the rent each month?",
+  "When is rent due every month?",
+  "When is the rent due each month?",
+  "How much is the service charge each year?",
+  "What is the late fee for each day of delay?",
+  "When is the meeting held every other week?",
+  "How much do I pay each additional day?",
+  "Wann ist die Miete jeden Monat fällig?",
+  "Wie viel kostet die Miete jeden Monat?",
+  "Wann muss ich jeden Monat zahlen?",
+  "Wie viel kostet jede weitere Stunde?",
+  "Wann ist die Miete jedes Quartal fällig?",
+  "Wo steht, welche Kündigungsfrist gilt?",
+  "Gibt es eine Klausel, welche die Haftung begrenzt?",
+  "Steht im Vertrag, welche Partei die Reparaturen zahlt?",
+  "Was ist die Strafe, welche bei Verzug fällig wird?",
+  "Where does it say, which notice period applies?",
+  "When does the teacher teach it?",
+  "When is the install date?",
+  "when is",
+  "wann ist",
+  "how much",
+  "wo steht",
+  "When is each payment due?",
+  "When is every payment due?",
+  "Wann ist jede Zahlung fällig?",
+  "Wann ist jeder Betrag fällig?",
+  "When is all rent due?",
+  "How much do all those fees add up to?",
+  "What is the clause which limits liability?",
+  "When is the date by which notice must be given?",
+  "Wann ist die Frist, innerhalb welcher gekündigt werden muss?",
+  "Does the document say anything at all about pets?",
+  "First of all, when is the deadline?",
+  "Wann muss die Miete jeden Werktag gezahlt werden?",
+  "Wann ist die Frist, jedoch ohne Verlängerung?",
+  "When is the deadline for everyone?",
+  "what's the total due?",
+  "what is the <synthesis-noun>",
+  "what is the …",
+  "find a",
+  "How much did we spend in total?",
+  "what is the decision on the budget?",
+  "how many dates are mentioned?",
+  "Finde jede Erwähnung …",
+  "how many X",
+  "When is the notice period?",
+  "When do they have to give notice?",
+  "Somewhen is fine",
+  "Elsewhere is the clause",
+  "When is the rent due on all Mondays?",
+  "Where is the clause which limits liability?",
+  "How much does each unit cost?",
+  "What is the penalty which applies?",
+  "Wo steht, welche Frist gilt?",
+  "When is the call for the install?"
+]
+
+describe('isNeedleShaped: monotone against master (#981)', () => {
+  it.each(MASTER_LOOKUPS)('%s → still a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+})
+
+// Review round 2: the frequency exemption of the NEW veto takes a number or any one word before the unit, weekdays, and German
+// words that end in a time unit.
+describe('isNeedleShaped: the new veto and frequencies (#981 review round 2)', () => {
+  it.each([
+    'When must I pay every 3 months?', 'When should the rent be paid every other Friday?', 'When can I pay each calendar quarter?',
+    'When must the rent be paid every Monday?', 'When must the report be filed each weekday?',
+    'Wann sollen wir jeden Werktag zahlen?', 'Wann sollen wir jedes Wochenende arbeiten?', 'Wann kann ich jeden Freitag kündigen?',
+    'Wann muss gezahlt werden, jeden Montag?', 'Wann sollen wir jedes Geschäftsjahr prüfen?', 'Wann kann ich jede Nacht anrufen?'
+  ])('%s → a lookup (a frequency is no list)', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it.each([
+    'When must every contract be signed?', 'Wann sollen wir jeden Vertrag prüfen?', 'When should each party sign?',
+    'When must every 3 invoices be paid, and which?', 'Wann kann ich jede Klausel kündigen?'
+  ])('%s → a list', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+})
+
+// Review round 3: the English frequency units are whole words (no «tag»/«age» inside "stage", "outage"), a noun before "time" is no
+// modifier, German endings count after «jede[nmrs]» only, and German «alle» is the twin of "all" in the new veto.
+describe('isNeedleShaped: the new veto, round 3', () => {
+  it.each([
+    'When must each stage be completed?', 'When must every outage be reported?', 'When should each shortage be logged?',
+    'When can every advantage be claimed?', 'When must each percentage be paid?', 'When should every voltage test be run?',
+    'When must each employee time sheet be signed?', 'When should every customer visit be logged?',
+    'Wann müssen allen Mietern die Unterlagen zugehen?', 'Wann sollen aller Kunden Zahlungen geprüft werden?',
+    'Wann müssen wir alle Rechnungen zahlen?', 'Wann kann man alles kündigen?'
+  ])('%s → a list', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    'When must I pay each month?', 'When must I pay every 3 months?', 'When can I pay every 2nd week?',
+    'When should the rent be paid each calendar quarter?', 'When must the report be filed each business day?',
+    'When must the rent be paid every Monday?', 'When can I leave each time the lease renews?',
+    'Wann sollen wir jeden Werktag zahlen?', 'Wann sollen wir jede zweite Woche zahlen?', 'Wann kann ich jedes Wochenende gehen?',
+    'Wann müssen wir jedes Mal zahlen?', 'Wann sollen wir jeden 3. Monat zahlen?'
+  ])('%s → a lookup (a frequency)', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+})
+
+// Review round 2: Form A is one phrase after the preposition too.
+describe('isSmallTalkReply: nothing but spaces after the preposition (#983 review round 2)', () => {
+  it.each([
+    'Thanks for that, summary', 'Thanks for this. Overview', 'Thanks for all - minutes', 'Thanks for the, summary',
+    'Danke für die; Zusammenfassung', 'Danke für, die Hilfe', 'Merci pour le, résumé', 'Спасибо за, резюме',
+    'Özet, için teşekkürler', 'Teşekkürler, bu özet - için'
+  ])('%s → a thanks and a request, not small talk', (q) => {
+    expect(isSmallTalkReply(q), q).toBe(false)
+    expect(isSmallTalk(q), q).toBe(false)
+  })
+
+  it.each(['Thanks for the summary, bye', 'Thanks, for the summary', 'Thanks for the summary!', 'Teşekkürler, özet için'])(
+    '%s → still small talk',
+    (q) => {
+      expect(isSmallTalkReply(q), q).toBe(true)
+    }
+  )
+})
+
+// "listed", "listener", "listening", "blister" and the German plural «Listen» hold the substring «liste», which vetoes a lookup
+// as on master (a pre-existing false veto; the German plural cannot be told from "listen"). Recorded, not fixed.
+describe('isNeedleShaped: «liste» is master\'s substring (a recorded false veto)', () => {
+  it.each(['When was the property listed?', 'Who was the listener?', 'When is the blister pack due?', 'Wann sind die Listen fällig?'])(
+    '%s → vetoed, as on master',
+    (question) => {
+      expect(isNeedleShaped(question)).toBe(false)
+    }
+  )
+})
+
+describe('isNeedleShaped: the veto reads quantifiers as words, and a frequency or a relative "which" is no list (#981)', () => {
+  it.each([
+    'When was the contract signed and which parties signed it?', 'Who is the contact for which department?',
+    'When must which documents be submitted?', 'Wann müssen welche Pflichten erfüllt werden?',
+    'Wann sind welche Zahlungen fällig?'
+  ])('%s → a list', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    // a frequency: one fact, not a list (before the exclusion the veto turned these into the whole report)
+    'How much is the rent each month?', 'When is rent due every month?', 'When is the rent due each month?',
+    'How much is the service charge each year?', 'What is the late fee for each day of delay?',
+    'When is the meeting held every other week?', 'How much do I pay each additional day?',
+    'When must I pay each time the rent changes?',
+    'Wann ist die Miete jeden Monat fällig?', 'Wie viel kostet die Miete jeden Monat?',
+    'Wann muss ich jeden Monat zahlen?', 'Wie viel kostet jede weitere Stunde?', 'Wann ist die Miete jedes Quartal fällig?',
+    // a relative or indirect "which" / «welche» after a comma
+    'Wo steht, welche Kündigungsfrist gilt?', 'Gibt es eine Klausel, welche die Haftung begrenzt?',
+    'Steht im Vertrag, welche Partei die Reparaturen zahlt?', 'Was ist die Strafe, welche bei Verzug fällig wird?',
+    'Where does it say, which notice period applies?',
+    // the veto's left anchor: "each" inside "breach", "reach", "teach" is no quantifier
+    'When must the breach be cured?', 'When can I reach the landlord?', 'When does the teacher teach it?',
+    // a letter before "all": "overall" is a report word, but "install", "shall", "call", "small" are none
+    'When is the install date?'
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it('a frequency AND a list in one question is still a list', () => {
+    expect(isNeedleShaped('When must each payment be made each month?')).toBe(false)
+    expect(isNeedleShaped('Wann müssen wir jede Zahlung jeden Monat leisten?')).toBe(false)
+  })
+})
+
+describe('isNeedleShaped: word-anchored lookups and the each/every veto (#981)', () => {
+  it.each([
+    // the issue's phrases, English
+    'When must they give notice?', 'When should the rent be paid?', 'When was the contract signed?',
+    'When can I terminate the lease?', 'When could they leave?', 'When shall payment be made?',
+    'Who is the tenant?', 'Who was the landlord?',
+    // German, finite verb right after «wann»
+    'Wann müssen wir kündigen?', 'Wann sollen die Zahlungen erfolgen?', 'Wann soll gezahlt werden?',
+    'Wann endet der Vertrag?', 'Wann kann ich kündigen?', 'Wann beginnt das Mietverhältnis?',
+    'Wann wurde der Vertrag unterschrieben?', 'Wann war die Übergabe?', 'Wann läuft die Frist ab?',
+    'Wann können wir ausziehen?', 'Wer ist der Mieter?', 'Wer war die Vermieterin?', 'Wer ist das Unternehmen?'
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it.each([
+    // plural and open "who/when" forms stay out on purpose
+    'Who was present?', 'Who are the parties?', 'Wer sind die Parteien?', 'When are the payments due?',
+    'Who is responsible for the budget?', 'Who is mentioned in this document?',
+    // lists and reports that a loose substring would catch (W §5 c, C1's collisions)
+    'Who is responsible for what?', 'Who is responsible for each action item?', 'Wer ist wofür verantwortlich?',
+    'Who are the attendees and what was decided?', 'Wer sind die Teilnehmer und was wurde beschlossen?',
+    'When are the deadlines in this contract?', 'Who was assigned which action items?',
+    'Who is the tenant? Summarize the lease', 'When must the tenant do what? List every deadline',
+    'When are all the deadlines?', 'When is everything due?',
+    // a relative clause or a longer word holds the letters but no question
+    'Explain the penalty for a tenant who is late', 'Wie schwer ist der Verstoß?', 'wer istanbul',
+    'Who issued the invoice?', 'Who isolated the issue?',
+    'When arena tickets', 'Wer ist schuld', 'When mustard seeds are sown, I wait'
+  ])('%s → not a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  // C2's three residual collisions, all each/which: the veto reads them as lists.
+  it.each([
+    'When must each obligation be fulfilled?', 'When should I act on each obligation?',
+    'Wann müssen welche Pflichten erfüllt werden?'
+  ])('%s → a list (the veto)', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  // Review round 2: the new veto reads only a question that is a lookup through a NEW form. These match master's own
+  // shapes ('when is', 'wann ist', 'how much', 'wo steht', ...), so they are lookups as on master, whatever else they say.
+  it.each([
+    'When is each payment due?', 'When is every payment due?', 'Wann ist jede Zahlung fällig?',
+    'Wann ist jeder Betrag fällig?', 'When is all rent due?', 'How much do all those fees add up to?',
+    'What is the clause which limits liability?', 'When is the date by which notice must be given?',
+    'Wann ist die Frist, innerhalb welcher gekündigt werden muss?', 'Does the document say anything at all about pets?',
+    'First of all, when is the deadline?', 'Wann muss die Miete jeden Werktag gezahlt werden?'
+  ])('%s → a lookup, as on master', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it('the veto is a word, not a substring: "jedoch" and "everyone" do not veto a lookup', () => {
+    expect(isNeedleShaped('Wann ist die Frist, jedoch ohne Verlängerung?')).toBe(true)
+    expect(isNeedleShaped('When is the deadline for everyone?')).toBe(true)
   })
 })
 

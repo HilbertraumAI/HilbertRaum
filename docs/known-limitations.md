@@ -1376,7 +1376,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the whole document in order instead of the best-matching passages. Everything else is still answered
   from the most relevant passages: a chat with several documents (there is no multi-document whole
   read), a chat with knowledge packs selected (the whole read never searches a pack), a short question
-  about the last answer ("Sure?"; other small talk gets a short reply that reads no document, #963), a
+  about the last answer ("Sure?"; it reads the documents with the bare message as the query, so with no
+  matching passage it gets the fixed "I couldn't find this in your documents" reply; other small talk gets a short
+  reply that reads no document, #963), a
   legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
   window. A summary question over such a longer document uses its deep index when one is built (#642);
   without one it is still answered from the most relevant passages, with no hint to build the index,
@@ -1396,14 +1398,28 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   «Wie geht's?», "What can you do?"), of whole thanks and greeting formulas («Passt», "Muchas gracias") and
   of thanks, greeting, goodbye and praise words in the ten interface languages, so four things follow. A
   message with a question mark anywhere in it, in any script, is a question about the last answer and is
-  answered from the documents: "Sure?", «Alles?», «Bitte?» for "pardon?", «Passt?», «¿Vale?», "Sure? Thanks";
+  answered from the documents (with no matching passage, by the fixed "I couldn't find this in your documents" reply, W-6): "Sure?", «Alles?», «Bitte?» for "pardon?", «Passt?», «¿Vale?», "Sure? Thanks";
   only the questions to the assistant keep the short reply with theirs. A message of acknowledgement words
   alone ("ok", "sure", "all", «alles bitte», «klar», «vale», «tamam», «ладно») can answer the assistant's own
   question or offer ("Shall I list the other deadlines?"), so it is answered from the documents with the
   conversation, as before; with a thanks or a greeting in it ("Ok, thanks") it gets the short reply. Praise
   counts as a thanks, so an offer accepted with "Great" or «Super» alone gets the short reply, not the list:
-  ask for it in words, or with "ok". And a thank-you longer than the lists is still taken for a question
-  about the documents (below).
+  ask for it in words, or with "ok". A thank-you that names what it thanks for also gets the short reply, in the
+  ten languages (#983, owner call G-8): "Thanks for the summary", "Thanks for the help!", "Great job!", «Danke für die
+  Hilfe», «Merci pour le résumé», «Özet için teşekkürler». The shape is closed: a thanks, "for", an optional "all", up to two determiners ("the", "your", «il tuo»), an
+  optional praise adjective ("Thanks for the great summary") and one noun for what the assistant gave (summary,
+  minutes, report, list, answer, help, info, work and the like), at most a closing word; Turkish also takes the thanks
+  last or first («Özet için teşekkürler», «Teşekkürler, özet için»). Or an intensifier ("very", «sehr», «muy»), a praise
+  adjective and that noun, written with only spaces between them ("Great summary", «Gute Arbeit», "Very good job"),
+  with a thanks after it at most. A comma, a dash or a full stop between the praise and the noun makes it an
+  acceptance followed by a request, so "Great, list", «Gut, Liste», «Отлично, таблицу» and «Добре, таблицю» read the
+  documents. Praise adverbs («отлично», «świetnie», «чудово») and acceptance words («добре», «gut», «iyi», Polish «dobra», which is usually "OK") are no praise
+  adjectives. Any other word keeps the request ("Thanks, now write the minutes", "Thanks for the summary of the
+  risks"), and so does a noun first ("Summary, thanks!"). A thank-you longer
+  than that is still taken for a question about the documents (below). **Review evidence (#976):** the action
+  shows only under an answer with sources or a coverage line, or one that already has a review, so it is not
+  offered under this reply, the fixed no-context reply, a routing answer or a refusal. The deterministic "list
+  every …" answer has neither, and does not offer it either.
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
@@ -1666,6 +1682,38 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   path), and **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k when the whole-doc
   read would truncate (a needle past the truncation cut would be missed — W1's exact budget calculus is the
   input); a **deliverable** ask (summary/minutes/compare/…) never downgrades.
+  **(#981, follow-ups wave 6, owner call G-9)** The lookup list is substrings ("how much", "when is", "when does",
+  "where is", «wann ist», «wann muss», «was ist der/die/das», …) plus word-anchored forms for the questions it missed:
+  "when must/should/was/can/could/shall", "who is/was the", «wann müssen/sollen/soll/war/wurde/kann/können/endet/beginnt/läuft»
+  and «wer ist/war der/die/das». "When must they give notice?" and «Wann endet der Vertrag?» are lookups now, the same in
+  both languages. The «who»/«wer» forms are definite singular on purpose, and the «when»/«wann» forms name a verb:
+  "Who are the parties?", "Who is responsible for the budget?", "When are the payments due?" and «Wann sind die Zahlungen fällig?»
+  still get the whole read (slower, never wrong). A word-anchored veto turns such a
+  question into a list when it says "each", "every", "which", «jede[nmrs]», «welche[nmrs]», «alle[nmrs]» or a bare "all" ("When must each
+  obligation be fulfilled?", "When must all invoices be paid?", "When must which documents be submitted?"). **The veto reads only
+  a question that is a lookup through one of the new forms.** A question that one of the old lookup shapes already matches
+  ("how much", "when is", "when does", «wann ist», «wo steht», «gibt es», …) is a lookup as on master, whatever else it says: "When is
+  each payment due?", «Wann ist jede Zahlung fällig?», "What is the clause which limits liability?", "First of all, when is the
+  deadline?" and "Does the document say anything at all about pets?" are answered from a few passages, as before #981, never
+  turned into the whole report (monotone against master; a test holds master's verdicts as literals). Two exceptions keep even a
+  new-form lookup a lookup: a **frequency** ("When must I pay every 3 months?", "every other Friday", «Wann sollen wir jeden
+  Werktag zahlen?», «jedes Wochenende»: the quantifier, at most a number or a short modifier ("other", "calendar", «weitere»,
+  «zweite»), then a whole time word, a weekday, or, after «jede[nmrs]» only, a German word ending in -tag, -woche, -monat,
+  -quartal, -jahr, -stunde, -nacht, -abend, -morgen; "each stage" and "every outage" are no frequency, and neither is "each
+  employee time sheet") and a relative or indirect
+  "which" / «welche» right after a comma. The only veto that got narrower is "all the", a substring on master: it now needs a
+  letter-free left edge, so "shall the", "call the", "install the" no longer veto a lookup ("When shall the tenant pay?"), while
+  "all these" and "all their" still do. The other eight interface languages have no lookup list, so «¿Cuándo hay que avisar?»
+  still gets the whole read (#809). **A lookup answers from the passages the search finds**, and across languages the
+  search can miss the one that holds the answer: «Wann müssen wir kündigen?» over an English lease found the preamble and
+  Art. 7, not the notice clause in Art. 34 (two runs, the 4B), and the answer then said the lease does not state when to give
+  notice, while "When must they give notice?" found Art. 34 and the date. When an answer says something is not in a document
+  written in another language, ask again in the document's language. **Not covered:** the «liste» substring is master's, so it still vetoes inside "listed",
+  "listener", "listening", "blister" and the German plural «Listen» (a pre-existing false veto that cannot be told from
+  "listen"); a report word inside another word ("registration" holds «gist», "briefing" holds «brief») still makes the question
+  a report; "Somewhen is fine" still reads as a lookup through "when is"; "Who's the tenant?" and "When's the deadline?" are no
+  lookups (no contraction forms). A report shape that
+  holds a lookup word ("When is the rent review?": "review" is a report word) stays a report.
   **A4 (audit §3.2/§3.3) tuned this composition (SKA-8/SKA-12/SKA-23):**
   **(SKA-8)** the `intends()` predicate — the **W2 count-mismatch routing** gate, consulted only at the
   wrong doc count — was decoupled from `applies()` and made **vocabulary-shaped** (`routeMatch`) for the

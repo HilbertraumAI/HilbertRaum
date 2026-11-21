@@ -40,7 +40,7 @@ const OFFER: SkillOffer = {
 /** A documents-conversation transcript with a run handler wired (a no-op unless the row spies on it):
  *  without one the offer never renders, so a row asserting its absence would pass for the wrong reason. */
 function renderOffer(over: Partial<TranscriptProps>): void {
-  renderTranscript({ onRunWithSkill: () => {}, reviewConversation: { mode: 'documents' }, ...over })
+  renderTranscript({ onRunWithSkill: () => {}, ...over })
 }
 
 describe('per-answer skill offer (#80)', () => {
