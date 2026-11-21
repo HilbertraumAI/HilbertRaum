@@ -1708,12 +1708,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   search can miss the one that holds the answer: «Wann müssen wir kündigen?» over an English lease found the preamble and
   Art. 7, not the notice clause in Art. 34 (two runs, the 4B), and the answer then said the lease does not state when to give
   notice, while "When must they give notice?" found Art. 34 and the date. When an answer says something is not in a document
-  written in another language, ask again in the document's language. **Not covered:** the «liste» substring is master's, so it still vetoes inside "listed",
-  "listener", "listening", "blister" and the German plural «Listen» (a pre-existing false veto that cannot be told from
-  "listen"); a report word inside another word ("registration" holds «gist», "briefing" holds «brief») still makes the question
-  a report; "Somewhen is fine" still reads as a lookup through "when is"; "Who's the tenant?" and "When's the deadline?" are no
-  lookups (no contraction forms). A report shape that
-  holds a lookup word ("When is the rent review?": "review" is a report word) stays a report.
+  written in another language, ask again in the document's language. **#997 (wave 7) made the report and list words words:** «liste» is the German noun as a word or the end of a compound
+  («Liste», «Listen», «Checkliste»), no longer a piece of "listed", "listener", "blister" or «gelistet»; "review",
+  "brief", "overall", "gist", "analy", "recap", "the whole", "in short" and «durchgehen» no longer match inside
+  "preview", «Briefkasten», "registration", "analyst", "recapture", "wholesale", "in shortage" or «durchgehend». Three
+  phrases are lookups too: "rent review" and, after a determiner ("the", "a", "next", "this", ...), "review date/period/clause/mechanism/notice" (a lease term; "review clause by clause" stays a request), "brief answer/reply/response", and
+  "overall" before an amount ("overall rent", "overall liability cap", unless "picture/assessment/structure" follows); «Listenform» and "briefing(s)" (also «Vorstandsbriefing») stay report and list words; "minutes" after a short number or "how many" is a
+  time. **Not covered:** drafting requests that hold an exception phrase ("Draft a brief reply", "Prepare a rent review report") read as lookup-shaped words, not reports; German «briefen» (a verb, and the plural of «Brief») matches nothing; "When is the debrief?" stays a report as on master; English "listen" is spelled like the German plural «Listen» and still vetoes; the lookup stems
+  stay substrings ("Somewhen is fine" still reads as a lookup through "when is", and "Nowhere is it stated?" depends on it:
+  narrowing them would lose a lookup master had); a whole word with another meaning still makes a report ("minutes" not
+  after those words, "purpose of", "conclusion", «Protokoll» and «Vergleich» compounds, and the bare word «Brief», a letter); "Who's the tenant?" and
+  "When's the deadline?" are no lookups (no contraction forms).
   **A4 (audit §3.2/§3.3) tuned this composition (SKA-8/SKA-12/SKA-23):**
   **(SKA-8)** the `intends()` predicate — the **W2 count-mismatch routing** gate, consulted only at the
   wrong doc count — was decoupled from `applies()` and made **vocabulary-shaped** (`routeMatch`) for the
