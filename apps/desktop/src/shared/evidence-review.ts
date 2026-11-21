@@ -1,5 +1,4 @@
 import type {
-  Conversation,
   CoverageInfo,
   EvidencePackLanguage,
   EvidencePackOptions,
@@ -17,22 +16,21 @@ import type { MessageKey, UiLanguageInfo } from './i18n'
 
 /**
  * Whether an answer can offer "Review evidence" (spec §9.1): it must be an ASSISTANT
- * message that is document-grounded — it carries citations or coverage metadata, or lives
- * in a documents conversation (pass the conversation when known; omitting it simply makes
- * the check rest on the message's own metadata).
+ * message with something to review — it carries citations or coverage metadata. #976
+ * (follow-ups wave 6, owner call G-7) dropped the spec's third leg, "or lives in a documents
+ * conversation": a small-talk reply, the fixed no-context reply, a routing answer and a
+ * refusal sit in a documents conversation too, and a review of them has no sources to check.
+ * An answer that already HAS a review keeps its entry whatever it carries (the renderer's
+ * `reviewSummary != null`, not this predicate), so no existing review is orphaned.
  *
  * The spec's third condition — "persisted and no longer streaming" — is the CALLER's
  * state: a still-streaming reply has no persisted row yet, so the renderer must gate on
  * its own streaming flag before consulting this predicate (Phase 2 wires that).
  */
-export function isReviewEligible(
-  message: Pick<Message, 'role' | 'citations' | 'coverage'>,
-  conversation?: Pick<Conversation, 'mode'> | null
-): boolean {
+export function isReviewEligible(message: Pick<Message, 'role' | 'citations' | 'coverage'>): boolean {
   if (message.role !== 'assistant') return false
   if (message.citations && message.citations.length > 0) return true
-  if (message.coverage != null) return true
-  return conversation?.mode === 'documents'
+  return message.coverage != null
 }
 
 /**

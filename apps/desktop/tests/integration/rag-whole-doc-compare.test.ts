@@ -533,6 +533,35 @@ describe('askDocuments — small talk gets the short small-talk reply, which rea
   })
 })
 
+// ---- #983 (follow-ups wave 6, G-8): "Thanks for the summary" is a thank-you too ----
+// Over a document too long to read whole, a thank-you that named the answer ("Thanks for the summary", "Thanks for the
+// help!", «Merci pour le résumé») ran a map-reduce over the whole document, with the thank-you as the notes' target (8 calls
+// for the summary, a task-only report for the rest). It is small talk now: one short reply, no document read. A thank-you
+// followed by a request keeps the request.
+describe('askDocuments — a thank-you that names the answer gets the short reply, over a long document too (#983)', () => {
+  it.each(['Thanks for the summary', 'Thanks for the help!', 'Great job!', 'Danke für die Hilfe', 'Merci pour le résumé'])(
+    'Contract Brief over a document too long to read whole, "%s": one call on the small-talk prompt, nothing read',
+    async (message) => {
+      const h = await makeFenceHarness([LONG_LEASE], 4096)
+      const logged = capLogCount('app:contract-brief')
+      const msg = await ask(h, message, 'app:contract-brief')
+      expectSmallTalkReply(h.runtime, msg, message)
+      expect(capLogCount('app:contract-brief') - logged).toBe(0)
+    }
+  )
+
+  it.each(['Thanks, now write the minutes', 'Thanks for the summary. Now list every deadline', 'Summary, thanks!'])(
+    'Contract Brief over the same document, "%s": still a request, the map-reduce',
+    async (message) => {
+      const h = await makeFenceHarness([LONG_LEASE], 4096)
+      const msg = await ask(h, message, 'app:contract-brief')
+      expect(h.runtime.calls).toBeGreaterThan(2)
+      expect(msg.coverage?.mode).toBe('capped')
+      expect(h.runtime.turns.some((turn) => turn[0]?.content === SMALL_TALK_SYSTEM_PROMPT)).toBe(false)
+    }
+  )
+})
+
 describe("askDocuments — the bundled compare skill's fall-through turn carries paragraph 1 of its fence (#632)", () => {
   it.each([
     { name: 'what-changed over one document', skillId: WHAT_CHANGED_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },
@@ -702,6 +731,31 @@ describe("askDocuments — a bundled whole-document skill's fall-through turn ca
       expect(msg.skillId).toBe(appId(id))
     }
   )
+
+  // #981 (follow-ups wave 6): "When must they give notice?" held no needle word on master, so it ran the whole report over
+  // the long lease (a chunk map-reduce, many calls, a capped stamp). It is a lookup now: one passage-search call, paragraph 1
+  // of the fence, the same downgrade as "When is the notice period?" above. "When must each payment be made?" is a list through
+  // the new veto and keeps the whole read ("When is each payment due?" stays a lookup, as on master).
+  it('share-safe-review, "When must they give notice?" over a document too long to read whole: one call, not capped, stamped', async () => {
+    const id = 'share-safe-review'
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const logged = capLogCount(appId(id))
+    const msg = await ask(h, 'When must they give notice?', appId(id))
+    expect(h.runtime.calls).toBe(1)
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId(id)])[0]])
+    expect(capLogCount(appId(id)) - logged).toBe(1)
+    expect(msg.skillId).toBe(appId(id))
+  })
+
+  it('share-safe-review, "When must each payment be made?" over the same document: a list, the whole read', async () => {
+    const id = 'share-safe-review'
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const msg = await ask(h, 'When must each payment be made?', appId(id))
+    expect(h.runtime.calls).toBeGreaterThan(2)
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(false)
+  })
 
   // #962: since #962 the budgets of a fall-through turn reserve the fence it sends (paragraph 1), not the whole fence,
   // so the room the cut frees goes to the passages. The yardstick is the user twin whose whole body IS paragraph 1: the

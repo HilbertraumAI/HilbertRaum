@@ -10762,7 +10762,11 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
    the whole-document engine the **default** when a matching skill is explicitly active over a
    fully-chunked scope; keywords only opt *out* (`isSmallTalk`) or distinguish a needle-ask
    (`isNeedleShaped` → top-k ONLY when the whole-doc read would truncate AND no tree exists — W1's exact
-   budget calculus is the input; deliverable asks never downgrade). Doc-count mismatch **routes
+   budget calculus is the input; deliverable asks never downgrade). *(Annotation, #981: SKA-12 dropped the "no
+   tree" conjunct, and follow-ups wave 6 added word-anchored lookups — "when must/should/was/can/could/shall",
+   "who is/was the", «wann müssen/sollen/…/endet/beginnt», «wer ist/war der/die/das» — and an each / every /
+   jede / welche veto that reads those new forms only; see known-limitations (the #981 paragraph) and the
+   note in rag-design's skills-remediation blockquote.)* Doc-count mismatch **routes
    deterministically** (W2: a single-doc handler NARROWS to the one manifest-signal match that is also
    fully-chunked with an honest `scopeNarrowed` notice, else `selectOne`; `what-changed` at ≠2 →
    `selectTwo`) instead of silently degrading; a document-plausibility gate falls the bank/invoice
@@ -14503,7 +14507,8 @@ action row).
 
 Entry points (spec §9): the message action row gains **Review evidence / Continue review**
 (+ Draft/Ready chip, joined additively by ⚠ Outdated) gated by the shared
-`isReviewEligible` predicate + a renderer streaming gate; `SourcesDisclosure` carries a
+`isReviewEligible` predicate (an answer with citations or coverage, or, since #976, one that already
+has a review; before #976 a documents conversation made every answer eligible) + a renderer streaming gate; `SourcesDisclosure` carries a
 quiet footer action. `ScreenId 'review'` has NO nav-rail entry and is reachable only
 through App's handoff slot (`openReview({reviewId}|{messageId})`, the `chatScope` idiom);
 `resolveNavTarget('review')` deliberately falls to home. The workspace is two-pane (spec

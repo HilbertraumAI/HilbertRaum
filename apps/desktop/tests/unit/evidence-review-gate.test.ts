@@ -183,15 +183,29 @@ describe('parseGenerationSnapshot (tolerant — absent = "Unavailable", never in
 })
 
 describe('isReviewEligible (spec §9.1 — the shared entry-point rule)', () => {
-  it('assistant + citations, assistant + coverage, or assistant in a documents conversation', () => {
+  it('assistant + citations, or assistant + coverage', () => {
     const citations = [{ label: 'S1', sourceTitle: 'A.pdf' }]
     const coverage: CoverageInfo = { mode: 'tree', chunksCovered: 1, chunksTotal: 1 }
     expect(isReviewEligible({ role: 'assistant', citations })).toBe(true)
     expect(isReviewEligible({ role: 'assistant', coverage })).toBe(true)
-    expect(isReviewEligible({ role: 'assistant' }, { mode: 'documents' })).toBe(true)
-    // Not eligible: user turns, plain chat answers without document grounding.
+    // Not eligible: user turns, answers without document grounding.
     expect(isReviewEligible({ role: 'user', citations })).toBe(false)
     expect(isReviewEligible({ role: 'assistant' })).toBe(false)
-    expect(isReviewEligible({ role: 'assistant', citations: [] }, { mode: 'chat' })).toBe(false)
+    expect(isReviewEligible({ role: 'assistant', citations: [] })).toBe(false)
+  })
+
+  // #976 (follow-ups wave 6, G-7): living in a documents conversation was the third leg and is gone. The rows a documents
+  // chat writes with neither field (a small-talk reply, the fixed no-context reply, a routing answer, a refusal, the
+  // deterministic listing) have nothing to review. The predicate no longer takes a conversation at all.
+  it('an answer with neither citations nor coverage is not eligible, whatever else it carries', () => {
+    for (const shape of [
+      {},
+      { citations: [] },
+      { citations: undefined, coverage: undefined }
+    ]) {
+      expect(isReviewEligible({ role: 'assistant', ...shape }), JSON.stringify(shape)).toBe(false)
+    }
+    const archive = [{ label: 'S1', sourceTitle: 'Wikipedia', sourceKind: 'archive' as const, packId: 'p1', articlePath: 'A/Rent' }]
+    expect(isReviewEligible({ role: 'assistant', citations: archive })).toBe(true)
   })
 })

@@ -21,7 +21,7 @@ interface Props {
   onSave: () => void
   /** Omit to hide (only answers with `hasResultTable` carry an exportable table). */
   onExportTable?: () => void
-  /** Omit to hide (only `isReviewEligible` answers offer a review — spec §9.1). */
+  /** Omit to hide (only answers with sources or coverage, or with an existing review, offer one — #976). */
   onReview?: () => void
   /** The message's existing review status, or null/absent when none exists yet. */
   reviewStatus?: EvidenceReviewStatus | null

@@ -48,27 +48,81 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview,
-      reviewConversation: { mode: 'documents' }
     })
     const btn = screen.getByRole('button', { name: START })
     fireEvent.click(btn)
     expect(onOpenReview).toHaveBeenCalledWith('m1')
   })
 
-  it('ELIGIBLE via documents-mode: no citations/coverage but a documents conversation', () => {
+  // #976 (follow-ups wave 6, G-7): "documents conversation" is no leg any more. These are the rows a documents chat writes
+  // with neither citations nor coverage: a small-talk reply, the fixed no-context reply, a routing answer, a refusal, a
+  // "use the button" pointer (an empty citation list) and the deterministic listing. None has sources to review.
+  it.each([
+    ['a small-talk reply', {}],
+    ['the fixed no-context reply', { content: t('en', 'main.rag.noContext') }],
+    ['a routing answer ("select two documents")', { skillId: 'app:what-changed', autoFired: true }],
+    ['a refusal under a skill', { skillId: 'app:contract-brief' }],
+    ['a "use the button" pointer', { skillId: 'app:redaction', citations: [] }],
+    ['the deterministic listing', { skillId: 'app:deadline-obligation-finder', content: '1. 1 June 2026 ...' }]
+  ] as Array<[string, Partial<Message>]>)('INELIGIBLE: %s (neither citations nor coverage) shows no review action', (_name, over) => {
+    renderTranscript({
+      messages: [makeMessage({ id: 'm1', citations: undefined, coverage: undefined, ...over })],
+      onOpenReview: noop
+    })
+    expect(screen.queryByRole('button', { name: START })).toBeNull()
+    expect(screen.queryByRole('button', { name: CONTINUE })).toBeNull()
+  })
+
+  it('ELIGIBLE: coverage alone (a whole-document answer) offers the action', () => {
+    renderTranscript({
+      messages: [makeMessage({ id: 'm1', coverage: { mode: 'capped', chunksCovered: 3, chunksTotal: 3 } })],
+      onOpenReview: noop
+    })
+    expect(screen.getByRole('button', { name: START })).toBeInTheDocument()
+  })
+
+  it('ELIGIBLE: an answer cited from a knowledge-pack archive offers the action', () => {
+    renderTranscript({
+      messages: [
+        makeMessage({
+          id: 'm1',
+          citations: [{ label: 'S1', sourceTitle: 'Wikipedia', sourceKind: 'archive', packId: 'p1', articlePath: 'A/Rent' }]
+        })
+      ],
+      onOpenReview: noop
+    })
+    expect(screen.getByRole('button', { name: START })).toBeInTheDocument()
+  })
+
+  // T+ (G-7): a review that already exists keeps its entry, whatever the answer carries, so a review made under a
+  // no-context reply before #976 is not orphaned.
+  it('EXISTING REVIEW on an answer with no sources: "Continue review" + the Draft chip stay', () => {
+    const onOpenReview = vi.fn()
+    renderTranscript({
+      messages: [makeMessage({ id: 'm1', citations: undefined, coverage: undefined })],
+      onOpenReview,
+      reviewSummaries: new Map([['m1', makeSummary({ status: 'draft' })]])
+    })
+    fireEvent.click(screen.getByRole('button', { name: CONTINUE }))
+    expect(onOpenReview).toHaveBeenCalledWith('m1')
+    expect(screen.queryByRole('button', { name: START })).toBeNull()
+    expect(screen.getByText(t('en', 'review.status.draft'))).toBeInTheDocument()
+  })
+
+  it('"no review yet" (null) on an answer with no sources shows nothing', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', citations: undefined, coverage: undefined })],
       onOpenReview: noop,
-      reviewConversation: { mode: 'documents' }
+      reviewSummaries: new Map([['m1', null]])
     })
-    expect(screen.getByRole('button', { name: START })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: START })).toBeNull()
+    expect(screen.queryByRole('button', { name: CONTINUE })).toBeNull()
   })
 
   it('INELIGIBLE (plain chat): an assistant answer without citations/coverage shows NO review action', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1' })],
       onOpenReview: noop,
-      reviewConversation: { mode: 'chat' }
     })
     expect(screen.queryByRole('button', { name: START })).toBeNull()
     expect(screen.queryByRole('button', { name: CONTINUE })).toBeNull()
@@ -78,7 +132,6 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     renderTranscript({
       messages: [userMsg('m1', 'Question?')],
       onOpenReview: noop,
-      reviewConversation: { mode: 'documents' }
     })
     expect(screen.queryByRole('button', { name: START })).toBeNull()
   })
@@ -87,7 +140,6 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
-      reviewConversation: { mode: 'documents' },
       actionsDisabled: true
     })
     expect(screen.getByRole('button', { name: START })).toBeDisabled()
@@ -96,7 +148,6 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
   it('NO HANDOFF: without onOpenReview the affordance never renders (optional-callback gate)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
-      reviewConversation: { mode: 'documents' }
     })
     expect(screen.queryByRole('button', { name: START })).toBeNull()
   })
@@ -106,7 +157,6 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', makeSummary({ status: 'draft' })]]),
-      reviewConversation: { mode: 'documents' }
     })
     expect(screen.getByRole('button', { name: CONTINUE })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: START })).toBeNull()
@@ -117,7 +167,6 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', makeSummary({ status: 'ready' })]]),
-      reviewConversation: { mode: 'documents' }
     })
     expect(screen.getByText(t('en', 'review.status.ready'))).toBeInTheDocument()
   })
@@ -127,7 +176,6 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', makeSummary({ status: 'ready', outdated: true })]]),
-      reviewConversation: { mode: 'documents' }
     })
     // BOTH chips: the completion fact is never erased by the overlay.
     expect(screen.getByText(t('en', 'review.status.ready'))).toBeInTheDocument()
@@ -139,7 +187,6 @@ describe('review entry point — visibility matrix (spec §9.1)', () => {
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview: noop,
       reviewSummaries: new Map([['m1', makeSummary({ status: 'draft', outdated: false })]]),
-      reviewConversation: { mode: 'documents' }
     })
     expect(screen.queryByText(t('en', 'review.status.outdated'))).toBeNull()
   })
@@ -151,7 +198,6 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview,
-      reviewConversation: { mode: 'documents' }
     })
     // Collapsed: the footer action is not in the document.
     expect(screen.queryByRole('button', { name: t('en', 'review.entry.sources') })).toBeNull()
@@ -163,7 +209,6 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
   it('an ineligible answer (no onOpenReview handoff) shows no footer action when expanded', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
-      reviewConversation: { mode: 'documents' }
     })
     fireEvent.click(screen.getByRole('button', { name: /sources \(1\)/i }))
     expect(screen.queryByRole('button', { name: t('en', 'review.entry.sources') })).toBeNull()
@@ -174,7 +219,6 @@ describe('SourcesDisclosure footer entry (spec §9.2)', () => {
     renderTranscript({
       messages: [makeMessage({ id: 'm1', ...CITED })],
       onOpenReview,
-      reviewConversation: { mode: 'documents' },
       actionsDisabled: true
     })
     fireEvent.click(screen.getByRole('button', { name: /sources \(1\)/i }))
