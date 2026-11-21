@@ -863,34 +863,88 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     })
   })
 
-  it('index.ts wires the handler: session-end on the main window (win32), powerMonitor shutdown (darwin), the Linux signals and quit inside whenReady, the crash path', () => {
+  // P3 (follow-ups wave 6, found with #977): a session-end lock does not end the process. On macOS a shutdown that
+  // another app cancels leaves the app running, locked; our signal listener has replaced the signal's default action,
+  // so before this fix a `kill` then did nothing (the signal path returned once a lock had run) and only SIGKILL could
+  // stop the app; a launchd stop waited out its exit timeout.
+  describe('P3: a signal after a session-end lock that left the app running', () => {
+    it('reaps and exits once, without a second lock; later signals do nothing', () => {
+      const { order, exits, handlers } = sessionHarness('darwin')
+      handlers.onSessionEnd({ reasons: ['shutdown'] }) // powerMonitor; the shutdown is then cancelled: no will-quit
+      expect(exits).toEqual([])
+      handlers.onTerminationSignal('SIGTERM')
+      expect(order.filter((l) => l === 'lock')).toHaveLength(1)
+      expect(order.slice(-2)).toEqual(['reap', 'exit']) // a child started since the lock is reaped first
+      expect(exits).toEqual([0])
+      handlers.onTerminationSignal('SIGTERM')
+      handlers.onTerminationSignal('SIGINT')
+      expect(exits).toEqual([0])
+    })
+
+    // The other locks are followed by an exit already under way: there a signal adds nothing (one exit at most).
+    it.each<[string, (h: SessionHarness) => Promise<void> | void, number[]]>([
+      ['a finished quit teardown', async (h) => {
+        h.handlers.onWillQuit(quitEvent())
+        await drain()
+        h.release()
+        await drain()
+      }, [0]],
+      ['a session-end lock and the will-quit exit after it', (h) => {
+        h.handlers.onSessionEnd()
+        h.handlers.onWillQuit(quitEvent())
+      }, [0]],
+      ['a lost session’s quit lock', (h) => h.handlers.onQuitEvent(), []]
+    ])('a signal after %s adds no exit and no lock', async (_before, before, expectedExits) => {
+      const h = sessionHarness('linux')
+      await before(h)
+      expect(h.exits).toEqual(expectedExits)
+      h.handlers.onTerminationSignal('SIGTERM')
+      h.handlers.onTerminationSignal('SIGHUP')
+      expect(h.exits).toEqual(expectedExits)
+      expect(h.order.filter((l) => l === 'lock')).toHaveLength(1)
+    })
+  })
+
+  it('index.ts wires the handler: session-end on the main window (win32), the POSIX signals (linux, darwin), the Linux quit and the darwin powerMonitor shutdown early inside whenReady, the crash path', () => {
     // Source-text pin (idiom: window-security.test.ts) — index.ts cannot be imported under vitest.
     const indexSrc = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
     expect(indexSrc).toContain("on('session-end', lifecycle.onSessionEnd)")
-    expect(indexSrc).toContain("powerMonitor.on('shutdown'")
     // The crash path itself (not the lifecycle deps binding) calls the lock before exit(1).
     expect(indexSrc).toMatch(/process\.on\('uncaughtException'[\s\S]*?\bemergencyLock\(ctx\)[\s\S]*?process\.exit\(1\)/)
-    // #964: the Linux legs, inside the `app.whenReady` callback (it ends at the first top-level `})`). The contract is
-    // the registration ORDER, which no test can run: Electron installs its own handlers for these signals after the
-    // main script has run, so a listener registered at module scope is replaced and never fires (measured on Electron
-    // 43.8.6 Linux), and only a real Linux Electron would show it.
+    // #964 (Linux), #977 (macOS): the signal, quit and powerMonitor legs, inside the `app.whenReady` callback (it ends
+    // at the first top-level `})`). The contract is the registration ORDER, which no test can run: Electron installs
+    // its own handlers for these signals after the main script has run, so a listener registered at module scope is
+    // replaced and never fires (measured on Electron 43.8.6 Linux; the same POSIX code path on macOS, read from
+    // Electron's source), and only a real Electron would show it.
     const readyAt = indexSrc.indexOf('app.whenReady().then(() => {')
     const readyEnd = indexSrc.indexOf('\n})\n', readyAt)
     expect(readyAt).toBeGreaterThan(0)
     const ready = indexSrc.slice(readyAt, readyEnd)
-    const linuxAt = ready.indexOf("if (process.platform === 'linux') {")
-    expect(linuxAt, 'the Linux legs are gated to Linux, inside whenReady').toBeGreaterThan(0)
-    // #964 security round (F3): first in the callback after the second-instance return, before the code that can
-    // throw (the protocol, the menu, the window): a throw there would otherwise skip the registration silently.
-    expect(linuxAt, 'after the second-instance return').toBeGreaterThan(ready.indexOf('if (!isPrimaryInstance) return'))
-    for (const later of ['installAppProtocol(', 'Menu.setApplicationMenu(', '\n  createWindow()']) {
-      expect(ready.indexOf(later), later).toBeGreaterThan(0)
-      expect(linuxAt, `before ${later.trim()}`).toBeLessThan(ready.indexOf(later))
+    const posixAt = ready.indexOf("if (process.platform === 'linux' || process.platform === 'darwin') {")
+    expect(posixAt, 'the signal legs are gated to Linux and macOS, inside whenReady').toBeGreaterThan(0)
+    const posix = ready.slice(posixAt, ready.indexOf('\n  }\n', posixAt))
+    expect(posix).toContain("for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const)")
+    expect(posix).toContain('process.on(signal, () => lifecycle.onTerminationSignal(signal))')
+    // The lost-session `quit` leg stays Linux-only, and the macOS session end stays a powerMonitor event; each line
+    // once in the whole file, so neither can also sit elsewhere under another gate.
+    const quitLeg = "\n  if (process.platform === 'linux') app.on('quit', () => lifecycle.onQuitEvent())\n"
+    const powerLeg = "\n  if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())\n"
+    for (const leg of [quitLeg, powerLeg]) {
+      expect(ready.indexOf(leg), leg.trim()).toBeGreaterThan(0)
+      expect(indexSrc.split(leg.trim()).length - 1, leg.trim()).toBe(1)
     }
-    const linux = ready.slice(linuxAt, ready.indexOf('\n  }\n', linuxAt))
-    expect(linux).toContain("for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const)")
-    expect(linux).toContain('process.on(signal, () => lifecycle.onTerminationSignal(signal))')
-    expect(linux).toContain("app.on('quit', () => lifecycle.onQuitEvent())")
+    expect(indexSrc.split("app.on('quit'").length - 1, 'one quit listener').toBe(1)
+    expect(indexSrc.split('powerMonitor.on(').length - 1, 'one powerMonitor listener').toBe(1)
+    // #964 security round (F3), and for the macOS legs since #977: first in the callback after the second-instance
+    // return, before the code that can throw (the protocol, the menu, the window): a throw there would otherwise skip
+    // the registration silently.
+    for (const [name, at] of [['signals', posixAt], ['quit', ready.indexOf(quitLeg)], ['powerMonitor', ready.indexOf(powerLeg)]] as const) {
+      expect(at, `${name} after the second-instance return`).toBeGreaterThan(ready.indexOf('if (!isPrimaryInstance) return'))
+      for (const later of ['installAppProtocol(', 'Menu.setApplicationMenu(', '\n  createWindow()']) {
+        expect(ready.indexOf(later), later).toBeGreaterThan(0)
+        expect(at, `${name} before ${later.trim()}`).toBeLessThan(ready.indexOf(later))
+      }
+    }
     // Nowhere else (module scope would be dead code), and never removed: without a listener a signal takes its
     // default action, which kills the app with the workspace unlocked.
     const outside = indexSrc.slice(0, readyAt) + indexSrc.slice(readyEnd)
