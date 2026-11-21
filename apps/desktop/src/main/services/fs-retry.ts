@@ -18,7 +18,8 @@ const HELD_HANDLE_CODES: ReadonlySet<string> = new Set(['EPERM', 'EACCES', 'EBUS
  * well within it. An engine install step makes several renames (the archive's move, the flatten, the
  * swap's two, a move back, the `cpu/` carry), so its worst case is several of these budgets on top of
  * the extractor's 5-minute deadline, and can outlast the spawn gate's 6-minute bound: a spawn that
- * waited that long goes ahead, which since #986 meets a complete copy (`runtime/spawn-gate.ts`).
+ * waited that long goes ahead, which since #986 meets a complete copy, except between the swap's two
+ * renames, when the install folder does not exist for up to one such budget (`runtime/spawn-gate.ts`).
  */
 export const RENAME_RETRY_BUDGET_MS = 12_000
 const FIRST_WAIT_MS = 50
