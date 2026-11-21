@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { dirname, join, posix, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeFamily, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
@@ -556,6 +556,74 @@ export function requiredInstallFiles(plan: RuntimeDownloadPlan): string[] {
     if (!out.includes(p)) out.push(p)
   }
   return out
+}
+
+// ---- The staged engine swap's folders (#986) ---------------------------------------------------
+
+/**
+ * The three folders of one engine install's staged swap (#986, architecture.md "In-app engine updates"
+ * §6). An install builds the new copy in `staging`, moves the current one to `previous`, moves `staging`
+ * in and deletes `previous`; the next start finishes or rolls back a swap a kill interrupted. Exact
+ * names only: no reader ever lists `runtime/<family>/`, and the start must never touch a sibling it
+ * does not own (the app-update plan's `<os>@<pin>/` folders).
+ */
+export interface EngineSwapDirs {
+  /** The install folder (`extract_to`), the only one the engine resolvers read. */
+  live: string
+  /** `<live>.new`: the new copy, extracted, checked and marked before anything moves. */
+  staging: string
+  /** `<live>.old`: the replaced copy, from the swap until its deletion. */
+  previous: string
+}
+
+/**
+ * The swap folders of the install folder `extractTo` under `rootPath` (#986). Both siblings are
+ * contained by `resolveWithinRoot`, and an install folder that is the drive root itself (an
+ * `extract_to` of `.`) is refused: its swap would move the whole drive. Pure (no I/O).
+ */
+export function engineSwapDirs(rootPath: string, extractTo: string): EngineSwapDirs {
+  const root = resolve(rootPath)
+  const live = resolve(extractTo)
+  const rel = relative(root, live)
+  if (rel === '' || isAbsolute(rel)) {
+    throw new Error(`An engine install folder must lie inside the drive root: ${extractTo}`)
+  }
+  // `resolve` dropped any trailing separator, so the suffix extends the folder's own name.
+  const relPosix = rel.split(sep).join('/')
+  return {
+    live,
+    staging: resolveWithinRoot(root, `${relPosix}.new`),
+    previous: resolveWithinRoot(root, `${relPosix}.old`)
+  }
+}
+
+/**
+ * `plan` with every path under its install folder moved under `dir` (#986): the same files at the same
+ * relative places, so the marker keys (`markerBinaryKey`) a copy staged in `<live>.new` records are the
+ * keys the live folder needs. Pure.
+ */
+export function planInFolder(plan: RuntimeDownloadPlan, dir: string): RuntimeDownloadPlan {
+  const moved = (p: string): string => join(dir, relative(plan.extractTo, p))
+  return {
+    ...plan,
+    extractTo: dir,
+    zipDest: moved(plan.zipDest),
+    binaryPath: moved(plan.binaryPath),
+    binaryPaths: plan.binaryPaths.map(moved),
+    runtimeFilePaths: plan.runtimeFilePaths.map(moved),
+    excludedPaths: plan.excludedPaths.map(moved)
+  }
+}
+
+/**
+ * Is the copy of `plan` in `dir` (default: its install folder) one the swap and the start may trust
+ * (#986)? Its marker parses AND every file the plan requires is there. Existence alone is not enough:
+ * the install folder can exist empty (prepare-drive's layout, an archive's download, a `cpu/` net's
+ * folder), and a delete killed part-way can keep a marker over missing files.
+ */
+export function engineFolderComplete(plan: RuntimeDownloadPlan, dir: string = plan.extractTo): boolean {
+  const at = dir === plan.extractTo ? plan : planInFolder(plan, dir)
+  return readRuntimeMarker(at.extractTo) !== null && runtimeBinaryPresent(at)
 }
 
 // ---- OCR language files (the `ocr:` asset class) ------------------------------------
