@@ -30,7 +30,8 @@ import { appStatus, runtimeStatus } from './status'
 //      no model       getRuntimeStatus every RUNTIME_POLL_MS (2,500 ms) while `running` is false
 //      a conversation listMessages, getConversationContextUsage, getConversationSummary, listAttachments,
 //      is selected    getActiveStream (once, then every STREAM_RECOVER_POLL_MS = 300 ms until it answers null);
-//                     getEvidenceReviewSummariesForConversation once a review-eligible answer is listed;
+//                     getEvidenceReviewSummariesForConversation once an answer with sources is listed, or once a
+//                     documents conversation lists answers (#976: an answer without sources may have a review);
 //                     listRunnableTools while a skill is picked
 //      each send      onToken, onCompaction, onContextUsage, onAnswerSpeed, onReasoning, onScopeNotice
 //                     (unsubscribed when the send settles), then sendChatMessage / askDocuments

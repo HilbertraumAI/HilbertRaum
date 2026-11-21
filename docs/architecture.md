@@ -14333,7 +14333,8 @@ action row).
 
 Entry points (spec §9): the message action row gains **Review evidence / Continue review**
 (+ Draft/Ready chip, joined additively by ⚠ Outdated) gated by the shared
-`isReviewEligible` predicate + a renderer streaming gate; `SourcesDisclosure` carries a
+`isReviewEligible` predicate (an answer with citations or coverage, or, since #976, one that already
+has a review; before #976 a documents conversation made every answer eligible) + a renderer streaming gate; `SourcesDisclosure` carries a
 quiet footer action. `ScreenId 'review'` has NO nav-rail entry and is reachable only
 through App's handoff slot (`openReview({reviewId}|{messageId})`, the `chatScope` idiom);
 `resolveNavTarget('review')` deliberately falls to home. The workspace is two-pane (spec

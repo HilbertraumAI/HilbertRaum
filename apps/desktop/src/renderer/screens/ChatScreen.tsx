@@ -773,17 +773,23 @@ export function ChatScreen({
   const [reviewSummaries, setReviewSummaries] = useState<
     ReadonlyMap<string, EvidenceReviewSummary | null>
   >(new Map())
+  //
+  // #976 (follow-ups wave 6, G-7): the entry shows on an answer with sources or coverage, AND on any answer that
+  // already has a review, so the batch's summaries are ALL stored, and the read also runs once for a documents
+  // conversation whose only unknown answers carry no sources (a review made under a no-context reply before
+  // #976 is still found). It stays one call per conversation, never one per message: after the first read only
+  // a new answer with sources asks again.
+  const reviewReadForRef = useRef<string | null>(null)
   useEffect(() => {
     setReviewSummaries(new Map())
+    reviewReadForRef.current = null
   }, [activeId])
   useEffect(() => {
     if (!activeId || messages.length === 0) return
     const conv = conversations.find((c) => c.id === activeId)
-    const scope = conv ? { mode: conv.mode } : null
-    const unknown = messages.filter(
-      (m) => m.role === 'assistant' && isReviewEligible(m, scope) && !reviewSummaries.has(m.id)
-    )
-    if (unknown.length === 0) return
+    const unknown = messages.filter((m) => m.role === 'assistant' && !reviewSummaries.has(m.id))
+    const firstRead = conv?.mode === 'documents' && reviewReadForRef.current !== activeId
+    if (!unknown.some((m) => isReviewEligible(m)) && !(firstRead && unknown.length > 0)) return
     let cancelled = false
     void (async () => {
       let byMessage = new Map<string, EvidenceReviewSummary>()
@@ -796,11 +802,14 @@ export function ChatScreen({
         // claiming a state we could not verify.
       }
       if (cancelled) return
+      reviewReadForRef.current = activeId
       setReviewSummaries((prev) => {
         const next = new Map(prev)
-        // Every candidate we asked about is now ANSWERED (summary or an explicit null), so
-        // the effect's own `unknown` gate closes and it cannot re-run for these ids.
-        for (const m of unknown) next.set(m.id, byMessage.get(m.id) ?? null)
+        // Every review the batch returned is kept, and every candidate we asked about is now
+        // ANSWERED (summary or an explicit null), so the effect's own `unknown` gate closes and
+        // it cannot re-run for these ids.
+        for (const s of byMessage.values()) next.set(s.messageId, s)
+        for (const m of unknown) if (!next.has(m.id)) next.set(m.id, null)
         return next
       })
     })()
@@ -2103,14 +2112,6 @@ export function ChatScreen({
 
   const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined
 
-  // Stable {mode} object for the memoized Transcript's review-eligibility check (spec §9.1
-  // documents-mode leg) — rebuilt only when the MODE actually changes, not per render.
-  const activeConvMode = activeConv?.mode ?? null
-  const reviewConversation = useMemo(
-    () => (activeConvMode ? { mode: activeConvMode } : null),
-    [activeConvMode]
-  )
-
   // The composite source scope shown in the picker (plan §13.2/D1). From the active
   // conversation's stored scope, falling back to its legacy fields, else the Library
   // default; a dangling/archived anchor falls back to Library with a quiet notice (§13.4).
@@ -2603,12 +2604,12 @@ export function ChatScreen({
           onSaveCodeBlock={handleSaveCodeBlock}
           // EP-1 plan §7.2: the review entry points (action row + sources footer). Only wired
           // when App provides the handoff (onOpenReview); per-message eligibility + labels are
-          // resolved inside Transcript via the shared isReviewEligible + reviewSummaries.
+          // resolved inside Transcript via the shared isReviewEligible (sources or coverage) or an existing
+          // review in reviewSummaries (#976).
           onOpenReview={onOpenReview ? handleOpenReviewMessage : undefined}
           onOpenArticle={handleOpenArticle}
           onSaveArticle={handleSaveArticle}
           reviewSummaries={reviewSummaries}
-          reviewConversation={reviewConversation}
           actionsDisabled={busyStreaming}
           resolveSkillTitle={resolveGlyphSkillTitle}
           progressNotice={streamConvId === activeId ? progressNotice : null}

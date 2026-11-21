@@ -1973,10 +1973,17 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   links still write AFTER sources+items inside the txn (`setEvidenceLink` validates keys).
   Also exports `sourceKindForMode`, `buildEvidenceSourceSnapshots`. `parseCitations` is now
   exported from `chat.ts` (the `parseCoverage` precedent — same tolerant validator).
-✅ **Eligibility rule (`shared/evidence-review.ts`):** pure `isReviewEligible(message,
-  conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
-  `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
-  gate (a streaming reply has no row yet) — Phase 2 wires it.
+✅ **Eligibility rule (`shared/evidence-review.ts`):** pure `isReviewEligible(message)` (spec §9.1):
+  assistant ∧ (citations non-empty ∨ coverage present). **#976 (follow-ups wave 6, G-7):** the spec's third
+  leg, "or the conversation is a documents conversation", is gone: a small-talk reply, the fixed no-context
+  reply, a routing answer, a refusal, a "use the button" pointer and the deterministic coverage-extract
+  listing carry neither field and have nothing to review. The predicate no longer takes a conversation. A
+  message that already has a review keeps its entry whatever it carries: the renderer shows the action
+  on `isReviewEligible(m) || reviewSummary != null`, and `ChatScreen` stores every summary the one batch
+  read (`evidence:summariesForConversation`) returns, and runs that read once for a documents conversation
+  even when none of its answers has sources. No main-side change: `createEvidenceReviewFromMessage` still
+  checks only the role. "Persisted and not streaming" stays the caller's gate (a streaming reply has no
+  row yet) — Phase 2 wires it.
 ✅ **IPC surface (`evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
   same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added

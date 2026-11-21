@@ -6327,15 +6327,19 @@ keeps the partial marked "Reply stopped", lock and quit end it, a failure leaves
 token throws `EmptyCompletionError` (CB-4). The meter gets the real usage (the two messages).
 
 **What stays unchanged.** Every grounded prompt, `GROUNDED_SYSTEM_PROMPT` included, byte for byte; the
-renderer, IPC, preload, the `Message` shape and the catalogs. The knowledge-pack acceptance set holds no
+renderer, IPC, preload, the `Message` shape and the catalogs (as of #963; #976 later narrowed the renderer's Review gate, below). The knowledge-pack acceptance set holds no
 small talk (0 of the 100 questions of `eval/rag_de_en.jsonl`), so the §17 shipping rule is not triggered.
 The local API has no route to the documents, so it is not affected.
 
 **Residuals (accepted).** An offer the assistant made and the user accepts with praise alone ("Great",
 «Super», «Perfetto») gets the short reply, not the offer (before #963 it got a summary); "ok", "sure", «bitte»
 and the other acceptance words read the documents with the conversation. A question to the assistant
-keeps the reply with its question mark. The reply sees no earlier turn. "Review" still shows under it, as
-under every answer in a documents chat (a separate product call).
+keeps the reply with its question mark. The reply sees no earlier turn. **Review (#976, owner call G-7):**
+"Review evidence" is not offered under it: the action shows only under an answer with citations or a
+coverage line, or one that already has a review. The same holds for the fixed no-context reply, a routing
+answer, a refusal and a "use the button" pointer. The deterministic "list every …" answer carries neither
+field and loses the action too (its review had no sources to link); an existing review under any of these
+keeps "Continue review".
 
 **Not taken.** (a1) a plain chat turn (`generateAssistantMessage`): its prompt tells the model to answer
 from its own knowledge, so "ok" after an offer could continue from the history without the documents, and
@@ -6352,4 +6356,9 @@ the documents; "ok" after the assistant's offer reads them with the conversation
 the rewritten small-talk rows of the #632 and #831 describes), `rag-whole-doc-skill.test.ts` and
 `rag-whole-read.test.ts` (the rewritten small-talk rows; knowledge packs in scope: no pack search, no pack
 outcome), `rag-regenerate-ipc.test.ts` (Stop, "Send again", regenerate), `skills-vocabulary.test.ts`
-(`isSmallTalkReply`).
+(`isSmallTalkReply`, and the #983 table: "Thanks for the summary", "Great job!", «Danke für die Hilfe» and
+one pair per newer language, each with the request it must not take: "Thanks, now write the minutes", "Summary,
+thanks!"), `rag-whole-doc-compare.test.ts` (#983 describe: "Thanks for the summary" under Contract Brief over
+a lease too long to read whole is one call on `SMALL_TALK_SYSTEM_PROMPT`; "Thanks, now write the minutes" runs
+the map-reduce), `ChatReviewChipBatch.test.tsx` and `ReviewEntryPoints.test.tsx` (#976). The eval set stays at
+0 of 100 small-talk questions with the new shape.

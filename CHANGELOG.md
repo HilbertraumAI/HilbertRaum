@@ -124,6 +124,12 @@ from its first public `1.0.0` release onward.
   task. It now gets the same short reply as "Thanks!", in English, German, Spanish, French, Italian, Dutch,
   Polish, Turkish, Russian and Ukrainian. A thank-you followed by a request ("Thanks, now write the
   minutes") is still a request (#983).
+- **"Review evidence" is offered only under answers that have sources to review.** In a chat about documents
+  the button also showed under a short reply to "Thanks!", under "I couldn't find this in your documents"
+  and under an answer that told you to pick a document, where a review has nothing to check. It now shows
+  under an answer with sources or a coverage line, and under any answer you have already started a review
+  for (that review keeps its "Continue review" button). The "list every …" answer that is computed without
+  the model has no sources and no longer offers it (#976).
 - **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
   workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
   a password, creating the workspace replaced that file, and with it the only key that opens that

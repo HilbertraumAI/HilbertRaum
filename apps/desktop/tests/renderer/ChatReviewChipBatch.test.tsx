@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { act, waitFor, cleanup } from '@testing-library/react'
+import { act, waitFor, cleanup, screen, within } from '@testing-library/react'
 import type { Conversation, Message } from '../../src/shared/types'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { chatScreenStubs, renderChatScreen } from '../helpers/chat-screen'
@@ -140,5 +140,82 @@ describe('AUD-12 — chat chip state is ONE round trip per conversation open', (
     await settleUntilQuiescent(() => getEvidenceReviewSummariesForConversation.mock.calls.length)
     // One attempt, no retry storm.
     expect(getEvidenceReviewSummariesForConversation).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #976 (follow-ups wave 6, G-7): the entry shows on an answer with sources or coverage, and on any answer that already has a
+// review. The batch read is still ONE call per conversation, and it now also runs for a documents conversation whose answers
+// carry no sources, so a review made under a no-context reply is found; every summary the batch returns is kept.
+describe('#976 — a review on an answer with no sources keeps its chip', () => {
+  const NO_SOURCES = (id: string): Message => assistantMsg(id, 'I could not find this in your documents.')
+  const chipOf = (block: Element): string | null => block.querySelector('.msg-review-chip')?.textContent ?? null
+  const chipsByAnswer = (): Array<[number, string]> =>
+    [...document.querySelectorAll('.msg-block.assistant')].flatMap((block, i) => {
+      const chip = chipOf(block)
+      return chip === null ? [] : [[i, chip] as [number, string]]
+    })
+
+  async function open(opts: { mode: 'chat' | 'documents'; messages: Message[]; summaries: ReturnType<typeof makeSummary>[] }) {
+    const getEvidenceReviewSummariesForConversation = vi.fn(async () => opts.summaries)
+    stubApi(
+      chatScreenStubs({
+        listConversations: vi.fn(async () => [makeConversation({ title: 'Chat', modelId: 'm1', mode: opts.mode })]),
+        listMessages: vi.fn(async () => opts.messages),
+        getEvidenceReviewSummariesForConversation
+      })
+    )
+    renderChatScreen({ initialConversationId: 'c1', onOpenReview: () => {} })
+    return getEvidenceReviewSummariesForConversation
+  }
+
+  it('documents chat, only answers with no sources, one has a review: ONE read, the chip on that answer', async () => {
+    const read = await open({
+      mode: 'documents',
+      messages: [userMsg('q1', 'Thanks!'), NO_SOURCES('a1'), userMsg('q2', 'What?'), NO_SOURCES('a2')],
+      summaries: [makeSummary({ id: 'r-a2', messageId: 'a2' })]
+    })
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(chipsByAnswer()).toEqual([[1, expect.stringContaining(t('en', 'review.status.draft'))]]))
+    await settleUntilQuiescent(() => read.mock.calls.length)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledWith('c1')
+    // The answer without a review offers nothing; the one with a review offers to continue it.
+    const rows = [...document.querySelectorAll('.msg-block.assistant')]
+    expect(within(rows[0] as HTMLElement).queryByRole('button', { name: t('en', 'review.action.start') })).toBeNull()
+    expect(within(rows[1] as HTMLElement).getByRole('button', { name: t('en', 'review.action.continue') })).toBeInTheDocument()
+  })
+
+  it('a documents chat with no review at all reads once and shows no action under a no-sources answer', async () => {
+    const read = await open({ mode: 'documents', messages: [userMsg('q1', 'Thanks!'), NO_SOURCES('a1')], summaries: [] })
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+    await settleUntilQuiescent(() => read.mock.calls.length)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(chipsByAnswer()).toEqual([])
+    expect(screen.queryByRole('button', { name: t('en', 'review.action.start') })).toBeNull()
+  })
+
+  it('every summary the batch returns is kept, also one for an answer without sources next to cited ones', async () => {
+    const cited = (id: string): Message =>
+      assistantMsg(id, 'Answer. [S1]', { citations: [{ label: 'S1', sourceTitle: 'contract.pdf', pageNumber: 1, snippet: 'x' }] })
+    const read = await open({
+      mode: 'documents',
+      messages: [userMsg('q1', 'Q1?'), cited('a1'), userMsg('q2', 'Q2?'), NO_SOURCES('a2')],
+      summaries: [makeSummary({ id: 'r-a1', messageId: 'a1', status: 'ready' }), makeSummary({ id: 'r-a2', messageId: 'a2' })]
+    })
+    await waitFor(() =>
+      expect(chipsByAnswer()).toEqual([
+        [0, expect.stringContaining(t('en', 'review.status.ready'))],
+        [1, expect.stringContaining(t('en', 'review.status.draft'))]
+      ])
+    )
+    await settleUntilQuiescent(() => read.mock.calls.length)
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  it('a plain chat with answers that carry no sources reads nothing (no review can exist there)', async () => {
+    const read = await open({ mode: 'chat', messages: [userMsg('q1', 'Hi'), assistantMsg('a1', 'Hello!')], summaries: [] })
+    await waitFor(() => expect(document.querySelectorAll('.msg-block.assistant')).toHaveLength(1))
+    await settleUntilQuiescent(() => read.mock.calls.length)
+    expect(read).not.toHaveBeenCalled()
   })
 })

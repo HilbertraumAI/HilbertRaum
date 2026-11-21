@@ -1374,14 +1374,22 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   «Wie geht's?», "What can you do?"), of whole thanks and greeting formulas («Passt», "Muchas gracias") and
   of thanks, greeting, goodbye and praise words in the ten interface languages, so four things follow. A
   message with a question mark anywhere in it, in any script, is a question about the last answer and is
-  answered from the documents: "Sure?", «Alles?», «Bitte?» for "pardon?", «Passt?», «¿Vale?», "Sure? Thanks";
+  answered from the documents (with no matching passage, by the fixed "I couldn't find this in your documents" reply, W-6): "Sure?", «Alles?», «Bitte?» for "pardon?", «Passt?», «¿Vale?», "Sure? Thanks";
   only the questions to the assistant keep the short reply with theirs. A message of acknowledgement words
   alone ("ok", "sure", "all", «alles bitte», «klar», «vale», «tamam», «ладно») can answer the assistant's own
   question or offer ("Shall I list the other deadlines?"), so it is answered from the documents with the
   conversation, as before; with a thanks or a greeting in it ("Ok, thanks") it gets the short reply. Praise
   counts as a thanks, so an offer accepted with "Great" or «Super» alone gets the short reply, not the list:
-  ask for it in words, or with "ok". And a thank-you longer than the lists is still taken for a question
-  about the documents (below).
+  ask for it in words, or with "ok". A thank-you that names what it thanks for also gets the short reply, in the
+  ten languages (#983, owner call G-8): "Thanks for the summary", "Thanks for the help!", "Great job!", «Danke für die
+  Hilfe», «Merci pour le résumé», «Özet için teşekkürler». The shape is closed: a thanks, "for", one noun for what the
+  assistant gave (summary, minutes, report, list, answer, help, work and the like), at most a closing word; or a
+  praise word and that noun, with a thanks after it at most. Any other word keeps the request ("Thanks, now write the
+  minutes", "Thanks for the summary of the risks"), and so does a noun first ("Summary, thanks!"). A thank-you longer
+  than that is still taken for a question about the documents (below). **Review evidence (#976):** the action
+  shows only under an answer with sources or a coverage line, or one that already has a review, so it is not
+  offered under this reply, the fixed no-context reply, a routing answer or a refusal. The deterministic "list
+  every …" answer has neither, and does not offer it either.
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
