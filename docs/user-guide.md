@@ -1417,9 +1417,12 @@ to free space. So when **Lock now** says it could not lock, free some space and 
 you quit.
 
 **Shutting down, restarting or logging off with the app still open:** on Windows the app locks
-the workspace on its own as the session ends. That is a best-effort safety net — a very large
-workspace may not finish locking in the time Windows allows — so quitting the app first is
-still the sure way. On a Mac this is not yet verified: quit the app before you shut down.
+the workspace on its own as the session ends. On Linux it does the same when you log out or shut
+down, or when the app is stopped with `kill` or Ctrl+C in a terminal: it locks the workspace and
+closes at once, without asking. That is a best-effort safety net — a very large workspace may not
+finish locking in the time the system allows, and a change made in the last second is not kept —
+so quitting the app first is still the sure way. On a Mac this is not yet verified: quit the app
+before you shut down.
 
 **Performance remembers each computer separately** (§5a): plug the drive into a computer it has
 seen before and its hardware result comes back immediately, with nothing re-measured. On a

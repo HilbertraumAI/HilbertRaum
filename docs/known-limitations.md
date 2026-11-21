@@ -66,13 +66,19 @@ password recovery — are documented in
   Open dialog lists `notes.txt ` under "All files" but cannot open it (an OS limit; a typed path
   loses its trailing space). Drop the file onto the app or import its folder instead.
 - **A large drop is slow on a fully busy machine (#934).** Checking a drop of up to 512 paths asks the file system once per path; when every CPU is busy with other work, that can take seconds instead of a fraction of a second. Nothing is lost, and the import carries on.
-- **On macOS and Linux, quit the app before shutting down or logging off (#248).** On Windows
-  the app locks the workspace itself as the session ends (PR #285; best effort — a very large
-  workspace may not finish in the time Windows allows, so quitting first is still the sure way).
-  The macOS `shutdown` leg is registered but not yet verified on a Mac (owner live check, #226),
-  and nothing is registered on Linux: there, every change since the last **Lock now** or normal
-  quit is lost if the session ends with the app open (user-guide §13; `security-model.md` "OS
-  session end locks the workspace"). Wait for the window to close before you eject.
+- **Quit the app before shutting down or logging off, above all on macOS (#248, #964).** On
+  Windows the app locks the workspace itself as the session ends (PR #285). On Linux it does the
+  same when a log-out, a shutdown or a `kill` ends it (#964): a termination signal (SIGTERM,
+  SIGINT or SIGHUP) or a lost session locks the workspace at once and ends the app, with no
+  question. Both are best effort: a very large workspace may not finish locking in the time the
+  system allows, and a review change made in the last second, a reply still being written or a
+  scan still being read is not kept, so quitting first is still the sure way. The Linux legs are
+  measured on Electron 43.8.6 under WSL with a stand-in app (the three signals, a lost D-Bus
+  session bus); a real desktop log-out (GNOME, KDE), a lost display and the packaged AppImage are
+  not checked yet. A forced kill (SIGKILL) still loses every change since the last **Lock now** or
+  normal quit. On macOS the `shutdown` leg is registered but not yet verified on a Mac (owner live
+  check, #226), so quit first there (user-guide §13; `security-model.md` "OS session end locks the
+  workspace"). Wait for the window to close before you eject.
 - **On Linux, the AppImage can run without Chromium's sandbox.** The app's windows are configured
   `sandbox: true` (`window-security.ts`), but the operating-system sandbox behind that setting
   needs unprivileged user namespaces, which Ubuntu 24.04 and later restrict by default (as do some
@@ -2919,9 +2925,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   still stops it the way quitting does, and a deep index, built again, reuses the parts it had
   already built. While the question is up, the workspace stays unlocked: a close
   followed by walking away no longer locks within seconds, but only once someone answers (there is
-  deliberately no timer that answers for you), unless a quit arrives meanwhile (Ctrl+Q, ⌘Q, or a
-  log-out on Linux if it reaches the app as a quit, which is unverified): that closes the question
-  and the app quits as if Close anyway had been picked. On macOS, a log-out or shutdown with the
+  deliberately no timer that answers for you), unless a quit arrives meanwhile (Ctrl+Q or ⌘Q):
+  that closes the question and the app quits as if Close anyway had been picked. On Linux a
+  log-out, a shutdown or a `kill` meanwhile locks the workspace at once and ends the app, without
+  the question and without the save (#964). On macOS, a log-out or shutdown with the
   app open may be interrupted once while the window saves: the order of the system's quit and its
   shutdown event is unverified (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF
   export), a Dock click during an OCR run (it should bring the window back, #910), and a log-out or

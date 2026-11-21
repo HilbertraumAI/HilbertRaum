@@ -1317,7 +1317,8 @@ explicitly:
   such an `.enc` or a staged `.enc.new` is there; with no snapshot at all, see "Encrypted file
   missing" above). Confidentiality
   is chosen over mid-session durability here; the mitigations are the clean quit path
-  (lock-on-quit, the `uncaughtException` crash lock and the Windows session-end lock, #248) and
+  (lock-on-quit, the `uncaughtException` crash lock, the Windows session-end lock, #248, and the
+  Linux signal and lost-session lock, #964) and
   the safe-eject guidance above. The trade-off is unchanged since #892, but no longer silent: the
   next lock screen says the session was not locked (see "Working file gone or not a database"
   above). A quit, or a crash lock, on a drive too full for the lock's checkpoint (#876) ends here
@@ -1937,9 +1938,10 @@ re-encrypts (the bullet below).
   to the save exactly as above, so the unsaved question can still follow. No question on a close a
   quit started (Ctrl+Q, ⌘Q, Dock Quit: explicit commands that stop the tasks at once, as Lock now
   does, which asks nothing either), on the macOS red button (the app and its tasks keep running), or
-  on a session end. A quit asked while the question is up (Ctrl+Q, ⌘Q, a Linux signal if it arrives
-  as `before-quit`) closes the dialog through its `signal` (`trackQuitRequests`' `onRequest`) and
-  counts as Close anyway, whatever the dialog then answers: an explicit quit never asks, and it has
+  on a session end. A quit asked while the question is up (Ctrl+Q, ⌘Q; a Linux signal never reaches
+  it, it locks and ends the app at once, #964) closes the dialog through its `signal`
+  (`trackQuitRequests`' `onRequest`) and counts as Close anyway, whatever the dialog then answers: an
+  explicit quit never asks, and it has
   already closed the OCR window (measured on Electron 43.8.6 with the real window-modal dialog: the
   quit's close of the main window is still emitted and held, the dialog closes about 40 ms later, then
   the hold, the save and the quit). A deep index, an extract pass, a summary, a comparison or a
@@ -1954,8 +1956,9 @@ re-encrypts (the bullet below).
   deliberately no auto-answer timeout (a time limit with a destructive effect, WCAG 2.2.1). Pinned
   by `tests/unit/close-guard.test.ts` and, locally, the real-Electron smoke (`stop-keep`,
   `quit-hold`).
-- **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
-  owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
+- **OS session end locks the workspace — Windows handled, Linux handled (#964), macOS registered but
+  unverified (#248; owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown,
+  restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above
   never ran and the process was killed with the working DB still plaintext on the drive — the next
   launch shredded the live working copy and the session delta was lost. The event Electron does
@@ -1983,10 +1986,34 @@ re-encrypts (the bullet below).
   reads as `shutdown` first), whether a Dock-menu Quit also reaches it, and what a shutdown the
   system then CANCELS leaves behind (the app alive with the workspace locked and no window
   recreated on a Dock click — quit and relaunch) — owner live check pending (#226); until then
-  quit before shutting down. **Linux:**
-  nothing registered (the `powerMonitor` event exists there too; not ruled). Pinned by
+  quit before shutting down. **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two
+  legs, both registered inside `app.whenReady` on Linux only, over the same closure. (1) A termination
+  signal — SIGTERM (`kill`, `systemctl stop`, a session manager), SIGINT (Ctrl+C), SIGHUP (the
+  terminal closed) — runs `onTerminationSignal`: `emergencyLock` once, then `app.exit(0)`. Electron's
+  own handler made each signal an ordinary, preventable quit with one shot: the close guard's
+  question or a failed save held it, and a second signal then killed the app with the working DB
+  plaintext (measured on Electron 43.8.6 Linux: exit 143, no handler run). The listeners must be
+  registered after `ready`: Electron installs its own `sigaction` handlers after the main script has
+  run, so a module-scope `process.on` is replaced and never fires (measured). They are never removed:
+  without a listener libuv leaves the signal at its default action, a kill. A signal during a running
+  quit teardown defers to it (that teardown owns the lock and exits from its own finally, bounded as
+  above); repeat signals do nothing. (2) A lost session — the D-Bus session bus gone (measured with a
+  private bus), or the display gone (read from Electron's source) — is how a log-out usually arrives:
+  Electron then exits with no `before-quit` and no `will-quit`, only `quit` (measured), so
+  `onQuitEvent` runs `emergencyLock` unless a lock already ran. A `quit` during a running quit
+  teardown (a log-out right after Ctrl+Q) locks at once: Electron ends the process as the event
+  returns, and the teardown never reaches its own lock (measured: one lock, exit 0). A lost bus also
+  brought a SIGTERM a few milliseconds after the `quit` lock (measured twice; most likely GLib's
+  exit-on-close for its D-Bus connection): whichever comes first locks, the other does nothing. A
+  signal that lands in the last milliseconds of the exit, after the lock, ends the
+  process with status 143. Same trade-off as Windows: no question, no save, and no partial reply
+  kept. Not yet checked: a real desktop log-out (GNOME, KDE), a lost display (needs Xvfb), the
+  packaged AppImage (`AppRun` is believed to `exec` Electron). The Linux `powerMonitor` leg (logind's
+  `PrepareForShutdown`) is not registered: the two legs already cover a poweroff. Pinned by
   `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings against
-  `will-quit`, the reap on the exit path, throw-safety, and the `index.ts` wiring (source text).
+  `will-quit`, the reap on the exit path, throw-safety, the Linux signal and `quit` legs (one lock
+  whatever came first), and the `index.ts` wiring (source text, including that the Linux legs sit
+  inside `app.whenReady`).
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so

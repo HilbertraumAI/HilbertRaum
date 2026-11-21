@@ -452,6 +452,12 @@ from its first public `1.0.0` release onward.
   same as quitting, and the workspace locks; start it again the next time. (During text
   recognition, closing the window now asks first, #935.) On macOS, clicking the Dock icon during
   the run now opens the window again (#910).
+- **On Linux, logging out or shutting down with HilbertRaum open now locks the workspace.** A
+  log-out ended the app without locking it, so every change since the last lock was lost. A
+  shutdown, or stopping the app with `kill` or Ctrl+C in a terminal, could wait on a question about
+  unsaved review changes or a running scan until the system ended the app, also without locking.
+  The app now locks the workspace at once and closes without asking, as it already did on Windows.
+  Quitting first is still the sure way: a change made in the last second is not kept (#964).
 - **A failed skill export no longer destroys the file you chose to replace.** The transactions
   and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
   straight onto the chosen file: a full drive or another failure part-way through left a
