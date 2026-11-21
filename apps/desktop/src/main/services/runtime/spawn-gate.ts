@@ -9,10 +9,17 @@
 //
 // Module-level and session-scoped, like the verdict store (engine-load.ts). The installer holds it for
 // its swap phase (`holdEngineSpawns`); every spawn site of the family awaits `waitForEngineSpawns`
-// before it verifies and spawns. The wait is bounded by `ENGINE_SPAWN_MAX_WAIT_MS`, just above the
-// extractor's own deadline, so a wedged swap can delay a spawn but never hang it.
+// before it verifies and spawns. The wait is bounded by `ENGINE_SPAWN_MAX_WAIT_MS` so a wedged swap can
+// delay a spawn but never hang it. The bound is NOT the job's worst case (#986 review): one step can take
+// the extractor's 5-minute deadline plus several 12 s rename-retry budgets (the archive's move, the
+// flatten, the swap's renames, a move back, the `cpu/` carry), the hashing and the flush, and a job has up
+// to two steps per family. It does not need to be: since #986 the install folder changes only in the
+// swap's renames, so a spawn that stops waiting meets a complete copy, old or new (between the main
+// build's swap and its carry, a new copy without its `cpu/` net for a moment). What a spawn let through
+// early can do is run the old copy, which the swap then moves to `.old`, where Windows cannot delete it
+// while it runs; the next swap or start deletes it.
 
-/** Longest a spawn waits for a swap: the extractor's 5-minute deadline plus a margin. */
+/** Longest a spawn waits for a swap: the extractor's 5-minute deadline plus a margin (enough: see above). */
 export const ENGINE_SPAWN_MAX_WAIT_MS = 6 * 60 * 1000
 
 const held = new Map<string, { done: Promise<void>; release: () => void }>()

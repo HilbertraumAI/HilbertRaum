@@ -186,8 +186,10 @@ and tested with. It still works; the update brings it to the version the app exp
   once for a moment), then choose Update again. The same check runs before an install or a reinstall.
 - **"The engine could not be replaced because another program is using one of its files":** often
   an antivirus program scanning the new files. The app waited and tried again, then put the old
-  engine back. Wait a minute and try again; if it keeps happening, see whether your antivirus
-  program reports the engine's files.
+  engine back. Rarely even that is refused: the AI Model screen then says the engine is missing, and
+  both copies wait on the drive. Wait a minute and try again (in that case with **Install the AI
+  engine**): the app first puts the new copy in place, so nothing is lost; restarting the app does
+  the same. If it keeps happening, see whether your antivirus program reports the engine's files.
 - **"The AI engine is in use right now":** an answer, an import, a translation or a document task is
   running. Wait until it has finished, then choose Update again.
 - **The button is greyed out:** like every download, the update needs **Allow internet access…** in

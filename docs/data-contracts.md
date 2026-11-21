@@ -2531,9 +2531,12 @@ whole renderer-visible surface.
   dir?)` (marker parses AND every required file present); `runtime-download.ts` `stageEngineInstall(plan,
   stagingDir, { extract?, signal?, log? })` (extract + checks + hashes + flush + marker inside `stagingDir`;
   the app-update plan's W-30 install reuses it), `engineFolderDeletesSettled()`, `recoverEngineSwaps(rootPath,
-  manifestsDir, { platform?, arch?, log? })` (called in `index.ts` before any engine is resolved; never
-  throws); `fs-retry.ts` `renameWithRetry(from, to, platform?)` + `renameMayClear(err, platform?)` +
-  `RENAME_RETRY_BUDGET_MS` (12 s of waits, EPERM/EACCES/EBUSY on Windows only); `archive-size.ts`
+  manifestsDir, { platform?, arch?, log?, warn? })` (called in `index.ts` before any engine is resolved,
+  what it could not do through `warn`; every engine job runs the same rule on its folders before phase 1;
+  never throws); `fs-retry.ts` `renameWithRetry(from, to, platform?)` + `renameMayClear(err, platform?)` +
+  `RENAME_RETRY_BUDGET_MS` (12 s of waits, EPERM/EACCES/EBUSY on Windows only) + `removeRetry(platform?)`
+  (`rm`'s `maxRetries`/`retryDelay` within the same budget, Windows only); phase 2 installs a family's
+  `cpu/` net before its main build; `archive-size.ts`
   `extractedArchiveBytes(path, clusterBytes)` (zip central directory or tar.gz ustar headers, each file
   rounded to the unit; null for anything it cannot size, Zip64 included). `assertCommercialDrive` fails
   `runtimeCurrent` (or `optionalRuntimesConsistent`) for a leftover `<extract_to>.new` / `.old` beside a

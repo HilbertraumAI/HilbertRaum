@@ -6111,15 +6111,40 @@ in place on a read-only drive) stays the app-update plan's.
   to the device; write the marker LAST, inside `.new`, and flush it (lens F CE-F1: a marker written
   after the move made a quit there reinstall over the kept copy). Phase 1 is unchanged: the archives
   still download into the install folder, which a first install creates.
-- **Cancel:** checked after the extraction and again before the swap. Until the swap's first rename a
+- **Order (review round 1):** phase 2 installs each family's `cpu/` net BEFORE its main build. The net's
+  archive downloads into `<os>/cpu/`, inside the main folder: with the main build first, its swap moved
+  that archive into `.old/cpu/`, and a refused carry left the net step without it (ENOENT) and the
+  archive inside `cpu/` for good once the start carried `.old/cpu` back. Net first, the net's swap
+  happens inside the old install folder and the main build's carry takes the NEW net across; no archive
+  is ever inside a folder another step renames. The cost: a net step that fails now stops the job before
+  the main build, which then stays as it was (it used to be replaced and the net failed after it).
+- **A retry never deletes what the last attempt kept (review round 1).** Before phase 1, the job runs the
+  start's recovery rule (`recoverEngineFolder`, below) on each of its folders, main build before its net:
+  a swap whose old copy could not be moved back is finished (the new copy moved in), a net a refused
+  carry left in `.old` is carried in. Before phase 1, because phase 1 makes the install folder again for
+  its archive. In phase 2 a step still refuses to delete a `.new` or `.old` that is the only whole copy
+  (the install folder is not) or that holds a `cpu/` net the install folder lacks: it ends `filesInUse`
+  with nothing touched.
+- **Cancel:** checked after the extraction, before the swap, and once more inside the swap right before
+  its first rename (after a stale `.old` was deleted, which can take seconds). Until the swap's first rename a
   cancel deletes `.new` and replaces nothing (#516's "finish the install" rule had its reason in the
   old copy being gone, and is retired); after it, the step finishes.
 - **Swap** (`swapEngineFolder`): delete a stale `.old`; `<os>` → `<os>.old`; `<os>.new` → `<os>`. Each
   rename goes through `renameWithRetry`: on Windows, EPERM, EACCES and EBUSY are tried again with waits
-  of 50 ms doubling to 1 s, 12 s in all (within the spawn gate's one-minute margin); elsewhere the first
-  refusal stands. A refused first rename touches nothing; a refused second one moves `.old` back. Both
-  end the step `filesInUse` (`main.engine.filesInUse`) with the installed copy as it was. Only when
-  `.old` cannot be moved back either do both copies stay, and the next start moves the new one in.
+  of 50 ms doubling to 1 s, 12 s in all; elsewhere the first refusal stands. A refused first rename
+  touches nothing; a refused second one moves `.old` back. Both end the step `filesInUse`
+  (`main.engine.filesInUse`, "try again in a minute") with the installed copy as it was. Only when `.old`
+  cannot be moved back either do both copies stay; the install folder is then gone for the moment, and
+  the next job in the session (the screen offers the install) or the next start moves the new copy in,
+  so "try again" holds there too. Deletes of a copy (`removeEngineFolder`) get Node's own `rm` retries
+  on Windows, 15 tries of 100 ms more each (12 s), for a scanner still reading a failed copy.
+- **The spawn gate's bound is not the worst case (review round 1).** One step can take the extractor's
+  5 minutes plus several 12 s rename budgets (the archive's move, the flatten, the swap's renames, a move
+  back, the carry), the hashing, the flush and waits on queued deletes, and a job has up to two steps per
+  family, so a job can hold the gate past its 6 minutes. That is enough: the install folder changes only
+  in the swap's renames, so a spawn that stops waiting meets a complete copy (for a moment, the new main
+  copy without its net). What a spawn let through early can do is run the old copy, which the swap moves
+  to `.old`, where Windows cannot delete it while it runs; the next swap or start deletes it.
 - **After the swap:** the main step carries `cpu/`; the verifier's cached verdicts for the replaced
   programs are dropped; `.old` is deleted in the background, marker first, once the job has released
   the spawn gate (a waiting helper starts on the new copy at once). The deletes run one after another
@@ -6129,14 +6154,18 @@ in place on a read-only drive) stays the app-update plan's.
   build before its net, and only the exact names `<os>.new` and `<os>.old` (never a pattern: frozen in
   the first Kit release, it must leave the app-update plan's `<os>@<pin>/` alone):
   - install complete → carry `.old/cpu` if missing (main build), delete `.new` and `.old`;
-  - else `.new` complete → move the incomplete install to `.old` (when free), `.new` in, carry, delete
-    `.old`;
-  - else `.old` complete → move the incomplete install to `.new` (when free), `.old` back, delete `.new`;
+  - else `.new` complete → move the incomplete install to `.old`, `.new` in, carry, delete `.old`;
+  - else `.old` complete → move the incomplete install to `.new`, `.old` back, delete `.new`;
   - else delete both (an incomplete `.old`'s `cpu/` carried first).
 
-  Renames run synchronously, once each: a refusal is logged and the layout left as it is, never worse
-  (a refused `.new` → install falls back to a complete `.old`). Deletes run in the background. It never
-  throws. A refused rename on a drive that cannot be written is where CE-F10 would hook (pointing the
+  An incomplete leftover already at the spare name is deleted first, synchronously and marker first
+  (its `cpu/` net carried into the install folder before); it used to make the start give up, so a
+  broken install folder stayed broken on every start (review round 1). Only two whole copies beside an
+  incomplete install folder are left as they are.
+
+  Renames run synchronously, once each: a refusal is logged as a warning and the layout left as it is,
+  never worse (a refused `.new` → install falls back to a complete `.old`). Deletes run in the
+  background. It never throws. A refused rename on a drive that cannot be written is where CE-F10 would hook (pointing the
   family's resolver at the complete copy); not built.
 - **Gates:** `assertCommercialDrive` fails a Kit with a leftover `<extract_to>.new` or `.old` beside any
   pinned build (the net's `cpu.new` / `cpu.old` included), and the Kit gate scripts' pre-flight
@@ -6146,12 +6175,16 @@ in place on a read-only drive) stays the app-update plan's.
 a real stick). A start rename refused by a lock waits for the next start. A Kit whose install folder is
 itself a junction gets a real folder from the swap (the junction's target is left as it was). An
 interrupted net swap the start could not repair, followed by a main update in the same session, would
-delete the old net with `.old`. Not modelled: two hosts writing one drive at once.
+delete the old net with `.old`. A dangling symbolic link at a leftover name is what the PowerShell Kit
+gate's `Get-Item -Force` check is for; this machine cannot create one (no symlink privilege), so only
+the junction case is exercised here. Not modelled: two hosts writing one drive at once.
 
-Tests: `engine-swap.test.ts` (ten crash layouts run through the recovery; the exact-names, marker-first
-and refused-rename rows; in a job: the `cpu/` carry and the marker inside `.new` at the first rename,
-stale leftovers, a held handle waited out on Windows, the rollback, the stranded case, a cancel before
-and during the swap, no room with nothing touched or paused, the OS tar in `.new`);
+Tests: `engine-swap.test.ts` (twelve crash layouts run through the recovery, the incomplete spare
+included; the exact-names, marker-first, refused-rename and warning rows; in a job: the `cpu/` carry and
+the marker inside `.new` at the first rename, stale leftovers, a held handle waited out on Windows, the
+rollback, the stranded case and its retry, a retry that fails after a keep-both, a job after a refused
+carry, a refused carry with both builds in one job, a first install, a net-only reinstall, a cancel
+before, during and just before the swap, no room with nothing touched or paused, the OS tar in `.new`);
 `engine-extract-containment.test.ts` (each failing archive as a first install and over an installed
 engine, which stays identical; a `.new` that cannot be deleted); `engine-download.test.ts` (the cancel
 rows, the part-way rows on `.new`); `engine-consent-ipc.test.ts` (the #532 reinstall keeps `cpu/`: the

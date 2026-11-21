@@ -300,7 +300,7 @@ first. It builds the new copy in **`<os>.new/`** beside the install folder (the 
 copy in, and deletes `.old` after the job. No resolver ever reads these names. A kill, an unplug or a
 crash between the steps can leave them; the app's next start on that OS finishes or rolls back the
 swap before anything starts an engine (`recoverEngineSwaps`, `architecture.md` "In-app engine
-updates" §6). Only these exact names are touched: any other folder beside the install (the app-update
+updates" §6), and so does the next engine job, before it downloads. Only these exact names are touched: any other folder beside the install (the app-update
 plan's `<os>@<pin>/`) is left alone. A Kit must not ship one: the sell gate and the Kit gate scripts
 refuse a leftover beside a pinned build.
 
