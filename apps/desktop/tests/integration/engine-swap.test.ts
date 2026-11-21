@@ -49,7 +49,7 @@ vi.mock('node:timers/promises', async (importOriginal) => {
 })
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -73,6 +73,8 @@ import { makeSizeOnlyZip, makeTarGz, makeZip } from '../helpers/archives'
 import { runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { fingerprintTree } from '../helpers/read-only-witness'
+import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
+import { verifierInert } from '../helpers/binary-fixtures'
 
 afterEach(() => {
   seams.renameRefuses = null
@@ -503,6 +505,15 @@ async function settle(mgr: EngineDownloadManager, jobId: string): Promise<Engine
 
 const update = { families: ['llama_cpp' as const], update: true as const }
 
+/**
+ * How a swap's refused rename ends (#986 review 3): a held handle on Windows is "files in use"; on macOS and
+ * Linux the same codes mean a real refusal, which ends as the install error it is.
+ */
+const heldEnd =
+  process.platform === 'win32'
+    ? { reason: 'filesInUse', matches: (error: string | null) => error === tMain('main.engine.filesInUse') }
+    : { reason: 'install', matches: (error: string | null) => error !== null && error !== tMain('main.engine.filesInUse') }
+
 describe('the staged swap in an engine job (#986)', () => {
   // #986 gap 1: the `cpu/` net lives inside the main folder; the main build's swap must not lose it.
   it('an update swaps the new copy in, carries the cpu/ net over and deletes the replaced copy after the job', async () => {
@@ -582,8 +593,9 @@ describe('the staged swap in an engine job (#986)', () => {
     mgr.onSettled((_job, end) => ends.push(end))
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
     const job = await settle(mgr, started.jobId)
-    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.filesInUse') })
-    expect(ends.map((e) => e.reason)).toEqual(['filesInUse'])
+    expect(job.status).toBe('failed')
+    expect(heldEnd.matches(job.error)).toBe(true)
+    expect(ends.map((e) => e.reason)).toEqual([heldEnd.reason])
     expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
     expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'net b200|b200', ...NOTHING_LEFT })
   })
@@ -595,7 +607,9 @@ describe('the staged swap in an engine job (#986)', () => {
     seams.renameRefuses = (from, to) => (from === liveDir(rootPath) && to === `${liveDir(rootPath)}.old` ? 'EBUSY' : null)
     const mgr = manager()
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
-    expect(await settle(mgr, started.jobId)).toMatchObject({ status: 'failed', error: tMain('main.engine.filesInUse') })
+    const refused = await settle(mgr, started.jobId)
+    expect(refused.status).toBe('failed')
+    expect(heldEnd.matches(refused.error)).toBe(true)
     expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
     expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
   })
@@ -620,7 +634,9 @@ describe('the staged swap in an engine job (#986)', () => {
     seams.renameRefuses = (from) => (from === `${liveDir(rootPath)}.new` || from === `${liveDir(rootPath)}.old` ? 'EPERM' : null)
     const mgr = manager()
     const first = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
-    expect(await settle(mgr, first.jobId)).toMatchObject({ status: 'failed', error: tMain('main.engine.filesInUse') })
+    const refused = await settle(mgr, first.jobId)
+    expect(refused.status).toBe('failed')
+    expect(heldEnd.matches(refused.error)).toBe(true)
     expect(layout(rootPath)).toMatchObject({ live: 'absent', staging: 'engine b200|b200', previous: 'engine b150|b150' })
     seams.renameRefuses = null
     // The engine reads as missing now, so the screen offers the install.
@@ -675,6 +691,46 @@ describe('the staged swap in an engine job (#986)', () => {
     seams.renameSyncRefuses = null
     await recover(rootPath, manifestsDir)
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT })
+  })
+
+  // #986 review 3: the job's own recovery moved the kept new copy in; the job then failed at its download.
+  // The program at those paths is another one now: a verdict cached for the old one must not stand, and
+  // the consumers (the re-arm, the probe refresh) must hear of it.
+  it('a copy a job’s recovery moves in drops the cached verdicts and is told, even when the job then fails', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const live = liveDir(rootPath)
+    const program = join(live, BIN)
+    initBinaryVerification(false) // as packaged: verdicts are cached for the session
+    try {
+      // Earlier this session: a copy whose program does not match its marker, refused and cached.
+      copy(live, 'b150', { records: [] })
+      await expect(verifyBinaryBeforeSpawn(program)).resolves.toBe('mismatch')
+      // Then a swap kept both copies: the install folder gone, the new copy whole and right in `.new`.
+      renameSync(live, `${live}.old`)
+      copy(`${live}.new`, 'b200')
+      writeRuntimeMarker(`${live}.new`, {
+        version: 'b200',
+        backend: 'vulkan',
+        os: HOST_OS,
+        arch: HOST_ARCH,
+        binaries: { [BIN]: sha256(Buffer.from('engine b200')) }
+      })
+      const mgr = new EngineDownloadManager({
+        fetchImpl: (async () => {
+          throw new TypeError('fetch failed')
+        }) as unknown as FetchFn,
+        extractImpl: newEngine
+      })
+      const told: Array<[string[], Partial<Record<string, string[]>>]> = []
+      mgr.onInstalled((families, programs) => told.push([families, programs]))
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'] })
+      expect((await settle(mgr, started.jobId)).status).toBe('failed')
+      expect(summary(live)).toBe('engine b200|b200')
+      await expect(verifyBinaryBeforeSpawn(program)).resolves.toBe('ok')
+      expect(told).toEqual([[['llama_cpp'], { llama_cpp: [program] }]])
+    } finally {
+      verifierInert()
+    }
   })
 
   // #986 review 2: two whole copies beside an empty install folder (a refused recovery rename, then a job's
@@ -832,10 +888,77 @@ describe('the staged swap in an engine job (#986)', () => {
     box.jobId = started.jobId
     await vi.waitFor(() => expect(box.mgr!.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     await engineFolderDeletesSettled()
-    // The cancel really landed, on the first rename of the swap, and the job took it.
-    expect(box.cancelledAt).toBe('cancelled')
+    // The cancel really landed, on the first rename of the swap, and was too late: the status never
+    // read 'cancelled' (#986 review 3: it used to, and then flipped to 'done').
+    expect(box.cancelledAt).toBe('extracting')
     expect(box.mgr.get(started.jobId).status).toBe('done')
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // #986 review 3: a cancel during the swap's SECOND rename: the job's status never reads 'cancelled', the
+  // job ends 'done', and its audit record has no cancel in it.
+  it('a cancel during the swap’s second rename never shows the job cancelled, and it ends done', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    const box: { mgr?: EngineDownloadManager; jobId?: string } = {}
+    const seen: string[] = []
+    seams.onRename = (from) => {
+      if (from === `${liveDir(rootPath)}.new` && box.jobId) {
+        seen.push(box.mgr!.cancel(box.jobId).status, box.mgr!.get(box.jobId).status)
+      }
+    }
+    box.mgr = manager()
+    const ends: EngineJobEnd[] = []
+    box.mgr.onSettled((_job, end) => ends.push(end))
+    const started = await box.mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    box.jobId = started.jobId
+    const job = await settle(box.mgr, started.jobId)
+    expect(seen).toEqual(['extracting', 'extracting'])
+    expect(job.status).toBe('done')
+    expect(ends.map((e) => e.reason)).toEqual([null])
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // #986 review 3: a cancel that lands while a swap ends keep-both must not hide it: the install folder is
+  // gone for the moment, and "Cancelled" would say nothing happened.
+  it('a cancel during a swap that ends keeping both copies reports that end, not a cancel', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    const box: { mgr?: EngineDownloadManager; jobId?: string; cancelledAt?: string } = {}
+    seams.onRename = (from) => {
+      if (from === `${liveDir(rootPath)}.new` && box.jobId && !box.cancelledAt) box.cancelledAt = box.mgr!.cancel(box.jobId).status
+    }
+    seams.renameRefuses = (from) => (from === `${liveDir(rootPath)}.new` || from === `${liveDir(rootPath)}.old` ? 'EPERM' : null)
+    box.mgr = manager()
+    const ends: EngineJobEnd[] = []
+    box.mgr.onSettled((_job, end) => ends.push(end))
+    const started = await box.mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    box.jobId = started.jobId
+    const job = await settle(box.mgr, started.jobId)
+    expect(job.status).toBe('failed')
+    expect(heldEnd.matches(job.error)).toBe(true)
+    expect(ends.map((e) => e.reason)).toEqual([heldEnd.reason])
+    expect(layout(rootPath)).toMatchObject({ live: 'absent', staging: 'engine b200|b200', previous: 'engine b150|b150' })
+  })
+
+  // #986 review 3: only a held handle is "files in use". A drive that cannot be written fails as the install
+  // error it is, with its own audit reason, and nothing is touched.
+  it('a rename refused because the drive cannot be written is an install error, not files in use', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    const before = fingerprintTree(liveDir(rootPath))
+    seams.renameRefuses = (from, to) => (from === liveDir(rootPath) && to === `${liveDir(rootPath)}.old` ? 'EROFS' : null)
+    const mgr = manager()
+    const ends: EngineJobEnd[] = []
+    mgr.onSettled((_job, end) => ends.push(end))
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    const job = await settle(mgr, started.jobId)
+    expect(job.status).toBe('failed')
+    expect(job.error).not.toBe(tMain('main.engine.filesInUse'))
+    expect(job.error).toContain('EROFS')
+    expect(ends.map((e) => e.reason)).toEqual(['install'])
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
   })
 
   // #986: a full drive used to fail half-way through the extraction, after the old copy was deleted.

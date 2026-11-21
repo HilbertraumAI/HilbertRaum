@@ -49,7 +49,7 @@ import {
 } from './assets'
 import { extractedArchiveBytes } from './archive-size'
 import { freeBytes } from './disk-space'
-import { removeRetry, renameWithRetry } from './fs-retry'
+import { removeRetry, renameMayClear, renameWithRetry } from './fs-retry'
 import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
 import { assertDownloadAllowed, NetworkSwitch, type DownloadGates } from './downloads'
@@ -828,6 +828,13 @@ export class EngineDownloadManager {
   private readonly settledListeners = new Set<(job: EngineDownloadJob, end: EngineJobEnd) => void>()
   /** #843: what each job set out to fetch (its dialog's preview) and why it stopped, for the audit. */
   private readonly previews = new Map<string, EngineDownloadPreview>()
+  /**
+   * #986 review 3: the job whose step has begun its swap's renames. A cancel then is too late for that step:
+   * it stops what comes after, and the job's status does not flip to 'cancelled' and back.
+   */
+  private swapping: string | null = null
+  /** #986 review 3: what a job's own recovery moved into an install folder, until the job tells its listeners. */
+  private readonly recoveredSteps = new Map<string, InstallStep[]>()
   private readonly endReasons = new Map<
     string,
     { reason: EngineJobEndReason; cause?: string; space?: EngineSpaceShortfall }
@@ -936,6 +943,9 @@ export class EngineDownloadManager {
       .finally(() => {
         this.runSettled = true
         if (this.active?.jobId === job.jobId) this.active = null
+        // #986 review 3: a job that stopped before its phase 2 still moved what its recovery moved.
+        const recovered = this.takeRecovered(job.jobId)
+        if (recovered.length > 0) this.notifyInstalled(recovered)
         // #516: every outcome — the IPC layer resumes what an update paused, done or not.
         const settled = this.get(job.jobId)
         const end = this.jobEnd(settled)
@@ -1021,6 +1031,13 @@ export class EngineDownloadManager {
   cancel(jobId: string): EngineDownloadJob {
     const job = this.jobs.get(jobId)
     if (!job) return this.get(jobId)
+    // #986 review 3: once a step's swap has begun renaming, that step finishes (its status stays as it is).
+    // The cancel still stops every step after it.
+    if (this.swapping === jobId) {
+      if (this.active?.jobId === jobId) this.active.controller.abort()
+      this.deps.log?.('Cancel arrived after the swap began: this step finishes, the rest is stopped', { jobId })
+      return { ...job }
+    }
     if (
       job.status === 'queued' ||
       job.status === 'downloading' ||
@@ -1111,17 +1128,24 @@ export class EngineDownloadManager {
     // #986 review 2: a main build's nested net folder too, whatever the job plans for it: a retry that plans
     // the main build alone must not move a net's unfinished swap (`<os>/cpu.new`, `cpu.old`) away with it.
     const logs: RecoveryLogs = { info: this.deps.log, warn: this.deps.log }
+    const recovered: InstallStep[] = []
     for (const step of steps) {
       const folders: Array<[RuntimeDownloadPlan, boolean]> = [[step.plan, step.main]]
       if (step.main && step.cpuNet) folders.push([step.cpuNet, false])
       for (const [plan, main] of folders) {
         try {
-          recoverEngineFolder(rootPath, step.family, plan, main, logs, main ? step.cpuNet : undefined)
+          // #986 review 3: a copy moved in is a new program at those paths: its cached verdicts go now,
+          // and the job's listeners hear of it when the job ends, whatever the outcome.
+          for (const moved of recoverEngineFolder(rootPath, step.family, plan, main, logs, main ? step.cpuNet : undefined)) {
+            for (const p of moved.binaryPaths) invalidateBinaryVerification(p)
+            recovered.push({ family: step.family, plan: moved, main: moved === step.plan, sizeBytes: null })
+          }
         } catch (err) {
           this.deps.log?.('Engine swap recovery failed', { family: step.family, error: String(err) })
         }
       }
     }
+    if (recovered.length > 0) this.recoveredSteps.set(job.jobId, recovered)
     const fetched: RuntimeDownloadPlan[] = []
     const discard = async (plans: readonly RuntimeDownloadPlan[]): Promise<void> => {
       for (const p of plans) await rm(p.zipDest, { force: true }).catch(() => undefined)
@@ -1210,11 +1234,21 @@ export class EngineDownloadManager {
       // #516: a job that stopped part-way still replaced what it replaced — the consumers of a new
       // main build need the same re-arm and probe refresh as after a complete install. #678: so does
       // a `cpu/` net a reinstall replaced alone: its old verdict goes, and the fresh copy is known.
-      if (!complete && replaced.length > 0) this.notifyInstalled(replaced)
+      if (!complete) {
+        const told = [...replaced, ...this.takeRecovered(job.jobId)]
+        if (told.length > 0) this.notifyInstalled(told)
+      }
     }
     job.binaryPath = steps.find((s) => s.main)?.plan.binaryPath ?? steps[0]?.plan.binaryPath ?? null
     job.status = 'done'
-    this.notifyInstalled(steps)
+    this.notifyInstalled([...steps, ...this.takeRecovered(job.jobId)])
+  }
+
+  /** #986 review 3: the steps a job's recovery moved in and has not told yet (and forget them). */
+  private takeRecovered(jobId: string): InstallStep[] {
+    const steps = this.recoveredSteps.get(jobId) ?? []
+    this.recoveredSteps.delete(jobId)
+    return steps
   }
 
   /**
@@ -1224,7 +1258,10 @@ export class EngineDownloadManager {
   private notifyInstalled(steps: readonly InstallStep[]): void {
     const families = [...new Set(steps.map((s) => s.family))]
     const programs: Partial<Record<EngineFamily, string[]>> = {}
-    for (const s of steps) (programs[s.family] ??= []).push(s.plan.binaryPath)
+    for (const s of steps) {
+      const list = (programs[s.family] ??= [])
+      if (!list.includes(s.plan.binaryPath)) list.push(s.plan.binaryPath)
+    }
     for (const listener of this.installedListeners) {
       try {
         listener(families, programs)
@@ -1438,13 +1475,17 @@ export class EngineDownloadManager {
         throw new EngineStepError('incomplete', tMain('main.engine.binaryMissing'))
       }
       try {
-        await swapEngineFolder(dirs, this.deps.log, controller.signal)
+        await swapEngineFolder(dirs, this.deps.log, controller.signal, () => {
+          this.swapping = job.jobId
+        })
       } catch (err) {
         if (err instanceof EngineStepError && err.keepStaging) keepStaging = true
         throw err
       }
       // The new copy is in place: from here a cancel is too late to stop anything.
       const carried = step.main ? await carryCpuNet(dirs.previous, dirs.live, this.deps.log, step.cpuNet) : true
+      // #986 review 3: the carry can replace an incomplete `cpu/`: the net's cached verdicts go too.
+      if (step.main) for (const p of step.cpuNet?.binaryPaths ?? []) invalidateBinaryVerification(p)
       // A `.old` whose net could not be carried stays for the next start to carry (`recoverEngineSwaps`).
       if (carried && present(dirs.previous)) replacedFolders.push(dirs.previous)
       // CODE-12 (full-audit 2026-07-11): drop the binary-verifier's session-cached verdict for every
@@ -1459,8 +1500,11 @@ export class EngineDownloadManager {
       // the only whole copy left (the swap could not put the old one back) stays: the next attempt in
       // this session, or the next start, moves it in.
       if (dirs && !keepStaging) deleteEngineFolderLater(dirs.staging, this.deps.log)
-      await rm(plan.zipDest, { force: true }).catch(() => undefined)
-      if (job.status === 'cancelled') return 'aborted'
+      await rm(plan.zipDest, { force: true, ...removeRetry() }).catch(() => undefined)
+      // #986 review 3: a swap that kept both copies (the install folder gone for the moment) is reported as
+      // such, never hidden behind a cancel that was recorded while it ran.
+      if (job.status === 'cancelled' && !keepStaging) return 'aborted'
+      if (keepStaging) this.endReasons.delete(job.jobId)
       job.status = 'failed'
       if (err instanceof EngineStepError) {
         job.error = err.message
@@ -1474,6 +1518,8 @@ export class EngineDownloadManager {
         ...(keepStaging ? { kept: 'the only whole copies, for the next attempt or start' } : {})
       })
       return 'failed'
+    } finally {
+      if (this.swapping === job.jobId) this.swapping = null
     }
   }
 }
@@ -1574,7 +1620,7 @@ async function removeEngineFolder(dir: string, log: EngineLog): Promise<boolean>
   try {
     if (!present(dir)) return true
     // `recursive`: whatever sits at the marker's name goes, a folder posing as it too.
-    if (isRealFolder(dir)) await rm(runtimeMarkerPath(dir), { force: true, recursive: true })
+    if (isRealFolder(dir)) await rm(runtimeMarkerPath(dir), { force: true, recursive: true, ...removeRetry() })
     // On Windows a scanner still reading a just-failed copy makes the delete EBUSY/EPERM for a moment:
     // Node retries within the rename's budget (`removeRetry`).
     await rm(dir, { recursive: true, force: true, ...removeRetry() })
@@ -1688,7 +1734,7 @@ export async function stageEngineInstall(
       () => true,
       () => false
     )
-    await rm(p, { recursive: true, force: true })
+    await rm(p, { recursive: true, force: true, ...removeRetry() })
     if (there) opts.log?.('Left out of the engine install', { file: basename(p) })
   }
   // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already refuses `..`
@@ -1697,7 +1743,7 @@ export async function stageEngineInstall(
   // FINAL layout (after flatten, so a relative link is checked where it will actually live) and refuse
   // the install if any link escapes. Legitimate engine archives carry no escaping links.
   await assertExtractedSymlinksContained(stagingDir)
-  await rm(staged.zipDest, { force: true })
+  await rm(staged.zipDest, { force: true, ...removeRetry() })
 
   // #339 P8-1: the completeness check covers EVERY file the plan requires — the family's executables
   // (the code floor ∪ the yaml's `executables`) and the build's `runtime_files` — after the flatten, so
@@ -1761,19 +1807,30 @@ export async function stageEngineInstall(
  * cancel that landed while a stale `.old` was being deleted is honoured: `signal` is checked once more
  * right before the first rename.
  */
-async function swapEngineFolder(dirs: EngineSwapDirs, log: EngineLog, signal?: AbortSignal): Promise<void> {
+async function swapEngineFolder(
+  dirs: EngineSwapDirs,
+  log: EngineLog,
+  signal?: AbortSignal,
+  onFirstRename?: () => void
+): Promise<void> {
   await engineFolderDeletesSettled()
   const inUse = (keepStaging = false): EngineStepError =>
     new EngineStepError('filesInUse', tMain('main.engine.filesInUse'), keepStaging)
+  // #986 review 3: only a held handle is "files in use"; a drive that cannot be written (EROFS), another
+  // volume (EXDEV), a full drive or a real permission refusal is the install error it is, with its own reason.
+  const refused = (err: unknown, keepStaging = false): EngineStepError =>
+    renameMayClear(err) ? inUse(keepStaging) : new EngineStepError('install', friendlyEngineError(err), keepStaging)
   if (present(dirs.previous) && !(await removeEngineFolder(dirs.previous, log))) throw inUse()
   if (signal?.aborted) throw new Error('engine install cancelled before the swap')
+  // From here the step finishes: a cancel is too late (`EngineDownloadManager.cancel`).
+  onFirstRename?.()
   const hadLive = present(dirs.live)
   if (hadLive) {
     try {
       await renameWithRetry(dirs.live, dirs.previous)
     } catch (err) {
       log?.('The installed engine could not be moved aside: nothing was replaced', { error: String(err) })
-      throw inUse()
+      throw refused(err)
     }
   }
   try {
@@ -1787,10 +1844,10 @@ async function swapEngineFolder(dirs: EngineSwapDirs, log: EngineLog, signal?: A
         log?.('The installed engine could not be moved back: both copies stay for the next attempt or start', {
           error: String(back)
         })
-        throw inUse(true)
+        throw refused(back, true)
       }
     }
-    throw inUse()
+    throw refused(err)
   }
 }
 
@@ -1823,18 +1880,23 @@ async function carryCpuNet(
 }
 
 /** {@link carryCpuNet} on the start path: one synchronous rename, and the install folder made if gone. */
-function carryCpuNetSync(previous: string, live: string, log: EngineLog, netPlan?: RuntimeDownloadPlan): boolean {
+function carryCpuNetSync(
+  previous: string,
+  live: string,
+  log: EngineLog,
+  netPlan?: RuntimeDownloadPlan
+): 'moved' | 'none' | 'failed' {
   const from = join(previous, 'cpu')
   const to = join(live, 'cpu')
-  if (!isRealFolder(from) || netWhole(to, netPlan)) return true
+  if (!isRealFolder(from) || netWhole(to, netPlan)) return 'none'
   try {
-    if (present(to) && !removeEngineFolderSync(to, log)) return false
+    if (present(to) && !removeEngineFolderSync(to, log)) return 'failed'
     mkdirSync(live, { recursive: true })
     renameSync(from, to)
-    return true
+    return 'moved'
   } catch (err) {
     log?.('Engine swap recovery: the cpu/ safety net could not be carried', { error: String(err) })
-    return false
+    return 'failed'
   }
 }
 
@@ -1879,7 +1941,11 @@ export function recoverEngineSwaps(
   // Never throws: the start goes on whatever a pin or a folder holds.
   const recover = (family: EngineFamily, plan: RuntimeDownloadPlan, main: boolean, net?: RuntimeDownloadPlan): void => {
     try {
-      recoverEngineFolder(rootPath, family, plan, main, logs, net)
+      // #986 review 3: a copy moved in is a new program at those paths (the session cache is empty at the
+      // start, but the rule is one: whatever moves a copy in drops its verdicts).
+      for (const moved of recoverEngineFolder(rootPath, family, plan, main, logs, net)) {
+        for (const p of moved.binaryPaths) invalidateBinaryVerification(p)
+      }
     } catch (err) {
       logs.warn?.('Engine swap recovery failed', { family, error: String(err) })
     }
@@ -1911,21 +1977,24 @@ function recoverEngineFolder(
   logs: RecoveryLogs,
   /** For a main build: its family's `cpu/` net build, to judge and resolve a net inside a copy. */
   netPlan?: RuntimeDownloadPlan
-): void {
+): RuntimeDownloadPlan[] {
   const { info, warn } = logs
+  /** #986 review 3: the plans whose install folder now holds another copy (the caller drops their verdicts). */
+  const changed: RuntimeDownloadPlan[] = []
   let dirs: EngineSwapDirs
   try {
     dirs = engineSwapDirs(rootPath, plan.extractTo)
   } catch {
-    return
+    return changed
   }
   const leftovers = [dirs.staging, dirs.previous]
-  if (!leftovers.some(present)) return
+  if (!leftovers.some(present)) return changed
   const where = { family, folder: basename(dirs.live), backend: plan.backend }
   const whole = (dir: string): boolean => isRealFolder(dir) && engineFolderComplete(plan, dir)
   const move = (from: string, to: string): boolean => {
     try {
       renameSync(from, to)
+      if (to === dirs.live && !changed.includes(plan)) changed.push(plan)
       return true
     } catch (err) {
       warn?.('Engine swap recovery: a folder could not be moved; left as it is', {
@@ -1945,7 +2014,9 @@ function recoverEngineFolder(
   const carryNet = (from: string, into: string = dirs.live): boolean => {
     if (!main) return true
     if (netPlan && isRealFolder(from)) recoverEngineFolder(rootPath, family, planInFolder(netPlan, join(from, 'cpu')), false, logs)
-    return carryCpuNetSync(from, into, warn, netPlan)
+    const carried = carryCpuNetSync(from, into, warn, netPlan)
+    if (carried === 'moved' && netPlan && !changed.includes(netPlan)) changed.push(netPlan)
+    return carried !== 'failed'
   }
   /**
    * Make room for `incoming` at the install name: move an incomplete install folder to `spare`. An
@@ -1973,37 +2044,38 @@ function recoverEngineFolder(
     const carried = carryNet(dirs.previous)
     for (const dir of leftovers) if (dir !== dirs.previous || carried) drop(dir)
     info?.('Engine swap recovery: the install is complete; its leftovers are deleted', where)
-    return
+    return changed
   }
   if (whole(dirs.staging)) {
     const vacated = vacate(dirs.previous, dirs.staging)
-    if (vacated === null) return
+    if (vacated === null) return changed
     if (!move(dirs.staging, dirs.live)) {
       if (vacated === 'moved') move(dirs.previous, dirs.live)
       else if (whole(dirs.previous)) move(dirs.previous, dirs.live)
-      return
+      return changed
     }
     const carried = carryNet(dirs.previous)
     if (carried) drop(dirs.previous)
     info?.('Engine swap recovery: the interrupted swap is finished', where)
-    return
+    return changed
   }
   if (whole(dirs.previous)) {
     const vacated = vacate(dirs.staging, dirs.previous)
-    if (vacated === null) return
+    if (vacated === null) return changed
     if (!move(dirs.previous, dirs.live)) {
       if (vacated === 'moved') move(dirs.staging, dirs.live)
-      return
+      return changed
     }
     // A net in the incomplete folder just moved aside comes back when the restored copy has none.
     const carried = vacated === 'moved' ? carryNet(dirs.staging) : true
     if (carried) drop(dirs.staging)
     info?.('Engine swap recovery: the interrupted swap is rolled back', where)
-    return
+    return changed
   }
   const carried = carryNet(dirs.previous)
   for (const dir of leftovers) if (dir !== dirs.previous || carried) drop(dir)
   info?.('Engine swap recovery: incomplete leftovers are deleted', where)
+  return changed
 }
 
 /**
