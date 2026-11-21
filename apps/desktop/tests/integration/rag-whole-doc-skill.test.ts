@@ -258,7 +258,7 @@ The tenant, Max Huber, must give notice three months before the contract ends.`
     }
   )
 
-  it.each(['When is each payment due?', 'Wann ist jede Zahlung fällig?', 'When must each obligation be fulfilled?'])(
+  it.each(['When must each obligation be fulfilled?', 'When must all invoices be paid?'])(
     'a LIST ask "%s" over the same doc keeps the whole read (chunk map-reduce, capped)',
     async (question) => {
       const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })

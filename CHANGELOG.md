@@ -115,8 +115,9 @@ from its first public `1.0.0` release onward.
   "When must …", "When should …", "When can …", "Who is the …" (or the German «Wann müssen …», «Wann endet …»,
   «Wer ist der …») was answered with the skill's whole report, which took 30 to 65 seconds. It is now
   answered like "When is the notice period?" already was: from the best-matching passages, in seconds. A
-  question that asks for a list ("When is each payment due?", «Wann ist jede Zahlung fällig?», "When must all invoices be
-  paid?") keeps the whole read, which "each" and «jede» had not done before (#981).
+  question that asks for a list through the new forms ("When must each obligation be fulfilled?", "When must all invoices be
+  paid?") keeps the whole read. Every question that was answered from the best-matching passages before is still answered
+  that way (#981).
 - **"Thanks for the summary" is answered with a short reply, not the summary again.** In a chat about
   documents, a thank-you or a compliment that names what it thanks you for ("Thanks for the summary",
   "Thanks for the help!", "Great job!", «Danke für die Hilfe», «Merci pour le résumé», «Gracias por el

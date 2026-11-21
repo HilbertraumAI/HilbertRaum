@@ -1056,12 +1056,16 @@ function isThanksObject(rest: readonly string[], sets: ThanksSets, fused: boolea
 /** The tokens read as one of the closed shapes in ONE language, every token accounted for. `tight[i]` says that
  *  only whitespace stands between token i-1 and token i in the message as typed. */
 function matchesThanksFor(tokens: readonly string[], tight: readonly boolean[], sets: ThanksSets): boolean {
-  // Form A, "thanks for (all) (the) (great) <noun>": the thanks phrase is the head (at most four words).
+  // Form A, "thanks for (all) (the) (great) <noun>": the thanks phrase is the head (at most four words). Everything
+  // after the preposition is one phrase typed with spaces only: "Thanks for that, summary" and "Thanks for all - minutes"
+  // are a thanks and a request (review round 2).
+  const tightFrom = (from: number, to: number): boolean => tight.slice(from, to).every(Boolean)
   if (!sets.turkish) {
     for (let i = 1; i <= 4 && i < tokens.length; i++) {
       if (
         sets.thanks.has(tokens.slice(0, i).join(' ')) &&
         sets.prep.has(tokens[i]) &&
+        tightFrom(i + 1, tokens.length) &&
         isThanksObject(tokens.slice(i + 1), sets, tokens[i] === 'fürs')
       )
         return true
@@ -1069,11 +1073,21 @@ function matchesThanksFor(tokens: readonly string[], tight: readonly boolean[], 
   } else {
     // Form A in Turkish word order: "(bu) <noun> için <thanks phrase>", or the thanks first: "<thanks>, (bu) <noun> için".
     const at = tokens.findIndex((t) => t === 'için' || t === 'icin')
-    if (at > 0 && sets.thanks.has(tokens.slice(at + 1).join(' ')) && isThanksObject(tokens.slice(0, at), sets, false))
+    if (
+      at > 0 &&
+      sets.thanks.has(tokens.slice(at + 1).join(' ')) &&
+      tightFrom(1, at + 1) &&
+      isThanksObject(tokens.slice(0, at), sets, false)
+    )
       return true
     if (at === tokens.length - 1 && at > 1) {
       for (let i = 1; i <= 4 && i < at; i++) {
-        if (sets.thanks.has(tokens.slice(0, i).join(' ')) && isThanksObject(tokens.slice(i, at), sets, false)) return true
+        if (
+          sets.thanks.has(tokens.slice(0, i).join(' ')) &&
+          tightFrom(i + 1, at + 1) &&
+          isThanksObject(tokens.slice(i, at), sets, false)
+        )
+          return true
       }
     }
   }
@@ -1191,8 +1205,11 @@ const REPORT_SHAPES: string[] = [
 ]
 
 /** Whole-document LIST-ALL deliverables (EN+DE): "list every …", "all the …", «sämtliche …», «Liste …». A
- *  deliverable for the needle veto (a list is never a single fact), but no report: #939 takes list notes for them. */
-const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'everything', 'sämtliche', 'auflisten']
+ *  deliverable for the needle veto (a list is never a single fact), but no report: #939 takes list notes for them.
+ *  «liste» is a bare substring as on master: it also matches inside "listen", "listed", "blister" and the German
+ *  plural «Listen», which cannot be told apart from it (a pre-existing false veto, recorded in known-limitations).
+ *  "all the" is the word-bounded `DELIVERABLE_SHAPE_RES` entry below (master matched it inside "shall the"). */
+const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'everything', 'sämtliche', 'liste', 'auflisten']
 
 /** Every deliverable shape the needle veto reads: the report shapes and the list-all shapes. */
 const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHAPES]
@@ -1202,25 +1219,32 @@ const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHA
 // alle?"); \balle\b matches the bare word without hitting 'alles'/'allen' (word boundary before the 's').
 // Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
 //
-// #981 (follow-ups wave 6, G-9): "each", "every", "which" (German «jede[nmrs]», «welche[nmrs]») and a bare "all" turn a
-// lookup question into a list ("When must each obligation be fulfilled?", "When must all invoices be paid?", "Who was
-// assigned which action items?"). All of them are WORD matches on the lower-cased question, and they only turn needles
-// into deliverables, the safe direction by the rule above. Two exceptions keep a plain lookup a lookup, because the
-// whole report is the #981 symptom: a FREQUENCY ("each month", "every other week", «jeden Monat», «jede weitere
-// Stunde»: the quantifier, then at most one adjective, then a time unit) is no list, and a relative or indirect
-// "which"/«welche» right after a comma ("Where does it say, which notice period applies?", «Gibt es eine Klausel, welche
-// die Haftung begrenzt?») asks for one fact. «liste» was a bare substring and matched inside "listed", "listener",
-// "listening", "blister", "glisten": the guard refuses a following d, n or r, which also loses the German plural
-// «Listen» (a recorded gap); «Liste», «Aufgabenliste» and «Fristenliste» still veto. Linear: no nested quantifier.
+// #981 (follow-ups wave 6): "all the" keeps master's meaning ("all these", "all their", "all those" too: no right
+// anchor) but needs a letter-free left edge, so "shall the", "call the", "install the" and "small the" no longer veto
+// a lookup ("When shall the tenant pay?"). This is the GENERAL veto: it reads every question, as on master.
+const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [/\balle\b/, /(?<![\p{L}\p{N}])all the/u]
+
+// #981 (follow-ups wave 6, G-9): the NEW veto. "each", "every", "which" (German «jede[nmrs]», «welche[nmrs]») and a bare
+// "all" turn a question that is a lookup ONLY through one of the new forms below into a list ("When must each
+// obligation be fulfilled?", "When must all invoices be paid?", "Who was assigned which action items?"). It never reads
+// a question that master's own lookup shapes already match: those stay lookups, so a question that master answered from
+// a few passages ("What is the clause which limits liability?", "First of all, when is the deadline?", "When is each
+// payment due?") is never turned into the whole report by this change (the #981 symptom). All are WORD matches on the
+// lower-cased question. Two exceptions keep a plain lookup a lookup: a FREQUENCY ("each month", "every 3 months",
+// "every other week", «jeden Werktag», «jede weitere Stunde»: the quantifier, then at most one word, then a time unit, a
+// weekday, or a German word ending in -tag, -woche, -monat, -quartal, -jahr, -stunde, -nacht, -abend, -morgen) is no
+// list, and a relative or indirect "which"/«welche» right after a comma ("Where does it say, which notice period
+// applies?") asks for one fact. Linear: no nested quantifier.
 const TIME_UNIT =
   '(?:times?|days?|weeks?|months?|quarters?|years?|mornings?|afternoons?|evenings?|nights?|hours?|minutes?|' +
-  'tag|woche|monat|quartal|jahr|mal|stunde)'
-const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [
-  /\balle\b/,
+  'weekdays?|weekends?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?|' +
+  'montags?|dienstags?|mittwochs?|donnerstags?|freitags?|samstags?|sonntags?|mal|' +
+  '\\p{L}*tage?|\\p{L}*(?:woche|wochen|monat|monate|quartal|quartale|jahr|jahre|stunde|stunden|nacht|nächte|' +
+  'abend|abende|morgen|wochenende))'
+const NEW_NEEDLE_VETO_RES: readonly RegExp[] = [
   /(?<![\p{L}\p{N}])all(?![\p{L}\p{N}])/u,
-  /liste(?![dnr])/u,
   new RegExp(
-    `(?<![\\p{L}\\p{N}])(?:each|every|jede[nmrs]?)(?![\\p{L}\\p{N}])(?!\\s+(?:\\p{L}+\\s+)?${TIME_UNIT}(?![\\p{L}\\p{N}]))`,
+    `(?<![\\p{L}\\p{N}])(?:each|every|jede[nmrs]?)(?![\\p{L}\\p{N}])(?!\\s+(?:[\\p{L}\\p{N}]+\\s+)?${TIME_UNIT}(?![\\p{L}\\p{N}]))`,
     'u'
   ),
   /(?<!,\s*)(?<![\p{L}\p{N}])(?:which|welche[nmrs]?)(?![\p{L}\p{N}])/u
@@ -1242,16 +1266,15 @@ const NEEDLE_SHAPES: string[] = [
 // Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
 // #939 review (S1): "find a" / "find an" as words, so "Find all deadlines" and "Find any deadline" (a list) are no
 // needles; a letter or digit on either side ends the match, as in the module's other Unicode-safe matches.
-//
-// #981 (follow-ups wave 6, G-9 = C2): the lookups the substring list above misses, as WORD-anchored forms (a letter
-// or digit on either side ends the match, so "somewhen", «wie schwer ist der» and «wer istanbul» never match).
-// Definite singular only, like «was ist der/die/das»: "Who are the parties?" or "When are the payments due?" are
-// left out on purpose. The German verb-second forms keep English and German routing the same («Wann endet der
-// Vertrag?» next to "When does the contract end?", #582). The each/every/which veto above turns "When must each
-// obligation be fulfilled?" back into a list.
-const NEEDLE_SHAPE_RES: readonly RegExp[] = [
-  /\bfinde\b/,
-  /(?<![\p{L}\p{N}])find an?(?![\p{L}\p{N}])/u,
+const NEEDLE_SHAPE_RES: readonly RegExp[] = [/\bfinde\b/, /(?<![\p{L}\p{N}])find an?(?![\p{L}\p{N}])/u]
+
+// #981 (follow-ups wave 6, G-9 = C2): the lookups the lists above miss, as WORD-anchored forms (a letter or digit on
+// either side ends the match, so "somewhen", «wie schwer ist der» and «wer istanbul» never match). Definite singular
+// only, like «was ist der/die/das»: "Who are the parties?" or "When are the payments due?" are left out on purpose. The
+// German verb-second forms keep English and German routing the same («Wann endet der Vertrag?» next to "When does the
+// contract end?", #582). A question that one of the shapes above matches is a lookup as before; the NEW veto above
+// reads only a question that is a lookup through these forms alone.
+const NEW_NEEDLE_SHAPE_RES: readonly RegExp[] = [
   /(?<![\p{L}\p{N}])when (?:must|should|was|can|could|shall)(?![\p{L}\p{N}])/u,
   /(?<![\p{L}\p{N}])who (?:is|was) the(?![\p{L}\p{N}])/u,
   /(?<![\p{L}\p{N}])wann (?:müssen|sollen|soll|war|wurde|kann|können|endet|beginnt|läuft)(?![\p{L}\p{N}])/u,
@@ -1264,14 +1287,18 @@ const NEEDLE_SHAPE_RES: readonly RegExp[] = [
  * cut would be missed). A deliverable verb vetoes it, so a summary/minutes/compare ask is never a needle.
  * #834: so does the every-mention example chip, recognised by its frame in every catalog (`isMentionChip`,
  * whatever word stands in its quotes): it asks for a list of every mention, and the German one held the
- * needle word «finde» while the other nine held none. Deterministic; the question is never logged.
+ * needle word «finde» while the other nine held none. #981 (follow-ups wave 6) is MONOTONE against master: every
+ * question that was a lookup on master still is one (the only change in that direction is the left edge of "all the");
+ * the new forms only add lookups, and their own each / every / which / all veto reads those added lookups alone.
+ * Deterministic; the question is never logged.
  */
 export function isNeedleShaped(question: string): boolean {
   const q = question.toLowerCase()
   if (isMentionChip(question)) return false
   if (DELIVERABLE_SHAPES.some((s) => q.includes(s)) || DELIVERABLE_SHAPE_RES.some((re) => re.test(q)))
     return false
-  return NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))
+  if (NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))) return true
+  return NEW_NEEDLE_SHAPE_RES.some((re) => re.test(q)) && !NEW_NEEDLE_VETO_RES.some((re) => re.test(q))
 }
 
 /**

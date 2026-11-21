@@ -1663,23 +1663,26 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   "when must/should/was/can/could/shall", "who is/was the", «wann müssen/sollen/soll/war/wurde/kann/können/endet/beginnt/läuft»
   and «wer ist/war der/die/das». "When must they give notice?" and «Wann endet der Vertrag?» are lookups now, the same in
   both languages. The forms are definite singular on purpose: "Who are the parties?", "When are the payments due?" and
-  "Who is responsible for the budget?" still get the whole read (slower, never wrong). A word-anchored veto turns a
-  lookup into a list when the question says "each", "every", "which", «jede[nmrs]» or «welche[nmrs]», or a bare "all"
-  ("When is each payment due?", «Wann ist jede Zahlung fällig?», "When must all invoices be paid?", "When must which
-  documents be submitted?"; "all" also covers "all the", "all these", "all their", "all of the"). Before #981 the first
-  two were lookups. Two exceptions keep a plain lookup a lookup: a **frequency** ("How much is the rent each month?",
-  "When is rent due every other week?", «Wann ist die Miete jeden Monat fällig?», «jede weitere Stunde»: the quantifier,
-  at most one adjective, then a time unit) is no list, and a relative or indirect "which" / «welche» right after a comma
-  ("Where does it say, which notice period applies?", «Gibt es eine Klausel, welche die Haftung begrenzt?») is no list
-  either. The other eight interface languages have no lookup list, so «¿Cuándo hay que avisar?» still gets the whole read
-  (#809). The list-all words «liste» and "all" are matched as words or word parts, not as pieces of other words: "shall",
-  "call", "install", "small" and "overall" hold no "all" word, and "listed", "listener", "listening" and "blister" no
-  «liste» (the guard refuses a following d, n or r). **Not covered:** the German plural «Listen» no longer vetoes by
-  itself (a «Liste» or «Aufgabenliste» does; «Wann sind die Listen fällig?» is a lookup); a report word inside another
-  word ("registration" holds «gist», "briefing" holds «brief») still makes the question a report; "Somewhen is fine"
-  still reads as a lookup through "when is"; and "Who's the tenant?" or "When's the deadline?" are no lookups (no
-  contraction forms). A report shape that holds a lookup word ("When is the rent review?": "review" is a report word)
-  stays a report.
+  "Who is responsible for the budget?" still get the whole read (slower, never wrong). A word-anchored veto turns such a
+  question into a list when it says "each", "every", "which", «jede[nmrs]» or «welche[nmrs]», or a bare "all" ("When must each
+  obligation be fulfilled?", "When must all invoices be paid?", "When must which documents be submitted?"). **The veto reads only
+  a question that is a lookup through one of the new forms.** A question that one of the old lookup shapes already matches
+  ("how much", "when is", "when does", «wann ist», «wo steht», «gibt es», …) is a lookup as on master, whatever else it says: "When is
+  each payment due?", «Wann ist jede Zahlung fällig?», "What is the clause which limits liability?", "First of all, when is the
+  deadline?" and "Does the document say anything at all about pets?" are answered from a few passages, as before #981, never
+  turned into the whole report (monotone against master; a test holds master's verdicts as literals). Two exceptions keep even a
+  new-form lookup a lookup: a **frequency** ("When must I pay every 3 months?", "every other Friday", «Wann sollen wir jeden
+  Werktag zahlen?», «jedes Wochenende»: the quantifier, at most one word, then a time unit, a weekday, or a German word ending in
+  -tag, -woche, -monat, -quartal, -jahr, -stunde, -nacht, -abend, -morgen) and a relative or indirect
+  "which" / «welche» right after a comma. The only veto that got narrower is "all the", a substring on master: it now needs a
+  letter-free left edge, so "shall the", "call the", "install the" no longer veto a lookup ("When shall the tenant pay?"), while
+  "all these" and "all their" still do. The other eight interface languages have no lookup list, so «¿Cuándo hay que avisar?»
+  still gets the whole read (#809). **Not covered:** the «liste» substring is master's, so it still vetoes inside "listed",
+  "listener", "listening", "blister" and the German plural «Listen» (a pre-existing false veto that cannot be told from
+  "listen"); a report word inside another word ("registration" holds «gist», "briefing" holds «brief») still makes the question
+  a report; "Somewhen is fine" still reads as a lookup through "when is"; "Who's the tenant?" and "When's the deadline?" are no
+  lookups (no contraction forms). A report shape that
+  holds a lookup word ("When is the rent review?": "review" is a report word) stays a report.
   **A4 (audit §3.2/§3.3) tuned this composition (SKA-8/SKA-12/SKA-23):**
   **(SKA-8)** the `intends()` predicate — the **W2 count-mismatch routing** gate, consulted only at the
   wrong doc count — was decoupled from `applies()` and made **vocabulary-shaped** (`routeMatch`) for the

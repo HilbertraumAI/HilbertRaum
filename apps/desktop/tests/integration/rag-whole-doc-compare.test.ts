@@ -734,8 +734,8 @@ describe("askDocuments — a bundled whole-document skill's fall-through turn ca
 
   // #981 (follow-ups wave 6): "When must they give notice?" held no needle word on master, so it ran the whole report over
   // the long lease (a chunk map-reduce, many calls, a capped stamp). It is a lookup now: one passage-search call, paragraph 1
-  // of the fence, the same downgrade as "When is the notice period?" above. "When is each payment due?" is a list and keeps
-  // the whole read (on master the word "each" did not veto the lookup).
+  // of the fence, the same downgrade as "When is the notice period?" above. "When must each payment be made?" is a list through
+  // the new veto and keeps the whole read ("When is each payment due?" stays a lookup, as on master).
   it('share-safe-review, "When must they give notice?" over a document too long to read whole: one call, not capped, stamped', async () => {
     const id = 'share-safe-review'
     const h = await makeFenceHarness([LONG_LEASE], 4096)
@@ -748,10 +748,10 @@ describe("askDocuments — a bundled whole-document skill's fall-through turn ca
     expect(msg.skillId).toBe(appId(id))
   })
 
-  it('share-safe-review, "When is each payment due?" over the same document: a list, the whole read', async () => {
+  it('share-safe-review, "When must each payment be made?" over the same document: a list, the whole read', async () => {
     const id = 'share-safe-review'
     const h = await makeFenceHarness([LONG_LEASE], 4096)
-    const msg = await ask(h, 'When is each payment due?', appId(id))
+    const msg = await ask(h, 'When must each payment be made?', appId(id))
     expect(h.runtime.calls).toBeGreaterThan(2)
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)

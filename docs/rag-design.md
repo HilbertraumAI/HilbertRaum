@@ -1515,7 +1515,7 @@ logged or audited; audit events stay ids/kinds/counts._
 > (KMP) chunk de-overlap, and the tree-ceiling `coverage.truncated` flip; **A3** (audit §8.2) inverted the
 > whole-doc gate so an `analysis:`-mode skill over a fully-chunked scope defaults to this engine
 > (`isNeedleShaped` downgrades to top-k only when the whole-doc read would truncate; since #981 it also reads
-> word-anchored "when must/should/…" and «wann endet/müssen/…» forms and an each / every / jede / welche veto,
+> word-anchored "when must/should/…" and «wann endet/müssen/…» forms and an each / every / jede / welche veto on those forms only,
 > see [`known-limitations.md`](known-limitations.md)); **R4** (audit §5.1)
 > made the symmetric-compare pair deterministic (A/B by import date). See §39's §-anchor legend for the
 > `audit §N.M` mapping.
@@ -6305,10 +6305,10 @@ noun first or the thanks first («Özet için teşekkürler», «Teşekkürler, 
 «sehr», «muy», «очень», «çok»), a PRAISE ADJECTIVE (attributive: no adverb, no interjection, no acceptance word such as
 «gut», «добре», «iyi», except "good" and «goed», which are attributive in their phrase) and one nominative noun, with only
 whitespace between the words, then at most a THANKS phrase ("Great
-summary, thanks!", "Great job!", «Gute Arbeit, danke»). A comma, dash or full stop between the praise and the noun
-ends it: the tokenizer drops punctuation, so "Great, list" and "Great list" were one token list, and an acceptance with
-a request ("Great, list", «Gut, Liste», «Отлично, таблицу», «Добре, таблицю») is the worst case, a request answered with
-a pleasantry (review round 1). It is never noun-first ("Summary, thanks!",
+summary, thanks!", "Great job!", «Gute Arbeit, danke»). A comma, dash or full stop between the praise and the noun, or between the preposition and what follows it ("Thanks for that,
+summary", "Thanks for all - minutes"), ends it: the tokenizer drops punctuation, so "Great, list" and "Great list" were one
+token list, and an acceptance with a request ("Great, list", «Gut, Liste», «Отлично, таблицу», «Добре, таблицю») is the worst
+case, a request answered with a pleasantry (review rounds 1 and 2). It is never noun-first ("Summary, thanks!",
 "Minutes please" are requests), and any other word keeps the request: "Thanks, now write the minutes",
 "Thanks for the summary of the risks", "Thanks for the summary and the minutes". Before #983 these ran a
 whole-document map-reduce with the thank-you as the target (8 calls for "Thanks for the summary" over a long
