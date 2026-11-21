@@ -1222,7 +1222,11 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `readVaultDescriptorChecked(path) → { kind: 'absent' | 'unreadable' | 'newer' (what, found) | 'ok'
   (descriptor) }` (#845); `readVaultDescriptor` is its back-compat face (`ok` → the descriptor, else
   null; a newer descriptor still counts as "a vault exists" for `isDescriptorUnreadable`, so no create
-  over it); `writeVaultDescriptor` (atomic: temp + fsync + rename). `vaultPathsFrom({configPath,dbPath,logsPath?})` →
+  over it); `writeVaultDescriptor` (atomic: temp + fsync + rename). **Byte-order mark (#974):** the
+  readers of `config/workspace.json`, `workspace/rekey-journal.json` (the format verdict's and the
+  recovery's) and `config/working-copy-lost.json` remove one leading U+FEFF before `JSON.parse`; a
+  second mark, or a file holding only the mark, still reads as unreadable. No writer writes a mark.
+  `vaultPathsFrom({configPath,dbPath,logsPath?})` →
   `VaultPaths { descriptorPath, encPath = <dbPath>.enc, dbPath, logsPath? }` (`logsPath` is optional
   and additive — older callers omit it; without it the rekey does not account for the rotated log).
 - **Rekey journal (on-disk, #241):** `workspace/rekey-journal.json` — `{ version: 1, staged: string[],

@@ -347,8 +347,9 @@ export class VaultDescriptorMissingError extends Error {
 }
 
 /**
- * Thrown by `unlockEncryptedVault` when `config/workspace.json` is on the drive but cannot be read (not JSON, a field
- * missing, or a UTF-8 byte-order mark in front of it) and the encrypted workspace file is NOT beside it (#955 item 1):
+ * Thrown by `unlockEncryptedVault` when `config/workspace.json` is on the drive but cannot be read (not JSON, or a field
+ * missing; #974: one UTF-8 byte-order mark in front of it no longer counts) and the encrypted workspace file is NOT
+ * beside it (#955 item 1):
  * no password can open anything here, yet the drive is not empty of a workspace either (a `.recovery` copy, a staged
  * `.enc.new` or stored documents may be under the key that file holds), so the create flow stays refused too.
  * Thrown before any password check and before anything is written. Content-free ON PURPOSE: the IPC layer maps it to
@@ -406,6 +407,17 @@ function numericVersion(v: unknown): number | null {
 }
 
 /**
+ * #974: `JSON.parse` of a small state file's text after ONE leading U+FEFF is removed. Node's `utf8` decoding keeps a
+ * UTF-8 byte-order mark, and `JSON.parse` refuses it, so a file an editor or a tool saved with one (Windows PowerShell
+ * 5.1 `Set-Content -Encoding utf8`, older Notepad, some sync and backup tools) read as unreadable although its JSON was
+ * intact. The readers of the descriptor, the rekey journal and the #875 marker use it; the app writes none of them with
+ * a BOM. A second mark, or a file holding only the mark, still throws.
+ */
+function parseJsonText(text: string): unknown {
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+}
+
+/**
  * What `config/workspace.json` holds (#845): no file (`absent`), a file that does not parse or lacks a field this
  * build needs (`unreadable`, e.g. a v2 without its wrapped data key), a format a NEWER build wrote (`newer`), or a
  * descriptor this build reads (`ok`).
@@ -429,7 +441,7 @@ export function readVaultDescriptorChecked(descriptorPath: string): VaultDescrip
   if (!existsSync(descriptorPath)) return { kind: 'absent' }
   let raw: unknown
   try {
-    raw = JSON.parse(readFileSync(descriptorPath, 'utf8'))
+    raw = parseJsonText(readFileSync(descriptorPath, 'utf8'))
   } catch {
     return { kind: 'unreadable' }
   }
@@ -504,7 +516,7 @@ function rekeyJournalVersion(vaultPaths: VaultPaths): unknown {
   const path = rekeyJournalPath(vaultPaths)
   if (!existsSync(path)) return undefined
   try {
-    return (JSON.parse(readFileSync(path, 'utf8')) as { version?: unknown } | null)?.version
+    return (parseJsonText(readFileSync(path, 'utf8')) as { version?: unknown } | null)?.version
   } catch {
     return undefined
   }
@@ -1261,7 +1273,7 @@ function readWorkingCopyLostMarker(vaultPaths: VaultPaths): WorkingCopyLostMarke
     return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? { kind: 'absent' } : { kind: 'other' }
   }
   try {
-    const m = JSON.parse(text) as { v?: unknown; enc?: unknown; cause?: unknown } | null
+    const m = parseJsonText(text) as { v?: unknown; enc?: unknown; cause?: unknown } | null
     if (m?.v === WORKING_COPY_LOST_VERSION && typeof m.enc === 'string') {
       return { kind: 'current', enc: m.enc, cause: markedLossCause(m.cause) }
     }
@@ -1292,7 +1304,13 @@ function writeWorkingCopyLostMarker(
     }
     renameSync(tmp, path)
   } catch (err) {
-    rmSync(tmp, { force: true })
+    // Best-effort, as `encryptFile`'s (#975 review nit): a temp this cannot remove (a directory at its name, a hold)
+    // threw from `rm` here and replaced the error being reported.
+    try {
+      rmSync(tmp, { force: true })
+    } catch {
+      /* the write's own failure is the one that propagates */
+    }
     throw err
   }
 }
@@ -1467,7 +1485,7 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
+    const parsed = parseJsonText(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
     if (parsed.version !== REKEY_JOURNAL_VERSION) {
       return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
     }

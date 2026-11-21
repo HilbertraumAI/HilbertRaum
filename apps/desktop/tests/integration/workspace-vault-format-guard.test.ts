@@ -2,20 +2,23 @@ import { describe, it, expect } from 'vitest'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join, relative } from 'node:path'
-import { openDatabase } from '../../src/main/services/db'
+import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
-import { decrypt, deriveKey, verifyKey } from '../../src/main/services/security/crypto'
+import { decrypt, deriveKey, generateDataKey, verifyKey } from '../../src/main/services/security/crypto'
 import {
   RECOVERY_SUFFIX,
   REKEY_JOURNAL_NAME,
   REKEY_SUFFIX,
   VaultDescriptorMissingError,
+  WORKING_COPY_LOST_MARKER,
   WorkspaceController,
   WorkspaceExistsError,
   cleanSidecars,
   encryptFile,
   readVaultDescriptorChecked,
+  rewrapVaultKey,
   shredFile,
+  stageRekey,
   unlockEncryptedVault,
   vaultFormatVerdict
 } from '../../src/main/services/workspace-vault'
@@ -80,6 +83,15 @@ function stagedFrame(vp: FreshVaultPaths): string {
 function rekeyJournal(vp: FreshVaultPaths, version: unknown, staged: string[]): string {
   const path = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
   writeFileSync(path, JSON.stringify({ version, staged, remove: [] }, null, 2), 'utf8')
+  return path
+}
+
+/** The three bytes of a UTF-8 byte-order mark (U+FEFF), which some editors and tools put in front of a file (#974). */
+const BOM = Buffer.from([0xef, 0xbb, 0xbf])
+
+/** The file at `path` with a byte-order mark put in front of it, the rest byte for byte (#974). */
+function prependBom(path: string): string {
+  writeFileSync(path, Buffer.concat([BOM, readFileSync(path)]))
   return path
 }
 
@@ -170,6 +182,19 @@ describe('a vault a newer build wrote is refused at startup and at unlock, and l
         arrange: (vp) => {
           const staged = stagedFrame(vp)
           return [staged, rekeyJournal(vp, 2, [staged])]
+        },
+        what: 'journal',
+        found: 2
+      }
+    ],
+    [
+      // #974: Node keeps a byte-order mark when it decodes UTF-8, and `JSON.parse` refuses it, so the format verdict
+      // read no version, and the recovery swapped the stage in and quarantined the journal as unreadable.
+      'a rekey journal of version 2 saved with a byte-order mark, and a staged .enc.new beside a v2 descriptor (before: read as no journal, swapped in)',
+      {
+        arrange: (vp) => {
+          const staged = stagedFrame(vp)
+          return [staged, prependBom(rekeyJournal(vp, 2, [staged]))]
         },
         what: 'journal',
         found: 2
@@ -406,6 +431,65 @@ describe('a password change re-reads the descriptor on disk before it writes (#8
   })
 })
 
+// #974: Node keeps a UTF-8 byte-order mark when it decodes a file, and `JSON.parse` refuses it, so each of the vault's
+// small JSON state files read as unreadable with one in front (the descriptor: the golden table above; the format
+// verdict's read of the rekey journal: the newer-journal row of the first table). One mark is removed before the
+// parse, by all four readers; the app writes none.
+describe('the vault state files read past one byte-order mark (#974)', () => {
+  it('a password change cut short after its commit, its journal saved with a byte-order mark: the start rolls it forward and quarantines nothing', () => {
+    const vp = lockedVault('fmtguard-974', PW, { legacyV1: true })
+    const { db, key } = unlockEncryptedVault(vp, PW)
+    updateSettings(db, { contextTokens: 7474 })
+    const dataKey = generateDataKey()
+    stageRekey(vp, db, key, dataKey)
+    rewrapVaultKey(vp, dataKey, 'next-password', FAST_KDF) // the COMMIT; the crash comes before the swap
+    db.close()
+    key.fill(0)
+    dataKey.fill(0)
+    shredFile(vp.dbPath) // the session the crash left, as the start's sweep removes it
+    cleanSidecars(vp.dbPath)
+    const journal = prependBom(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+      expect(existsSync(journal)).toBe(false)
+      expect(existsSync(`${journal}.corrupt`)).toBe(false)
+      ctl.unlock('next-password')
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(7474)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('the #875 marker saved with a byte-order mark is still this build’s: the lock screen shows its notice, the unlock consumes it', () => {
+    const vp = lockedVault('fmtguard-974', PW)
+    const enc = readFileSync(vp.encPath).subarray(8, 20).toString('base64') // the IV of `.enc`'s frame, which a marker names
+    const marker = join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER)
+    writeFileSync(marker, Buffer.concat([BOM, Buffer.from(JSON.stringify({ v: 1, enc, cause: 'lock' }), 'utf8')]))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
+      ctl.unlock(PW)
+      expect(ctl.takeWorkingCopyLost()).toEqual({ cause: 'lock', lostAt: expect.any(String) })
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // One mark only: the mark alone, or two marks in front of the JSON, is no file any build wrote.
+  it.each<[string, (json: Buffer) => Buffer]>([
+    ['the mark alone', () => BOM],
+    ['two marks in front of the JSON', (json) => Buffer.concat([BOM, BOM, json])]
+  ])('a key file holding %s still reads as unreadable', (_case, bytes) => {
+    const vp = lockedVault('fmtguard-974', PW)
+    writeFileSync(vp.descriptorPath, bytes(readFileSync(vp.descriptorPath)))
+    expect(readVaultDescriptorChecked(vp.descriptorPath)).toEqual({ kind: 'unreadable' })
+  })
+})
+
 // The over-broadening guards: what is NOT newer must go on as before.
 describe('what is not newer (#845)', () => {
   // `isDescriptorUnreadable` counts a newer descriptor as "a vault exists", so a v3 whose data file moved away is
@@ -513,12 +597,22 @@ describe('what is not newer (#845)', () => {
   // The golden descriptors (tests/fixtures/vault-golden/PROVENANCE.md): written by the released v0.1.65 and v0.1.50
   // code itself, on a scratch root, with a throwaway password. The release's key schedule must hold (derive, verify,
   // unwrap), a vault built around its data key must unlock and lock, and the descriptor must stay byte for byte.
+  // #974: so must one an editor saved again with a UTF-8 byte-order mark in front (Windows PowerShell 5.1
+  // `Set-Content -Encoding utf8`, older Notepad): it read as unreadable, and the unlock said the key file was missing.
   it.each([
-    ['v0.1.65', 'golden-throwaway-v0.1.65', 'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4'],
-    ['v0.1.50', 'golden-throwaway-v0.1.50', '1d524326f2f0721c282a2c26fddb1b22518b66929aabd9d3932ddf25a41a0a4c']
-  ])('the descriptor %s wrote reads as current, unlocks and stays byte for byte', (tag, password, sha256) => {
-    const fixture = readFileSync(join(__dirname, '..', 'fixtures', 'vault-golden', `${tag}-workspace.json`))
-    expect(createHash('sha256').update(fixture).digest('hex')).toBe(sha256) // the bytes PROVENANCE.md records
+    ['v0.1.65', 'v0.1.65', 'golden-throwaway-v0.1.65', 'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4', false],
+    ['v0.1.50', 'v0.1.50', 'golden-throwaway-v0.1.50', '1d524326f2f0721c282a2c26fddb1b22518b66929aabd9d3932ddf25a41a0a4c', false],
+    [
+      'v0.1.65, saved again with a byte-order mark (#974),',
+      'v0.1.65',
+      'golden-throwaway-v0.1.65',
+      'eace4d6f3982e42992f5e3757133bedbdc505d0e544101c89437fb28825848f4',
+      true
+    ]
+  ])('the descriptor %s wrote reads as current, unlocks and stays byte for byte', (_label, tag, password, sha256, bom) => {
+    const golden = readFileSync(join(__dirname, '..', 'fixtures', 'vault-golden', `${tag}-workspace.json`))
+    expect(createHash('sha256').update(golden).digest('hex')).toBe(sha256) // the bytes PROVENANCE.md records
+    const fixture = bom ? Buffer.concat([BOM, golden]) : golden
     const vp = freshVaultPaths('fmtguard-golden')
     writeFileSync(vp.descriptorPath, fixture)
     const read = readVaultDescriptorChecked(vp.descriptorPath)

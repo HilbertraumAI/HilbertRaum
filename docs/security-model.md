@@ -1515,8 +1515,11 @@ password. Four guards close this:
   with no `.enc` beside it (a stat says ENOENT; any other stat failure proves nothing), throws
   `VaultDescriptorUnreadableError` → `vault_descriptor_unreadable`, at the unlock and at a create
   over such a file. Its copy says not to delete the key file and never that no data is left: a
-  `.recovery`, an `.enc.new` or stored documents may still be there, and a file saved with a UTF-8
-  byte-order mark reads as unreadable (a separate issue).
+  `.recovery`, an `.enc.new` or stored documents may still be there. Since #974 one UTF-8
+  byte-order mark in front of the file (Windows PowerShell 5.1 `Set-Content -Encoding utf8`, older
+  Notepad) no longer makes it unreadable: the descriptor, the rekey journal (both readers) and the
+  #875 marker are read past one leading mark. Node keeps the mark when it decodes UTF-8, and
+  `JSON.parse` refused it. The app writes none of these files with a mark.
 
 ### Vault format versions (#845)
 

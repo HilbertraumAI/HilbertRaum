@@ -142,6 +142,10 @@ from its first public `1.0.0` release onward.
   backup. And when creating a workspace finds
   one on the drive after all, the lock screen no longer asks you to restart: it switches to the
   unlock screen for that workspace at once (#955).
+- **A key file saved with a byte-order mark opens.** If `config/workspace.json` was saved by a
+  program that adds a byte-order mark in front of the text (Windows PowerShell 5.1, older versions
+  of Notepad, some sync tools), the lock screen said the file can't be read, and no password could
+  open the workspace. It now opens normally (#974).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When
   Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
   running, the next document task in line started during that wait and was stopped a moment
