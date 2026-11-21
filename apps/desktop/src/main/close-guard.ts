@@ -19,7 +19,8 @@ import type { DocTaskStatus, SaveBeforeCloseResult } from '../shared/types'
 // ⌘Q, Dock Quit: explicit quit commands, which stop the tasks at once), on Lock now or on a session
 // end. On the X path the OCR window lives until the main window's `closed` (measured, follow-ups
 // wave 4 research B §0), so a Keep open loses nothing. A quit asked while the question is up (Ctrl+Q
-// or a signal on Linux) closes it and counts as Close anyway (review SF-1): explicit quits never ask.
+// on Linux, ⌘Q on macOS) closes it and counts as Close anyway (review SF-1): explicit quits never ask.
+// A Linux signal never reaches the question: it locks the workspace and ends the app at once (#964).
 //
 // #936: once the guard commits to a close that quits (after that question, or at once with
 // nothing to ask), it holds the document-task queue (`holdWork`): a quit the guard holds closes
@@ -33,8 +34,9 @@ import type { DocTaskStatus, SaveBeforeCloseResult } from '../shared/types'
 // (`performShutdown` → `beginLock`), so a save this guard waits for always lands before the lock.
 // A close that came from a quit (`before-quit` fired first) quits again after the save: the
 // prevented close cancelled that quit, and on macOS the app would otherwise stay open with no
-// window. The Windows `session-end`, macOS `powerMonitor 'shutdown'` and `uncaughtException`
-// paths stay synchronous (`shutdown.ts`): the OS kills the process, nothing can wait there.
+// window. The Windows `session-end`, macOS `powerMonitor 'shutdown'`, Linux signal and `quit`
+// (#964) and `uncaughtException` paths stay synchronous (`shutdown.ts`): the process ends, nothing
+// can wait there.
 //
 // Electron-free like `createAppLifecycleHandlers` (`index.ts` cannot be imported under vitest):
 // the window, `ipcMain`, the dialog and the copy are injected, and `tests/unit/close-guard.test.ts`
@@ -162,9 +164,10 @@ export function createCloseGuard(deps: CloseGuardDeps): CloseGuard {
   }
   /**
    * #935: the user's answer; a question that throws or rejects closes (as #888's dialog does), the save still runs.
-   * Review SF-1: an explicit quit never asks (owner call G-1), so a quit asked while the question is up (Ctrl+Q or a
-   * SIGTERM on Linux, ⌘Q on macOS) closes the dialog and counts as Close anyway: that quit has already closed the OCR
-   * window, and swallowing it would leave a signal quit waiting on someone to answer.
+   * Review SF-1: an explicit quit never asks (owner call G-1), so a quit asked while the question is up (Ctrl+Q on
+   * Linux, ⌘Q on macOS) closes the dialog and counts as Close anyway: that quit has already closed the OCR window, and
+   * swallowing it would leave the quit waiting on someone to answer. (A Linux signal never gets here: it locks the
+   * workspace and ends the app at once, #964.)
    */
   const askStopSafely = async (work: StoppingWork): Promise<StopWorkChoice> => {
     const quitAsked = new AbortController()

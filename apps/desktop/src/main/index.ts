@@ -1123,6 +1123,23 @@ app.whenReady().then(() => {
   // instance must not reach initBackend() — its workspace.init() crash-sweep is the very
   // thing that shreds the primary's live working DB.
   if (!isPrimaryInstance) return
+  // #964: the Linux legs. A SIGTERM (`kill`, `systemctl stop`), SIGINT (Ctrl+C) or SIGHUP (the terminal closed)
+  // locks the workspace at once and ends the app, as a Windows session end does; Electron's own handler made it an
+  // ordinary quit that the close guard's question could hold, and a second signal then killed the app unlocked.
+  // Registered HERE, after `ready`, never at module scope: Electron installs its own handlers for these signals
+  // after the main script has run and so replaces any listener registered at load time (measured on Electron 43.8.6
+  // Linux: a module-scope listener never fires; Electron's handlers are in place by `ready`). And FIRST in this
+  // callback, before anything that can throw (the back end, the protocol, the menu, the window), so a throw there
+  // cannot skip it. Never removed: removing the last listener leaves the signal at its default action, so the next
+  // one would kill the app with nothing locked. A lost session (the display or the D-Bus session bus gone, which is
+  // how a log-out usually arrives) emits neither `before-quit` nor `will-quit`, only `quit`: that leg locks if
+  // nothing has. Both share the quit closure (`createAppLifecycleHandlers`); `ctx` is read when they run.
+  if (process.platform === 'linux') {
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+      process.on(signal, () => lifecycle.onTerminationSignal(signal))
+    }
+    app.on('quit', () => lifecycle.onQuitEvent())
+  }
   perfMark('app_ready')
   // `app.getLocale()` is only meaningful after whenReady (R-L1: verified on Windows —
   // it returns a BCP-47 tag like "en-US"/"de"). Best guess until settings are readable.

@@ -252,25 +252,35 @@ and after (`architecture.md` "Electron fuses — design record (#562)"):
     key), is inside its validity window, and has an RSA key of at least 2048 bits, a P-256, P-384
     or P-521 key, or an Ed25519 key, and only when Node's list does not hold it already (by
     fingerprint). On one Windows machine that kept 94 of 120 and added 17.
-  - **What is trusted now, and the residual.** Node returns one list for the Root, the Intermediate
-    Certification Authorities and the Trusted People stores (the machine's and the user's) and
-    does not say which store a certificate came from, so the filter cannot keep only Windows' own
-    roots. Every self-signed CA that passes it is trusted, from any of those stores:
+  - **What is trusted now, and the residual.** Node returns one list for the Root and the
+    Intermediate Certification Authorities stores (the machine's and the user's) and the machine's
+    Trusted People store, and does not say which store a certificate came from, so the filter
+    cannot keep only Windows' own roots. `CurrentUser\TrustedPeople` is not read (Node 24.22.1's
+    source, and measured). Every self-signed CA that passes the filter is trusted, from any of the
+    stores Node reads:
     - roots that Windows still trusts and Chrome dropped (Entrust, the old DigiCert roots,
       VeriSign, Go Daddy);
-    - self-signed CAs that sit in an Intermediate or Trusted People store, which Windows does not
-      treat as roots (measured: "Microsoft TPM Root Certificate Authority 2014" is only in the
-      Intermediate stores, and the downloads trust it); and Windows' per-root purposes are not
-      carried over, so the time-stamping root counts as a TLS root;
-    - any CA a program running as the user puts in `CurrentUser\CA` or
-      `CurrentUser\TrustedPeople`: unlike `CurrentUser\Root`, Windows shows no confirmation for
-      those, so such a program can add a CA the downloads then trust. That is the reach
-      `NODE_EXTRA_CA_CERTS` gave it before the fuse went off.
+    - self-signed CAs that sit in an Intermediate store or the machine's Trusted People store,
+      which Windows does not treat as roots (measured: "Microsoft TPM Root Certificate Authority
+      2014" is only in the Intermediate stores, and the downloads trust it); and Node honours a
+      certificate's enhanced key usage property (a root an administrator set to "not for server
+      authentication" is left out) but not Windows' root-program chain policies, so the
+      time-stamping root counts as a TLS root;
+    - any CA a program running as the user puts in `CurrentUser\CA`: unlike `CurrentUser\Root`,
+      Windows shows no confirmation for it, so such a program can add a CA the downloads then
+      trust (the machine's stores need admin rights). That is the reach `NODE_EXTRA_CA_CERTS` gave
+      it before the fuse went off;
+    - a certificate an administrator distrusted in Windows' `Disallowed` store, when a Root or CA
+      store also holds it: Node never reads `Disallowed` (its source, an upstream TODO). Node's
+      bundled roots were never subject to it either.
 
     None of this can change what gets installed: every engine, model and OCR file is checked
     against a pinned SHA-256 before use, and the downloads send no credentials, so such a CA at
     most lets someone who intercepts the connection see which public file is fetched, or make the
-    download fail. Whether Node's read honours Windows' `Disallowed` store is not verified.
+    download fail. Kept by the owner's call on #961: narrowing the list would take a PowerShell
+    child process at the first download or a move to Chromium's network stack (`architecture.md`
+    "Electron fuses — design record (#562)" §8). Node's reader is checked again on each Electron
+    bump.
   - **The eMudhra block still applies.** Electron's patch
     `tls_adapt_the_upstream_spki_blocklist_for_electron.patch` adds the revoked eMudhra RSA
     intermediates to the SPKI blocklist that Node 24.22.1 applies to every TLS context through its
@@ -1317,7 +1327,8 @@ explicitly:
   such an `.enc` or a staged `.enc.new` is there; with no snapshot at all, see "Encrypted file
   missing" above). Confidentiality
   is chosen over mid-session durability here; the mitigations are the clean quit path
-  (lock-on-quit, the `uncaughtException` crash lock and the Windows session-end lock, #248) and
+  (lock-on-quit, the `uncaughtException` crash lock, the Windows session-end lock, #248, and the
+  Linux signal and lost-session lock, #964) and
   the safe-eject guidance above. The trade-off is unchanged since #892, but no longer silent: the
   next lock screen says the session was not locked (see "Working file gone or not a database"
   above). A quit, or a crash lock, on a drive too full for the lock's checkpoint (#876) ends here
@@ -1937,9 +1948,10 @@ re-encrypts (the bullet below).
   to the save exactly as above, so the unsaved question can still follow. No question on a close a
   quit started (Ctrl+Q, ⌘Q, Dock Quit: explicit commands that stop the tasks at once, as Lock now
   does, which asks nothing either), on the macOS red button (the app and its tasks keep running), or
-  on a session end. A quit asked while the question is up (Ctrl+Q, ⌘Q, a Linux signal if it arrives
-  as `before-quit`) closes the dialog through its `signal` (`trackQuitRequests`' `onRequest`) and
-  counts as Close anyway, whatever the dialog then answers: an explicit quit never asks, and it has
+  on a session end. A quit asked while the question is up (Ctrl+Q, ⌘Q; a Linux signal never reaches
+  it, it locks and ends the app at once, #964) closes the dialog through its `signal`
+  (`trackQuitRequests`' `onRequest`) and counts as Close anyway, whatever the dialog then answers: an
+  explicit quit never asks, and it has
   already closed the OCR window (measured on Electron 43.8.6 with the real window-modal dialog: the
   quit's close of the main window is still emitted and held, the dialog closes about 40 ms later, then
   the hold, the save and the quit). A deep index, an extract pass, a summary, a comparison or a
@@ -1954,8 +1966,9 @@ re-encrypts (the bullet below).
   deliberately no auto-answer timeout (a time limit with a destructive effect, WCAG 2.2.1). Pinned
   by `tests/unit/close-guard.test.ts` and, locally, the real-Electron smoke (`stop-keep`,
   `quit-hold`).
-- **OS session end locks the workspace — Windows handled, macOS registered but unverified (#248;
-  owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown, restart or log-off
+- **OS session end locks the workspace — Windows handled, Linux handled (#964), macOS registered but
+  unverified (#248; owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown,
+  restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above
   never ran and the process was killed with the working DB still plaintext on the drive — the next
   launch shredded the live working copy and the session delta was lost. The event Electron does
@@ -1966,9 +1979,15 @@ re-encrypts (the bullet below).
   without it) → `onSessionEnd` on the lifecycle factory
   (`main/shutdown.ts`), which runs `emergencyLock` — the `uncaughtException` crash path's
   synchronous best-effort lock, extracted and now shared: arm the lock latch, fire-and-forget the
-  local-API stop, flush the encrypted log, `workspace.shutdown()` (re-encrypt + shred; a
-  `plaintext_dev` DB is checkpointed + closed), then reap the registered sidecar children in its
-  own try. It runs exactly once, over the SAME closure as `will-quit`/`activate`: a session end
+  local-API stop, abort the plaintext and knowledge-pack operations in flight and shred the
+  decrypted transients they registered (#964 security round; no settle can be awaited, so a parser
+  that cannot cancel has its file shredded under it, as at the lock's bound), flush the encrypted
+  log, `workspace.shutdown()` (re-encrypt + shred; a `plaintext_dev` DB is checkpointed +
+  closed), log the lock's duration (content-free; after the flush it reaches the console and a
+  `plaintext_dev` log only), then reap the registered sidecar children in its own try. The
+  knowledge-pack service's `zim-transient/` cleanup is left to the next session start (kiwix-serve
+  runs until the reap). It runs exactly once, over the SAME closure as `will-quit`/`activate`: a
+  session end
   during a running quit teardown defers to that teardown (on Windows the ordering cannot occur —
   the quit closed every window before `will-quit`), and a `will-quit` after the session-end lock
   exits at once (a prevented quit that never exited would make macOS report the app as
@@ -1983,10 +2002,51 @@ re-encrypts (the bullet below).
   reads as `shutdown` first), whether a Dock-menu Quit also reaches it, and what a shutdown the
   system then CANCELS leaves behind (the app alive with the workspace locked and no window
   recreated on a Dock click — quit and relaunch) — owner live check pending (#226); until then
-  quit before shutting down. **Linux:**
-  nothing registered (the `powerMonitor` event exists there too; not ruled). Pinned by
-  `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings against
-  `will-quit`, the reap on the exit path, throw-safety, and the `index.ts` wiring (source text).
+  quit before shutting down. **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two
+  legs, both registered inside `app.whenReady` on Linux only, first in it after the second-instance
+  return (before the code that can throw), over the same closure. (1) A termination
+  signal — SIGTERM (`kill`, `systemctl stop`, a session manager), SIGINT (Ctrl+C), SIGHUP (the
+  terminal closed) — runs `onTerminationSignal`: `emergencyLock` once, then `app.exit(0)`. Electron's
+  own handler made each signal an ordinary, preventable quit with one shot: the close guard's
+  question or a failed save held it, and a second signal then killed the app with the working DB
+  plaintext (measured on Electron 43.8.6 Linux: exit 143, no handler run). The listeners must be
+  registered after `ready`: Electron installs its own `sigaction` handlers after the main script has
+  run, so a module-scope `process.on` is replaced and never fires (measured). They are never removed:
+  without a listener libuv leaves the signal at its default action, a kill. A signal during a running
+  quit teardown defers to it (that teardown owns the lock and exits from its own finally, bounded as
+  above); repeat signals do nothing. (2) A lost session — the D-Bus session bus gone (measured with a
+  private bus), or the display gone (read from Electron's source) — is how a log-out usually arrives:
+  Electron then exits with no `before-quit` and no `will-quit`, only `quit` (measured), so
+  `onQuitEvent` runs `emergencyLock` unless a lock already ran. A `quit` during a running quit
+  teardown (a log-out right after Ctrl+Q) locks at once: Electron ends the process as the event
+  returns, and the teardown never reaches its own lock (measured: one lock, exit 0). This leg runs
+  under Electron's fixed 10 s shutdown watchdog (`Browser::ExitWithCode`), whatever the session
+  manager allows: a lock that takes longer ends in a crash (`Failed to shutdown.`, status 133;
+  measured with a stand-in lock that blocks: 8 s finished, 12 s and 15 s crashed). The workspace
+  is then left unencrypted on the drive until the next start, which recovers it as after any cut
+  lock (the working file is checkpointed and closed before the re-encrypt). Where the host keeps
+  core dumps (systemd-coredump, apport), that crash may store a memory image of the main process,
+  vault key and decrypted pages included, on the host's disk (seen as "core dumped" under WSL; a
+  given desktop's setting is not checked). The lock writes about twice the database's size, so a
+  workspace of a few hundred MB on a slow stick may not fit; the lock's duration is logged after
+  it. The signal leg has no such bound: its lock runs before `app.exit` (a 5 s lock with three more
+  signals during it finished, status 0). Owner call (2026-11-21): keep this leg and document the
+  bound. A lost bus also brought a SIGTERM a few milliseconds after the `quit` lock in two of four
+  runs (most likely GLib's exit-on-close for its D-Bus connection): whichever comes first locks,
+  the other does nothing. A signal that lands in the last milliseconds of the exit, after the
+  lock, ends the process with status 143. Not covered: SIGKILL and SIGQUIT (Ctrl+\ in a
+  terminal), whose default action ends the process at once, SIGQUIT with a core dump where the
+  host keeps them; nothing locks. Same trade-off as Windows: no question, no save, and no partial
+  reply kept; the decrypted transients of the operations in flight are shredded (above). Not yet
+  checked: a real desktop log-out (GNOME, KDE), a lost display (needs Xvfb), the packaged AppImage
+  (`AppRun` is believed to `exec` Electron). The Linux `powerMonitor` leg (logind's
+  `PrepareForShutdown`, which would lock before the session goes, outside that watchdog) is not
+  registered: a poweroff reaches the two legs above, the lost session's under its 10 s bound.
+  Pinned by `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings
+  against `will-quit`, the reap on the exit path, throw-safety (a throwing log line before the lock
+  included), the transient sweep, the duration line, the Linux signal and `quit` legs (one lock
+  whatever came first), and the `index.ts` wiring (source text, including that the Linux legs sit
+  inside `app.whenReady`, before the protocol, the menu and the window).
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so

@@ -16970,11 +16970,30 @@ under `ELECTRON_RUN_AS_NODE`, loopback only):
   (AddTrust External CA Root, VeriSign Class 3 PCA, Thawte Premium Server CA). Electron's bundled
   list is curated (118 roots, where plain Node bundles 146) and leaves out roots Windows still
   trusts, such as Entrust G2 and three old DigiCert roots.
-- The list does not say which Windows store a certificate came from: Node merges the Root, the
-  Intermediate Certification Authorities (`CA`) and the Trusted People stores, of the machine and
-  of the user, into one list. So the filter cannot keep only Windows' own roots. `CurrentUser\Root`
-  makes Windows ask the user before a root is added; `CurrentUser\CA` and `CurrentUser\TrustedPeople`
-  do not, so any program running as the user can put a self-signed CA there without a prompt.
+- The list does not say which Windows store a certificate came from. Node 24.22.1's Windows reader
+  (`ReadWindowsCertificates`, `src/crypto/crypto_context.cc` L759-L806; Electron's Node patches do
+  not change what it reads) merges into one list the Root and the Intermediate Certification
+  Authorities (`CA`) stores at five locations (the machine, the machine's group policy, the
+  enterprise, the user, the user's group policy) and the Trusted People store at the three machine
+  locations only.
+  `CurrentUser\TrustedPeople` is not read (Node's comment: trusted end-entity certificates count for
+  server authentication in the local machine store only; measured: the two certificates there are
+  not in the list). So the filter cannot keep only Windows' own roots. `CurrentUser\Root` makes
+  Windows ask the user before a root is added; `CurrentUser\CA` does not, so any program running as
+  the user can put a self-signed CA there without a prompt. The machine's stores need admin rights.
+- Node checks each certificate's purposes as Chromium does (`IsCertTrustedForServerAuth`, L669-L708):
+  the enhanced key usage (EKU) property an administrator sets in certmgr, intersected with the EKU
+  extension. A certificate set to "not for server authentication" is left out (measured: the
+  machine's Trusted People certificate, an EFS certificate, is). Windows' root-program chain
+  policies (`CERT_ROOT_PROGRAM_CHAIN_POLICIES_PROP_ID`, property 105) are not read, and that is where
+  the time-stamping root's restriction lives (measured with `certutil -v -store Root`: "Microsoft
+  Time Stamp Root CA 2014" carries no EKU extension and no EKU property).
+- Node never opens the `Disallowed` store and subtracts nothing from the list (its TODO at
+  L761-L762: "support disallowed (revoked) certificates"), so a certificate distrusted there stays
+  in the list when a Root or CA store also holds it. Node's bundled roots were never subject to
+  `Disallowed` either. Both `Disallowed` stores are empty on the measuring machine. Read from
+  Node's source (#961), not measured: the self-cleaning measurement script writes to
+  `CurrentUser\CA` and `CurrentUser\Disallowed` and was not run (G-5 below).
 - With the filter below: 120 read, 94 kept (10 not self-signed, 8 outside their validity, 6 not a
   CA, 2 RSA keys under 2048 bits left out; the signature check and the EC curve list, added after
   the review, leave out nothing more here), 17 added: GlobalSign Root CA, Starfield Class 2,
@@ -17029,11 +17048,24 @@ under `ELECTRON_RUN_AS_NODE`, loopback only):
   a store with nothing usable or new, or a list Node refuses keeps the default trust. It logs one
   line: counts only (certificates read, kept, added), or an error code, never a certificate or a
   message. The process does not try again.
-- Route 2, Electron's `net.fetch` (Chromium's stack, the OS proxy), was not taken: every
-  downloader's Range, streaming and abort handling would need re-testing, and it bypasses Node's
-  `connect`, so the offline tripwire would stop seeing the downloads.
+- Route 2, Electron's `net.fetch` (Chromium's verifier, which reads Windows' stores by role and
+  checks `Disallowed` first), was not taken: every downloader's Range, streaming and abort handling
+  would need re-testing; `net.fetch` rejects `redirect: 'manual'` ("Redirect was cancelled",
+  Electron 43.8.6 `net-client-request.ts`), which the downloads' per-hop redirect checks rely on;
+  it bypasses Node's `connect`, so the offline tripwire would stop seeing the downloads; and it
+  brings no proxy support either, since the app runs Chromium with `--no-proxy-server` (#567).
 - `electron-builder.yml` turns `EnableNodeOptionsEnvironmentVariable` off. Wire `001011001` →
   `000011001`.
+
+**Decision on #961** (follow-ups wave 5 gate G-5, 2026-11-20: the default, which the owner saw and
+let stand): keep the union, and say exactly what is and is not read (the Facts above). Narrowing to
+Windows' Root stores and honouring `Disallowed` would take a second source per store, a PowerShell
+or `certutil` child process at the first download (about 1 s measured, a Windows-only branch on the
+download path, antivirus and AppLocker failure modes, localized `certutil` output), or route 2.
+Integrity is pinned, so both residuals touch which public file is fetched and whether a download
+succeeds, not what gets installed. The script that would measure `Disallowed` changes the OS trust
+store and was not run. Re-read Node's `ReadWindowsCertificates` on each Electron bump: if its
+`Disallowed` TODO lands, that residual goes away with no change here.
 
 **What the fuse governs now.** Off, the packaged main process reads neither `NODE_OPTIONS` (it
 ignored all but `--http-parser` and `--max-http-header-size` already, §3) nor `NODE_EXTRA_CA_CERTS`,
@@ -17043,10 +17075,12 @@ which Electron unsets. An unpackaged development build is not fused and reads bo
 any store Node reads, not only Windows' roots. The residuals:
 - A root that Windows still trusts but Chrome dropped (Entrust, the old DigiCert roots, VeriSign,
   Go Daddy) is trusted for the in-app downloads.
-- A self-signed CA in an Intermediate or Trusted People store is trusted too, though Windows does
-  not treat it as a root: the Microsoft TPM root is the measured case. Node also reads
-  certificates only, not Windows' per-root purposes, so the time-stamping root counts as a TLS
-  root.
+- A self-signed CA in an Intermediate store, or in the machine's Trusted People store, is trusted
+  too, though Windows does not treat it as a root: the Microsoft TPM root is the measured case.
+  Node honours a certificate's EKU property but not Windows' root-program chain policies, so the
+  time-stamping root counts as a TLS root.
+- A certificate an administrator distrusted in `Disallowed` stays trusted when a Root or CA store
+  also holds it: Node never reads `Disallowed`.
 - A program running as the user can add a CA to `CurrentUser\CA` without Windows' root-install
   prompt, and the downloads then trust it. That is the same reach `NODE_EXTRA_CA_CERTS` gave such a
   program before the fuse went off, so turning the fuse off did not close that route; it moved it.
@@ -17055,7 +17089,7 @@ no credentials, and the eMudhra block applies whatever the list holds, so none o
 what gets installed. At most it lets someone who can intercept the connection see which public file
 is being fetched, or make the download fail. Narrowing the list to Windows' Root stores would need
 a second source for the store of origin (a `certutil` or PowerShell read in a child process at the
-first download); not done.
+first download); not done ("Decision on #961" above).
 
 **What stops working.** A root that reaches the app only through `NODE_EXTRA_CA_CERTS`, and is not
 in the OS store, no longer counts in a packaged build: downloads behind such a proxy fail with "fetch
@@ -17091,10 +17125,11 @@ each fail `packaging.test.ts`.
   the read runs on the main thread at the first download; if it is slow or asks for anything, it
   blocks there. Owed to the Mac walk, beside #887/#888.
 - The trust widening above: roots Windows trusts and Chrome dropped, self-signed CAs from the
-  Intermediate and Trusted People stores, and the silent `CurrentUser\CA` route; pinned SHA-256
-  keeps integrity.
-- Whether Node's Windows read honours the `Disallowed` store is not verified (both are empty on the
-  measuring machine, and Node's source was not read).
+  Intermediate stores and the machine's Trusted People store, the silent `CurrentUser\CA` route,
+  and `Disallowed` not honoured; pinned SHA-256 keeps integrity.
+- `Disallowed` is not honoured: Node 24.22.1 never opens it (`ReadWindowsCertificates`, its TODO at
+  L761-L762). Read from the source, not measured (the measuring script changes the OS trust store;
+  G-5). Re-read `ReadWindowsCertificates` on each Electron bump.
 - A store read that fails is not retried in that process (by design: one log line); behind a TLS
   scanner the downloads then fail until the app restarts.
 - **Owed:** the packaged download behind Norton (a `--win dir` build with `NODE_EXTRA_CA_CERTS`

@@ -59,6 +59,9 @@ npm test            # the whole suite (root; delegates to the apps/desktop works
 npm run typecheck
 npm run test:coverage  # optional: suite + V8 coverage report (writes coverage/, gitignored; not a CI gate)
 ```
+On Linux, Ctrl+C in `npm run dev` or electron-vite's restart (a SIGTERM) runs the emergency lock and ends the app at
+once, not the normal quit (#964): the workspace locks (a `plaintext_dev` one is checkpointed and closed), and a review
+change still being saved or work in flight is dropped.
 
 **Behind a TLS-intercepting corporate proxy, `npm ci` can hang silently.** Run the one-shot
 bootstrap `scripts/setup-dev.{ps1,sh}` instead of a bare `npm ci`: it probes for and sets
