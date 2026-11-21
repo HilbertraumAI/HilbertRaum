@@ -27,6 +27,15 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-11-21 — the 2026-11-20 follow-ups wave 5 entry retired verbatim (wave closed)
+
+Retired from `BUILD_STATE.md` on 2026-11-21, when the wave closed (PR #972 merged as `17dc517d`, the last
+of PRs #967–#972); a short outcome entry with the open follow-ups (#973–#983) replaces it there. Its records
+are listed in that entry. Citations of this entry now resolve here. Text below is byte-identical to what was
+removed.
+
+_2026-11-20 — **Follow-ups wave 5 (#952–#964, the follow-ups wave 4 left): in progress.** Six PRs: T #957 #960, S #958 #959, V #954 #955 #956, G #962 #963, N #952 #953, L #964 #961; plan and ledger in `tmp/followups-wave-5/` (gitignored). This line becomes the outcome entry when the wave closes._
+
 ## 2026-11-20 — the closed 2026-10-14 #678 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-11-20 (preamble budget, making room for the follow-ups wave 5 line). Its
