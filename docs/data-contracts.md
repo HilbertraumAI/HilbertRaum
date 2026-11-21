@@ -2528,7 +2528,9 @@ whole renderer-visible surface.
   `assets.ts` `EngineSwapDirs { live, staging, previous }` + `engineSwapDirs(rootPath, extractTo)` (the exact
   `<live>.new` / `<live>.old` siblings, contained by `resolveWithinRoot`; refuses an install folder that is
   the drive root), `planInFolder(plan, dir)` (the plan rebased, same marker keys), `engineFolderComplete(plan,
-  dir?)` (marker parses AND every required file present); `runtime-download.ts` `stageEngineInstall(plan,
+  dir?)` (the marker parses AND every file its `binaries` map records is present; the plan's required files
+  only for a marker without the map, review round 2); `InstallStep.cpuNet?` (a main build's net plan, which a
+  job recovers, guards and carries whatever it installs); `runtime-download.ts` `stageEngineInstall(plan,
   stagingDir, { extract?, signal?, log? })` (extract + checks + hashes + flush + marker inside `stagingDir`;
   the app-update plan's W-30 install reuses it), `engineFolderDeletesSettled()`, `recoverEngineSwaps(rootPath,
   manifestsDir, { platform?, arch?, log?, warn? })` (called in `index.ts` before any engine is resolved,

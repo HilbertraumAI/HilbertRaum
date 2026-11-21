@@ -6094,6 +6094,10 @@ in place on a read-only drive) stays the app-update plan's.
    `engineFolderComplete`), never mere existence: the install folder can exist empty (prepare-drive,
    the archive's download, a net's folder).
 3. **Un-mark before deleting:** every delete of a copy removes its marker first.
+   *Review round 2:* a copy is judged by ITS OWN marker: the marker parses and every file its `binaries`
+   map records is there (the plan's list only for a marker without the map). Judged by the current pin's
+   list, an old copy that lacks a file a newer pin adds read as incomplete, and the start deleted it
+   instead of rolling back to it (and finished an update it should have dropped).
 4. **No rename onto an existing folder:** a stale `.old` is deleted (marker first) before the swap, and
    one that cannot go fails the step before the install folder is touched.
 
@@ -6134,9 +6138,12 @@ in place on a read-only drive) stays the app-update plan's.
   of 50 ms doubling to 1 s, 12 s in all; elsewhere the first refusal stands. A refused first rename
   touches nothing; a refused second one moves `.old` back. Both end the step `filesInUse`
   (`main.engine.filesInUse`, "try again in a minute") with the installed copy as it was. Only when `.old`
-  cannot be moved back either do both copies stay; the install folder is then gone for the moment, and
-  the next job in the session (the screen offers the install) or the next start moves the new copy in,
-  so "try again" holds there too. Deletes of a copy (`removeEngineFolder`) get Node's own `rm` retries
+  cannot be moved back either do both copies stay; the install folder is then gone for the moment. The
+  next job (the screen offers the install) and the next start first finish such a swap with the start's
+  rule, for every folder of the job's families, the main build's nested net folder included (review
+  round 2). Their renames are tried once, without the waits a job's renames get, so "try again in a
+  minute" holds once the holder has let go; while it still holds a folder, the job ends `filesInUse`
+  again with nothing touched. Deletes of a copy (`removeEngineFolder`) get Node's own `rm` retries
   on Windows, 15 tries of 100 ms more each (12 s), for a scanner still reading a failed copy.
 - **The spawn gate's bound is not the worst case (review round 1).** One step can take the extractor's
   5 minutes plus several 12 s rename budgets (the archive's move, the flatten, the swap's renames, a move
@@ -6153,15 +6160,23 @@ in place on a read-only drive) stays the app-update plan's.
   transcriber slot and the engine check resolve a binary): for every family's host build, the main
   build before its net, and only the exact names `<os>.new` and `<os>.old` (never a pattern: frozen in
   the first Kit release, it must leave the app-update plan's `<os>@<pin>/` alone):
-  - install complete → carry `.old/cpu` if missing (main build), delete `.new` and `.old`;
+  - install complete → carry `.old/cpu` when the install has no whole net (main build), delete `.new`
+    and `.old`;
   - else `.new` complete → move the incomplete install to `.old`, `.new` in, carry, delete `.old`;
   - else `.old` complete → move the incomplete install to `.new`, `.old` back, delete `.new`;
   - else delete both (an incomplete `.old`'s `cpu/` carried first).
 
   An incomplete leftover already at the spare name is deleted first, synchronously and marker first
   (its `cpu/` net carried into the install folder before); it used to make the start give up, so a
-  broken install folder stayed broken on every start (review round 1). Only two whole copies beside an
-  incomplete install folder are left as they are.
+  broken install folder stayed broken on every start (review round 1). When the spare name holds a
+  WHOLE copy, the incomplete install folder holds no engine and is the one deleted (its `cpu/` net carried
+  into the copy about to move in first): two whole copies beside an empty install folder used to stay
+  for good, every start and every job (review round 2).
+
+  The `cpu/` carry (start and job) moves the net when the install's `cpu/` is not a WHOLE net by its own
+  marker, deleting an incomplete one first (an empty `cpu/` used to shadow the only net in `.old`, which
+  then went). Before carrying out of a copy, a net swap left unfinished inside it (`<copy>/cpu.new`,
+  `cpu.old`) is finished or rolled back there, so whole nets never go with the copy (review round 2).
 
   Renames run synchronously, once each: a refusal is logged as a warning and the layout left as it is,
   never worse (a refused `.new` → install falls back to a complete `.old`). Deletes run in the
@@ -6169,18 +6184,23 @@ in place on a read-only drive) stays the app-update plan's.
   family's resolver at the complete copy); not built.
 - **Gates:** `assertCommercialDrive` fails a Kit with a leftover `<extract_to>.new` or `.old` beside any
   pinned build (the net's `cpu.new` / `cpu.old` included), and the Kit gate scripts' pre-flight
-  (`build-commercial-drive.{ps1,sh}`) names it too.
+  (`build-commercial-drive.{ps1,sh}`) names it too, the knowledge-pack tools' folders included (their own
+  list, held to the yaml by `script-drift.test.ts`). Its advice "start the app on this drive once" works
+  for the builder's own OS only: the start recovers this host's builds.
 
 **Residuals.** exFAT and an antivirus holding a new file are not measured here (the owed T8.5c walk on
-a real stick). A start rename refused by a lock waits for the next start. A Kit whose install folder is
-itself a junction gets a real folder from the swap (the junction's target is left as it was). An
-interrupted net swap the start could not repair, followed by a main update in the same session, would
-delete the old net with `.old`. A dangling symbolic link at a leftover name is what the PowerShell Kit
+a real stick). The start's renames, and the job's own recovery's, are tried once, without retries (the
+start never waits on a lock): a refused one waits for the next start or job. With a junction at the
+install folder (dev kits only; a real Kit has no links there), the swap renames the junction itself to
+`.old` and moves a real folder in, and the main build's carry then moves `cpu/` out of the junction's
+TARGET into the new folder: the target loses its net (on another volume the carry fails, EXDEV, and
+`.old` stays for the start). A dangling symbolic link at a leftover name is what the PowerShell Kit
 gate's `Get-Item -Force` check is for; this machine cannot create one (no symlink privilege), so only
 the junction case is exercised here. Not modelled: two hosts writing one drive at once.
 
-Tests: `engine-swap.test.ts` (twelve crash layouts run through the recovery, the incomplete spare
-included; the exact-names, marker-first, refused-rename and warning rows; in a job: the `cpu/` carry and
+Tests: `engine-swap.test.ts` (eighteen crash layouts run through the recovery, the incomplete spare,
+two whole copies beside an empty install, a net swap inside `.old`, a pin that adds a file and an empty
+`cpu/` included; a job over two whole copies and a retry that plans the main build alone; the exact-names, marker-first, refused-rename and warning rows; in a job: the `cpu/` carry and
 the marker inside `.new` at the first rename, stale leftovers, a held handle waited out on Windows, the
 rollback, the stranded case and its retry, a retry that fails after a keep-both, a job after a refused
 carry, a refused carry with both builds in one job, a first install, a net-only reinstall, a cancel
