@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   performShutdown,
   createAppLifecycleHandlers,
@@ -8,11 +8,12 @@ import {
   SHUTDOWN_OVERALL_DEADLINE_MS
 } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
-import { workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
+import { WorkspaceController, workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { tempRoot } from '../helpers/db-fixtures'
 import { until } from '../helpers/hang-budget'
+import { ENCRYPTION_REQUIRED, lockedVault } from '../helpers/vault-fixtures'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 // REL-4 (full-audit-2026-06-29 follow-up): the QUIT teardown must abort in-flight chat/RAG streams
@@ -1010,36 +1011,50 @@ describe('overall teardown deadline (#238 / #230)', () => {
 })
 
 // #956: the quit teardown's failure lines follow the workspace lock's rule (`failureForLog`, whose rule is
-// failure-for-log.test.ts's): a Node file error logs its code and bare system call, never its message, which names the
-// drive's paths and lands in the log Diagnostics hands out. The two arms a real file error reaches: the lock at quit and
-// the synchronous emergency lock (a session end, a crash), both meeting a full drive at the re-encrypt.
+// failure-for-log.test.ts's): a file error logs its code and bare system call, never its message, which names the
+// drive's paths and lands in the log Diagnostics hands out. The two arms a failed lock reaches: the lock at quit and the
+// synchronous emergency lock (a session end, a crash). Review R F-5: through a REAL controller whose re-encrypt meets a
+// full drive, so the arm gets what the controller throws, a `VaultLockError` that carries the cause's code in its
+// content-free `failure` (a stand-in throwing the raw file error left that branch of `failureForLog` unpinned here).
 describe('a quit failure line names no path (#956)', () => {
-  const tmp = join('C:', 'Users', 'someone', 'HilbertRaum', 'workspace', 'hilbertraum.sqlite.enc.tmp')
-  const fullDrive = (): Error =>
-    Object.assign(new Error(`ENOSPC: no space left on device, write '${tmp}'`), { code: 'ENOSPC', syscall: 'write', path: tmp })
-
   type QuitLog = { error: (message: string, meta?: unknown) => void; info: (message: string, meta?: unknown) => void }
+
+  /** An unlocked controller over a real vault whose every re-encrypt fails as a full drive does, naming the temp. */
+  function fullDriveWorkspace(): { root: string; workspace: WorkspaceController } {
+    const vp = lockedVault('shutdown-956', 'pw')
+    const fullDrive = (_src: string, dest: string): void => {
+      throw Object.assign(new Error(`ENOSPC: no space left on device, write '${dest}.tmp'`), {
+        code: 'ENOSPC',
+        syscall: 'write',
+        path: `${dest}.tmp`
+      })
+    }
+    const workspace = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false, fullDrive)
+    workspace.init()
+    workspace.unlock('pw')
+    return { root: vp.root, workspace }
+  }
 
   it.each<[string, (ctx: AppContext, log: QuitLog) => Promise<void> | void]>([
     ['the lock at quit', (ctx, log) => performShutdown(ctx, { inFlightStreams: new Map(), detachVaultKey: () => {}, log })],
     ['the emergency lock', (ctx, log) => emergencyLock(ctx, { detachVaultKey: () => {}, killSidecarChildren: () => {}, log })]
-  ])('%s logs a file error by its code, not its path', async (_arm, run) => {
-    const ctx = {
-      ...fakeCtx([]),
-      workspace: workspaceStandIn(
-        {},
-        {
-          shutdown: () => {
-            throw fullDrive()
-          }
-        }
-      )
-    } as unknown as AppContext
+  ])('%s logs a failed lock by its cause’s code, not its path', async (_arm, run) => {
+    const { root, workspace } = fullDriveWorkspace()
+    const ctx = { ...fakeCtx([]), workspace } as unknown as AppContext
+    const lines: Array<[string, unknown]> = []
     const errors: Array<[string, unknown]> = []
-    await run(ctx, { error: (message: string, meta?: unknown) => void errors.push([message, meta]), info: () => undefined })
+    await run(ctx, {
+      error: (message: string, meta?: unknown) => {
+        errors.push([message, meta])
+        lines.push([message, meta])
+      },
+      info: (message: string, meta?: unknown) => void lines.push([message, meta])
+    })
     const lock = errors.filter(([message]) => /lock/i.test(message))
     expect(lock).toHaveLength(1)
-    expect(lock[0][1]).toEqual({ error: 'Error', code: 'ENOSPC', syscall: 'write' })
-    expect(JSON.stringify(errors)).not.toContain('hilbertraum.sqlite')
+    expect(lock[0][1]).toMatchObject({ error: 'VaultLockError', code: 'ENOSPC', syscall: 'write' })
+    const text = JSON.stringify(lines)
+    expect(text).not.toContain('hilbertraum.sqlite')
+    expect(text).not.toContain(basename(root))
   })
 })
