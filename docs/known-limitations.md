@@ -1680,7 +1680,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   "which" / «welche» right after a comma. The only veto that got narrower is "all the", a substring on master: it now needs a
   letter-free left edge, so "shall the", "call the", "install the" no longer veto a lookup ("When shall the tenant pay?"), while
   "all these" and "all their" still do. The other eight interface languages have no lookup list, so «¿Cuándo hay que avisar?»
-  still gets the whole read (#809). **Not covered:** the «liste» substring is master's, so it still vetoes inside "listed",
+  still gets the whole read (#809). **A lookup answers from the passages the search finds**, and across languages the
+  search can miss the one that holds the answer: «Wann müssen wir kündigen?» over an English lease found the preamble and
+  Art. 7, not the notice clause in Art. 34 (two runs, the 4B), and the answer then said the lease does not state when to give
+  notice, while "When must they give notice?" found Art. 34 and the date. When an answer says something is not in a document
+  written in another language, ask again in the document's language. **Not covered:** the «liste» substring is master's, so it still vetoes inside "listed",
   "listener", "listening", "blister" and the German plural «Listen» (a pre-existing false veto that cannot be told from
   "listen"); a report word inside another word ("registration" holds «gist», "briefing" holds «brief») still makes the question
   a report; "Somewhen is fine" still reads as a lookup through "when is"; "Who's the tenant?" and "When's the deadline?" are no
