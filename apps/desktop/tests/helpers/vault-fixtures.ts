@@ -371,6 +371,29 @@ export function newerPlaintext<T extends VaultPaths>(vp: T): T {
   return vp
 }
 
+/**
+ * #985: the workspace database at `path` (it holds the app schema) as a NEWER build can leave it: `PRAGMA user_version`
+ * set to `userVersion` (default one above this build's `SCHEMA_VERSION`) and, with `unparseable` (the default), one
+ * index whose `sqlite_schema` text ends in a clause no SQLite knows, written through `writable_schema`. Then
+ * `PRAGMA user_version` still reads, and every schema read fails with SQLITE_CORRUPT ("malformed database schema"), as
+ * app-update review 4 measured (re-measured on node:sqlite's SQLite 3.50.4). Through a raw handle (no migrations),
+ * closed again: as the last connection it checkpoints the WAL into the file and removes both sidecars.
+ */
+export function writeNewerSchema(path: string, opts: { userVersion?: number; unparseable?: boolean } = {}): void {
+  const raw = openRawDb(path)
+  try {
+    raw.exec(`PRAGMA user_version = ${opts.userVersion ?? SCHEMA_VERSION + 1};`)
+    if (opts.unparseable ?? true) {
+      raw.exec('CREATE INDEX w985_future ON settings(key);')
+      raw.exec('PRAGMA writable_schema = ON;')
+      raw.exec("UPDATE sqlite_schema SET sql = 'CREATE INDEX w985_future ON settings(key) FUTURE_CLAUSE' WHERE name = 'w985_future';")
+      raw.exec('PRAGMA writable_schema = OFF;')
+    }
+  } finally {
+    raw.close()
+  }
+}
+
 export interface WorkspaceIpcCtxOptions {
   /** `ctx.runtime.stop` (default: resolves at once). */
   stopRuntime?: () => Promise<void>

@@ -1222,7 +1222,9 @@ explicitly:
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
   good `.enc`). Anything not matching that narrow signature is shredded as before, as long as an
-  encrypted snapshot is there (with none at all, see "Encrypted file missing" below).
+  encrypted snapshot is there (with none at all, see "Encrypted file missing" below). A working
+  file or `.recovery` a newer build stamped (#985) is kept and never rolled forward by this build:
+  see "Vault format versions" below.
   When the salvage cannot judge or move the fresh copy safely because a program holds the
   `.recovery` file, the app **refuses to open** rather than losing it (#242). Two legs: at
   startup, if the move-aside cannot land — another program holds the spent `.recovery`
@@ -1260,7 +1262,9 @@ explicitly:
   waits), `preserveNewerPlaintext` keeps the copy: it replays the `-wal` into the main file (after
   an unclean end the session's last commits sit there), probes the file, and moves a database to
   `<db>.recovery`. A `-wal` that SQLite cannot replay (it reports the database as corrupt) is
-  dropped by the sweep, so a copy kept then lacks the session's last commits. The next unlock with
+  dropped by the sweep, so a copy kept then lacks the session's last commits. A copy a newer build
+  stamped is kept the same way (#985); this build's unlock then refuses it as newer (see "Vault
+  format versions" below). The next unlock with
   the right password rolls it forward over the missing `.enc`
   through the CODE-1b path above, which every build since 0.1.47 has. Until then the lock screen
   says so (`lockNotice: 'encrypted_file_missing'`), read from the disk at every start (descriptor
@@ -1404,7 +1408,11 @@ password. Four guards close this:
   which SQLite refuses with a plain error) and a row whose record claims a value longer than SQLite
   allows (TOOBIG; damage for the probe's own reads only, not for the unlock's open), two shapes of
   noise the review's fuzz found (review round 3); any other failure means the probe could not
-  decide, which is never read as lost. It reads the schema with `trusted_schema` OFF (on by default
+  decide, which is never read as lost. Before it opens the file with SQLite it reads the schema stamp
+  in the header (`user_version`, offset 60, signed): above this build's `SCHEMA_VERSION` the file is
+  `newer` (#985), which no site discards (see "Vault format versions" below), because a newer
+  build's schema can hold text this SQLite cannot parse, which fails every schema read with CORRUPT
+  although the file is intact. It reads the schema with `trusted_schema` OFF (on by default
   in `node:sqlite`), since it may parse a file found on the drive before any unlock. On Windows it
   opens the file in the `\\?\` long-path form, which SQLite needs for a path of 260 characters or
   more (a `.recovery` beside a 251-character working file). A
@@ -1538,6 +1546,28 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   written, shredded or renamed, the workspace stays locked, and the create flow is refused. A
   stale verdict does not outlive its cause: while it stands, an unlock or create re-reads the disk,
   so once the newer artifact is gone the skipped salvage runs before anything is decrypted.
+- **A newer build's working copy is kept, never discarded (#985, owner decision G-2 A, the
+  app-update plan's W-66).** The plaintext working files the start and the unlock judge (a failed
+  lock's working copy, the only copy over a missing `.enc`, a `.recovery`) are outside the verdict
+  above: they are judged by `probeDatabaseFile`. A newer build may write schema text this SQLite
+  cannot parse (a newer clause in an index, a trigger, a generated column, a table option); SQLite
+  then fails every schema read with CORRUPT ("malformed database schema"), while `PRAGMA
+  user_version` still reads (measured), so the probe called such a file damaged, and the start's
+  salvage, the start with `.enc` missing and the unlock's roll-forward shredded it: the newer build's
+  last session, or the whole workspace. The probe now reads the schema stamp from the header first:
+  above this build's `SCHEMA_VERSION` the file is `newer`. The start keeps it as `<db>.recovery`,
+  like a database (`preserved`, or `kept-only-copy` with `.enc` missing), never as damage: no #875
+  marker and no loss notice. The unlock refuses a `.recovery` judged `newer`, whatever its age,
+  before anything is rolled forward or shredded, with the #247 error (`WorkspaceNewerError` →
+  `workspace_newer`, "written by a newer HilbertRaum — update the app"); the newer build's own
+  unlock rolls it forward. The lock and the v1 rekey stage read `newer` as a database (the session's
+  own file cannot be newer: the open refuses one). **Cost:** the newer session's working copy rests
+  in plaintext on the drive until a newer build unlocks it, the same exposure as any failed lock
+  (the CODE-1b trade in "Lock failure & durability"). **Limits:** a working file beside live
+  `-wal`/`-shm` (a newer build's mid-session crash) is still swept, as this build's own (the accepted
+  power-cut trade-off there, unchanged); a damaged file whose stamp happens to read above
+  `SCHEMA_VERSION` is kept and refused too, so the unlock keeps answering "newer" until the copy is
+  moved off the drive (`troubleshooting.md`). The rule for later releases is in `data-contracts.md` "Schema stamp".
 - **No downgrade.** A password change re-reads the descriptor on disk first and refuses a newer
   (or replaced) one; the diagnostics log never persists over a newer-framed `app.log.enc` and
   never rotates onto a newer-framed `app.1.log.enc`.

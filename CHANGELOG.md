@@ -196,6 +196,12 @@ from its first public `1.0.0` release onward.
   workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
   encrypted. When no copy was left, the lock screen now says so, and that you should not create a
   new workspace (#911).
+- **A copy of your workspace that a later version left on the drive is kept.** If a later version
+  of HilbertRaum could not lock the workspace when it closed (on a full drive, for example) and you
+  then start this version on the same drive, this version could delete the readable copy that held
+  the later version's last session, or the whole workspace when its encrypted file was missing
+  too. It now keeps that copy as it is, and the unlock says the workspace was written by a newer
+  HilbertRaum: start the newer version to open it (#985).
 - **A workspace file you put back while the app is open keeps your newest changes.** Putting
   `config/workspace.json` back while the lock screen was open, as the lock screen advises when it is
   missing, and then unlocking could open the workspace at its last saved state and drop the newer

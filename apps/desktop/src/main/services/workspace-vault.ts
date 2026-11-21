@@ -30,6 +30,7 @@ import {
   probeDatabaseFile,
   sqliteJudgedDamaged,
   walAwaitsCheckpoint,
+  WorkspaceNewerError,
   type DatabaseFileProbe,
   type WalCheckpointRetry
 } from './db'
@@ -1001,7 +1002,10 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
  *     (docs/security-model.md "Lock failure & durability");
  *   • the file is a database SQLite can read (`probeDatabaseFile`, #876): a failed shred's
  *     random-overwrite, or a file whose header survived but whose structure did not, must
- *     never be re-encrypted over the good `.enc`.
+ *     never be re-encrypted over the good `.enc`. #985: a file a NEWER build stamped (its
+ *     `user_version` above this build's, `newer`) is kept the same way, whatever its schema
+ *     holds: this build cannot judge it, so it is never `'discarded'`. The unlock refuses
+ *     to roll it forward (`WorkspaceNewerError`), and a newer build's unlock rolls it forward.
  *
  * Returns what happened, because the caller's next step depends on it (#242): `'preserved'`
  * (moved aside; sweep safe), `'not-needed'` (no such file; sweep safe), `'swept-unclean'` (#892:
@@ -1077,7 +1081,8 @@ export function preserveNewerPlaintext(vaultPaths: VaultPaths, onProbeFallback?:
  *   • the working file or its `-wal` is strictly NEWER than `.enc`: every unlock decrypts the working file after the
  *     lock that wrote `.enc`, so a session that ended unlocked always is; older is derived data;
  *   • the working file starts like a database ({@link startsLikeDatabase}): the session's own file, whole or torn
- *     mid-checkpoint. That is exactly when {@link probeDatabaseFile} answers `database`, `damaged` or `unchecked`, the
+ *     mid-checkpoint. That is exactly when {@link probeDatabaseFile} answers `database`, `damaged`, `unchecked` or
+ *     (#985) `newer`, the
  *     answers this check needs, at a fraction of the cost (one 100-byte read instead of the structural walk: 0.13 ms
  *     against 3.6 ms on a warm 28 MB working file, far more on a cold stick), and with no probe fallback to note for a
  *     check that salvages nothing. A shred survivor (no header: our shred never leaves one), a file that cannot be
@@ -1105,7 +1110,7 @@ const SQLITE_DATABASE_HEADER_BYTES = 100
 
 /** #892: does the file at `path` start like a database: a whole 100-byte database header that begins with the SQLite
  *  magic? The first step of {@link probeDatabaseFile}, alone: every file it lets through, the probe answers
- *  `database`, `damaged` or `unchecked`. Throws when the file cannot be read (the caller's doubt). */
+ *  `database`, `damaged`, `unchecked` or (#985) `newer`. Throws when the file cannot be read (the caller's doubt). */
 function startsLikeDatabase(path: string): boolean {
   const fd = openSync(path, 'r')
   try {
@@ -1148,9 +1153,11 @@ function encryptedFileState(vaultPaths: VaultPaths): EncryptedFileStat['state'] 
  *     session's last commits sit there, and the main file alone lacks them. A `-wal` that still holds commits after
  *     the replay (a full drive, another connection reading it) blocks the start, all three files kept (`'failed'`, as
  *     #242). A database SQLite calls damaged goes on to the probe;
- *   - a file that reads as a database (`database`, or `unchecked` judged by its header) is moved to `<db>.recovery`,
- *     which the next unlock with the right password rolls forward over the missing `.enc` (every build since 0.1.47
- *     does): `'kept-only-copy'`. One whose structure is `damaged` (a real copy: its header reads) is
+ *   - a file that reads as a database (`database`, `unchecked` judged by its header, or, #985, `newer`: a newer
+ *     build's copy, kept whatever its schema holds) is moved to `<db>.recovery`, which the next unlock with the right
+ *     password rolls forward over the missing `.enc` (every build since 0.1.47 does; this build's unlock refuses a
+ *     `newer` one, which a newer build's unlock rolls forward): `'kept-only-copy'`. One whose structure is `damaged`
+ *     (a real copy: its header reads) is
  *     `'discarded-only-copy'`: the sweep shreds it, the start reports it for one log line, and the unlock then says
  *     the file is missing. A shred survivor or a file gone meanwhile is nothing to keep (`'not-needed'`). One the
  *     probe cannot read blocks, with nothing removed.
@@ -1922,7 +1929,8 @@ export interface UnlockedVault {
  * and open the database. Throws `WrongPasswordError` on a bad password (the GCM verifier
  * fails, the DB is never touched). Before the password is even checked: `VaultNewerError` when a
  * vault artifact is in a format a newer build wrote (#845). After the password verified:
- * `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247), `VaultDamagedError` when `.enc`
+ * `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` copy a newer build
+ * stamped, before anything is written), `VaultDamagedError` when `.enc`
  * fails its tag (#860 V5b) or SQLite finds no database or a corrupt one (#208),
  * `VaultOpenFailedError` when the open could not finish otherwise (#844), and `VaultMissingError` when there is no `.enc`
  * and no `.recovery` copy to roll forward over it (#911).
@@ -2025,6 +2033,11 @@ export function unlockEncryptedVault(
         if (probe.verdict === 'unknown' || probe.verdict === 'gone') {
           throw new Error(`The .recovery probe could not decide (${probe.verdict})`)
         }
+        // #985 (W-66): a copy a NEWER build stamped is neither rolled forward nor shredded, whatever its age: this build
+        // cannot judge its schema, and it may be that build's last session (a failed lock, or the only copy over a
+        // missing `.enc`). Refused at once, as the open refuses a newer database (#247), before `.enc` or the copy is
+        // written (the catch below lets it through: it is no probe error).
+        if (probe.verdict === 'newer') throw new WorkspaceNewerError(probe.found)
         const newer =
           probe.verdict !== 'not-database' &&
           (enc.state === 'missing' || statSync(recoveryPath).mtimeMs > enc.mtimeMs)
@@ -2034,7 +2047,8 @@ export function unlockEncryptedVault(
         // #875: our own shred never leaves a header, so a newer copy whose header reads but whose
         // structure does not was the failed lock's session, and shredding it loses that session.
         recoveryDiscarded = probe.verdict === 'damaged' && newer
-      } catch {
+      } catch (err) {
+        if (isWorkspaceNewerError(err)) throw err
         // #242 — a probe error means we cannot read the header. If `.recovery` could still be
         // the fresh failed-lock delta — newer than `.enc`, `.enc` missing, or the mtime
         // unreadable too — we must NOT unlock into the stale `.enc` and leave the snapshot to
@@ -2147,14 +2161,17 @@ export type ProbeFallbackNote = (site: ProbeFallbackSite, code: string) => void
 /**
  * #876: does a site treat the file as a database? `database` does; `unchecked` (review round 2) does too, exactly as
  * the header check before the probe did (the probe read the header, only its structural read could not run), and the
- * fallback is reported. Everything else does not.
+ * fallback is reported. #985: so does `newer`, a file a newer build stamped: the salvage keeps it (`preserved`,
+ * `kept-only-copy`), and the lock and the rekey stage encrypt it as before (the session's own file cannot be newer:
+ * `openDatabase` refuses one). The unlock's `.recovery` roll-forward refuses it before it gets here. Everything else
+ * does not.
  */
 function readsAsDatabase(probe: DatabaseFileProbe, site: ProbeFallbackSite, onProbeFallback?: ProbeFallbackNote): boolean {
   if (probe.verdict === 'unchecked') {
     onProbeFallback?.(site, probe.code ?? 'unknown')
     return true
   }
-  return probe.verdict === 'database'
+  return probe.verdict === 'database' || probe.verdict === 'newer'
 }
 
 /** What a lock found at the working file after the close (#876): whether the `-wal` still holds commits after the one
@@ -3122,6 +3139,8 @@ export class WorkspaceController {
         // Review round 2: the lock carried what it found (its one probe, and the WAL after its retry),
         // so the file is judged once; only a failure before that judgement (the close itself) probes
         // here. A structure the probe could not read (not damage) is a database, as the header said.
+        // #985: a file a newer build stamped (`newer`) is never lost either: it is kept as it is, with
+        // the closed handle (the re-open below would refuse it), and the next start's salvage keeps it.
         const judged = err instanceof LockStoppedError ? err.verdict : null
         const probe = judged?.probe ?? probeDatabaseFile(dbPath)
         if (!judged?.probe && probe.verdict === 'unchecked') this.noteProbeFallback('lock', probe.code ?? 'unknown')

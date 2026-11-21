@@ -33,6 +33,7 @@ import {
   setFrameMagic,
   thrownBy,
   unlockedController,
+  writeNewerSchema,
   type FreshVaultPaths
 } from '../helpers/vault-fixtures'
 
@@ -68,6 +69,8 @@ function snapshot(root: string): Record<string, string> {
   }
   return out
 }
+
+const sha = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex')
 
 /** A staged `.enc.new` in this build's frame (`HRAUMEN1`), but under a key no descriptor wraps: if it were ever
  *  swapped in, `.enc` would change, and the vault would be lost. Its plaintext source lies outside the hashed tree. */
@@ -317,6 +320,84 @@ describe('a vault a newer build wrote is refused at startup and at unlock, and l
       }
       // Still a vault: the create flow is refused.
       expect(() => ctl.create('another-password', 'encrypted')).toThrow(WorkspaceExistsError)
+      expect(snapshot(vp.root)).toEqual(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+})
+
+// #985 (W-66): a working copy or `.recovery` a NEWER build left, stamped above this build's schema version, whose schema
+// this SQLite cannot parse: every schema read fails with SQLITE_CORRUPT, so the probe called it damaged, and the start's
+// salvage, the start with `.enc` missing and the unlock's roll-forward shredded it (the newer build's last session, or
+// the whole workspace). Each is now kept byte for byte, and the unlock refuses it as the open refuses a newer database
+// (`WorkspaceNewerError` → `workspace_newer`, "written by a newer HilbertRaum") before anything is written. No #875 marker
+// and no loss notice: nothing was lost.
+describe('a working copy or .recovery a newer build stamped is kept, never discarded (#985)', () => {
+  const recoveryOf = (vp: FreshVaultPaths): string => `${vp.dbPath}${RECOVERY_SUFFIX}`
+  const NEWER = { name: 'WorkspaceNewerError', found: SCHEMA_VERSION + 1 }
+
+  it('a failed lock’s working copy: the start keeps it as .recovery, the unlock refuses it, both files byte for byte', () => {
+    const vp = lockedVault('fmtguard-985', PW)
+    failedLockState(vp, 7171, PW) // closed, newer than `.enc` (backdated): the salvage signature
+    writeNewerSchema(vp.dbPath)
+    const working = sha(vp.dbPath)
+    const enc = sha(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(vp.dbPath)).toBe(false)
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(ctl.getState()).toEqual({ state: 'locked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true })
+      expect(existsSync(join(dirname(vp.descriptorPath), WORKING_COPY_LOST_MARKER))).toBe(false)
+      expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(existsSync(vp.dbPath)).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('the only copy, with .enc missing: the start keeps it as .recovery, the unlock refuses it, the copy byte for byte', () => {
+    const vp = lockedVault('fmtguard-985', PW)
+    failedLockState(vp, 7171, PW)
+    writeNewerSchema(vp.dbPath)
+    rmSync(vp.encPath)
+    const working = sha(vp.dbPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(ctl.discardedOnlyCopy()).toBe(false)
+      expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'encrypted_file_missing' })
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
+      expect(sha(recoveryOf(vp))).toBe(working)
+      expect(existsSync(vp.encPath)).toBe(false)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Whatever its age: one older than `.enc` looks like a spent leftover, which the roll-forward shreds, and this build
+  // cannot tell a newer build's copy from one.
+  it.each<[string, number]>([
+    ['newer than .enc', 0],
+    ['older than .enc', 120_000]
+  ])('a .recovery %s: the unlock refuses it before anything is written, every file byte for byte', (_age, olderBy) => {
+    const vp = lockedVault('fmtguard-985', PW)
+    failedLockState(vp, 7171, PW) // `.enc` backdated 60 s
+    writeNewerSchema(vp.dbPath)
+    renameSync(vp.dbPath, recoveryOf(vp))
+    if (olderBy > 0) backdate(recoveryOf(vp), olderBy)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      const before = snapshot(vp.root)
+      expect(before['workspace/hilbertraum.sqlite.recovery']).toBeDefined()
+      expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
+      expect(ctl.isUnlocked()).toBe(false)
       expect(snapshot(vp.root)).toEqual(before)
     } finally {
       ctl.shutdown()

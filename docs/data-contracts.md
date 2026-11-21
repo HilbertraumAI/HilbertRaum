@@ -1253,7 +1253,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   only, builds a v1 descriptor); `unlockEncryptedVault(vaultPaths, password) → { db, key, descriptor }`
   (format verdict → verify → decrypt → open). It throws **`VaultNewerError`** before the password is
   checked (#845); **`WrongPasswordError`** when the verifier fails; after the password verified,
-  `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247), **`VaultDamagedError`** when `.enc`
+  `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` the
+  probe calls `newer`, before anything is written), **`VaultDamagedError`** when `.enc`
   fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
   its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
   and `VaultOpenFailedError` when the open could not finish otherwise (#844).
@@ -1272,8 +1273,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   refuses the lock. `stageRekey` refuses the same pending WAL (no retry: its connection is open).
   **`probeDatabaseFile(path)`**
   (`services/db.ts`, #876) → `{ verdict: 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'
-  | 'unchecked', code? }`: the
-  header through `node:fs`, then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
+  | 'unchecked', code? } | { verdict: 'newer', found }`: the
+  header through `node:fs` (#985: a schema stamp, `user_version` at offset 60 read as a signed
+  big-endian 32-bit integer, above `SCHEMA_VERSION` answers `newer` with the stamp as `found`,
+  before SQLite opens the file), then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
   `\\?\` long form on Windows) that reads the schema, the first row of every table and the last row
   of every rowid table, then the root-page header of every index through `node:fs`. It reads the
   main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file.
@@ -1290,8 +1293,11 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   the controller keeps the notes, `takeProbeFallbacks()` returns them once, and the lock, unlock and
   password-change handlers log each ("A workspace file was judged by its SQLite header …"). The one
   verdict for the lock's guard and its #855 verdict, the startup salvage, the
-  `.recovery` roll-forward and `stageRekey`. `sqliteJudgedDamaged(err)` (the #844 classifier)
-  lives beside it.
+  `.recovery` roll-forward and `stageRekey`. **`newer` is never discarded** (#985): the salvage
+  keeps the file as `.recovery` (`preserved`, or `kept-only-copy` with `.enc` missing; no #875
+  marker), the `.recovery` roll-forward throws `WorkspaceNewerError(found)` before anything is
+  written (→ `workspace_newer`), and the lock and `stageRekey` read it as a database.
+  `sqliteJudgedDamaged(err)` (the #844 classifier) lives beside it.
   `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that
   allows it and a dev build; the `developerMode` setting plays no part (it lives in the encrypted DB).
 - **Vault format versions (#845):** `vaultFormatVerdict(vaultPaths) → { kind: 'ok' } | { kind:
@@ -1313,6 +1319,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   | `workspace/hilbertraum.sqlite.enc` and every staged file a recovery would swap in (`.enc.new`, `documents/` and `images/` `*.enc.new`, the journal's entries) | first 8 bytes `HRAUMEN` + an ASCII digit `2`–`9` (`frame`) | any other magic (`HRAUMEN` + `0`, a letter or another byte, i.e. a damaged version byte; `PAIDENC1`, written before 0.1.10; noise): "unrecognised header", the generic unlock error |
   | `workspace/rekey-journal.json` | any numeric `version` above 1 (2, 2.5), whatever the descriptor says (`journal`) | unparseable or another `version`: quarantined as `.corrupt` |
   | `logs/app.log.enc`, `logs/app.1.log.enc` | a `newer` `app.log.enc`: `logging.ts` keeps the session's log in memory and never persists or rotates over it; a `newer` `app.1.log.enc`: only the rotation onto it is skipped (the live `app.log.enc` keeps persisting, up to the 2 MB buffer cap) | a corrupt or foreign-key log: started fresh (overwritten), as before |
+
+  **The plaintext working copy** (`workspace/hilbertraum.sqlite`, its `.recovery`) is judged by
+  `probeDatabaseFile`, not by this verdict: a schema stamp above `SCHEMA_VERSION` is `newer`, kept by
+  the start and refused by the unlock with `WorkspaceNewerError` (#985, see the probe above).
 
   **Not part of the vault:** startup's ZIM transient sweep still runs before the verdict is read
   (`main/index.ts`): it deletes the knowledge-pack reader's temporary listing files under
@@ -1501,7 +1511,12 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   it, and on a complete schema a second open changes nothing; a HIGHER value throws the typed `WorkspaceNewerError` with the handle closed and the
   file byte-identical. Bump `SCHEMA_VERSION` only for a change an older build must not open.
   Builds ≤ 0.1.59 never read the stamp, so it protects only pairs whose older build is newer
-  than PR #289;
+  than PR #289. **Later-writer rule (#985, frozen for every later release):** schema text an older
+  SQLite cannot parse (a newer clause in an index, a trigger, a generated column, a table option)
+  ships only together with a bump of `SCHEMA_VERSION`. An older build's SQLite fails every schema
+  read of such a file with CORRUPT ("malformed database schema"), and from #985 on its start and
+  unlock keep a working copy or `.recovery` only when the stamp says `newer`: without the bump that
+  file reads as damaged and is discarded. Builds before #985 discard it either way;
   `lockWorkspace` → `WorkspaceStateInfo`, with `lockNotice: 'working_copy_lost'` when the lock
   finished at the last good snapshot because the working file was gone or no longer a database
   (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock, and
