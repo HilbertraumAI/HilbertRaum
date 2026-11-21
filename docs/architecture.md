@@ -8998,7 +8998,9 @@ detects `retrieveWholeDocument`'s `truncated` flag and hands off to **`answerWho
 (`manager.summarizeFromTree`) over the precomputed node summaries — the **deepest layer** (`level 1` =
 full leaf coverage) read via `nodeSummariesAtLevel` — with the **SKILL.md fence applied at every step**
 (a skill-fenced MAP per `packIntoWindows` window when the summaries span >1 window, then a skill-fenced
-streamed REDUCE; when they fit one window the single fenced reduce IS the step). It stamps the honest
+streamed REDUCE; when they fit one window the single fenced reduce IS the step). With no skill (the #642
+tree summary) there is no fence, and each map and fold step takes notes for the user's request, its only
+target (#952, follow-ups wave 5; `rag-design.md` §14.10). It stamps the honest
 **`tree`** coverage (`treeStatus:'ready'`, `chunksCovered = reachableLeafChunkIds`, `treeLevels`,
 `truncated:false`) and cites the **leaf chunks** (`documentLeafProvenance`, M2-safe — node summaries are
 never `[Sn]`). It returns **null** when there is no usable tree (no `ready` status / no node summaries),

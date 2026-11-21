@@ -20,6 +20,7 @@ import { buildSkillFence } from '../../src/main/services/skills/prompt'
 import { finishScriptedRuntime, recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import {
   answerWholeDoc,
+  asNoFenceMapPrompt,
   asPreRequestMapPrompt,
   germanDoc,
   WHOLE_DOC_QUESTION,
@@ -341,12 +342,13 @@ describe('whole-document chunk map-reduce — hierarchical fold for the large-do
     expect(allTurns).toContain(`M${String(SENTENCES - 1).padStart(4, '0')}`)
   })
 
-  // #939: the fold condenses the map notes, so with the request flag it carries the request too; with no skill and no
-  // flag (the #642 tree summary of a plain document chat) every map and condense call is the prompt as it was.
+  // #939: the fold condenses the map notes, so with the request flag it carries the request too. #952: with no skill
+  // there is no task, so every map and condense call takes notes for the request alone with no flag, on the frozen
+  // no-fence template, and never names "the task described below".
   it.each([
     { name: 'a skill and the request flag', skill: { installId: 'app:contract-brief', title: 'Contract Brief', body: '# Contract brief\nList every decision.' }, notesForRequest: true },
     { name: 'no skill', skill: undefined, notesForRequest: undefined }
-  ])('the map and condense calls with $name (#939)', async ({ skill, notesForRequest }) => {
+  ])('the map and condense calls with $name (#939, #952)', async ({ skill, notesForRequest }) => {
     const h = await makeHarness(350)
     const runtime = mapReduceRuntime(MEDIUM_NOTE, CTX2)
     await answerWholeDoc(h, runtime, { skill, wholeDocumentNotesForRequest: notesForRequest })
@@ -355,11 +357,10 @@ describe('whole-document chunk map-reduce — hierarchical fold for the large-do
     expect(folds.length).toBeGreaterThan(0)
     expect(steps.length).toBeGreaterThan(folds.length)
     for (const step of steps) {
-      if (notesForRequest) {
-        expect(step).toContain(`\nUser request:\n${WHOLE_DOC_QUESTION}\n`)
-      } else {
-        expect(step).not.toContain('User request:')
-        expect(step).toBe(asPreRequestMapPrompt(step, null))
+      expect(step).toContain(`\nUser request:\n${WHOLE_DOC_QUESTION}\n`)
+      if (skill == null) {
+        expect(step).not.toContain('task described below')
+        expect(step).toBe(asNoFenceMapPrompt(step, WHOLE_DOC_QUESTION))
       }
     }
   })

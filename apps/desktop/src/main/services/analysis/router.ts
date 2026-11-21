@@ -740,18 +740,13 @@ function isListAsk(shape: 'list' | 'modifier' | null, q: string): boolean {
 }
 
 /**
- * #939 (follow-ups wave 4, owner call 2026-11-20): does the question ask to find or list items, by the
- * router's own list detection (step 4b's test: "List every deadline", "When is each payment due?", the
- * every-mention chip in every catalog)? A summary ask or a compare never counts (review B1: "Summarize all
- * the decisions" and «Fasse alle Beschlüsse zusammen» carry a quantifier, but the router reads them as
- * summaries before step 4b). With the skill-side report veto (`isReportShaped`) it decides whether a bundled
- * whole-document skill's map and fold steps take notes for the question too. The list words are English and
- * German (the chip excepted). Pure; the question is never logged.
+ * #953 (follow-ups wave 5, owner call G-2): does the router read the question as a summary ask (its summary words,
+ * the split German verb of «Fasse alle Beschlüsse zusammen» among them, or a summarize chip of any catalog)? With
+ * the skill-side report shapes (`isReportShaped`) it marks a request for a whole-document skill's report, whose map
+ * and fold steps keep their notes for the task alone (`registerRagIpc`). Pure; the question is never logged.
  */
-export function asksForList(question: string): boolean {
-  const q = (question ?? '').normalize('NFC')
-  if (isSummaryAsk(q) || COMPARE_RE.test(q)) return false
-  return isListAsk(listRequestShape(q).shape, q)
+export function asksForSummary(question: string): boolean {
+  return isSummaryAsk((question ?? '').normalize('NFC'))
 }
 
 /** Classify a question into an engine choice (pure; plan §4.4). */

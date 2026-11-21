@@ -777,8 +777,9 @@ export interface WholeDocChunksDeps {
   skill?: TurnSkill | null
   /** How much of the skill body the fence carries (#632; absent ⇒ the whole body) — threaded to the core. */
   skillFenceMode?: SkillFenceMode
-  /** #939: the map and fold steps take notes for the user's question too (a list-shaped question under a
-   *  bundled whole-document skill, decided by `registerRagIpc`). Absent ⇒ the prompts as they were. */
+  /** #939: under a skill, the map and fold steps take notes for the user's question too (decided by
+   *  `registerRagIpc`). Absent ⇒ the prompts as they were. With no skill, or a fence of paragraph 1 alone, the
+   *  core always takes notes for the question: there is no task (#952). */
   notesForRequest?: boolean
   contextTokens: number
   signal?: AbortSignal
@@ -1599,8 +1600,11 @@ export interface GroundedAnswerOptions {
   /**
    * #939 (follow-ups wave 4, owner call 2026-11-20): when the whole-document read below needs the map-reduce
    * rescue, its map and fold steps take notes for the question too, not only for the skill's task. Set by
-   * `registerRagIpc` for a list-shaped question (`asksForList`) under a bundled whole-document skill. Absent ⇒
-   * the map and fold prompts as they were, byte for byte (every deliverable, user skills, a no-skill read).
+   * `registerRagIpc` for every question under a whole-document skill, bundled or the user's own, that does not
+   * ask for the skill's report (`isReportShaped`; #953, follow-ups wave 5 owner call G-2). Absent ⇒ the map and
+   * fold prompts as they were, byte for byte (a report request). With no skill, or with `skillFenceMode`
+   * `'first-paragraph'` (a fall-through turn's heading and honesty rules), the core takes notes for the question
+   * whatever this says: there is no task (#952).
    */
   wholeDocumentNotesForRequest?: boolean
   /**

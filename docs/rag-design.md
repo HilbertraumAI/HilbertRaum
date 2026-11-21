@@ -2436,49 +2436,75 @@ join → reduce). Beyond the hard ceiling the tail stays honestly beginning-only
 lever, not unbounded — the dominant cost is one map call per window on CPU, covered by the Phase 3 progress
 notice).
 
-**A list request's map and fold steps see the question (#939, follow-ups wave 4, owner call 2026-11-20).**
-The map and fold prompts carried the skill fence but never the question: `mapUserPrompt` asked for "every
-detail the task needs" for "the task described below", which is the fence. So a question the whole-document
-engine takes that is not the skill's deliverable ("Find every mention of 'indemnity'" under Contract Brief) was
-answered from notes taken for the brief, under a whole-document coverage label: over a 19-section lease with
-three indemnity articles, qwen3-4b-instruct-q4 named one and qwen3.5-9b-ud-q4kxl said there was no mention.
-Now, for a list request, the map and fold prompts carry the question under the reduce's own label, `User
-request:`, before the fence (`userRequestBlock`), and their instruction adds "and everything the user request
-asks about" (the map: "when it asks to find or list something, note each place with its exact wording"); the
-task clause stays word for word. **The rule:** `registerRagIpc` sets `wholeDocumentNotesForRequest` on the
-whole-document engine's read when all three hold: the turn skill is a bundled one (`source === 'app'`);
-`asksForList(question)` (`analysis/router.ts`, the router's own list detection, step 4b's test: a list or count
-request, a quantifier inside a question, or the every-mention chip in every catalog, and never a question the
-router reads as a summary or a compare first, so "Summarize all the decisions" and «Fasse alle Beschlüsse
-zusammen» are none); and not `isReportShaped(question)` (`skills/vocabulary.ts`: the report half of the needle
-veto's deliverable shapes, "summar", "minutes", "brief", "review", «Protokoll» and the rest, or a summarize chip,
-so «Erstelle das Protokoll mit allen Beschlüssen» and "Write the minutes including every action item" are
-none). Both predicates are shared, not copied: the deliverable shapes are now the report shapes plus the list-all
-shapes ("list every", «sämtliche», …), the same words as before. The flag reaches `streamWholeDocMapReduce`
-through both rescues (`notesForRequest`). Every other read sends the map and fold prompts as they were, byte for
-byte: every report request, list word or not ("Summarize this contract", "Write the meeting minutes", the
-summarize chip, «Fasse dieses Dokument zusammen»), any other question, a user skill, and the no-skill tree
-summary. A plain list request takes the notes: "List every deadline", "List all action items", the chip. **Why
-gated (measured on the GTX 1070 Ti, b9849, one run per question, master `5dc4e058` against the branch BEFORE the
-gate, every question on the map step; the gated build was not re-run, since its chip prompts are the measured
-ones and its other prompts are master's; another program shared the GPU from the master 4B turns on, so no time is
-compared):** the English chip under Contract Brief went from 1/3 to 3/3 indemnity articles on the 4B and from 0/3
-to 3/3 on the 9B; the German chip, read whole since #834, found 3/3 on the 9B and 0/3 on the 4B on both builds
-(a German term in an English lease). Meeting Minutes over a 14-section transcript lost facts, 5 → 2 of 8 on the
-4B (master's answer itself was cut by a repetition loop) and 8 → 6 of 8 on the 9B (the next-meeting date in its
-last line). Contract Brief's summary gained facts, 4 → 7 of 11 on the 4B (but lost the one indemnity article
-master listed) and 4 → 6 of 11 on the 9B. So the question rides only where a list is asked for, measured on the
-every-mention chip under Contract Brief, and a report request cannot regress. Cost of the flagged case: the
+**The map and fold steps see the question (#939, follow-ups wave 4; #952 and #953, follow-ups wave 5; owner
+calls 2026-11-20).** The map and fold prompts carried the skill fence but never the question: `mapUserPrompt`
+asked for "every detail the task needs" for "the task described below", which is the fence. So a question the
+whole-document engine takes that is not the skill's deliverable ("Find every mention of 'indemnity'" under
+Contract Brief) was answered from notes taken for the brief, under a whole-document coverage label: over a
+19-section lease with three indemnity articles, qwen3-4b-instruct-q4 named one and qwen3.5-9b-ud-q4kxl said there
+was no mention. With no skill (the #642 tree summary) the same prompt named "the task described below" with
+nothing below it (#952). **The rule as built (wave 5 owner call G-2, option A):** with **no skill**, the user's
+request is the notes' only target. `streamWholeDocMapReduce` decides it in the core (`notesForRequest === true ||
+skillFence === null`), so no caller can build a prompt with no task; the no-fence prompt is the request layout with
+the fence left out ("to answer the user request below … note every detail the user request needs", then `User
+request:` from `userRequestBlock`, then the part). Under **any whole-document skill, bundled or the user's own**,
+`registerRagIpc` sets `wholeDocumentNotesForRequest` unless the question asks for the skill's report:
+`isReportShaped(question)` (`skills/vocabulary.ts`: the report half of the needle veto's deliverable shapes,
+"summar", "minutes", "brief", "review", «Protokoll» and the rest, or a summarize chip) or
+`asksForSummary(question)` (`analysis/router.ts`, the router's own summary reading, which also catches the split
+German verb of «Fasse alle Beschlüsse zusammen»; the report shapes don't, and #939 had kept it out through the
+same reading). With the flag, the map and fold prompts carry the question under the reduce's own label, `User
+request:`, before the fence, and their instruction adds "and everything the user request asks about" (the map:
+"when it asks to find or list something, note each place with its exact wording"); the task clause stays word for
+word. A report request keeps the prompts as they were, byte for byte, list word or not ("Summarize this
+contract", the summarize chip, "Summarize all the decisions", «Erstelle das Protokoll mit allen Beschlüssen»,
+"Write the minutes including every action item"). A bundled skill's fall-through turn carries paragraph 1 of its
+fence only (#632, #831: the heading and honesty rules, no task), so the core takes the question there too
+(`skillFenceMode === 'first-paragraph'`, wave 5 review round), on the request layout with paragraph 1 after the
+request; What Changed? over one document with a ready deep index is the case that reaches it. A skill with no
+analysis engine (a fence-only user skill) on the tree route keeps the prompts as they were, by design: its fence
+is the task its author wrote, and it has no flag. The report words are English and German plus the chip, so a
+report request typed in the eight newer interface languages takes the question too (G-A3); the fence, not the
+question, sets the report's format. The reduce prompt is the same in every shape: it carried the question before #939. Wave 4 had shipped the flag
+narrower (a bundled skill, a list question by the router's `asksForList`, and no report); wave 5 removed
+`asksForList`, which then had no caller. **Why (lane A, wave 5: GTX 1070 Ti, b9849, qwen3-4b-instruct-q4 at a
+4,096 window and qwen3.5-9b-ud-q4kxl at 8,192, one run per turn and variant plus a second run of two 9B turns,
+every map, fold and reduce call dumped):** the fence, not the question, makes a map step write the report. With
+master's prompt, every 4B map call under Meeting Minutes wrote the whole eight-section minutes for its part, "Not
+stated" rows included, and stopped at the 512-token cap; Deadline & Obligation Finder and Contract Brief wrote
+their tables the same way. With the question on, the notes shrank for a question that is not the report. Wave
+4's Meeting Minutes loss was run-to-run noise: "Write the meeting minutes" with the question off and on gave 4 →
+6 of 8 on the 4B and 8 → 8, then 7 → 7, on the 9B. A question that is not the report gained, and both models'
+master answers claimed absences that were false: "Tell me about the parking rules" under Contract Brief 1 → 6 and
+3 → 6 of 6 (4B, 9B; the 4B's turn took 51 s instead of 87 s, its notes now inside the reduce budget); "Tell me
+about the insurance requirements" under Deadline & Obligation Finder 3 → 4 of 5 (4B); a user skill's "List every
+deadline in this contract" 0 → 5 and 0 → 10 of 12. With no skill, over an 80,608-word portfolio of ten leases
+with an auto-built deep index, the notes kept as many facts for "Summarize this document" (4B 10 → 11, 9B 12 → 12
+of 30) and far more for a focused summary, "Summarize the rent and the notice deadline of each lease" (4B 10 → 19,
+9B 6 → 25), whose answers rose from 1 to 9 of 31 on the 4B (its badge from "beginning" to "whole") and from 7 to
+18 on the 9B. The no-skill map step runs only when the level-1 summaries span more than one map window: on a
+4,096 window that is every auto-built tree (from about 16,000 words), on 8,192 only documents past about 85,000
+words or a tree built on a smaller window. **Wave 4's measurements (#939, history; master `5dc4e058` against the
+branch before the gate, one run per question; another program shared the GPU from the master 4B turns on, so no
+time is compared):** the English chip under Contract Brief went from 1/3 to 3/3 indemnity articles on the 4B and
+from 0/3 to 3/3 on the 9B; the German chip, read whole since #834, found 3/3 on the 9B and 0/3 on the 4B on both
+builds (a German term in an English lease). Meeting Minutes over a 14-section transcript lost facts, 5 → 2 of 8 on
+the 4B and 8 → 6 of 8 on the 9B, which is why wave 4 gated the question; wave 5's re-run above showed that loss to
+be noise. Contract Brief's summary gained facts, 4 → 7 of 11 on the 4B and 4 → 6 of 11 on the 9B. **Cost:** the
 question was already reserved in every window (`reserveWords`, the fold's overhead), so window size and count stay
-the same; each map or fold call adds the question and about 40 tokens of instruction. No cache keys on these
-prompts or their notes (`summary_cache` holds the deep-index build's node summaries, which this path only reads).
-Tests: `rag-whole-doc-compare.test.ts` (the #939 describe: the chip in en, de and es, "List every deadline" and
-"List all action items" carry the request on every map call, the chip over a ready deep index too; four report
-requests, four report requests with a list word and a user skill's list question send master's prompt for the
-skill's own fence, `asPreRequestMapPrompt`), `rag-whole-doc-tree.test.ts` (master's whole map and fold prompts,
-byte for byte, for known windows: `masterMapPrompt`, a frozen copy of master's template in
-`tests/helpers/whole-doc-fixtures.ts`), `rag-whole-doc-mapreduce.test.ts` (the flag on and off, map and fold),
-`extract-router.test.ts` (`asksForList`) and `skills-vocabulary.test.ts` (`isReportShaped`). Residuals:
+the same (a row pins it); each map or fold call adds the question and about 40 tokens of instruction. No cache keys
+on these prompts or their notes (`summary_cache` holds the deep-index build's node summaries, which this path only
+reads). Tests: `rag-whole-doc-compare.test.ts` (the #939/#953 describe: the chip in en, de and es, "List every
+deadline" and "List all action items" carry the request on every map call, the chip over a ready deep index too;
+a user skill's list question, "Tell me about the parking rules", "Explain the termination rules" and «Enumera todos
+los plazos» carry it before the fence with the task kept; five report requests, a user skill's among them, and
+four report requests with a list word send master's prompt for the skill's own fence, `asPreRequestMapPrompt`;
+the #952 describe: no skill over a ready deep index, en and de, every map step on the no-fence prompt, and What
+Changed? over one document, every map step with the request before paragraph 1), `rag-whole-doc-tree.test.ts`
+(master's whole map and fold prompts with a skill, `masterMapPrompt`, and the no-skill ones, `noFenceMapPrompt`,
+byte for byte, both frozen in `tests/helpers/whole-doc-fixtures.ts`; the window pin at 4,096; a paragraph-1 fence
+takes the request), `rag-whole-doc-mapreduce.test.ts` (the flag on, and no skill, map and fold) and `skills-vocabulary.test.ts`
+(`isReportShaped`). Residuals, the 9B's list clause over a document whose clauses repeat among them:
 [`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
 
 **Residuals** (see `known-limitations.md`): a document beyond the **hard** ceiling (~100 pages) is still
