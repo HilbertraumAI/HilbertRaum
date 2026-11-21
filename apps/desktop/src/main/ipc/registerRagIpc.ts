@@ -599,7 +599,9 @@ export function registerRagIpc(ctx: AppContext): void {
       //      skill, not exactly one for a whole-document skill, none included (a knowledge-pack-only scope, a
       //      document still indexing). (An in-vocabulary request at the wrong count never gets this far: the
       //      W2 pre-pass above narrows it or answers "select two" / "pick one".)
-      //   2. `applies()` is false because the question is small talk.
+      //   2. `applies()` is false because the message is small talk that did not get the short reply above
+      //      (#963, rag-design §19): only a filler question about the last answer ("Sure?") or a bare
+      //      acceptance ("ok") gets here.
       //   3. (#831) the whole-document engine applied but sent a single-fact question over a document too long
       //      to read whole to the passage search (the needle downgrade below sets the mode there).
       // The turn falls through to the ordinary grounded answer, where the model sees ordinary passages, not

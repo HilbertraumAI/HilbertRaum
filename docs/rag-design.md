@@ -2443,9 +2443,11 @@ whole-document engine takes that is not the skill's deliverable ("Find every men
 Contract Brief) was answered from notes taken for the brief, under a whole-document coverage label: over a
 19-section lease with three indemnity articles, qwen3-4b-instruct-q4 named one and qwen3.5-9b-ud-q4kxl said there
 was no mention. With no skill (the #642 tree summary) the same prompt named "the task described below" with
-nothing below it (#952). **The rule as built (wave 5 owner call G-2, option A):** with **no skill**, the user's
-request is the notes' only target. `streamWholeDocMapReduce` decides it in the core (`notesForRequest === true ||
-skillFence === null`), so no caller can build a prompt with no task; the no-fence prompt is the request layout with
+nothing below it (#952). **The rule as built (wave 5 owner call G-2, option A):** `streamWholeDocMapReduce`
+decides the notes' target in the core, in one expression: the user's request is a target when `notesForRequest ===
+true || skillFence === null || skillFenceMode === 'first-paragraph'` (the caller's flag, no skill, or a fence cut to
+its paragraph 1), so no caller can build a prompt with no task. With **no skill**, the user's request is the notes'
+only target; the no-fence prompt is the request layout with
 the fence left out ("to answer the user request below … note every detail the user request needs", then `User
 request:` from `userRequestBlock`, then the part). Under **any whole-document skill, bundled or the user's own**,
 `registerRagIpc` sets `wholeDocumentNotesForRequest` unless the question asks for the skill's report:
@@ -2459,8 +2461,8 @@ request:`, before the fence, and their instruction adds "and everything the user
 word. A report request keeps the prompts as they were, byte for byte, list word or not ("Summarize this
 contract", the summarize chip, "Summarize all the decisions", «Erstelle das Protokoll mit allen Beschlüssen»,
 "Write the minutes including every action item"). A bundled skill's fall-through turn carries paragraph 1 of its
-fence only (#632, #831: the heading and honesty rules, no task), so the core takes the question there too
-(`skillFenceMode === 'first-paragraph'`, wave 5 review round), on the request layout with paragraph 1 after the
+fence only (#632, #831: the heading and honesty rules, no task), so the core takes the question there too (the
+rule's third term above, wave 5 review round), on the request layout with paragraph 1 after the
 request; What Changed? over one document with a ready deep index is the case that reaches it. A skill with no
 analysis engine (a fence-only user skill) on the tree route keeps the prompts as they were, by design: its fence
 is the task its author wrote, and it has no flag. The report words are English and German plus the chip, so a
@@ -2846,8 +2848,10 @@ the whole fence, would truncate. Option 1 (rag only) was not taken: it left one 
 turn.
 
 **The facts it rests on.** Since #632 and #831 a bundled whole-document skill's fall-through turn (the
-engine declined it: a question outside the skill's vocabulary over several documents, small talk, the
-needle downgrade) sends paragraph 1 of its fence, but the allowance kept measuring the whole fence. Per
+engine declined it: a question outside the skill's vocabulary over several documents; small talk that does
+not get the short small-talk reply, which since #963 is only a filler question about the last answer such
+as "Sure?" or «Alles?» or a bare acceptance such as "ok" or «Alles bitte», §14.5 and §19; the needle
+downgrade) sends paragraph 1 of its fence, but the allowance kept measuring the whole fence. Per
 skill, at the question "When is the notice deadline?" (units are `approxPromptTokens`, about 1.3 per
 word):
 
