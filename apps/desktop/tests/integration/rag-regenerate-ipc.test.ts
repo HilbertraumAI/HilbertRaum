@@ -28,6 +28,8 @@ import { failingRuntime, scriptedRuntime, type ScriptedCall } from '../helpers/s
 import { makeRagAskContext } from '../helpers/skills-world'
 import { t } from '../../src/shared/i18n'
 import type { Message } from '../../src/shared/types'
+import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -128,5 +130,89 @@ describe('askDocuments "Send again" (#613)', () => {
 
     expect(calls).toHaveLength(0)
     expect(listMessages(db, convId)).toEqual(before)
+  })
+})
+
+// #963 — small talk in a documents chat gets the short small-talk reply (`generateSmallTalkReply`), and it runs through
+// the same stream, regenerate guard and chat slot as every answer: a Stop keeps the partial, marked "Reply stopped"; a
+// failure before any token leaves the message unanswered for "Send again", which answers it with no second copy; a
+// failed regenerate brings the previous reply back. Each row also checks that the model got the message alone (the
+// reply path, not the passage search, which the seeded chunk would feed).
+describe('askDocuments small talk through the stream wrappers (#963)', () => {
+  const MESSAGE = 'Danke!'
+
+  async function smallTalkChat(): Promise<ReturnType<typeof regenWorkspace> & { convId: string }> {
+    const w = regenWorkspace('ragsmalltalk')
+    const docId = await seedEmbeddedDoc(w.db, new MockEmbedder(), 'contract.pdf', ['Danke! Vielen Dank für Ihre Zusammenarbeit.'])
+    const conv = createConversation(w.db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    return { ...w, convId: conv.id }
+  }
+  const sentAlone = (call: ScriptedCall): boolean =>
+    call.messages.length === 2 && call.messages[0].role === 'system' && call.messages[1].content === MESSAGE
+
+  it('a Stop mid-reply keeps the partial, marked "Reply stopped"', async () => {
+    const w = await smallTalkChat()
+    const calls: ScriptedCall[] = []
+    const runtime: ModelRuntime = {
+      ...scriptedRuntime('unused'),
+      async *chatStream(messages, options) {
+        calls.push({ messages, options })
+        yield 'Gern '
+        // What the Stop button does: abort the turn's registered controller, with the user's cause.
+        inFlightStreams.get(w.convId)!.abort(endedEarlyAbortReason('user'))
+        if (options?.signal?.aborted) return
+        yield 'geschehen!'
+      }
+    }
+    registerRagIpc(makeRagAskContext(w, runtime).ctx)
+
+    const { result } = await invoke(handlers, IPC.askDocuments, w.convId, MESSAGE, null)
+
+    expect(calls.map(sentAlone)).toEqual([true])
+    expect(result as Message).toMatchObject({ content: 'Gern ', endedEarly: 'user' })
+    expect(listMessages(w.db, w.convId).map((m) => [m.role, m.content, m.endedEarly])).toEqual([
+      ['user', MESSAGE, undefined],
+      ['assistant', 'Gern ', 'user']
+    ])
+    expect(inFlightStreams.has(w.convId)).toBe(false)
+  })
+
+  it('a failure before any token leaves the message for "Send again", which answers it with no second copy', async () => {
+    const w = await smallTalkChat()
+    registerRagIpc(makeRagAskContext(w, failingRuntime()).ctx)
+    await expect(invoke(handlers, IPC.askDocuments, w.convId, MESSAGE, null)).rejects.toThrow(/HTTP 400|too large/i)
+    const [question] = listMessages(w.db, w.convId)
+    expect(listMessages(w.db, w.convId).map((m) => m.role)).toEqual(['user'])
+
+    const calls: ScriptedCall[] = []
+    registerRagIpc(makeRagAskContext(w, scriptedRuntime('Gern geschehen!', calls)).ctx)
+    const { result } = await invoke(handlers, IPC.askDocuments, w.convId, '', null, false, undefined, question.id)
+
+    expect(calls.map(sentAlone)).toEqual([true])
+    expect((result as Message).content).toBe('Gern geschehen!')
+    expect(listMessages(w.db, w.convId).map((m) => [m.role, m.id === question.id])).toEqual([
+      ['user', true],
+      ['assistant', false]
+    ])
+  })
+
+  it('a regenerate replaces the reply, and a failed one brings the previous reply back', async () => {
+    const w = await smallTalkChat()
+    appendMessage(w.db, { conversationId: w.convId, role: 'user', content: MESSAGE })
+    const prior = appendMessage(w.db, { conversationId: w.convId, role: 'assistant', content: 'Gern geschehen!' })
+
+    registerRagIpc(makeRagAskContext(w, failingRuntime()).ctx)
+    await expect(invoke(handlers, IPC.askDocuments, w.convId, '', null, /* regenerate */ true)).rejects.toThrow(/HTTP 400|too large/i)
+    expect(listMessages(w.db, w.convId).map((m) => m.id).at(-1)).toBe(prior.id)
+
+    const calls: ScriptedCall[] = []
+    registerRagIpc(makeRagAskContext(w, scriptedRuntime('Bitte sehr!', calls)).ctx)
+    await invoke(handlers, IPC.askDocuments, w.convId, '', null, /* regenerate */ true)
+
+    expect(calls.map(sentAlone)).toEqual([true])
+    expect(listMessages(w.db, w.convId).map((m) => [m.role, m.content])).toEqual([
+      ['user', MESSAGE],
+      ['assistant', 'Bitte sehr!']
+    ])
   })
 })

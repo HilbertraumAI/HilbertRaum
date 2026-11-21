@@ -30,7 +30,9 @@ import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
-import { documentApproxTokenTotal, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
+import { documentApproxTokenTotal, type ExternalRetrievalArm, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
+import type { AppContext } from '../../src/main/services/context'
+import { archiveCandidate } from '../helpers/zim-retrieval-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -63,6 +65,8 @@ async function makeHarness(o: {
    *  marks it stale) or `failed` (a re-index that failed before that transaction keeps it, and its old
    *  sections stay searchable). */
   otherTreeDoc?: IngestionStatus
+  /** #963: the knowledge-pack arm the chat's `packIds` get (the ZIM service's `makeArm`); absent ⇒ no ZIM service. */
+  arm?: ExternalRetrievalArm
 }): Promise<Harness> {
   const w = makeSkillsWorld('wholeread')
   const docId = await ingestTextFile(w, o.fileName ?? 'abrechnung.txt', o.text)
@@ -74,7 +78,10 @@ async function makeHarness(o: {
     documentIds.push(other)
   }
   const runtime = recordingRuntime('Model answer.', { contextWindow: o.contextWindow })
-  registerRagIpc(makeRagAskContext(w, runtime).ctx)
+  const { ctx } = makeRagAskContext(w, runtime)
+  const arm = o.arm
+  const zim = arm ? { makeArm: (_db: Db, packIds: readonly string[] | null | undefined) => (packIds?.length ? arm : null) } : undefined
+  registerRagIpc(zim ? ({ ...ctx, zim } as unknown as AppContext) : ctx)
   const conv = createConversation(w.db, {
     mode: 'documents',
     scope: { collectionIds: [], documentIds, ...(o.packIds ? { packIds: o.packIds } : {}) }
@@ -155,14 +162,59 @@ describe('askDocuments — one document that fits is read whole (#643)', () => {
 
   it.each([
     // The whole read never queries a knowledge pack; a pack chat keeps the retrieval that does.
-    { name: 'a chat with knowledge packs', question: 'Wie hoch ist die Miete?', packIds: ['pack-1'], calls: 1, mode: 'relevance' },
-    // Small talk keeps top-k, which answers it without a model call when nothing matches.
-    { name: 'small talk', question: 'thanks!', packIds: undefined, calls: 0, mode: undefined }
+    { name: 'a chat with knowledge packs', question: 'Wie hoch ist die Miete?', packIds: ['pack-1'], calls: 1, mode: 'relevance' }
   ])('$name stays top-k over a document that fits', async ({ question, packIds, calls, mode }) => {
     const h = await makeHarness({ text: statement(110), contextWindow: 8192, packIds })
     const msg = await ask(h, question)
     expect(h.runtime.calls).toBe(calls)
     expect(msg.coverage?.mode).toBe(mode)
+  })
+
+  // #963: small talk is not read whole either. It used to keep top-k (which answered it without a model call when
+  // nothing matched); it now gets the short small-talk reply: one model call that carries no section, and no coverage.
+  it('small talk over a document that fits gets the short small-talk reply, not a whole read', async () => {
+    const h = await makeHarness({ text: statement(110), contextWindow: 8192 })
+    const msg = await ask(h, 'thanks!')
+    expect(h.runtime.calls).toBe(1)
+    expect(h.runtime.lastMessages.map((m) => m.role)).toEqual(['system', 'user'])
+    expect(h.runtime.lastMessages[1].content).toBe('thanks!')
+    expect(msg.coverage).toBeUndefined()
+    expect(msg.citations ?? []).toEqual([])
+  })
+})
+
+// #963 (B S-4): with knowledge packs in scope, small talk used to run the pack arm (a query-expansion model call, then
+// the archive search) and answer from the articles it found, with their pack outcomes. The short small-talk reply runs
+// no arm: no expansion, no search, no pack outcome, one model call.
+describe('askDocuments — small talk in a chat with knowledge packs searches no pack (#963)', () => {
+  it('«Danke!» with a pack in scope: no pack search, no pack outcome, one model call', async () => {
+    let armCalls = 0
+    const arm: ExternalRetrievalArm = async () => {
+      armCalls++
+      return {
+        candidates: [archiveCandidate(0, 'Danke is the German word for thanks.')],
+        outcomes: [{ packId: 'pack-1', title: 'Wikipedia (Test)', status: 'searched', reason: null, found: 1, admitted: 1 }]
+      }
+    }
+    const h = await makeHarness({ text: statement(110), contextWindow: 8192, packIds: ['pack-1'], arm })
+    const msg = await ask(h, 'Danke!')
+    expect(armCalls).toBe(0)
+    expect(msg.packOutcomes).toBeUndefined()
+    expect(msg.citations ?? []).toEqual([])
+    expect(h.runtime.calls).toBe(1)
+    expect(h.runtime.lastMessages[1].content).toBe('Danke!')
+  })
+
+  // The control: a real question in the same chat still searches the pack.
+  it('a real question with a pack in scope still searches it', async () => {
+    let armCalls = 0
+    const arm: ExternalRetrievalArm = async () => {
+      armCalls++
+      return { candidates: [], outcomes: [] }
+    }
+    const h = await makeHarness({ text: statement(110), contextWindow: 8192, packIds: ['pack-1'], arm })
+    await ask(h, 'Wie hoch ist die Miete?')
+    expect(armCalls).toBe(1)
   })
 })
 

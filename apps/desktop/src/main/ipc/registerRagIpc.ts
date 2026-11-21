@@ -23,6 +23,7 @@ import {
   documentFitsWholeRead,
   generateGroundedAnswer,
   generateGroundedDataAnswer,
+  generateSmallTalkReply,
   type GroundedAnswerOptions,
   isNoContextAnswer,
   modePackOutcomes,
@@ -42,7 +43,7 @@ import { offerableSkillCandidates } from '../services/skills/suggest'
 import { documentsInScope, scopeSectionTotals } from '../services/skills/scope-documents'
 import { getSkill, type SkillRecord } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
-import { isNeedleShaped, isReportShaped, isSmallTalk } from '../services/skills/vocabulary'
+import { isNeedleShaped, isReportShaped, isSmallTalk, isSmallTalkReply } from '../services/skills/vocabulary'
 import type { SkillFenceMode } from '../services/skills/prompt'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { saveResultTable } from '../services/tables/store'
@@ -232,7 +233,8 @@ function skillAnalysisHandler(
  * document fits: the listing can only list the values, the whole read can add them up.
  *
  * Stays top-k: a multi-document scope; a chat with knowledge packs (the whole read never queries
- * them); small talk (top-k answers it without a model call when nothing matches); a legacy, partly
+ * them); small talk (#963: the short small-talk reply takes most of it before any of this, so what
+ * reaches here is a filler question such as "Sure?" or a bare "ok", which reads passages); a legacy, partly
  * chunked document (its sections are not its whole text, so "covers the whole document" would lie).
  */
 function wholeReadDocumentId(
@@ -367,6 +369,26 @@ export function registerRagIpc(ctx: AppContext): void {
       // prior answer is untouched. `null`/`''` (a deliberate skill-free re-run) stays allowed.
       if (typeof skillInstallId === 'string' && skillInstallId.length > 0 && skill == null) {
         throw new Error(tMain('main.chat.skillUnavailable'))
+      }
+
+      // #963 (follow-ups wave 5 owner call G-1): small talk ("Danke!", "Thanks!", «Merci !», "How are you?") gets one
+      // short model reply that reads nothing: no scope narrowing, no skill engine, no router, no knowledge-pack search
+      // and no grounded prompt, so no Sources, coverage meter or skill stamp sit under a thank-you. `isSmallTalkReply`
+      // is stricter than the `isSmallTalk` opt-outs below: a filler question ("Sure?", «Alles?») and an answer to the
+      // assistant's own question or offer with no thanks, greeting or praise in it ("ok", "all", «bitte») still read the
+      // documents, with the conversation. The turn runs
+      // through the stream, the regenerate guard and the chat slot every answer uses, so Stop, lock, quit, "Send again"
+      // and regenerate behave as on any turn.
+      if (isSmallTalkReply(text)) {
+        return withChatStream(
+          event,
+          conversationId,
+          'Small-talk reply failed',
+          withRegenerateGuard(ctx.db, conversationId, isRegenerate, (signal, sendToken, _sendReasoning, _sendCompaction, sendUsage) =>
+            generateSmallTalkReply(ctx.db, runtime, conversationId, text, { signal, onToken: sendToken, onPromptUsage: sendUsage })
+          ),
+          (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
+        )
       }
 
       const rawSettings = getSettings(ctx.db)
@@ -521,14 +543,16 @@ export function registerRagIpc(ctx: AppContext): void {
 
       // #643 / #642: the one document this turn reads whole instead of top-k, or null (`wholeReadDocumentId`,
       // sized for the turn's question and skill). Every caller decides it inside the chat slot, against the
-      // document as the answer reads it — not before a wait for a yielding document task.
+      // document as the answer reads it — not before a wait for a yielding document task. #962: sized for the
+      // fence the turn sends too (`skillFenceMode`, declared below and final before any call), the same budget
+      // `generateGroundedAnswer` reads the document with, so a "fits" here never becomes a truncated read there.
       const wholeReadFor = (treeSummary: boolean): string | null =>
         wholeReadDocumentId(
           ctx.db,
           scope,
           documentsInScope(ctx.db, scope, { requireChunks: true }),
           text,
-          wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
+          wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill, skillFenceMode),
           treeSummary
         )
       // What a grounded answer leads with: the W2 scope notice, then (#649) the heads-up that a whole read of a
@@ -589,8 +613,8 @@ export function registerRagIpc(ctx: AppContext): void {
       // whatever its author wrote, and with no routing vocabulary its real deliverable requests over several
       // documents fall through here too. Unchanged: the skill stamp on that answer (fence placed + sections
       // found), every path the engine takes (the compare and whole-document reads return below with the whole
-      // fence), every other skill's fence, and the budgets (they still reserve the whole fence; only the fence
-      // text is shorter).
+      // fence), and every other skill's fence. #962: the budgets reserve the fence that is sent, so the room
+      // paragraph 1 frees goes to the passages (and to `wholeReadFor`'s whole read of one fitting document).
       const bundledDeliverableSkill =
         turnSkillRecord?.source === 'app' &&
         (analysisHandler?.mode === 'grounded-whole-doc-compare' || analysisHandler?.mode === 'grounded-whole-doc')
@@ -649,6 +673,9 @@ export function registerRagIpc(ctx: AppContext): void {
             //     takes the relevance path, which makes NO whole-document claim, so D45's premise (a partial
             //     WHOLE read passed off as complete) doesn't apply — a needle over a not-fully-chunked doc is
             //     served by top-k, not refused. A DELIVERABLE keeps the whole read and DOES hit the refusal.
+            //   - #962: this budget stays sized for the WHOLE fence (no `fenceMode`): it asks whether the engine's
+            //     own read, which carries the whole fence, would truncate. Only after a downgrade does the turn
+            //     carry paragraph 1, and the budgets of that fall-through reserve paragraph 1.
             const needleDowngrade =
               isNeedleShaped(text) &&
               !documentFitsWholeRead(

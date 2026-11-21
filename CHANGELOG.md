@@ -356,6 +356,14 @@ from its first public `1.0.0` release onward.
   document had a deep index, and "Find every mention of …" never said that the answer may miss
   items. Both now work as they do in English and German, also when you put your own word in the
   quotes (#809).
+- **With a whole-document skill selected, a single fact in a long document is looked up in more of
+  it on a small model.** With What Changed?, Contract Brief, Meeting Minutes, Share-Safe Review or
+  Deadline & Obligation Finder selected, a question such as "When is the notice deadline?" about a
+  document too long to read whole was answered from a single passage on a model with a 4,096-token
+  context, such as the 4B model, and the fact was often missed. The skill's instructions are already
+  shortened for such a question; the room that frees now goes to the document, so the answer reads two
+  passages instead of one, and a document that now fits is read whole. With a larger context nothing
+  changes (#962).
 - **A French question about a dispute is no longer read as a comparison.** With two documents in
   the chat, a question with "différend" (a dispute), "différé" (deferred) or "différer" (to
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.
@@ -366,10 +374,17 @@ from its first public `1.0.0` release onward.
   tenant?" or "How do I change the rent?" was often answered in the skill's comparison layout, an
   executive summary and then the changes between versions, instead of with the fact you asked for.
   Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder did the same
-  with their own reports for a question asked over several documents, a single fact looked up in a
-  long document, or a thank-you: "Who attended?" could get full meeting minutes. Such a question is
+  with their own reports for a question asked over several documents or a single fact looked up in a
+  long document: "Who attended?" could get full meeting minutes. Such a question is
   now answered plainly from the documents, and the answer still shows that the skill was applied.
   Comparing two documents, and a skill's report on one document, work as before (#632, #831).
+- **A thank-you or greeting in a chat about your documents gets a short reply.** "Danke!",
+  "Thanks!", "Merci !" or "How are you?" in a chat with documents was answered with a summary of the
+  documents, with sources and the coverage line under it, and with a skill selected, in that skill's
+  layout. It now gets a short reply in the language you wrote in, without sources, and nothing is read
+  for it: not the documents, not the knowledge packs in the chat. A short question about the last
+  answer, such as "Sure?" or "Alles?", and a plain "ok" or "all" in answer to the assistant's question
+  are still answered from the documents (#963).
 - **The "every mention" example question reads a long document whole in every language.** With a
   whole-document skill such as Contract Brief selected and one long document in scope, the German
   example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching
