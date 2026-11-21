@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot } from './services/workspace'
@@ -27,6 +28,7 @@ import { loadPolicy, currentPolicyStatus, isCommercialPolicy } from './services/
 import { vaultPathsFrom, workspaceAdmitsWork, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log, usesPlaintextLog } from './services/logging'
+import { setLogRedactionRoots } from './services/log-redact'
 import { initPerf, perfMark, perfMs } from './services/perf'
 import { createTrustedSenders } from './ipc/guarded-handle'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
@@ -210,6 +212,15 @@ function initBackend(): void {
     fallbackRoot: app.getPath('userData')
   })
   ensureWorkspaceDirs(paths)
+  // #975: what Diagnostics shows and Copy / Save log hand out names these folders by placeholder (`<drive>`, …;
+  // services/log-redact.ts). Registered before the first read of the log; the log at rest keeps the paths.
+  setLogRedactionRoots({
+    driveRoot: paths.rootPath,
+    appData: app.getPath('userData'),
+    home: homedir(),
+    temp: tmpdir(),
+    app: [dirname(app.getPath('exe')), process.resourcesPath, app.getAppPath()]
+  })
   initLogging(paths.logsPath)
   // Perf marks (opt-in, HILBERTRAUM_PERF_LOG=1) land beside app.log; buffered marks
   // (app_ready) flush here. See services/perf.ts for the content rules.

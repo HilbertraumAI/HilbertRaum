@@ -14,13 +14,17 @@ import {
 import { join } from 'node:path'
 import { encrypt, decrypt, serializeBlob, deserializeBlob, isVaultNewerError } from './security/crypto'
 import { ROTATED_ENCRYPTED_LOG_NAME, newerFrameAt, shredFile } from './workspace-vault'
+import { logRedactionRoots, redactLogText } from './log-redact'
 
 // Local-only rotating logger (spec §7.11 — diagnostics logs stay on device, never uploaded).
 //
-// app.log can carry file names/paths and model ids (never document or chat text — that is a
-// hard rule, enforced at call sites), so on an ENCRYPTED workspace the log is encrypted at
-// rest exactly like the database and the document cache (spec §3.5). On a plaintext_dev
-// workspace the log stays a plain rotating file (matching the unencrypted dev DB).
+// app.log can carry file names, absolute paths and model ids (never document or chat text —
+// that is a hard rule, enforced at call sites), so on an ENCRYPTED workspace the log is
+// encrypted at rest exactly like the database and the document cache (spec §3.5). On a
+// plaintext_dev workspace the log stays a plain rotating file (matching the unencrypted dev DB).
+// The paths stay in the log at rest; what LEAVES it (readLogTail: the Diagnostics panel and
+// Copy; readLogFull: Save log) is redacted (#975, `log-redact.ts`): the drive, app-data, home,
+// temp and app folders by placeholder (`<drive>`, …), account names as `<user>`.
 //
 // The wrinkle is timing: logging starts at app launch, BEFORE the vault is unlocked, so the
 // key does not exist yet (startup, policy load, and the unlock attempts themselves all log).
@@ -336,36 +340,9 @@ export const log = {
   error: (m: string, meta?: unknown) => write('error', m, meta)
 }
 
-/**
- * The last `maxLines` lines of the local log, for the Diagnostics screen (spec §7.11
- * "show recent local logs"). Read-only, local-only, never uploaded. Reads the plain file in
- * plaintext mode; reads the in-memory buffer otherwise (the on-disk copy is encrypted).
- */
-export function readLogTail(maxLines = 200): string[] {
-  let text: string
-  if (mode === 'plaintext') {
-    if (!plainLogFile || !existsSync(plainLogFile)) return []
-    try {
-      text = readFileSync(plainLogFile, 'utf8')
-    } catch {
-      return []
-    }
-  } else {
-    text = buffer
-  }
-  const lines = text.split(/\r?\n/)
-  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-  return lines.slice(-maxLines)
-}
-
-/**
- * The ENTIRE current log as one string (not just the tail), for the Diagnostics "Save to
- * file" action. Same source as readLogTail — the plain file in plaintext mode, the
- * in-memory buffer otherwise (the on-disk copy is encrypted). The export itself is written
- * as plaintext to a user-chosen location, a deliberate user action (spec §7.11): the user
- * is taking diagnostics OUT of the encrypted workspace to share with support.
- */
-export function readLogFull(): string {
+/** The current log as stored: the plain file in plaintext mode, the in-memory buffer otherwise (the on-disk copy is
+ *  encrypted). Never handed out as it is: the two readers below redact it (#975). */
+function storedLogText(): string {
   if (mode === 'plaintext') {
     if (!plainLogFile || !existsSync(plainLogFile)) return ''
     try {
@@ -375,4 +352,27 @@ export function readLogFull(): string {
     }
   }
   return buffer
+}
+
+/**
+ * The last `maxLines` lines of the local log, for the Diagnostics screen (spec §7.11
+ * "show recent local logs") and its Copy button. Read-only, local-only, never uploaded. Each
+ * line is redacted on the way out (#975, `log-redact.ts`): the known folders by placeholder,
+ * account names as `<user>`.
+ */
+export function readLogTail(maxLines = 200): string[] {
+  const lines = storedLogText().split(/\r?\n/)
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  const roots = logRedactionRoots()
+  return lines.slice(-maxLines).map((line) => redactLogText(line, roots))
+}
+
+/**
+ * The ENTIRE current log as one string (not just the tail), for the Diagnostics "Save to
+ * file" action. Same source as readLogTail, redacted the same way (#975). The export itself
+ * is written as plaintext to a user-chosen location, a deliberate user action (spec §7.11):
+ * the user is taking diagnostics OUT of the encrypted workspace to share with support.
+ */
+export function readLogFull(): string {
+  return redactLogText(storedLogText(), logRedactionRoots())
 }
