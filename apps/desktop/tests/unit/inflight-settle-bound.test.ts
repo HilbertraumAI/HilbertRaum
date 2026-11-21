@@ -6,6 +6,7 @@ import {
 import { performShutdown } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 import { within } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 // full-audit 2026-07-12 REL-4 — the in-flight-stream settle await is BOUNDED (the 5 s
 // doc-task settle treatment). The settle promises never reject (resolved in the stream
@@ -49,7 +50,7 @@ describe('awaitInFlightStreamsSettled ceiling (full-audit 2026-07-12 REL-4)', ()
     const fakeCtx = {
       runtime: { shutdown: () => {}, stop: async () => {} },
       embedder: {},
-      workspace: { shutdown: () => order.push('lock') }
+      workspace: workspaceStandIn({}, { shutdown: () => order.push('lock') })
     } as unknown as AppContext
 
     const p = performShutdown(fakeCtx, {

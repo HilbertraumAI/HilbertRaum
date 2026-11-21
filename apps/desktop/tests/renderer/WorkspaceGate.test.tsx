@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
+import { useState } from 'react'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { WorkspaceGate, passwordStrength } from '../../src/renderer/screens/WorkspaceGate'
-import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
+import { WorkspaceGate } from '../../src/renderer/screens/WorkspaceGate'
+import { passwordStrength } from '../../src/renderer/components'
+import { t, UI_LANGUAGE_CODES, type MessageKey } from '../../src/shared/i18n'
 import {
   MIN_PASSWORD_LENGTH,
   type WorkspaceStateInfo,
@@ -11,10 +13,12 @@ import {
   type ModelInfo,
   type ModelVerifyProgress
 } from '../../src/shared/types'
+import { LOCKED_ENCRYPTED_WORKSPACE, UNLOCKED_ENCRYPTED_WORKSPACE } from '../helpers/app-shell'
 import { catalogOf } from '../helpers/i18n-catalogs'
 import { modelInfo } from '../helpers/model-fixtures'
 import { renderInLanguage } from '../helpers/render-language'
-import { stubApi } from '../helpers/renderer'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
+import type { PreloadApi } from '../../src/preload'
 
 // Renderer test (jsdom + RTL) for the pre-app gate. Phase 27 turned the CREATE path
 // into the 3-step first run (welcome → password → optional starter step); this suite
@@ -29,19 +33,18 @@ const UNINITIALIZED: WorkspaceStateInfo = {
   plaintextAllowed: false,
   encryptionRequired: true
 }
-const LOCKED: WorkspaceStateInfo = {
-  state: 'locked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
-const UNLOCKED: WorkspaceStateInfo = { ...UNINITIALIZED, state: 'unlocked', mode: 'encrypted' }
 
 /** A minimal installed chat model for the starter-step gate. */
 const chatModel = (state: ModelInfo['state']): ModelInfo => modelInfo({ id: 'qwen3-4b-instruct-q4', state, recommended: true })
 
 const okCreate = (): Mock =>
-  vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED }))
+  vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE }))
+
+/** Stubs for a create that SUCCEEDS: the gate then subscribes to first-run verify progress (the preload returns an
+ *  unsubscribe function) before it lists the models. */
+function stubCreate(over: Partial<PreloadApi>): void {
+  stubApi({ onModelVerifyProgress: vi.fn(() => () => {}), ...over })
+}
 
 /** Walk from the welcome step to the password step. */
 async function toPasswordStep(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -49,7 +52,14 @@ async function toPasswordStep(user: ReturnType<typeof userEvent.setup>): Promise
   await screen.findByRole('heading', { name: /create your password/i })
 }
 
-afterEach(cleanup)
+// #832: a window.api call no row stubbed fails that row (cleanup first, so one failure cannot cascade).
+afterEach(() => {
+  try {
+    cleanup()
+  } finally {
+    assertNoUnexpectedApiCalls()
+  }
+})
 
 describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', () => {
   // Strength words are MessageKeys resolved at render (Phase 40); the English
@@ -90,19 +100,13 @@ describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', (
 })
 
 describe('WorkspaceGate — create (3-step first run)', () => {
-  it('starts on the welcome step with the trust framing, no password fields yet', () => {
-    stubApi({})
-    render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
-
-    expect(screen.getByRole('heading', { name: /welcome/i })).toBeInTheDocument()
-    expect(screen.getByText(/everything stays on this drive/i)).toBeInTheDocument()
-    expect(screen.queryByPlaceholderText('Password')).not.toBeInTheDocument()
-  })
-
-  it('moves welcome → password and back', async () => {
+  it('starts on the welcome step with the trust framing and no password fields, then moves welcome → password and back', async () => {
     const user = userEvent.setup()
     stubApi({})
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
+    expect(screen.getByRole('heading', { name: /welcome/i })).toBeInTheDocument()
+    expect(screen.getByText(/everything stays on this drive/i)).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Password')).not.toBeInTheDocument()
 
     await toPasswordStep(user)
     expect(screen.getByPlaceholderText('Password')).toBeInTheDocument()
@@ -111,7 +115,8 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     expect(screen.getByRole('heading', { name: /welcome/i })).toBeInTheDocument()
   })
 
-  it('keeps Create disabled until the password is 8+ chars and matches confirm', async () => {
+  // The length floor is the next row's (MIN_PASSWORD_LENGTH, never a copied 8).
+  it('keeps Create disabled while confirm differs, and enables it on a match', async () => {
     const user = userEvent.setup()
     stubApi({})
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
@@ -120,11 +125,6 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     const create = screen.getByRole('button', { name: /create workspace/i })
     expect(create).toBeDisabled()
 
-    await user.type(screen.getByPlaceholderText('Password'), 'short')
-    expect(create).toBeDisabled() // < 8 chars
-    expect(screen.getByText(/at least 8 characters/i)).toBeInTheDocument()
-
-    await user.clear(screen.getByPlaceholderText('Password'))
     await user.type(screen.getByPlaceholderText('Password'), 'longenough')
     await user.type(screen.getByPlaceholderText('Confirm password'), 'different')
     expect(create).toBeDisabled() // mismatch
@@ -133,6 +133,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await user.clear(screen.getByPlaceholderText('Confirm password'))
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
     expect(create).toBeEnabled()
+    expect(screen.queryByText(/don.?t match/i)).not.toBeInTheDocument()
   })
 
   // The floor is main's (`registerWorkspaceIpc` refuses under it), so main's too-short refusal
@@ -161,10 +162,12 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await toPasswordStep(user)
 
     // A weak-but-valid password: meter says "Weak", the button stays enabled. The visible
-    // word is plain text now (not a live region — audit L13), so query it by text.
+    // word is plain text now (not a live region — audit L13), so query it by text. The sr-only
+    // announcer repeats the word once typing has paused for 600 ms (Components.test.tsx owns that
+    // debounce), which can land while the confirm field is still being typed: look past it.
     await user.type(screen.getByPlaceholderText('Password'), 'aaaaaaaa')
     await user.type(screen.getByPlaceholderText('Confirm password'), 'aaaaaaaa')
-    expect(screen.getByText('Weak')).toBeInTheDocument()
+    expect(screen.getByText('Weak', { ignore: 'script, style, [role="status"]' })).toBeInTheDocument()
     expect(screen.getByText(/longer is stronger/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /create workspace/i })).toBeEnabled()
   })
@@ -211,7 +214,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     const createWorkspace = okCreate()
     const listModels = vi.fn(async (): Promise<ModelInfo[]> => [chatModel('installed')])
     const onUnlocked = vi.fn()
-    stubApi({ createWorkspace, listModels })
+    stubCreate({ createWorkspace, listModels })
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={onUnlocked} />)
     await toPasswordStep(user)
 
@@ -222,16 +225,24 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     expect(createWorkspace).toHaveBeenCalledWith('longenough', 'encrypted')
     // The step-3 check runs AFTER create succeeds (listModels needs an unlocked
     // workspace) and, with a model installed, skips the starter step entirely.
-    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'chat'))
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE, 'chat'))
     expect(screen.queryByText(/no ai model is installed/i)).not.toBeInTheDocument()
   })
 
-  it('shows the starter step when no chat model is installed, with every exit honest', async () => {
+  // Every exit of the starter step is honest: it hands the open workspace to the shell exactly once, on its own
+  // screen (Skip ends on the teaching Chat empty state). A model listed but not installed still counts as none, and so
+  // does an installed embedder: every Kit ships E5, so "no chat model" usually reads like this list (#860 R4).
+  it.each<[MessageKey, string]>([
+    ['gate.starter.skip', 'chat'],
+    ['gate.starter.addDocuments', 'documents'],
+    ['gate.starter.chooseModel', 'models']
+  ])('shows the starter step when no chat model is installed; %s lands on %s', async (exit, landOn) => {
     const user = userEvent.setup()
     const onUnlocked = vi.fn()
-    stubApi({
+    const embedder = modelInfo({ id: 'multilingual-e5-small-q8', role: 'embeddings', state: 'installed' })
+    stubCreate({
       createWorkspace: okCreate(),
-      listModels: vi.fn(async (): Promise<ModelInfo[]> => [chatModel('missing')])
+      listModels: vi.fn(async (): Promise<ModelInfo[]> => [chatModel('missing'), embedder])
     })
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={onUnlocked} />)
     await toPasswordStep(user)
@@ -245,27 +256,9 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await screen.findByText(/no ai model is installed on this drive yet/i)
     expect(onUnlocked).not.toHaveBeenCalled()
 
-    await user.click(screen.getByRole('button', { name: /choose your ai model/i }))
-    expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'models')
-  })
-
-  it('the starter step is skippable and ends on the Chat empty state', async () => {
-    const user = userEvent.setup()
-    const onUnlocked = vi.fn()
-    stubApi({
-      createWorkspace: okCreate(),
-      listModels: vi.fn(async (): Promise<ModelInfo[]> => [])
-    })
-    render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={onUnlocked} />)
-    await toPasswordStep(user)
-
-    await user.type(screen.getByPlaceholderText('Password'), 'longenough')
-    await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
-    await user.click(screen.getByRole('button', { name: /create workspace/i }))
-
-    await screen.findByText(/no ai model is installed on this drive yet/i)
-    await user.click(screen.getByRole('button', { name: /skip for now/i }))
-    expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'chat')
+    await user.click(screen.getByRole('button', { name: t('en', exit) }))
+    expect(onUnlocked).toHaveBeenCalledTimes(1)
+    expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE, landOn)
   })
 
   // FE-E (full-audit-2026-06-29-followup, Phase 8): a THROWN model-listing/verify failure
@@ -275,7 +268,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
   it('routes to Models (not silently to Chat) when the post-create model check throws', async () => {
     const user = userEvent.setup()
     const onUnlocked = vi.fn()
-    stubApi({
+    stubCreate({
       createWorkspace: okCreate(),
       listModels: vi.fn(async (): Promise<ModelInfo[]> => {
         throw new Error('boom')
@@ -288,7 +281,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
     await user.click(screen.getByRole('button', { name: /create workspace/i }))
 
-    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'models'))
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE, 'models'))
   })
 
   it('shows a determinate verification bar while first-run hashing runs, then unsubscribes', async () => {
@@ -337,29 +330,6 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await waitFor(() => expect(unsubscribe).toHaveBeenCalled())
   })
 
-  it('shows the error message and clears the fields when create is refused', async () => {
-    const user = userEvent.setup()
-    const createWorkspace = vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({
-        ok: false,
-        reason: 'refused',
-        message: 'Password must be at least 8 characters.'
-      })
-    )
-    const onUnlocked = vi.fn()
-    stubApi({ createWorkspace })
-    render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={onUnlocked} />)
-    await toPasswordStep(user)
-
-    await user.type(screen.getByPlaceholderText('Password'), 'longenough')
-    await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
-    await user.click(screen.getByRole('button', { name: /create workspace/i }))
-
-    expect(await screen.findByText(/at least 8 characters/i)).toBeInTheDocument()
-    expect(onUnlocked).not.toHaveBeenCalled()
-    expect(screen.getByPlaceholderText('Password')).toHaveValue('') // fields reset
-  })
-
   it('offers the plaintext toggle only when policy allows it', async () => {
     const user = userEvent.setup()
     stubApi({})
@@ -378,15 +348,21 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     const createWorkspace = vi.fn(
       async (): Promise<WorkspaceActionResult> => ({
         ok: true,
-        state: { ...UNLOCKED, mode: 'plaintext_dev' }
+        state: { ...UNLOCKED_ENCRYPTED_WORKSPACE, mode: 'plaintext_dev' }
       })
     )
-    stubApi({ createWorkspace, listModels: vi.fn(async (): Promise<ModelInfo[]> => []) })
+    stubCreate({ createWorkspace, listModels: vi.fn(async (): Promise<ModelInfo[]> => []) })
     render(<WorkspaceGate state={{ ...UNINITIALIZED, plaintextAllowed: true }} onUnlocked={vi.fn()} />)
     await toPasswordStep(user)
 
-    // The plaintext toggle is a Switch (binary setting, guidelines §6).
-    await user.click(screen.getByRole('switch'))
+    // The plaintext toggle is a Switch (binary setting, guidelines §6). Encrypted stays the default even where
+    // policy allows plaintext (CLAUDE.md: no plaintext workspace unless explicitly chosen), and the choice is
+    // called out while it stands.
+    const toggle = screen.getByRole('switch')
+    expect(toggle).not.toBeChecked()
+    expect(screen.queryByText(t('en', 'gate.create.plaintextWarning'))).not.toBeInTheDocument()
+    await user.click(toggle)
+    expect(screen.getByText(t('en', 'gate.create.plaintextWarning'))).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /create workspace/i }))
     expect(createWorkspace).toHaveBeenCalledWith('', 'plaintext_dev')
   })
@@ -396,11 +372,11 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
   it('unlocks with the entered password and stays a one-step screen', async () => {
     const user = userEvent.setup()
     const unlockWorkspace = vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED })
+      async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE })
     )
     const onUnlocked = vi.fn()
     stubApi({ unlockWorkspace })
-    render(<WorkspaceGate state={LOCKED} onUnlocked={onUnlocked} />)
+    render(<WorkspaceGate state={LOCKED_ENCRYPTED_WORKSPACE} onUnlocked={onUnlocked} />)
 
     // No first-run steps on unlock: the password field is immediately there.
     expect(screen.getByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
@@ -410,27 +386,65 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
 
     expect(unlockWorkspace).toHaveBeenCalledWith('my-passphrase')
     // A plain unlock passes no landing target — the shell keeps its screen.
-    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED))
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED_ENCRYPTED_WORKSPACE))
+  })
+})
+
+// #955 item 3: a create refused because a workspace is on the drive after all (its key file copied back while the
+// create form was up). The form used to stay until a restart, and its copy said "Restart HilbertRaum". Main now reads
+// `locked` (its unlock runs the start's steps over that vault), so the gate re-reads the state and hands it to its parent,
+// which shows the unlock form. Walk round: the create step and the unlock screen are one card, so the alert region the
+// create step mounted is the very element that receives the refusal; a region mounted by the switch got its text in the
+// same frame in the real app, which many screen readers miss (#436, M-U1).
+describe('WorkspaceGate — a create refused because a workspace is on the drive (#955 item 3)', () => {
+  /** The gate in a parent that keeps its state as App does, on the create step with a valid password typed; main
+   *  answers the create with `workspace_exists` and reads `locked` afterwards. */
+  async function onRefusableCreate(user: ReturnType<typeof userEvent.setup>) {
+    const createWorkspace = vi.fn(
+      async (): Promise<WorkspaceActionResult> => ({ ok: false, reason: 'workspace_exists', message: 'main’s text' })
+    )
+    const getWorkspaceState = vi.fn(async (): Promise<WorkspaceStateInfo> => LOCKED_ENCRYPTED_WORKSPACE)
+    const onUnlocked = vi.fn()
+    stubApi({ createWorkspace, getWorkspaceState })
+    function Parent(): JSX.Element {
+      const [state, setState] = useState<WorkspaceStateInfo>(UNINITIALIZED)
+      return <WorkspaceGate state={state} onUnlocked={onUnlocked} onStateChange={setState} />
+    }
+    render(<Parent />)
+    await toPasswordStep(user)
+    await user.type(screen.getByPlaceholderText('Password'), 'longenough')
+    await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+    return { getWorkspaceState, onUnlocked }
+  }
+
+  it('re-reads the state and shows the unlock form, the refusal arriving in its alert region, focus on its field', async () => {
+    const user = userEvent.setup()
+    const { getWorkspaceState, onUnlocked } = await onRefusableCreate(user)
+    // The create step's own region, in the document and empty before the refusal.
+    const region = screen.getByRole('alert')
+    expect(region).toBeEmptyDOMElement()
+    await user.click(screen.getByRole('button', { name: /create workspace/i }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    // The same element after the switch, the refusal now inside it.
+    expect(screen.getByRole('alert')).toBe(region)
+    expect(region).toHaveTextContent(t('en', 'main.workspace.exists'))
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Password'))
+    expect(getWorkspaceState).toHaveBeenCalledTimes(1)
+    expect(onUnlocked).not.toHaveBeenCalled()
   })
 
-  it('shows the error on a wrong password and does not advance', async () => {
+  // Review R F-2: the card keeps its state across the switch. "Show password" turned on at the create step left the
+  // unlock field unmasked, so the other workspace's password was typed in clear text.
+  it('starts the unlock field masked although "Show password" was on at the create step', async () => {
     const user = userEvent.setup()
-    const unlockWorkspace = vi.fn(
-      async (): Promise<WorkspaceActionResult> => ({
-        ok: false,
-        reason: 'wrong_password',
-        message: "That password didn't unlock your workspace. Check it and try again."
-      })
-    )
-    const onUnlocked = vi.fn()
-    stubApi({ unlockWorkspace })
-    render(<WorkspaceGate state={LOCKED} onUnlocked={onUnlocked} />)
+    await onRefusableCreate(user)
+    await user.click(screen.getByRole('button', { name: /show password/i }))
+    expect(screen.getByPlaceholderText('Password')).toHaveAttribute('type', 'text')
+    await user.click(screen.getByRole('button', { name: /create workspace/i }))
 
-    await user.type(screen.getByPlaceholderText('Password'), 'nope')
-    await user.click(screen.getByRole('button', { name: /^unlock$/i }))
-
-    expect(await screen.findByText(/didn.t unlock your workspace/i)).toBeInTheDocument()
-    expect(onUnlocked).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Password')).toHaveAttribute('type', 'password')
   })
 })
 
@@ -446,7 +460,7 @@ describe('WorkspaceGate — the edition name stays English in a Turkish UI', () 
 
   it('"HilbertRaum Lite" resolves to lang="en" under <html lang="tr">', () => {
     stubApi({})
-    renderInLanguage(<WorkspaceGate state={LOCKED} onUnlocked={vi.fn()} />, 'tr')
+    renderInLanguage(<WorkspaceGate state={LOCKED_ENCRYPTED_WORKSPACE} onUnlocked={vi.fn()} />, 'tr')
     expect(document.documentElement.lang).toBe('tr')
     expect(screen.getByText('HilbertRaum Lite').closest('[lang]')?.getAttribute('lang')).toBe('en')
   })
@@ -455,27 +469,45 @@ describe('WorkspaceGate — the edition name stays English in a Turkish UI', () 
 // UI-languages owner call D-17 (a): before unlock the gate renders in the localStorage mirror's
 // language, while main emits its failure `message` in its own cached language (the OS locale
 // until settings are readable). Every row renders the gate in German and lets main answer in
-// English, so a gate that showed `message` for a mapped reason turns its row red.
+// English, so a gate that showed `message` for a mapped reason turns its row red. Every failure
+// also leaves the user on the gate: nothing reaches the shell, and a failed create empties both
+// password fields for the retry (SH-12; the unlock field's reset and focus are WorkspaceGateFocus's).
 describe('WorkspaceGate — unlock/create failures render in the gate’s language (UI-languages owner call D-17 (a))', () => {
   type Failure = Extract<WorkspaceActionResult, { ok: false }>
 
   afterEach(() => window.localStorage.clear())
 
-  /** Render the gate in German, submit once, and have main answer with `failure`. */
-  async function failIn(call: 'unlock' | 'create', failure: Failure): Promise<void> {
+  /** Render the gate in German, submit once, have main answer with `failure` (or the call reject with it), and expect
+   *  `shown` on a gate that stayed up. #955 item 3: after a create's `workspace_exists` the gate re-reads main's state;
+   *  here main still reads `uninitialized`, so the create form keeps the refusal (the switch to the unlock form when main
+   *  reads `locked` is the next describe's). */
+  async function failIn(call: 'unlock' | 'create', failure: Failure | Error, shown: string): Promise<void> {
     const user = userEvent.setup()
-    const answer = vi.fn(async (): Promise<WorkspaceActionResult> => failure)
-    stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
+    const answer = vi.fn(async (): Promise<WorkspaceActionResult> => {
+      if (failure instanceof Error) throw failure
+      return failure
+    })
+    const onUnlocked = vi.fn()
+    const onStateChange = vi.fn()
+    stubApi(
+      call === 'unlock'
+        ? { unlockWorkspace: answer }
+        : { createWorkspace: answer, getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => UNINITIALIZED) }
+    )
     renderInLanguage(
-      <WorkspaceGate state={call === 'unlock' ? LOCKED : UNINITIALIZED} onUnlocked={vi.fn()} />,
+      <WorkspaceGate
+        state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED}
+        onUnlocked={onUnlocked}
+        onStateChange={onStateChange}
+      />,
       'de'
     )
     if (call === 'unlock') {
       await user.type(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder')), 'nope')
       await user.click(screen.getByRole('button', { name: t('de', 'gate.unlock.submit') }))
     } else {
-      // A valid encrypted password, as the gate always sends: main's too-short refusal can't
-      // be the answer, so a `refused` here is the vault's own sentence.
+      // A valid encrypted password, as the gate always sends. Main's too-short refusal can't be the
+      // answer to it, but a stubbed `refused` row still checks the copy the gate would show for one.
       await user.click(screen.getByRole('button', { name: t('de', 'gate.welcome.start') }))
       const password = await screen.findByPlaceholderText(t('de', 'gate.passwordPlaceholder'))
       await user.type(password, 'longenough')
@@ -483,24 +515,36 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
       await user.click(screen.getByRole('button', { name: t('de', 'gate.create.submit') }))
       expect(answer).toHaveBeenCalledWith('longenough', 'encrypted')
     }
+    expect(await screen.findByText(shown)).toBeInTheDocument()
+    expect(onUnlocked).not.toHaveBeenCalled()
+    expect(onStateChange).not.toHaveBeenCalled()
+    if (call === 'create' && !(failure instanceof Error)) {
+      expect(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder'))).toHaveValue('')
+      expect(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder'))).toHaveValue('')
+    }
   }
 
+  // The lookup itself, the most common failure, and one row per table (`error` reads "couldn't open" to unlock and
+  // "couldn't create" to create). Which key every other reason maps to is tied to main's real handlers, in every
+  // language, by workspace-ipc.test.ts's cross-check ("main says what the gate shows"), the D-17 record's guard.
+  // #807: the reasons that replaced create's free-text `refused` (the vault's English sentence, shown as it came), the
+  // too-short refusal that `refused` now only is, with the floor in its text (A2), and the missing descriptor (C-S2).
   it.each([
     ['unlock', 'wrong_password', 'main.workspace.wrongPassword'],
-    ['unlock', 'vault_damaged', 'main.workspace.vaultDamaged'],
-    ['unlock', 'vault_recovery_blocked', 'main.workspace.recoveryBlocked'],
-    ['unlock', 'workspace_newer', 'main.workspace.newer'],
     ['unlock', 'error', 'main.workspace.openFailed'],
-    ['create', 'workspace_newer', 'main.workspace.newer'],
-    ['create', 'error', 'main.workspace.createFailed']
+    ['create', 'error', 'main.workspace.createFailed'],
+    ['create', 'workspace_exists', 'main.workspace.exists'],
+    ['create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
+    ['create', 'refused', 'main.workspace.passwordTooShort'],
+    ['unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing'],
+    // Review V F-3: a create over an unreadable key file with no `.enc` shows the unlock's copy, on the create form.
+    ['create', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable']
   ] as const)('%s %s shows %s in German although main said it in English', async (call, reason, key) => {
-    await failIn(call, { ok: false, reason, message: t('en', key) })
-    expect(await screen.findByText(t('de', key))).toBeInTheDocument()
+    const params = { min: MIN_PASSWORD_LENGTH }
+    await failIn(call, { ok: false, reason, message: t('en', key, params) }, t('de', key, params))
   })
 
   it.each([
-    // The vault's own refusal sentence: no catalog key, raw English in every UI language today.
-    ['create', 'refused', 'An encrypted workspace already exists here — refusing to overwrite it.'],
     // A reason neither table has. The tables are typecheck-complete, so only a cast gets here;
     // the gate still says what main said instead of showing an empty banner.
     ['unlock', 'not_in_the_tables' as string as Failure['reason'], 'Something new went wrong.'],
@@ -508,7 +552,12 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     // (found in the UI languages wave's code review).
     ['unlock', 'toString' as string as Failure['reason'], 'Something else went wrong.']
   ] as const)('%s %s shows main’s own message', async (call, reason, message) => {
-    await failIn(call, { ok: false, reason, message })
-    expect(await screen.findByText(message)).toBeInTheDocument()
+    await failIn(call, { ok: false, reason, message }, message)
+  })
+
+  // #860 R1: a call that REJECTS (an IPC or main-side fault, not an answer) has no reason to map; the gate still says
+  // something, in its own language, instead of leaving the user on a silent gate.
+  it.each(['unlock', 'create'] as const)('%s: a call that rejects shows the generic failure in German', async (call) => {
+    await failIn(call, new Error('ipc broke'), t('de', 'gate.error.generic'))
   })
 })

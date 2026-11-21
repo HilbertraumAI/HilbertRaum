@@ -3,6 +3,7 @@ import { createMockEmbedder } from './mock'
 import { createE5Embedder } from './e5'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
+import type { BoundModelStartCheck } from '../models'
 
 // Availability-aware embedder selector (graceful-fallback rule), mirroring
 // the runtime factory. The real `E5Embedder` (a loopback `llama-server --embedding`
@@ -28,6 +29,8 @@ export interface EmbedderSelectionDeps {
   /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
   isDev?: boolean
   onSelect?: (kind: 'e5' | 'mock', reason: string) => void
+  /** #913: the E5's start check (`E5EmbedderOptions.checkModel`). Absent ⇒ no check. */
+  checkModel?: BoundModelStartCheck
 }
 
 /**
@@ -42,7 +45,8 @@ export function createSelectedEmbedder(deps: EmbedderSelectionDeps): Embedder {
       binPath,
       modelPath: model.modelPath,
       dimensions: model.dimensions,
-      contextTokens: model.contextTokens
+      contextTokens: model.contextTokens,
+      checkModel: deps.checkModel
     })
 
   // Shared model→binary→weights ladder (L16). The embedder is the one selector that

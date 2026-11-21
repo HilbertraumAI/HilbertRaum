@@ -31,10 +31,13 @@ import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-
 import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
 import { t } from '../../src/shared/i18n'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
+import type { WorkspaceAdmission } from '../../src/main/services/workspace-vault'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { until, within } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -77,7 +80,7 @@ function ctxWith(workspacePath: string, transcriber: Transcriber | null): {
     paths: { workspacePath },
     transcriber,
     audit,
-    workspace: { isUnlocked: () => true }
+    workspace: workspaceStandIn()
   } as unknown as AppContext
   return { ctx, audit }
 }
@@ -176,7 +179,14 @@ describe('registerDictationIpc', () => {
   // locked (where it should hold only `.enc` sidecars) — an F16 lock-guard parity gap. With a
   // transcriber PRESENT (so the refusal is the lock gate, not the unavailable backstop) and a
   // LOCKED workspace, it must refuse with the friendly locked copy and write nothing.
-  it('refuses on a locked vault and writes NO file under documents/ (S3)', async () => {
+  // AUD-02 (#860 L6): the second posture is an open workspace mid-lock — `isUnlocked()` is still true for the whole
+  // teardown, so only the latch (`workspaceAdmitsWork`) keeps the plaintext WAV out of documents/ then.
+  // Each row builds its own stand-in (it is stateful), so a retry or a later row never inherits a moved posture.
+  it.each<[string, () => WorkspaceAdmission]>([
+    ['on a locked vault', () => workspaceStandIn({ unlocked: false })],
+    ['while a lock is under way (AUD-02 latch)', () => workspaceStandIn({ locking: true })]
+  ])('refuses %s and writes NO file under documents/ (S3)', async (_posture, makeWorkspace) => {
+    const workspace = makeWorkspace()
     const workspacePath = freshWorkspacePath()
     const { transcriber, seen } = fakeTranscriber()
     const lockedCtx = {
@@ -184,13 +194,13 @@ describe('registerDictationIpc', () => {
       paths: { workspacePath },
       transcriber,
       audit: vi.fn(),
-      workspace: { isUnlocked: () => false }
+      workspace
     } as unknown as AppContext
     registerDictationIpc(lockedCtx)
 
     await expect(
       invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
-    ).rejects.toThrow(/Workspace is locked\./)
+    ).rejects.toThrow(t('en', 'main.dictation.locked'))
     // The refusal precedes any disk write AND the transcriber dispatch.
     expect(seen).toHaveLength(0)
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
@@ -392,23 +402,33 @@ describe('registerDictationIpc — voice engine refused by the OS (#530)', () =>
     }
   })
 
-  it('an EngineCannotRunError (whisper family) rejects with the engine-cannot-run copy and shreds the temp file', async () => {
+  // #869: and a speech model whose path has no spelling the engine reads on this Windows command line
+  // says so too — renaming the file fixes it, a retry would not.
+  it.each<[string, () => Error, 'main.dictation.engineCannotRun' | 'main.dictation.voiceModelPathUnsupported', string]>([
+    [
+      'an EngineCannotRunError (whisper family) rejects with the engine-cannot-run copy',
+      () =>
+        new EngineCannotRunError('whisper-cli', {
+          family: 'whisper_cpp',
+          reason: 'library-missing',
+          os: 'linux',
+          name: 'libgomp.so.1',
+          exit: 'exit code 127'
+        }),
+      'main.dictation.engineCannotRun',
+      'libgomp'
+    ],
+    ['a WhisperPathError (#869) rejects with the model-path copy', () => new WhisperPathError('-vm'), 'main.dictation.voiceModelPathUnsupported', 'whisper-cli']
+  ])('%s and shreds the temp file', async (_label, refusal, key, detail) => {
     const workspacePath = freshWorkspacePath()
-    const refusal = new EngineCannotRunError('whisper-cli', {
-      family: 'whisper_cpp',
-      reason: 'library-missing',
-      os: 'linux',
-      name: 'libgomp.so.1',
-      exit: 'exit code 127'
-    })
-    registerDictationIpc(ctxWith(workspacePath, throwing(refusal)).ctx)
+    registerDictationIpc(ctxWith(workspacePath, throwing(refusal())).ctx)
     const err = await invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3])).then(
       () => null,
       (e: unknown) => e
     )
-    expect(String(err)).toContain(t('en', 'main.dictation.engineCannotRun'))
+    expect(String(err)).toContain(t('en', key))
     expect(String(err)).not.toContain(DICTATION_FAILED_MESSAGE)
-    expect(String(err)).not.toContain('libgomp') // the technical detail stays out of the toast
+    expect(String(err)).not.toContain(detail) // the technical detail stays out of the toast
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
   })
 })

@@ -13,6 +13,71 @@ import type { ModelRuntime } from '../../src/main/services/runtime'
 import { DEFAULT_SETTINGS, type Message } from '../../src/shared/types'
 import { tempRoot } from './db-fixtures'
 
+/** The map and fold instructions as they were before #939 (frozen copies of master's builders), which a turn under a
+ *  skill keeps byte for byte when its notes do not take the request (#939). With no skill the notes always take it:
+ *  the no-fence template below (#952). */
+export const MASTER_MAP_HEAD = (part: string | number, total: string | number): string =>
+  `You are processing part ${part} of ${total} of ONE document, section by section, to complete the task ` +
+  'described below. From THIS part only, note every detail the task needs — keep names, numbers, dates, ' +
+  'decisions, and obligations exact. Write brief notes, not the final answer.\n'
+export const MASTER_FOLD_HEAD = (part: string | number, total: string | number): string =>
+  `You are condensing the notes from part ${part} of ${total} of ONE document into a shorter summary, to complete ` +
+  'the task described below. Keep every name, number, date, decision, and obligation exact — drop only ' +
+  'repetition and filler. Write condensed notes, not the final answer.\n'
+
+/** Master's whole map or fold user turn for one window (`text`) and the turn's fence (`skillFence`, as
+ *  `buildSkillFence` returns it, or null for no skill). The frozen template of master's builders. */
+export function masterMapPrompt(fold: boolean, skillFence: string | null, part: number | string, total: number | string, text: string): string {
+  const fence = skillFence ? `\n${skillFence}\n` : ''
+  const head = fold ? MASTER_FOLD_HEAD(part, total) : MASTER_MAP_HEAD(part, total)
+  const label = fold ? '(section notes)' : '(section summaries)'
+  return `${head}${fence}\nPart ${part} of ${total} ${label}:\n${text}\n\n${fold ? 'Condensed notes:' : 'Notes:'}`
+}
+
+/** #952: the map and fold instructions with no skill (frozen copies of the no-fence builders). There is no task, so
+ *  the user's request is the notes' only target, in the fenced request layout with the fence left out. */
+export const NO_FENCE_MAP_HEAD = (part: string | number, total: string | number): string =>
+  `You are processing part ${part} of ${total} of ONE document, section by section, to answer the user request ` +
+  'below. From THIS part only, note every detail the user request needs — keep names, numbers, dates, decisions, ' +
+  'and obligations exact. Write brief notes, not the final answer.\n'
+export const NO_FENCE_FOLD_HEAD = (part: string | number, total: string | number): string =>
+  `You are condensing the notes from part ${part} of ${total} of ONE document into a shorter summary, to answer ` +
+  'the user request below. Keep every name, number, date, decision, and obligation exact — drop only repetition ' +
+  'and filler. Write condensed notes, not the final answer.\n'
+
+/** The whole no-skill map or fold user turn for one window (`text`) and the user's `request` (#952). */
+export function noFenceMapPrompt(fold: boolean, request: string, part: number | string, total: number | string, text: string): string {
+  const head = fold ? NO_FENCE_FOLD_HEAD(part, total) : NO_FENCE_MAP_HEAD(part, total)
+  const label = fold ? '(section notes)' : '(section summaries)'
+  return `${head}\nUser request:\n${request}\n\nPart ${part} of ${total} ${label}:\n${text}\n\n${fold ? 'Condensed notes:' : 'Notes:'}`
+}
+
+/** A map or fold user turn split into its step kind, part numbers and window text, or null when it is neither. */
+function mapStepOf(user: string): { fold: boolean; part: string; total: string; text: string } | null {
+  const m = user.match(/^You are (processing|condensing the notes from) part (\d+) of (\d+) /)
+  if (!m) return null
+  const fold = m[1] !== 'processing'
+  const marker = `\nPart ${m[2]} of ${m[3]} ${fold ? '(section notes)' : '(section summaries)'}:\n`
+  const tail = fold ? '\n\nCondensed notes:' : '\n\nNotes:'
+  const at = user.lastIndexOf(marker)
+  if (at < 0 || !user.endsWith(tail)) return null
+  return { fold, part: m[2], total: m[3], text: user.slice(at + marker.length, user.length - tail.length) }
+}
+
+/** A map or fold user turn rebuilt as master's builder would write it for ITS OWN part numbers and window text
+ *  and the EXPECTED fence, or null when `user` is neither. Equal to `user` ⇔ the step sent master's prompt for that
+ *  window: every byte but the window text is master's template and the given fence. */
+export function asPreRequestMapPrompt(user: string, skillFence: string | null): string | null {
+  const step = mapStepOf(user)
+  return step && masterMapPrompt(step.fold, skillFence, step.part, step.total, step.text)
+}
+
+/** The same for the no-skill template (#952): equal to `user` ⇔ the step sent the no-fence prompt for `request`. */
+export function asNoFenceMapPrompt(user: string, request: string): string | null {
+  const step = mapStepOf(user)
+  return step && noFenceMapPrompt(step.fold, request, step.part, step.total, step.text)
+}
+
 /** The whole-document question the suites ask (German, like the fixture). */
 export const WHOLE_DOC_QUESTION = 'Fasse das gesamte Dokument zusammen: welche Entscheidungen wurden getroffen?'
 

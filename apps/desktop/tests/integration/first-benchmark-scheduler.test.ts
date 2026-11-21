@@ -111,11 +111,11 @@ import {
   performanceChangedSpy,
   result,
   seededDb,
-  sessionWorkspace,
   stoppedStatus,
   stubChatRuntime,
   withLlamaBinary
 } from '../helpers/performance-fixture'
+import { workspaceStandIn, type WorkspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 /** A catalog chat model with no weights under the test roots: developer leniency lets the
@@ -311,7 +311,7 @@ describe('prepareFirstBenchmark: the cheap half', () => {
     expect(prepareFirstBenchmark(ctxWith(root, fresh))).toEqual({
       run: 'first-run',
       attempted: false,
-      epoch: undefined,
+      epoch: 1, // the session the decision was made in (the stand-in's first)
       hereKey: here(),
       // #380/#473: the session's probe refresh, fired on a first run too, so the seam's
       // auto-start waits for it exactly as on any other unlock.
@@ -342,7 +342,7 @@ describe('prepareFirstBenchmark: the cheap half', () => {
   it('a locked workspace (or one whose lock is under way) owes nothing and captures no session', () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     ws.beginLock()
     expect(prepareFirstBenchmark(ctxWith(root, db, { workspace: ws }))).toEqual({
       run: null,
@@ -525,7 +525,7 @@ describe('movedDriveNotice: what the moved-drive check did (§5 item 22 (a))', (
     const db = seededDb(root)
     const foreign = result()
     updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, hereResult()] })
-    const workspace = sessionWorkspace()
+    const workspace = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace })
     prepareFirstBenchmark(ctx)
     expect(movedDriveNotice(ctx)).toMatchObject({ kind: 'restored' })
@@ -831,7 +831,7 @@ describe('settlement re-checks', () => {
   it('a lock completing during the wait → skipped-admission', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     const foreign = movedToNewMachine(db)
     const settled = deferred()
@@ -848,7 +848,7 @@ describe('settlement re-checks', () => {
   it('a lock UNDER WAY at settlement (DB still open, latch armed) → skipped-admission', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     movedToNewMachine(db)
     const settled = deferred()
@@ -865,7 +865,7 @@ describe('settlement re-checks', () => {
   it('a lock AND a re-unlock during the wait (the flags look untouched, the epoch does not) → skipped-epoch', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     movedToNewMachine(db)
     const settled = deferred()
@@ -903,7 +903,7 @@ describe('settlement re-checks', () => {
   it('a lane holding the model at settlement → skipped-busy, no retry, no push', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     const spy = performanceChangedSpy()
 
@@ -974,7 +974,7 @@ describe('SD2: one automatic attempt per unlock session', () => {
   it('a failed new-computer run is not retried in the session; the next session re-checks and runs', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     const foreign = movedToNewMachine(db)
     runBenchmarkSpy.mockRejectedValueOnce(new Error('drive probe blew up'))
@@ -1014,7 +1014,7 @@ describe('SD2: one automatic attempt per unlock session', () => {
   it('a successful MANUAL run ends the re-check: the next prepare owes nothing, in this session and the next', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     movedToNewMachine(db)
     runBenchmarkSpy.mockRejectedValueOnce(new Error('no binary'))
@@ -1039,12 +1039,12 @@ describe('the late-write guard (runAndPersistBenchmark)', () => {
   const notSaved = t('en', 'main.benchmark.lockedDuringRun')
 
   it.each([
-    ['a lock completed', (ws: ReturnType<typeof sessionWorkspace>) => ws.completeLock()],
-    ['a lock under way (DB open, latch armed)', (ws: ReturnType<typeof sessionWorkspace>) => ws.beginLock()]
+    ['a lock completed', (ws: WorkspaceStandIn) => ws.completeLock()],
+    ['a lock under way (DB open, latch armed)', (ws: WorkspaceStandIn) => ws.beginLock()]
   ])('%s between the legs and the persist: rejects, writes nothing, the idle push still follows the release', async (_label, lock) => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     const foreign = movedToNewMachine(db)
     const spy = performanceChangedSpy(() => ctx.runtime.occupancy.held('benchmark'))
@@ -1066,7 +1066,7 @@ describe('the late-write guard (runAndPersistBenchmark)', () => {
   it('a lock AND a re-unlock between the legs and the persist: rejects (the epoch moved); the same session persists', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     const foreign = movedToNewMachine(db)
 
@@ -1088,7 +1088,7 @@ describe('the late-write guard (runAndPersistBenchmark)', () => {
   it('through the scheduler, a refused late persist is a "failed" outcome', async () => {
     const root = freshRoot()
     const db = seededDb(root)
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     const ctx = ctxWith(root, db, { workspace: ws })
     const foreign = movedToNewMachine(db)
     const measure = runBenchmarkSpy.getMockImplementation()!
@@ -1310,7 +1310,7 @@ describe('the persisted result downstream', () => {
     const ctx = ctxWith(root, db, {
       paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'no-such-config') },
       workspace: {
-        isUnlocked: () => true,
+        ...workspaceStandIn(),
         getState: (): WorkspaceStateInfo => ({ state: 'unlocked', mode: 'plaintext_dev', plaintextAllowed: true, encryptionRequired: false })
       }
     })

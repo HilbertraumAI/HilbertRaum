@@ -40,18 +40,21 @@ executableName: HilbertRaum
 # the green gate fails.
 electronVersion: 43.8.6
 
-# Electron fuses (#560, #562), flipped in the packaged binary by @electron/fuses before signing.
+# Electron fuses (#560, #562, #564), flipped in the packaged binary by @electron/fuses before signing.
 # Measured on 43.7.7, re-checked on 43.8.0, 43.8.3 and 43.8.6; the record is docs/architecture.md
 # "Electron fuses — design record (#562)".
 #  - runAsNode OFF: ELECTRON_RUN_AS_NODE no longer turns HilbertRaum.exe into a plain Node runtime.
 #    Nothing uses it (tesseract.js runs on worker_threads, which this fuse does not touch).
 #  - enableNodeCliInspectArguments OFF: --inspect / --inspect-brk / SIGUSR1 open no debugger on the
 #    main process. Chromium's --remote-debugging-port is a different switch and still works.
-#  - enableNodeOptionsEnvironmentVariable stays ON, deliberately (owner decision 2026-10-03). A
-#    packaged app already ignores NODE_OPTIONS except two parser flags; what the fuse still governs
-#    is NODE_EXTRA_CA_CERTS, and TLS-scanning antivirus (Norton, measured) and corporate proxies
-#    export their root that way. Off, the in-app engine and model downloads fail with "fetch
-#    failed" on such machines (measured). Turn it off only once the downloaders trust the OS store (#564).
+#  - enableNodeOptionsEnvironmentVariable OFF (#564): the main process reads neither NODE_OPTIONS
+#    nor NODE_EXTRA_CA_CERTS (Electron unsets it). A packaged app ignored NODE_OPTIONS already,
+#    except two parser flags. NODE_EXTRA_CA_CERTS is how TLS-scanning antivirus (Norton, measured)
+#    and corporate proxies get their root trusted; they also install it in the OS certificate store,
+#    and the in-app downloads trust that store since #564 (src/main/services/net/trust.ts, called by
+#    downloadToFile before the first request). Until #564 this fuse stayed on (owner decision
+#    2026-10-03), because with it off the engine and model downloads failed with "fetch failed"
+#    behind Norton (measured). A root that is ONLY in NODE_EXTRA_CA_CERTS no longer counts.
 #  - enableEmbeddedAsarIntegrityValidation + onlyLoadAppFromAsar ON: a modified app.asar ends the
 #    app ("ASAR Integrity Violation"), and an `app/` folder planted beside a removed app.asar is
 #    never loaded. electron-builder writes the header hash on every build (the Windows exe resource,
@@ -70,10 +73,10 @@ electronVersion: 43.8.6
 # The other fuses keep Electron's defaults. tests/integration/packaging.test.ts pins this block and
 # checks that the installed electron-builder still maps every option (an unmapped name is ignored
 # silently). Re-check the built binary's fuse wire after an Electron bump or a change here
-# (docs/packaging.md "Electron fuses"); expected for 43.8.6: 001011001.
+# (docs/packaging.md "Electron fuses"); expected for 43.8.6: 000011001 (001011001 until #564).
 electronFuses:
   runAsNode: false
-  enableNodeOptionsEnvironmentVariable: true
+  enableNodeOptionsEnvironmentVariable: false
   enableNodeCliInspectArguments: false
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
@@ -138,8 +141,9 @@ files:
 npmRebuild: false
 
 # Model manifests are the ONLY model metadata in git. Ship them beside app.asar so the
-# packaged main process finds them: resolveManifestsDir(app.getAppPath()) walks up from
-# resources/app.asar and matches resources/model-manifests. HILBERTRAUM_MANIFESTS_DIR overrides.
+# packaged main process finds them: for the model list, resolveManifestsDir(app.getAppPath())
+# walks up from resources/app.asar and matches resources/model-manifests (HILBERTRAUM_MANIFESTS_DIR
+# overrides); the engine pins read exactly <process.resourcesPath>/model-manifests (#842).
 # Weights + sidecar binaries are NEVER bundled — they live on the prepared drive.
 extraResources:
   - from: ../../model-manifests
@@ -208,7 +212,8 @@ win:
   # signtoolOptions are read from env on the build machine:
   #   WIN_CSC_LINK              path/URL to the OV/EV .pfx (or base64) — NEVER in the repo
   #   WIN_CSC_KEY_PASSWORD      the .pfx password
-  # An EV cert (hardware token / cloud HSM) builds SmartScreen reputation fastest. The
+  # Signing lets SmartScreen build reputation for the publisher; Microsoft treats certificate
+  # types alike for this (docs/packaging.md "Code signing & notarization", #850). The
   # launcher (Start HilbertRaum.cmd) is a script and is not itself signed; the portable
   # .exe it spawns IS signed, which is what SmartScreen evaluates.
   signtoolOptions:

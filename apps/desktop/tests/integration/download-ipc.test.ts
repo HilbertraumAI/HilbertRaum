@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse as parseYaml, stringify } from 'yaml'
 
 // Phase 18 IPC-layer tests: the downloadModel gates are enforced in the MAIN process
 // (policy ceiling ∧ allowNetwork setting ∧ license acknowledgement), the offline
@@ -21,8 +21,11 @@ vi.mock('electron', () => ({
 
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
-import { tMain } from '../../src/main/services/i18n'
+import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
+import { applyUiLanguageSetting, tMain } from '../../src/main/services/i18n'
+import { t } from '../../src/shared/i18n'
 import { DownloadManager } from '../../src/main/services/downloads'
+import { setManifestAppVersion } from '../../src/main/services/models'
 import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -35,6 +38,7 @@ import { tempRoot } from '../helpers/db-fixtures'
 import { deferred } from '../helpers/deferred'
 import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { sha256 } from '../helpers/manifest-fixtures'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -115,7 +119,7 @@ function makeCtx(opts: {
     trustedSenders: ANY_SENDER,
     paths: { rootPath: drive.rootPath, configPath: drive.configPath },
     db,
-    workspace: { isUnlocked: () => opts.unlocked !== false },
+    workspace: workspaceStandIn({ unlocked: opts.unlocked !== false }),
     manifestsDir: drive.manifestsDir
   } as unknown as AppContext
   return { ctx, db, rootPath: drive.rootPath }
@@ -163,12 +167,47 @@ describe('downloadModel gates (offline guarantee — closed gates never reach th
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('throws on an unknown model id', async () => {
+  // #930 (G-5): in the interface language, the same text as the chat start's unknown id.
+  it('throws on an unknown model id, in the interface language', async () => {
     const { ctx } = makeCtx({ allowNetwork: true })
     registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: bodyFetch(BODY) }))
-    await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(
-      /Unknown model id/
+    await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(t('en', 'main.models.unknown'))
+    applyUiLanguageSetting('de')
+    try {
+      await expect(invoke(handlers, IPC.downloadModel, 'no-such-model')).rejects.toThrow(t('de', 'main.models.unknown'))
+    } finally {
+      applyUiLanguageSetting('en')
+    }
+  })
+
+  // #847: a manifest for a newer HilbertRaum is listed for display only. Its `download` block is never offered, and
+  // the main process refuses it as an unknown id: the renderer cannot ask its way past the missing button. Each
+  // manifest is otherwise complete, so only its routing keeps it out of the downloader.
+  it.each<[string, Record<string, unknown>]>([
+    ['a role this build does not know', { role: 'hologram' }],
+    ['a known role whose min_app_version this app does not meet', { role: 'chat', min_app_version: '2.0.0' }]
+  ])('refuses a model for a newer HilbertRaum as an unknown id: %s — fetch never called (#847)', async (_title, over) => {
+    const fetchSpy = vi.fn(bodyFetch(BODY))
+    const { ctx } = makeCtx({ allowNetwork: true })
+    writeFileSync(
+      join(ctx.manifestsDir as string, 'future.yaml'),
+      stringify({
+        ...parseYaml(readFileSync(join(ctx.manifestsDir as string, 'test-model.yaml'), 'utf8')),
+        id: 'future-model',
+        local_path: 'models/chat/future.gguf',
+        ...over
+      })
     )
+    setManifestAppVersion('1.0.0')
+    try {
+      registerDownloadIpc(ctx, new DownloadManager({ fetchImpl: fetchSpy }))
+      await expect(invoke(handlers, IPC.downloadModel, 'future-model', { licenseAccepted: true })).rejects.toThrow(
+        t('en', 'main.models.unknown')
+      )
+    } finally {
+      setManifestAppVersion('')
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('a manifest awaiting license review needs licenseAccepted to be exactly true', async () => {
@@ -434,7 +473,31 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
 })
 
 describe('the default manager main/index.ts registers (no injected manager)', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    setPerformanceChangedSink(null)
+  })
+
+  // #914 review SF-2: the Performance rows say which models are on this drive, and an open screen re-reads only on
+  // `performance:changed`. A download that puts the model's files in place pushes it once, after the availability
+  // selectors re-ran; one that fails puts nothing in place and pushes nothing.
+  it.each<[string, FetchFn, string[]]>([
+    ['done', bodyFetch(BODY), ['selectors re-ran', 'performance:changed']],
+    ['failed', (async () => Promise.reject(new Error('connection reset'))) as unknown as FetchFn, []]
+  ])(
+    '#914: a download that ends %s tells an open Performance screen exactly when its files are in place',
+    async (status, fetchImpl, expected) => {
+      vi.stubGlobal('fetch', vi.fn(fetchImpl))
+      const { ctx } = makeCtx({ allowNetwork: true })
+      const events: string[] = []
+      ctx.onModelInstalled = () => events.push('selectors re-ran')
+      setPerformanceChangedSink(() => events.push('performance:changed'))
+      registerDownloadIpc(ctx)
+      const { result } = await invoke(handlers, IPC.downloadModel, 'test-model-q4')
+      expect((await waitForTerminal((result as DownloadJob).jobId)).status).toBe(status)
+      expect(events).toEqual(expected)
+    }
+  )
 
   it('the default manager main/index.ts registers fetches globally and reports to the context', async () => {
     const fetchSpy = vi.fn(bodyFetch(BODY))

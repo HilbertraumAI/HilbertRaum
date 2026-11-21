@@ -8,9 +8,7 @@ import { join } from 'node:path'
 // failure. `node:fs` is a recording pass-through (no synchronous write may reach the destination, #256);
 // `node:fs/promises` is a pass-through whose next `open` can be armed to fail its fsync or to short-write once.
 
-const dialogState = vi.hoisted(() => ({
-  result: { canceled: true as boolean, filePath: undefined as string | undefined }
-}))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 // Pass-through `node:fs` wrapper that only RECORDS the synchronous write-side calls — every
 // call still hits the real filesystem (#256, the pattern of the evidence-pack async-fs test).
 const syncCalls = vi.hoisted(() => ({ list: [] as Array<{ fn: string; path: string }> }))
@@ -32,9 +30,13 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...mocked, default: mocked }
 })
 // Pass-through `node:fs/promises` (production imports `open`, `rename`, `rm` from it). Arming a flag makes the NEXT `open`
-// return a handle whose fsync fails, or whose write stores one byte short; the flag is consumed, so a row can check that
-// the tail really reached that step.
-const fsFaults = vi.hoisted(() => ({ failSync: false, shortWrite: false }))
+// return a handle whose fsync fails, whose write stores one byte short, whose write fails outright, or whose close fails
+// (after really closing, so the cleanup can still remove the file); each flag is consumed, so a row can check that the
+// tail really reached that step. Every handle's `close` and every `rm` is also recorded in `fsSteps.order`
+// (`close:<path>`, `rm:<path>`), so a row can check that the handle is closed BEFORE its tmp file is removed — an open
+// handle keeps the file locked on Windows, and the delete-on-close semantics of newer Windows would hide a missed close.
+const fsFaults = vi.hoisted(() => ({ failSync: false, shortWrite: false, failWrite: false, failClose: false }))
+const fsSteps = vi.hoisted(() => ({ order: [] as string[] }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const open = (async (...args: Parameters<typeof actual.open>) => {
@@ -43,6 +45,20 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       fsFaults.failSync = false
       handle.sync = async (): Promise<void> => {
         throw Object.assign(new Error('EIO: injected fsync failure'), { code: 'EIO' })
+      }
+    }
+    if (fsFaults.failWrite) {
+      fsFaults.failWrite = false
+      handle.write = (async () => {
+        throw Object.assign(new Error('ENOSPC: injected write failure'), { code: 'ENOSPC' })
+      }) as unknown as typeof handle.write
+    }
+    if (fsFaults.failClose) {
+      fsFaults.failClose = false
+      const close = handle.close.bind(handle)
+      handle.close = async (): Promise<void> => {
+        await close()
+        throw Object.assign(new Error('EIO: injected close failure'), { code: 'EIO' })
       }
     }
     if (fsFaults.shortWrite) {
@@ -56,16 +72,24 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       handle.write = (async (b: Buffer, o: number, l: number, p: number | null) =>
         write(b, o, Math.max(0, l - 1), p)) as unknown as typeof handle.write
     }
+    const path = String(args[0])
+    const closeStep = handle.close.bind(handle) // the failing close above, when armed
+    handle.close = async (): Promise<void> => {
+      fsSteps.order.push(`close:${path}`)
+      return closeStep()
+    }
     return handle
   }) as typeof actual.open
-  const mocked = { ...actual, open }
+  const rm = (async (...args: Parameters<typeof actual.rm>) => {
+    fsSteps.order.push(`rm:${String(args[0])}`)
+    return actual.rm(...args)
+  }) as typeof actual.rm
+  const mocked = { ...actual, open, rm }
   return { ...mocked, default: mocked }
 })
 vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: {
-    showSaveDialog: async () => dialogState.result
-  }
+  dialog: { showSaveDialog: saveDialog.showSaveDialog }
 }))
 
 import { bomFor, saveBinaryExport, saveTextExport, type SaveExportDialogOptions } from '../../src/main/ipc/save-export'
@@ -78,9 +102,11 @@ const BINARY_BYTES = Buffer.concat([
 ])
 
 beforeEach(() => {
-  dialogState.result = { canceled: true, filePath: undefined }
+  saveDialog.reset()
   fsFaults.failSync = false
   fsFaults.shortWrite = false
+  fsFaults.failWrite = false
+  fsFaults.failClose = false
 })
 
 function freshDir(): string {
@@ -126,7 +152,7 @@ describe('saveBinaryExport (#90)', () => {
     // A plain-text extension deliberately: `bomFor` would prefix U+FEFF on the TEXT path; the binary path must never
     // consult it.
     const dest = join(dir, 'export.csv')
-    dialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
 
     const saved = await saveBinaryExport(OPTIONS, BINARY_BYTES)
     expect(saved).toBe(dest)
@@ -136,7 +162,7 @@ describe('saveBinaryExport (#90)', () => {
   it('success leaves only the destination (no tmp sibling)', async () => {
     const dir = freshDir()
     const dest = join(dir, 'contract.docx')
-    dialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
 
     await saveBinaryExport(OPTIONS, BINARY_BYTES)
     expect(readdirSync(dir)).toEqual(['contract.docx'])
@@ -146,7 +172,7 @@ describe('saveBinaryExport (#90)', () => {
 describe('the shared atomic tail, both writers (#90, #256)', () => {
   it.each(WRITERS)('%s: a cancel that still reports a path returns null and writes nothing', async (_name, write) => {
     const dir = freshDir()
-    dialogState.result = { canceled: true, filePath: join(dir, 'out.txt') }
+    saveDialog.result = { canceled: true, filePath: join(dir, 'out.txt') }
     expect(await write(OPTIONS, 'payload')).toBeNull()
     expect(readdirSync(dir)).toEqual([])
   })
@@ -157,7 +183,7 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
       const dir = freshDir()
       const dest = join(dir, 'out.txt')
       writeFileSync(dest, 'OLD CONTENT')
-      dialogState.result = { canceled: false, filePath: dest }
+      saveDialog.result = { canceled: false, filePath: dest }
       fsFaults.failSync = true
       await expect(write(OPTIONS, 'new content')).rejects.toThrow(/injected fsync failure/)
       expect(fsFaults.failSync).toBe(false) // consumed: the tail opened a handle and reached its fsync
@@ -170,7 +196,7 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
     '%s: a failed fsync on a new destination rejects, leaves NO destination file and NO tmp residue',
     async (_name, write) => {
       const dir = freshDir()
-      dialogState.result = { canceled: false, filePath: join(dir, 'out.txt') }
+      saveDialog.result = { canceled: false, filePath: join(dir, 'out.txt') }
       fsFaults.failSync = true
       await expect(write(OPTIONS, 'payload')).rejects.toThrow(/injected fsync failure/)
       expect(fsFaults.failSync).toBe(false)
@@ -178,9 +204,43 @@ describe('the shared atomic tail, both writers (#90, #256)', () => {
     }
   )
 
+  // #838: the handle was closed in a `finally`, so a close that failed after a failed write replaced the write's error:
+  // the user and the log saw the close error, not the cause. The first error wins now — and the handle is still closed,
+  // before the tmp file is removed.
+  it.each(WRITERS)(
+    '%s: a write failure followed by a close failure rejects with the WRITE error, closes before removing, keeps the old file',
+    async (_name, write) => {
+      const dir = freshDir()
+      const dest = join(dir, 'out.txt')
+      writeFileSync(dest, 'OLD CONTENT')
+      saveDialog.result = { canceled: false, filePath: dest }
+      fsFaults.failWrite = true
+      fsFaults.failClose = true
+      fsSteps.order.length = 0
+      await expect(write(OPTIONS, 'new content')).rejects.toThrow(/injected write failure/)
+      const tmp = fsSteps.order.find((s) => s.startsWith('rm:'))?.slice('rm:'.length)
+      expect(tmp).toMatch(/\.[0-9a-f]{32}\.tmp$/)
+      expect(fsSteps.order).toEqual([`close:${tmp}`, `rm:${tmp}`])
+      expect(readFileSync(dest, 'utf8')).toBe('OLD CONTENT')
+      expect(readdirSync(dir)).toEqual(['out.txt'])
+    }
+  )
+
+  // A close failure is still a failure when everything before it worked: the bytes may not be on disk.
+  it.each(WRITERS)(
+    '%s: a close failure after a good write still rejects and leaves no tmp sibling',
+    async (_name, write) => {
+      const dir = freshDir()
+      saveDialog.result = { canceled: false, filePath: join(dir, 'out.txt') }
+      fsFaults.failClose = true
+      await expect(write(OPTIONS, 'payload')).rejects.toThrow(/injected close failure/)
+      expect(readdirSync(dir)).toEqual([])
+    }
+  )
+
   it('a short write refuses: rejects, leaves NO destination file and NO tmp residue', async () => {
     const dir = freshDir()
-    dialogState.result = { canceled: false, filePath: join(dir, 'contract.docx') }
+    saveDialog.result = { canceled: false, filePath: join(dir, 'contract.docx') }
     fsFaults.shortWrite = true
     await expect(saveBinaryExport(OPTIONS, BINARY_BYTES)).rejects.toThrow(/short write/)
     expect(fsFaults.shortWrite).toBe(false)
@@ -196,7 +256,7 @@ describe('saveTextExport writes off the synchronous fs API (#256)', () => {
   it('no synchronous write reaches the destination directory during the export', async () => {
     const dir = freshDir()
     const dest = join(dir, 'big.md')
-    dialogState.result = { canceled: false, filePath: dest }
+    saveDialog.result = { canceled: false, filePath: dest }
     const content = 'ausschließlich '.repeat(200_000) // ~3 MB
 
     syncCalls.list.length = 0

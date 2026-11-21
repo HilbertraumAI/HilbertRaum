@@ -27,7 +27,8 @@ import { TRANSLATE_MAX_TEXT_CHARS } from '../../src/shared/types'
 import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls, until } from '../helpers/hang-budget'
+import { until, untilValue } from '../helpers/hang-budget'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -35,7 +36,7 @@ function ctxFor(unlocked = true): AppContext {
   // The lock-TEARDOWN half of `workspaceAdmitsWork` (AUD-02) is lock-admission-race.test.ts's, over a real vault.
   return {
     trustedSenders: ANY_SENDER,
-    workspace: { isUnlocked: () => unlocked }
+    workspace: workspaceStandIn({ unlocked })
   } as unknown as AppContext
 }
 
@@ -98,20 +99,20 @@ function service(deps: {
   hasDocTask?: boolean
 }): TranslateJobService {
   return new TranslateJobService({
+    isWorkspaceLocking: () => false,
     getTranslator: () => deps.translator ?? null,
     hasActiveDocTask: () => deps.hasDocTask ?? false
   })
 }
 
 async function waitForTerminal(event: FakeIpcEvent, jobId: string): Promise<TranslateJob> {
-  for (let i = 0; i < hangPolls(300, 5); i++) {
-    const done = event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trDone(jobId))
-    const err = event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trError(jobId))
-    if (done) return done[1] as TranslateJob
-    if (err) return err[1] as TranslateJob
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error('translate job never reached a terminal state')
+  const call = await untilValue(
+    () =>
+      event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trDone(jobId)) ??
+      event.sender.send.mock.calls.find((c: unknown[]) => c[0] === STREAM.trError(jobId)),
+    'the translate job reaching a terminal state'
+  )
+  return call[1] as TranslateJob
 }
 
 beforeEach(() => {
@@ -249,6 +250,21 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(terminal.state).toBe('failed')
     expect(terminal.error).toBe('engineCannotRun')
     expect(calls).toBe(1)
+  })
+
+  it('#913: a start the file check refused surfaces the modelDamaged code, not startFailed', async () => {
+    let calls = 0
+    const translator = translatorWith(async () => {
+      calls += 1
+      throw new TranslationStartError(new Error('The translation model file failed its check'), { modelDamaged: true })
+    })
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('modelDamaged') // "download it again", not "free memory / restart"
+    expect(calls).toBe(1) // latched: no retry
   })
 
   it('a retry after a transiently-failed attempt does NOT duplicate the streamed text (F-1)', async () => {
@@ -461,7 +477,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow(/Workspace is locked\./)
   })
 
-  it('#163 (T-1): the SERVICE-level isWorkspaceLocking refusal (the non-IPC callers\' guard)', async () => {
+  it('#163 (T-1): the SERVICE-level isWorkspaceLocking refusal, the service\'s own guard (defence in depth; the IPC guard refuses first)', async () => {
     // `TranslateJobService.start()`'s own AUD-02 check. The production wiring
     // (main/index.ts) passes isWorkspaceLocking; a start during the teardown must come back
     // terminal without touching the sidecar.

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 // EP-1 Phase 1 (plan §6.4) — the evidence-review IPC surface through the mocked-electron
-// harness: the full create→read→update→delete round trip (the four answer classes are the
+// harness: the full create→read→update round trip (the four answer classes are the
 // builder's, pinned in evidence-snapshot.test.ts), payload guards, the reviewer-origin forcing
 // rule, the real freshness verdict over the wire, the idempotent create — and the phase's
 // MANDATORY no-model/no-network assertions: the runtime is a tripwire that fails the suite if
@@ -12,27 +12,18 @@ import { join } from 'node:path'
 
 const ipcState = vi.hoisted(() => ({
   handlers: new Map() as IpcHandlers,
-  // The export handler's native save dialog, test-controlled; `lastOptions` is what the handler passed.
-  saveDialog: {
-    canceled: true as boolean,
-    filePath: undefined as string | undefined,
-    lastOptions: undefined as Record<string, unknown> | undefined
-  },
   // The REAL print harness on the shared fake hidden window (#563: it fetches through the app's real scheme handler).
   print: { windows: [] as FakePrintWindow[], appListeners: new Map() } as FakePrintElectronState
 }))
+// The export handler's native save dialog, test-controlled; `lastOptions` is what the handler passed.
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', async () => {
   const { fakePrintElectron } = await import('../helpers/fake-print-window')
   const { fakeIpcMain } = await import('../helpers/ipc')
   // The fake `app.getVersion()` is '0.0.0-test': create stamps it into the generation snapshot (IP1 reads it).
   return fakePrintElectron(ipcState.print, {
     ipcMain: fakeIpcMain(ipcState.handlers),
-    dialog: {
-      showSaveDialog: async (options: Record<string, unknown>) => {
-        ipcState.saveDialog.lastOptions = options
-        return { canceled: ipcState.saveDialog.canceled, filePath: ipcState.saveDialog.filePath }
-      }
-    }
+    dialog: { showSaveDialog: saveDialog.showSaveDialog }
   })
 })
 
@@ -74,6 +65,7 @@ import {
   useOfflineGuard
 } from '../helpers/evidence-fixtures'
 import type { FakePrintElectronState, FakePrintWindow } from '../helpers/fake-print-window'
+import { manifestsDirWith, rawManifest } from '../helpers/manifest-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers
@@ -99,7 +91,7 @@ beforeEach(() => {
 })
 
 /** One workspace + the real registrar on H's tripwired context. */
-function harness(o: { unlocked?: () => boolean } = {}) {
+function harness(o: { unlocked?: () => boolean; manifestsDir?: string } = {}) {
   const { db, root } = freshWorkspaceDb('epipc')
   const c = evidenceIpcContext(db, root, o)
   registerEvidenceReviewsIpc(c.ctx)
@@ -107,12 +99,12 @@ function harness(o: { unlocked?: () => boolean } = {}) {
 }
 
 describe('evidence-review IPC round trips (mocked-electron harness)', () => {
-  it('create→read→update→decide→select→link→ready→reopen→refresh→delete, model never touched, offline guard silent', async () => {
+  it('create→read→update→decide→select→link→ready→reopen→refresh, model never touched, offline guard silent', async () => {
     const { db, runtimeTouched } = harness()
     // FIX-4c: one citation WITH a documentId (the byId resolution branch) and one without
     // (title-unmatched → unresolved) — both resolved under the tripwire-asserted flow.
     const docId = seedSourceDocument(db, { title: 'A.pdf', sha256: 'aa'.repeat(32) })
-    const { messageId } = seedAssistantAnswer(db, {
+    const { conversationId, messageId } = seedAssistantAnswer(db, {
       content: RELEVANCE.content,
       citations: [
         { label: 'S1', sourceTitle: 'A.pdf', documentId: docId, chunkId: 'c1' },
@@ -149,11 +141,11 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     expect((againRaw as EvidenceReviewDetail).id).toBe(created.id)
     expect(listAuditEvents(db, { limit: 100 }).filter((e) => e.type === 'evidence_review_created')).toHaveLength(1)
 
-    // -- entry-point read
-    const { result: summaryRaw } = await invoke(handlers, IPC.getEvidenceReviewForMessage, messageId)
-    const summary = summaryRaw as EvidenceReviewSummary
+    // -- entry-point read (the transcript's chip state: the conversation batch, AUD-12)
+    const { result: summariesRaw } = await invoke(handlers, IPC.getEvidenceReviewSummariesForConversation, conversationId)
+    const [summary] = summariesRaw as EvidenceReviewSummary[]
     expect(summary).toMatchObject({ id: created.id, messageId, status: 'draft', outdated: false })
-    expect(summary.gate).toEqual({ eligible: false, requiredTotal: 2, decidedTotal: 0 })
+    expect(summary!.gate).toEqual({ eligible: false, requiredTotal: 2, decidedTotal: 0 })
 
     // -- head patch
     const { result: patchedRaw } = await invoke(handlers, IPC.updateEvidenceReview, created.id, {
@@ -251,18 +243,25 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
     const { result: freshMissing } = await invoke(handlers, IPC.refreshEvidenceReviewState, 'nope')
     expect(freshMissing).toBeNull()
 
-    // -- delete
-    const { result: deleted } = await invoke(handlers, IPC.deleteEvidenceReview, created.id)
-    expect(deleted).toBe(true)
-    const { result: goneRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
-    expect(goneRaw).toBeNull()
     const types = listAuditEvents(db, { limit: 100 }).map((e) => e.type)
     expect(types).toContain('evidence_review_created')
     expect(types).toContain('evidence_review_ready')
-    expect(types).toContain('evidence_review_deleted')
 
     // -- the phase's hard rule, asserted over the WHOLE flow (the offline guard: after every test):
     expect(runtimeTouched).toEqual([]) // model runtime never consulted, never started
+  })
+
+  // #839 F2: every other row runs with no manifests dir (display name honestly null). With the drive's catalog, create
+  // stamps the model's catalog name once, main-side; the renderer never supplies it.
+  it('create stamps the catalog display name of the conversation model into the generation snapshot', async () => {
+    const { db, runtimeTouched } = harness({ manifestsDir: manifestsDirWith(rawManifest()) })
+    const { messageId } = seedAssistantAnswer(db, { ...RELEVANCE, modelId: 'qwen3-4b-instruct-q4' })
+    const created = (await invoke(handlers, IPC.createEvidenceReview, messageId)).result as EvidenceReviewDetail
+    expect(created.generationSnapshot).toMatchObject({
+      modelId: 'qwen3-4b-instruct-q4',
+      modelDisplayName: 'Qwen3 4B Instruct Q4'
+    })
+    expect(runtimeTouched).toEqual([])
   })
 
   it('payload guards: malformed ids and shapes read as unknown; create refuses garbage loudly', async () => {
@@ -273,14 +272,11 @@ describe('evidence-review IPC round trips (mocked-electron harness)', () => {
 
     // Non-string / empty ids → unknown (null/false), never a throw or a cast.
     expect((await invoke(handlers, IPC.getEvidenceReview, 42)).result).toBeNull()
-    expect((await invoke(handlers, IPC.getEvidenceReviewForMessage, '')).result).toBeNull()
     expect((await invoke(handlers, IPC.updateEvidenceReview, {}, { title: 'x' })).result).toBeNull()
     expect((await invoke(handlers, IPC.deleteEvidenceSelection, null)).result).toBe(false)
     expect((await invoke(handlers, IPC.removeEvidenceLink, created.items[0]!.id, 7)).result).toBe(false)
-    expect((await invoke(handlers, IPC.deleteEvidenceReview, undefined)).result).toBe(false)
-    // The legs above bind and match no row (null contract; {} is read as an empty named-parameter bag). `true` cannot be bound by node:sqlite: only safeId keeps these from throwing (undefined, above, already reaches that guard).
+    // The legs above bind and match no row (null contract; {} is read as an empty named-parameter bag). `true` cannot be bound by node:sqlite: only safeId keeps these from throwing.
     expect((await invoke(handlers, IPC.getEvidenceReview, true)).result).toBeNull()
-    expect((await invoke(handlers, IPC.getEvidenceReviewForMessage, true)).result).toBeNull()
     expect((await invoke(handlers, IPC.updateEvidenceReview, true, { title: 'x' })).result).toBeNull()
     expect((await invoke(handlers, IPC.deleteEvidenceSelection, true)).result).toBe(false)
     expect((await invoke(handlers, IPC.removeEvidenceLink, created.items[0]!.id, true)).result).toBe(false)
@@ -411,9 +407,7 @@ describe('vault lock + the D-2 delete-confirm count (EP-1 plan §7 exit gate)', 
 
 describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () => {
   beforeEach(() => {
-    ipcState.saveDialog.canceled = true
-    ipcState.saveDialog.filePath = undefined
-    ipcState.saveDialog.lastOptions = undefined
+    saveDialog.reset()
     ipcState.print.windows.length = 0
     ipcState.print.printToPDF = async () => PDF_BYTES
   })
@@ -427,7 +421,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     })
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
-    ipcState.saveDialog.canceled = true
+    saveDialog.result = { canceled: true }
     const { result } = await invoke(handlers, IPC.exportEvidencePack, created.id, {})
     expect(result).toBeNull()
     const { result: detailRaw } = await invoke(handlers, IPC.getEvidenceReview, created.id)
@@ -446,8 +440,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(h.root, 'post-rename-ipc.html')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     // Injected row-insert failure AFTER the pipeline's load (INSERT-only trigger).
     h.db.exec(
       "CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected'); END"
@@ -473,8 +466,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(root, 'unrecorded-ipc.html')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     // The record INSERT fails after the rename, and the unlink that would restore "no file" fails too.
     db.exec("CREATE TRIGGER fail_export BEFORE INSERT ON evidence_exports BEGIN SELECT RAISE(ABORT, 'injected'); END")
     fsState.failRmFor = dest
@@ -500,7 +492,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     expect((await invoke(handlers, IPC.exportEvidencePack, 42, {})).result).toBeNull()
     expect((await invoke(handlers, IPC.exportEvidencePack, '', {})).result).toBeNull()
     expect((await invoke(handlers, IPC.exportEvidencePack, 'no-such-review', {})).result).toBeNull()
-    expect(ipcState.saveDialog.lastOptions).toBeUndefined() // no dialog for a malformed or unknown id
+    expect(saveDialog.calls).toHaveLength(0) // no dialog for a malformed or unknown id
 
     const { messageId } = seedAssistantAnswer(h.db, {
       content: RELEVANCE.content,
@@ -510,8 +502,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(h.root, 'hostile-options.html')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
       language: 'xx',
       includeReviewerNotes: 'yes',
@@ -541,8 +532,7 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     const dest = join(h.root, 'pack.pdf')
-    ipcState.saveDialog.canceled = false
-    ipcState.saveDialog.filePath = dest
+    saveDialog.result = { canceled: false, filePath: dest }
     const { result: recordRaw } = await invoke(handlers, IPC.exportEvidencePack, created.id, {
       language: 'en',
       format: 'pdf'
@@ -550,11 +540,11 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const record = recordRaw as EvidenceExportRecord
 
     // The dialog offered BOTH formats, requested one first, suggested name .pdf.
-    expect(ipcState.saveDialog.lastOptions?.filters).toEqual([
+    expect(saveDialog.lastOptions?.filters).toEqual([
       { name: 'PDF', extensions: ['pdf'] },
       { name: 'HTML', extensions: ['html'] }
     ])
-    expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.pdf$/)
+    expect(String(saveDialog.lastOptions?.defaultPath)).toMatch(/\.pdf$/)
 
     // The REAL print harness ran: it loaded the pack FROM MEMORY on the print host under a
     // random token (#563), served once by the app's own scheme handler — and nothing beside the
@@ -592,13 +582,15 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     const { result: createdRaw } = await invoke(handlers, IPC.createEvidenceReview, messageId)
     const created = createdRaw as EvidenceReviewDetail
     // 'PDF' (wrong case) is NOT normalized — the boundary reads it as the default.
-    ipcState.saveDialog.canceled = true
+    saveDialog.result = { canceled: true }
     await invoke(handlers, IPC.exportEvidencePack, created.id, { format: 'PDF' })
-    expect(ipcState.saveDialog.lastOptions?.filters).toEqual([
+    expect(saveDialog.lastOptions?.filters).toEqual([
       { name: 'HTML', extensions: ['html'] },
       { name: 'PDF', extensions: ['pdf'] }
     ])
-    expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
+    expect(String(saveDialog.lastOptions?.defaultPath)).toMatch(/\.html$/)
+    // §24.3 (#839 F3): the pack leaves the encrypted workspace; the dialog says so (the macOS sheet shows `message`).
+    expect(saveDialog.lastOptions?.message).toBe(tShared('en', 'review.export.encryptionWarning'))
     expect(h.runtimeTouched).toEqual([])
   })
 })

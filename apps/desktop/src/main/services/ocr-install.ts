@@ -33,15 +33,16 @@ import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 //
 // - WHAT is installed is anchored in CODE (`OCR_PINS`: language, sha256, exact size), drift-tested
 //   against the committed `model-manifests/runtime-sources.yaml`. The drive's user-writable yaml
-//   contributes ONLY the download URL of each pinned language — a yaml whose sha256 differs from
-//   the pin is refused, its `dest` is ignored (the destination is always `ocr/<lang>.traineddata.gz`
+//   contributes ONLY the download URL of each pinned language — an entry whose sha256 differs from
+//   the pin is never used, its `dest` is ignored (the destination is always `ocr/<lang>.traineddata.gz`
 //   under the drive root) and its other languages are ignored. So the yaml can at most redirect the
 //   host (the accepted trust-by-location residual, security-model.md S4), never choose the bytes or
 //   the path. No URL literal lives in `src/` (the R-O2 no-CDN sentinel in tests/unit/ocr.test.ts).
-// - Sources: the drive's `model-manifests/` first; when that yaml offers no usable `ocr:` block
-//   (none, or the file does not validate as a whole), the app-bundled copy (a bare portable exe
-//   reads the bundled one anyway). Neither → unavailable. A VALID drive block that pins other
-//   files is refused, never "fixed" by the fallback.
+// - Sources, per pinned file (#841): the first list whose entry for it carries the pinned sha256,
+//   the drive's `model-manifests/` first (a drive owner's mirror keeps working), then the app's own
+//   copy, which matches the pins by construction (a bare portable exe reads the bundled one anyway).
+//   A yaml that does not validate as a whole offers no list. No list → unavailable; a file that
+//   matches in no list → mismatch, refused.
 // - `planOcrDownloads` decides what to fetch, so a present file matching its pin is skipped — the
 //   same hash-is-state rule `prepare-drive` / `fetch-runtime --family ocr` and the sell gate use.
 // - Per file: `<dest>.part` → `downloadToFile` (https-only per hop, private-host deny, ≤5 redirects,
@@ -136,11 +137,16 @@ type OcrSourceResolution =
   | { kind: 'mismatch' }
 
 /**
- * Where to download each pinned language from: the drive's yaml first, the app-bundled one only
- * when the drive's offers no usable `ocr:` block (none, or a file that does not validate). A
- * valid block that does not carry EVERY pinned language with the pinned sha256 is a mismatch
- * (version skew or tampering) — refused, never "fixed" by falling back. Either way the bytes are
- * the code pins': the yaml only ever chooses the host.
+ * Where to download each pinned file from: per file, the first source list whose entry for it
+ * carries the pinned sha256 — the drive's yaml first (a drive owner's own mirror keeps working),
+ * then the app's own copy, which matches the pins by construction (drift-tested,
+ * tests/unit/ocr-pins.test.ts). #841: a drive's list written before this app's pins changed (one
+ * prepared before `osd` existed, #538) used to refuse the whole install although the app's own
+ * list carried every file; that is the normal state after copying a new app onto a Kit. An entry
+ * with another sha256 is never used, so the bytes are still the code pins': the yaml only ever
+ * chooses the host. `mismatch` when some pinned file has a matching entry in no list (version skew
+ * or tampering, with the app's own list missing or damaged too); `none` when no list offers a
+ * usable `ocr:` block (none, or a yaml that does not validate).
  */
 function resolveOcrSources(
   manifestsDir: string | null,
@@ -150,18 +156,16 @@ function resolveOcrSources(
   const dirs = [manifestsDir, bundledManifestsDir].filter(
     (d, i, all): d is string => typeof d === 'string' && d !== '' && all.indexOf(d) === i
   )
-  for (const dir of dirs) {
-    const block = loadOcrBlock(dir)
-    if (!block) continue
-    const urls = new Map<string, string>()
-    for (const pin of pins) {
-      const file = block.files.find((f) => f.lang === pin.lang)
-      if (!file || file.sha256 !== pin.sha256) return { kind: 'mismatch' }
-      urls.set(pin.lang, file.url)
-    }
-    return { kind: 'ok', urls }
+  const blocks = dirs.map(loadOcrBlock).filter((b): b is OcrSources => b !== null)
+  if (blocks.length === 0) return { kind: 'none' }
+  const entries = blocks.flatMap((b) => b.files) // in list order: the drive's first
+  const urls = new Map<string, string>()
+  for (const pin of pins) {
+    const file = entries.find((f) => f.lang === pin.lang && f.sha256 === pin.sha256)
+    if (!file) return { kind: 'mismatch' }
+    urls.set(pin.lang, file.url)
   }
-  return { kind: 'none' }
+  return { kind: 'ok', urls }
 }
 
 /** The pins as `planOcrDownloads` input: the code's hash + fixed destination, the yaml's URL. */
@@ -233,8 +237,21 @@ export interface OcrInstallSourceOptions {
   bundledManifestsDir: string | null
 }
 
+/** The OCR install's audit events (#843). */
+export type OcrInstallAuditType = 'ocr_install_started' | 'ocr_install_finished' | 'ocr_install_failed'
+
+/**
+ * Where a job's audit events go (#843): the IPC layer passes the app recorder (`ctx.audit`) and adds
+ * the job's `trigger`. The metadata is language codes, byte counts and content-free codes only
+ * (`{ jobId, languages, bytes }`, plus `outcome` when finished, `reason`/`cause` when not) — never the
+ * job's `error` text.
+ */
+export type OcrInstallAudit = (type: OcrInstallAuditType, message: string, metadata: Record<string, unknown>) => void
+
 export interface StartOcrInstallOptions extends OcrInstallSourceOptions {
   gates: DownloadGates
+  /** #843: records the job's start and its end (finished, or failed with a reason code). */
+  audit?: OcrInstallAudit
   /**
    * Bring the engine slot up to date once every file is in place (`refreshOcrSlot`). Its outcome
    * is the job's `outcome`. Expected never to reject; a rejection reads as `'startFailed'`.
@@ -275,6 +292,8 @@ export class OcrInstallManager {
   private starting = false
   /** False while a `run()` is still settling — a cancelled job's activation may still be running. */
   private runSettled = true
+  /** #843: why each job stopped (the first reason recorded stands), for its audit record. */
+  private readonly endReasons = new Map<string, { reason: string; cause?: string }>()
   private readonly pins: readonly OcrPin[]
 
   constructor(private readonly deps: OcrInstallDeps = {}) {
@@ -301,11 +320,15 @@ export class OcrInstallManager {
       sizeBytes: pin.sizeBytes,
       installed: tasks.find((t) => t.lang === pin.lang)?.status === 'present-verified'
     }))
+    // The confirmation's "From" names the hosts this install will contact: those of the files the plan
+    // still downloads (#841 can mix the drive's list and the app's own), or every file's once all are
+    // in place.
+    const toFetch = new Map(tasks.filter((t) => t.status === 'download').map((t) => [t.lang, t.url]))
     return {
       available: resolved.kind === 'ok',
       languages,
       totalBytes: languages.filter((l) => !l.installed).reduce((sum, l) => sum + l.sizeBytes, 0),
-      sourceHost: urls ? sourceHosts(urls) : null,
+      sourceHost: urls ? sourceHosts(toFetch.size > 0 ? toFetch : urls) : null,
       license: OCR_LICENSE
     }
   }
@@ -358,19 +381,61 @@ export class OcrInstallManager {
       const controller = new AbortController()
       this.active = { jobId: job.jobId, controller }
       this.runSettled = false
+      const languages = plan.map((p) => p.pin.lang)
       this.deps.log?.('OCR install started', {
         jobId: job.jobId,
-        languages: plan.map((p) => p.pin.lang),
+        languages,
         bytes: job.totalBytes
       })
+      const auditMeta = { jobId: job.jobId, languages, bytes: job.totalBytes }
+      // Never throws, like the end's: a failing sink here used to reject start() with the job already
+      // active, so every later install read "already running" until the app restarted.
+      try {
+        opts.audit?.('ocr_install_started', `OCR install started: ${languages.join(', ')}`, { ...auditMeta })
+      } catch (err) {
+        this.deps.log?.('OCR install audit failed', { error: String(err) })
+      }
       void this.run(job, plan, opts, controller).finally(() => {
         this.runSettled = true
         if (this.active?.jobId === job.jobId) this.active = null
+        this.auditEnd(job, opts.audit, auditMeta, languages)
       })
       return { ...job }
     } finally {
       this.starting = false
     }
+  }
+
+  /** #843: the job's one terminal audit event, once its run has settled. Never throws. */
+  private auditEnd(
+    job: OcrInstallJob,
+    audit: OcrInstallAudit | undefined,
+    meta: Record<string, unknown>,
+    languages: readonly string[]
+  ): void {
+    if (!audit) return
+    const what = languages.join(', ')
+    try {
+      if (job.status === 'done') {
+        audit('ocr_install_finished', `OCR install finished: ${what}`, { ...meta, outcome: job.outcome })
+        return
+      }
+      const recorded = this.endReasons.get(job.jobId)
+      const reason = recorded?.reason ?? (job.status === 'cancelled' ? 'cancelled' : 'failed')
+      audit('ocr_install_failed', `OCR install failed: ${what}`, {
+        ...meta,
+        reason,
+        ...(recorded?.cause ? { cause: recorded.cause } : {})
+      })
+    } catch (err) {
+      this.deps.log?.('OCR install audit failed', { error: String(err) })
+    }
+  }
+
+  /** #843: record why `job` stops; the first reason recorded for a job stands. */
+  private noteEnd(job: OcrInstallJob, reason: string, cause?: unknown): void {
+    if (this.endReasons.has(job.jobId)) return
+    this.endReasons.set(job.jobId, { reason, ...(typeof cause === 'string' ? { cause } : {}) })
   }
 
   get(jobId: string): OcrInstallJob {
@@ -397,6 +462,7 @@ export class OcrInstallManager {
     if (!job) return this.get(jobId)
     if (LIVE.has(job.status)) {
       job.status = 'cancelled'
+      this.noteEnd(job, 'cancelled')
       if (this.active?.jobId === jobId) this.active.controller.abort()
       this.deps.log?.('OCR install cancelled', { jobId })
     }
@@ -423,6 +489,7 @@ export class OcrInstallManager {
   /** Stop `job` for #782: it reads `cancelled`, and its run cleans up as a cancel's does. */
   private stopNetworkJob(job: OcrInstallJob, controller: AbortController): void {
     job.status = 'cancelled'
+    this.noteEnd(job, 'networkOff')
     controller.abort()
     this.deps.log?.('OCR install stopped: internet access was switched off', { jobId: job.jobId })
     this.network.stopped(controller)
@@ -440,6 +507,7 @@ export class OcrInstallManager {
     const terminal = [...this.jobs.values()].filter((j) => !LIVE.has(j.status))
     for (const job of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_JOBS))) {
       this.jobs.delete(job.jobId)
+      this.endReasons.delete(job.jobId)
     }
   }
 
@@ -448,6 +516,9 @@ export class OcrInstallManager {
     if (job.status === 'cancelled') return
     job.status = 'failed'
     job.error = tMain(key)
+    // #843: the key's last part is the audit's reason code (`downloadFailed`, `checksumMismatch`, …),
+    // the log's own `reason` its cause (`http-404`, `mismatch`, `rename`, …): both content-free.
+    this.noteEnd(job, key.replace(/^main\.(ocr|download)\./, ''), meta.reason)
     this.deps.log?.('OCR install failed', { jobId: job.jobId, ...meta })
   }
 

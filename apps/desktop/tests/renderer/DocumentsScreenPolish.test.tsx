@@ -7,7 +7,8 @@ import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { startTask, clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { en } from '../../src/shared/i18n'
 import type { Collection, DocTaskStatus, DocumentInfo, DocumentPreview } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 
 // PERF-5: count DocRow renders test-side — production's memo object, inner component wrapped (no src seam).
 const rowRenders = vi.hoisted(() => new Map<string, number>())
@@ -70,6 +71,7 @@ afterEach(() => {
   clearDocTaskSession()
   vi.restoreAllMocks()
   window.localStorage.clear()
+  assertNoUnexpectedApiCalls()
 })
 
 // ---- DR-1: a late "Show more" page must not resurrect a closed modal --------------------
@@ -81,7 +83,7 @@ describe('DocumentsScreen — DR-1 preview load-more late-response guard', () =>
     const previewDocumentPage = vi.fn(
       () => new Promise<DocumentPreview>((res) => { resolvePage = res })
     )
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -111,7 +113,7 @@ describe('DocumentsScreen — DR-2 refresh ordering guard', () => {
   it('a stale listDocuments resolving last does not overwrite the newer one', async () => {
     const resolvers: Array<(v: DocumentInfo[]) => void> = []
     const listDocuments = vi.fn(() => new Promise<DocumentInfo[]>((res) => { resolvers.push(res) }))
-    stubApi({ listDocuments, listCollections: vi.fn(async () => []) })
+    stubApi(documentsScreenStubs({ listDocuments, listCollections: vi.fn(async () => []) }))
     render(<DocumentsScreen />)
 
     // Mount refresh (seq 1) → resolve with alpha so the screen renders.
@@ -146,7 +148,7 @@ describe('DocumentsScreen — DR-3 toolbar refresh error handling', () => {
       }
       throw new Error('The workspace is locked. Unlock it to continue.')
     })
-    stubApi({ listDocuments })
+    stubApi(documentsScreenStubs({ listDocuments }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
 
@@ -160,14 +162,14 @@ describe('DocumentsScreen — DR-3 toolbar refresh error handling', () => {
 describe('DocumentsScreen — DR-4 per-row preview loading', () => {
   it('opening one row’s preview does not disable/relabel or re-render the other rows', async () => {
     const previewDocument = vi.fn(() => new Promise<DocumentPreview>(() => {})) // parked → loading holds
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'alpha.pdf' }),
         doc({ id: 'd2', title: 'beta.pdf' })
       ]),
       previewDocument
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('alpha.pdf')
     await screen.findByText('beta.pdf')
@@ -202,7 +204,7 @@ describe('DocumentsScreen — DR-5 import gate', () => {
       done: false,
       cancelled: false
     }))
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
 
@@ -218,10 +220,10 @@ describe('DocumentsScreen — DR-6 archived-project active state', () => {
   it('selecting an archived project marks its rail item active + aria-current', async () => {
     const user = userEvent.setup()
     const archived = coll({ id: 'old', name: 'OldCase', archivedAt: '2026-02-01T00:00:00Z' })
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => [archived]),
       listDocuments: vi.fn(async () => [doc({})])
-    })
+    }))
     render(<DocumentsScreen />)
 
     const railBtn = await screen.findByRole('button', { name: 'OldCase' })
@@ -249,11 +251,11 @@ describe('DocumentsScreen — DR-7 localized doc-task failure copy', () => {
         error: en['main.ingest.sourceMissing'], // persist-canonical English
         resultRef: null
       }
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments: vi.fn(async () => [doc({})]),
         startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
         getDocTask: vi.fn(async () => status)
-      })
+      }))
       const flush = async (): Promise<void> => {
         await act(async () => {
           for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
@@ -287,7 +289,7 @@ describe('DocumentsScreen — DR-8 first-mount loading state', () => {
   it('shows a status spinner while the initial listDocuments is in flight, then clears it', async () => {
     let resolveList: ((v: DocumentInfo[]) => void) | null = null
     const listDocuments = vi.fn(() => new Promise<DocumentInfo[]>((res) => { resolveList = res }))
-    stubApi({ listDocuments })
+    stubApi(documentsScreenStubs({ listDocuments }))
     render(<DocumentsScreen />)
 
     // docs === null && error === null → the loading region is present.
@@ -307,14 +309,14 @@ describe('DocumentsScreen — CODE-32 preview install ordering', () => {
     const previewDocument = vi.fn(
       (id: string) => new Promise<DocumentPreview>((res) => { resolvers.set(id, res) })
     )
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
         doc({ id: 'd1', title: 'alpha.pdf' }),
         doc({ id: 'd2', title: 'beta.pdf' })
       ]),
       previewDocument
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('alpha.pdf')
 
@@ -351,7 +353,7 @@ describe('DocumentsScreen — CODE-33 context menu busy gate', () => {
     const getReindexAllJob = vi.fn(async () => ({
       jobId: 'r1', total: 3, completed: 1, failed: 0, done: false, cancelled: false
     }))
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), getReindexAllJob }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Import files' })).toBeDisabled())
@@ -371,10 +373,10 @@ describe('DocumentsScreen — CODE-35 preview load-more error placement', () => 
     const previewDocument = vi.fn(async () => firstPage())
     const previewDocumentPage = vi.fn(async () => {
       throw new Error(
-        "Error invoking remote method 'docs:previewPage': Error: The workspace is locked. Unlock it to continue."
+        "Error invoking remote method 'docs:preview-page': Error: The workspace is locked. Unlock it to continue."
       )
     })
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: /preview/i }))
@@ -400,7 +402,7 @@ describe('DocumentsScreen — CODE-38 collections refresh', () => {
       if (fail) throw new Error('The workspace is locked. Unlock it to continue.')
       return [coll({ id: 'p1', name: 'Cases' })]
     })
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), listCollections })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), listCollections }))
     render(<DocumentsScreen />)
     expect(await screen.findByRole('button', { name: 'Cases' })).toBeInTheDocument()
 
@@ -419,7 +421,7 @@ describe('DocumentsScreen — CODE-38 collections refresh', () => {
     const listCollections = vi.fn(
       () => new Promise<Collection[]>((res) => { collResolvers.push(res) })
     )
-    stubApi({ listDocuments: vi.fn(async () => [doc({})]), listCollections })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({})]), listCollections }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await waitFor(() => expect(collResolvers.length).toBe(1)) // the mount refresh's read
@@ -460,12 +462,12 @@ describe('DocumentsScreen — CODE-39 done-task auto-open failure', () => {
           "Error invoking remote method 'docs:preview': Error: The workspace is locked. Unlock it to continue."
         )
       })
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments: vi.fn(async () => [doc({})]),
         startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
         getDocTask: vi.fn(async () => done),
         previewDocument
-      })
+      }))
       const flush = async (): Promise<void> => {
         await act(async () => {
           for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
@@ -498,11 +500,11 @@ describe('DocumentsScreen — state-unknown task row (F2 rider)', () => {
       const getDocTask = vi.fn(async () => {
         throw new Error('ipc gone')
       })
-      stubApi({
+      stubApi(documentsScreenStubs({
         listDocuments: vi.fn(async () => [doc({})]),
         startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
         getDocTask
-      })
+      }))
       const flush = async (): Promise<void> => {
         await act(async () => {
           for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)

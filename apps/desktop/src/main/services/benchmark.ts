@@ -23,7 +23,7 @@ import type {
   SpeedSampleIdentity
 } from '../../shared/types'
 import type { ModelRuntime, RuntimeTimings } from './runtime'
-import { recommendChatModelId, recommendModelId } from './models'
+import { recommendChatModelId, recommendModelId, type CardEvidence } from './models'
 import { SLOW_READ_MBPS, VERY_LOW_TOKENS_PER_SECOND } from '../../shared/performance-rules'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
@@ -504,6 +504,8 @@ export interface GpuBenchmarkInput {
    * absent → 'cpu', the RAM pick.
    */
   memoryClass?: MemoryClass
+  /** Earlier starts on this machine's card (model-benchmarks.md §6.8); absent → the fit estimate alone. */
+  card?: CardEvidence | null
 }
 
 export interface RunBenchmarkDeps {
@@ -639,7 +641,8 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   const memory = {
     memoryClass: deps.gpu?.memoryClass ?? 'cpu',
     ramGb: ramRounded,
-    budgetMb: deps.gpu?.budgetMb ?? null
+    budgetMb: deps.gpu?.budgetMb ?? null,
+    card: deps.gpu?.card ?? null
   } as const
   const ramPick = recommendChatModelId(deps.manifests, memory, speedSignal)
   // Did the signal actually move the pick? Feeds the named §6.5 warning below.

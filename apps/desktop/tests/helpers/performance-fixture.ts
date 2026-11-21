@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, vi, type Mock } from 'vitest'
 import { detectSystem } from '../../src/main/services/benchmark'
 import { setAnswerSpeedObserver } from '../../src/main/ipc/chat-stream'
@@ -10,6 +10,7 @@ import {
   type FirstBenchmarkOutcome
 } from '../../src/main/ipc/registerBenchmarkIpc'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { discoverManifests, manifestFiles } from '../../src/main/services/models'
 import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
 import { recordModelLoadRead, resetEffectiveReadForTests, setEffectiveReadObserver } from '../../src/main/services/read-speed'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
@@ -20,11 +21,14 @@ import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
-import type { BenchmarkResult, GpuDevice } from '../../src/shared/types'
+import { pickManifestForRole } from '../../src/shared/manifest'
+import type { BenchmarkResult, GpuDevice, ResidentModelRow } from '../../src/shared/types'
 import { benchmarkResult } from './benchmark-records'
 import { START_READS, stoppedStatus } from './chat-runtime-stub'
+import { CATALOG_MANIFESTS } from './gpu-fixtures'
 import { ANY_SENDER } from './ipc'
 import { rawManifest, writeManifest } from './manifest-fixtures'
+import { workspaceStandIn } from './workspace-stand-in'
 
 export { committingRuntime, START_READS, stoppedStatus, stubChatRuntime, type StubChatRuntime, type StubChatRuntimeOptions } from './chat-runtime-stub'
 export { CARDS, CATALOG_MANIFESTS } from './gpu-fixtures'
@@ -73,7 +77,7 @@ export function seededDb(root: string): Db {
  *
  * The first-benchmark attempt memo and moved-drive latch are NOT reset: both are keyed on the DB
  * handle + the unlock epoch, so a test's new `seededDb()` is already a new session. A row that needs
- * a second session on ONE handle says so with an epoch bump (`sessionWorkspace().completeUnlock()`).
+ * a second session on ONE handle says so with an epoch bump (`workspaceStandIn().completeUnlock()`).
  *
  * Root removal closes DBs FIRST: on Windows a still-open sqlite file makes `rmSync` fail. If it
  * still fails (a close that is asynchronously settling), retry ONCE after a real macrotask
@@ -111,9 +115,10 @@ export async function closePerformanceFixture(): Promise<void> {
 
 export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}): AppContext {
   return {
-    paths: { rootPath: root, workspacePath: join(root, 'workspace') },
+    // configPath: the images status reads the drive policy (#913); none there means the dev defaults.
+    paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     db,
-    workspace: { isUnlocked: () => true },
+    workspace: workspaceStandIn(),
     // The registrars go through `guardedHandle` (#252), which refuses a context without a
     // trusted-sender set; the permissive harness set keeps registration possible here.
     trustedSenders: { ...ANY_SENDER },
@@ -211,6 +216,37 @@ export function withLlamaBinary(root: string): void {
   writeFileSync(join(dir, llamaServerBinaryName()), 'fake-binary')
 }
 
+/** A non-chat role of the "Models on this computer" rows. */
+export type CatalogRole = Exclude<ResidentModelRow['role'], 'chat'>
+
+/**
+ * #914: presence-only stand-ins under `root` (a few bytes per file) for the real catalog models the Performance rows
+ * name: the chat model `chat` (a catalog id) and, for each role in `roles`, the app's pick for it
+ * (`pickManifestForRole`, the rule the rows use). Every file of a model is written (`manifestFiles`: the weight, a
+ * vision projector, a voice model's extra file), so its row reads `onDrive: true`; the rows check presence, never a
+ * hash. An id or role with no catalog model throws, so a renamed catalog entry fails loudly instead of quietly
+ * turning a row "not on this drive".
+ */
+export function withCatalogFiles(root: string, models: { chat?: string; roles?: readonly CatalogRole[] }): void {
+  const manifests = discoverManifests(CATALOG_MANIFESTS).manifests.map((d) => d.manifest)
+  const picks = (models.roles ?? []).map((role) => {
+    const pick = pickManifestForRole(manifests, role)
+    if (!pick) throw new Error(`withCatalogFiles: the catalog has no ${role} model`)
+    return pick
+  })
+  if (models.chat != null) {
+    const chat = manifests.find((m) => m.id === models.chat && m.role === 'chat')
+    if (!chat) throw new Error(`withCatalogFiles: the catalog has no chat model ${models.chat}`)
+    picks.push(chat)
+  }
+  for (const manifest of picks) {
+    for (const file of manifestFiles(root, manifest)) {
+      mkdirSync(dirname(file.path), { recursive: true })
+      writeFileSync(file.path, 'stand-in')
+    }
+  }
+}
+
 type GpuProbeCall = (binPath: string) => Promise<GpuDevice[] | null>
 
 /**
@@ -224,44 +260,6 @@ export function fakeGpuProbe(
 ): CachedGpuProbe & { calls: Mock<GpuProbeCall>; invalidate: Mock<() => void> } {
   const calls = vi.fn<GpuProbeCall>(typeof impl === 'function' ? impl : async () => impl)
   return Object.assign(calls, { calls, invalidate: vi.fn<() => void>() })
-}
-
-/**
- * A session-aware workspace stand-in: flags plus the epoch counter, in the real controller's shape.
- * A lock arms the latch first and closes the DB last; an unlock clears the latch and advances the
- * session epoch. No `requireDb`: a context whose `db` follows the session keeps its own getter.
- */
-export function sessionWorkspace(): {
-  isUnlocked: () => boolean
-  isLocking: () => boolean
-  unlockEpoch: () => number
-  beginLock: () => void
-  completeLock: () => void
-  completeUnlock: () => void
-} {
-  let unlocked = true
-  let locking = false
-  let epoch = 1
-  return {
-    isUnlocked: () => unlocked,
-    isLocking: () => locking,
-    unlockEpoch: () => epoch,
-    // The MID-TEARDOWN state, and the one the epoch cannot see: the latch is armed but the DB
-    // is still open, so `isUnlocked()` alone still says "go". This is the majority of the real
-    // lock window (seconds of awaited sidecar/stream/task teardown), not a transient.
-    beginLock: () => {
-      locking = true
-    },
-    completeLock: () => {
-      locking = true // armed as the lock handler's first act…
-      unlocked = false // …and the DB closes at the very end of its teardown
-    },
-    completeUnlock: () => {
-      locking = false
-      unlocked = true
-      epoch += 1
-    }
-  }
 }
 
 /**

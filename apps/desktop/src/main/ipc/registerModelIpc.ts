@@ -6,6 +6,7 @@ import type {
   AppSettings,
   EffectiveReadSample,
   LiveRecommendation,
+  ModelFileVerdict,
   ModelInfo,
   ModelState,
   RuntimeInstallInfo,
@@ -19,15 +20,18 @@ import { clearModelLoadLatch } from '../services/runtime/factory'
 import {
   buildModelList,
   checksumCacheStats,
+  checksumCacheView,
   computeInstallState,
   createSettingsHashStore,
   discoverManifests,
   graphicsBudgetMib,
   invalidateChecksum,
+  knownVerdicts,
   launchContextTokens,
   machineRamGb,
   manifestFiles,
   recommendChatModelId,
+  cardEvidenceFor,
   selectModel,
   weightPath,
   type BuildModelListOptions,
@@ -50,8 +54,9 @@ import { detectSystem } from '../services/benchmark'
 import { machineKey } from '../services/performance'
 import { effectiveReadPatch, eligiblePersistedSample } from '../services/benchmark-persistence'
 import type { Db } from '../services/db'
-import { loadPolicy } from '../services/policy'
-import { tMain } from '../services/i18n'
+import { developerLeniency } from '../services/policy'
+import { rearmStartRefusals } from '../services/model-start-check'
+import { mainUiLanguage, tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
@@ -62,12 +67,6 @@ import { isChatStreaming } from './inflight'
 // falling back to UNKNOWN until the user runs the benchmark for the first time.
 
 /**
- * Effective checksum leniency: "developer" is the user toggle OR a dev build —
- * but the drive POLICY is authoritative and can only restrict. On a commercial drive
- * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
- * are rejected no matter what the toggle says; this also disables the mock fallback.
- */
-/**
  * The memory inputs the chat ★ pick goes by (§6.6; PR #308 audit decisions 6 and 9): the class
  * and the BUDGET device for the NEXT start, read through `nextStartMemoryFor` from the
  * ELIGIBLE persisted probe (`eligibleGpuProbe`, PR #303 audit M8.3: a probe stamped with
@@ -76,11 +75,20 @@ import { isChatStreaming } from './inflight'
  * Models ★ and the benchmark can never name different cards. Exported for the seam test,
  * which pins what the `listModels` handler feeds `buildModelList`.
  */
-export function pickerMemoryFor(s: AppSettings): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb'> {
-  const next = nextStartMemoryFor(s, machineKey(detectSystem()))
+export function pickerMemoryFor(
+  s: AppSettings
+): Pick<BuildModelListOptions, 'memoryClass' | 'graphicsBudgetMb' | 'cardEvidence'> {
+  const here = machineKey(detectSystem())
+  const next = nextStartMemoryFor(s, here)
   // The budget is the device's FREE figure (else total − 1024), raw MiB — decision 10; the same
   // `graphicsBudgetMib` call `probeAndPersistGpu` makes for the benchmark.
-  return { memoryClass: next.memoryClass, graphicsBudgetMb: graphicsBudgetMib(next.device) }
+  // §6.8: what earlier starts on this machine's card showed, so a model seen landing only partly
+  // on it is not recommended for it again.
+  return {
+    memoryClass: next.memoryClass,
+    graphicsBudgetMb: graphicsBudgetMib(next.device),
+    cardEvidence: cardEvidenceFor(s, here)
+  }
 }
 
 /**
@@ -141,16 +149,10 @@ export function liveChatRecommendation(s: AppSettings, manifests: ModelManifest[
   const basis = memory.memoryClass ?? 'cpu'
   const modelId = recommendChatModelId(
     manifests,
-    { memoryClass: basis, ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null },
+    { memoryClass: basis, ramGb: machineRamGb(), budgetMb: memory.graphicsBudgetMb ?? null, card: memory.cardEvidence ?? null },
     speedSignalFor(s)
   )
   return { modelId, basis }
-}
-
-function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
-  const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
-  const developer = s.developerMode || ctx.isDev
-  return developer && policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
 }
 
 /**
@@ -168,6 +170,38 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   }
 }
 
+/**
+ * #959: what the checksum cache says about each manifest's files right now (`knownVerdicts`: no hashing, a read-only
+ * view of the settings). A pass that may write the cache takes one before and one after and pushes the Performance
+ * refresh only when a verdict moved, so the screen follows a file check without a reopen and a pass that merely
+ * confirms the cache sends nothing. Null when the workspace cannot be read (locked mid-pass): nothing to announce.
+ */
+function snapshotVerdicts(ctx: AppContext, manifests: readonly ModelManifest[]): Map<string, ModelFileVerdict> | null {
+  try {
+    const s = getSettings(ctx.db)
+    return knownVerdicts(manifests, ctx.paths.rootPath, {
+      developerMode: developerLeniency(ctx, s.developerMode),
+      hashStore: checksumCacheView(s.checksumCache, ctx.paths.rootPath)
+    })
+  } catch {
+    return null
+  }
+}
+
+/** One Performance push when any verdict differs between the two snapshots (#959). */
+function pushIfVerdictsChanged(
+  before: Map<string, ModelFileVerdict> | null,
+  after: Map<string, ModelFileVerdict> | null
+): void {
+  if (!before || !after) return
+  for (const [id, verdict] of after) {
+    if (before.get(id) !== verdict) {
+      notifyPerformanceChanged()
+      return
+    }
+  }
+}
+
 async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
   // AUD-03 — snapshot WHICH unlocked session this start belongs to, before the long pre-start
   // window below. `computeInstallState` hashes a multi-GB GGUF, which takes minutes on a cold
@@ -175,17 +209,21 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // and invalidates the size+mtime cache). A lock, or a lock AND a re-unlock, can complete inside
   // that window; the epoch is the only thing that can tell the resulting stale start apart from a
   // legitimate one, because after a re-unlock `isUnlocked()` is true and `isLocking()` false
-  // again. Undefined for a stand-in workspace without the counter ⇒ the epoch check is skipped
-  // and the unlocked/locking re-check below still applies.
-  const startEpoch = ctx.workspace.unlockEpoch?.()
+  // again.
+  const startEpoch = ctx.workspace.unlockEpoch()
   if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
   const { manifests } = discoverManifests(ctx.manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
-  if (!found) throw new Error(`Unknown model id: ${modelId}`)
+  // #930: every refusal below is in the interface language and names the model by its display name; an id or a role
+  // code is never shown (the log keeps the id).
+  if (!found) {
+    log.warn('Model start refused: unknown model id', { modelId })
+    throw new Error(tMain('main.models.unknown'))
+  }
   // The chat runtime loads chat models only; an embeddings model here would start
   // llama-server in chat mode over a 384-dim embedder and produce garbage.
   if (found.manifest.role !== 'chat') {
-    throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
+    throw new Error(tMain('main.models.notChat', { name: found.manifest.displayName }))
   }
 
   const s = getSettings(ctx.db)
@@ -194,12 +232,15 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // first-run journey alive — for a developer (toggle or dev build, when the drive
   // policy permits unverified models) a MISSING model may start, because the selecting
   // runtime factory then falls back to the built-in mock runtime.
-  const lenient = developerLeniency(ctx, s)
+  const lenient = developerLeniency(ctx, s.developerMode)
   // The multi-GB weight hash below is the dominant cold-start cost on slow media and is
   // otherwise invisible in the logs; `computed` moving distinguishes a real hash from a
   // (size+mtime) cache hit.
   const installT0 = performance.now()
   const computedBefore = checksumCacheStats.computed
+  // #959: this check can change a model's file verdict too. It needs no push of its own: `startModelRuntime`
+  // releases its start request (#599) after this, and that release is a runtime change, which the Performance
+  // screen already follows (`runtime.onChange` in `main/index.ts`), refused start or not.
   const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
     developerMode: lenient,
     hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
@@ -219,12 +260,11 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   const mockFallback = state === 'missing' && lenient
   if (state !== 'installed' && !mockFallback) {
     // §7 voice: the problem and the next step; the raw state code stays in Diagnostics/logs.
+    const name = found.manifest.displayName
     throw new Error(
       state === 'checksum_failed'
-        ? `"${found.manifest.displayName}" can't be started — we couldn't verify its file. ` +
-          'It may be incomplete; try downloading it again.'
-        : `"${found.manifest.displayName}" can't be started — its model file isn't installed ` +
-          'on this drive yet.'
+        ? tMain('main.models.startDamaged', { name })
+        : tMain('main.models.startMissing', { name })
     )
   }
 
@@ -232,9 +272,14 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // thrash or OOM mid-chat — refuse with a friendly, spec §11.4-toned message. Only
   // real weights are gated; the zero-weights mock fallback uses no real memory.
   if (state === 'installed' && found.manifest.recommendedMinRamGb > machineRamGb()) {
+    // #930: both figures in the interface language's number format, as the AI Model card's RAM hint writes them.
+    const lang = mainUiLanguage()
     throw new Error(
-      `"${found.manifest.displayName}" needs at least ${found.manifest.recommendedMinRamGb} GB RAM; ` +
-        `this computer has about ${machineRamGb()} GB. Pick a smaller model — quality stays great.`
+      tMain('main.models.startNeedsRam', {
+        name: found.manifest.displayName,
+        min: found.manifest.recommendedMinRamGb.toLocaleString(lang),
+        ram: machineRamGb().toLocaleString(lang)
+      })
     )
   }
 
@@ -289,7 +334,7 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // …and the residual micro-window: a lock AND a subsequent unlock both completing inside the
   // hash leave the two flags above looking exactly like "still unlocked". The session epoch does
   // not — this start was admitted into a session that no longer exists.
-  if (startEpoch !== undefined && ctx.workspace.unlockEpoch?.() !== startEpoch) {
+  if (ctx.workspace.unlockEpoch() !== startEpoch) {
     throw new Error('The workspace was locked and re-opened — the stale model start was abandoned')
   }
 
@@ -488,11 +533,12 @@ export async function maybeAutoStartActiveModel(ctx: AppContext): Promise<void> 
 
 /**
  * Wave 7 rulings (a)/(c) (step 4-7, resolving the scoped Opus review of step 4-6's finding C2):
- * `models:select` and `models:use` both reach `activeModelId` through `selectModel` →
- * `updateSettings` (`services/models.ts`), bypassing `registerCoreIpc.ts`'s `settings:update`
- * handler — and its suspend hook — entirely. Both IPC handlers below call this so the decision is
- * made through the SAME shared predicate that handler uses (`rerankerPostureInputsChanged`,
- * `rag/device-posture.ts`), never a third independent copy of the condition. `before` must be
+ * `models:select` and `runtime:use` are the only channels that move `activeModelId` (#868:
+ * `settings:update` drops it from a renderer patch). Both reach it through `selectModel` →
+ * `updateSettings` (`services/models.ts`), never through `registerCoreIpc.ts`'s `settings:update`
+ * handler and its suspend hook, so both IPC handlers below call this, and the decision is made
+ * through the SAME shared predicate that handler uses for `gpuMode` (`rerankerPostureInputsChanged`,
+ * `rag/device-posture.ts`), never a second independent copy of the condition. `before` must be
  * read off `getSettings` BEFORE `selectModel` runs (the REAL-flip discipline); only
  * `activeModelId` can move through this path (`selectModel` never touches `gpuMode`/
  * `gpuAutoDisabled`), so `after` reuses `before`'s GPU fields verbatim.
@@ -558,6 +604,10 @@ export function registerModelIpc(ctx: AppContext): void {
         return []
       }
       const s = getSettings(ctx.db)
+      // #959: the verdicts the cache holds before this pass (see `snapshotVerdicts`). One manifest read serves both
+      // snapshots: the pass changes the cache, not the manifest set (a download that lands mid-pass pushes on its own, #914).
+      const verdictManifests = discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
+      const verdictsBefore = snapshotVerdicts(ctx, verdictManifests)
       // #420: only a pass the renderer named is cancellable, and it is registered BEFORE any
       // hashing starts — so a Cancel clicked in the first seconds (before the first progress
       // event, or on a pass that emits none because everything is cached) still finds it.
@@ -567,7 +617,7 @@ export function registerModelIpc(ctx: AppContext): void {
         const { models, manifestErrors } = await buildModelList({
           manifestsDir: ctx.manifestsDir,
           rootPath: ctx.paths.rootPath,
-          developerMode: developerLeniency(ctx, s),
+          developerMode: developerLeniency(ctx, s.developerMode),
           runningModelId: ctx.runtime.activeModelId(),
           hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
           machineRamGb: machineRamGb(),
@@ -602,13 +652,20 @@ export function registerModelIpc(ctx: AppContext): void {
         // #108: a cold-cache visit just hashed real multi-GB files — persist any fresh sample.
         // A CANCELLED pass reaches here too: whatever finished hashing is a genuine sample.
         persistEffectiveRead(ctx)
+        // #959: a pass that found a file damaged (or put a verdict right) tells the Performance screen once.
+        // After a cancelled pass too: whatever finished hashing is in the cache.
+        pushIfVerdictsChanged(verdictsBefore, snapshotVerdicts(ctx, verdictManifests))
         // #634: the search model's start-failure copy says "choose Check all model files — then try
-        // again". A completed full check that did not find its file damaged re-arms its failed-start
-        // latch, so "then try again" is a real attempt (a health timeout on a slow drive, or a memory
-        // shortage, may pass now). A damaged file is re-armed by its re-download (`onModelInstalled`).
+        // again". A completed full check re-arms every role whose model it did not find damaged
+        // (#913 review S1: the search model, the reranker, the images cooldown, the translator slot),
+        // so "then try again" is a real attempt (a file put right by hand, a health timeout on a slow
+        // drive, or a memory shortage, may pass now). A damaged file is re-armed by its re-download
+        // (`onModelInstalled`) or a clean "Verify checksum".
         if (!lazyVerify && !controller?.signal.aborted) {
-          const searchModel = models.find((m) => m.id === ctx.embedder?.id)
-          if (searchModel && searchModel.state !== 'checksum_failed') ctx.embedder.resetStartFailure?.()
+          rearmStartRefusals(
+            ctx,
+            models.filter((m) => m.state !== 'checksum_failed').map((m) => ({ id: m.id, role: m.role }))
+          )
         }
         return models
       } finally {
@@ -652,8 +709,14 @@ export function registerModelIpc(ctx: AppContext): void {
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
-    if (!found) throw new Error(`Unknown model id: ${modelId}`)
+    if (!found) {
+      log.warn('Verify model: unknown model id', { modelId })
+      throw new Error(tMain('main.models.unknown')) // #930
+    }
     const store = createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
+    // #959: capture BEFORE the invalidate below: it drops the evidence of a cached mismatch, so a
+    // damaged-to-ok flip could not be told from "nothing changed" afterwards.
+    const verdictsBefore = snapshotVerdicts(ctx, [found.manifest])
     // Invalidate EVERY file the manifest carries (#106 adjacent fix): this used to drop
     // only the GGUF's cache entry, so "Verify checksum" on a vision model re-hashed the
     // weight but silently served the mmproj projector from cache.
@@ -665,11 +728,15 @@ export function registerModelIpc(ctx: AppContext): void {
     // straight to the session's "cannot be loaded" verdict.
     clearModelLoadLatch(modelId)
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
-      developerMode: developerLeniency(ctx, getSettings(ctx.db)),
+      developerMode: developerLeniency(ctx, getSettings(ctx.db).developerMode),
       hashStore: store
     })
+    pushIfVerdictsChanged(verdictsBefore, snapshotVerdicts(ctx, [found.manifest]))
     log.info('Model re-verified', { modelId, state })
     ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
+    // #913 review S1: the forced re-hash is the one action that clears a stale mismatch (a file put
+    // back from a backup keeps its size and mtime), so a clean answer re-arms every role that refused.
+    if (state !== 'checksum_failed') rearmStartRefusals(ctx, [{ id: modelId, role: found.manifest.role }])
     // #108: the forced re-hash is a real full-file read — persist any fresh sample.
     persistEffectiveRead(ctx)
     return state
@@ -702,9 +769,13 @@ export function registerModelIpc(ctx: AppContext): void {
     // reaches this for those roles, but the handler stays honest for non-UI callers.
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
-    if (!found) throw new Error(`Unknown model id: ${modelId}`)
+    // #930: the same catalog text as startModelRuntime's guards.
+    if (!found) {
+      log.warn('Use model: unknown model id', { modelId })
+      throw new Error(tMain('main.models.unknown'))
+    }
     if (found.manifest.role !== 'chat') {
-      throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
+      throw new Error(tMain('main.models.notChat', { name: found.manifest.displayName }))
     }
     // Select first so a refresh mid-load reflects the choice on the Active badge; selectModel
     // persists the active slot + emits its own `model_selected` audit event.

@@ -233,7 +233,7 @@ export function aggregate(model: string, scores: ItemScore[]): ModelAggregate {
 /**
  * The columns of one `eval/results/<stem>-quality.csv` row, and of `<stem>-quality-rescored.csv`
  * (`eval/rescore.mjs` mirrors them). The combined `<stem>.csv` (`eval/combine.mjs`, speed/RSS
- * joined) takes these by name, all but `mean_answer_chars`.
+ * joined) takes these by name.
  */
 export const QA_CSV_HEADER = [
   'model',

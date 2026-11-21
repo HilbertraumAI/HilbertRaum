@@ -16,9 +16,12 @@ import { describe, it, expect } from 'vitest'
 import { ANALYSIS_RESPONSE_RESERVE_TOKENS, CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
 import { retrieveWholeDocument, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
 import type { ChatMessage } from '../../src/main/services/runtime'
+import { buildSkillFence } from '../../src/main/services/skills/prompt'
 import { finishScriptedRuntime, recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import {
   answerWholeDoc,
+  asNoFenceMapPrompt,
+  asPreRequestMapPrompt,
   germanDoc,
   WHOLE_DOC_QUESTION,
   wholeDocHarness,
@@ -76,6 +79,38 @@ describe('whole-document chunk map-reduce for an over-budget no-tree turn (Phase
     expect(reduceUser).toContain('Notes (whole document)')
     expect(reduceUser).not.toContain('BEGINNING of the document')
   })
+
+  // #939 (owner call 2026-11-20): the map step used to see the skill's task and never the user's request, so a
+  // list-all question under a whole-document skill was answered from notes taken for the skill's deliverable. With
+  // `wholeDocumentNotesForRequest` (set by registerRagIpc for a list-shaped question under a bundled skill) every map
+  // call carries the request under the reduce's label, before the fence, and keeps the task; without it every map
+  // call is the prompt as it was.
+  it.each([{ notesForRequest: true }, { notesForRequest: false }])(
+    'with the request flag $notesForRequest, the map calls carry the user request or are the prompt as it was (#939)',
+    async ({ notesForRequest }) => {
+      const h = await makeHarness(280)
+      const runtime = mapReduceRuntime()
+      const question = "Find every mention of 'Kategorien'"
+      const skill = { installId: 'app:contract-brief', title: 'Contract Brief', body: '# Contract brief\nList the parties and the risks.' }
+      await answerWholeDoc(h, runtime, { skill, wholeDocumentNotesForRequest: notesForRequest }, question)
+      expect(runtime.calls).toBeGreaterThan(2)
+      const maps = runtime.turns.slice(0, -1).map(userTurnOf)
+      for (const map of maps) {
+        expect(map).toContain('List the parties and the risks.')
+        if (notesForRequest) {
+          expect(map).toContain(`\nUser request:\n${question}\n`)
+          expect(map.indexOf('User request:')).toBeLessThan(map.indexOf('List the parties and the risks.'))
+          expect(map).toContain('note every detail the task needs')
+        } else {
+          expect(map).not.toContain('User request:')
+          expect(map).toBe(asPreRequestMapPrompt(map, buildSkillFence({ title: skill.title, body: skill.body }).text))
+        }
+      }
+      // The reduce carried the request before #939 already, either way.
+      const reduceUser = userTurnOf(runtime.turns[runtime.turns.length - 1])
+      expect(reduceUser).toContain(`User request:\n${question}\n`)
+    }
+  )
 
   it('an over-budget doc that packs into ONE window runs a single reduce call, still untruncated', async () => {
     // Over the single-read budget (enters the map-reduce path) but small enough that the de-overlapped
@@ -305,6 +340,29 @@ describe('whole-document chunk map-reduce — hierarchical fold for the large-do
     const allTurns = runtime.turns.map(userTurnOf).join('\n')
     expect(allTurns).toContain('M0000')
     expect(allTurns).toContain(`M${String(SENTENCES - 1).padStart(4, '0')}`)
+  })
+
+  // #939: the fold condenses the map notes, so with the request flag it carries the request too. #952: with no skill
+  // there is no task, so every map and condense call takes notes for the request alone with no flag, on the frozen
+  // no-fence template, and never names "the task described below".
+  it.each([
+    { name: 'a skill and the request flag', skill: { installId: 'app:contract-brief', title: 'Contract Brief', body: '# Contract brief\nList every decision.' }, notesForRequest: true },
+    { name: 'no skill', skill: undefined, notesForRequest: undefined }
+  ])('the map and condense calls with $name (#939, #952)', async ({ skill, notesForRequest }) => {
+    const h = await makeHarness(350)
+    const runtime = mapReduceRuntime(MEDIUM_NOTE, CTX2)
+    await answerWholeDoc(h, runtime, { skill, wholeDocumentNotesForRequest: notesForRequest })
+    const steps = runtime.turns.slice(0, -1).map(userTurnOf)
+    const folds = steps.filter((u) => u.includes('Condensed notes:'))
+    expect(folds.length).toBeGreaterThan(0)
+    expect(steps.length).toBeGreaterThan(folds.length)
+    for (const step of steps) {
+      expect(step).toContain(`\nUser request:\n${WHOLE_DOC_QUESTION}\n`)
+      if (skill == null) {
+        expect(step).not.toContain('task described below')
+        expect(step).toBe(asNoFenceMapPrompt(step, WHOLE_DOC_QUESTION))
+      }
+    }
   })
 
   it('beyond the HARD ceiling the tail is honestly dropped (deep-index tree territory)', async () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testBudgetMs } from '../helpers/hang-budget'
 import {
   expandPaths,
   expandPathsBounded,
@@ -225,11 +226,15 @@ describe('walk budget — defaults, env overrides and the drop cap', () => {
     expect('exhausted' in full).toBe(false)
   })
 
+  // Measured (#934 item 3, Windows, 12 logical CPUs, 512 missing paths, one await per path, mean of 3): idle 75 ms for
+  // 512 async failed stats; 6 busy threads 131 ms; 12 busy threads 6.4 s (about 99 ms per call at p99). Synchronous
+  // statSync stays at 51 / 48 / 152 ms and a 16-thread libuv pool changes nothing (5.8 s), so the cost is the awaited hop's
+  // scheduling on a starved CPU, not the failed open. That is why this row's budget is `testBudgetMs`, not a fixed bound.
   it('MAX_DROP_PATHS is 512; the service itself does not cap (the handler caps the raw seams only)', async () => {
     expect(MAX_DROP_PATHS).toBe(512)
     // A main-vetted picker selection may exceed the cap and must still be countable.
     const dir = root()
     const paths = Array.from({ length: MAX_DROP_PATHS + 1 }, (_, i) => join(dir, `missing-${i}.txt`))
     expect(await summarizeImportPaths(paths)).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
-  })
+  }, testBudgetMs(30_000))
 })

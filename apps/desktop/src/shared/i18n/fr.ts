@@ -1199,6 +1199,11 @@ export const fr: UiCatalog<'fr'> = {
   'models.library.translation': 'Traduction',
   'models.library.images': 'Images',
   'models.library.voice': 'Voix',
+  'models.newerApp.heading': 'Nécessite une version plus récente de HilbertRaum',
+  'models.newerApp.badge': 'Mise à jour requise',
+  'models.newerApp.hint':
+    'Ce modèle est destiné à une version plus récente de HilbertRaum. Mettez l’application à jour ' +
+    'sur cet ordinateur pour l’utiliser.',
   'models.library.memory': 'Mémoire minimale\u00A0: {size}',
   'models.library.clear': 'Effacer les filtres',
   'models.library.showVariants': 'Afficher toutes les variantes ({count})',
@@ -1227,10 +1232,14 @@ export const fr: UiCatalog<'fr'> = {
   'models.state.installed': 'Installé',
   'models.state.missing': 'Non téléchargé',
   'models.state.checksumFailed': 'Non vérifiable',
+  'models.state.noChecksum': 'Pas de somme de contrôle',
   'models.state.unsupported': 'Non pris en charge',
   'models.state.notRecommended': 'Déconseillé',
   'models.state.ready': 'Prêt',
   'models.state.running': 'En marche',
+  'models.noChecksum.hint':
+    'Ce modèle n’a aucune somme de contrôle enregistrée\u00A0: il ne fonctionne qu’en mode ' +
+    'développeur, sur un disque dont la politique autorise les modèles non vérifiés.',
   'models.badge.notResponding': 'Ne répond pas',
   'models.notRespondingHint':
     'Le modèle d’IA a cessé de répondre. Un redémarrage règle généralement le problème.',
@@ -1362,6 +1371,18 @@ export const fr: UiCatalog<'fr'> = {
   'models.engine.downloadingNoTotal': 'Téléchargement du moteur d’IA…',
   'models.engine.verifying': 'Vérification du moteur d’IA…',
   'models.engine.extracting': 'Décompression du moteur d’IA…',
+  'models.engineConfirm.chatEngine': 'Moteur d’IA (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Moteur vocal (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'version de repli pour le processeur seul',
+  'models.engineConfirm.version': 'Version',
+  'models.engineConfirm.total': 'Taille totale',
+  'models.engineConfirm.licenseIncludes': '{license}, inclut {bundled}',
+  'models.engineConfirm.hint':
+    'Chaque fichier est téléchargé depuis l’adresse indiquée et vérifié par rapport à sa somme de ' +
+    'contrôle attendue avant d’être utilisé. Rien sur vous ni sur vos documents n’est envoyé.',
+  'models.engineConfirm.updateNote':
+    'Votre modèle continue de répondre pendant le téléchargement. Il se met en pause quelques ' +
+    'secondes, seulement pendant le remplacement des fichiers.',
   'models.voiceEngine.title': 'Ajouter la dictée vocale (facultatif)',
   'models.voiceEngine.explain':
     'Le Chat et les réponses sur vos documents fonctionnent déjà sur ce disque. Le moteur vocal ' +
@@ -1422,7 +1443,8 @@ export const fr: UiCatalog<'fr'> = {
     'Sur ce système d’exploitation, l’application ne peut pas encore installer le moteur ' +
     'vocal\u00A0: ce modèle ne permet donc ni la dictée vocale ni l’importation audio ici.',
   'models.vision.installed':
-    'Installé\u00A0: utilisé automatiquement sur l’écran Images. Rien à démarrer ici.',
+    'Installé\u00A0: l’écran Images choisit automatiquement le modèle à utiliser. Rien à démarrer ' +
+    'ici.',
   'models.vision.notInstalled':
     'Utilisé automatiquement sur l’écran Images une fois installé\u00A0: aucune configuration ' +
     'nécessaire.',
@@ -2073,6 +2095,12 @@ export const fr: UiCatalog<'fr'> = {
   'diag.audit.model_download_started': 'Téléchargement lancé',
   'diag.audit.model_download_verified': 'Téléchargement vérifié',
   'diag.audit.model_download_failed': 'Échec du téléchargement',
+  'diag.audit.engine_install_started': 'Téléchargement du moteur ou des outils lancé',
+  'diag.audit.engine_install_finished': 'Moteur ou outils installés',
+  'diag.audit.engine_install_failed': 'Échec de l’installation du moteur ou des outils',
+  'diag.audit.ocr_install_started': 'Téléchargement des fichiers OCR lancé',
+  'diag.audit.ocr_install_finished': 'Fichiers OCR installés',
+  'diag.audit.ocr_install_failed': 'Échec de l’installation des fichiers OCR',
   'diag.audit.document_imported': 'Document importé',
   'diag.audit.document_reindexed': 'Document réindexé',
   'diag.audit.document_deleted': 'Document supprimé',
@@ -2091,6 +2119,7 @@ export const fr: UiCatalog<'fr'> = {
   'diag.audit.workspace_lock_failed':
     'Échec d’une tentative de verrouillage (l’espace de travail est resté ouvert)',
   'diag.audit.workspace_password_changed': 'Mot de passe de l’espace de travail modifié',
+  'diag.audit.workspace_working_copy_lost': 'Modifications récentes perdues',
   'diag.audit.settings_changed': 'Paramètres modifiés',
   'diag.audit.local_api_toggled': 'API locale activée ou désactivée',
   'diag.audit.policy_warning': 'Avis de la politique du disque',
@@ -2214,6 +2243,9 @@ export const fr: UiCatalog<'fr'> = {
     '{model} · {size}\u00A0GB sur le disque · contexte\u00A0: {context} tokens',
   'perf.model.line.other':
     '{model} · {size}\u00A0GB sur le disque · contexte\u00A0: {context} tokens',
+  'perf.model.lineNoSize.one': '{model} · contexte\u00A0: {context} token',
+  'perf.model.lineNoSize.many': '{model} · contexte\u00A0: {context} tokens',
+  'perf.model.lineNoSize.other': '{model} · contexte\u00A0: {context} tokens',
   'perf.model.none':
     'Aucun modèle sélectionné pour l’instant. Choisissez-en un sur l’écran Modèle d’IA.',
   'perf.model.need': 'Occupe {need}\u00A0GB avec ce contexte.',
@@ -2297,6 +2329,9 @@ export const fr: UiCatalog<'fr'> = {
   'perf.models.device.processor': 'processeur',
   'perf.models.loaded': 'chargé',
   'perf.models.notLoaded': 'non chargé',
+  'perf.models.notOnDrive': 'pas sur ce disque',
+  'perf.models.damaged': 'échec de la vérification des fichiers',
+  'perf.models.noChecksum': 'aucune somme de contrôle enregistrée',
   'perf.models.lifetime.session': 'reste chargé',
   'perf.models.lifetime.idle': 'se décharge en cas d’inactivité',
   'perf.models.lifetime.per-use': 'ne fonctionne que pendant une tâche',
@@ -2304,6 +2339,7 @@ export const fr: UiCatalog<'fr'> = {
   'perf.models.card':
     'Carte graphique\u00A0: Chat {chat}\u00A0GB + traduction {translation}\u00A0GB, sur ' +
     '{vram}\u00A0GB.',
+  'perf.models.cardChat': 'Carte graphique\u00A0: Chat {chat}\u00A0GB, sur {vram}\u00A0GB.',
   'perf.models.cardReranker':
     'Carte graphique\u00A0: classement {reranker}\u00A0GB, sur {vram}\u00A0GB.',
   'perf.models.cardBoth':
@@ -2539,6 +2575,27 @@ export const fr: UiCatalog<'fr'> = {
     'ce disque.',
   'gate.unlock.submit': 'Déverrouiller',
   'gate.unlock.submitBusy': 'Déverrouillage…',
+  'gate.unlock.workingCopyLost':
+    'Le fichier de travail de l’espace de travail sur le disque a été supprimé ou endommagé. Votre ' +
+    'espace de travail est conservé tel qu’il était la dernière fois qu’il a été verrouillé ou que ' +
+    'l’application a été fermée\u00A0; les modifications faites depuis sont perdues.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum n’a pas verrouillé votre espace de travail lors de sa dernière fermeture, par ' +
+    'exemple parce que le disque a été retiré, que l’ordinateur a subi une coupure de courant ou que ' +
+    'l’application a été arrêtée de force. Votre espace de travail s’ouvre tel qu’il était lors de ' +
+    'son dernier verrouillage\u00A0; toute modification faite depuis est perdue. La prochaine fois, ' +
+    'quittez HilbertRaum avant de retirer le disque.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum n’a pas pu verrouiller votre espace de travail lors de sa dernière fermeture, car ' +
+    'le disque était plein. Votre espace de travail s’ouvre tel qu’il était lors de son dernier ' +
+    'verrouillage\u00A0; toute modification faite depuis est perdue. Assurez-vous que le disque ' +
+    'dispose d’espace libre avant de continuer\u00A0: sinon, le prochain verrouillage ne pourra pas ' +
+    'non plus enregistrer vos modifications.',
+  'gate.unlock.encryptedFileMissing':
+    'Le fichier chiffré de l’espace de travail était absent du disque, HilbertRaum a donc conservé ' +
+    'la copie non chiffrée laissée par votre dernière session. Déverrouillez maintenant pour la ' +
+    'chiffrer à nouveau, puis cherchez ce qui a supprimé le fichier, par exemple un outil de ' +
+    'synchronisation ou de nettoyage.',
   'gate.welcome.title': 'Bienvenue',
   'gate.welcome.intro':
     'Voici votre espace de travail d’IA privé. Discutez avec un modèle d’IA et posez des ' +
@@ -2608,6 +2665,11 @@ export const fr: UiCatalog<'fr'> = {
     'Le moteur vocal ne peut pas fonctionner sur cet ordinateur\u00A0: cet enregistrement n’a ' +
     'donc pas pu être transcrit. Suivez les indications de l’écran Modèle d’IA, puis réindexez ' +
     'ce document.',
+  'main.ingest.voiceModelPathUnsupported':
+    'Sous Windows, le moteur vocal ne peut pas ouvrir le modèle de transcription, car le nom d’un ' +
+    'dossier ou du fichier dans le chemin du modèle contient un tréma, un accent ou un autre ' +
+    'caractère non ASCII. Placez le modèle dans un chemin sans ces caractères et mettez à jour son ' +
+    'entrée dans le manifeste du modèle, puis réindexez ce document.',
   'main.ingest.searchModelTimeout':
     'Le modèle de recherche n’a pas répondu à temps\u00A0: ce document n’a donc pas pu être ' +
     'indexé. Réessayez.',
@@ -2702,6 +2764,28 @@ export const fr: UiCatalog<'fr'> = {
     'navigateur se connectera à ce site.',
   'main.dialog.openLink.open': 'Ouvrir',
   'main.dialog.openLink.cancel': 'Annuler',
+  'main.dialog.unsavedReview.title':
+    'Certaines modifications de la vérification n’ont pas pu être enregistrées.',
+  'main.dialog.unsavedReview.message':
+    'Certaines modifications de la vérification n’ont pas pu être enregistrées.',
+  'main.dialog.unsavedReview.detail':
+    'Si vous fermez maintenant, elles seront perdues. Vérifiez que le disque est toujours branché et ' +
+    'qu’il reste de l’espace libre, puis réessayez.',
+  'main.dialog.unsavedReview.tryAgain': 'Réessayer',
+  'main.dialog.unsavedReview.keepOpen': 'Ne pas fermer',
+  'main.dialog.unsavedReview.closeAnyway': 'Fermer quand même',
+  'main.dialog.taskRunning.title': 'Une tâche sur un document n’est pas encore terminée.',
+  'main.dialog.taskRunning.message': 'Une tâche sur un document n’est pas encore terminée.',
+  'main.dialog.taskRunning.detailOcr':
+    'Si vous fermez maintenant, la lecture du document numérisé s’arrête et les pages déjà lues sont ' +
+    'perdues.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Si vous fermez maintenant, la traduction s’arrête et la partie déjà traduite est perdue.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Si vous fermez maintenant, les tâches sur les documents en cours ou en attente s’arrêtent et le ' +
+    'travail déjà fait est perdu.',
+  'main.dialog.taskRunning.keepOpen': 'Ne pas fermer',
+  'main.dialog.taskRunning.closeAnyway': 'Fermer quand même',
   'main.workspace.wrongPassword':
     'Ce mot de passe n’a pas déverrouillé votre espace de travail. Vérifiez-le et réessayez.',
   'main.workspace.openFailed': 'L’espace de travail n’a pas pu être ouvert.',
@@ -2710,6 +2794,28 @@ export const fr: UiCatalog<'fr'> = {
     'endommagées et n’ont pas pu être ouvertes. Ressaisir le mot de passe n’y changera rien. Ne ' +
     'créez pas de nouvel espace de travail\u00A0: laissez les fichiers tels quels et restaurez ' +
     'le dossier «\u00A0workspace\u00A0» à partir d’une sauvegarde.',
+  'main.workspace.vaultMissing':
+    'Votre mot de passe est correct, mais le fichier chiffré de l’espace de travail est absent du ' +
+    'disque, et aucune copie ne permet de le récupérer. Ne créez pas de nouvel espace de travail. ' +
+    'Remettez le fichier à sa place ou restaurez le dossier «\u00A0workspace\u00A0» à partir d’une ' +
+    'sauvegarde.',
+  'main.workspace.descriptorMissing':
+    'Le fichier qui contient la clé de votre espace de travail (config/workspace.json) est absent du ' +
+    'disque ou illisible, et aucun mot de passe ne peut donc ouvrir l’espace de travail. Ne créez ' +
+    'pas de nouvel espace de travail. Remettez le fichier à sa place ou restaurez-le à partir d’une ' +
+    'sauvegarde.',
+  'main.workspace.descriptorUnreadable':
+    'Le fichier qui contient la clé de votre espace de travail (config/workspace.json) est illisible ' +
+    'et le fichier chiffré de l’espace de travail est absent du disque. Aucun mot de passe ne peut ' +
+    'donc ouvrir l’espace de travail. Ne supprimez pas le fichier de clé. Restaurez les deux ' +
+    'fichiers à partir d’une sauvegarde, ou consultez le guide de dépannage avant de repartir de ' +
+    'zéro.',
+  'main.workspace.vaultOpenFailed':
+    'Votre mot de passe est correct, mais HilbertRaum n’a pas pu terminer l’ouverture de ' +
+    'l’espace de travail. L’espace de travail chiffré sur le disque est resté tel quel. ' +
+    'Vérifiez qu’il reste de l’espace libre sur le disque, puis réessayez. Si le problème ' +
+    'est apparu après une mise à jour, la version précédente de HilbertRaum peut toujours ' +
+    'l’ouvrir.',
   'main.workspace.recoveryBlocked':
     'L’espace de travail ne peut pas encore être ouvert\u00A0: un autre programme garde ouvert ' +
     'un fichier de récupération qui contient vos données les plus récentes. Fermez tout ce qui ' +
@@ -2721,6 +2827,12 @@ export const fr: UiCatalog<'fr'> = {
     'mettez l’application à jour pour l’ouvrir. Rien n’a été modifié.',
   'main.workspace.createFailed': 'L’espace de travail n’a pas pu être créé.',
   'main.workspace.passwordTooShort': 'Le mot de passe doit comporter au moins {min} caractères.',
+  'main.workspace.exists':
+    'Un espace de travail existe déjà sur ce disque, aucun nouvel espace n’a donc été créé. ' +
+    'Déverrouillez-le avec son mot de passe.',
+  'main.workspace.plaintextNotAllowed':
+    'Un espace de travail sans mot de passe n’est pas autorisé ici. Créez l’espace de travail avec ' +
+    'un mot de passe.',
   'main.workspace.newPasswordTooShort':
     'Le nouveau mot de passe doit comporter au moins {min} caractères.',
   'main.workspace.unlockBeforeChange':
@@ -2732,6 +2844,9 @@ export const fr: UiCatalog<'fr'> = {
   'main.workspace.busyPasswordChange':
     'Le mot de passe de l’espace de travail est en cours de modification. Réessayez dans un ' +
     'instant.',
+  'main.workspace.busyDocumentWork':
+    'Des documents sont encore en cours d’importation ou de réindexation. Attendez la fin de ' +
+    'l’opération, puis réessayez.',
   'main.workspace.lockFailed':
     'L’espace de travail n’a pas pu être verrouillé\u00A0: il reste ouvert et vos données sont ' +
     'en sécurité. Libérez de l’espace sur le disque, puis réessayez.',
@@ -2924,7 +3039,7 @@ export const fr: UiCatalog<'fr'> = {
     'été supprimé. Si vous le relancez, il recommencera depuis le début.',
   'main.engine.alreadyRunning': 'Le moteur d’IA est déjà en cours de téléchargement.',
   'main.engine.noSources':
-    'Aucune source de moteur n’a été trouvée sur ce disque (le fichier ' +
+    'Aucune source de moteur n’a été trouvée dans cette copie de HilbertRaum (le fichier ' +
     '«\u00A0runtime-sources.yaml\u00A0» est absent).',
   'main.engine.noHostBuild': 'Aucune version du moteur d’IA n’est disponible pour cet ordinateur.',
   'main.engine.alreadyInstalled': 'Le moteur d’IA est déjà installé.',
@@ -2966,6 +3081,12 @@ export const fr: UiCatalog<'fr'> = {
     'Le moteur d’IA est actuellement utilisé (une réponse, une importation, une traduction ou ' +
     'une tâche sur un document est en cours). Relancez la mise à jour une fois l’opération ' +
     'terminée.',
+  'main.engine.notEnoughSpace':
+    'Il n’y a pas assez d’espace libre sur ce disque (nécessaire pour décompresser le moteur\u00A0: ' +
+    '{needed}\u00A0; disponible\u00A0: {free}). Libérez de l’espace sur le disque, puis réessayez.',
+  'main.engine.filesInUse':
+    'Le moteur n’a pas pu être remplacé, car un autre programme utilise l’un de ses fichiers (une ' +
+    'analyse antivirus, par exemple). Réessayez dans une minute.',
   'main.ocr.badRequest':
     'La demande de téléchargement des fichiers OCR n’a pas été comprise. Réessayez.',
   'main.ocr.alreadyRunning': 'Les fichiers OCR sont déjà en cours de téléchargement.',
@@ -2973,9 +3094,10 @@ export const fr: UiCatalog<'fr'> = {
     'Ce disque ne contient pas de liste de téléchargement pour les fichiers OCR. Ajoutez-les ' +
     'plutôt avec les scripts de préparation du disque («\u00A0fetch-runtime --family ocr\u00A0»).',
   'main.ocr.sourcesMismatch':
-    'La liste de téléchargement des fichiers OCR sur ce disque ne correspond pas à cette version ' +
-    'de HilbertRaum\u00A0: rien n’a donc été téléchargé. Ajoutez plutôt les fichiers avec les ' +
-    'scripts de préparation du disque («\u00A0fetch-runtime --family ocr\u00A0»).',
+    'Ni la liste de téléchargement des fichiers OCR sur ce disque ni celle de cette copie de ' +
+    'HilbertRaum ne contient les fichiers qu’utilise cette version\u00A0: rien n’a donc été ' +
+    'téléchargé. Ajoutez plutôt les fichiers avec les scripts de préparation du disque ' +
+    '(«\u00A0fetch-runtime --family ocr\u00A0»).',
   'main.ocr.alreadyInstalled':
     'Les fichiers OCR sont déjà sur ce disque. Si la reconnaissance de texte n’est toujours pas ' +
     'proposée, redémarrez HilbertRaum.',
@@ -3031,6 +3153,18 @@ export const fr: UiCatalog<'fr'> = {
   'main.models.noManifests':
     'Aucune liste de modèles n’a été trouvée sur ce disque\u00A0: le dossier ' +
     '«\u00A0model-manifests\u00A0» est absent.',
+  'main.models.unknown': 'Ce modèle ne figure plus dans la liste des modèles de ce disque.',
+  'main.models.notChat':
+    '«\u00A0{name}\u00A0» n’est pas un modèle du Chat, il ne peut donc pas être démarré ici.',
+  'main.models.startDamaged':
+    'Le modèle «\u00A0{name}\u00A0» n’a pas réussi la vérification de ses fichiers, il n’a donc pas ' +
+    'été démarré. Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
+  'main.models.startMissing':
+    'Le modèle «\u00A0{name}\u00A0» ne peut pas être démarré\u00A0: son fichier de modèle n’est pas ' +
+    'encore sur ce disque.',
+  'main.models.startNeedsRam':
+    'Le modèle «\u00A0{name}\u00A0» nécessite au moins {min}\u00A0GB de RAM – cet ordinateur dispose ' +
+    'd’environ {ram}\u00A0GB. Choisissez un modèle plus petit\u00A0: la qualité reste excellente.',
   'main.models.autoSelected':
     'Ce modèle est utilisé automatiquement une fois installé\u00A0: il n’y a rien à sélectionner.',
   'main.models.locked':
@@ -3075,6 +3209,12 @@ export const fr: UiCatalog<'fr'> = {
   'main.dictation.engineCannotRun':
     'Le moteur vocal ne peut pas fonctionner sur cet ordinateur. L’écran Modèle d’IA indique ce ' +
     'qui manque.',
+  'main.dictation.voiceModelPathUnsupported':
+    'Sous Windows, le moteur vocal ne peut pas ouvrir l’un de ses modèles (le modèle de ' +
+    'transcription ou celui de détection d’activité vocale), car le nom d’un dossier ou du fichier ' +
+    'dans le chemin de ce modèle contient un tréma, un accent ou un autre caractère non ASCII. ' +
+    'Placez le modèle dans un chemin sans ces caractères et mettez à jour son entrée dans le ' +
+    'manifeste du modèle, puis réessayez.',
   'main.preflight.readOnly':
     'Ce disque semble être en lecture seule\u00A0: l’application ne peut donc pas y créer son ' +
     'espace de travail. Essayez un autre port USB ou consultez le guide de dépannage.',
@@ -3467,6 +3607,9 @@ export const fr: UiCatalog<'fr'> = {
   'images.avail.incompatible':
     'Le modèle pour les images présent sur ce disque nécessite une version plus récente du ' +
     'moteur d’IA.',
+  'images.avail.damaged':
+    'Le modèle pour les images présent sur ce disque n’a pas réussi la vérification de ses fichiers. ' +
+    'Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
   'images.avail.cta': 'Ouvrir l’écran Modèle d’IA',
   'images.avail.ocrPointer':
     'Des documents numérisés\u00A0? Utilisez «\u00A0Rendre interrogeable (OCR)\u00A0» sur ' +
@@ -3533,6 +3676,9 @@ export const fr: UiCatalog<'fr'> = {
   'images.err.engineCannotRun':
     'Le moteur d’IA ne peut pas fonctionner sur cet ordinateur. L’écran Modèle d’IA indique ce ' +
     'qui manque.',
+  'images.err.modelDamaged':
+    'Le modèle pour les images n’a pas réussi la vérification de ses fichiers, il n’a donc pas été ' +
+    'démarré. Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
   'images.err.emptyResponse':
     'Aucune réponse n’a été renvoyée pour cette image. Essayez de reformuler votre question.',
   'images.err.emptyQuestion': 'Saisissez d’abord une question sur l’image.',
@@ -3645,6 +3791,9 @@ export const fr: UiCatalog<'fr'> = {
   'translate.err.engineCannotRun':
     'Le moteur d’IA ne peut pas fonctionner sur cet ordinateur. L’écran Modèle d’IA indique ce ' +
     'qui manque.',
+  'translate.err.modelDamaged':
+    'Le modèle de traduction n’a pas réussi la vérification de ses fichiers, il n’a donc pas été ' +
+    'démarré. Téléchargez-le à nouveau sur l’écran Modèle d’IA.',
   'translate.err.empty': 'Aucune traduction n’a été renvoyée. Réessayez, ou reformulez le texte.',
   'translate.err.sameLang': 'Choisissez deux langues différentes.',
   'translate.err.tooLong':
@@ -3736,12 +3885,18 @@ export const fr: UiCatalog<'fr'> = {
   'review.rename.save': 'Enregistrer',
   'review.loading': 'Chargement de la vérification…',
   'review.notFound': 'Cette vérification est introuvable. Elle a peut-être été supprimée.',
+  'review.openFailed': 'Cette vérification n’a pas pu être ouverte.',
   'review.question.toggle': 'Question',
   'review.answerPane.aria': 'Réponse en cours de vérification',
   'review.autosave.saving': 'Enregistrement…',
   'review.autosave.saved': 'Enregistré',
   'review.autosave.error': 'Certaines modifications n’ont pas encore pu être enregistrées.',
   'review.autosave.retry': 'Réessayer',
+  'review.unsaved.body':
+    'Certaines modifications de «\u00A0{title}\u00A0» n’ont pas encore pu être enregistrées\u00A0: ' +
+    'l’autre vérification n’a donc pas été ouverte. Réessayez ou abandonnez ces modifications pour ' +
+    'l’ouvrir.',
+  'review.unsaved.discard': 'Abandonner les modifications et ouvrir',
   'review.evidence.title': 'Justificatifs',
   'review.evidence.captionRelevance':
     'Les sources affichées sont les extraits fournis au modèle d’IA local pour cette réponse.',
@@ -3953,6 +4108,7 @@ export const fr: UiCatalog<'fr'> = {
   'review.export.done': 'Pack de justificatifs exporté.',
   'review.export.error':
     'Le pack de justificatifs n’a pas pu être exporté. Aucun fichier n’a été écrit.',
+  'review.export.failed': 'L’exportation du pack de justificatifs n’a pas abouti.',
   'review.export.copyHash': 'Copier la somme SHA-256',
   'review.export.hashCopied': 'Somme SHA-256 copiée dans le presse-papiers.'
 }

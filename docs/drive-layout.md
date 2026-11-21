@@ -2,13 +2,20 @@
 
 ## How the app finds its data
 
-At startup (`main/index.ts` → `initBackend()`), the app resolves a **root path** using
-`services/workspace.ts` → `resolvePaths()`, in this priority:
+At startup (`main/index.ts` → `initBackend()`), the app picks a **root path** with
+`services/workspace.ts` → `locateDriveRoot()` and derives the paths from it with `resolvePaths()`, in
+this priority:
 
-1. **`HILBERTRAUM_DRIVE_ROOT` environment variable** — explicit override (used when launching from a
-   prepared drive, or for testing). If the root contains `config/drive.json`, it is treated as a
-   **prepared drive**.
-2. **App-data fallback** — `app.getPath('userData')` for a normal install / dev run.
+1. **`HILBERTRAUM_DRIVE_ROOT` environment variable** — explicit override (the drive launchers set it;
+   also used for testing). If the root contains `config/drive.json`, it is treated as a **prepared
+   drive**. An empty or blank value counts as unset (#858).
+2. **The drive the app runs from** — `findPreparedDriveRoot` walks up, at most six folders, from
+   where the app really is: the Windows portable exe's folder (`PORTABLE_EXECUTABLE_DIR`), a Linux
+   AppImage's file (`APPIMAGE`; the executable itself runs from a temporary mount), or the
+   executable's folder. So an app started directly on a Kit, without the launcher, still opens the
+   drive's workspace. A macOS app that Gatekeeper translocates runs from elsewhere and is not found
+   this way; the drive's launcher covers it.
+3. **App-data fallback** — `app.getPath('userData')` for a normal install / dev run.
 
 From the root, these paths are derived and created (idempotently) on first run:
 
@@ -20,6 +27,9 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   │                      # while the app runs, SQLite keeps -wal/-shm sidecars next to it (WAL
 │   │                      # mode); a clean quit checkpoints + removes them in BOTH modes (#51) —
 │   │                      # sidecars present at rest mean the last session ended uncleanly
+│   │                      # hilbertraum.sqlite.recovery: a copy a start set aside for the next unlock to roll
+│   │                      # forward (a failed lock's session, CODE-1b; or the only copy of the workspace when
+│   │                      # .enc was missing, #911); plaintext until that unlock
 │   ├── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
 │   ├── images/            # saved image-analysis history copies (<id><ext>.enc in encrypted mode)
 │   └── zim-transient/     # generated library XML for the knowledge-pack server (plaintext while
@@ -34,6 +44,10 @@ From the root, these paths are derived and created (idempotently) on first run:
 ├── logs/
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
+                           #   working-copy-lost.json: only after a lock that kept the last saved state
+                           #   because the working file was gone or damaged (#875), or a start that
+                           #   shredded the session an unclean end left (#892); content-free, bound
+                           #   to that .enc snapshot, removed by the next unlock
 ```
 
 > **Skills live OUTSIDE `workspace/`, in the clear (Skills plan §0/§7, revised 2026-06-17).** A skill
@@ -49,7 +63,8 @@ From the root, these paths are derived and created (idempotently) on first run:
 > `resolveManifestsDir` precedent).
 
 `buildDriveStatus()` reports root/workspace/models/logs paths, prepared-drive flag, writability,
-free space, and OS/arch — surfaced on the **Diagnostics** screen.
+free space, the size of `workspace/images/` (`0` when empty, unknown when unreadable), and OS/arch —
+surfaced on the **Diagnostics** screen.
 
 ## Prepared external drive (commercial layout, spec §6)
 
@@ -70,6 +85,9 @@ HILBERTRAUM/
 ├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Vulkan on win/linux)
 │   ├── .hilbertraum-runtime.json                       # install marker: { version, backend, os, arch }
 │   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only)
+├── runtime/<family>/<os>.new/, <os>.old/       # TRANSIENT (#986): an in-app install's staged copy and the copy
+│                                                #   it replaces, beside the install (and <os>/cpu.new/, cpu.old/);
+│                                                #   gone after the job, finished or rolled back at the next start
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family: the whisper-cli transcriber
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin + the Silero VAD .bin its manifest requires since #504; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
@@ -107,10 +125,19 @@ HILBERTRAUM/
 │   └── runtime-sources.yaml                     # sidecar download manifest (llama_cpp + whisper_cpp + kiwix_tools + ocr blocks)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
 ├── user-skills/                                # user Skills (read-write PLAIN folders) — EMPTY on a sold drive
-├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive
-├── logs/
+├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive:
+│                                                #   the sell gate refuses any file or link in it and any
+│                                                #   non-empty folder; empty documents/, images/ and
+│                                                #   zim-transient/ are fine (#893)
+├── logs/                                       # app.log.enc (app.log in plaintext dev mode) — EMPTY on a sold
+│                                                #   drive, by the same sell-gate rule (#893)
 ├── docs/                                       # user guide, privacy, troubleshooting
-└── config/{drive.json,policy.json,checksums.json}
+└── config/{drive.json,policy.json,checksums.json}  # + workspace.json once a workspace exists, and
+                                                #   working-copy-lost.json only after a lock kept the last
+                                                #   saved state (#875) or a start shredded the session an
+                                                #   unclean end left (#892); a workspace created here removes a
+                                                #   leftover one. The sell gate refuses both, and either
+                                                #   one's temporary copy (`<name>.*`, #893)
 ```
 
 > **Skills on a commercial drive (S3 lays the dirs; S9 provisions + asserts).** `app-skills/` carries
@@ -179,6 +206,8 @@ drive is the same flow as building it, run again from a machine with the repo:
    `config/drive.json` and `config/policy.json` are kept, and `--force` would rewrite both to the
    defaults, resetting a drive owner's policy (`docs/packaging.md`, "To move a drive to the repo's pin").
 2. `fetch-models` / `fetch-runtime` download anything new (present + verified files are skipped).
+   An engine that the app updated past the drive's pin is kept as it is (#873); `--allow-downgrade`
+   replaces it with the drive's pin.
    On a Kit, `fetch-models --bundled`: plain `fetch-models` would preload the whole catalog (#766).
 3. **Delete every prior app artifact** at the drive root — `HilbertRaum-<old>-portable.exe`,
    `HilbertRaum-<old>.AppImage`, `HilbertRaum-<old>-mac-arm64.app.zip` — and any extracted
@@ -189,7 +218,12 @@ drive is the same flow as building it, run again from a machine with the repo:
 4. `verify-models --target <drive> --strict` confirms every weight still verifies; on a Kit,
    `--kit` checks what it ships and leaves the in-app catalog alone (#766).
 
-The user's `workspace/` (and its encrypted data) is never modified by an update.
+An update does not edit your `workspace/` files itself. The first time a newer version opens the
+workspace it may upgrade the database inside it (new columns, indexes and search tables) and
+records the schema version it wrote. Versions 0.1.60 and later refuse to open a workspace whose
+schema version is newer than their own, so after an update that raises it, an older version can no
+longer open that workspace; 0.1.59 and older do not check. No release so far has raised it: it has
+been 1 since 0.1.60.
 
 ## Preparing a drive (scripts)
 
@@ -260,6 +294,16 @@ build comes from `model-manifests/runtime-sources.yaml`. See
 Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
 exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).
 
+**Transient swap folders (#986).** An in-app install, update or reinstall never deletes the engine
+first. It builds the new copy in **`<os>.new/`** beside the install folder (the `cpu/` net in
+**`<os>/cpu.new/`**), marks it, then moves the install to **`<os>.old/`** (`cpu.old/`) and the new
+copy in, and deletes `.old` after the job. No resolver ever reads these names. A kill, an unplug or a
+crash between the steps can leave them; the app's next start on that OS finishes or rolls back the
+swap before anything starts an engine (`recoverEngineSwaps`, `architecture.md` "In-app engine
+updates" §6), and so does the next engine job, before it downloads. Only these exact names are touched: any other folder beside the install (the app-update
+plan's `<os>@<pin>/`) is left alone. A Kit must not ship one: the sell gate and the Kit gate scripts
+refuse a leftover beside a pinned build.
+
 ### Second sidecar family: the whisper.cpp transcriber
 
 Audio transcription uses a separate, pinned **whisper.cpp** CLI under
@@ -296,9 +340,9 @@ carries ONLY the language data under `ocr/`:
   recognition for scans and photos (optional)"* row on the **AI Model** screen, offers
   **Download OCR files** — a facts-only confirmation, then the pinned `deu` + `eng` files (and `osd`, #538) land in
   `ocr/`. The app pins their sha256 + exact size in code (`services/ocr-install.ts`,
-  drift-tested against the yaml); from the yaml it takes only the URL, never the `dest`. When
-  the drive's yaml offers no usable `ocr:` block (none, or the file does not validate) it falls back
-  to the app-bundled copy; a valid block pinning other files is refused.
+  drift-tested against the yaml); from the yaml it takes only the URL, never the `dest`. Each file
+  comes from the drive's yaml when its entry carries the pinned hash, else from the app's own copy
+  (#841); a file neither list pins that way is refused.
 - **Offline / DIY:** fetch with **`fetch-runtime --family ocr`** (`-Family ocr` on PowerShell) —
   one run covers every OS (the data is platform-independent).
 - Shipped files: `deu.traineddata.gz` (1.27 MB) + `eng.traineddata.gz` (2.82 MB), the
@@ -321,7 +365,15 @@ carries ONLY the language data under `ocr/`:
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).
 - Path separators handled via `node:path`; works on Windows/macOS/Linux.
-- The SQLite file is self-contained, so moving the `workspace/` folder moves all data.
+- A plaintext (developer) workspace is self-contained: moving the `workspace/` folder moves all its
+  data. **An encrypted workspace is two places, always moved together:** `workspace/` holds the
+  encrypted data, and `config/workspace.json` holds the key it is encrypted with (wrapped by the
+  password-derived key, with the salt and the password verifier). No password opens `workspace/`
+  without its `config/workspace.json` (the lock screen says the key file is missing or can't be
+  read, #807), and `config/workspace.json` alone opens nothing (the lock screen says the encrypted
+  workspace file is missing, #911). The rest of `config/`
+  (`drive.json`, `policy.json`, `checksums.json`) belongs to the drive and stays (troubleshooting,
+  "I forgot my workspace password", #931).
 
 ### Filesystem
 For a kit that must be read and written on Windows, macOS **and** Linux, format the drive as

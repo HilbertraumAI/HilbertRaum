@@ -13,7 +13,7 @@ size_on_disk_gb: 14.4
 # Windows PeakWorkingSet basis the catalog RAM lines are calibrated on (the same sweep read the
 # 27B-Q5 below the Q4); lines KEPT — Windows-basis re-measure tracked in the wave follow-up.
 recommended_min_ram_gb: 20
-recommended_ram_gb: 32
+recommended_ram_gb: 24
 # Rank 2 since the wave ratification (owner decision 2026-08-03, model-benchmarks.md §9.3 wave
 # outcome): the §2 eval has it at EM parity with the then-24 GB pick qwen3.6-27b-q4 (.9765),
 # ZERO unanswerable-set hallucinations after audit, ~4x its decode speed (155.8 vs 40.1 t/s
@@ -26,6 +26,16 @@ recommended_ram_gb: 32
 # candidate: MoE with ~3.8B ACTIVE params/token (8 of 128 experts) — the qwen3-30b-a3b /
 # qwen3.5-35b-a3b total-vs-active trade at 4–8 GB less disk/RAM.
 recommendation_rank: 2
+# Processor path (model-benchmarks.md §6.7): the pick from 24 GB without a graphics card. As a
+# mixture-of-experts model it decodes at 15.6 tok/s on the i9-9900X processor (§9.3) where the dense
+# 27B to 31B models run near 3, at 90.5 on the 2026-11 answer-quality study. The ordinary rank stays 2.
+# recommended_ram_gb 32 -> 24 with it: in-app peak RSS 14.28 GiB (§9.3), under the 16.8 GB Qwen3.6
+# 27B Q4 that already sits at 24. A slow benchmark steps to the 9B.
+recommendation_rank_cpu: 3
+step_down_to: qwen3.5-9b-ud-q4kxl
+# Card path (model-benchmarks.md §6.8): the runtime's own fit projection under the app's launch
+# (context 8192, one slot, batch 2048; b12110, full offload 31/31 on the RTX 3090, 2026-11-20).
+projected_graphics_need_mib: 14955
 recommended_context_tokens: 8192
 # Weights that stay HOST-mapped even on a full offload (the embedding/output tensors): the picker
 # subtracts them from the estimate's base and before applying its 15 % working share, because the

@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // scripts/zim-dev-set-diff.mjs — stage A of the knowledge-pack acceptance read
 // (docs/rag-design.md §17, "Shipping rule for knowledge-pack changes"). It loads the converter
@@ -35,7 +36,7 @@ describe.skipIf(!process.features.typescript)('zim-dev-set-diff.mjs (stage A of 
     const articles = readdirSync(fixtures).filter((f) => f.endsWith('.html')).length
     expect(report.identical).toBe(true)
     expect(report.total).toEqual({ articles, identical: articles, whitespaceOnly: 0, wordsChanged: 0 })
-  })
+  }, testBudgetMs(60_000))
 
   // Negative control: HEAD against HEAD can only ever say IDENTICAL, so a comparator that always
   // said so would pass the test above. A throwaway repo with a stub converter gives the script a
@@ -99,5 +100,5 @@ describe.skipIf(!process.features.typescript)('zim-dev-set-diff.mjs (stage A of 
     expect(spaced.result.stdout).toContain('VERDICT: WORDS IDENTICAL')
     expect(spaced.report.identical).toBe(true)
     expect(spaced.report.total).toEqual({ articles: 1, identical: 0, whitespaceOnly: 1, wordsChanged: 0 })
-  })
+  }, testBudgetMs(60_000))
 })

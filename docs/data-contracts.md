@@ -12,7 +12,7 @@
 getAppStatus(): Promise<AppStatus>
 getDriveStatus(): Promise<DriveStatus>
 runBenchmark(): Promise<BenchmarkResult>
-listModels(): Promise<ModelInfo[]>
+listModels(): Promise<ModelInfo[]>   // incl. display-only entries for a newer HilbertRaum (role 'unknown', #847)
 selectModel(modelId: string): Promise<{ activeModelId; activeEmbeddingModelId }>
 startRuntime(modelId: string): Promise<RuntimeStatus>
 stopRuntime(): Promise<void>
@@ -24,7 +24,7 @@ getImportJob(jobId: string): Promise<ImportJobStatus>
 listDocuments(): Promise<DocumentInfo[]>
 deleteDocument(documentId: string): Promise<void>
 getSettings(): Promise<AppSettings>
-updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+updateSettings(patch: RendererSettingsPatch): Promise<AppSettings>  // renderer-owned keys only (#868)
 ```
 _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names in `src/shared/ipc.ts`.
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
@@ -188,7 +188,8 @@ every unfiled one (failed or importing) into `RetrievalScope.documentIds`. No sh
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
 foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `createRequire`
-(see Decision log). Helpers: `openDatabase(path)`, `listTables(db)`. **#571** added one additive
+(see Decision log). Helper: `openDatabase(path)` (tests list the tables with
+`tests/helpers/db-fixtures.ts` `listTables`, #840). **#571** added one additive
 partial index, `idx_documents_pending_dest ON documents(id) WHERE pending_destination_json IS NOT
 NULL` (created after `ensureColumn`, like the other migrated-column indexes) — no column, no
 migration. **#581** added connection-local TEMP objects, created on every open after the
@@ -201,7 +202,7 @@ Nothing reaches the workspace file, so an older build sees no change and `SCHEMA
 
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;
-`updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:true`
+`updateSettings(patch)` upserts (what each key may hold is the write gate below; who may write it through IPC is `SETTINGS_WRITERS`, see the end of this section); `seedSettings` seeds on first run. Default `allowNetwork:true`
 (network is PERMITTED on a fresh install so model/engine downloads work — the policy ceiling still
 wins; a commercial `policy.json` can force it back off), `workspaceMode:'plaintext_dev'`,
 `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
@@ -294,16 +295,37 @@ so the newer build still finds the choice. Before unlock the renderer cannot rea
 per-computer localStorage mirror `hilbertraum.uiLanguage` instead (D-L3).
 ⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
 unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
-`workspaceMode` is set to the active mode by the `WorkspaceController` on open.
+`workspaceMode` is set to the active mode by the `WorkspaceController` at create, at a plaintext open and at every unlock, and the write gate accepts only `encrypted` or `plaintext_dev`. The renderer cannot set it (#858).
+**Who writes which key (#868).** `settings:update` accepts only the keys [`SETTINGS_WRITERS`](../apps/desktop/src/shared/settings-writers.ts) marks renderer-owned (`satisfies Record<keyof AppSettings, 'renderer' | 'main'>`, so a new key fails typecheck until it has an owner). A main-owned key (`workspaceMode`, `activeModelId`, `activeEmbeddingModelId`, `lastBenchmark`, `benchmarkHistory`, `modelPlacements`, `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`, `checksumCache`) is dropped with a log line and the rest of the patch is saved; a key that is no setting is dropped and only counted in that line, never named. The main process writes its keys through `updateSettings(db, …)` directly (the active ids through `models:select` / `runtime:use`). The preload's `updateSettings(patch: RendererSettingsPatch)` makes a literal patch with a main-owned key fail typecheck in the renderer too. The 19 renderer-owned keys are the 14 the screens write plus the five retrieval tuning keys, which no screen writes; the write gate bounds those: `ragTopKInitial` and `ragTopKFinal` to 1–200 and `ragMaxContextTokens` to 256–131,072, each floored to a whole number and clamped, `ragMinSimilarity` clamped to 0–1, and a non-finite value of these four is dropped with the previous value kept; `contextTokens` keeps its 2,048 floor (a non-finite value still falls back to it) and is clamped to 131,072.
 
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
 (rootPath, workspacePath, modelsPath, logsPath, configPath, dbPath, isPreparedDrive).
-`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable). See `docs/drive-layout.md`.
+`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable, and `imagesBytes`: the size of `workspace/images/`, `0` when empty, `null` when unreadable). See `docs/drive-layout.md`.
 
 ### Core IPC (Phase 1 live)
 ✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in
 `src/main/ipc/registerCoreIpc.ts`, invoked from `initBackend()` in `main/index.ts`.
+
+**#888 — save before the window closes** ([`security-model.md`](security-model.md) "App-shell gate &
+lifecycle"): the main→renderer event `EVENTS.saveBeforeClose` (`app:saveBeforeClose`, payload
+`requestId: number`), its one-way answer `IPC.saveBeforeCloseDone` (`app:saveBeforeCloseDone`, a
+renderer→main `send` of `{ requestId, unsaved: boolean }`), the preload method
+`onSaveBeforeClose(cb: () => Promise<SaveBeforeCloseResult>): () => void`, and the type
+`SaveBeforeCloseResult = { unsaved: boolean }` (`shared/types.ts`). Main sends the event to the
+closing main window once per close attempt and waits up to `CLOSE_SAVE_BOUND_MS` (8 s,
+`main/close-guard.ts`), longer than the window's own bounds (the review store's 6 s inside the
+bridge's `BEFORE_CLOSE_SAVE_BOUND_MS`, 6.5 s). The preload runs `cb` and sends the answer itself
+once `cb` settles; a rejection, a throw or any answer but `unsaved: false` is sent as
+`unsaved: true`, and main then asks the user before closing. The bridge answers `unsaved: true` too
+for a registrant that throws or has not settled by its bound, unless it was registered best effort
+(`registerBeforeClose(save, { bestEffort: true })`, the language pick): such a one counts only when
+it answers `unsaved: true` itself. The answer is received by an `ipcMain.on` listener per request,
+like `perf:mark` (not a `guardedHandle`, so outside `ipc-lock-coverage`): it accepts only the
+window's own `webContents` and the current request id, and it answers while the workspace is locked
+too. Renderer side: `renderer/lib/beforeClose.ts` (`registerBeforeClose`, `saveAllBeforeClose`,
+`installBeforeCloseBridge`, installed from `main.tsx`); the registrants are the review store and the
+Settings language pick. Nothing is persisted; no schema change.
 
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
@@ -316,10 +338,33 @@ hard total (the number drifted twice, see DOC-3/F-20).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendChatModelId` (dispatching to
 `recommendModelIdByRam` / `recommendModelIdByVram`; `recommendModelId` is the legacy
-profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`.
+profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`. The embeddings ★ (`ModelInfo.recommended`
+on an embeddings card) is `pickManifestForRole(all, 'embeddings')` when it fits the machine's RAM, not a RAM ranking
+(#848 review; the same pick `resolveModelByRole` composes and the Performance rows name). `manifestFilesPresent`
+(#890) is `computeInstallState`'s synchronous first two steps (supported runtime/format, every declared file
+exists; no hashing), behind the images pick `pickVisionManifest` (`services/vision/status.ts`).
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
-`shared/types.ts`. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
+`shared/types.ts`. **#932**: `ModelInfo.noChecksum?: true` marks a `checksum_failed` model whose manifest
+carries a placeholder hash on any file (`hasPlaceholderHash`, decided from the manifest alone): no checksum on
+record, not a damaged file. The card shows "No checksum" (`models.state.noChecksum`) and `models.noChecksum.hint`,
+and offers no Download. `ModelState`, `ModelStartVerdict` and every start gate are unchanged: the model is still
+refused outside developer leniency. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
 resolved against the **drive root**.
+✅ **A manifest for a newer HilbertRaum (#847)** — `DiscoveryResult { manifests, unsupported, errors }`:
+a `role` this build does not know, or a `min_app_version` above the app (`setManifestAppVersion`, set once
+at startup from `app.getVersion()` and by the sell gate from `--app-version`; unset = unknown, which is
+fail-safe), routes a file to `unsupported: { manifest: UnsupportedManifest, sourceFile }[]`
+(`shared/manifest.ts`: `id`, `displayName`, `role | null`, `family | null`, `sizeOnDiskGb | null`,
+`minAppVersion | null`, `localPaths`), never to `manifests`, so no consumer of a `ModelManifest` can
+select, start, verify or download one. One id space with `manifests`, in which a usable manifest ALWAYS keeps its
+id whatever the walk order (F-847-4): a same-id newer entry is a duplicate in `errors`, not listed; among
+newer entries the first in walk order wins. `min_app_version` is exactly `MAJOR.MINOR.PATCH` (anything else
+is newer; a pre-release app is older than its release; `manifestNeedsNewerApp`).
+`buildModelList` appends one display-only `ModelInfo` per entry, after the models: `role: 'unknown'`
+(the union's one non-role member), `declaredRole?`, `needsNewerApp: true`, `state: 'unsupported'`,
+`recommended: false`, no `download`, `filesPresent` (every declared file exists; existence only). The
+sell gate reports each entry as a problem. Frozen for every later release to meet: the app-update plan's
+Appendix B.
 ✅ **`ModelManifest.files?: RequiredFileSpec[]`** (#310) — the ADDITIONAL required files of a
 weight beyond `local_path`/`sha256` (the primary — a shard set's shard 1), each
 `{ localPath, sha256, download? }`. Emitted after `local_path`/`sha256`/`download`/`mmproj` in the
@@ -370,12 +415,15 @@ excluded).
 client-facing rendering of this same contract is [`local-api.md`](local-api.md) §6, which must be
 updated in the same change whenever anything below moves):**
 `LocalApiServer` (`services/local-api/server.ts` + `handlers.ts`) binds **127.0.0.1 AND ::1**
-(O5; never 0.0.0.0; no-IPv6 machines degrade to v4-only), default port **4980** (O1).
+(O5; never 0.0.0.0; no-IPv6 machines degrade to v4-only; the two listen calls, `127.0.0.1` and
+then `::1` on the same port, are pinned by `local-api-server.test.ts` "listens on 127.0.0.1 AND
+::1, never 0.0.0.0; the two listeners share the port"), default port **4980** (O1).
 Every response carries `Server: HilbertRaum/<version>`. Pipeline order (security contract):
-Host (loopback names only; absent ⇒ 403) → Origin (`http(s)` non-loopback + literal `null` ⇒
-403; absent/custom app schemes pass; OPTIONS ⇒ 403; **no CORS header is ever emitted**) →
-content-type (POST = `application/json`, charset tolerated; else 415) → Bearer auth
-(constant-time; when token NOT required a present Authorization is IGNORED; both routes gated).
+Host (loopback names only; absent ⇒ 403) → OPTIONS ⇒ 403 `no_cors` (before the Origin check;
+**no CORS header is ever emitted**) → Origin (`http(s)` non-loopback + literal `null` ⇒ 403;
+absent/custom app schemes pass) → content-type (POST = `application/json`, charset tolerated; else
+415) → Bearer auth (constant-time; when token NOT required a present Authorization is IGNORED; both
+routes gated) → route.
 Routes (D6 — nothing else): **GET `/v1/models`** → `{object:'list', data:[{id, object:'model',
 owned_by:'hilbertraum', context_window}]}`; never consumes an admission slot; distinct probe
 outcomes: 200 running · 503 `model_starting` + Retry-After · 503 `model_not_loaded`.
@@ -397,7 +445,7 @@ both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invali
 502 `runtime_unresponsive` · 503 `model_starting`/`model_not_loaded`/`workspace_locked`/
 `server_stopped` (`model_starting` from the start REQUEST on, its weight check included — #599). **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
 `{"error":{type:'server_error', code:'preempted_by_user'}}` frame, stream closes **without**
-`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. **A deliberate model
+`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way: for the active request, for the one waiting in the queue, and for a request that arrives while a stop, a disable or a re-port is pending or running (#859). **A deliberate model
 stop or switch (#600)** ends the active request first with the model gate's own code — `model_not_loaded`
 after a stop, `model_starting` (+ Retry-After) after a switch or a stop the app follows with a start
 (`stop({ startFollows })`: an engine update, the demo → real engine restart); 503 before any bytes, the
@@ -407,7 +455,7 @@ limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300
 a 15 s SSE drain-timeout reclaim wedged slots — the runtime's CB-5 watchdogs end a wedged
 sidecar with 502 `runtime_unresponsive`: no headers in 180 s, then before the first token 120 s
 of silence or 10 min without prompt progress, then 30 s without text; `local-api.md` §6.7, #598), body-idle 30 s (body phase only),
-maxConnections 16. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
+maxConnections 16 per listener: one on 127.0.0.1 and one on ::1, so up to 32 at once. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
 post-unlock seams via `maybeStartLocalApi` when policy ∧ setting permit (D3/D7) — both seams
 delegate to `applyLocalApiSettings` (one gate); stopped first in `runLockTeardown` (best-effort,
 pinned) + `performShutdown` (pinned); start/stop/applySettings are SERIALIZED inside the server
@@ -604,8 +652,10 @@ the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.t
 the cache the runtime allocates at the model's recommended window under the app's launch (ubatch
 2048, and — since the 2026-09-07 `-np 1` decision on issue #319 — **ONE server slot**, not b9849's
 four unified ones). Carried by exactly the seven decision models (Gemma 4 12B 2.4, 26B-A4B **0.8**,
-E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**) plus TranslateGemma's measured
-0.75 for its sidecar's headroom gate (#473); all eight are pinned in `committed-catalog.test.ts`; the
+E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**), the Qwen3.5 9B UD-Q3_K_XL
+sibling's 0.3 (2026-11-20: same architecture, and the f16 cache does not depend on the weight
+quantization) and TranslateGemma's measured
+0.75 for its sidecar's headroom gate (#473); all nine are pinned in `committed-catalog.test.ts`; the
 GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
 Six are DERIVED from the launch config; the 26B-A4B's is MEASURED off its first hardware start
 (#412, 2026-09-08 — the derived 1.5 it replaced was 2.02× the 760.00 MiB the start logged).
@@ -640,6 +690,39 @@ by four. Hence the three Gemma terms did not move at all and the four Qwen ones 
 figures use the MTP recurrent state (both opt into `speculative_decoding`); that does not
 double-count `MTP_VRAM_HEADROOM_MB`, which gates whether rung 1a is *attempted* and covers the draft
 head's own weights + KV.
+✅ **Processor-path rank and step-down (2026-11-20, `model-benchmarks.md` §6.7):** manifest
+`recommendation_rank_cpu` (optional; a number ≥ 0 — a wrong type or a negative value is a
+validation error, never a silent default, because the field moves a recommendation) →
+`ModelManifest.recommendationRankCpu?: number`, and manifest `step_down_to` (optional; a
+non-empty model id, trimmed; any other type or an empty string is an error; called
+`cpu_step_down_to` until §6.8 made the card path follow it too) →
+`ModelManifest.stepDownTo?: string`. Both are ABSENT when omitted. The rank is read only by
+`recommendModelIdForProcessor` (services/models.ts), which `recommendChatModelId` reaches for
+memory class `cpu`: it replaces `recommendation_rank` there (0 = selectable but never the
+automatic pick on a processor; absent = the ordinary rank). `step_down_to` names the chat
+model that a benchmark under `SLOW_PICK_TOKENS_PER_SECOND` on this one steps to (absent = the end
+of its chain), on the processor and, since §6.8, on a card that carries card ranks; each path
+follows a link only to a target it may pick. The validator does not resolve the target id. The
+committed values and the chain invariants (every target exists, is ranked on the processor, needs
+no more RAM than its source, and no chain loops) are pinned in `committed-catalog.test.ts` ("§6.7
+processor path"). An older app ignores both keys and gives the RAM pick.
+✅ **Card-path rank and measured need (2026-11-20, `model-benchmarks.md` §6.8):** manifest
+`recommendation_rank_gpu` (optional; a number ≥ 0, validated like `recommendation_rank_cpu`) →
+`ModelManifest.recommendationRankGpu?: number`, and manifest `projected_graphics_need_mib`
+(optional; a number ≥ 0, validated the same way; 0 is a figure, not "absent") →
+`ModelManifest.projectedGraphicsNeedMib?: number`. Both are ABSENT when omitted. When ANY chat
+manifest carries `recommendation_rank_gpu`, `recommendModelIdByVram` ranks by it (absent = the
+ordinary rank) and picks the highest-ranked model that fits the card outright, so §6.6 decision 2
+does not apply to such a catalog. `projected_graphics_need_mib` is llama.cpp's own fit projection
+("projected to use N MiB of device memory") read off a full-offload start under the app's launch
+(the manifest's context, `-np 1`, batch and ubatch 2048, its speculative decoding). Where present,
+`estimateGraphicsNeedMib` returns it plus `VRAM_FIT_MARGIN_MIB` (1,024) and the derived terms
+(weights, `host_mapped_weights_mib`, `estimated_context_cache_gib`) do not enter. That moves the
+picker's fit and the Performance screen's pre-start estimate for a discrete card. The sidecar gates'
+`chatGraphicsShareMib` does not read it. Every value is pinned to its row of
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/projected-graphics-need-b12110-20261120.tsv`,
+and every model the card path can pick must carry one (`committed-catalog.test.ts`). A pin bump
+re-reads them. An older app ignores both keys and keeps rule C on the derived estimate.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -675,7 +758,10 @@ head's own weights + KV.
 
 ### Document storage + import model (LOCKED — Phase 4)
 - **Stored copy.** Imports are **copied into `workspace/documents/<id><ext>`** (`stored_path`);
-  `original_path` is also kept. Self-contained drive: re-index re-parses the stored copy; delete
+  `original_path` is also kept. `<ext>` is the extension of the document's `title`, which is the
+  file name without trailing spaces, and without trailing dots when a supported extension is then
+  left (#918: `report.pdf.` → `report.pdf`, "Washington, D.C." unchanged); the parser, the MIME
+  type and the export names read the same title. Self-contained drive: re-index re-parses the stored copy; delete
   removes the stored copy + chunks + embeddings + row (never the original).
 - **Async-with-polling.** `importDocuments(paths, options?: ImportOptions)` (#138 D-7: `options`
   carries `destination` — `{ kind: 'conversation', conversationId }` files a chat attachment —
@@ -778,7 +864,7 @@ head's own weights + KV.
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
   throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
   REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
-  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, budgetMb?, memoryClass? }`), keeping this module
+  `RunBenchmarkDeps.gpu: { name, useful, totalMb?, budgetMb?, memoryClass?, card? }`), keeping this module
   `child_process`-free. `name` / `totalMb` are the **budget device's** (`nextStartMemory` in
   `services/performance.ts`, PR #308 audit decisions 6/9); `totalMb` is the graphics TILE's figure
   (→ `BenchmarkResult.gpuVramMb`), never the picker's input. **`budgetMb`** (P3, decision 10) is
@@ -788,22 +874,36 @@ head's own weights + KV.
   carries a usable card; the profile bump), `memoryClass` = the NEXT start's class (honours
   `gpuMode` / `gpuAutoDisabled`, names one budget device), so `{ useful: true, memoryClass: 'cpu' }`
   is a valid input — a card present, the GPU switched off.
-- **`PickerMemory`** (`services/models.ts`) — `{ memoryClass, ramGb, budgetMb: number | null }`, the
-  input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
-  `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
-  the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
-  (unrounded weights MiB − `hostMappedWeightsMib` ?? 0) × 1.15 + (`estimatedContextCacheGib` ?? 0.5)
-  × 1024 + 1,024, i.e. the OFFLOADABLE weights carry both the base and the 15 % working share
-  (§5 item 22 (e), 2026-09-08; #321 had taken them out of the share only) and the cache term is
-  computed for the app's ONE server slot since #319 — AND
-  `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
-  ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
-  confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,
+- **`PickerMemory`** (`services/models.ts`) — `{ memoryClass, ramGb, budgetMb: number | null, card?: CardEvidence | null }`,
+  the input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
+  `budgetMb` → **the card path, §6.6 rule C as amended by §6.8**
+  (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal, card)`): eligible(m) =
+  `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` = the manifest's
+  `projectedGraphicsNeedMib` + 1,024 where it carries one (§6.8; every model the card path can pick
+  does), else the derived (unrounded weights MiB − `hostMappedWeightsMib` ?? 0) × 1.15 +
+  (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024, whose OFFLOADABLE weights carry both the base
+  and the 15 % working share (§5 item 22 (e), 2026-09-08) and whose cache term is computed for the
+  app's ONE server slot since #319 — AND `recommendedMinRamGb ≤ ramGb` AND not
+  `landedPartlyOnCard(m, budgetMib, card)` (a stored start of the model on this card with layers
+  left off, at a context no larger than `launchContextTokens` gives the next start, with at least the
+  present budget free then, within `PARTIAL_EVIDENCE_TOLERANCE_MIB` = 256). With card ranks in the
+  catalog (`recommendationRankGpu` replaces `recommendationRank`) the pick is the highest-ranked
+  eligible model outright; without them the RAM pick stands where it is eligible (decision 2), else
+  the highest-RANKED eligible model; ties by tier then size, ranked-only guard, else the RAM pick of
+  the ordinary ranks (partial-offload fallback). A slow reading then moves it once inside the
+  eligible pool: with card ranks along the `stepDownTo` chain first, else (or off the chain) the
+  §6.5 step. `card` is `cardEvidenceFor(settings, machineKey)` at every seam: the stored
+  `modelPlacements` of this machine (and unstamped ones) plus the two context settings.
+  `cpu` → **§6.7 the processor path**
+  (`recommendModelIdForProcessor(manifests, ramGb, signal)`: the RAM stages over a view in which
+  `recommendationRankCpu` replaces `recommendationRank`, then a slow reading follows the pick's
+  `stepDownTo` chain, and one off the chain is §6.5; a catalog without either field gives
+  exactly the RAM pick); `unified`, or `discrete` with no budget → the RAM pick,
   byte-identical to `recommendModelIdByRam`. Both seams build it from ONE decision: `pickerMemoryFor(s)`
-  (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb`) and
-  `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb`), each calling `graphicsBudgetMib` on
+  (registerModelIpc → `BuildModelListOptions.memoryClass` / `.graphicsBudgetMb` / `.cardEvidence`) and
+  `probeAndPersistGpu` (→ `GpuBenchmarkInput.budgetMb` / `.card`), each calling `graphicsBudgetMib` on
   `nextStartMemory`'s device. `weightsMib(m)` is the shared unrounded GB → MiB conversion the
-  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the eight
+  Performance pre-start estimate reuses (decision 8). The committed grid, thresholds and the nine
   cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
@@ -945,13 +1045,48 @@ head's own weights + KV.
   backend, or the translation sidecar's posture is `--device none`; **Wave 8 ruling (a)**: for
   the reranker role, `'gpu'`/`'cpu'` follows its own headroom gate against the RUNTIME's
   committed chat model, never `settings.activeModelId` — see `rag/device-posture.ts`);
+  **#914 (owner decision G-5 (c))**: `ResidentModelRow.onDrive: boolean` is whether every file of
+  the row's model is on this drive (`manifestFilesPresent`, presence only, no hash) — false for a
+  catalog model that is not downloaded and for a row with no manifest (no model, or an active
+  model outside the catalog); every non-chat row still names the catalog's model for its role
+  (`pickManifestForRole`; images: the pick among the vision models on the drive, else the
+  catalog's) whether or not it is on the drive, and the screen shows "not on this drive"
+  (`perf.models.notOnDrive`) in place of "not loaded". **Loaded beats `onDrive`** (#914 code
+  review): a row that is `loaded` (a weight deleted while the runtime holds it open, a manifest
+  removed under a running model) says "loaded now" and counts in the total, whatever `onDrive`
+  says. `placement.model.sizeOnDiskGb` and the chat row's `sizeOnDiskGb` are `number | null`: null
+  for a model outside the catalog (it was `0`, shown as "0.0 GB"). `placement.model.onDrive:
+  boolean` (#914 code review) is computed once in `buildPlacement`: the active model's files are on
+  this drive, or the chat runtime holds it right now. When it is false, "Your model" uses
+  `perf.model.lineNoSize` (no size on disk), states no verdict, note or "Choose a smaller model",
+  and its pill says "not on this drive"; the renderer reads this field, never the chat row. On a
+  `discrete` card the chat/translation line (`perf.models.card`) needs both models here (on the
+  drive or loaded) with a size; with the chat model here and on the card but no translation model
+  here, the chat-only line `perf.models.cardChat` keeps the card figure.
+  **#933**: `ResidentModelRow.fileCheck: ModelFileVerdict` (`'ok' | 'damaged' | 'unverified'`) is what
+  the checksum cache already knows about the row's files (`knownFileVerdict`, services/models.ts:
+  synchronous, never a hash, over `checksumCacheView`, a read-only view of the snapshot's own
+  `settings.checksumCache`, so the getter never writes settings): `damaged` = a live cached digest
+  differs from the manifest's; `unverified` = a placeholder hash outside developer leniency
+  (`developerLeniency`); `ok` otherwise, and for a row not on the drive. Unless the row is `loaded`
+  (loaded beats it), a non-`ok` row reads `perf.models.damaged` / `perf.models.noChecksum` in place of
+  "not loaded", adds nothing to `totals.ramAllMb` and is not added to a card line.
+  `placement.model.fileCheck?: ModelFileVerdict` is the chat row's verdict, `'ok'` while the chat
+  runtime holds the model; absent reads `'ok'`. Not `'ok'` → "Your model" states no verdict, note or
+  "Choose a smaller model" (its line keeps the size on disk) and its pill says what its row says. The
+  images row names the first vision candidate whose files are `ok` (as `getVisionStatus` passes over a
+  refused one), else the first.
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget) and `totals.bothOnCard` is true when two or more of chat, translation and the
-  reranker are genuinely resident on the card — chat with an observed GPU start and at least one
-  layer offloaded, translation live with layers on the card, the reranker `'gpu'`-postured and
-  loaded.
+  unified budget), on every class over the rows that are `loaded`, or `onDrive` with `fileCheck: 'ok'`
+  (#933), only (null when no
+  such row has a size, i.e. nothing installed; 0 when every counted row runs on the card, an
+  estimated chat spill not counted; a small value is an observed small spill — the screen leaves
+  the line out while it would read 0.0 GB), and `totals.bothOnCard` is true when two or more of
+  chat, translation and the reranker are genuinely resident on the card — chat with an observed
+  GPU start and at least one layer offloaded, translation live with layers on the card, the
+  reranker `'gpu'`-postured and loaded.
   **#495 follow-up:** `totals.chatAndTranslationOnCard` is chat-and-translation specifically,
   never the reranker — it gates `perf.models.cardBoth`'s pair-naming sentence so that sentence
   stays true when the contending pair `bothOnCard` reports is chat+reranker or
@@ -988,7 +1123,9 @@ head's own weights + KV.
   backfill / GPU-probe writes (every `probeAndPersistGpu` write, the empty probe of a probe that
   could not run or threw included), chat-runtime transitions (`RuntimeManager.onChange`),
   resident-sidecar transitions (`onResidencyChange` on the embedder, reranker, translation and
-  vision runtimes), and the snapshot's settings keys (`PERFORMANCE_SETTINGS_KEYS`) — and never
+  vision runtimes), a model download reaching `done` (#914, after the `onModelInstalled`
+  selectors; the rows read which model files are on the drive), and the snapshot's settings keys
+  (`PERFORMANCE_SETTINGS_KEYS`) — and never
   from a getter. The read stays gated; the event carries nothing to gate. Preload:
   `onPerformanceChanged(cb: () => void): () => void` (returns the unsubscribe). No polling.
 
@@ -1062,19 +1199,34 @@ head's own weights + KV.
 
 ### Encrypted workspace (Phase 9 live)
 ✅ **`services/security/crypto.ts`** (spec §3.5) — pure KDF + AEAD, no I/O.
-- **KDF:** `deriveKey(password, salt, params)` → 32-byte key. `KdfParams` is per-algo
+- **KDF:** `deriveKey(password, salt, params)` → 32-byte key; it derives only with `KDF_ALGOS`
+  (`isKnownKdfAlgo`), the list the vault's format check (#845) reads too. `KdfParams` is per-algo
   (`argon2id: m/t/p` · `scrypt: N/r/p`); `DEFAULT_KDF = { argon2id, m=19456, t=2, p=1, keyLen=32 }`
-  for NEW vaults, `SCRYPT_KDF = { scrypt, N=32768, r=8, p=1 }` still unlocks legacy vaults (see the
-  §3 KDF decision). `generateSalt()` → 16 random bytes. Deterministic for the same
-  password+salt+params.
+  for NEW vaults. A legacy vault unlocks from the params its descriptor recorded (the unlock derives
+  with `descriptor.kdf`, scrypt or Argon2id); `SCRYPT_KDF = { scrypt, N=32768, r=8, p=1 }` is an
+  exported constant that no code reads (see the §3 KDF decision). `generateSalt()` → 16 random
+  bytes. Deterministic for the same password+salt+params.
 - **AEAD:** `encrypt(key, plaintext) → { iv(12), tag(16), ciphertext }` (AES-256-GCM, fresh IV),
   `decrypt(key, blob)` (throws on wrong key/tamper). `serializeBlob`/`deserializeBlob`
-  (`MAGIC(8)|iv|tag|ct` on-disk frame). `makeVerifier(key)`/`verifyKey(key, verifier)` (password
+  (`MAGIC(8)|iv|tag|ct` on-disk frame; `MAGIC` = the family `HRAUMEN` + the frame version byte `1`).
+  `classifyFrameMagic(head) → 'current' | 'newer' | 'foreign'` (#845); `deserializeBlob` and the
+  streaming readers throw **`VaultNewerError`** (`{ what: 'descriptor'|'kdf'|'frame'|'journal', found }`,
+  `isVaultNewerError`) for a `newer` frame, before any output is opened, and "unrecognised header" for a
+  `foreign` one. `makeVerifier(key)`/`verifyKey(key, verifier)` (password
   check via a known-plaintext GCM blob — never touches the DB).
 ✅ **`services/workspace-vault.ts`** (spec §7.9) — the lock/unlock lifecycle.
-- **Descriptor:** `VaultDescriptor { version, mode:'encrypted', kdf, saltB64, verifier }` at
-  **`config/workspace.json`** (unencrypted; the only pre-unlock artifact).
-  `readVaultDescriptor`/`writeVaultDescriptor` (atomic). `vaultPathsFrom({configPath,dbPath,logsPath?})` →
+- **Descriptor:** `VaultDescriptor { version, mode:'encrypted', kdf, saltB64, verifier, dataKey? }` at
+  **`config/workspace.json`** (unencrypted; the only pre-unlock artifact). `dataKey` (v2) is the data
+  key wrapped by the password-derived key; every published release writes v2 with Argon2id
+  (`apps/desktop/tests/fixtures/vault-golden/PROVENANCE.md`).
+  `readVaultDescriptorChecked(path) → { kind: 'absent' | 'unreadable' | 'newer' (what, found) | 'ok'
+  (descriptor) }` (#845); `readVaultDescriptor` is its back-compat face (`ok` → the descriptor, else
+  null; a newer descriptor still counts as "a vault exists" for `isDescriptorUnreadable`, so no create
+  over it); `writeVaultDescriptor` (atomic: temp + fsync + rename). **Byte-order mark (#974):** the
+  readers of `config/workspace.json`, `workspace/rekey-journal.json` (the format verdict's and the
+  recovery's) and `config/working-copy-lost.json` remove one leading U+FEFF before `JSON.parse`; a
+  second mark, or a file holding only the mark, still reads as unreadable. No writer writes a mark.
+  `vaultPathsFrom({configPath,dbPath,logsPath?})` →
   `VaultPaths { descriptorPath, encPath = <dbPath>.enc, dbPath, logsPath? }` (`logsPath` is optional
   and additive — older callers omit it; without it the rekey does not account for the rotated log).
 - **Rekey journal (on-disk, #241):** `workspace/rekey-journal.json` — `{ version: 1, staged: string[],
@@ -1090,46 +1242,339 @@ head's own weights + KV.
   leaves `images/` and out-of-store twins staged (a current build finishes them); a completed
   migration is a plain v2 vault. Constants: `REKEY_JOURNAL_NAME`, `IMAGES_DIR_NAME`,
   `DOCUMENTS_DIR_NAME`, `ROTATED_ENCRYPTED_LOG_NAME` (`app.1.log.enc`, deleted at the commit).
+  **Staged database in doubt (#973):** `recoverPendingRekey` leaves the whole staged set (and the
+  journal) as it is when a v2 descriptor sits beside a `hilbertraum.sqlite.enc.new` that no journal
+  lists and an `.enc` that is there (any stat answer but ENOENT); a journal entry lists it only by
+  its full path, folded as `pathKey` folds it (review round 3: a match by the folder and file names,
+  which every workspace shares, let a stale journal vouch for a foreign stage), so an entry written
+  under another drive letter or mount point leaves the stage in doubt, for the unlock to authenticate.
+  `unlockEncryptedVault(…, onStageInDoubt?)` resolves it
+  after the data key is unwrapped: the module-private `authenticatesUnder(path, key) → boolean` (one
+  GCM pass, nothing written; false when the tag fails or the file is no `HRAUMEN1` frame, cut short
+  or another magic; a newer frame throws `VaultNewerError`) true → `applyPendingRekey` (outcome
+  `rolled-forward`), false → the file is deleted, then `recoverPendingRekey` runs again for the rest of
+  the staged set (`removed`); a read that fails with ENOENT is no stage, with EISDIR or ENOTDIR (a
+  folder at the name), like a delete that fails, leaves the file as it is and opens `.enc` (`left`),
+  and with any other code (EBUSY, EPERM, EACCES, EIO, …) throws `VaultRecoveryBlockedError`
+  (→ `vault_recovery_blocked`, nothing changed, before the `.recovery` roll-forward).
+  `onStageInDoubt(outcome: StageInDoubtOutcome)` hears the outcome as soon as it is true, also when a
+  later step of the unlock fails; the pass is timed as the perf mark `vault_stage_check` (`checkMs`,
+  `stageBytes`). While a stage is in doubt at `init()`, a loss the start judged (#875 `startup`, #892
+  `unclean`) is held in memory instead of marked; the controller marks it when the outcome is
+  `removed` or `left`, drops it on `rolled-forward`, and settles a hold no outcome reached at the
+  next successful unlock (recorded while `.enc`'s frame IV is still the one it was judged against,
+  dropped otherwise); it is never carried past that unlock, and a create clears it.
+  `WorkspaceController.init()` removes a stray `.enc.new`
+  and `.enc.new.tmp` when there is no descriptor file, no `.enc` and no journal (each ENOENT); the
+  state stays `uninitialized`. No on-disk shape changes.
   `createImageSession(db, dir, req, cipher, beginWork?)` — the optional fifth argument is the
   document-work lease factory (`() => ctl.beginDocumentWork()`), taken before the first await.
-- **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename), `shredFile`
+- **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename; `decryptFile` throws
+  `FrameAuthError` when the GCM tag fails, #860 V5b), `shredFile`
   (overwrite-random + unlink, best-effort), `cleanSidecars` (shred `-wal`/`-shm`).
-- **Lifecycle:** `createEncryptedVaultOnDisk(vaultPaths, password, kdf?)` (writes descriptor + seeds
-  an initial DB + encrypts → `.enc` + shreds, leaving it LOCKED); `unlockEncryptedVault(vaultPaths,
-  password) → { db, key, descriptor }` (verify → decrypt → open; throws **`WrongPasswordError`**);
-  `lockEncryptedVault(vaultPaths, db, key)` (checkpoint+close → re-encrypt → shred).
-  `plaintextAllowed(policy, {isDev, developerMode})` gates plaintext (now **enforced**).
-- **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: plaintext opens
-  immediately, encrypted stays locked, else uninitialized), `getState() → WorkspaceStateInfo`,
+- **Lifecycle:** `createEncryptedVaultOnDisk(vaultPaths, password, kdf?, opts?)` seeds a new
+  database, encrypts it to `.enc.new`, shreds the plaintext and its WAL/SHM, writes the descriptor (the
+  commit point), then renames `.enc.new` to `.enc`, leaving the vault LOCKED (`opts.legacyV1`, tests
+  only, builds a v1 descriptor); `unlockEncryptedVault(vaultPaths, password) → { db, key, descriptor }`
+  (format verdict → verify → decrypt → open). It throws **`VaultNewerError`** before the password is
+  checked (#845); **`WrongPasswordError`** when the verifier fails; after the password verified,
+  `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` the
+  probe calls `newer` that may hold the freshest data, right after the password check and before the
+  staged-file check, the roll-forward or any shred), **`VaultDamagedError`** when `.enc`
+  fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
+  its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
+  and `VaultOpenFailedError` when the open could not finish otherwise (#844).
+  `lockEncryptedVault(vaultPaths, db, key, encryptFileImpl?, onProbeFallback?)` (checkpoint+close →
+  `-wal` check, with one retry → probe → re-encrypt → shred). It refuses while the `-wal` still holds
+  commits after the retry, and unless the probe reads the file as a database; once it has judged the
+  file, every failure is a **`LockStoppedError`** (`reason: 'wal' | 'probe' | 'encrypt'`, `verdict:
+  { walPending, probe | null }`, an encrypt failure as its `cause`), which the controller reads
+  instead of probing again (#876 review round 2). **`walAwaitsCheckpoint(dbPath)`** (`services/db.ts`):
+  stats `<dbPath>-wal` first (32 bytes or less never counts); true when it has a valid WAL header
+  (magic `0x377f0682`/`0x377f0683`) and frames after it, or has frames but cannot be opened or read
+  (a hold); a noise `-wal` is false. **`checkpointLeftoverWal(dbPath)`** → `{ outcome: 'checkpointed'
+  | 'busy', log, checkpointed } | { outcome: 'damaged' | 'failed', code }`: the lock's one retry, a
+  plain open (SQLite's own WAL recovery decides what the WAL holds), `PRAGMA wal_checkpoint(TRUNCATE)`
+  and close; `damaged` (CORRUPT/NOTADB) means the WAL cannot be replayed into the file and no longer
+  refuses the lock. `stageRekey` refuses the same pending WAL (no retry: its connection is open).
+  **`probeDatabaseFile(path)`**
+  (`services/db.ts`, #876) → `{ verdict: 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown'
+  | 'unchecked', code? } | { verdict: 'newer', found }`: the
+  header through `node:fs` (#985: a schema stamp, `user_version` at offset 60 read as a signed
+  big-endian 32-bit integer, above `SCHEMA_VERSION` answers `newer` with the stamp as `found`,
+  before SQLite opens the file), then an `immutable=1` read-only open (no lock, no `-wal`/`-shm`; the
+  `\\?\` long form on Windows) that reads the schema, the first row of every table and the last row
+  of every rowid table, then the root-page header of every index through `node:fs`. It reads the
+  main file alone: beside a `-wal` that holds commits its verdict is about a stale or torn file.
+  `damaged` = the SQLite header, but SQLite calls the structure CORRUPT, NOTADB or (the probe's
+  own reads only, review round 3) TOOBIG, or an index root is no b-tree page, or the page size or
+  the schema format number (header byte 47 above 4) is one no SQLite writes; the schema is read with
+  `trusted_schema` OFF; `not-database` = no SQLite header (noise, empty,
+  cut short); `unknown` = the header read itself failed (a hold), never read as lost; `unchecked`
+  (review round 2) = the header reads but the structure could not be read for a reason that is not
+  damage (any other SQLite error, an index-root read that fails), with `code` (SQLite's result code
+  and fixed description, or a Node error code). **The probe only adds a refusal or a discard for
+  proven damage:** every site judges an `unchecked` file by its header, as before the probe, and
+  reports it (`ProbeFallbackNote(site, code)`, `site` = `lock` | `salvage` | `recovery` | `rekey`);
+  the controller keeps the notes, `takeProbeFallbacks()` returns them once, and the lock, unlock and
+  password-change handlers log each ("A workspace file was judged by its SQLite header …"). The one
+  verdict for the lock's guard and its #855 verdict, the startup salvage, the
+  `.recovery` roll-forward and `stageRekey`. **`newer` is never discarded** (#985): the salvage
+  keeps the file as `.recovery` (`preserved`, or `kept-only-copy` with `.enc` missing; no #875
+  marker; with `.enc` missing no `encrypted_file_missing` notice), the unlock throws
+  `WorkspaceNewerError(found)` (→ `workspace_newer`) for a `.recovery` that may hold the freshest
+  data (`.enc` missing or not judged, or the copy at least as new by mtime) right after the password
+  check, before the staged-file check, the roll-forward or any shred, and keeps one older than a
+  present `.enc` (a spent leftover) as it is, unencrypted, with `UnlockedVault.newerRecoveryLeft`
+  set (the controller's `takeNewerRecoveryLeft()` returns it once, for one content-free log line, no
+  audit type; the copy stays until a later failed lock's salvage replaces it or a newer build's
+  unlock shreds it as spent), the create
+  refuses with the same error while a working file or `.recovery` probes `newer`, and the lock and
+  `stageRekey` read it as a database.
+  `sqliteJudgedDamaged(err)` (the #844 classifier) lives beside it.
+  `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that
+  allows it and a dev build; the `developerMode` setting plays no part (it lives in the encrypted DB).
+- **Vault format versions (#845):** `vaultFormatVerdict(vaultPaths) → { kind: 'ok' } | { kind:
+  'newer', what, found }`, read-only and independent of the password. It runs first in
+  `WorkspaceController.init()` (before the failed-lock salvage, the crash sweep and the rekey recovery)
+  and in `unlockEncryptedVault` (before the rekey recovery, the `.recovery` roll-forward and the
+  decrypt). A `newer` verdict writes, shreds and renames nothing of the vault: the workspace reports `locked`, the
+  create flow is refused, and every unlock throws `VaultNewerError`, which the unlock IPC answers with
+  `workspace_newer` (+ `main.workspace.newer`, no new key) and a log line naming `what` and `found`.
+  While startup's verdict is `newer`, `unlock()` and `create()` re-read the disk first: once the newer
+  artifact is gone (the newer copy rolled back, a backup restored), `init()` runs the salvage, sweep and
+  rekey recovery it skipped, before anything is decrypted. "Numeric" below means a number, integer or not,
+  or a string holding a decimal number (`"3"`): shipped builds compare `version` with `>=`, which
+  JavaScript applies to both.
+
+  | Artifact | Read as `newer` (`what`) | Not newer: as before |
+  |---|---|---|
+  | `config/workspace.json` | any numeric `version` above 2 (3, 2.5, `"3"`), checked before any shape check (`descriptor`); a v1/v2 descriptor whose `kdf.algo` is a string other than `scrypt`/`argon2id` (`kdf`) | unparseable, a field missing, a v2 without `dataKey`, a `version` string holding no number (`"3.0.0"`): `unreadable` ("restore a backup"); out-of-bounds KDF params: refused at derive (tamper); a `dataKey` under a version that is not a v2's (missing, null, 0, 1; no v1 ever had one): `unreadable`, so only the descriptor needs restoring |
+  | `workspace/hilbertraum.sqlite.enc` and every staged file a recovery would swap in (`.enc.new`, `documents/` and `images/` `*.enc.new`, the journal's entries) | first 8 bytes `HRAUMEN` + an ASCII digit `2`–`9` (`frame`) | any other magic (`HRAUMEN` + `0`, a letter or another byte, i.e. a damaged version byte; `PAIDENC1`, written before 0.1.10; noise): "unrecognised header", the generic unlock error |
+  | `workspace/rekey-journal.json` | any numeric `version` above 1 (2, 2.5), whatever the descriptor says (`journal`) | unparseable or another `version`: quarantined as `.corrupt` |
+  | `logs/app.log.enc`, `logs/app.1.log.enc` | a `newer` `app.log.enc`: `logging.ts` keeps the session's log in memory and never persists or rotates over it; a `newer` `app.1.log.enc`: only the rotation onto it is skipped (the live `app.log.enc` keeps persisting, up to the 2 MB buffer cap) | a corrupt or foreign-key log: started fresh (overwritten), as before |
+
+  **The plaintext working copy** (`workspace/hilbertraum.sqlite`, its `.recovery`) is judged by
+  `probeDatabaseFile`, not by this verdict: a schema stamp above `SCHEMA_VERSION` is `newer`, kept by
+  the start and refused by the unlock with `WorkspaceNewerError` (#985, see the probe above).
+
+  **Not part of the vault:** startup's ZIM transient sweep still runs before the verdict is read
+  (`main/index.ts`): it deletes the knowledge-pack reader's temporary listing files under
+  `workspace/zim-transient/` (a newer build's included), which never hold workspace data.
+
+  **Residual:** a `newer` verdict also skips startup's crash sweep, so a newer build's own crash leftovers (its
+  plaintext working database and `-wal`/`-shm`, its transient decrypted copies) stay on the drive until a newer
+  build starts and sweeps them. Deliberate: they may hold that build's unsaved data, and the verdict's rule is that
+  nothing is written, shredded or renamed.
+
+  `changePassword` re-reads the descriptor on disk first and refuses (nothing derived or written) when it
+  is newer or no longer the one the session unlocked; the IPC answers `error` +
+  `main.workspace.changeFailed` (the current password still works). **Frozen constraints for any future
+  format** (builds shipped before #845 cannot be changed): they read a descriptor with `mode` other
+  than `encrypted`, or without `dataKey`, as unreadable (safe), but a v3 that keeps `dataKey` as a v2
+  (unsafe: it unlocks, and a password change rewrites it as v2) — so a v3 must drop or rename
+  `dataKey` (or change `mode`); a field added to a v2 descriptor without a version bump is dropped by
+  any build's password change; never stage `.enc.new` (or any `*.enc.new`) under a v2 descriptor
+  before the commit point — every shipped build rolls a staged file forward under a v2 descriptor and
+  quarantines a journal it cannot read, so a newer build's uncommitted stage would end up under a key
+  that exists nowhere (from #973 on, a journal-less `.enc.new` beside an existing `.enc` is rolled
+  forward only once it authenticates under the unwrapped data key, and deleted when its tag fails,
+  but the builds before it remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
+  unrecognised header), and a later frame version is one ASCII digit `2`–`9` after `HRAUMEN` (any other byte
+  there reads as damage from #845 on).
+- **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
+  first, then plaintext opens immediately, encrypted stays locked, else uninitialized),
+  `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup),
+  `isNewerWorkspace()` (#247), `isRecoveryBlocked()` (#242), `getState() → WorkspaceStateInfo`,
   `requireDb()` (throws while locked), `isUnlocked()`, `unlock(password)`, `create(password, mode)`,
-  `lock()` (no-op for plaintext).
+  `lock()` (no-op for plaintext: it returns with the database open and disarms the latch),
+  `shutdown()` (the quit's lock; for plaintext a checkpoint + close),
+  `changePassword(current, next, kdf?)`, `beginDocumentWork()` → release (refused with
+  `VaultBusyError` during a password change), `beginLock()` / `isLocking()` / `cancelLock()` (the
+  AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
+  locked or in plaintext), `takeWorkingCopyLost()` (#875, below), `discardedOnlyCopy()` (#911),
+  `takeRestoredMissingEnc()` (#911,
+  below), `takeStageOutcome() → 'removed' | 'left' | null` (#973: the last unlock removed a staged
+  `.enc.new` that does not open under the data key, or left one it could neither judge nor remove;
+  returned once, for the unlock IPC's one content-free log line on its success and failure paths, no
+  audit type).
+- **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
+  database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
+  what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
+  next successful unlock, `getState()` reports `lockNotice: 'working_copy_lost'` while the state is
+  `locked`. The lock also writes
+  **`config/working-copy-lost.json`** = `{ "v": 1, "enc": "<base64 of the 12-byte IV of .enc>", "cause": "lock" }`
+  (`cause`: `lock` | `startup` | `unclean` | `unclean-full`)
+  (temp + fsync + rename, best-effort), so a lock at quit, a crash or a session end is reported at
+  the next start: `init()` (encrypted branch, after the verdict, the salvage, the sweep and the
+  rekey recovery) adopts a v1 marker whose `enc` equals the IV of the `.enc` there now, and removes
+  one that names another (a later lock by any build re-encrypted `.enc`: stale). A marker of
+  another `v`, or one that is not JSON, is neither shown nor removed; under a newer-format verdict
+  none is read. The startup salvage raises the same notice when the sweep shreds a newer working
+  file whose header reads but whose structure is `damaged` (no shred of ours leaves a header; a
+  header-less one is a successful lock's shred survivor and raises nothing); its marker says
+  `"cause": "startup"`. **An unclean end (#892):** beside live `-wal`/`-shm` (the mid-session crash
+  state the sweep shreds as before) `preserveNewerPlaintext` returns `'swept-unclean'`, sweep-safe
+  exactly like `'not-needed'`, when the working file or its `-wal` is newer than `.enc` and
+  `probeDatabaseFile` reads the working file as `database`, `damaged` or `unchecked` (`not-database`,
+  `unknown`, `gone` and any error raise nothing; since #892's code review the check reads only the
+  100-byte header that the probe's first step reads, which lets through exactly those three answers,
+  and notes no probe fallback). `init()` then reads the free space through the
+  controller's injected `freeBytes(path)` (default `disk-space.ts` `freeBytesSync`, statfs) BEFORE
+  the sweep, and records the loss AFTER the sweep and the rekey recovery, only while `.enc` has a
+  readable frame and still the IV it had before that recovery (a roll-forward that swapped it opens
+  the staged copy of the session; an `.enc` with no readable frame names no snapshot):
+  `lockNotice: 'session_not_closed'`, marker `"cause": "unclean"`; or
+  `'session_not_closed_full'` / `"unclean-full"` when the free space is below the size of the working
+  file plus its `-wal`, both read before the sweep (the session's lock needed room for its checkpoint
+  and its encrypt; a null answer, or any error, is not full). The notice per cause: `lock`, `startup`
+  → `working_copy_lost`. The reader
+  maps a cause this build writes (`lock`, `startup`, `unclean`, `unclean-full`) 1:1 and **any other
+  (a later build's, or none) to `unclean`**, never to `lock`. Known limits: every marker write
+  (temp + rename, the same for all four causes since #875) replaces whatever file is there, a marker
+  of another `v` included, although reading and removing leave such a marker alone; and
+  `unclean-full` is measured once, at the start that sweeps, so it stays `_full` until the unlock
+  even if space is freed before a later start (its copy speaks in the past for that reason); and a
+  session run on a computer whose clock is behind the one that last locked the drive leaves a
+  working file and `-wal` older than `.enc`, so its loss is not reported (the salvage's mtime rule,
+  which treats such a file as derived data); and `unclean-full` measures the room, not why the session
+  ended: a pulled drive or a power cut on a drive short of that room is reported as `unclean-full` too. A
+  successful unlock consumes it: the
+  flag clears, this build's marker is
+  removed, and `takeWorkingCopyLost() → { cause, lostAt: <marker mtime ISO> | null } | null` returns
+  it once, for the unlock IPC to log ("The changes since the last saved state were lost …") and
+  audit (`workspace_working_copy_lost`, metadata `{ cause, lostAt }`, `cause` = `lock` | `startup` |
+  `unclean` | `unclean-full` | `recovery`). `recovery` is a loss the unlock itself makes: `unlockEncryptedVault` shreds a
+  `.recovery` newer than `.enc` whose structure is `damaged` (`UnlockedVault.recoveryDiscarded`),
+  recorded with no `lostAt` (the event's own time is when); that copy is shredded only once the
+  unlock has succeeded, so a failed unlock keeps the evidence and the next one records it (except with `.enc` missing,
+  #911, where the right password shreds it at once: no unlock could succeed) (review
+  round 2; an older damaged copy is a spent leftover: shredded, nothing recorded). `create()` removes
+  a v1 marker a wiped vault left (with no vault, startup never reads one) and clears the record in
+  memory; the commercial sell gate refuses a drive that carries it (`noUserData`, #893). Older builds ignore the file; the descriptor is untouched.
+- **Encrypted file missing (#911):** the one state in which the start keeps plaintext instead of
+  sweeping it: the descriptor is encrypted, a working file is there, **no encrypted snapshot of any
+  kind exists** (a stat of `.enc` says ENOENT, and no `.enc.new` is staged) and the #845 verdict
+  found nothing newer. `preserveNewerPlaintext` then replays the `-wal` into the main file
+  (`checkpointLeftoverWal`), probes the file and moves a
+  `database` (or `unchecked`, judged by its header) to `<db>.recovery`: outcome `'kept-only-copy'`,
+  sweep-safe like `'preserved'`. A copy whose structure is `damaged`, a shred survivor or a file
+  gone meanwhile is `'not-needed'` (swept; no notice), except that a `damaged` one is
+  `'discarded-only-copy'`: swept the same way, and `discardedOnlyCopy()` is true for that start, for
+  `main/index.ts`'s content-free log line. The sidecars are left to the sweep that
+  follows every path that does not block (named after the working file, they never pair with the
+  `.recovery`). `'failed'` (blocked, every file kept, as
+  #242): a stat of `.enc` that fails other than ENOENT, a `-wal` that still holds commits after the
+  replay, a probe that cannot read the file, a rename that cannot land. The `.recovery` contract is
+  unchanged and now also carries this state: no start sweeps it, and the unlock rolls it forward
+  over a missing `.enc` (every build since 0.1.47). **No marker** is written, and the marker format
+  (`v`, `enc`, the `cause` set) is unchanged: the notice is derived from the disk at every start
+  (descriptor encrypted, `.enc` ENOENT, a `.recovery` that starts like a database: the #892 header
+  read; at `init()` and after a failed unlock only), so `getState()` reports
+  `lockNotice: 'encrypted_file_missing'` while locked, across restarts and builds, until a
+  successful unlock. That unlock sets `UnlockedVault.restoredMissingEnc` (the roll-forward
+  encrypted over a missing `.enc`), and `takeRestoredMissingEnc() -> boolean` returns it once for
+  the unlock IPC's content-free log line (no audit type). With no `.enc` and nothing rolled forward,
+  `unlockEncryptedVault` throws `VaultMissingError` after the verifier (a wrong password is still
+  `WrongPasswordError` and touches nothing; `keptCopyDiscarded` tells the IPC's log line whether a
+  kept copy went), having shredded a `.recovery` that was spent or
+  `damaged` (#875 keeps a damaged one until an unlock succeeds; with no `.enc` none can). `.enc` and
+  the working file are not written. A failed unlock re-reads the notice from the disk, so it goes
+  once no copy is kept. The unlock judges `.enc` once, by the start's ENOENT-only rule: a stat that fails
+  otherwise, with a `.recovery` there, throws `VaultRecoveryBlockedError` and rolls nothing forward.
+  **A returned `.enc`:** the start never replaces a snapshot, but the unlock
+  applies the CODE-1b roll-forward rule to an `.enc` that came back after the start: the kept copy
+  replaces it unless that `.enc` is newer by mtime. A newer one wins, the kept copy is shredded as a
+  spent leftover, and nothing records the session it held.
 ✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
   `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
   **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|
-  'vault_damaged'|'vault_recovery_blocked'|'workspace_newer'|'refused'|'error', message}` — a
+  'vault_damaged'|'vault_missing'|'vault_descriptor_missing'|'vault_descriptor_unreadable'|'vault_open_failed'|
+  'vault_recovery_blocked'|'workspace_newer'|
+  'workspace_exists'|'plaintext_not_allowed'|'refused'|'error', message}` — a
   wrong password / policy refusal is a normal result, not a throw; `vault_damaged` (#208) is the
   password-verified-but-undecryptable-to-a-database unlock failure, deliberately distinct from
-  `wrong_password`; `vault_recovery_blocked` (#242) is the unlock refused because a held
-  `.recovery` file blocks the failed-lock salvage — retry once the hold clears, nothing lost;
+  `wrong_password`, and since #844 only what SQLite itself calls not a database or corrupt, plus
+  (#860 V5b) a `.enc` that fails its GCM tag after the password verified;
+  `vault_open_failed` (#844) is the unlock whose open could not finish on a database SQLite does
+  not call damaged (an upgrade step or the unlock's settings write, on a full drive, an I/O
+  error, a bug in a new step) — the failed open never rewrites `.enc`; free space and retry,
+  or start the previous version after an update;
+  `vault_missing` (#911) is the unlock whose password verified while `.enc` is missing and no
+  `.recovery` copy was rolled forward over it: `.enc` and the working file not written (a spent or
+  damaged `.recovery` shredded); put the file back or restore the
+  workspace folder from a backup, never create a new workspace (create's table maps it to `null`:
+  never sent there);
+  `vault_descriptor_missing` (#807, C-S2) is the unlock refused because `.enc` is there but
+  `config/workspace.json` is missing or unreadable (`VaultDescriptorMissingError`): no password can be
+  checked or open it, nothing is written; put the file back or restore it from a backup, never
+  create a new workspace (before, a plain error that read "Could not open the workspace.");
+  `vault_descriptor_unreadable` (#955 item 1) is the unlock refused because `config/workspace.json`
+  is there but cannot be read and a stat of `.enc` says ENOENT (`VaultDescriptorUnreadableError`;
+  any other stat failure proves nothing and stays `error`): no password can open anything, nothing
+  is written; don't delete the key file, restore both files from a backup (before, a plain error
+  that read "Could not open the workspace."). The create answers it too, with the same key, for such
+  a file that appeared under its create form (the gate shows it on the create form, no switch);
+  `workspace_exists` (#807) is the create refused because a workspace is already on the drive
+  (`WorkspaceExistsError`: an encrypted descriptor, the `.enc`, an unreadable descriptor beside an
+  `.enc` or a newer build's artifact; since #954 any descriptor file, read live, so also one put back
+  after the start; also the `createEncryptedVaultOnDisk` belt over an `.enc` or a descriptor file,
+  at its start and right before its commit), and
+  `plaintext_not_allowed` (#807) the create without a password that the policy or the build does
+  not allow (`PlaintextNotAllowedError`); both used to be `refused` with the vault's English
+  sentence, matched by its wording, and nothing on the disk changes (the start's steps for a vault
+  that appeared after the start run at the unlock). Since #955 the state then reads `locked`: the
+  gate re-reads it after `workspace_exists`
+  and, when it reads `locked`, hands it to App (`onStateChange`), which shows the unlock form with the
+  refusal; create's `refused` is now only
+  a password under `MIN_PASSWORD_LENGTH` or not a string. A Node file error during create (an
+  `EPERM … rename`) is `error` (`createFailed`), logged content-free (#807: it used to match the old
+  wording and reach the gate raw);
+  `vault_recovery_blocked` (#242) is the unlock refused because a held
+  `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
+  other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing; since #973 also
+  a staged `.enc.new` in doubt that the unlock cannot read: a hold, or an I/O error such as EIO) —
+  retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
-  written by a NEWER build — nothing written, update the app). Since the 2026-11 UI languages
+  written by a NEWER build — nothing written, update the app; since #845 also the unlock refused
+  because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages
   wave the lock screen renders a failed unlock or create from `reason` in its own language
   (`shared/workspace-failure-keys.ts`, one table per call; architecture.md i18n record D-L3);
-  `message` is shown only for a reason a table maps to `null` (create's free-text `refused`) or
-  doesn't know. `MIN_PASSWORD_LENGTH` (`shared/types.ts`) is the one password floor for main, the
+  every reason a call sends has a key (create's `refused` renders `main.workspace.passwordTooShort`
+  with `{ min }`, #807 A2), so `message` is shown only for a reason a table maps to `null` (one the
+  call never sends) or doesn't know. `MIN_PASSWORD_LENGTH` (`shared/types.ts`) is the one password floor for main, the
   gate, the change-password card and the strength meter;
   **Schema stamp (#247):** the workspace database carries `PRAGMA user_version` =
   `SCHEMA_VERSION` (`services/db.ts`; `1` since PR #289). `openDatabase` reads it before any
   PRAGMA that writes: `0` (every database written before the stamp) and any lower value run the
-  additive migrations and are stamped in place; an equal value writes nothing (a second open is
-  a no-op); a HIGHER value throws the typed `WorkspaceNewerError` with the handle closed and the
+  additive migrations and are stamped in place; an equal value skips only the stamp write — the
+  additive migrations still run on every open, so an equal-stamped file missing a newer column gets
+  it, and on a complete schema a second open changes nothing; a HIGHER value throws the typed `WorkspaceNewerError` with the handle closed and the
   file byte-identical. Bump `SCHEMA_VERSION` only for a change an older build must not open.
   Builds ≤ 0.1.59 never read the stamp, so it protects only pairs whose older build is newer
-  than PR #289;
-  `lockWorkspace` → `WorkspaceStateInfo`. Registered in `initBackend()`; exposed on preload `api` +
+  than PR #289. **Later-writer rule (#985, frozen for every later release):** schema text an older
+  SQLite cannot parse (a newer clause in an index, a trigger, a generated column, a table option)
+  ships only together with a bump of `SCHEMA_VERSION`. An older build's SQLite fails every schema
+  read of such a file with CORRUPT ("malformed database schema"), and from #985 on its start and
+  unlock keep a working copy or `.recovery` only when the stamp says `newer`: without the bump that
+  file reads as damaged and is discarded. Builds before #985 discard it either way;
+  `lockWorkspace` → `WorkspaceStateInfo`, with `lockNotice: 'working_copy_lost'` when the lock
+  finished at the last good snapshot because the working file was gone or no longer a database
+  (#855); since #875 `getWorkspaceState` reports it too, while locked, until the next unlock, and
+  since #892 also `session_not_closed` / `session_not_closed_full` for a start that swept the
+  session an unclean end left (see "Working copy lost" above). Since #911 `getWorkspaceState` also
+  reports `encrypted_file_missing` while a copy the start kept over a missing `.enc` waits for the
+  unlock (see "Encrypted file missing" above). `changeWorkspacePassword(current, next)` (`workspace:changePassword`) →
+  `WorkspaceActionResult`: `wrong_password` (a wrong or non-string current password), `refused`
+  (a new password under `MIN_PASSWORD_LENGTH` or not a string, the workspace locked or a lock under
+  way, or document work in progress: `VaultBusyError`, whose message is `tMain` text since #807), `error` (anything else, #845's refusals
+  included: the current password still works). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
 - **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
-  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired }`, `WorkspaceActionResult`.
+  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`
+  (`lockNotice`: `working_copy_lost` | `session_not_closed` | `session_not_closed_full`, #892;
+  `encrypted_file_missing`, #911),
+  `WorkspaceActionResult`.
 ✅ **`AppContext.db` is now a getter** over `workspace.requireDb()` (throws while locked) +
   `AppContext.workspace: WorkspaceController`. `main/index.ts` builds the controller from
   `loadPolicy(...).policy` + `isDev`, calls `init()`, and locks on `will-quit`. `registerCoreIpc`'s
@@ -1161,7 +1606,11 @@ head's own weights + KV.
   `createE5Embedder(opts)`. **`Embedder` gained optional `stop?(): Promise<void>`** (mock omits it).
 ✅ **`services/embeddings/factory.ts`** — `createSelectedEmbedder({ rootPath, model, … }) → Embedder`
   (real `E5Embedder` iff binary + E5 weights present; else `MockEmbedder`). `EmbeddingModelInfo {
-  id, modelPath, dimensions?, contextTokens? }`.
+  id, modelPath, dimensions?, contextTokens? }`. The model is `resolveModelByRole('embeddings')`'s pick
+  (#848): the manifest flagged `default_for_role: true` (`ModelManifest.defaultForRole`), else the first
+  of the role in `discoverManifests`' walk (each folder's entry names in code-unit order, on every OS). The
+  flag decides whether or not the file is present: a missing default weight composes the `MockEmbedder`,
+  never another installed embeddings model. `activeEmbeddingModelId` does not choose it.
 ✅ **`VectorIndex`** — optional 3rd ctor arg `{ embeddingModelId? }`: a non-empty id scopes the cosine
   scan to `WHERE embedding_model_id = ?` (mismatch guard); default scans all rows. **`rag.retrieve`**
   passes `{ embeddingModelId: embedder.id }`.
@@ -1348,6 +1797,31 @@ head's own weights + KV.
   partial test contexts stay valid; every call site is `ctx.audit?.(…)`.
 ✅ **`services/downloads.ts` seam (additive):** `DownloadManagerDeps.audit?` (`DownloadAuditType` =
   the three `model_download_*` values) — injected by `registerDownloadIpc` in production.
+✅ **Engine and OCR installs (#843, additive):** `engine_install_started | engine_install_finished |
+  engine_install_failed`, recorded in `registerEngineIpc` (started once `start()` has resolved, in the
+  `engine:download` handler — a job cannot settle before that, and nothing reorders the two — and the end
+  from `EngineDownloadManager.onSettled`, whose listener now also gets `EngineJobEnd { reason, cause?,
+  preview }`; `kind`, `versions` and `sizeBytes` come from the job's stored plan alone). Neither call can
+  fail the install: an audit fault is logged and dropped. Metadata `{ jobId, kind:
+  'install'|'update'|'reinstall', families, versions: { <family>: <pin> }, sizeBytes: number|null, trigger:
+  'user' }`; a failure adds `reason` (`cancelled`, `networkOff`, `checksumMismatch`, `fileMissing`,
+  `placeholderHash`, `download`, `incomplete`, `install`, `notReplaced`, since #986 `noSpace` (no room to
+  unpack, refused before anything was touched) and `filesInUse` (the swap's rename was refused and the
+  installed copy put back), and `internal` for an exception no
+  step caught — the job then ends `failed` instead of staying in a live status) and, for `download`, `cause`
+  (`failureReason`: `network`, `http-404`, `write`, …); for `noSpace` (#986) the two byte counts its message
+  named, `neededBytes` and `freeBytes` (from the new `EngineJobEnd.space?: { neededBytes, freeBytes }`).
+  `ocr_install_started | ocr_install_finished |
+  ocr_install_failed` come from `services/ocr-install.ts` through the new `StartOcrInstallOptions.audit?`
+  sink, which `registerEngineIpc` wires to `ctx.audit` adding the same `trigger: 'user'`: `{ jobId,
+  languages, bytes, trigger }`, plus `outcome` when finished and `reason` (the `main.ocr.*` key's last
+  part, `cancelled` or `networkOff`) and `cause` when not; the manager calls the sink inside a guard at both
+  ends, so a failing sink never fails or blocks the install. Never `job.error` (friendly copy that can carry
+  a path). A request refused before a job exists records nothing, as a model download's. A knowledge-pack
+  tools install is an engine job, so it is recorded as `engine_install_*` with `families: ['kiwix_tools']`
+  (the labels say "engine or tools"). An end that is still in the recorder's memory buffer (workspace
+  locked) when the app quits is lost. The names are permanent: an in-app updater records the same types
+  with its own `trigger`.
 ✅ **`services/offlineGuard.ts` seam (additive):** `AssertOfflinePostureDeps.onViolation?(host)`.
 ✅ **IPC** `ipc/registerAuditIpc.ts` — `getAuditEvents`, `exportAuditLog` (JSON, save-dialog
   pattern). **Renderer:** Diagnostics Activity card (on-demand, type filter, paging, export).
@@ -1370,7 +1844,16 @@ head's own weights + KV.
   problems[], checks{ policyCommercial, networkDenied, weightsVerified, licensesApproved, noUserData, runtimeCurrent,
   runtimeHashed, optionalRuntimesConsistent, kiwixSourceBundle, ocrAssetsVerified, appSkillsPresent, userSkillsEmpty,
   licenseArtifactsPresent, platformMatrixDeclared, appArtifactsPresent, launchersPresent }, modelResults }>`. Never
-  throws; every failed check adds a `problems[]` line. The Kit rule (#766): a model SHIPS when it is bundled
+  throws; every failed check adds a `problems[]` line. `noUserData` (#893) is a rule, not a list of names: no entry
+  directly in `workspace/` or `logs/` (`USER_DATA_DIRS`; a file or a link, never followed, is named `<dir>/<name>`, a
+  non-empty folder `<dir>/<name>/*`, an empty folder passes) and no `config/workspace.json*` or
+  `config/working-copy-lost.json*` (`USER_DATA_CONFIG_FILES`, exact or `<name>.*`, any case); one sorted problem per
+  entry, `user data present on a drive meant to ship empty: <path>`. It fails closed: `workspace/`, `logs/`, `config/`
+  or a folder directly in the first two that cannot be listed (no read or enter right), and a file where one of the
+  three folders belongs, each add `user data unreadable on a drive meant to ship empty: <dir>/` or `<dir> (not a
+  folder)`; only a missing path (ENOENT) passes. A link is what Node's `Dirent` calls one (a symlink, a junction; a
+  cloud placeholder folder is a folder). The builders' native pre-flight states the same rule (`user data present:
+  <path>`, `user data unreadable: <path>`; `script-drift.test.ts` pins both lists). The Kit rule (#766): a model SHIPS when it is bundled
   (`bundled_on_preconfigured_drive`) or has any file on the drive; at least one model is bundled, every shipped weight
   is VERIFIED (`weightsVerified`) and every shipped model's `license_review.status` is `approved` (`licensesApproved` —
   `--accept-license` never overrides it); a manifest with no file on the drive is the in-app catalog and is not checked.
@@ -1482,16 +1965,19 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   byte-identical), `createEvidenceSelection` (refuses out-of-range AND surrogate-splitting
   offsets — never clamps; F-15), `deleteEvidenceSelection` (selections only — block items are
   structural), `setEvidenceLink` (upsert per (item, key); refuses unknown source keys),
-  `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`, and the pure
+  `removeEvidenceLink`, `recordEvidenceExport`, `listEvidenceExports`. The pure
   `deriveReadyGate` (D-7: required = non-heading block items, NULL `blockKind` counts as
-  required; 'not_applicable' counts as decided; selections never gate).
+  required; 'not_applicable' counts as decided; selections never gate) lives in
+  `shared/evidence-review.ts` since #839: the renderer's review store runs the same function
+  for live progress (it was a byte-identical renderer copy, `computeReadyGate`, under an
+  equivalence matrix; that name is still exported from `reviewSession.ts` for PR #511).
 ✅ **Audit literals (types only — no emitter until Phase 1):** `evidence_review_created`,
   `evidence_review_ready`, `evidence_review_deleted`, `evidence_pack_exported`. Metadata
   contract: ids/counts ONLY — never titles, notes, reviewer labels, snippets, or paths.
   (The exhaustive Diagnostics label record forced the matching `diag.audit.*` EN/DE keys to
   land now; behaviorally inert until an event exists.)
-✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix, the FIX-4 renderer-mirror
-  equivalence, the pure snapshot parsers, and the spec-§9.1 `isReviewEligible` rule) +
+✅ **Tests:** `tests/unit/evidence-review-gate.test.ts` (D-7 matrix, the pure snapshot parsers,
+  and the spec-§9.1 `isReviewEligible` rule) +
   `tests/integration/evidence-reviews.test.ts` (schema on fresh/reopened DBs via `listTables`;
   decided items, notes and the reviewer label surviving a reopen (the restart leg, moved from
   `evidence-reviews-ipc.test.ts`); a pre-P4 workspace gaining `freshness_ack_json`;
@@ -1555,20 +2041,20 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   conversation?)` (spec §9.1): assistant ∧ (citations non-empty ∨ coverage present ∨
   `conversation.mode === 'documents'`). "Persisted and not streaming" stays the caller's
   gate (a streaming reply has no row yet) — Phase 2 wires it.
-✅ **IPC surface (19 channels, `evidence:*` in `shared/ipc.ts`; handlers in
+✅ **IPC surface (`evidence:*` in `shared/ipc.ts`; handlers in
   `main/ipc/registerEvidenceReviewsIpc.ts`, wired in `main/index.ts`; preload methods of the
   same names on `window.api` — 13 shipped in Phase 1, `evidence:countForConversation` added
   in Phase 2 for the D-2 delete confirm, `evidence:export` added in Phase 3 with its
   pipeline, `evidence:acknowledgeFreshness` + `evidence:sourceContext` added in Phase 4,
   `evidence:summariesForConversation` + `evidence:bulkAction` added by the AUD-12/AUD-13
   remediation as the BATCH forms of two surfaces that previously fanned out per message /
-  per item):**
+  per item; #840 removed `evidence:getForMessage` and `evidence:delete`, which no screen
+  called, so 17 remain):**
   | preload method | channel | shape |
   |---|---|---|
   | `createEvidenceReview(messageId)` | `evidence:create` | → `EvidenceReviewDetail`; IDEMPOTENT (existing review returned, audit only on real creation); throws localized `invalidRequest` on a malformed id, ids-only errors on unknown/non-assistant message |
   | `getEvidenceReview(reviewId)` | `evidence:get` | → `EvidenceReviewDetail \| null` |
-  | `getEvidenceReviewForMessage(messageId)` | `evidence:getForMessage` | → `EvidenceReviewSummary \| null` (entry-point state for ONE message; the transcript uses the conversation-scoped batch below) |
-  | `getEvidenceReviewSummariesForConversation(conversationId)` | `evidence:summariesForConversation` | → `EvidenceReviewSummary[]` — **AUD-12**: the chat transcript's whole chip state in ONE round trip, keyed by `messageId` renderer-side. Same per-summary shape (gate + derived `outdated` overlay) as `evidence:getForMessage`, element-for-element. Service side it is TWO statements for any conversation length — one indexed head read on `conversation_id`, one join for the item rows the gates derive from. `[]` for an unknown/malformed id |
+  | `getEvidenceReviewSummariesForConversation(conversationId)` | `evidence:summariesForConversation` | → `EvidenceReviewSummary[]` — **AUD-12**: the chat transcript's whole chip state in ONE round trip, keyed by `messageId` renderer-side. Each element is a review's head + its gate (the `EvidenceReviewSummary` shape; main's per-message `getEvidenceReviewForMessage` builds the same shape, and its one product caller is `evidence:create`'s idempotency check) with the derived `outdated` overlay. Service side it is TWO statements for any conversation length — one indexed head read on `conversation_id`, one join for the item rows the gates derive from. `[]` for an unknown/malformed id |
   | `updateEvidenceReview(reviewId, patch)` | `evidence:update` | → `EvidenceReview \| null`; malformed patch fields DROPPED, never coerced |
   | `updateEvidenceReviewItem(itemId, patch)` | `evidence:updateItem` | → `EvidenceReviewItem \| null`; unknown decision literals dropped (stored decision untouched) |
   | `applyEvidenceReviewBulkAction(reviewId, action)` | `evidence:bulkAction` | → `EvidenceReviewItem[] \| null` — **AUD-13**: one of the three sanctioned conservative sweeps (`EvidenceReviewBulkAction` = `'headings_not_applicable' \| 'clear_decisions' \| 'undecided_follow_up'`) applied to the whole review in ONE transaction, returning the refreshed items. Null on an unknown id, an UNRECOGNIZED action name (never mapped onto a nearby one), and on a READY review (the same write guard the per-item patch enforces). The head activity stamp moves only when the sweep matched something. The forbidden blanket "mark all supported" has no literal in the union, so it cannot be requested |
@@ -1581,7 +2067,6 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   | `refreshEvidenceReviewState(reviewId)` | `evidence:refreshState` | → `EvidenceReviewFreshness \| null` — **REAL since Phase 4** (spec §21.2): snapshot vs workspace from STORED facts only — document existence by snapshotted id, stored `documents.sha256` vs snapshot hash (**never re-hashed**), `messages.content` vs `answer_snapshot` (exact), coverage semantic-fields compare. Unresolved identities report `'unverifiable'`, NEVER `'changed'`. No model, no network, no file I/O |
   | `acknowledgeEvidenceReviewFreshness(reviewId)` | `evidence:acknowledgeFreshness` | → `EvidenceReviewFreshness \| null` — Phase 4 (spec §15.5/§28.6): persists `{acknowledgedAt, fingerprint}` into `freshness_ack_json`; the fingerprint canonicalizes the CURRENT drift so a LATER change lapses the acknowledge. NO-OP on a non-outdated review (nothing written). Writes ONLY its own column — status/completed_at/updated_at untouched (§18.4), NOT subject to the ready-state write-guard (lifecycle metadata, not a decision edit). No audit event (not a spec-§22 type) |
   | `getEvidenceSourceContext(reviewId, sourceKey)` | `evidence:sourceContext` | → `EvidenceSourceContext \| null` — Phase 4 (D-5, spec §10.2.4): the STORED extracted text (`chunks` table — never a source-file read) around one source's persisted excerpt, resolved from the review's OWN snapshot (`documentId` never crosses the wire from the renderer). Ladder: snapshotted `sourceChunkId` (verified to belong to the snapshotted document — a foreign chunk id never leaks another document's text) → stored-text containment search (`instr`) → honest `located:false`. Context = located chunk ± one neighbor, ≤1200 chars/side, surrogate-safe boundaries. Null on unknown review/key and on unresolved-identity sources |
-  | `deleteEvidenceReview(reviewId)` | `evidence:delete` | → `boolean` |
   | `countEvidenceReviewsForConversation(conversationId)` | `evidence:countForConversation` | → `number` — Phase 2 (plan §7.6, D-2): the conversation-delete confirm names how many reviews the cascade removes. Count only, never content; malformed/unknown ids read `0` |
   | `exportEvidencePack(reviewId, options)` | `evidence:export` | → `EvidenceExportRecord \| null` — Phase 3 (plan §8.3): save dialog → deterministic HTML render → ATOMIC write (tmp sibling → fsync → sha256 of the ON-DISK bytes → rename) → `evidence_exports` row. Null on unknown/malformed id (no dialog) or user cancel; any failure UP TO the rename leaves no destination file and no row (spec §28.9). A POST-rename record failure (workspace-DB error, or the review deleted in another window while the dialog was open) UNLINKS the just-written file and REJECTS with distinct localized copy (`main.evidenceReviews.exportNotRecorded`; if even the unlink fails, `…exportFileNotRecorded` states the file exists WITHOUT a history record) — null never means "exported", and a real export is never reported as a cancel (fix round FIX-1). Works on draft AND ready reviews (the ready guard covers item mutations only — tested). `options: EvidencePackExportRequest` (= `Partial<EvidencePackOptions> & {format?}`) resolves against `EVIDENCE_PACK_OPTION_DEFAULTS` main-side; the RESOLVED option set persists to `options_json` (the format NEVER does — `evidence_exports.format` is its column). **P6 (plan §11): PDF over the SAME channel** — `format: 'pdf'` (literal only; anything else reads 'html') prints the SAME rendered HTML through the hidden-window harness AFTER the dialog; the save dialog OFFERS both filters (requested first) and the chosen extension has the final word (`packFormatForDestination`: `.pdf`⇒pdf, `.html`/`.htm`⇒html, else the request — file content, extension and recorded format always agree). A failed/killed print = a pre-rename failure: no file, no row |
   Every handler `requireUnlocked()` (`main.evidenceReviews.locked`, EN+DE; auto-enforced by
@@ -1596,11 +2081,14 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   ADDITIVELY in P4 (all new fields optional on the wire — see the Phase-4 block).
 ✅ **Audit emitters:** `evidence_review_created` (`{reviewId, messageId,
   conversationId, itemCount, sourceCount, autoLinkCount}`), `evidence_review_ready`
-  (`{reviewId, requiredTotal, decidedTotal}`), `evidence_review_deleted` (`{reviewId}`),
-  and — Phase 3 — `evidence_pack_exported` (`{reviewId, format}` **only**: the destination
-  path, the bare file name and the review title, which seeds the suggested name, are content
-  and never audited) — ids/counts ONLY; review titles/labels/notes/answer text/source titles
-  AND the export path are sentinel-swept through the REAL handlers in `audit-ipc.test.ts`.
+  (`{reviewId, requiredTotal, decidedTotal}`), and — Phase 3 — `evidence_pack_exported`
+  (`{reviewId, format}` **only**: the destination path, the bare file name and the review
+  title, which seeds the suggested name, are content and never audited) — ids/counts ONLY;
+  review titles/labels/notes/answer text/source titles AND the export path are sentinel-swept
+  through the REAL handlers in `audit-ipc.test.ts`. `evidence_review_deleted` (`{reviewId}`)
+  had one emitter, the `evidence:delete` channel, which no screen called (the app has no
+  review delete, B-03); #840 removed the channel, so no build emits it now. The literal and its
+  `diag.audit.*` label stay, so rows an older build wrote still read.
 ✅ **i18n:** `main.evidenceReviews.locked` + `main.evidenceReviews.invalidRequest` (emission
   set) and persist-canonical `main.evidenceReviews.defaultTitle` ('Evidence review' — the
   fallback written to `evidence_reviews.title` when a conversation title trims empty; in
@@ -1614,7 +2102,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   display-parity links, and the FIX-2 atomicity leg: an injected SQLite-trigger failure
   mid-build rolls back the three tables the build writes (head, items, links) and surfaces
   the original error) + `tests/integration/evidence-reviews-ipc.test.ts` (the full
-  create→read→update→decide→select→link→ready→reopen→refresh→delete round trip over the
+  create→read→update→decide→select→link→ready→reopen→refresh round trip over the
   mocked-electron harness incl. a documentId-resolved source and a real selection deletion —
   the four answer classes are the builder's, pinned in `evidence-snapshot.test.ts` — payload
   guards, reviewer-origin forcing, the real freshness verdict over the wire, idempotent
@@ -1709,8 +2197,24 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   the file.
   Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
   `<meta charset>` is the contract; recorded hash = on-disk bytes).
-  `suggestedPackFileName(title, format)` slugs the review title (content — which is why
-  path/name never reach audit) + the format's extension.
+  `suggestedPackFileName(title, format)` = the review title through the shared file-name rule
+  (content — which is why path/name never reach audit) + the format's extension. The rule is
+  `fileNameStem(title, { fallback, keepParens?, maxCodePoints? })` (`main/services/text.ts`, #899):
+  NFC first, and every space, tab, line break or no-break space becomes a plain space; letters,
+  numbers, space, `_`, `-` (and `(` `)` with `keepParens`), a combining mark only inside
+  a character that holds a letter or number (a vowel sign stays, and a keycap `1️⃣` keeps its
+  selector, its base being a number; a stripped emoji's variation selector goes with it); format
+  characters go, ZWJ and ZWNJ included; whole characters (graphemes) up to 60 code points
+  (never half an astral letter, #839, nor a letter without its vowel sign; a character carrying
+  more marks than the whole cap keeps only its letter, one holding more letters than the cap is
+  left out); composed again (NFC) once built; no leading space or `-`, no trailing space, `-` or
+  opening `(` (`_` stays at both ends); the fallback (`evidence-pack`
+  here) when no letter or number is left; `_` appended to a Windows device name (`CON`, `NUL`,
+  `COM1`, …). The chat transcript export (fallback `chat`) and the three document exports
+  (`documentFileName` in `registerDocsIpc.ts`: the title's extension is cut only when it is one, a
+  dot then 1-10 letters or digits, and the original export keeps it; fallback `document`, with
+  `(` `)`; a trailing "(…)" group such as a translation's "(Deutsch)" kept whole, the name
+  before it cut instead) build their suggested names through the same rule.
 ✅ **PDF print harness (P6, `main/services/evidence-pack/print-pdf.ts` — plan §11/D-1):**
   `printEvidencePackHtmlToPdf(html, {packId})` → PDF `Buffer`. Dedicated
   hidden `BrowserWindow` per print — `SECURE_WINDOW_WEB_PREFERENCES` spread (sandboxed),
@@ -1745,10 +2249,12 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   history renders real `detail.exports` rows **including the recorded SHA-256** (truncated
   mono display + a copy-full-hash action via `copyToClipboard` — the pack's own integrity
   note and the user guide point the reader here, fix round FIX-2). Store
-  (`reviewSession.ts`): `exportReviewPack(options)` FLUSHES pending edits first (the pack
-  renders persisted data; a failed flush REFUSES — pinned by test), then merges the
-  returned record into `detail.exports` newest-first under the `openToken` staleness
-  guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
+  (`reviewSession.ts`): `exportReviewPack(options)` DRAINS pending edits first (saves in
+  passes until nothing is queued, #889 — an edit made while that save was writing is in the
+  pack too; the pack renders persisted data; a failed save REFUSES, and so does an edit still
+  queued when the drain's passes run out — pinned by test), then
+  merges the returned record into `detail.exports` newest-first under the `openToken`
+  staleness guard. Outcomes: 'exported' | 'cancelled' (native-dialog cancel — silent) | 'failed'
   (+friendly copy, rendered inline in the panel). A token change (lock/switch) landing
   AFTER a successful export still returns 'exported' (state untouched — the export is
   real; only a genuine rejection reports 'failed'; the lock case is pinned in
@@ -1823,7 +2329,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   answer edit, changed→recovered→changed-again (no stale-ack resurrection), and a NEW
   deletion (adds a fact). Hashes only, inside the encrypted row. Also exports
   `compareStoredHashes` (the ack parser is module-private).
-✅ **Read overlay (IPC boundary):** `evidence:get` + `evidence:getForMessage` responses
+✅ **Read overlay (IPC boundary):** `evidence:get` + `evidence:summariesForConversation` responses
   carry the REAL computed `outdated` (the chat chip + a fresh open render truthfully);
   SERVICE-level reads and every write-path return (`update`/`markReady`/`reopen`/`create`)
   keep the constant-false overlay — the renderer's freshness UI reads the store's refresh
@@ -1833,12 +2339,13 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   unacknowledged (`EvidencePackOutdatedError` → localized
   `main.evidenceReviews.exportOutdated`, thrown BEFORE any dialog/file work), and INJECTS
   the verdict into `buildEvidencePackModel(detail, options, meta, freshness?)` (4th
-  OPTIONAL param — the model stays pure; goldens inject fixed verdicts). Pack rendering:
+  OPTIONAL param — the model stays pure; the goldens run the real export pipeline, so their verdicts come from the seeded workspace). Pack rendering:
   cover outdated warning + acknowledge stamp (§21.3 "prominent snapshot warning"),
   coverage-section mismatch records (`packExport.coverage.answerChangedNow`/
   `coverageChangedNow`/`sourcesChangedNow`/`sourcesMissingNow` — missing counts NEW
-  deletions only) + `freshnessChecked` note (the P3 fixed `freshnessNote` renders only
-  when NO verdict was injected), per-card §15.4/§15.5 warnings, and the §16.1.7 source
+  deletions only) + `freshnessChecked` note (the P3 fixed `freshnessNote` is the pure
+  model's no-verdict branch, reachable only by direct model/render callers such as tests; every
+  exported pack carries `freshnessChecked`), per-card §15.4/§15.5 warnings, and the §16.1.7 source
   register column becomes **Availability at export** (available / changed-since-review /
   missing / cannot-verify from `EvidencePackSource.currentState`). A deleted source NEVER
   blocks export (§28.7). Model additions: `EvidencePackFreshness` + `outdated` overridden
@@ -2019,7 +2526,8 @@ whole renderer-visible surface.
   engine updates"):** `EngineStatus` gains `engineVersions?: EngineVersionInfo[]` — per family on
   the drive with a host build: `{ family, optional, installed: string|null, installedBackend:
   string|null, pinned, pinnedBackend, relation: 'current'|'older'|'newer'|'unknown', cpuNet?:
-  { installed, pinned, relation } }`. `EngineDownloadRequest` gains `update?: boolean` (explicit
+  { installed, pinned, relation } }`; `pinned` comes from the app's own `runtime-sources.yaml`,
+  never the drive's (#842). `EngineDownloadRequest` gains `update?: boolean` (explicit
   REQUIRED `families`, never with `reinstall`; only `older` installs and an older `cpu/` net are
   replaced, else `main.engine.nothingToUpdate`; refused while work runs, `main.engine.updateBusy`),
   and `EngineDownloadJob` gains `update?: boolean`. **Behaviour change:** the argument-less
@@ -2051,6 +2559,50 @@ whole renderer-visible surface.
   count stays 145) and **no preload change** — `missingOptionalFamilies` and the gate additions ride the existing
   `engineStatus` payload / the existing assert-tool call, unread by the renderer until the
   consent step (#339 P8-2).
+  **#843 additions (the engine's confirmation; one new channel, additive):** `getEnginePlan(request?:
+  EngineDownloadRequest): Promise<EngineDownloadPreview>` (`engine:plan`, read-only; the preload sends
+  NO payload for the argument-less call, as `downloadEngine` does). The handler validates the request
+  exactly like `engine:download` (`parseEngineDownloadRequest`, then `main.engine.nothingToRepair` for a
+  reinstall without a damaged-files verdict) and answers from `previewEngineDownload` = the step
+  selection `EngineDownloadManager.start()` runs (`planEngineSteps`), with the same bundled pins and,
+  for a reinstall, the same refused builds — or throws the selection refusal `start()` would at that
+  moment (`nothingToUpdate`, `alreadyInstalled`, `noHostBuild`, …). The gates, the one-job check, the
+  engine-in-use refusals (`main.engine.runtimeRunning` and its twins) and the update's
+  `main.engine.updateBusy` are not part of it; `start()` and the update handler check them after
+  Confirm (and plan again). `EngineDownloadPreview = { kind:
+  'install'|'update'|'reinstall', items: EngineDownloadPreviewItem[], totalBytes: number|null }`, with
+  `EngineDownloadPreviewItem = { family, version, installed: string|null, backend, os, arch, safetyNet,
+  url, sizeBytes: number|null, license, bundledLicense: string|null, licenseUrl: string|null }`.
+  `license`, `bundledLicense` (per OS) and `licenseUrl` (`<repo>/blob/<version>/LICENSE`, only for a
+  plain tag) come from the code-side `SidecarFamilySpec` (new optional `bundledLicenses`,
+  `licenseRepo`; `license` is now set for the two required families too), `sizeBytes` from the pin's
+  `size_bytes`, which every committed llama.cpp and whisper.cpp build now carries. The renderer sends
+  Confirm's request unchanged to `engine:download`: main keeps no consent token.
+  **#986 additions (the staged engine swap; no IPC, no preload, no schema change; `architecture.md` "In-app
+  engine updates" §6):** `EngineJobEndReason` (`runtime-download.ts`) gains `noSpace` and `filesInUse`, and
+  `EngineJobEnd` gains `space?: EngineSpaceShortfall = { neededBytes, freeBytes }` (set for `noSpace`); the
+  job's `error` is `main.engine.notEnoughSpace` (`{needed}`, `{free}`, the model downloader's unit rules) or
+  `main.engine.filesInUse` (new keys, all ten catalogs). **Behaviour change:** a cancel is honoured until the
+  swap's first rename, even after the extraction (it used to finish the install, #516), and arrives too late
+  after it; a failed step leaves the installed copy as it was (it used to leave none, #752). New exports:
+  `assets.ts` `EngineSwapDirs { live, staging, previous }` + `engineSwapDirs(rootPath, extractTo)` (the exact
+  `<live>.new` / `<live>.old` siblings, contained by `resolveWithinRoot`; refuses an install folder that is
+  the drive root), `planInFolder(plan, dir)` (the plan rebased, same marker keys), `engineFolderComplete(plan,
+  dir?)` (the marker parses AND every file its `binaries` map records is present; the plan's required files
+  only for a marker without the map, review round 2); `InstallStep.cpuNet?` (a main build's net plan, which a
+  job recovers, guards and carries whatever it installs); `runtime-download.ts` `stageEngineInstall(plan,
+  stagingDir, { extract?, signal?, log? })` (extract + checks + hashes + flush + marker inside `stagingDir`;
+  the app-update plan's W-30 install reuses it), `engineFolderDeletesSettled()`, `recoverEngineSwaps(rootPath,
+  manifestsDir, { platform?, arch?, log?, warn? })` (called in `index.ts` before any engine is resolved,
+  what it could not do through `warn`; every engine job runs the same rule on its folders before phase 1;
+  never throws); `fs-retry.ts` `renameWithRetry(from, to, platform?)` + `renameMayClear(err, platform?)` +
+  `RENAME_RETRY_BUDGET_MS` (12 s of waits, EPERM/EACCES/EBUSY on Windows only) + `removeRetry(platform?)`
+  (`rm`'s `maxRetries`/`retryDelay` within the same budget, Windows only); phase 2 installs a family's
+  `cpu/` net before its main build; `archive-size.ts`
+  `extractedArchiveBytes(path, clusterBytes)` (zip central directory or tar.gz ustar headers, each file
+  rounded to the unit; null for anything it cannot size, Zip64 included). `assertCommercialDrive` fails
+  `runtimeCurrent` (or `optionalRuntimesConsistent`) for a leftover `<extract_to>.new` / `.old` beside a
+  pinned build, and the Kit gate scripts' pre-flight says so too.
 - **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
   (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
   all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:
@@ -2082,11 +2634,16 @@ whole renderer-visible surface.
   history `listImageSessions`/`getImageSession`/`deleteImageSession`/`clearImageSessions`.
   Types: `VisionStatus`, `ImageJob`, `ImageSessionSummary`/`ImageSessionDetail`
   (see also the #117–#124 wave section above). Record: `architecture.md` "Image
-  understanding — design record".
+  understanding — design record". #913 (additive, skew-safe): `VisionUnavailableReason` gained
+  `'damaged'` (a vision model on the drive failed its file check: a check found a file damaged, or
+  its hash is a placeholder outside developer mode) and `VisionErrorCode` gained `'modelDamaged'`
+  (the job's twin, when the status changed after the screen read it). No schema change.
 - **Translate view (text path)** — `translateStart(req: TranslateRequest): Promise<TranslateJob>`,
   `translateCancel(jobId)`, `getActiveTranslateJob(): Promise<TranslateJob | null>` (remount
   recovery), streams `onTranslateToken`/`onTranslateDone`/`onTranslateError`. Record:
-  `architecture.md` "Translation sidecar — design record" (TG waves).
+  `architecture.md` "Translation sidecar — design record" (TG waves). #913: `TranslateErrorCode`
+  gained `'modelDamaged'` (the start check refused a weight a check found damaged; additive, the
+  screen keeps its unknown-code fallback).
   Wave #156–#165 additions (2026-08-09): `TranslateErrorCode` gained `'tooLong'` and
   `shared/types.ts` the `TRANSLATE_MAX_TEXT_CHARS = 200_000` paste bound (#160 BE-3);
   `AppStatus` carries the additive gates `translationAvailable: boolean` (issue #40) and
@@ -2157,9 +2714,9 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (157 channels since #530 added `engine:recheck`; 156 since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
+`shared/ipc.ts` (158 channels since #888 added `app:saveBeforeCloseDone`; 157 since #530 added `engine:recheck`; 156 since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
 sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
-(now 3, `packs:changed` added; #530 added `engine:problemsChanged` to `EVENTS`) are separate constants, #259) against this file then found **16** that
+(7 since #888 added `app:saveBeforeClose`; 3 at the sweep, `packs:changed` added; #530 added `engine:problemsChanged` to `EVENTS`) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented
 calls that arrived one at a time. Listed here so the declared source of truth is complete; each
 one's behaviour stays owned by the design record named beside it.

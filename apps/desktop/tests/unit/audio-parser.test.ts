@@ -3,6 +3,7 @@ import {
   AudioParser,
   AUDIO_ENGINE_CANNOT_RUN_MESSAGE,
   AUDIO_EXTENSIONS,
+  AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE,
   AUDIO_NEEDS_TRANSCRIBER_MESSAGE,
   AUDIO_SEGMENT_MAX_TOKENS,
   AUDIO_SEGMENT_TARGET_TOKENS,
@@ -19,6 +20,7 @@ import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/c
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
 import { t } from '../../src/shared/i18n'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 
 // Phase 36 — the AudioParser with a FAKE transcriber behind the injection seam (the
 // wave-3 testing posture: CI is zero-binary/zero-audio; the real path lives in the
@@ -256,23 +258,34 @@ describe('AudioParser', () => {
     expect((err as Error).message).not.toContain('0xc000001d')
   })
 
-  it('#530: an EngineCannotRunError maps to the voice-engine copy, not the generic failure', async () => {
-    const refused: Transcriber = {
-      id: 'fake',
-      transcribe: async () => {
-        throw new EngineCannotRunError('whisper-cli', {
+  // #530: the OS refused to start the voice engine; #869: the speech model's path has no spelling the
+  // engine can read on this Windows command line. Each says what is wrong, not the generic failure.
+  it.each<[string, () => Error, string, string]>([
+    [
+      '#530: an EngineCannotRunError maps to the voice-engine copy',
+      () =>
+        new EngineCannotRunError('whisper-cli', {
           family: 'whisper_cpp',
           reason: 'library-missing',
           os: 'linux',
           name: 'libgomp.so.1',
           exit: 'exit code 127'
-        })
+        }),
+      AUDIO_ENGINE_CANNOT_RUN_MESSAGE,
+      'libgomp'
+    ],
+    ['#869: a WhisperPathError maps to the model-path copy', () => new WhisperPathError('-m'), AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE, 'whisper-cli']
+  ])('%s, not the generic failure', async (_label, error, message, detail) => {
+    const refused: Transcriber = {
+      id: 'fake',
+      transcribe: async () => {
+        throw error()
       }
     }
     const err = await AudioParser.parse('meeting.mp3', { transcriber: refused }).catch((e) => e)
-    expect((err as Error).message).toBe(AUDIO_ENGINE_CANNOT_RUN_MESSAGE)
+    expect((err as Error).message).toBe(message)
     expect((err as Error).message).not.toBe(AUDIO_TRANSCRIPTION_FAILED_MESSAGE)
-    expect((err as Error).message).not.toContain('libgomp') // persisted on the document row: no detail
+    expect((err as Error).message).not.toContain(detail) // persisted on the document row: no detail
   })
 
   it('forwards progress + workDir to the transcriber', async () => {

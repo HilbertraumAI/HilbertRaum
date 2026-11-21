@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -10,19 +10,10 @@ import { randomUUID } from 'node:crypto'
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 // Mutable save-dialog result so a test can drive the export CSV write (default = user cancelled), plus
-// the LAST save-dialog options (U5 / §6.2) so a test can assert the per-export title/filter/extension.
-type SaveDialogOptions = {
-  title?: string
-  defaultPath?: string
-  filters?: Array<{ name: string; extensions: string[] }>
-}
-const dialogState = vi.hoisted(() => ({
-  saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
-  lastSaveOptions: undefined as SaveDialogOptions | undefined,
-  // An optional gate a test can set to HOLD a save-dialog (and thus an export run) in flight — used to
-  // prove the SKA-25 empty-handle cancel is a boundary no-op against a genuinely running run.
-  gate: undefined as Promise<void> | undefined
-}))
+// the LAST save-dialog options (U5 / §6.2) so a test can assert the per-export title/filter/extension, and an
+// optional gate a test can set to HOLD a save-dialog (and thus an export run) in flight — used to prove the
+// SKA-25 empty-handle cancel is a boundary no-op against a genuinely running run.
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
@@ -31,16 +22,32 @@ vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => null },
   dialog: {
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
-    // Called as showSaveDialog(options) in tests (no focused window). Capture the options so a test can
-    // assert the dialog the user would see, optionally BLOCK on a test gate, then return the result.
-    showSaveDialog: async (...args: unknown[]) => {
-      dialogState.lastSaveOptions = (args.length > 1 ? args[1] : args[0]) as SaveDialogOptions
-      if (dialogState.gate) await dialogState.gate
-      return dialogState.saveResult
-    }
+    // Called as showSaveDialog(options) in tests (no focused window).
+    showSaveDialog: saveDialog.showSaveDialog
   },
   app: { getVersion: () => '0.0.0-test' }
 }))
+// #838: a pass-through `node:fs/promises` (everything hits the real filesystem). Arming `failSyncUnder` with a folder
+// makes the next `open` of a file in that folder return a handle whose fsync fails; the flag is consumed, so a row can
+// check that the export really reached that step. A plain `writeFile` never goes through `open`, so it cannot be failed
+// this way: that is the point of the row that uses it.
+const fsFaults = vi.hoisted(() => ({ failSyncUnder: null as string | null }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const open = (async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args)
+    const dir = fsFaults.failSyncUnder
+    if (dir != null && String(args[0]).startsWith(dir)) {
+      fsFaults.failSyncUnder = null
+      handle.sync = async (): Promise<void> => {
+        throw Object.assign(new Error('EIO: injected fsync failure'), { code: 'EIO' })
+      }
+    }
+    return handle
+  }) as typeof actual.open
+  const mocked = { ...actual, open }
+  return { ...mocked, default: mocked }
+})
 
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
 import {
@@ -60,7 +67,7 @@ import { getSkill } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import type { RunnableTool, RunnableToolSet, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls } from '../helpers/hang-budget'
+import { untilValue } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seedStoredTextDoc } from '../helpers/doc-fixtures'
 import { writeSkillPackage, type SkillSpec } from '../helpers/skill-fixtures'
@@ -208,20 +215,16 @@ function makeUserSkillHarness(statementText: string): Harness {
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 async function pollUntilTerminal(runHandle: string): Promise<SkillRunState> {
-  for (let i = 0; i < hangPolls(50, 1); i++) {
-    const { result } = await invoke(handlers, IPC.getSkillRun, runHandle)
-    const state = result as SkillRunState | null
-    if (state && state.state !== 'running') return state
-    await flush()
-  }
-  throw new Error('run did not terminate')
+  return untilValue(async () => {
+    const state = (await invoke(handlers, IPC.getSkillRun, runHandle)).result as SkillRunState | null
+    return state && state.state !== 'running' ? state : undefined
+  }, `skill run ${runHandle} reaching a terminal state`)
 }
 
 beforeEach(() => {
   ipcState.handlers.clear()
-  dialogState.saveResult = { canceled: true }
-  dialogState.lastSaveOptions = undefined
-  dialogState.gate = undefined
+  saveDialog.reset()
+  fsFaults.failSyncUnder = null
 })
 
 /** Run a tool to a terminal state via the IPC channels (returns the final ids/counts-only state). */
@@ -400,7 +403,7 @@ describe('skills tool-run IPC (S11b)', () => {
     // The export is a different sink path (dispatch export case + IPC saveTextFile): the secret IS in
     // the user-chosen CSV (correct) but must never reach the audit stream.
     const out = join(tempDir(), 'export.csv')
-    dialogState.saveResult = { canceled: false, filePath: out }
+    saveDialog.result = { canceled: false, filePath: out }
     await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
     expect(readFileSync(out, 'utf8')).toContain(SENTINEL)
     // The audit recorded the run lifecycle (started/done) but NEVER the transaction content.
@@ -636,7 +639,7 @@ describe('skills tool-run IPC — U6 run lifecycle (SKA-6/17/25/29)', () => {
     await runTool(skillInstallId, conversationId, 'extract_transactions')
     // Hold the export in flight on the save dialog.
     let openGate = (): void => {}
-    dialogState.gate = new Promise<void>((res) => {
+    saveDialog.gate = new Promise<void>((res) => {
       openGate = () => res()
     })
     const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
@@ -658,7 +661,7 @@ describe('skills tool-run IPC — U6 run lifecycle (SKA-6/17/25/29)', () => {
     // A REAL handle DOES cancel it (the abort is honoured once the dialog releases).
     await invoke(handlers, IPC.cancelSkillRun, start.run.runHandle)
     openGate()
-    dialogState.gate = undefined
+    saveDialog.gate = undefined
     const terminal = await pollUntilTerminal(start.run.runHandle)
     expect(terminal.state).not.toBe('running')
   })
@@ -682,7 +685,7 @@ describe('skills tool-run IPC — two conversations, same document (A2 semantics
     await runTool(skillInstallId, convA, 'extract_transactions') // give the export data
     // Hold a run on the document open (conversation A's export parked on the save dialog).
     let openGate = (): void => {}
-    dialogState.gate = new Promise<void>((res) => {
+    saveDialog.gate = new Promise<void>((res) => {
       openGate = () => res()
     })
     const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
@@ -708,7 +711,7 @@ describe('skills tool-run IPC — two conversations, same document (A2 semantics
 
     // Release the dialog; once A is terminal + cleared, conversation B's turn proceeds normally.
     openGate()
-    dialogState.gate = undefined
+    saveDialog.gate = undefined
     await pollUntilTerminal(startA.run.runHandle)
     await invoke(handlers, IPC.clearSkillRun, startA.run.runHandle)
     const after = await runTool(skillInstallId, convB, 'validate_statement_balances')
@@ -724,7 +727,7 @@ describe('skills tool-run IPC — two conversations, same document (A2 semantics
     await runTool(skillInstallId, convA, 'extract_transactions')
     // Hold conversation A's export on its document open…
     let openGate = (): void => {}
-    dialogState.gate = new Promise<void>((res) => {
+    saveDialog.gate = new Promise<void>((res) => {
       openGate = () => res()
     })
     const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
@@ -745,7 +748,7 @@ describe('skills tool-run IPC — two conversations, same document (A2 semantics
     const stateA = (await invoke(handlers, IPC.getSkillRun, startA.run.runHandle)).result as SkillRunState
     expect(stateA.state).toBe('running')
     openGate()
-    dialogState.gate = undefined
+    saveDialog.gate = undefined
     await pollUntilTerminal(startA.run.runHandle)
   })
 })
@@ -815,7 +818,7 @@ describe('skills export_transactions_csv IPC (S11c)', () => {
     )
     await runTool(skillInstallId, conversationId, 'extract_transactions')
     const out = join(tempDir(), 'export.csv')
-    dialogState.saveResult = { canceled: false, filePath: out }
+    saveDialog.result = { canceled: false, filePath: out }
     const final = await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
     expect(final.state).toBe('done')
     expect(final.transactionCount).toBe(2)
@@ -835,7 +838,7 @@ describe('skills export_transactions_csv IPC (S11c)', () => {
   it('a cancelled save persists no file and reports it calmly', async () => {
     const { skillInstallId, conversationId } = makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10')
     await runTool(skillInstallId, conversationId, 'extract_transactions')
-    dialogState.saveResult = { canceled: true } // user dismissed the save dialog
+    saveDialog.result = { canceled: true } // user dismissed the save dialog
     const final = await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
     // A dismissed dialog is a CANCEL, not a failure (B1) — the run reports it calmly, with no
     // failure copy (the renderer shows the calm "cancelled" row, not a red error).
@@ -852,7 +855,7 @@ describe('skills redact_document IPC (S11d)', () => {
       `Contact ${SECRET_EMAIL} on 2026-03-15 about IBAN AT61 1904 3002 3457 3201.`
     )
     const out = join(tempDir(), 'redacted.txt')
-    dialogState.saveResult = { canceled: false, filePath: out }
+    saveDialog.result = { canceled: false, filePath: out }
     const final = await runTool(skillInstallId, conversationId, 'redact_document', true)
     expect(final.state).toBe('done')
     // Phase 7 (D78): no model runs in this IPC harness (`ctx.runtime` is absent), so the redaction
@@ -870,6 +873,23 @@ describe('skills redact_document IPC (S11d)', () => {
     expect(JSON.stringify(stateRaw)).not.toContain(SECRET_EMAIL)
     expect(JSON.stringify(stateRaw)).not.toContain(out)
   })
+
+  // #838: the skills text exports (transactions and invoice CSV, invoice JSON/XML, redacted.txt, edited.txt) were
+  // written with a plain `writeFile` straight onto the chosen file, so a failure part-way through destroyed the file the
+  // user chose to replace, while the run said "Nothing was changed." They now take the shared tmp → fsync → rename tail.
+  it('a failed write while replacing an existing redacted.txt keeps the old file, leaves no tmp sibling and fails the run', async () => {
+    const { skillInstallId, conversationId } = makeRedactionHarness(`Contact ${SECRET_EMAIL} today.`)
+    const dir = tempDir()
+    const out = join(dir, 'redacted.txt')
+    writeFileSync(out, 'PREVIOUS COPY')
+    saveDialog.result = { canceled: false, filePath: out }
+    fsFaults.failSyncUnder = dir
+    const final = await runTool(skillInstallId, conversationId, 'redact_document', true)
+    expect(fsFaults.failSyncUnder).toBeNull() // consumed: the export opened a file in that folder and reached its fsync
+    expect(final.state).toBe('failed')
+    expect(readFileSync(out, 'utf8')).toBe('PREVIOUS COPY')
+    expect(readdirSync(dir)).toEqual(['redacted.txt'])
+  })
 })
 
 // U5 (audit §6.2) — each export gets its OWN save-dialog metadata (title / filter label / extension),
@@ -880,7 +900,7 @@ describe('skills redact_document IPC (S11d)', () => {
 describe('skills export save-dialog metadata (U5 / §6.2)', () => {
   const tEn = (key: MessageKey): string => t('en', key)
   const firstFilter = (): { name: string; extensions: string[] } | undefined =>
-    dialogState.lastSaveOptions?.filters?.[0]
+    saveDialog.lastOptions?.filters?.[0]
 
   it.each<{
     name: string
@@ -932,8 +952,8 @@ describe('skills export save-dialog metadata (U5 / §6.2)', () => {
     const { skillInstallId, conversationId } = harness()
     if (preTool) await runTool(skillInstallId, conversationId, preTool)
     await runTool(skillInstallId, conversationId, tool, true)
-    expect(dialogState.lastSaveOptions?.title).toBe(tEn(title))
-    if (notTitle) expect(dialogState.lastSaveOptions?.title).not.toBe(tEn(notTitle))
+    expect(saveDialog.lastOptions?.title).toBe(tEn(title))
+    if (notTitle) expect(saveDialog.lastOptions?.title).not.toBe(tEn(notTitle))
     expect(firstFilter()).toEqual({ name: tEn(filter), extensions: [ext] })
   })
 })

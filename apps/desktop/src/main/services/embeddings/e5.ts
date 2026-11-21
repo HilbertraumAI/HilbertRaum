@@ -13,6 +13,7 @@ import {
 import { isEngineCannotRunError } from '../runtime/engine-load'
 import { truncateToContext } from '../runtime/context-budget'
 import { log } from '../logging'
+import type { BoundModelStartCheck } from '../models'
 
 // Real on-device embedder (spec §6, §9.2). Drops in behind the existing
 // `Embedder` interface with the SAME id/dimensions as the E5-small manifest, so the
@@ -80,6 +81,13 @@ export interface E5EmbedderOptions extends E5EmbedderDeps {
   dimensions?: number
   /** Texts per `/v1/embeddings` request (default 32). */
   batchSize?: number
+  /**
+   * #913 (G-4 d2): checks the E5's file before each cold start spawns, inside the single-flight start. The composition
+   * passes the hashing check: the first start in a workspace hashes the file (the vectors it writes are stored in the
+   * index, so a damaged file would spoil it), later ones read the cache. The start-abort signal goes in, so a lock or
+   * quit during the hash ends the start at once. `damaged` latches a `start` failure. Absent ⇒ no check.
+   */
+  checkModel?: BoundModelStartCheck
 }
 
 interface EmbeddingResponse {
@@ -345,55 +353,31 @@ export class E5Embedder implements Embedder {
     if (!this.starting) {
       const abort = new AbortController()
       this.startAbort = abort
-      const ctx = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
-      // RT-4: size the physical batch above the context so multiple in-context inputs of a
-      // 32-input request co-decode per ubatch instead of the 512 embedding-mode default
-      // processing them ~1 at a time. `max(ctx, …)` keeps batch ≥ ctx for raised contexts.
-      const physicalBatch = Math.max(ctx, EMBED_PHYSICAL_BATCH_TOKENS)
-      const server = new LlamaServer({
-        binPath: this.opts.binPath,
-        modelPath: this.opts.modelPath,
-        contextTokens: ctx,
-        // `--embedding` switches llama-server to the embeddings endpoint; mean pooling
-        // is what E5 expects. `--device none` PINS the embedder to CPU
-        // (architecture.md GPU record §7): the 384-dim model gains little from a GPU,
-        // and pinning keeps ingestion immune to driver flakiness and VRAM contention
-        // with the chat model. `--batch-size`/`--ubatch-size` raise the physical batch
-        // for multi-sequence throughput (RT-4; see EMBED_PHYSICAL_BATCH_TOKENS).
-        extraArgs: [
-          '--embedding',
-          '--pooling',
-          'mean',
-          '--device',
-          'none',
-          '--batch-size',
-          String(physicalBatch),
-          '--ubatch-size',
-          String(physicalBatch)
-        ],
-        spawn: this.opts.spawn,
-        fetchImpl: this.opts.fetchImpl,
-        findPort: this.opts.findPort,
-        healthTimeoutMs: this.opts.healthTimeoutMs,
-        healthIntervalMs: this.opts.healthIntervalMs,
-        // #244: let a lock/quit teardown abort this start mid-health-wait (the child is killed
-        // via the normal stop path; start() rejects AbortError — never latched below).
-        startAbortSignal: abort.signal,
-        // #634: a crash after the start drops the server, so the next embed() starts a fresh one.
-        onUnexpectedExit: (info) => this.handleUnexpectedExit(server, info)
-      })
-      this.starting = server
-        .start()
-        .then(() => {
-          this.server = server
-          this.emitResidencyChange()
-        })
+      // #913 (G-4 d2): the file check runs first, inside this single-flight start, and nothing spawns
+      // until it says `ok`; a teardown aborts it like the health wait. Without a check the spawn stays
+      // synchronous, as before.
+      const check = this.opts.checkModel
+      const launched = check
+        ? check(abort.signal).then((verdict) => {
+            if (abort.signal.aborted) throw new DOMException('The search model start was aborted', 'AbortError')
+            if (verdict === 'damaged') throw new EmbedderError('start', 'The search model file failed its check')
+            return this.launch(abort)
+          })
+        : this.launch(abort)
+      this.starting = launched
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))
           // #244: a teardown-ABORTED start is not a load fault — never latch
           // `startFailed`; the next embed() after unlock must attempt a fresh start.
           if (isStartAbortError(err) || abort.signal.aborted) {
             throw interrupted(this.stopped ? STOPPED_MESSAGE : SUSPENDING_MESSAGE)
+          }
+          // #913: the check found the file damaged — already the path-free `start` failure (the copy
+          // sends the user to "Check all model files"). Latched like a load fault; a re-download
+          // (`onModelInstalled`), a clean check of the file (`rearmStartRefusals`) or a lock re-arms it.
+          if (isEmbedderError(err)) {
+            this.startFailed = err
+            throw err
           }
           // #530: the OS refused the program — its own typed, path-free error and copy.
           // #634: anything else becomes the path-free `start` failure — except a bind race, which
@@ -430,6 +414,51 @@ export class E5Embedder implements Embedder {
     if (this.tearingDown) throw interrupted(SUSPENDING_MESSAGE)
     if (!this.server) throw this.failed('Embeddings server failed to start')
     return this.server
+  }
+
+  /** Spawn the sidecar for the start `abort` belongs to and install it once healthy. */
+  private launch(abort: AbortController): Promise<void> {
+    const ctx = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
+    // RT-4: size the physical batch above the context so multiple in-context inputs of a
+    // 32-input request co-decode per ubatch instead of the 512 embedding-mode default
+    // processing them ~1 at a time. `max(ctx, …)` keeps batch ≥ ctx for raised contexts.
+    const physicalBatch = Math.max(ctx, EMBED_PHYSICAL_BATCH_TOKENS)
+    const server = new LlamaServer({
+      binPath: this.opts.binPath,
+      modelPath: this.opts.modelPath,
+      contextTokens: ctx,
+      // `--embedding` switches llama-server to the embeddings endpoint; mean pooling
+      // is what E5 expects. `--device none` PINS the embedder to CPU
+      // (architecture.md GPU record §7): the 384-dim model gains little from a GPU,
+      // and pinning keeps ingestion immune to driver flakiness and VRAM contention
+      // with the chat model. `--batch-size`/`--ubatch-size` raise the physical batch
+      // for multi-sequence throughput (RT-4; see EMBED_PHYSICAL_BATCH_TOKENS).
+      extraArgs: [
+        '--embedding',
+        '--pooling',
+        'mean',
+        '--device',
+        'none',
+        '--batch-size',
+        String(physicalBatch),
+        '--ubatch-size',
+        String(physicalBatch)
+      ],
+      spawn: this.opts.spawn,
+      fetchImpl: this.opts.fetchImpl,
+      findPort: this.opts.findPort,
+      healthTimeoutMs: this.opts.healthTimeoutMs,
+      healthIntervalMs: this.opts.healthIntervalMs,
+      // #244: let a lock/quit teardown abort this start mid-health-wait (the child is killed
+      // via the normal stop path; start() rejects AbortError — never latched, see `ensureStarted`).
+      startAbortSignal: abort.signal,
+      // #634: a crash after the start drops the server, so the next embed() starts a fresh one.
+      onUnexpectedExit: (info) => this.handleUnexpectedExit(server, info)
+    })
+    return server.start().then(() => {
+      this.server = server
+      this.emitResidencyChange()
+    })
   }
 
   /**

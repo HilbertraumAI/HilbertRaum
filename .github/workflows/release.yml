@@ -239,7 +239,7 @@ jobs:
               ' models run in demo mode with simulated answers) and an **AI model** of your' +
               ' choice. Two optional downloads are offered in the app only when you need them:' +
               ' the knowledge-pack tools, and the **text-recognition (OCR) files** for scanned' +
-              ' PDFs and photos (German + English, about 4 MB; offered on the scan or photo in' +
+              ' PDFs and photos (German, English and page orientation, about 8.6 MB; offered on the scan or photo in' +
               ' Documents and on the AI Model screen). Every download asks first and is' +
               ' SHA-256-verified. Offline installs:' +
               ' the llama-runtime-*.zip assets below hold the same verified engine build —' +

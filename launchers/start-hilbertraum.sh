@@ -18,7 +18,8 @@ if [ "${1:-}" = "--check" ]; then CHECK=1; fi
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export HILBERTRAUM_DRIVE_ROOT="$DIR"
-# One source of truth: the app reads the SAME manifests the drive scripts verified.
+# The model list reads the SAME manifests the drive scripts verified. The AI-engine pins
+# always come from the app's own copy, never from this folder (#842).
 export HILBERTRAUM_MANIFESTS_DIR="$DIR/model-manifests"
 
 # Find the AppImage on the drive and count the matches.

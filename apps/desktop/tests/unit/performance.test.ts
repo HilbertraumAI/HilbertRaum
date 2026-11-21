@@ -300,7 +300,8 @@ describe('placementVerdict', () => {
       ['gemma4-12b-it-qat-q4', 8],
       ['gemma4-26b-a4b-it-qat-q4', 16],
       ['qwen3.6-27b-q5', 20],
-      ['qwen3.5-35b-a3b-ud-q4kxl', 24]
+      // (was the 35B-A3B on 24 GiB until §6.8: its measured projection, 21,244 + 1,024, fits that card)
+      ['gemma4-31b-it-qat-q4', 20]
     ])('%s on a %i GiB card: the old estimate said "gpu", the picker says no fit — the row now agrees (partial)', (id, gib) => {
       const m = byId(id)
       const v = estimate(m, gib)
@@ -410,7 +411,7 @@ describe('attributedGpuFigures', () => {
 
 describe('loadedAtOnceMb', () => {
   const row = (over: Partial<ResidentModelRow>): ResidentModelRow => ({
-    role: 'vision', modelId: 'm', sizeOnDiskGb: 1, device: 'cpu', loaded: false, lifetime: 'idle',
+    role: 'vision', modelId: 'm', sizeOnDiskGb: 1, onDrive: true, fileCheck: 'ok', device: 'cpu', loaded: false, lifetime: 'idle',
     gpuLayers: null, totalLayers: null, ...over
   })
   /** A card machine: chat and translation on the card, the translation live with 20 of 49 layers offloaded. */
@@ -458,8 +459,84 @@ describe('loadedAtOnceMb', () => {
     expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: bothOnCpu, verdict: { ...estimate, kind: 'cpu' } })).toBe(17408)
   })
 
+  // A lite drive on a card machine: the chat row is the only one on the drive and it runs on the card, so nothing
+  // lands on the processor. That is 0 (the screen leaves the line out), not null: null means nothing is installed.
+  it('discrete: a drive whose only model is a card-resident chat totals 0', () => {
+    const chatOnly = rows.map((r) => (r.role === 'chat' ? r : { ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnly, verdict: estimate })).toBe(0)
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnly, verdict: { ...estimate, estimated: false, kind: 'partial', spillMb: 0 } })).toBe(0)
+  })
+
+  it('discrete: nothing installed totals null', () => {
+    const none = rows.map((r) => ({ ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: none, verdict: estimate })).toBeNull()
+  })
+
+  it('discrete: a card-resident chat plus a processor row on the drive totals that row alone', () => {
+    const withReranker = rows.map((r) => (r.role === 'chat' || r.role === 'reranker' ? r : { ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: withReranker, verdict: estimate })).toBe(1126)
+  })
+
+  it('discrete: a card-resident chat whose observed spill is more than 0 still counts the spill', () => {
+    const chatOnly = rows.map((r) => (r.role === 'chat' ? r : { ...r, onDrive: false, loaded: false }))
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: chatOnly, verdict: { ...estimate, estimated: false, kind: 'partial', spillMb: 2100 } })).toBe(2100)
+  })
+
   it('unified: one pool — the full sum, whatever the rows say', () => {
     expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(17408)
+  })
+
+  // #914 (owner decision G-5 (c)): a row still names the catalog's model when its files are not on this drive, but
+  // nothing will load it, so it adds nothing on any class. Here the vision (3.0 GiB = 3,072 MiB) and translation rows,
+  // neither loaded: on cpu and unified the translation row's whole 6.8 GiB (6,963.2 MiB) goes too; on discrete a
+  // translation that is not live adds 0 anyway, so the vision row carries the proof there (4,915.2 − 3,072 MiB).
+  const missing = rows.map((r) =>
+    r.role === 'vision' || r.role === 'translation'
+      ? { ...r, onDrive: false, loaded: false, gpuLayers: null, totalLayers: null }
+      : r
+  )
+  it.each([
+    ['cpu', missing.map((r) => ({ ...r, device: 'cpu' as const })), { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408 - 3072 - 6963],
+    ['discrete', missing, estimate, 4915 - 3072],
+    ['unified', missing, { ...estimate, budgetMb: 36_864 }, 17408 - 3072 - 6963]
+  ] as const)('#914 %s: a row whose files are not on this drive adds nothing', (memoryClass, classRows, verdict, expected) => {
+    expect(loadedAtOnceMb({ memoryClass, rows: classRows, verdict })).toBe(expected)
+  })
+
+  // #914 code review: loaded beats `onDrive`. A resident model's memory is in use whatever the drive says now (a weight
+  // deleted while the runtime holds it open, a manifest removed under a running model), so it counts as if on the
+  // drive: the live translation spill on discrete (the 9,036 MiB of the all-on-drive case), the vision row's 3.0 GiB
+  // on cpu.
+  it.each([
+    ['discrete', 'translation' as const, estimate, 9036],
+    ['cpu', 'vision' as const, { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408]
+  ] as const)('#914 %s: a loaded %s row counts even when its files are not on this drive', (memoryClass, role, verdict, expected) => {
+    const classRows = rows.map((r) => ({
+      ...r,
+      ...(memoryClass === 'cpu' ? { device: 'cpu' as const } : {}),
+      ...(r.role === role ? { onDrive: false, loaded: true } : {})
+    }))
+    expect(loadedAtOnceMb({ memoryClass, rows: classRows, verdict })).toBe(expected)
+  })
+
+  // #933: a row on the drive whose files the checksum cache knows are damaged, or that has no checksum on record, will
+  // not load either (every start refuses it), so it adds nothing on any class; loaded beats it, as for `onDrive`. Here
+  // the vision row (3.0 GiB = 3,072 MiB), not loaded, then loaded.
+  it.each([
+    ['cpu', { ...estimate, kind: 'cpu' as const, budgetMb: 16_384 }, 17408],
+    ['discrete', estimate, 9036],
+    ['unified', { ...estimate, budgetMb: 36_864 }, 17408]
+  ] as const)('#933 %s: a damaged or no-checksum row adds nothing unless it is loaded', (memoryClass, verdict, all) => {
+    const classRows = (over: Partial<ResidentModelRow>): ResidentModelRow[] =>
+      rows.map((r) => ({
+        ...r,
+        ...(memoryClass === 'cpu' ? { device: 'cpu' as const } : {}),
+        ...(r.role === 'vision' ? over : {})
+      }))
+    for (const fileCheck of ['damaged', 'unverified'] as const) {
+      expect(loadedAtOnceMb({ memoryClass, rows: classRows({ fileCheck }), verdict })).toBe(all - 3072)
+      expect(loadedAtOnceMb({ memoryClass, rows: classRows({ fileCheck, loaded: true }), verdict })).toBe(all)
+    }
   })
 
   // Wave 8 ruling (d)/NF-3 (step 4-8): a `'gpu'`-posture reranker row is no longer counted

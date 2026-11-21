@@ -72,17 +72,21 @@ export const SECURITY_TEXT: readonly string[] = [
   'settings.changePassword',
   'settings.developer.toggle',
   'settings.developer.hint',
+  // #932: when a model with no checksum on record may run (developer mode and the drive policy).
+  'models.noChecksum.hint',
   'docs.exportOriginal.warning',
   'review.export.encryptionWarning',
   'packExport.privacy',
   'packExport.integrity.hashNote',
   'packExport.sources.pathNote',
   'diag.audit.workspace_lock_failed',
+  'diag.audit.workspace_working_copy_lost',
   // Network and offline.
   'settings.tab.privacy',
   'settings.network',
   'indicator',
   'models.confirm.hint',
+  'models.engineConfirm.hint',
   'diag.audit.offline_guard_violation',
   'skills.intro',
   'skills.perm',
@@ -197,12 +201,12 @@ export const EXACT_MATCH_SITES: readonly ExactMatchSite[] = [
       'the checked figures (routedQuestions, skills/analysis/bank-statement.ts).'
   },
   {
-    file: 'src/main/services/analysis/router.ts',
+    file: 'src/main/services/analysis/example-chips.ts',
     find: { calls: 'catalogValues', argument: 0 },
     reason:
       'The document chat recognises this example question by its text: the summarize chip by its ' +
-      'whole text, the every-mention chip by the text around its quotes (catalogValues, ' +
-      'analysis/router.ts).'
+      'whole text, the every-mention chip by the text around its quotes, for the router and for ' +
+      'the single-fact check of a whole-document skill (catalogValues, analysis/example-chips.ts).'
   }
 ]
 

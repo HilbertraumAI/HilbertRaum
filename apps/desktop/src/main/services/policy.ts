@@ -330,6 +330,23 @@ export function loadPolicy(
   return loaded
 }
 
+/**
+ * Effective checksum leniency (spec §7.4): "developer" is the user toggle OR a dev build — but the drive POLICY is
+ * authoritative and can only restrict. On a commercial drive (`require_sha256_match: true` /
+ * `allow_unverified_models: false`) unverified weights are rejected no matter what the toggle says; this also disables
+ * the chat mock fallback. One rule for every model role (#913): the chat start gate and the AI Model screen
+ * (`registerModelIpc`), the images status (`vision/status.ts`) and the start check the other roles run before they
+ * spawn (`main/index.ts`). The policy is read only for a developer: for anyone else the answer is no.
+ */
+export function developerLeniency(
+  ctx: { paths: { configPath: string }; isDev: boolean },
+  developerModeSetting: boolean
+): boolean {
+  if (!developerModeSetting && !ctx.isDev) return false
+  const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
+  return policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
+}
+
 export interface EffectiveNetwork {
   /** Does the policy permit ANY network (model downloads or update checks)? */
   networkAllowedByPolicy: boolean

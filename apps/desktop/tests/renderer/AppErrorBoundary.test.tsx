@@ -22,7 +22,7 @@ vi.mock('../../src/renderer/screens/PerformanceScreen', () => ({
 import { App } from '../../src/renderer/App'
 import { UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { DEFAULT_SETTINGS, type AppSettings, type PolicyStatus, type WorkspaceStateInfo } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 import { appStatus, makePolicyStatus } from '../helpers/status'
 
 const unlocked: WorkspaceStateInfo = {
@@ -55,6 +55,7 @@ afterEach(() => {
   cleanup()
   errSpy.mockRestore()
   window.localStorage.clear()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('App — per-screen error boundary (FE-1)', () => {

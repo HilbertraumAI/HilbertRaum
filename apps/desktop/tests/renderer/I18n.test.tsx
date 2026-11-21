@@ -5,13 +5,14 @@ import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { ToastProvider } from '../../src/renderer/components'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
+import { BEFORE_CLOSE_SAVE_BOUND_MS, saveAllBeforeClose } from '../../src/renderer/lib/beforeClose'
 import {
   I18nProvider,
   UI_LANGUAGE_STORAGE_KEY,
   resolvePreUnlockLanguage,
   useT
 } from '../../src/renderer/i18n'
-import { DEFAULT_SETTINGS, type AppSettings, type WorkspaceStateInfo } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type AppSettings, type SaveBeforeCloseResult } from '../../src/shared/types'
 import {
   UI_LANGUAGES,
   UI_LANGUAGE_CODES,
@@ -19,27 +20,21 @@ import {
   type UiLanguage,
   type UiLanguageSetting
 } from '../../src/shared/i18n'
-import { appShellStubs } from '../helpers/app-shell'
+import { LOCKED_ENCRYPTED_WORKSPACE, appShellStubs } from '../helpers/app-shell'
 import { deferred } from '../helpers/deferred'
 import { renderInLanguage } from '../helpers/render-language'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
 
 // Phase 39 — renderer language resolution (i18n record §3.2, D-L2/D-L3): the pre-unlock
 // gate resolves from the localStorage mirror (falling back to navigator.language),
 // the Settings → General picker patches `uiLanguage` and switches the UI live, and
 // the RESOLVED language is mirrored to localStorage + `<html lang>`.
 
-const LOCKED: WorkspaceStateInfo = {
-  state: 'locked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
-
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
   document.documentElement.lang = ''
+  assertNoUnexpectedApiCalls()
 })
 
 describe('resolvePreUnlockLanguage', () => {
@@ -60,7 +55,7 @@ describe('resolvePreUnlockLanguage', () => {
 
 describe('pre-unlock gate language (App + WorkspaceGate)', () => {
   it('renders the locked gate in English with no stored state', async () => {
-    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE) }))
     render(<App />)
     expect(
       await screen.findByRole('heading', { name: 'Unlock your workspace' })
@@ -70,7 +65,7 @@ describe('pre-unlock gate language (App + WorkspaceGate)', () => {
 
   it('renders the locked gate in German when the mirror says de (German render smoke)', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
-    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE) }))
     render(<App />)
     expect(
       await screen.findByRole('heading', { name: 'Arbeitsbereich entsperren' })
@@ -298,7 +293,7 @@ describe('Settings → General language picker', () => {
     // Only the mirror survives into the next start: the gate must set <html lang> itself.
     document.documentElement.lang = ''
 
-    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED) }))
+    stubApi(appShellStubs({ getWorkspaceState: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE) }))
     render(<App />)
     expect(await screen.findByRole('heading', { name: t('ru', 'gate.unlock.title') })).toBeInTheDocument()
     expect(screen.getByPlaceholderText(t('ru', 'gate.passwordPlaceholder'))).toBeInTheDocument()
@@ -371,6 +366,39 @@ describe('Settings → General language picker', () => {
     await elapse(PAST_THE_PAUSE_MS)
     expect(updateSettings).toHaveBeenCalledTimes(1)
     expect(toasts()).toEqual([t('de', 'settings.saved')])
+  })
+
+  // #888: a window close runs no unmount, so a choice still inside its pause was lost (PR #823 saved it
+  // only on the pause, a blur or leaving the tab). The save before the window closes sends it, and
+  // answers main only once that save has answered.
+  it('a choice still inside its pause is saved when the window closes, before the close-time save answers (#888)', async () => {
+    const { updateSettings, release } = stubSettings({ ...DEFAULT_SETTINGS }, { hold: true })
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    let answer: SaveBeforeCloseResult | undefined
+    void saveAllBeforeClose().then((a) => (answer = a))
+    await elapse(0)
+    expect(updateSettings).toHaveBeenCalledWith({ uiLanguage: 'de' }) // the pause has not passed
+    expect(answer).toBeUndefined() // waiting for that save
+    release()
+    await elapse(0)
+    expect(answer).toEqual({ unsaved: false })
+    await elapse(PAST_THE_PAUSE_MS)
+    expect(updateSettings).toHaveBeenCalledTimes(1)
+  })
+
+  // Code review round 3 (item 3): the language pick is best effort. A save of it that never answers is waited for
+  // up to the bridge's bound, and then does not make the window answer unsaved.
+  it('a language save that never answers does not make the close-time save answer unsaved (#888)', async () => {
+    stubSettings({ ...DEFAULT_SETTINGS }, { hold: true }) // never released
+    renderWithToasts()
+    const picker = await pickerOnFakeClock()
+    fireEvent.change(picker, { target: { value: 'de' } })
+    let answer: SaveBeforeCloseResult | undefined
+    void saveAllBeforeClose().then((a) => (answer = a))
+    await elapse(BEFORE_CLOSE_SAVE_BOUND_MS)
+    expect(answer).toEqual({ unsaved: false })
   })
 
   // #808, audit PA-4: the provider outlives the tab, so a choice saved by the unmount still switches

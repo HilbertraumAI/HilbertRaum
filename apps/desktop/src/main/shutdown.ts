@@ -4,6 +4,7 @@ import {
   awaitInFlightStreamsSettled
 } from './ipc/inflight'
 import { endedEarlyAbortReason } from './services/chat/ended-early'
+import { failureForLog } from './services/failure-for-log'
 import { detachVaultKey as realDetachVaultKey, log as realLog } from './services/logging'
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import type { AppContext } from './services/context'
@@ -13,6 +14,9 @@ import type { AppContext } from './services/context'
 // cannot be imported under jsdom). The will-quit handler is the only caller. The SYNCHRONOUS
 // best-effort lock the crash path and the OS session-end handler share (`emergencyLock`, #248)
 // lives here too, for the same reason.
+//
+// #956: every failure line here logs `failureForLog(err)`, as the workspace lock does: a file error
+// its code and bare system call only (its message names the drive's paths), anything else its message.
 
 /** Injection seams so a unit test can drive `performShutdown` without the real singletons. */
 export interface ShutdownDeps {
@@ -88,7 +92,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   // Nothing on this path clears the latch and the process exits, so arming it is terminal by
   // construction — exactly what quit wants.
   try {
-    ctx?.workspace.beginLock?.()
+    ctx?.workspace.beginLock()
   } catch {
     /* best-effort */
   }
@@ -167,7 +171,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
       if (!controller.signal.aborted) controller.abort(quitReason)
     }
   } catch (err) {
-    log.error('Error aborting in-flight streams on quit', String(err))
+    log.error('Error aborting in-flight streams on quit', failureForLog(err))
   }
   // #238 / #230: the five awaited steps below are bounded as a WHOLE by
   // `SHUTDOWN_OVERALL_DEADLINE_MS` (see the constant). The log flush and the lock stay OUTSIDE.
@@ -179,7 +183,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     try {
       await (ctx?.localApi?.stop() ?? Promise.resolve())
     } catch (err) {
-      log.error('Error stopping the local API on quit', String(err))
+      log.error('Error stopping the local API on quit', failureForLog(err))
     }
     try {
       await Promise.allSettled([
@@ -198,7 +202,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
         ctx?.zim?.stop() ?? Promise.resolve()
       ])
     } catch (err) {
-      log.error('Error stopping sidecars on quit', String(err))
+      log.error('Error stopping sidecars on quit', failureForLog(err))
     }
     // R1 (full-audit-2026-06-30, Phase C): deterministically await each aborted stream's SETTLE
     // (its partial-reply persistence) before lock() closes the DB — the same guarantee the lock
@@ -227,9 +231,10 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     await settleAndCleanZimTransients(ctx, log)
   }, log)
   sweepPlaintextOps(ctx, log)
-  // #238: by now no window is left (Windows/Linux quit after window-all-closed), so this line
-  // is the only visible state of a quit that is locking — and it lands in the encrypted log
-  // because it precedes the flush below.
+  // #238: by now no window is left (every quit closes the windows before `will-quit`; on
+  // Windows/Linux the main window's last close starts the quit, #910), so this line is the only
+  // visible state of a quit that is locking — and it lands in the encrypted log because it
+  // precedes the flush below.
   log.info('quit: locking workspace')
   // Flush the encrypted diagnostics log to disk while the vault key is still live (lock() zeroes it).
   // No-op for plaintext_dev (that log is appended in real time).
@@ -241,7 +246,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   try {
     ctx?.workspace.shutdown()
   } catch (err) {
-    log.error('Failed to lock workspace on quit', String(err))
+    log.error('Failed to lock workspace on quit', failureForLog(err))
   }
 }
 
@@ -268,7 +273,7 @@ async function withOverallDeadline(
   })
   // The section cannot reject today (every step is try/caught or `allSettled`); the catch makes
   // that structural, so neither a pre-deadline rejection nor an abandoned one can skip the lock.
-  const raced = section().catch((err) => log.error('quit: teardown section failed', String(err)))
+  const raced = section().catch((err) => log.error('quit: teardown section failed', failureForLog(err)))
   try {
     await Promise.race([raced, deadline])
   } finally {
@@ -289,13 +294,15 @@ export interface EmergencyLockDeps {
 
 /**
  * Lock the workspace NOW, synchronously and best-effort, for a process that is about to die
- * without `will-quit`: the `uncaughtException` crash path (`main/index.ts`) and an OS session
- * end (#248 — Windows `session-end`, macOS `powerMonitor` `shutdown`). NOT the awaited
+ * without `will-quit`: the `uncaughtException` crash path (`main/index.ts`), an OS session
+ * end (#248 — Windows `session-end`, macOS `powerMonitor` `shutdown`) and, on Linux, a termination
+ * signal or a lost session's `quit` (#964). NOT the awaited
  * `performShutdown` teardown: nothing here can be awaited, because whoever called this exits
  * or is killed as soon as it returns. In order: arm the workspace lock latch (so no content
  * surface admits new work between here and the kill), fire-and-forget the local API's stop
  * (in-process, no orphan class — only so live external sockets abort instead of dangling until
- * the OS reaps them), flush the encrypted log while the vault key is live, then
+ * the OS reaps them), abort the plaintext and knowledge-pack operations and shred the transients
+ * they registered (#964 security round), flush the encrypted log while the vault key is live, then
  * `workspace.shutdown()` = `lock()` (re-encrypt + shred the plaintext working DB; for
  * `plaintext_dev` a checkpoint + close so no `-wal`/`-shm` outlive the process, #51). Then reap
  * every registered sidecar child: on Windows the children survive the parent, so without this
@@ -303,14 +310,15 @@ export interface EmergencyLockDeps {
  * half first, the hygiene half in its OWN try so a lock throw cannot skip it). A failed lock is
  * logged and left to the next launch's recovery (`workspace.shutdown()` closes the re-opened
  * handle so the working file rests bare and newer than `.enc` — the salvage signature `init()`
- * rolls forward instead of shredding).
+ * rolls forward instead of shredding). Its duration is logged after the lock, content-free.
  */
 export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = {}): void {
   const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
   const killSidecarChildren = deps.killSidecarChildren ?? killRegisteredSidecarChildren
   const log = deps.log ?? realLog
+  const startedAt = performance.now()
   try {
-    ctx?.workspace.beginLock?.()
+    ctx?.workspace.beginLock()
   } catch {
     /* best-effort */
   }
@@ -319,11 +327,54 @@ export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = 
   } catch {
     /* best-effort */
   }
+  // #964 security round (F2): abort every plaintext and knowledge-pack operation in flight and shred the transients
+  // they registered (a preview, import, re-index, dictation, export or OCR task's decrypted `.parse*` copy; a pack
+  // operation's `library.<n>.xml`), as Lock now and the quit teardown do (#237, #301). Nothing here can await their
+  // settle, so a parser that cannot cancel has its file shredded under it: the lock's own rule at its bound. All
+  // four calls are synchronous and never throw; each has its own try all the same, as in the lock path. The pack
+  // service's `zim-transient/` cleanup is left to the next session start: kiwix-serve still runs until the reap.
+  let swept = 0
+  try {
+    ctx?.plaintextOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
+  try {
+    ctx?.zimOps?.abortAll()
+  } catch {
+    /* best-effort */
+  }
+  try {
+    swept += ctx?.plaintextOps?.sweepRegistered() ?? 0
+  } catch {
+    /* best-effort */
+  }
+  try {
+    swept += ctx?.zimOps?.sweepRegistered() ?? 0
+  } catch {
+    /* best-effort */
+  }
+  try {
+    // Before the flush, so it lands in the encrypted log; a count only.
+    if (swept > 0) log.info('emergency lock: swept registered transients', { swept })
+  } catch {
+    /* a log line must never stop the lock */
+  }
+  let lockFailed = false
   try {
     detachVaultKey()
     ctx?.workspace.shutdown()
   } catch (err) {
-    log.error('emergency lock failed — the next launch recovers the working copy', String(err))
+    lockFailed = true
+    log.error('emergency lock failed — the next launch recovers the working copy', failureForLog(err))
+  }
+  // #964 security round (F1): how long the lock took, against the 10 s Electron allows a lost session's `quit`. The
+  // key is gone by now, so this line reaches the console and a `plaintext_dev` log, not the encrypted one; the
+  // lock's phases are in the perf log (`vault_lock_done`) when HILBERTRAUM_PERF_LOG=1. Content-free.
+  try {
+    log.info('emergency lock: finished', { durationMs: Math.round(performance.now() - startedAt), lockFailed })
+  } catch {
+    /* best-effort */
   }
   try {
     killSidecarChildren()
@@ -360,8 +411,17 @@ export interface AppLifecycleDeps {
   exit: (code: number) => void
   /** `createWindow` (a macOS Dock click fires `activate` with no window open). */
   createWindow: () => void
-  /** `BrowserWindow.getAllWindows().length`. */
-  windowCount: () => number
+  /**
+   * How many MAIN windows are open: 0 or 1 (`mainWindow === null ? 0 : 1`), never
+   * `BrowserWindow.getAllWindows().length` (#910). The hidden helper windows (the OCR rasterizer,
+   * the evidence-pack print window) are windows too, and counting them kept a macOS Dock click
+   * from bringing the window back while an OCR run went on.
+   */
+  mainWindowCount: () => number
+  /** `process.platform`: macOS keeps the app open with no window, Windows and Linux quit. */
+  platform: NodeJS.Platform
+  /** `app.quit()`: the quit the main window's last close starts on Windows and Linux (#910). */
+  quit: () => void
   /**
    * `killRegisteredSidecarChildren` — reaps, synchronously and right before `exit`, whatever a
    * deadline-abandoned sidecar stop left behind (the CODE-11 crash-path reaper, reused). A no-op
@@ -375,12 +435,44 @@ export interface AppLifecycleHandlers {
   onWillQuit: (event: WillQuitEventLike) => void
   onActivate: () => void
   /**
+   * The main window is gone (its `closed` event, after the close guard let the close through,
+   * #888). On Windows and Linux that quits the app (#910): Electron's own quit
+   * (`window-all-closed`) waits for EVERY window, and a hidden helper window (an OCR run, a PDF
+   * export's print) kept the app running with no window and the workspace unlocked, then quit
+   * synchronously when the helper went — which cancelled the OCR run it had just finished. The
+   * quit closes the helpers and goes through `before-quit` → `will-quit` like any other quit
+   * (measured on Electron 43.8.6). On macOS the app stays open with no window (the platform
+   * convention); a Dock click brings the window back (`onActivate`, `mainWindowCount`), except while
+   * a quit that closed the window is still closing the helper windows. `closedForQuit` is the close
+   * guard's own answer for this close (`CloseGuard.closedForQuit()`): it let the close go through as
+   * part of a quit (⌘Q, Dock Quit), after the save.
+   */
+  onMainWindowClosed: (closedForQuit: boolean) => void
+  /**
    * The OS is ending the session (#248): Windows `session-end` on the main window (a shutdown,
    * restart or log-off — cannot be prevented; the process is killed once the handler returns),
    * or macOS `powerMonitor` `shutdown` (unverified on a Mac — #226). Runs `emergencyLock` once.
    */
   onSessionEnd: (event?: SessionEndEventLike) => void
-  /** True from the first `will-quit` or session end on (tests + diagnostics). */
+  /**
+   * #964, Linux: a termination signal (SIGTERM from `kill` or `systemctl stop`, SIGINT from Ctrl+C in a terminal,
+   * SIGHUP when the terminal closes). Electron's own handler turned it into an ordinary quit with one shot: the close
+   * guard's question or a failed save held it, and a second signal then killed the app with the workspace unlocked
+   * (measured on Electron 43.8.6 Linux: exit 143, no handler run). Runs `emergencyLock` once, as a session end does,
+   * then `exit(0)`. A signal during a running quit teardown defers to it (the teardown owns the lock and exits from
+   * its own finally); a signal after a lock already ran does nothing.
+   */
+  onTerminationSignal: (signal: NodeJS.Signals) => void
+  /**
+   * #964, Linux: Electron's `quit`, the last event before the process ends. A lost session (the display or the D-Bus
+   * session bus gone, which is how a log-out usually arrives) ends the app with no `before-quit` and no `will-quit`,
+   * only `quit` (measured on Electron 43.8.6 Linux). Runs `emergencyLock` unless a lock already ran: the quit
+   * teardown's (whose own `exit` emits this event) or a signal's. Never exits: Electron is already exiting.
+   * The crash path's `process.exit(1)` emits `quit` too (measured), after its own `emergencyLock`, which this
+   * closure does not see: the second run finds the workspace locked and only repeats the reap.
+   */
+  onQuitEvent: () => void
+  /** True from the first `will-quit`, session end, signal or `quit` lock on (tests + diagnostics). */
   isShuttingDown: () => boolean
 }
 
@@ -408,11 +500,43 @@ export interface AppLifecycleHandlers {
  * `will-quit`); a `will-quit` AFTER the session-end lock exits at once instead of starting the
  * teardown — the vault is already locked and the children reaped, and a prevented quit that never
  * exited would make macOS report the app as cancelling the shutdown.
+ *
+ * #964 — the Linux legs share it as well: a termination signal takes the session-end lock and exits
+ * (`onTerminationSignal`), and Electron's `quit`, the one event a lost session still emits, locks if
+ * no lock has run (`onQuitEvent`). Either way there is one lock: a signal during a running teardown
+ * defers to it, repeat signals do nothing, and `quit` after the teardown's or a signal's lock does
+ * nothing. A `quit` DURING a running teardown is a session lost mid-quit: Electron ends the process
+ * as the event returns, so the teardown never reaches its lock, and `onQuitEvent` locks at once.
  */
+/**
+ * The line a lock handler writes right before `emergencyLock`, in its own guard (#964 security round, F4): the
+ * handler has already marked the lock as run, so a logger that threw there would leave the workspace unlocked with
+ * every later signal and `quit` doing nothing. The real sinks swallow their errors; this makes it structural.
+ */
+function logBeforeLock(line: () => void): void {
+  try {
+    line()
+  } catch {
+    /* a log line must never stop the lock */
+  }
+}
+
 export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycleHandlers {
   let shuttingDown = false
   /** The session-end lock ran (nothing awaits; a later `will-quit` has nothing left to do). */
   let sessionEndLocked = false
+  /**
+   * #964: a lock has run, and nothing clears this: the quit teardown finished (its lock ran, or failed and was
+   * logged), or the session-end, signal or `quit` lock ran. Unlike `sessionEndLocked`, which a later `will-quit`
+   * clears on its way to the exit, so the `quit` that exit emits still finds it set.
+   */
+  let lockRan = false
+  /**
+   * #910: the main window's last close started the quit (Windows, Linux), or closed through one (macOS ⌘Q or
+   * Dock Quit). Until its `will-quit` the quit is still closing the helper windows (a few ms, measured; longer
+   * during a print), and a second launch or a Dock click then must not open a window into it.
+   */
+  let quitAfterLastClose = false
   return {
     onWillQuit: (event) => {
       // #238: EVERY will-quit is prevented — the first one starts the teardown, any later one
@@ -437,8 +561,9 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       shuttingDown = true
       void deps
         .performShutdown()
-        .catch((err) => deps.log.error('quit: teardown failed', String(err)))
+        .catch((err) => deps.log.error('quit: teardown failed', failureForLog(err)))
         .finally(() => {
+          lockRan = true
           try {
             deps.killSidecarChildren()
           } catch {
@@ -448,9 +573,24 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
         })
     },
     onActivate: () => {
-      // #238: no fresh window once a quit has begun.
-      if (shuttingDown) return
-      if (deps.windowCount() === 0) deps.createWindow()
+      // #238: no fresh window once a quit has begun (#910: also the quit the last close started).
+      if (shuttingDown || quitAfterLastClose) return
+      // #910: main windows only — a hidden helper window is not a window the user can use.
+      if (deps.mainWindowCount() === 0) deps.createWindow()
+    },
+    onMainWindowClosed: (closedForQuit) => {
+      // #910: Windows and Linux quit when the main window closes, whatever helper windows are
+      // left; the quit closes them. During a quit that is already running the call adds nothing
+      // (Electron ignores a nested `app.quit()`: one `before-quit`, one `will-quit`, measured).
+      if (deps.platform === 'darwin') {
+        // macOS stays open after the red button. A window its guard closed for a quit is not coming back: that
+        // quit runs to `will-quit`. (The guard's answer for this close, never the app-level quit flag, which
+        // only a guard's consume() clears: a stale one would block every later Dock click.)
+        if (closedForQuit) quitAfterLastClose = true
+        return
+      }
+      quitAfterLastClose = true
+      deps.quit()
     },
     onSessionEnd: (event) => {
       // #248: once only, and never beside a running quit teardown (see the factory comment).
@@ -460,12 +600,56 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       }
       shuttingDown = true
       sessionEndLocked = true
-      // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
-      deps.log.info('session-end: locking workspace', { reasons: event?.reasons ?? [] })
+      lockRan = true
       try {
+        // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
+        logBeforeLock(() => deps.log.info('session-end: locking workspace', { reasons: event?.reasons ?? [] }))
         deps.emergencyLock()
       } catch (err) {
-        deps.log.error('session-end: lock failed', String(err))
+        deps.log.error('session-end: lock failed', failureForLog(err))
+      }
+    },
+    onTerminationSignal: (signal) => {
+      // #964: once only (see the factory comment). A running quit teardown owns the lock and exits from its own
+      // finally, bounded by SHUTDOWN_OVERALL_DEADLINE_MS; after a lock already ran (a signal's, whose exit is under
+      // way, or the `quit` leg's, while Electron exits) nothing is left to do. The listener itself stays registered
+      // (`index.ts`): without it the next signal would kill the app at once.
+      if (shuttingDown) {
+        if (!lockRan) deps.log.info('signal: a quit teardown is already running — it owns the lock', { signal })
+        return
+      }
+      shuttingDown = true
+      sessionEndLocked = true
+      lockRan = true
+      try {
+        // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
+        logBeforeLock(() => deps.log.info('signal: locking workspace', { signal }))
+        deps.emergencyLock()
+      } catch (err) {
+        deps.log.error('signal: lock failed', failureForLog(err))
+      }
+      // The listener replaced Electron's handler (which started a quit) and the default action (which ends the
+      // process): without this exit the app would run on with its workspace locked.
+      deps.exit(0)
+    },
+    onQuitEvent: () => {
+      // #964: a lost session emits only `quit`, so this is the first the app hears of it. After a signal's lock, or
+      // after a quit teardown that finished (its own `exit` emits `quit` too), nothing is left to do. During a
+      // teardown that has not finished, the session was lost mid-quit: Electron ends the process as this returns,
+      // so the teardown never reaches its lock, and the lock runs here.
+      if (lockRan) return
+      const midTeardown = shuttingDown
+      shuttingDown = true
+      sessionEndLocked = true
+      lockRan = true
+      try {
+        // Logged BEFORE the lock so the line lands in the encrypted log (the lock flushes it).
+        logBeforeLock(() =>
+          deps.log.info('quit: the session ended before the workspace locked — locking workspace', { midTeardown })
+        )
+        deps.emergencyLock()
+      } catch (err) {
+        deps.log.error('quit: lock failed', failureForLog(err))
       }
     },
     isShuttingDown: () => shuttingDown
@@ -488,7 +672,7 @@ async function awaitActiveDocTaskSettled(
   try {
     settle = ctx?.docTasks?.awaitActiveTaskSettled?.()
   } catch (err) {
-    log.error('Error awaiting doc-task settle on quit', String(err))
+    log.error('Error awaiting doc-task settle on quit', failureForLog(err))
     return
   }
   if (!settle) return
@@ -516,7 +700,7 @@ async function awaitSkillRunsSettled(
     const settled = await (ctx?.skillRuns?.awaitSettled(SHUTDOWN_TASK_SETTLE_TIMEOUT_MS) ?? true)
     if (!settled) log.info('quit: a skill run was still running at the settle bound')
   } catch (err) {
-    log.error('Error settling skill runs on quit', String(err))
+    log.error('Error settling skill runs on quit', failureForLog(err))
   }
 }
 
@@ -534,7 +718,7 @@ async function awaitPlaintextOpsSettled(
     const settled = await ops.awaitSettled(SHUTDOWN_TASK_SETTLE_TIMEOUT_MS)
     if (!settled) log.info('quit: plaintext operations still running at the settle bound', { live: ops.size() })
   } catch (err) {
-    log.error('Error settling plaintext operations on quit', String(err))
+    log.error('Error settling plaintext operations on quit', failureForLog(err))
   }
 }
 
@@ -573,7 +757,7 @@ async function settleAndCleanZimTransients(
         unconfirmedChildren: report.unconfirmedChildren
       })
   } catch (err) {
-    log.error('Error settling knowledge-pack operations on quit', String(err))
+    log.error('Error settling knowledge-pack operations on quit', failureForLog(err))
   }
 }
 
@@ -583,6 +767,6 @@ function sweepPlaintextOps(ctx: AppContext | null, log: Pick<typeof realLog, 'er
     const swept = ctx?.plaintextOps?.sweepRegistered() ?? 0
     if (swept > 0) log.info('quit: swept registered plaintext transients', { swept })
   } catch (err) {
-    log.error('Error sweeping plaintext transients on quit', String(err))
+    log.error('Error sweeping plaintext transients on quit', failureForLog(err))
   }
 }

@@ -17,8 +17,9 @@ export interface SidecarModel {
   /**
    * Every file the weight requires, absolute (#310) — `resolveModelByRole` fills it from
    * `manifestFiles()`. Absent/empty falls back to `[modelPath]`, which is what a single-file
-   * model has always meant. Existence only: these roles never hash (the Models screen and
-   * the ship-time gates do).
+   * model has always meant. Existence only: selection never hashes (the Models screen and the
+   * ship-time gates do). Each service checks its files at its cold start instead (#913,
+   * `checkModelBeforeStart`).
    */
   requiredPaths?: string[]
 }

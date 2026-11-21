@@ -7,7 +7,8 @@ import { requestSkillDetail, clearSkillDetailRequest } from '../../src/renderer/
 import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppSettings, type SkillInfo, type SkillPreview } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import type { PreloadApi } from '../../src/preload'
 import { makeSkillInfo } from '../helpers/chat-fixtures'
 
 // Phase S5 — Settings → Skills UI (skills plan §15/§18.1). The renderer is a thin view over
@@ -56,21 +57,37 @@ function renderTab(): void {
   )
 }
 
+/**
+ * What the tab reads beside the skill list (#832). `getSettings` fails by default, so the auto-fire switch stays out of
+ * the way of the rows that count switches (a row about the toggle supplies its own); the reconcile status is clean.
+ * `over` spreads last.
+ */
+function skillsTabStubs(over: Partial<PreloadApi>): Partial<PreloadApi> {
+  return {
+    getSettings: vi.fn<PreloadApi['getSettings']>(async () => {
+      throw new Error('settings unreadable')
+    }),
+    getSkillReconcileStatus: vi.fn<PreloadApi['getSkillReconcileStatus']>(async () => ({ errorCount: 0, errorCodes: [] })),
+    ...over
+  }
+}
+
 afterEach(() => {
   cleanup()
   clearSkillDetailRequest()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('SkillsTab — list + empty state', () => {
   it('shows the empty state with the import affordance when no skills are installed', async () => {
-    stubApi({ listSkills: vi.fn(async () => []) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => []) }))
     renderTab()
     expect(await screen.findByText('No skills yet')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Import a skill/ })).toBeInTheDocument()
   })
 
   it('renders a row with the trust chip and the enable switch', async () => {
-    stubApi({ listSkills: vi.fn(async () => [skill()]) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill()]) }))
     renderTab()
     expect(await screen.findByText('Bank statement helper')).toBeInTheDocument()
     expect(screen.getByText('Made by you')).toBeInTheDocument()
@@ -79,7 +96,7 @@ describe('SkillsTab — list + empty state', () => {
 
   it('marks an app skill as non-deletable (no Delete item in the overflow)', async () => {
     const user = userEvent.setup()
-    stubApi({ listSkills: vi.fn(async () => [skill({ installId: 'app:x', source: 'app', trustedLevel: 'app' })]) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill({ installId: 'app:x', source: 'app', trustedLevel: 'app' })]) }))
     renderTab()
     await screen.findByText('Bank statement helper')
     await user.click(screen.getByRole('button', { name: 'Skill actions' }))
@@ -93,12 +110,12 @@ describe('SkillsTab — list + empty state', () => {
 describe('SkillsTab — per-action failure copy (CODE-37)', () => {
   it('a failed disable toasts the toggle failure, not the load-failure copy', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       disableSkill: vi.fn(async () => {
         throw new Error('The workspace is locked. Unlock it to continue.')
       })
-    })
+    }))
     renderTab()
     await user.click(await screen.findByRole('switch'))
     // TEETH: pre-fix this toasted "Skills couldn’t be loaded." — the list IS loaded and visible.
@@ -108,12 +125,12 @@ describe('SkillsTab — per-action failure copy (CODE-37)', () => {
 
   it('a failed delete toasts the delete failure', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       deleteSkill: vi.fn(async () => {
         throw new Error('The workspace is locked. Unlock it to continue.')
       })
-    })
+    }))
     renderTab()
     await screen.findByText('Bank statement helper')
     await user.click(screen.getByRole('button', { name: 'Skill actions' }))
@@ -126,12 +143,12 @@ describe('SkillsTab — per-action failure copy (CODE-37)', () => {
 
   it('a failed export toasts the export failure', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       exportSkill: vi.fn(async () => {
         throw new Error('The folder could not be written.')
       })
-    })
+    }))
     renderTab()
     await screen.findByText('Bank statement helper')
     await user.click(screen.getByRole('button', { name: 'Skill actions' }))
@@ -145,7 +162,7 @@ describe('SkillsTab — enable / disable', () => {
   it('disables an enabled skill through the switch', async () => {
     const disableSkill = vi.fn(async () => skill({ enabled: false }))
     const user = userEvent.setup()
-    stubApi({ listSkills: vi.fn(async () => [skill()]), disableSkill })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill()]), disableSkill }))
     renderTab()
     await screen.findByText('Bank statement helper')
     await user.click(screen.getByRole('switch'))
@@ -166,7 +183,7 @@ describe('SkillsTab — enable / disable', () => {
     const listSkills = vi.fn()
     listSkills.mockResolvedValueOnce([skill({ enabled: true })]) // initial load
     listSkills.mockResolvedValue([skill({ enabled: false })]) // server state after the disable
-    stubApi({ listSkills, disableSkill: disableSkill })
+    stubApi(skillsTabStubs({ listSkills, disableSkill: disableSkill }))
     renderTab()
     const sw = await screen.findByRole('switch')
     expect(sw).toBeChecked()
@@ -190,10 +207,10 @@ describe('SkillsTab — enable / disable', () => {
   it('confirms before enabling a duplicate-id skill (one active per name, DS12)', async () => {
     const enableSkill = vi.fn(async () => skill({ enabled: true }))
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill({ enabled: false, duplicateId: true })]),
       enableSkill
-    })
+    }))
     renderTab()
     await screen.findByText('Bank statement helper')
     await user.click(screen.getByRole('switch'))
@@ -209,10 +226,10 @@ describe('SkillsTab — detail drawer', () => {
   it('shows the permission block and the unacknowledged-warning acknowledge flow', async () => {
     const acknowledgeSkillWarning = vi.fn(async () => skill({ warningAck: true }))
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill({ warningAck: false })]),
       acknowledgeSkillWarning
-    })
+    }))
     renderTab()
     await user.click(await screen.findByText('Bank statement helper'))
     const dialog = within(screen.getByRole('dialog'))
@@ -227,7 +244,7 @@ describe('SkillsTab — detail drawer', () => {
   // its Tier-2 tools), NOT off kind:'tool' — the bank-statement v1 stub is instruction-only (DS17).
   it('shows the guidance-only note for a tool-reserved instruction skill', async () => {
     const user = userEvent.setup()
-    stubApi({ listSkills: vi.fn(async () => [skill({ kind: 'instruction', reservesTools: true })]) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill({ kind: 'instruction', reservesTools: true })]) }))
     renderTab()
     await user.click(await screen.findByText('Bank statement helper'))
     const dialog = within(screen.getByRole('dialog'))
@@ -238,7 +255,7 @@ describe('SkillsTab — detail drawer', () => {
 
   it('does not show the guidance-only note for a plain instruction skill', async () => {
     const user = userEvent.setup()
-    stubApi({ listSkills: vi.fn(async () => [skill({ kind: 'instruction', reservesTools: false })]) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill({ kind: 'instruction', reservesTools: false })]) }))
     renderTab()
     await user.click(await screen.findByText('Bank statement helper'))
     const dialog = within(screen.getByRole('dialog'))
@@ -249,7 +266,7 @@ describe('SkillsTab — detail drawer', () => {
   // block gains the "Use approved local tools" line.
   it('shows the real-tools note + the approved-tools permission line for a kind:tool skill', async () => {
     const user = userEvent.setup()
-    stubApi({ listSkills: vi.fn(async () => [skill({ kind: 'tool', reservesTools: true })]) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill({ kind: 'tool', reservesTools: true })]) }))
     renderTab()
     await user.click(await screen.findByText('Bank statement helper'))
     const dialog = within(screen.getByRole('dialog'))
@@ -263,7 +280,7 @@ describe('SkillsTab — detail drawer', () => {
   // renderer mailbox — consumed once the list loads, so later refreshes never re-open it.
   it('opens the detail modal for a pending deep-link request (#46)', async () => {
     requestSkillDetail('user:bank-statement')
-    stubApi({ listSkills: vi.fn(async () => [skill()]) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill()]) }))
     renderTab()
     const dialog = within(await screen.findByRole('dialog'))
     expect(dialog.getByText('Bank statement helper')).toBeInTheDocument()
@@ -272,7 +289,7 @@ describe('SkillsTab — detail drawer', () => {
 
   it('a deep-link request for a skill that no longer exists opens nothing (#46)', async () => {
     requestSkillDetail('user:gone')
-    stubApi({ listSkills: vi.fn(async () => [skill()]) })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill()]) }))
     renderTab()
     await screen.findByText('Bank statement helper')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -283,12 +300,12 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
   it('previews permissions then imports on confirm', async () => {
     const importSkill = vi.fn(async () => skill())
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => ({ token: 'tok-new', path: '/tmp/new.skill.zip' })),
       previewSkillPackage: vi.fn(async () => preview()),
       importSkill
-    })
+    }))
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -309,7 +326,7 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     const pickSkillPackage = vi.fn(async () => {
       throw new Error('picker exploded')
     })
-    stubApi({ listSkills: vi.fn(async () => []), pickSkillPackage: pickSkillPackage })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => []), pickSkillPackage: pickSkillPackage }))
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -320,14 +337,14 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
   it('blocks confirm on a dev-mode-gated downgrade (DS15)', async () => {
     const importSkill = vi.fn()
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => ({ token: 'tok-old', path: '/tmp/old.skill.zip' })),
       previewSkillPackage: vi.fn(async () =>
         preview({ collision: true, isDowngrade: true, downgradeBlocked: true, installedVersion: '2.0.0', version: '1.0.0' })
       ),
       importSkill
-    })
+    }))
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -350,12 +367,12 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
         "Error invoking remote method 'skills:import': Error: A newer version of this skill is already installed. Turn on developer mode to install an older version."
       )
     })
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => ({ token: 'tok-race', path: '/tmp/race.skill.zip' })),
       previewSkillPackage: vi.fn(async () => preview()),
       importSkill: importSkill
-    })
+    }))
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -375,12 +392,12 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     const importSkill = vi.fn(async () => {
       throw new Error('ECONNRESET or some other novel failure')
     })
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => ({ token: 'tok-new', path: '/tmp/new.skill.zip' })),
       previewSkillPackage: vi.fn(async () => preview()),
       importSkill: importSkill
-    })
+    }))
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -391,13 +408,13 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
 
   it('shows friendly structural errors and blocks confirm when the preview is not ok', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => ({ token: 'tok-bad', path: '/tmp/bad.skill.zip' })),
       previewSkillPackage: vi.fn(async () =>
         preview({ ok: false, errors: ['This skill package is missing its SKILL.md.'] })
       )
-    })
+    }))
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -413,11 +430,11 @@ describe('SkillsTab — auto-fire opt-in (S13c/D4)', () => {
   it('reflects the saved off state and turns auto-fire on through the shared Settings patch', async () => {
     const user = userEvent.setup()
     const updateSettings = vi.fn(async (p: Partial<AppSettings>) => ({ ...DEFAULT_SETTINGS, ...p }))
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillsAutoFireEnabled: false })),
       updateSettings: updateSettings
-    })
+    }))
     renderTab()
     const toggle = (await screen.findByRole('switch', {
       name: 'Apply a matching skill automatically'
@@ -428,10 +445,10 @@ describe('SkillsTab — auto-fire opt-in (S13c/D4)', () => {
   })
 
   it('reflects a saved on state', async () => {
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillsAutoFireEnabled: true }))
-    })
+    }))
     renderTab()
     expect(
       await screen.findByRole('switch', { name: 'Apply a matching skill automatically' })
@@ -439,7 +456,7 @@ describe('SkillsTab — auto-fire opt-in (S13c/D4)', () => {
   })
 
   it('hides the toggle when settings cannot be read (never implies an unconfirmed state)', async () => {
-    stubApi({ listSkills: vi.fn(async () => [skill()]) }) // no getSettings stub ⇒ load fails silently
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill()]) })) // the base getSettings rejects
     renderTab()
     await screen.findByText('Bank statement helper')
     expect(
@@ -453,19 +470,19 @@ describe('SkillsTab — auto-fire opt-in (S13c/D4)', () => {
 // count (never a folder name).
 describe('SkillsTab — reconcile-error notice (SKA-32)', () => {
   it('shows "N skill folders could not be read" when the status reports errors', async () => {
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       getSkillReconcileStatus: vi.fn(async () => ({ errorCount: 2, errorCodes: ['invalidManifest'] }))
-    })
+    }))
     renderTab()
     expect(await screen.findByText(/2 skill folders could not be read/)).toBeInTheDocument()
   })
 
   it('shows no notice for a clean tree', async () => {
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       getSkillReconcileStatus: vi.fn(async () => ({ errorCount: 0, errorCodes: [] }))
-    })
+    }))
     renderTab()
     await screen.findByText('Bank statement helper')
     expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument()
@@ -474,12 +491,12 @@ describe('SkillsTab — reconcile-error notice (SKA-32)', () => {
   it('tolerates an unreadable status (older main): the list still loads, no notice', async () => {
     // An older main has no handler, so the status read rejects. The rejection must stay inside the
     // best-effort read (an escaped one fails the run as an unhandled rejection).
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => [skill()]),
       getSkillReconcileStatus: vi.fn(async () => {
         throw new Error("No handler registered for 'skills:reconcileStatus'")
       })
-    })
+    }))
     renderTab()
     await screen.findByText('Bank statement helper')
     expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument()
@@ -491,7 +508,7 @@ describe('SkillsTab — reconcile-error notice (SKA-32)', () => {
 describe('SkillsTab — import preview notes localized by code (SKA-35)', () => {
   it('renders a coded note through the copy table, not the raw structural string', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(skillsTabStubs({
       listSkills: vi.fn(async () => []),
       pickSkillPackage: vi.fn(async () => ({ token: 'tok-new', path: '/tmp/new.skill.zip' })),
       previewSkillPackage: vi.fn(async () =>
@@ -500,7 +517,7 @@ describe('SkillsTab — import preview notes localized by code (SKA-35)', () => 
           noteCodes: [{ code: 'permissionClamped', params: { field: 'documents', value: 'selected_only' } }]
         })
       )
-    })
+    }))
     renderTab()
     await screen.findByText('No skills yet')
     await user.click(screen.getByRole('button', { name: /Import a skill/ }))
@@ -516,7 +533,7 @@ describe('SkillsTab — delete', () => {
   it('confirms then deletes a user skill', async () => {
     const deleteSkill = vi.fn(async () => undefined)
     const user = userEvent.setup()
-    stubApi({ listSkills: vi.fn(async () => [skill()]), deleteSkill })
+    stubApi(skillsTabStubs({ listSkills: vi.fn(async () => [skill()]), deleteSkill }))
     renderTab()
     await screen.findByText('Bank statement helper')
     await user.click(screen.getByRole('button', { name: 'Skill actions' }))

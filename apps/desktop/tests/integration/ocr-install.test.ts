@@ -37,6 +37,7 @@ import { hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { hangBudgetMs, until } from '../helpers/hang-budget'
 import { tempRoot } from '../helpers/db-fixtures'
 import type { OcrInstallJob, OcrInstallStatus, OcrRefreshOutcome } from '../../src/shared/types'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as IpcHandlers
 
@@ -207,7 +208,7 @@ describe('sources / destinations (#410)', () => {
     expect(existsSync(join(root, 'runtime', 'llama.cpp', 'win', 'llama-server.exe'))).toBe(false)
   })
 
-  it('a yaml sha256 that does not match the pin is a mismatch — refused, no fetch, unavailable', async () => {
+  it('a yaml sha256 that does not match the pin, with no other list to take it from, is a mismatch — refused, no fetch, unavailable', async () => {
     const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml({ deuSha: sha256('not-the-pinned-bytes') }))
     const fetchSpy = vi.fn(correctBytesFetch)
@@ -218,13 +219,69 @@ describe('sources / destinations (#410)', () => {
     expect(status.available).toBe(false)
   })
 
-  it('a yaml missing one pinned language is a mismatch too', async () => {
+  it('a yaml missing one pinned language, with no other list to take it from, is a mismatch too', async () => {
     const root = tempRoot('ocr')
     const manifests = manifestsDirWith(root, ocrYaml({ omitLangs: ['eng'] }))
     const fetchSpy = vi.fn(correctBytesFetch)
     const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
     await expect(mgr.start(startOpts(root, manifests))).rejects.toThrow(tMain('main.ocr.sourcesMismatch'))
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  // #841: a drive whose list predates this app's pins (one prepared before `osd` existed, #538), or
+  // pins another version of a file. The app's own list carries every pinned file by construction,
+  // so each file comes from the first list whose entry carries its pinned hash: the drive's mirror
+  // where it matches, the app's own copy for the rest. Before, the whole install was refused.
+  it.each<[string, OcrYamlOverrides]>([
+    ['lacks a pinned file', { omitLangs: ['eng'] }],
+    ['pins another version of one', { engSha: sha256('another-version-of-eng') }]
+  ])('a drive list that %s: that file comes from the app’s own list, the matching one from the drive’s (#841)', async (_how, drive) => {
+    const root = tempRoot('ocr')
+    const driveManifests = manifestsDirWith(root, ocrYaml({ host: 'https://drive-mirror.example.test', ...drive }))
+    const bundled = tempRoot('ocr-bundled')
+    writeFileSync(join(bundled, 'runtime-sources.yaml'), ocrYaml({ host: 'https://bundled.example.test' }))
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
+
+    const status = await mgr.status(sourceOpts(root, driveManifests, bundled))
+    expect(status.available).toBe(true)
+    expect(status.sourceHost).toBe('drive-mirror.example.test, bundled.example.test')
+
+    const job = await mgr.start(startOpts(root, driveManifests, bundled))
+    expect((await runToEnd(mgr, job.jobId)).status).toBe('done')
+    const fetched = fetchSpy.mock.calls.map((call) => String(call[0]))
+    expect(new Set(fetched.filter((u) => u.includes('deu')))).toEqual(new Set(['https://drive-mirror.example.test/deu.traineddata.gz']))
+    expect(new Set(fetched.filter((u) => u.includes('eng')))).toEqual(new Set(['https://bundled.example.test/eng.traineddata.gz']))
+    expect(existsSync(join(root, ocrPinRelPath('eng')))).toBe(true)
+  })
+
+  // The app's own list is checked against the pins too: with both lists present, a file neither
+  // carries with its pinned hash is still a mismatch, refused before any request.
+  it('a file that neither list pins with its hash is a mismatch, though both lists are there (#841)', async () => {
+    const root = tempRoot('ocr')
+    const driveManifests = manifestsDirWith(root, ocrYaml({ omitLangs: ['eng'] }))
+    const bundled = tempRoot('ocr-bundled')
+    writeFileSync(join(bundled, 'runtime-sources.yaml'), ocrYaml({ host: 'https://bundled.example.test', engSha: sha256('not-eng') }))
+    const fetchSpy = vi.fn(correctBytesFetch)
+    const mgr = new OcrInstallManager({ fetchImpl: fetchSpy as unknown as FetchFn, pins: FAKE_PINS })
+    expect((await mgr.status(sourceOpts(root, driveManifests, bundled))).available).toBe(false)
+    await expect(mgr.start(startOpts(root, driveManifests, bundled))).rejects.toThrow(tMain('main.ocr.sourcesMismatch'))
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  // The confirmation's "From" names only the hosts the install will contact: with `deu` already in
+  // place, only `eng` is fetched, from the app's own list, so the drive's mirror is not named.
+  it('the confirmation names only the hosts of the files still to fetch (#841)', async () => {
+    const root = tempRoot('ocr')
+    mkdirSync(join(root, 'ocr'), { recursive: true })
+    writeFileSync(join(root, ocrPinRelPath('deu')), DEU_BYTES)
+    const driveManifests = manifestsDirWith(root, ocrYaml({ host: 'https://drive-mirror.example.test', omitLangs: ['eng'] }))
+    const bundled = tempRoot('ocr-bundled')
+    writeFileSync(join(bundled, 'runtime-sources.yaml'), ocrYaml({ host: 'https://bundled.example.test' }))
+    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: FAKE_PINS })
+    const status = await mgr.status(sourceOpts(root, driveManifests, bundled))
+    expect(status.languages.map((l) => [l.lang, l.installed])).toEqual([['deu', true], ['eng', false]])
+    expect(status.sourceHost).toBe('bundled.example.test')
   })
 
   it('falls back to the app-bundled source list when the drive yaml carries no ocr: block', async () => {
@@ -834,7 +891,8 @@ describe('OCR install via IPC (#410)', () => {
     await closePerformanceFixture()
   })
 
-  function makeIpcDrive(opts: { locked?: boolean } = {}): {
+  /** `appCopyOnly`: the drive carries no source list; only the app's own copy does (the #410 fallback). */
+  function makeIpcDrive(opts: { locked?: boolean; appCopyOnly?: boolean } = {}): {
     root: string
     ctx: ReturnType<typeof ctxWith>
     ocrInstaller: OcrInstallManager
@@ -845,7 +903,9 @@ describe('OCR install via IPC (#410)', () => {
     mkdirSync(manifests, { recursive: true })
     mkdirSync(join(root, 'config'), { recursive: true })
     writeFileSync(join(root, 'config', 'policy.json'), JSON.stringify({ network: { allow_model_downloads: true } }))
-    writeFileSync(join(manifests, 'runtime-sources.yaml'), ocrYaml())
+    const appManifests = join(root, 'app-bundle', 'model-manifests')
+    mkdirSync(appManifests, { recursive: true })
+    writeFileSync(join(opts.appCopyOnly ? appManifests : manifests, 'runtime-sources.yaml'), ocrYaml())
     const db = seededDb(root)
     updateSettings(db, { allowNetwork: true })
     const fetchSpy = vi.fn(correctBytesFetch)
@@ -853,14 +913,24 @@ describe('OCR install via IPC (#410)', () => {
     const ctx = ctxWith(root, db, {
       paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
       manifestsDir: manifests,
+      bundledManifestsDir: appManifests,
       isDev: true,
       ocrEngine: null,
-      workspace: { isUnlocked: () => opts.locked !== true }
+      workspace: workspaceStandIn({ unlocked: opts.locked !== true })
     })
     handlers.clear()
     registerEngineIpc(ctx, undefined, { ocrInstaller })
     return { root, ctx, ocrInstaller, fetchSpy }
   }
+
+  // The handler's fallback reads the app's own copy off the context (`ctx.bundledManifestsDir`, which
+  // the engine pins share since #842).
+  it('falls back to the app’s own source list when the drive carries none', async () => {
+    makeIpcDrive({ appCopyOnly: true })
+    const status = (await invoke(handlers, IPC.getOcrInstallStatus)).result as OcrInstallStatus
+    expect(status.available).toBe(true)
+    expect(status.sourceHost).toBe('example.test')
+  })
 
   it('refuses while the workspace is locked, before any fetch', async () => {
     const d = makeIpcDrive({ locked: true })

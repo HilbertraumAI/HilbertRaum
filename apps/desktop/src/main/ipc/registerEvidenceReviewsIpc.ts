@@ -38,7 +38,6 @@ import {
   applyEvidenceReviewBulkAction,
   countEvidenceReviewsForConversation,
   createEvidenceSelection,
-  deleteEvidenceReview,
   deleteEvidenceSelection,
   getEvidenceReview,
   getEvidenceReviewForMessage,
@@ -205,9 +204,9 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
 
   // P4 read overlay (spec §18.4): the service reads report the honest constant-false
   // "not known to be outdated"; the IPC boundary is where the DERIVED overlay is applied —
-  // detail + entry-point summary carry the REAL computed flag (stored-fact comparison,
-  // trivially cheap), so the chat chip and a freshly opened screen are truthful without a
-  // second round trip. Write-path returns (update/markReady/reopen/create) keep the
+  // the detail and the conversation's chip summaries carry the REAL computed flag (stored-fact
+  // comparison, trivially cheap), so the chat chip and a freshly opened screen are truthful
+  // without a second round trip. Write-path returns (update/markReady/reopen/create) keep the
   // constant-false overlay — the renderer's freshness UI reads the refresh result, never
   // a write-return's flag.
   const outdatedOverlay = (reviewId: string): boolean =>
@@ -220,22 +219,11 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
     return detail ? { ...detail, outdated: outdatedOverlay(detail.id) } : null
   })
 
-  ipcHandle(
-    IPC.getEvidenceReviewForMessage,
-    (_e, messageId: unknown): EvidenceReviewSummary | null => {
-      requireUnlocked()
-      const id = safeId(messageId)
-      const summary = id ? getEvidenceReviewForMessage(ctx.db, id) : null
-      return summary ? { ...summary, outdated: outdatedOverlay(summary.id) } : null
-    }
-  )
-
-  // AUD-12: the WHOLE transcript's chip state in one round trip. The per-message channel
-  // above stays (no renderer code has read it since AUD-12; removing it is its own change), but
-  // a conversation open asks ONCE: the renderer used to await one invoke per candidate answer,
-  // each of them a full item-row load plus a freshness recompute, so opening a long
-  // documents-mode conversation paid a serial cost proportional to its history. The derived
-  // overlay is applied per review here, exactly as the single-message read does.
+  // AUD-12: the WHOLE transcript's chip state in one round trip. A conversation open asks ONCE:
+  // the renderer used to await one invoke per candidate answer, each of them a full item-row
+  // load plus a freshness recompute, so opening a long documents-mode conversation paid a serial
+  // cost proportional to its history. The per-message channel that did that had no caller left
+  // after AUD-12 and was removed (#840). The derived overlay is applied per review here.
   ipcHandle(
     IPC.getEvidenceReviewSummariesForConversation,
     (_e, conversationId: unknown): EvidenceReviewSummary[] => {
@@ -385,17 +373,6 @@ export function registerEvidenceReviewsIpc(ctx: AppContext): void {
       return id && key ? getEvidenceSourceContext(ctx.db, id, key) : null
     }
   )
-
-  ipcHandle(IPC.deleteEvidenceReview, (_e, reviewId: unknown): boolean => {
-    requireUnlocked()
-    const id = safeId(reviewId)
-    if (!id) return false
-    const deleted = deleteEvidenceReview(ctx.db, id)
-    if (deleted) {
-      ctx.audit?.('evidence_review_deleted', 'Evidence review deleted', { reviewId: id })
-    }
-    return deleted
-  })
 
   // D-2 (spec §25.4, plan §7.6): the conversation-delete confirm names how many reviews the
   // cascade will remove. A pure COUNT — no titles, notes, or content ever cross this channel;

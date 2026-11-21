@@ -6,6 +6,7 @@ import {
   matchesLibraryView,
   matchesModelSearch,
   modelTask,
+  newerAppRows,
   variantGroupOrder,
   type ModelTask,
   type ModelVariantGroup
@@ -14,10 +15,12 @@ import {
   isModelInstalled,
   orderPickerModels
 } from '../lib/modelAvailability'
+import { EngineConfirmDialog } from '../components/EngineConfirmDialog'
 import { computeDownloadGate } from '../lib/downloadGate'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
 import { useOcrInstall } from '../lib/useOcrInstall'
+import { httpsLink } from '../lib/httpsLink'
 import { useEngineProblemsRead } from '../lib/useEngineProblems'
 import type { ModelsFocus } from '../navigation'
 import { useT } from '../i18n'
@@ -28,6 +31,8 @@ import type {
   AppSettings,
   DownloadJob,
   EngineDownloadJob,
+  EngineDownloadPreview,
+  EngineDownloadRequest,
   EngineProblem,
   EngineProblemFamily,
   EngineRecheckResult,
@@ -80,6 +85,13 @@ const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; i
   running: { labelKey: 'models.state.running', tone: 'accent', icon: '▶' }
 }
 
+/** #932: a `checksum_failed` model whose manifest has no checksum on record (`ModelInfo.noChecksum`): not damaged. */
+const NO_CHECKSUM_BADGE: { labelKey: MessageKey; tone: BadgeTone; icon: string } = {
+  labelKey: 'models.state.noChecksum',
+  tone: 'warning',
+  icon: '⚠'
+}
+
 /**
  * A disk size → "14.4 GB": the declared bytes when known, else the manifest's `size_on_disk_gb`.
  * Decimal GB with one decimal, the separator from the UI language (#768: it divided by 1024³ and
@@ -87,24 +99,6 @@ const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; i
  */
 function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): string {
   return bytes != null ? fmtDiskGb(bytes, lang) : `${fmt1(fallbackGb, lang)}${unitJoin(lang)}GB`
-}
-
-/**
- * The licence link as rendered — its href and the host shown beside it — or null when it must
- * not render as a link (#236): the manifest validator already refuses a non-https `license_url`,
- * but a stale cached manifest or a hostile one that slipped past an older build must not become
- * a clickable `javascript:` or `http:` anchor behind the fixed "read the license" label.
- * Stricter than the chat-link gate, which also allows `http:`. Returning both from one parse
- * keeps the anchor and the validated host from ever diverging.
- */
-function licenseLink(url: string | null | undefined): { href: string; host: string } | null {
-  if (!url) return null
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'https:' ? { href: parsed.href, host: parsed.host } : null
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -320,6 +314,14 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   const [engine, setEngine] = useState<EngineStatus | null>(null)
   const [engineJob, setEngineJob] = useState<EngineDownloadJob | null>(rememberedEngineJob)
   const engineJobRef = useRef<EngineDownloadJob | null>(rememberedEngineJob)
+  // #843: the engine install / update / reinstall confirmation — what main's preview says the job
+  // will fetch, the request Confirm sends unchanged, and the clicked surface's title and action label.
+  const [engineConfirm, setEngineConfirm] = useState<{
+    preview: EngineDownloadPreview
+    request: EngineDownloadRequest | undefined
+    titleKey: MessageKey
+    confirmKey: MessageKey
+  } | null>(null)
   // #339 P8-2 (the owner's ruling): the quiet "knowledge-pack tools" row below the two engine
   // banners — the SAME confirm dialog/hook the Knowledge-packs panel notice uses, so the two
   // entry points can never present different facts. Only fetches its own getEngineStatus/
@@ -616,30 +618,34 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     return () => clearInterval(timer)
   }, [engineJob?.jobId, engineJob?.status])
 
-  async function startEngineDownload(): Promise<void> {
+  /**
+   * #843: every engine action asks first. The click reads main's preview of what this exact request
+   * would fetch (`getEnginePlan` — the step selection the job itself runs) and opens the dialog; a
+   * refusal (nothing to update, a repair no longer needed) is shown like a failed start. The request
+   * is kept as it is and sent unchanged on Confirm, so main needs no consent token.
+   */
+  async function askEngine(
+    request: EngineDownloadRequest | undefined,
+    titleKey: MessageKey,
+    confirmKey: MessageKey
+  ): Promise<void> {
     setError(null)
     try {
-      setEngineJob(await window.api.downloadEngine())
+      const preview = await (request === undefined ? window.api.getEnginePlan() : window.api.getEnginePlan(request))
+      if (mountedRef.current) setEngineConfirm({ preview, request, titleKey, confirmKey })
     } catch (e) {
-      setError(friendlyIpcError(e))
+      if (mountedRef.current) setError(friendlyIpcError(e))
     }
   }
 
-  /** #516: "Update" — the same job and gates; main pauses the engine's users only for the swap. */
-  async function startEngineUpdate(families: string[]): Promise<void> {
+  /**
+   * The confirmed engine job: the default install (no argument), #516's "Update" (main pauses the
+   * engine's users only for the swap) or #532's "Install … again" — the same job and gates for each.
+   */
+  async function startEngineJob(request: EngineDownloadRequest | undefined): Promise<void> {
     setError(null)
     try {
-      setEngineJob(await window.api.downloadEngine({ families: families as RuntimeFamily[], update: true }))
-    } catch (e) {
-      setError(friendlyIpcError(e))
-    }
-  }
-
-  /** #532: "Install … again" — the same job and gates as the install, for an engine already here. */
-  async function startEngineRepair(family: EngineProblemFamily): Promise<void> {
-    setError(null)
-    try {
-      setEngineJob(await window.api.downloadEngine({ families: [family], reinstall: true }))
+      setEngineJob(await (request === undefined ? window.api.downloadEngine() : window.api.downloadEngine(request)))
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -704,6 +710,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
    * is the full-verify mode `buildModelList` already has, so this needs no new channel; the
    * hashes it computes land in the (size, mtime) checksum store, so the `refresh()` that
    * `run` fires afterwards reports every state — `checksum_failed` included — from the cache.
+   * The pass stops at a model's first damaged file and leaves its other files unhashed; the
+   * lazy refresh still reads that one cached mismatch as `checksum_failed` (#913).
    *
    * #420: the run id is minted HERE, before the call, and handed to main — so Cancel has a
    * handle from the first instant, not from the first progress event (which can be seconds
@@ -822,6 +830,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     (family === 'all' || m.family === family) &&
     matchesModelSearch(m, query)
   const visibleModels = orderPickerModels(models.filter((m) => matchesLibraryRow(m, currentView)))
+  // #847 — the trailing "Needs a newer HilbertRaum" rows (never library rows, never a family option).
+  const newerRows = newerAppRows(models, { view: currentView, task, family, query })
   const families = availableFamilies(models, { activeChat, view: currentView, task })
   // #313 — a selected family the current view/task cannot yield: kept visible (never silently
   // dropped) with a marker option, and the trigger for the family-specific empty state below.
@@ -890,7 +900,11 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   // A withdrawn source (#196) is NOT downloadable — the network-gate banner above the list
   // must not appear for a screen whose only "missing" models can never be fetched anyway.
   const anyDownloadable = models.some(
-    (m) => m.download && !m.download.withdrawn && (m.state === 'missing' || m.state === 'checksum_failed')
+    (m) =>
+      m.download &&
+      !m.download.withdrawn &&
+      !m.noChecksum &&
+      (m.state === 'missing' || m.state === 'checksum_failed')
   )
 
   // #339 P8-2: the knowledge-pack tools install job's download percentage, same shape as the
@@ -924,6 +938,12 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   function downloadSection(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     if (m.state !== 'missing' && m.state !== 'checksum_failed') return null
+    // #932 (A S-A9): no checksum on record is not a damaged file, and a download cannot give the manifest a checksum:
+    // the model stays refused while any of its files has none, so the card's hint says what it needs instead. When no
+    // file needs fetching, main refuses the download too (`main.download.presentUnverified`). A mixed manifest (a
+    // real-hash GGUF, damaged, beside a placeholder projector) would get the GGUF planned and fetched, but the new copy
+    // still could not start, so the button stays hidden there too (#933 review N2; docs/model-policy.md "Model states").
+    if (m.noChecksum) return null
     // #196: the publisher removed the pinned file. Explain instead of offering a button that
     // can only end in an HTTP 404 — the main process refuses the start regardless.
     if (m.download.withdrawn) {
@@ -1064,6 +1084,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     // A start in flight (server truth, survives a revisit): this model's own, or any.
     const thisStarting = runtime?.startingModelId === m.id
     const anyStarting = runtime?.startingModelId != null
+    const taskLabel = TASKS.find((entry) => entry.value === modelTask(m))?.label ?? null
+    const stateBadge = m.noChecksum ? NO_CHECKSUM_BADGE : STATE_BADGE[m.state]
     return (
       // #35: not-yet-downloaded cards render visually quieter (`.model-card-missing`) so
       // the models that are usable right now stand out when scanning the list.
@@ -1072,8 +1094,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           <div>
             <div className="model-title">{m.displayName}</div>
             <div className="model-sub">
-              {t(TASKS.find((entry) => entry.value === modelTask(m))!.label)}
-              {' · '}{t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
+              {/* #847 review: no task label (and no crash) for a model with no task; only the trailing
+                  newer-app section holds one today, and it has its own card. */}
+              {taskLabel && <>{t(taskLabel)}{' · '}</>}
+              {t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
               {' · '}{t('models.library.memory', { size: fmtGbNum(m.recommendedMinRamGb, lang) })}
             </div>
             {automatic && <p className="hint hint-tight">{t(automaticUsageKey(m, installed))}</p>}
@@ -1094,8 +1118,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
                 {t('models.badge.ramNeeded', { min: minRam })}
               </Badge>
             )}
-            <Badge tone={STATE_BADGE[m.state].tone} icon={STATE_BADGE[m.state].icon}>
-              {t(STATE_BADGE[m.state].labelKey)}
+            <Badge tone={stateBadge.tone} icon={stateBadge.icon}>
+              {t(stateBadge.labelKey)}
             </Badge>
             {m.state === 'running' && runtime?.unresponsive && (
               <Badge tone="warning" icon="⚠">
@@ -1105,6 +1129,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           </div>
         </div>
 
+        {/* #932: what a model with no checksum on record needs, in place of a repair it cannot have. */}
+        {m.noChecksum && <p className="hint">{t('models.noChecksum.hint')}</p>}
         {m.role === 'transcriber' && voiceEngineUnsupported && (
           <p className="hint">{t('models.transcriber.engineUnsupported')}</p>
         )}
@@ -1269,6 +1295,27 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     )
   }
 
+  // #847: a model for a newer HilbertRaum. Display only (the main process refuses it on every path), so there is
+  // nothing to select, start, download or verify, and it must not look like a broken download: a neutral badge
+  // instead of the error-tone "Unsupported" state, and no technical-details disclosure with its Verify button.
+  function newerAppCard(m: ModelInfo): JSX.Element {
+    return (
+      <div className="card model-card model-card-missing" key={m.id}>
+        <div className="model-head">
+          <div>
+            <div className="model-title">{m.displayName}</div>
+            <p className="hint hint-tight">{t('models.newerApp.hint')}</p>
+          </div>
+          <div className="badges">
+            <Badge tone="neutral" icon="↑">
+              {t('models.newerApp.badge')}
+            </Badge>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   function libraryRows(groups: { group: ModelVariantGroup; expanded: boolean }[]): JSX.Element[] {
     return groups.map(({ group, expanded }) => {
       if (group.models.length === 1) return card(group.models[0])
@@ -1296,7 +1343,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   function confirmDialog(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     const needsAck = !m.download.licenseApproved
-    const license = licenseLink(m.download.licenseUrl)
+    const license = httpsLink(m.download.licenseUrl)
     const close = (): void => {
       setConfirming(null)
       setLicenseAck(false)
@@ -1373,7 +1420,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             job: engineJobFor(engineJob, 'install'),
             installKey: opts.installKey,
             primary: true,
-            onStart: () => void startEngineDownload()
+            onStart: () => void askEngine(undefined, opts.titleKey, opts.installKey)
           })}
         </div>
       </Banner>
@@ -1399,7 +1446,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             job: engineJobFor(engineJob, 'update'),
             installKey: 'models.engineUpdate.update',
             primary: false,
-            onStart: () => void startEngineUpdate(families)
+            onStart: () =>
+              void askEngine({ families: families as RuntimeFamily[], update: true }, titleKey, 'models.engineUpdate.update')
           })}
         </div>
       </Banner>
@@ -1416,13 +1464,14 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     if (!(engine?.reinstallableFamilies ?? []).includes(problem.family)) return undefined
     const job = engineJobFor(engineJob, problem.family)
     const voice = problem.family === 'whisper_cpp'
+    const installKey: MessageKey = voice ? 'models.engineProblem.voiceReinstall' : 'models.engineProblem.reinstall'
     return {
       control: engineJobControls({
         job,
-        installKey: voice ? 'models.engineProblem.voiceReinstall' : 'models.engineProblem.reinstall',
+        installKey,
         // The chat banner's reinstall is the fix and leads; the voice hint stays quiet (§11.17 #5).
         primary: !voice,
-        onStart: () => void startEngineRepair(problem.family)
+        onStart: () => void askEngine({ families: [problem.family], reinstall: true }, installKey, installKey)
       }),
       policyAllows: policy?.policy.network.allowModelDownloads === true,
       live: job != null && ENGINE_JOB_LIVE.has(job.status)
@@ -1831,8 +1880,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             </>
           )}
         </div>}
-        <p className="hint" role="status">{tCount('models.library.results', visibleModels.length)}</p>
-        {visibleModels.length === 0 ? (
+        <p className="hint" role="status">{tCount('models.library.results', visibleModels.length + newerRows.length)}</p>
+        {visibleModels.length === 0 && newerRows.length === 0 ? (
           <div className="model-library-empty">
             {/* #313 — a selected family the view/task combo can never satisfy gets its own
                 explanation instead of the generic "no models match" copy, naming the family and
@@ -1859,18 +1908,48 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
               </>
             )}
           </div>
-        ) : sections.map(({ entry, groups }) => {
-          return groups.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
-            <h3 className="model-task-heading">{t(entry.label)}</h3>
-            {libraryRows(groups)}
-          </section>
-        })}
+        ) : (
+          <>
+            {sections.map(({ entry, groups }) => {
+              return groups.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
+                <h3 className="model-task-heading">{t(entry.label)}</h3>
+                {libraryRows(groups)}
+              </section>
+            })}
+            {/* #847: after the five task sections, only when non-empty (design-guidelines §15). */}
+            {newerRows.length > 0 && (
+              <section key="newer-app" aria-label={t('models.newerApp.heading')}>
+                <h3 className="model-task-heading">{t('models.newerApp.heading')}</h3>
+                {newerRows.map(newerAppCard)}
+              </section>
+            )}
+          </>
+        )}
       </section>
 
       {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
       <ErrorBanner message={error} t={t} />
 
       {confirming && confirmDialog(confirming)}
+
+      {engineConfirm && (
+        <EngineConfirmDialog
+          open
+          preview={engineConfirm.preview}
+          title={t(engineConfirm.titleKey)}
+          confirmLabel={t(engineConfirm.confirmKey)}
+          downloadsEnabled={downloadsEnabled}
+          blockedReason={downloadsBlockedReason}
+          onConfirm={() => {
+            const { request } = engineConfirm
+            setEngineConfirm(null)
+            void startEngineJob(request)
+          }}
+          onCancel={() => setEngineConfirm(null)}
+          lang={lang}
+          t={t}
+        />
+      )}
 
       {packToolsInstall.family && (
         <KnowledgePackToolsDialog

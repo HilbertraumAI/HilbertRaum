@@ -422,7 +422,7 @@ Qualität bleibt top.").
   KI-Modell) · document → Dokument · re-index → neu indexieren · offline → offline ·
   "Ask my documents" → „Meine Dokumente fragen“ · lock/unlock → sperren/entsperren ·
   password → Passwort · settings → Einstellungen · plaintext (developer) mode →
-  unverschlüsselt (Entwickler).
+  unverschlüsselt (Entwickler) · demo mode → Demo-Modus (one spelling, #829).
 - **EP-1 review glossary** (native pass, P5 2026-07-18 — the legal-adjacent register for the
   evidence-review surface; the CANONICAL record — the `de.ts` header comment mirrors it):
   evidence → **Nachweis(e)** — the NOUN „Beleg“ is banned; the verb „belegen“ is the
@@ -1470,9 +1470,44 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
   one tab stop per group, arrows move focus+selection, Home/End jump, each chip = glyph +
   localized text. Selection recolors via border+weight, never color alone.
 - **Debounced auto-save with a labelled status line:** the repo's first auto-save
-  (`lib/reviewSession.ts`, 600 ms debounce, loss-free flush; flush on screen exit and BEFORE
-  vault lock). The UI voice is a quiet `role="status"` "Saving… / Saved" line and a
-  `role="alert"` + retry on failure — no unlabeled spinner (§6), no toast spam.
+  (`lib/reviewSession.ts`, 600 ms debounce, loss-free flush; flush on screen exit, BEFORE vault
+  lock and before the window closes, #888). A change the close cannot save asks in a native dialog,
+  modal to the window: **Try again** is the default (Enter), **Keep open** answers Esc, **Close
+  anyway** is never the default (`main/close-guard.ts`; the `external-open.ts` dialog's posture: the
+  safe button is the default, plain buttons). A close that would stop a scan being read (OCR) or a
+  document translation asks before that save, in a second native dialog of the same posture (#935):
+  "A document task is not finished yet.", the detail saying what is lost, with no count; **Keep
+  open** is the default and answers Esc, **Close anyway** is never the default, and the two buttons
+  read exactly as this dialog's Keep open and Close anyway. The UI voice is a quiet "Saving… /
+  Saved" line in a `role="status"` region and the failure + **Try again** in a `role="alert"`
+  region beside it — no unlabeled spinner (§6), no toast spam. Both regions (and the Outdated
+  banner's `role="status"` region) are mounted EMPTY with the review and only their text changes
+  (#837, the §6 rule; the line used to be inserted already filled, and to swap status for alert on
+  one node).
+- **A failed save is never run over (#837):** while an edit a failed write left unsaved is
+  waiting, **Bulk actions** is disabled (not hidden — the error line beside the title is the
+  explanation) and the store refuses the sweep; any other error (a failed acknowledge, link
+  or selection) leaves nothing queued and blocks nothing. Bulk actions is also disabled while
+  a sweep runs (one at a time). No item save runs during a sweep: a decision still waiting to
+  be saved when the sweep returns stays on screen and is saved after it; every other item
+  shows what the sweep saved, so the screen and the saved review agree. Re-opening the same
+  review keeps the unsaved edit on screen with its error line. A switch to ANOTHER review is refused only
+  when a write actually failed (edits that are merely still being saved are written first,
+  and the switch goes ahead); then a card shows in its place — `BlockedSwitchCard` inside
+  the screen's existing open-error card: one sentence naming the review whose changes could
+  not be saved and saying the other review was not opened (`review.unsaved.body`), the save
+  error itself (the text of the review's own error line, `hint error`), then **Try again**
+  (primary, reuses `review.autosave.retry` — saves, then opens the other review), **Discard
+  changes and open** (`review.unsaved.discard` — the only way such an edit is lost before a
+  lock, and the user's own choice) and the ghost **‹ Back to chat** (`review.back`). The card
+  can replace the review seconds after the click that led to it, and that click's button left
+  with the chat, so **Try again takes focus** when the card appears, described by the
+  sentence and the error (`aria-describedby`, so a screen reader reads both), and again after
+  a retry that failed (the WorkspaceGate step / PerformanceScreen restore precedent, WCAG
+  2.4.3). Try again and Discard are disabled while one of them runs; Back stays live. The
+  card never outlives its cause: if a later save succeeds while it shows (the old screen's
+  exit flush, a timer), it goes ahead with the switch it was shown for. The lock still drops
+  an unsaved edit: the user's security action wins (`known-limitations.md`).
 - **Honesty captions are keys, not prose:** the evidence pane's per-mode caption
   (`review.evidence.captionRelevance|WholeDoc|Structured`) and the per-item
   "No direct source marker" / "Derived through whole-document analysis" notes are asserted
@@ -2395,11 +2430,15 @@ backend/data-contract/IPC changes. Before/after eyeball captures lived in
      still wrap cleanly to two lines. Guard: `tests/unit/rail-labels.test.ts`.
    - **The rail scrolls at short window heights** (#803, 2026-11-15; open-issues wave owner call
      G-9). Its content is about 631 px tall on an encrypted workspace (571 px on a plaintext one,
-     which has no lock button), so below a window height of about 696 px (636; Turkish, with its
-     two-line «Yapay zekâ modeli», about 15 px more) its foot, Lock now and the network
-     indicator, sat under the window and the whole app scrolled to reach it. `.sidebar` now
-     scrolls on its own (`overflow-y: auto; min-height: 0`), by wheel and keyboard (Tab brings the
-     lock button and the indicator into view), with no visible scrollbar
+     which has no lock button), so below an outer window height of about 670 px (610 plaintext;
+     Turkish, with its two-line «Yapay zekâ modeli», about 15 px more) its foot, Lock now and the
+     network indicator, sat under the window and the whole app scrolled to reach it. Those
+     figures are for the menu bar hidden, as on Windows and Linux since #912; with the bar shown
+     they are 696 / 636 (the bar takes 26 px). Measured 2026-11-19 in the running dev app at
+     880 px outer width, 100 % scaling, English UI: the largest outer heights that scroll were 669
+     (encrypted), 609 (plaintext) and 695 (encrypted, bar shown); Turkish not measured. `.sidebar`
+     now scrolls on its own (`overflow-y: auto; min-height: 0`), by wheel and keyboard (Tab
+     brings the lock button and the indicator into view), with no visible scrollbar
      (`scrollbar-width: none`): a classic bar takes about 15 px of the column, and the labels are
      sized to the pixel (German «Einstellungen» has 0.3 px to spare). It never scrolls sideways
      (`overflow-x: hidden`, owner round 2026-11-15): a label too wide for the column is clipped
@@ -2657,13 +2696,33 @@ screen now keeps the active chat model pinned above a compact library of alterna
 
 - **On this drive / Browse models:** the view lists a model whose state is KNOWN to be on the
   drive — `installed`/`ready`/`running`, plus `checksum_failed` ("Can't verify"), whose files are
-  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`).
+  present and whose entire recovery action (re-download) lives on that row (`isModelOnDrive`). A
+  `checksum_failed` model with no checksum on record (`ModelInfo.noChecksum`, #932) is listed the same
+  way but has no recovery action: its badge says "No checksum" (warning tone, ⚠, never the error-tone
+  "Can't verify"), one hint line says it runs only in developer mode on a drive whose policy allows
+  unverified models, and it offers no Download (nor does it count toward the downloads banner).
   Nothing here infers file presence: `unsupported` and `not_recommended` describe the machine or
   the policy, not the drive, and the renderer has no presence contract to read — widening the set
   needs one first. The INITIAL view is still chosen once from whether anything is usable right now
   (`isModelInstalled`), so a damaged-only drive opens in Browse; a completed download does not
   change the user's view. Browse includes installed and missing entries. Existing
   installed/recommended/memory-fit ordering and all main-process gates remain intact.
+- **#847 amendment — "Needs a newer HilbertRaum", and the one presence contract.** A model for a newer
+  HilbertRaum (a role this build does not know, or a manifest `min_app_version` above the app;
+  `ModelInfo.role: 'unknown'`, `needsNewerApp`) is never a library row, a task or a family option
+  (`matchesLibraryView` refuses it, so `visibleModels`, `availableFamilies` and the family empty-state
+  count never see it). It renders in ONE trailing section after the five task sections, shown only when
+  non-empty, under the heading "Needs a newer HilbertRaum" (`newerAppRows`, `lib/modelLibrary.ts`): a
+  compact card with the name, a NEUTRAL "Needs newer app" badge (never the error-tone "Unsupported" state
+  badge: it must not look like a broken download) and one hint line ("…Update the app on this computer to
+  use it."). It has no Use/Start, no Download and no technical-details disclosure (its "Verify checksum"
+  would be refused as an unknown model). The view rule is the PRESENCE CONTRACT this section adds:
+  `filesPresent`, computed in the main process from the existence (not the hash) of every file the
+  manifest declares. "On this drive" lists an entry only when it is true — the user's "my downloaded model
+  vanished" case — and Browse lists every entry. `isModelOnDrive` is unchanged and still infers nothing.
+  The entries serve no task and offer no family, so a task or family filter hides the section; search
+  applies as to every row, and the results count includes the section's rows (so does the empty-state
+  decision: a list holding only such entries shows them, not "no models").
 - **Search + task + family filters:** search display name, exact id and family, case-insensitively,
   matching every whitespace-separated term. Filter before grouping so a collapsed variant is
   directly discoverable. Tasks are Chat, Document search (embeddings + reranker), Translation,
@@ -2750,8 +2809,15 @@ screen now keeps the active chat model pinned above a compact library of alterna
   entirely, is recovered on mount (#314): the screen asks the main process which downloads still
   need the user — adopting the live job, else the most recent unresolved result — and **Dismiss**
   tells the main process too, so a dismissal made before the reload stays dismissed.
+- **#933 amendment — the Performance rows say the same.** On "Models on this computer", a model on the
+  drive that every start refuses reads, in place of its "not loaded" pill, "failed its file check" (a
+  check found a file damaged; the card's "Can't verify") or "no checksum on record" (the card's "No
+  checksum"). Both use the warning tone, lower case like the sibling pills, and both come from
+  `ResidentModelRow.fileCheck` (the checksum cache, never a hash). "loaded now" still wins over both.
+  Such a row adds nothing to the processor total or a graphics-card line, and "Your model" shows the
+  same pill instead of a fit claim, keeping its size on disk.
 
-Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `lib/modelAvailability.ts`
+Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face, the #847 trailing rows), `lib/modelAvailability.ts`
 (the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split
 out of the screen so `modelLibrary` can share them without importing it back), `styles.css`, EN/DE
 catalogs. Behavioral coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`, the real-catalog
@@ -2760,7 +2826,9 @@ grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*
 ## 16. Minimum window — design record (2026-11-15, #803)
 
 The main window can't be made smaller than **880×600** (`minWidth` / `minHeight`,
-`main/index.ts`); on Windows that leaves 864×535 for the content. Every screen has to work there
+`main/index.ts`); on Windows that leaves 864×561 for the content since #912 hid the menu bar
+(864×535 with the bar; both measured on a bare Electron 43.8.6 window with the app's menu rule, at
+100 % scaling, not yet in the running app). Every screen has to work there
 in every interface language. What #803 changed for it (open-issues wave owner call G-9 and the
 owner rounds in the `architecture.md` i18n legend):
 

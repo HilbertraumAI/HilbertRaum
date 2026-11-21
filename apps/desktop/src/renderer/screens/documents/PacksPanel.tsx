@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
   KnowledgePack,
@@ -24,6 +24,7 @@ import {
 import { friendlyIpcError } from '../../lib/errors'
 import { useKnowledgePackToolsInstall } from '../../lib/useKnowledgePackToolsInstall'
 import { useT } from '../../i18n'
+import { inNameOrder } from '../../lib/collation'
 
 // Knowledge packs management (ZIM wave) — the Documents screen's "Knowledge packs" MODE
 // (§11.16: the header's segmented switch; before that a rail section at the bottom of the
@@ -283,6 +284,8 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
     return parts.join(' · ')
   }
 
+  // #958: the interface language's order, not SQLite's NOCASE order (A-Z only folding). Display only.
+  const sortedPacks = useMemo(() => inNameOrder(packs ?? [], lang, (p) => p.title), [packs, lang])
   const loaded = packs != null
   const hasPacks = packs != null && packs.length > 0
   const addButton = (
@@ -392,7 +395,7 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
 
       {hasPacks && (
         <ul className="packs-list" aria-label={t('packs.listLabel')}>
-          {packs.map((p) => {
+          {sortedPacks.map((p) => {
             // #301 P6 (plan §9.23 (a) row 5/6, (c)5): a confirmed-`no` searchability verdict
             // is its OWN badge, shown BESIDE the switch — a pack can be enabled and still have
             // no full-text index. Undefined / 'unknown' / 'yes' show nothing.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateManifest, isRealSha256 } from '../../src/shared/manifest'
+import { validateManifest, isRealSha256, manifestNeedsNewerApp } from '../../src/shared/manifest'
 import { rawManifest } from '../helpers/manifest-fixtures'
 
 describe('validateManifest', () => {
@@ -133,6 +133,52 @@ describe('validateManifest', () => {
     }
   })
 
+  // The processor-path fields (model-benchmarks.md §6.7): optional, and validated like the other
+  // fields that move a recommendation. Absent leaves the manifest shape unchanged.
+  it('parses recommendation_rank_cpu and step_down_to, leaving both undefined when omitted (§6.7)', () => {
+    const both = validateManifest(rawManifest({ recommendation_rank_cpu: 0, step_down_to: ' lighter-model ' })).manifest
+    expect(both?.recommendationRankCpu).toBe(0)
+    expect(both?.stepDownTo).toBe('lighter-model')
+    expect(validateManifest(rawManifest({ recommendation_rank_cpu: 3 })).manifest?.recommendationRankCpu).toBe(3)
+    const absent = validateManifest(rawManifest())
+    expect(absent.ok).toBe(true)
+    expect('recommendationRankCpu' in (absent.manifest ?? {})).toBe(false)
+    expect('stepDownTo' in (absent.manifest ?? {})).toBe(false)
+  })
+
+  it('rejects a negative or non-numeric recommendation_rank_cpu and an empty or non-string step_down_to (§6.7)', () => {
+    for (const value of [-1, 'x', '3', true, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      const res = validateManifest(rawManifest({ recommendation_rank_cpu: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('recommendation_rank_cpu')), String(value)).toBe(true)
+    }
+    for (const value of ['', '   ', 3, true, ['a'], null]) {
+      const res = validateManifest(rawManifest({ step_down_to: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('step_down_to')), String(value)).toBe(true)
+    }
+  })
+
+  // The card-path fields (model-benchmarks.md §6.8), validated the same way.
+  it('parses recommendation_rank_gpu and projected_graphics_need_mib, leaving both undefined when omitted (§6.8)', () => {
+    const both = validateManifest(rawManifest({ recommendation_rank_gpu: 0, projected_graphics_need_mib: 5919 })).manifest
+    expect(both?.recommendationRankGpu).toBe(0)
+    expect(both?.projectedGraphicsNeedMib).toBe(5919)
+    const absent = validateManifest(rawManifest())
+    expect('recommendationRankGpu' in (absent.manifest ?? {})).toBe(false)
+    expect('projectedGraphicsNeedMib' in (absent.manifest ?? {})).toBe(false)
+  })
+
+  it('rejects a negative or non-numeric recommendation_rank_gpu or projected_graphics_need_mib (§6.8)', () => {
+    for (const key of ['recommendation_rank_gpu', 'projected_graphics_need_mib']) {
+      for (const value of [-1, 'x', '3', true, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+        const res = validateManifest(rawManifest({ [key]: value }))
+        expect(res.ok, `${key}=${String(value)}`).toBe(false)
+        expect(res.errors.some((e) => e.includes(key)), `${key}=${String(value)}`).toBe(true)
+      }
+    }
+  })
+
   // Issue #182: `speculative_decoding` is a CLOSED enum on purpose — a free-form argument list
   // would let a hand-edited on-drive manifest inject any llama-server flag (`--host 0.0.0.0`
   // defeats the loopback-only invariant, since extras are appended last and a later flag wins).
@@ -190,6 +236,27 @@ describe('validateManifest', () => {
     }
     // false on another role is also rejected: the key is chat-only, whatever its value.
     expect(validateManifest(rawManifest({ role: 'embeddings', disable_prompt_cache: false })).ok).toBe(false)
+  })
+
+  // #848: `default_for_role` names the manifest `resolveModelByRole` takes for its role ahead of walk order. A typo fails
+  // the manifest like every optional field's; on chat it is inert (the active chat model is the user's pick) and accepted,
+  // never rejected: a field this release reads must not make a later manifest vanish from it (D848-3).
+  it('parses default_for_role: true; false and absent both leave the field off (#848)', () => {
+    expect(validateManifest(rawManifest({ role: 'embeddings', default_for_role: true })).manifest?.defaultForRole).toBe(true)
+    for (const raw of [rawManifest({ role: 'embeddings', default_for_role: false }), rawManifest({ role: 'embeddings' })]) {
+      const res = validateManifest(raw)
+      expect(res.ok).toBe(true)
+      expect(res.manifest).not.toHaveProperty('defaultForRole')
+    }
+  })
+
+  it('rejects a non-boolean default_for_role, and accepts the flag on chat, where nothing reads it (#848)', () => {
+    for (const value of ['true', 'yes', 1, null, ['embeddings']]) {
+      const res = validateManifest(rawManifest({ role: 'embeddings', default_for_role: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('default_for_role')), String(value)).toBe(true)
+    }
+    expect(validateManifest(rawManifest({ role: 'chat', default_for_role: true })).ok).toBe(true)
   })
 
   // vuln-scan-2026-06-21 [path-traversal]: a hostile manifest's local_path is rejected at the
@@ -503,9 +570,9 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
 
 // TG-1: the `translation` role (TranslateGemma). Unlike vision it is a single-file GGUF (no
 // mmproj), so the only role-specific fact is that the role string is accepted; everything else
-// rides the shared manifest schema. An older build that predates the role treats such a manifest
-// as `unsupported` (validator rejects an unknown role) — the same forward-compatible rollout as
-// vision/transcriber.
+// rides the shared manifest schema. A build that predates a role lists such a manifest as needing a
+// newer HilbertRaum (#847: discovery routes an unknown role to `parseUnsupportedManifest`; the validator
+// itself still rejects it); builds up to v0.1.65 reject it, so it vanishes there.
 describe('validateManifest — translation role (TranslateGemma, TG-1)', () => {
   const translationRaw = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
     rawManifest({
@@ -786,6 +853,47 @@ describe('validateManifest — files: additional required files (#310)', () => {
     const res = validateManifest(rawManifest({ local_path: 'models/chat/x-00001-of-00000.gguf' }))
     expect(res.ok).toBe(false)
     expect(res.errors).toContain('"local_path" must name a shard set of at least one shard, not "-of-00000"')
+  })
+})
+
+// #847 (a+): the frozen comparator release 1 applies to every later manifest's `min_app_version`. The minimum must be
+// exactly MAJOR.MINOR.PATCH; anything else counts as newer (the old reader cannot vouch for it). Parts compare as numbers.
+// The app's own version may carry a pre-release suffix, which is OLDER than its release (semver), and build metadata,
+// which is ignored. An app version this build cannot read counts as unknown, which is newer too.
+describe('manifestNeedsNewerApp — the (a+) comparator (#847)', () => {
+  it.each<[string, unknown, boolean]>([
+    ['0.1.65', '0.1.65', false],
+    ['0.1.65', '0.1.64', false],
+    ['0.1.65', '0.1.66', true],
+    ['0.1.9', '0.1.10', true], // multi-digit parts compare as numbers, not text
+    ['0.1.10', '0.1.9', false],
+    ['0.1.65', '0.1.100', true],
+    ['0.2.0', '0.1.100', false],
+    ['1.0.0', '0.99.99', false],
+    ['0.1.66-beta.1', '0.1.66', true], // a pre-release app does not meet its own release
+    ['0.1.66-beta.1', '0.1.65', false],
+    ['0.1.66+build.7', '0.1.66', false],
+    ['0.1.65', '0.1.0.9', true], // not exactly MAJOR.MINOR.PATCH: newer
+    ['0.1.65', '00.01.000', true],
+    ['0.1.65', '0.1.0x', true],
+    ['0.1.65', '0.1.0-beta', true],
+    ['0.1.65', 'v0.1.0', true],
+    ['0.1.65', '0.1', true],
+    ['0.1.65', ' 0.1.0', true],
+    ['0.1.65', '', true],
+    ['0.1.65', 0.1, true],
+    ['0.1.65', false, true],
+    ['', '0.0.1', true], // an app that does not know its version cannot vouch
+    ['0.1', '0.0.1', true]
+  ])('app %s, min_app_version %j: needs a newer app = %s', (app, min, expected) => {
+    expect(manifestNeedsNewerApp({ min_app_version: min }, app)).toBe(expected)
+  })
+
+  it('an absent or null min_app_version never asks for a newer app, whatever the app version', () => {
+    for (const app of ['0.1.65', '', 'junk']) {
+      expect(manifestNeedsNewerApp({}, app)).toBe(false)
+      expect(manifestNeedsNewerApp({ min_app_version: null }, app)).toBe(false)
+    }
   })
 })
 

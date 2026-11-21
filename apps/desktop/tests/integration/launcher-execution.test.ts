@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, delimiter, join } from 'node:path'
 import { REPO_ROOT } from '../helpers/repo-files'
 import { bashLegSkipped, outputOf } from '../helpers/script-legs'
-import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs, until, within } from '../helpers/hang-budget'
 
 // Executes the drive-root launchers (#235, #257). Every launcher derives the drive root from
 // its own location, so each case copies the launcher into a scratch root beside 0-byte app
@@ -314,16 +314,41 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
 
   // The normal Mac path: exFAT holds no symlinks, so the drive carries the ditto-zip and the launcher unpacks it once into
   // $HOME/Library/Caches (#769). A `ditto` stub first on PATH stands in for macOS's own, so the bash legs reach this path
-  // without a Mac: it logs each call and, by DITTO_MODE, unpacks a stub bundle (ok), fails (fail) or unpacks nothing (empty).
+  // without a Mac: it logs each call and, by DITTO_MODE, unpacks a stub bundle (ok), fails (fail), unpacks nothing (empty)
+  // or a bundle without its app binary (nobin). It writes the bundle in two halves; with DITTO_GATE set it stops between
+  // them until the row lets it go on, so a row can start a second launch while the first one is unpacking (#887).
   describe('unpacking the .app.zip into the local cache', () => {
     const zip = zips[1]
     const cached = basename(zip, '.zip')
     const pathKey = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? 'PATH'
+    const firstHalf = (caches: string): string => join(caches, cached, 'HilbertRaum.app', 'Contents', 'Frameworks', 'first-half')
 
+    type DittoMode = 'ok' | 'fail' | 'empty' | 'nobin' | 'full'
+    interface Started {
+      exited: Promise<{ status: number | null; out: string }>
+      kill(): void
+    }
     interface Drive {
       root: string
       caches: string
-      run(mode: 'ok' | 'fail' | 'empty'): SpawnSyncReturns<string>
+      run(mode: DittoMode): SpawnSyncReturns<string>
+      /**
+       * A launch that runs beside the test, for the rows where two launches overlap. `prelude` runs first in the shell that
+       * then `exec`s the launcher, so its `$$` is the launcher's PID.
+       */
+      start(mode: DittoMode, env: Record<string, string>, prelude?: string): Started
+      /**
+       * Puts an `mv` stub first on PATH that, with MV_GATE set, waits before it moves. With MV_MODE=lose it loses the rename
+       * race instead: a parallel start publishes a complete copy (marked `rival`) at the target, and the rename fails. With
+       * MV_MODE=fail it fails and publishes nothing.
+       */
+      stubMv(): void
+      /** Puts an `mkdir` stub first on PATH that, with MKDIR_MODE=full, fails a `mkdir` without `-p` (a full disk). */
+      stubMkdir(): void
+      /** A gate file prefix for DITTO_GATE / MV_GATE: the stub writes `<gate>.started` and waits for `<gate>.go`. */
+      gate(name: string): string
+      reached(gate: string): Promise<void>
+      release(gate: string): void
       dittoCalls(): string[]
     }
 
@@ -337,34 +362,135 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
       stubApp(app, 'launched.txt')
       const log = join(stubs, 'ditto.log')
       writeFileSync(log, '')
+      const waitFor = (variable: string): string[] => [
+        `if [ -n "\${${variable}:-}" ]; then`,
+        `  : > "$${variable}.started"`,
+        `  while [ ! -e "$${variable}.go" ]; do sleep 0.05; done`,
+        'fi'
+      ]
       writeFileSync(
         join(stubs, 'ditto'),
         [
           '#!/bin/bash',
           'echo "$*" >> "$DITTO_LOG"',
           'case "$DITTO_MODE" in fail) exit 1 ;; empty) exit 0 ;; esac',
-          'mkdir -p "$4/HilbertRaum.app/Contents/MacOS"',
+          // A full disk: the unpack gets part-way, then the write fails.
+          'if [ "$DITTO_MODE" = full ]; then mkdir -p "$4/half"; echo "ditto: $4/half: No space left on device" >&2; exit 1; fi',
+          'mkdir -p "$4/HilbertRaum.app/Contents/Frameworks"',
+          ': > "$4/HilbertRaum.app/Contents/Frameworks/first-half"',
+          ...waitFor('DITTO_GATE'),
+          // A zip extractor re-creates a parent folder that went missing meanwhile.
+          'mkdir -p "$4/HilbertRaum.app/Contents/MacOS" || exit 1',
+          'if [ "$DITTO_MODE" = nobin ]; then exit 0; fi',
           'cp "$DITTO_APP" "$4/HilbertRaum.app/Contents/MacOS/HilbertRaum"',
           ''
         ].join('\n')
       )
       chmodSync(join(stubs, 'ditto'), 0o755)
+      // The inherited key, whatever its case: Windows env names are case-insensitive, and Git Bash converts a Windows
+      // `Path` itself (a `C:` entry in a POSIX PATH would split at its colon).
+      const env = (mode: DittoMode, extra: Record<string, string> = {}): Record<string, string> => ({
+        HOME: home,
+        [pathKey]: `${stubs}${delimiter}${process.env[pathKey] ?? ''}`,
+        DITTO_LOG: log,
+        DITTO_MODE: mode,
+        DITTO_APP: app,
+        ...extra
+      })
       return {
         root,
         caches: join(home, 'Library', 'Caches', 'HilbertRaum'),
-        // The inherited key, whatever its case: Windows env names are case-insensitive, and Git Bash converts a Windows
-        // `Path` itself (a `C:` entry in a POSIX PATH would split at its colon).
-        run: (mode) =>
-          runBash(root, COMMAND, [], {
-            HOME: home,
-            [pathKey]: `${stubs}${delimiter}${process.env[pathKey] ?? ''}`,
-            DITTO_LOG: log,
-            DITTO_MODE: mode,
-            DITTO_APP: app
-          }),
+        run: (mode) => runBash(root, COMMAND, [], env(mode)),
+        // Git Bash's bash.exe puts its own /usr/bin ahead of the PATH it inherits, which hides an `mv` stub (a `ditto` one
+        // has nothing to hide behind). The inner bash keeps the PATH it is given, and `exec` keeps the PID.
+        start: (mode, extra, prelude = '') => {
+          const child = spawn('bash', ['-c', `${prelude}PATH="$(cd "$1" && pwd):$PATH"; exec bash "$2"`, 'launch', stubs, join(root, COMMAND)], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, ...env(mode, extra) }
+          })
+          let out = ''
+          child.stdout.setEncoding('utf8').on('data', (d: string) => (out += d))
+          child.stderr.setEncoding('utf8').on('data', (d: string) => (out += d))
+          const exited = new Promise<{ status: number | null; out: string }>((resolve) =>
+            child.on('close', (status) => resolve({ status, out }))
+          )
+          return { exited, kill: () => child.kill() }
+        },
+        // /bin/mv exists on macOS, on the usrmerged Ubuntu runners and in Git Bash.
+        stubMv: () => {
+          writeFileSync(
+            join(stubs, 'mv'),
+            [
+              '#!/bin/bash',
+              ...waitFor('MV_GATE'),
+              'if [ "${MV_MODE:-}" = lose ]; then',
+              '  mkdir -p "$2/HilbertRaum.app/Contents/MacOS" "$2/HilbertRaum.app/Contents/Frameworks"',
+              '  cp "$DITTO_APP" "$2/HilbertRaum.app/Contents/MacOS/HilbertRaum"',
+              '  : > "$2/HilbertRaum.app/Contents/Frameworks/rival"',
+              '  echo "mv: rename $1 to $2: Directory not empty" >&2',
+              '  exit 1',
+              'fi',
+              'if [ "${MV_MODE:-}" = fail ]; then echo "mv: rename $1 to $2: Permission denied" >&2; exit 1; fi',
+              'exec /bin/mv "$@"',
+              ''
+            ].join('\n')
+          )
+          chmodSync(join(stubs, 'mv'), 0o755)
+        },
+        // /bin/mkdir exists on macOS, on the usrmerged Ubuntu runners and in Git Bash.
+        stubMkdir: () => {
+          writeFileSync(
+            join(stubs, 'mkdir'),
+            [
+              '#!/bin/bash',
+              'if [ "${MKDIR_MODE:-}" = full ] && [ "${1:-}" != -p ]; then',
+              '  echo "mkdir: cannot create directory: No space left on device" >&2',
+              '  exit 1',
+              'fi',
+              'exec /bin/mkdir "$@"',
+              ''
+            ].join('\n')
+          )
+          chmodSync(join(stubs, 'mkdir'), 0o755)
+        },
+        gate: (name) => join(stubs, `gate-${name}`),
+        reached: (gate) => until(() => existsSync(`${gate}.started`), `${basename(gate)} reached its stub`, 10_000),
+        release: (gate) => writeFileSync(`${gate}.go`, ''),
         dittoCalls: () => readFileSync(log, 'utf8').split('\n').filter(Boolean)
       }
     }
+
+    /**
+     * A PID the launcher's `kill -0` sees as running. Under Git Bash node's `child.pid` is the Windows PID, which MSYS
+     * `kill -0` cannot see, so the child prints its own `$$` (the same number on Linux and macOS).
+     */
+    async function livePid(): Promise<{ pid: string; stop(): void }> {
+      const child = spawn('bash', ['-c', 'echo $$; exec sleep 60'], { stdio: ['ignore', 'pipe', 'ignore'] })
+      const stop = (pid?: string): void => {
+        if (pid) spawnSync('bash', ['-c', 'kill "$1" 2>/dev/null; true', '_', pid])
+        child.kill()
+      }
+      try {
+        const pid = await within(
+          new Promise<string>((resolve) => {
+            let buf = ''
+            child.stdout.setEncoding('utf8').on('data', (d: string) => {
+              buf += d
+              if (buf.includes('\n')) resolve(buf.slice(0, buf.indexOf('\n')).trim())
+            })
+          }),
+          'the stand-in for a running launch printed its PID',
+          10_000
+        )
+        return { pid, stop: () => stop(pid) }
+      } catch (e) {
+        stop()
+        throw e
+      }
+    }
+
+    /** The PID of a bash that has exited and been reaped: `kill -0` fails on it. */
+    const deadPid = (): string => spawnSync('bash', ['-c', 'echo $$'], { encoding: 'utf8' }).stdout.trim()
 
     it("unpacks the zip once, publishes it in $HOME's cache and starts the cached bundle with the drive's variables; the next start reuses it", () => {
       const drive = zipDrive()
@@ -382,19 +508,283 @@ describe.skipIf(bashLegSkipped)('Start HilbertRaum.command (macOS)', () => {
       expectDriveEnv(readFileSync(record, 'utf8'), drive.root)
     })
 
-    it('sweeps a partial unpack that a killed run left behind', () => {
+    // A partial unpack is `<zip name>.partial.<pid of the start writing it>`. One whose start has ended is swept; a name
+    // that is no PID is swept too: `kill -0 0` and `kill -0 00` signal the start's own process group and `kill -0 -1` every
+    // process it may signal, so each succeeds and such a folder would otherwise stay forever.
+    it.each([
+      ['the PID of a start that has ended', deadPid],
+      ['0', () => '0'],
+      ['a leading zero (00)', () => '00'],
+      ['a minus sign (-1)', () => '-1']
+    ])('sweeps a partial unpack left behind whose name holds %s (#887)', (_, suffix) => {
       const drive = zipDrive()
-      mkdirSync(join(drive.caches, `${cached}.partial.999`, 'HilbertRaum.app'), { recursive: true })
+      mkdirSync(join(drive.caches, `${cached}.partial.${suffix()}`, 'HilbertRaum.app'), { recursive: true })
       const r = drive.run('ok')
       expect(r.status, outputOf(r)).toBe(0)
       expect(readdirSync(drive.caches)).toEqual([cached])
     })
 
+    // The launcher's own PID passes `kill -0`, so only the sweep's own-PID arm removes a stale partial that carries it (a
+    // killed start of the same number). Kept, the unpack would land on top of its files and publish them. The shell that
+    // plants it `exec`s the launcher, so the PID is the same.
+    it('sweeps a stale partial unpack that holds its own PID before it unpacks (#887)', async () => {
+      const drive = zipDrive()
+      const own = `"$HOME/Library/Caches/HilbertRaum/${cached}.partial.$$/HilbertRaum.app/Contents/Frameworks"`
+      const s = drive.start('ok', {}, `mkdir -p ${own} && : > ${own}/STALE || exit 97; `)
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(0)
+        expect(readdirSync(drive.caches)).toEqual([cached])
+        const app = join(drive.caches, cached, 'HilbertRaum.app')
+        expect(existsSync(join(app, 'Contents', 'Frameworks', 'STALE')), 'the stale file was published').toBe(false)
+        expect(existsSync(join(app, 'Contents', 'MacOS', 'launched.txt'))).toBe(true)
+      } finally {
+        s.kill()
+      }
+    })
+
+    // A leftover with this start's own PID that the sweep cannot remove (root-owned files from a `sudo` start) used to be
+    // reused by `mkdir -p`: the unpack landed beside its files and published them. NTFS ignores the mode and root may delete
+    // anything, so the row needs a POSIX desk and a normal user (on a Windows box, WSL runs it: round-3 log).
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a leftover partial unpack with its own PID that the sweep cannot remove stops the start, and none of it is published (#887)',
+      async () => {
+        const drive = zipDrive()
+        const own = `"$HOME/Library/Caches/HilbertRaum/${cached}.partial.$$/locked"`
+        const s = drive.start('ok', {}, `mkdir -p ${own} && : > ${own}/f && chmod 555 ${own} || exit 97; `)
+        try {
+          const r = await within(s.exited, 'the start ended', 10_000)
+          expect(r.status, r.out).toBe(1)
+          expect(r.out).toMatch(/An earlier unpack at '.*\.partial\.\d+' could not be removed/)
+          expect(existsSync(join(drive.caches, cached)), 'a published cache').toBe(false)
+          expect(drive.dittoCalls()).toEqual([])
+        } finally {
+          s.kill()
+          for (const name of existsSync(drive.caches) ? readdirSync(drive.caches) : []) {
+            const locked = join(drive.caches, name, 'locked')
+            if (existsSync(locked)) chmodSync(locked, 0o755)
+          }
+        }
+      }
+    )
+
+    // A partial folder that cannot be created at all is no "earlier unpack": the message names the real cause (#919). The
+    // stub makes the disk full for the one `mkdir` without `-p`; a launch with it must go through `start`, because Git Bash's
+    // bash puts /usr/bin ahead of an inherited PATH and would hide the stub.
+    it('a partial unpack folder that cannot be created (a full disk) says so, not that an earlier unpack could not be removed (#919)', async () => {
+      const drive = zipDrive()
+      drive.stubMkdir()
+      const s = drive.start('ok', { MKDIR_MODE: 'full' })
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(1)
+        expect(r.out).toMatch(/Could not create '.*\.partial\.\d+'/)
+        expect(r.out).not.toMatch(/earlier unpack/)
+        expect(drive.dittoCalls()).toEqual([])
+        expect(existsSync(join(drive.caches, cached)), 'a published cache').toBe(false)
+      } finally {
+        s.kill()
+      }
+    })
+
+    // NTFS ignores the mode and root may write anywhere, so these two rows need a POSIX desk and a normal user.
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a cache folder this user cannot write to says "Could not create", not "earlier unpack" (#919)',
+      async () => {
+        const drive = zipDrive()
+        mkdirSync(drive.caches, { recursive: true })
+        chmodSync(drive.caches, 0o555)
+        const s = drive.start('ok', {})
+        try {
+          const r = await within(s.exited, 'the start ended', 10_000)
+          expect(r.status, r.out).toBe(1)
+          expect(r.out).toMatch(/Could not create '.*\.partial\.\d+'/)
+          expect(r.out).not.toMatch(/earlier unpack/)
+          expect(drive.dittoCalls()).toEqual([])
+        } finally {
+          s.kill()
+          chmodSync(drive.caches, 0o755)
+        }
+      }
+    )
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a ~/Library/Caches that cannot be written gets the launcher message, not a bare mkdir error (#919)',
+      async () => {
+        const drive = zipDrive()
+        const libraryCaches = join(drive.caches, '..')
+        mkdirSync(libraryCaches, { recursive: true })
+        chmodSync(libraryCaches, 0o555)
+        const s = drive.start('ok', {})
+        try {
+          const r = await within(s.exited, 'the start ended', 10_000)
+          expect(r.status, r.out).toBe(1)
+          expect(r.out).toMatch(/Could not create '.*\.partial\.\d+'/)
+          expect(r.out).toContain('docs/troubleshooting.md')
+          expect(drive.dittoCalls()).toEqual([])
+        } finally {
+          s.kill()
+          chmodSync(libraryCaches, 0o755)
+        }
+      }
+    )
+
+    // A start that loses the publish race moves its copy INSIDE the published cache and removes it there; stopped in
+    // between, it left that copy (up to ~400 MB) inside the cache for good.
+    it('removes a copy that a stopped start left nested inside the published cache (#887)', () => {
+      const drive = zipDrive()
+      const first = drive.run('ok')
+      expect(first.status, outputOf(first)).toBe(0)
+      mkdirSync(join(drive.caches, cached, `${cached}.partial.${deadPid()}`, 'HilbertRaum.app'), { recursive: true })
+      const r = drive.run('ok')
+      expect(r.status, outputOf(r)).toBe(0)
+      expect(readdirSync(join(drive.caches, cached))).toEqual(['HilbertRaum.app'])
+      expect(drive.dittoCalls()).toHaveLength(1)
+    })
+
+    // #887: the sweep ran only while the cache was missing, so a start stopped during its unpack after another start had
+    // published kept its partial (up to ~400 MB) for as long as that version was used.
+    it('sweeps a partial unpack left behind once the cache is published too (#887)', () => {
+      const drive = zipDrive()
+      const first = drive.run('ok')
+      expect(first.status, outputOf(first)).toBe(0)
+      mkdirSync(join(drive.caches, `${cached}.partial.${deadPid()}`, 'HilbertRaum.app'), { recursive: true })
+      const r = drive.run('ok')
+      expect(r.status, outputOf(r)).toBe(0)
+      expect(readdirSync(drive.caches)).toEqual([cached])
+      expect(drive.dittoCalls()).toHaveLength(1)
+    })
+
+    // #887: every start used to delete every partial unpack, so a second double-click during the first unpack deleted the
+    // folder the first start was still writing into.
+    it('keeps the partial unpack of a start that is still running (#887)', async () => {
+      const drive = zipDrive()
+      const live = await livePid()
+      try {
+        const partial = join(drive.caches, `${cached}.partial.${live.pid}`)
+        mkdirSync(partial, { recursive: true })
+        writeFileSync(join(partial, 'still-unpacking'), '')
+        const r = drive.run('ok')
+        expect(r.status, outputOf(r)).toBe(0)
+        expect(existsSync(join(partial, 'still-unpacking'))).toBe(true)
+        expect(existsSync(join(drive.caches, cached, 'HilbertRaum.app'))).toBe(true)
+      } finally {
+        live.stop()
+      }
+    })
+
+    it('two starts during one unpack both start the app, and the copy they run is complete (#887)', async () => {
+      const drive = zipDrive()
+      const [one, two] = [drive.gate('ditto-1'), drive.gate('ditto-2')]
+      const starts: Started[] = []
+      try {
+        starts.push(drive.start('ok', { DITTO_GATE: one }))
+        await drive.reached(one)
+        starts.push(drive.start('ok', { DITTO_GATE: two }))
+        await drive.reached(two)
+        drive.release(one)
+        const first = await within(starts[0].exited, 'the first start ended', 10_000)
+        drive.release(two)
+        const second = await within(starts[1].exited, 'the second start ended', 10_000)
+        expect(first.status, first.out).toBe(0)
+        expect(second.status, second.out).toBe(0)
+        expect(existsSync(firstHalf(drive.caches)), 'the half unpacked before the second start').toBe(true)
+        expect(readdirSync(drive.caches)).toEqual([cached])
+      } finally {
+        for (const gate of [one, two]) drive.release(gate)
+        for (const s of starts) s.kill()
+      }
+    })
+
+    // `mv` onto a folder that exists moves the source INTO it: two starts that both found no cache before either published
+    // would leave a second ~400 MB copy inside the first.
+    it('two starts that publish at the same moment leave one copy in the cache, nothing nested (#887)', async () => {
+      const drive = zipDrive()
+      drive.stubMv()
+      const [one, two] = [drive.gate('mv-1'), drive.gate('mv-2')]
+      const starts: Started[] = []
+      try {
+        starts.push(drive.start('ok', { MV_GATE: one }))
+        await drive.reached(one)
+        starts.push(drive.start('ok', { MV_GATE: two }))
+        await drive.reached(two)
+        drive.release(one)
+        const first = await within(starts[0].exited, 'the first start ended', 10_000)
+        drive.release(two)
+        const second = await within(starts[1].exited, 'the second start ended', 10_000)
+        expect(first.status, first.out).toBe(0)
+        expect(second.status, second.out).toBe(0)
+        expect(readdirSync(join(drive.caches, cached))).toEqual(['HilbertRaum.app'])
+        expect(readdirSync(drive.caches)).toEqual([cached])
+      } finally {
+        for (const gate of [one, two]) drive.release(gate)
+        for (const s of starts) s.kill()
+      }
+    })
+
+    // A parallel start can also publish between mv's own look at the target and its rename: the rename then fails
+    // ("Directory not empty"). That start used to stop there under `set -e` with a raw `mv` line and keep its partial.
+    it('a start whose publish loses the rename race to a parallel start runs that copy and leaves no partial (#887)', async () => {
+      const drive = zipDrive()
+      drive.stubMv()
+      const s = drive.start('ok', { MV_MODE: 'lose' })
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(0)
+        expect(r.out).not.toMatch(/Directory not empty/)
+        expect(readdirSync(drive.caches)).toEqual([cached])
+        const app = join(drive.caches, cached, 'HilbertRaum.app')
+        expect(existsSync(join(app, 'Contents', 'Frameworks', 'rival')), "the parallel start's copy").toBe(true)
+        expect(existsSync(join(app, 'Contents', 'MacOS', 'launched.txt'))).toBe(true)
+      } finally {
+        s.kill()
+      }
+    })
+
+    it('a publish that fails with no copy published stops with a message and leaves no partial (#887)', async () => {
+      const drive = zipDrive()
+      drive.stubMv()
+      const s = drive.start('ok', { MV_MODE: 'fail' })
+      try {
+        const r = await within(s.exited, 'the start ended', 10_000)
+        expect(r.status, r.out).toBe(1)
+        expect(r.out).toMatch(/Could not finish unpacking '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip'/)
+        // It stops there: going on, it would tell the user to delete a cache folder that does not exist.
+        expect(r.out).not.toMatch(/is incomplete/)
+        expect(readdirSync(drive.caches), 'no partial and no cache').toEqual([])
+      } finally {
+        s.kill()
+      }
+    })
+
+    // Root-owned files from a `sudo` start, or a read-only folder, used to stop every later start at the sweep with a raw
+    // `rm` error. NTFS ignores the mode and root may delete anything, so the row needs a POSIX desk and a normal user.
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a leftover partial unpack the sweep cannot remove does not stop the start (#887)',
+      () => {
+        const drive = zipDrive()
+        const locked = join(drive.caches, `${cached}.partial.${deadPid()}`, 'locked')
+        mkdirSync(locked, { recursive: true })
+        writeFileSync(join(locked, 'f'), '')
+        chmodSync(locked, 0o555)
+        try {
+          const r = drive.run('ok')
+          expect(r.status, outputOf(r)).toBe(0)
+          expect(existsSync(join(drive.caches, cached, 'HilbertRaum.app'))).toBe(true)
+        } finally {
+          chmodSync(locked, 0o755)
+        }
+      }
+    )
+
     // An archive that unpacks to no .app (a zip made without --keepParent) used to be published as the cache, and every
-    // later start then refused it without unpacking again (#769).
+    // later start then refused it without unpacking again (#769). So did a bundle without its app binary, after which every
+    // start told the user to get past Gatekeeper (#887).
     it.each([
+      ['runs out of disk space', 'full', /Could not unpack '.*\.app\.zip'\.\s+Check that this Mac's disk has free space/],
       ['fails', 'fail', /Could not unpack '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip'/],
-      ['unpacks no .app', 'empty', /found no \.app inside it/]
+      ['unpacks no .app', 'empty', /found no \.app inside it/],
+      ['unpacks an .app without its app binary', 'nobin', /Unpacked '.*HilbertRaum-0\.1\.59-mac-arm64\.app\.zip' but the app inside it lacks its program file/]
     ] as const)('when ditto %s it publishes nothing, leaves no partial, and the next start unpacks again', (_, mode, message) => {
       const drive = zipDrive()
       for (const attempt of [1, 2]) {

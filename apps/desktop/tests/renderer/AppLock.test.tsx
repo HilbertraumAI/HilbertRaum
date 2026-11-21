@@ -3,28 +3,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
-import {
-  adoptActiveJob,
-  clearTranslateSession,
-  getTranslateSession
-} from '../../src/renderer/lib/translateSession'
-import {
-  clearFileTranslate,
-  getFileTranslate,
-  translateDroppedFiles
-} from '../../src/renderer/lib/fileTranslateSession'
-import {
-  getVisionSession,
-  loadSession,
-  clearVisionSession
-} from '../../src/renderer/lib/visionSession'
-import {
-  type WorkspaceStateInfo,
-  type TranslateJob,
-  type ImportJob
-} from '../../src/shared/types'
-import { appShellStubs } from '../helpers/app-shell'
-import { stubApi } from '../helpers/renderer'
+import { getVisionSession, loadSession, clearVisionSession } from '../../src/renderer/lib/visionSession'
+import type { WorkspaceActionResult, WorkspaceStateInfo } from '../../src/shared/types'
+import { t } from '../../src/shared/i18n'
+import { LOCKED_ENCRYPTED_WORKSPACE, UNLOCKED_ENCRYPTED_WORKSPACE, appShellStubs } from '../helpers/app-shell'
+import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 import { selectedImage } from '../helpers/vision-fixtures'
 
 // F-41 (audit-2026-07-16): the stubApi payloads are typed against the real PreloadApi bridge
@@ -33,46 +16,44 @@ import { selectedImage } from '../helpers/vision-fixtures'
 
 // TA-2 / H3: the renderer session-store purge must fire at the REAL lock seam. A screen-effect
 // purge was dead code (lock unmounts the screen before the effect could observe `locked`); the
-// purge now lives in `App.lockNow`. This drives the real flow — seed all three module stores, click
-// "Lock now" in the rail, and assert main's `lockWorkspace` ran and every store is back to EMPTY.
+// purge now lives in `App.lockNow`. This drives the real flow — seed a module store, click "Lock
+// now" in the rail, and assert main's `lockWorkspace` ran, the store is back to EMPTY and the gate
+// shows. What `purgeSessionStores` clears, store by store, is lockPurge.test.ts's; the review
+// store's flush → lock → purge order is ReviewLockSeam.test.tsx's.
 
-const unlockedEncrypted: WorkspaceStateInfo = {
-  state: 'unlocked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
-}
-const lockedState: WorkspaceStateInfo = {
-  state: 'locked',
-  mode: 'encrypted',
-  plaintextAllowed: false,
-  encryptionRequired: true
+/** A resident vision session: an image and one answered turn, the content a lock must drop. */
+function seedVisionSession(): void {
+  loadSession(
+    selectedImage('secret.png', { sizeBytes: 42 }),
+    [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
+    'sess1'
+  )
 }
 
-const CHOICE = { sourceLang: 'de', targetLang: 'en' } as const
-
+// #832: an unmocked window.api call fails the row (cleanup first; the stores clear whatever happens).
 afterEach(() => {
-  cleanup()
-  clearTranslateSession()
-  clearFileTranslate()
-  clearVisionSession()
-  vi.restoreAllMocks()
+  try {
+    cleanup()
+  } finally {
+    try {
+      assertNoUnexpectedApiCalls()
+    } finally {
+      clearVisionSession()
+      vi.restoreAllMocks()
+    }
+  }
 })
 
 describe('App.lockNow — purges the session stores at the real lock seam (TA-2)', () => {
-  it('empties the text, document, and vision stores when the workspace locks', async () => {
-    const lockWorkspace = vi.fn(async () => lockedState)
+  it('runs the whole session-store purge when the workspace locks (the vision store emptied), then shows the gate', async () => {
+    const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
+    // Once the lock shows the gate, App marks it for opt-in measurement runs (benchmark.md "gate_visible").
+    const perfMark = vi.fn()
     stubApi(
       appShellStubs({
-        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
         lockWorkspace,
-        // Seeds: a running text job to re-adopt + a never-resolving document import.
-        getActiveTranslateJob: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'j9', state: 'translating', text: 'geheim' })),
-        onTranslateToken: vi.fn(() => () => {}),
-        onTranslateDone: vi.fn(() => () => {}),
-        onTranslateError: vi.fn(() => () => {}),
-        getDroppedFilePath: vi.fn(() => 'C:\\docs\\secret.pdf'),
-        importDocuments: vi.fn(() => new Promise<ImportJob>(() => {}))
+        perfMark
       })
     )
 
@@ -83,30 +64,43 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     const nav = await screen.findByRole('navigation')
     const lockBtn = within(nav).getByRole('button', { name: 'Lock now' })
 
-    // Seed all three stores non-idle. Document store FIRST (its start clears the text store), then
-    // the text store, then the vision store — mirroring the real one-at-a-time reset order.
-    void translateDroppedFiles([new File(['%PDF'], 'secret.pdf', { type: 'application/pdf' })], CHOICE)
-    await adoptActiveJob()
-    loadSession(
-      selectedImage('secret.png', { sizeBytes: 42 }),
-      [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
-      'sess1'
-    )
-    expect(getFileTranslate().busy).toBe(true)
-    expect(getTranslateSession().output).toBe('geheim')
+    // The vision store: not the review store, so it is emptied only if lockNow runs the WHOLE purge.
+    seedVisionSession()
     expect(getVisionSession().selected).not.toBeNull()
 
     await user.click(lockBtn)
 
     expect(lockWorkspace).toHaveBeenCalledTimes(1)
     await waitFor(() => {
-      expect(getTranslateSession().state).toBe('idle')
-      expect(getTranslateSession().output).toBe('')
-      expect(getFileTranslate().state).toBe('idle')
-      expect(getFileTranslate().busy).toBe(false)
       expect(getVisionSession().selected).toBeNull()
       expect(getVisionSession().turns).toHaveLength(0)
     })
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(perfMark).toHaveBeenCalledWith('gate_visible')
+    // A plain lock carries no #855 notice, so the gate shows none.
+    expect(screen.queryByText(t('en', 'gate.unlock.workingCopyLost'))).not.toBeInTheDocument()
+  })
+
+  // #855: a lock that finished at the last good snapshot because the working file was gone or no
+  // longer a database resolves `locked` with a notice. The gate the lock lands on must say that
+  // the changes since the previous lock are lost: the user would otherwise unlock into older data
+  // with nothing to explain it.
+  it('shows the gate with the lost-changes notice when the lock finished at the last snapshot (#855)', async () => {
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
+        lockWorkspace: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...LOCKED_ENCRYPTED_WORKSPACE, lockNotice: 'working_copy_lost' })),
+        perfMark: vi.fn()
+      })
+    )
+
+    const user = userEvent.setup()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    await user.click(within(nav).getByRole('button', { name: 'Lock now' }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(t('en', 'gate.unlock.workingCopyLost'))
   })
 
   // full-audit 2026-07-11 CODE-26: a FAILED lock (main restored the unlocked vault, CODE-1a)
@@ -114,14 +108,14 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
   // security-sensitive control. Now the friendly copy surfaces on a banner, the session
   // stores are NOT purged (the workspace really is still unlocked), and the shell stays up.
   it('surfaces a failed lock on a banner — stores kept, shell still unlocked (CODE-26)', async () => {
+    // What main throws when the re-encrypt fails (registerWorkspaceIpc), behind Electron's IPC transport prefix.
+    const lockFailed = t('en', 'main.workspace.lockFailed')
     const lockWorkspace = vi.fn(async () => {
-      throw new Error(
-        "Error invoking remote method 'workspace:lock': Error: The workspace could not be locked — free some disk space and try again."
-      )
+      throw new Error(`Error invoking remote method 'workspace:lock': Error: ${lockFailed}`)
     })
     stubApi(
       appShellStubs({
-        getWorkspaceState: vi.fn(async () => unlockedEncrypted),
+        getWorkspaceState: vi.fn(async () => UNLOCKED_ENCRYPTED_WORKSPACE),
         lockWorkspace
       })
     )
@@ -131,20 +125,13 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     const nav = await screen.findByRole('navigation')
 
     // Seed one session store so the "stores NOT purged" half has teeth.
-    loadSession(
-      selectedImage('secret.png', { sizeBytes: 42 }),
-      [{ id: 't1', question: 'q', answer: 'a secret', state: 'done', error: null }],
-      'sess1'
-    )
+    seedVisionSession()
 
     await user.click(within(nav).getByRole('button', { name: 'Lock now' }))
     expect(lockWorkspace).toHaveBeenCalledTimes(1)
 
-    // The friendly main-process copy, stripped of the IPC transport prefix, on an alert banner.
-    const banner = await screen.findByText(
-      'The workspace could not be locked — free some disk space and try again.'
-    )
-    expect(banner.textContent).not.toContain('Error invoking remote method')
+    // The friendly main-process copy, stripped of the IPC transport prefix (an exact match: the prefix would fail it).
+    expect(await screen.findByText(lockFailed)).toBeInTheDocument()
 
     // Shell still unlocked: the rail (with its Lock button) is up, not the WorkspaceGate.
     expect(within(nav).getByRole('button', { name: 'Lock now' })).toBeInTheDocument()
@@ -154,8 +141,114 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
 
     // The banner is dismissible (retry stays available).
     await user.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(
-      screen.queryByText('The workspace could not be locked — free some disk space and try again.')
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText(lockFailed)).not.toBeInTheDocument()
+  })
+})
+
+describe('the gate at start (#875)', () => {
+  // #875: a lock at QUIT that finished at the last snapshot has no lock screen to return the notice to. Main keeps it
+  // (a marker on the drive) and reports it in the workspace state, so the gate at the next start says it from the
+  // state App fetches on mount, with no lock in this session. #892: so does a start whose sweep shredded the session an
+  // unclean end left behind, in its own words (the working file was neither removed nor damaged), and with the
+  // free-space advice when the drive was too full to lock. #911: so does a start that found the encrypted file missing
+  // and kept the only copy, until the unlock encrypts it again. One banner per value, in that value's words only.
+  const NOTICE_COPY = {
+    working_copy_lost: 'gate.unlock.workingCopyLost',
+    session_not_closed: 'gate.unlock.sessionNotClosed',
+    session_not_closed_full: 'gate.unlock.sessionNotClosedFull',
+    encrypted_file_missing: 'gate.unlock.encryptedFileMissing'
+  } as const
+  it.each(Object.entries(NOTICE_COPY) as Array<[keyof typeof NOTICE_COPY, (typeof NOTICE_COPY)[keyof typeof NOTICE_COPY]]>)(
+    'shows the %s notice on the gate at start, from the workspace state alone (#875, #892, #911)',
+    async (notice, key) => {
+      const lockWorkspace = vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE)
+      stubApi(
+        appShellStubs({
+          getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => ({ ...LOCKED_ENCRYPTED_WORKSPACE, lockNotice: notice })),
+          lockWorkspace,
+          perfMark: vi.fn()
+        })
+      )
+
+      render(<App />)
+
+      expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+      expect(screen.getByRole('status')).toHaveTextContent(t('en', key))
+      for (const other of Object.values(NOTICE_COPY).filter((k) => k !== key)) {
+        expect(screen.queryByText(t('en', other))).not.toBeInTheDocument()
+      }
+      expect(lockWorkspace).not.toHaveBeenCalled()
+    }
+  )
+
+  // The state crosses the IPC: a value the gate has no copy for shows no banner, also one that names a member every
+  // object inherits (an own-property read, as for a failure's `reason`), instead of rendering garbage or crashing.
+  it.each(['toString', 'a-later-notice'])('shows no notice for a value it has no copy for (%s)', async (notice) => {
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(
+          async (): Promise<WorkspaceStateInfo> => ({ ...LOCKED_ENCRYPTED_WORKSPACE, lockNotice: notice as WorkspaceStateInfo['lockNotice'] })
+        ),
+        lockWorkspace: vi.fn(async () => LOCKED_ENCRYPTED_WORKSPACE),
+        perfMark: vi.fn()
+      })
+    )
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  // #860 A1: with no workspace state there is neither a gate nor a shell to show. The start says the app could not
+  // start, with main's reason, instead of a blank window.
+  it('shows the fatal screen with the reason when the workspace state cannot be read at start', async () => {
+    stubApi(
+      appShellStubs({
+        getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => {
+          throw new Error('workspace config unreadable')
+        })
+      })
+    )
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: t('en', 'app.fatal.title') })).toBeInTheDocument()
+    expect(screen.getByText('workspace config unreadable')).toBeInTheDocument()
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Password')).not.toBeInTheDocument()
+  })
+})
+
+describe('the gate after a refused create (#955 item 3)', () => {
+  // #955 item 3: App hands the gate main's new state. A create refused because a workspace is on the drive after all
+  // (its key file copied back while the create form was up) shows the unlock form in the same session; App used to
+  // give the gate only `onUnlocked`, so the create form stayed up until a restart.
+  it('switches to the unlock form, with the refusal, when a create finds a workspace on the drive (#955 item 3)', async () => {
+    const uninitialized: WorkspaceStateInfo = { state: 'uninitialized', mode: null, plaintextAllowed: false, encryptionRequired: true }
+    let reads = 0
+    const getWorkspaceState = vi.fn(
+      async (): Promise<WorkspaceStateInfo> => (reads++ === 0 ? uninitialized : LOCKED_ENCRYPTED_WORKSPACE)
+    )
+    const createWorkspace = vi.fn(
+      async (): Promise<WorkspaceActionResult> => ({
+        ok: false,
+        reason: 'workspace_exists',
+        message: t('en', 'main.workspace.exists')
+      })
+    )
+    stubApi(appShellStubs({ getWorkspaceState, createWorkspace, perfMark: vi.fn() }))
+
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: t('en', 'gate.welcome.start') }))
+    await user.type(await screen.findByPlaceholderText(t('en', 'gate.passwordPlaceholder')), 'longenough')
+    await user.type(screen.getByPlaceholderText(t('en', 'gate.create.confirmPlaceholder')), 'longenough')
+    await user.click(screen.getByRole('button', { name: t('en', 'gate.create.submit') }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(await screen.findByText(t('en', 'main.workspace.exists'))).toBeInTheDocument()
+    expect(createWorkspace).toHaveBeenCalledTimes(1)
+    expect(getWorkspaceState).toHaveBeenCalledTimes(2) // App's at start, the gate's after the refusal
   })
 })

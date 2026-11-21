@@ -1185,6 +1185,11 @@ export const pl: UiCatalog<'pl'> = {
   'models.library.translation': 'Tłumaczenie',
   'models.library.images': 'Obrazy',
   'models.library.voice': 'Mowa',
+  'models.newerApp.heading': 'Wymaga nowszej wersji HilbertRaum',
+  'models.newerApp.badge': 'Wymaga nowszej aplikacji',
+  'models.newerApp.hint':
+    'Ten model jest przeznaczony dla nowszej wersji HilbertRaum. Zaktualizuj aplikację na tym ' +
+    'komputerze, aby go używać.',
   'models.library.memory': 'Minimalna pamięć: {size}',
   'models.library.clear': 'Wyczyść filtry',
   'models.library.showVariants': 'Pokaż wszystkie warianty ({count})',
@@ -1212,10 +1217,14 @@ export const pl: UiCatalog<'pl'> = {
   'models.state.installed': 'Zainstalowany',
   'models.state.missing': 'Niepobrany',
   'models.state.checksumFailed': 'Nie można sprawdzić',
+  'models.state.noChecksum': 'Brak sumy kontrolnej',
   'models.state.unsupported': 'Nieobsługiwany',
   'models.state.notRecommended': 'Niezalecany',
   'models.state.ready': 'Gotowy',
   'models.state.running': 'Działa',
+  'models.noChecksum.hint':
+    'Ten model nie ma zapisanej sumy kontrolnej, więc działa tylko w trybie programisty na dysku, ' +
+    'którego zasady pozwalają na niesprawdzone modele.',
   'models.badge.notResponding': 'Nie odpowiada',
   'models.notRespondingHint':
     'Model AI przestał odpowiadać. Ponowne uruchomienie zwykle rozwiązuje ten problem.',
@@ -1331,6 +1340,18 @@ export const pl: UiCatalog<'pl'> = {
   'models.engine.downloadingNoTotal': 'Pobieranie silnika AI…',
   'models.engine.verifying': 'Sprawdzanie silnika AI…',
   'models.engine.extracting': 'Rozpakowywanie silnika AI…',
+  'models.engineConfirm.chatEngine': 'Silnik AI (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Silnik mowy (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'wersja zapasowa tylko dla procesora',
+  'models.engineConfirm.version': 'Wersja',
+  'models.engineConfirm.total': 'Łączny rozmiar',
+  'models.engineConfirm.licenseIncludes': '{license}, zawiera {bundled}',
+  'models.engineConfirm.hint':
+    'Każdy plik jest pobierany z podanego adresu i przed użyciem porównywany z oczekiwaną sumą ' +
+    'kontrolną. Nie są wysyłane żadne informacje o tobie ani o twoich dokumentach.',
+  'models.engineConfirm.updateNote':
+    'Twój model odpowiada dalej, dopóki trwa pobieranie. Wstrzymuje pracę na kilka sekund tylko na ' +
+    'czas zastępowania plików.',
   'models.voiceEngine.title': 'Dodaj dyktowanie (opcjonalnie)',
   'models.voiceEngine.explain':
     'Odpowiedzi w czacie i odpowiedzi na podstawie dokumentów już działają na tym dysku. Silnik ' +
@@ -1387,7 +1408,8 @@ export const pl: UiCatalog<'pl'> = {
     'W tym systemie operacyjnym aplikacja nie może jeszcze zainstalować silnika mowy, więc ten ' +
     'model nie włącza tu dyktowania ani importu nagrań audio.',
   'models.vision.installed':
-    'Zainstalowany – używany automatycznie na ekranie Obrazy. Nie trzeba tu niczego uruchamiać.',
+    'Zainstalowany – ekran Obrazy sam wybiera, którego modelu wizyjnego użyć. Nie trzeba tu niczego ' +
+    'uruchamiać.',
   'models.vision.notInstalled':
     'Po zainstalowaniu jest używany automatycznie na ekranie Obrazy – nie wymaga konfiguracji.',
   'models.vision.goToImages': 'Otwórz ekran Obrazy',
@@ -1999,6 +2021,12 @@ export const pl: UiCatalog<'pl'> = {
   'diag.audit.model_download_started': 'Rozpoczęto pobieranie',
   'diag.audit.model_download_verified': 'Sprawdzono pobrany plik',
   'diag.audit.model_download_failed': 'Pobieranie nie powiodło się',
+  'diag.audit.engine_install_started': 'Rozpoczęto pobieranie silnika lub narzędzi',
+  'diag.audit.engine_install_finished': 'Zainstalowano silnik lub narzędzia',
+  'diag.audit.engine_install_failed': 'Instalacja silnika lub narzędzi nie powiodła się',
+  'diag.audit.ocr_install_started': 'Rozpoczęto pobieranie plików OCR',
+  'diag.audit.ocr_install_finished': 'Zainstalowano pliki OCR',
+  'diag.audit.ocr_install_failed': 'Instalacja plików OCR nie powiodła się',
   'diag.audit.document_imported': 'Zaimportowano dokument',
   'diag.audit.document_reindexed': 'Ponownie zindeksowano dokument',
   'diag.audit.document_deleted': 'Usunięto dokument',
@@ -2017,6 +2045,7 @@ export const pl: UiCatalog<'pl'> = {
   'diag.audit.workspace_lock_failed':
     'Próba zablokowania nie powiodła się (obszar roboczy pozostał odblokowany)',
   'diag.audit.workspace_password_changed': 'Zmieniono hasło obszaru roboczego',
+  'diag.audit.workspace_working_copy_lost': 'Utracono ostatnie zmiany',
   'diag.audit.settings_changed': 'Zmieniono ustawienia',
   'diag.audit.local_api_toggled': 'Włączono lub wyłączono lokalne API',
   'diag.audit.policy_warning': 'Komunikat zasad dysku',
@@ -2136,6 +2165,10 @@ export const pl: UiCatalog<'pl'> = {
   'perf.model.line.few': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokeny',
   'perf.model.line.many': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokenów',
   'perf.model.line.other': '{model} · {size}\u00A0GB na dysku · kontekst: {context} tokena',
+  'perf.model.lineNoSize.one': '{model} · kontekst: {context} token',
+  'perf.model.lineNoSize.few': '{model} · kontekst: {context} tokeny',
+  'perf.model.lineNoSize.many': '{model} · kontekst: {context} tokenów',
+  'perf.model.lineNoSize.other': '{model} · kontekst: {context} tokena',
   'perf.model.none': 'Nie wybrano jeszcze modelu. Wybierz model na ekranie Model AI.',
   'perf.model.need': 'Zajmuje {need}\u00A0GB przy tym rozmiarze kontekstu.',
   'perf.model.needEstimate':
@@ -2213,12 +2246,16 @@ export const pl: UiCatalog<'pl'> = {
   'perf.models.device.processor': 'procesor',
   'perf.models.loaded': 'teraz wczytany',
   'perf.models.notLoaded': 'niewczytany',
+  'perf.models.notOnDrive': 'brak na tym dysku',
+  'perf.models.damaged': 'nie przeszedł sprawdzenia plików',
+  'perf.models.noChecksum': 'brak zapisanej sumy kontrolnej',
   'perf.models.lifetime.session': 'zostaje w pamięci',
   'perf.models.lifetime.idle': 'zwalnia pamięć przy bezczynności',
   'perf.models.lifetime.per-use': 'działa tylko podczas pracy',
   'perf.models.split': 'warstwy na karcie: {gpuLayers} z {layers}',
   'perf.models.card':
     'Karta graficzna: czat {chat}\u00A0GB + tłumaczenie {translation}\u00A0GB, z {vram}\u00A0GB.',
+  'perf.models.cardChat': 'Karta graficzna: czat {chat}\u00A0GB, z {vram}\u00A0GB.',
   'perf.models.cardReranker': 'Karta graficzna: ocena trafności {reranker}\u00A0GB, z {vram}\u00A0GB.',
   'perf.models.cardBoth':
     'Oba modele są teraz na karcie. Model uruchomiony jako drugi dostał pozostałą pamięć i ' +
@@ -2439,6 +2476,27 @@ export const pl: UiCatalog<'pl'> = {
     'Wpisz hasło, aby otworzyć obszar roboczy na tym dysku. Wszystko zostaje na tym dysku.',
   'gate.unlock.submit': 'Odblokuj',
   'gate.unlock.submitBusy': 'Odblokowywanie…',
+  'gate.unlock.workingCopyLost':
+    'Plik roboczy obszaru roboczego na dysku został usunięty lub uszkodzony. Twój obszar roboczy ' +
+    'jest zachowany w stanie z ostatniego zablokowania lub zamknięcia aplikacji; zmiany ' +
+    'wprowadzone od tego czasu zostały utracone.',
+  'gate.unlock.sessionNotClosed':
+    'Przy ostatnim zamknięciu aplikacji HilbertRaum obszar roboczy nie został zablokowany, na ' +
+    'przykład dlatego, że odłączono dysk, zabrakło zasilania komputera lub wymuszono zamknięcie ' +
+    'aplikacji. Obszar roboczy otwiera się w stanie z ostatniego zablokowania; ewentualne zmiany ' +
+    'wprowadzone od tego czasu zostały utracone. Następnym razem zamknij aplikację HilbertRaum przed ' +
+    'odłączeniem dysku.',
+  'gate.unlock.sessionNotClosedFull':
+    'Przy ostatnim zamknięciu aplikacji HilbertRaum nie udało się zablokować obszaru roboczego, ' +
+    'ponieważ dysk był pełny. Obszar roboczy otwiera się w stanie z ostatniego zablokowania; ' +
+    'ewentualne zmiany wprowadzone od tego czasu zostały utracone. Upewnij się, że na dysku jest ' +
+    'wolne miejsce, zanim przejdziesz dalej – inaczej także następne zablokowanie nie zapisze twoich ' +
+    'zmian.',
+  'gate.unlock.encryptedFileMissing':
+    'Na dysku brakowało zaszyfrowanego pliku obszaru roboczego, dlatego aplikacja HilbertRaum ' +
+    'zachowała niezaszyfrowaną kopię pozostawioną przez ostatnią sesję. Odblokuj teraz, aby ponownie ' +
+    'ją zaszyfrować, a potem sprawdź, co usunęło plik, na przykład narzędzie do synchronizacji lub ' +
+    'czyszczenia.',
   'gate.welcome.title': 'Witaj',
   'gate.welcome.intro':
     'To twój prywatny obszar roboczy AI. Rozmawiaj z modelem AI i zadawaj pytania o swoje ' +
@@ -2501,6 +2559,11 @@ export const pl: UiCatalog<'pl'> = {
   'main.ingest.voiceEngineCannotRun':
     'Silnik mowy nie może działać na tym komputerze, więc nie udało się transkrybować tego ' +
     'nagrania. Na ekranie Model AI widać, co zrobić – a potem zindeksuj ten dokument ponownie.',
+  'main.ingest.voiceModelPathUnsupported':
+    'W systemie Windows silnik mowy nie może otworzyć modelu transkrypcji, ponieważ nazwa folderu ' +
+    'lub pliku w ścieżce modelu zawiera literę ze znakiem diakrytycznym (na przykład ą, ł, ü, é) ' +
+    'albo inny znak spoza ASCII. Umieść model w ścieżce bez takich znaków i zaktualizuj jego wpis w ' +
+    'manifeście modelu – a potem zindeksuj ten dokument ponownie.',
   'main.ingest.searchModelTimeout':
     'Model wyszukiwania nie odpowiedział na czas, więc nie udało się zindeksować tego dokumentu. ' +
     'Spróbuj ponownie.',
@@ -2592,6 +2655,27 @@ export const pl: UiCatalog<'pl'> = {
     'przeglądarka połączy się z tą witryną.',
   'main.dialog.openLink.open': 'Otwórz',
   'main.dialog.openLink.cancel': 'Anuluj',
+  'main.dialog.unsavedReview.title': 'Nie udało się zapisać części zmian w weryfikacji.',
+  'main.dialog.unsavedReview.message': 'Nie udało się zapisać części zmian w weryfikacji.',
+  'main.dialog.unsavedReview.detail':
+    'Jeśli zamkniesz teraz, zostaną utracone. Sprawdź, czy dysk jest nadal podłączony i ma wolne ' +
+    'miejsce, i spróbuj ponownie.',
+  'main.dialog.unsavedReview.tryAgain': 'Spróbuj ponownie',
+  'main.dialog.unsavedReview.keepOpen': 'Nie zamykaj',
+  'main.dialog.unsavedReview.closeAnyway': 'Zamknij mimo to',
+  'main.dialog.taskRunning.title': 'Zadanie dotyczące dokumentu nie zostało jeszcze ukończone.',
+  'main.dialog.taskRunning.message': 'Zadanie dotyczące dokumentu nie zostało jeszcze ukończone.',
+  'main.dialog.taskRunning.detailOcr':
+    'Jeśli zamkniesz teraz, odczytywanie skanu zostanie przerwane, a odczytane dotąd strony zostaną ' +
+    'utracone.',
+  'main.dialog.taskRunning.detailTranslation':
+    'Jeśli zamkniesz teraz, tłumaczenie zostanie przerwane, a przetłumaczona dotąd część zostanie ' +
+    'utracona.',
+  'main.dialog.taskRunning.detailSeveral':
+    'Jeśli zamkniesz teraz, trwające i oczekujące zadania dotyczące dokumentów zostaną przerwane, a ' +
+    'wykonana dotąd praca zostanie utracona.',
+  'main.dialog.taskRunning.keepOpen': 'Nie zamykaj',
+  'main.dialog.taskRunning.closeAnyway': 'Zamknij mimo to',
   'main.workspace.wrongPassword':
     'To hasło nie odblokowało twojego obszaru roboczego. Sprawdź je i spróbuj ponownie.',
   'main.workspace.openFailed': 'Nie udało się otworzyć obszaru roboczego.',
@@ -2599,6 +2683,24 @@ export const pl: UiCatalog<'pl'> = {
     'Hasło jest prawidłowe, ale dane obszaru roboczego na dysku są uszkodzone i nie udało się ' +
     'ich otworzyć. Ponowne wpisanie hasła nie pomoże. Nie twórz nowego obszaru roboczego – ' +
     'zostaw pliki bez zmian i przywróć folder obszaru roboczego z kopii zapasowej.',
+  'main.workspace.vaultMissing':
+    'Hasło jest prawidłowe, ale na dysku brakuje zaszyfrowanego pliku obszaru roboczego i nie ' +
+    'pozostała żadna kopia, z której można by go odzyskać. Nie twórz nowego obszaru roboczego. Odłóż ' +
+    'plik na miejsce albo przywróć folder obszaru roboczego z kopii zapasowej.',
+  'main.workspace.descriptorMissing':
+    'Na dysku brakuje pliku z kluczem obszaru roboczego (config/workspace.json) albo nie da się go ' +
+    'odczytać, więc żadne hasło nie otworzy obszaru roboczego. Nie twórz nowego obszaru roboczego. ' +
+    'Odłóż plik na miejsce albo przywróć go z kopii zapasowej.',
+  'main.workspace.descriptorUnreadable':
+    'Nie da się odczytać pliku z kluczem obszaru roboczego (config/workspace.json), a na dysku ' +
+    'brakuje zaszyfrowanego pliku obszaru roboczego, więc żadne hasło nie otworzy obszaru roboczego. ' +
+    'Nie usuwaj pliku z kluczem. Przywróć oba pliki z kopii zapasowej albo zajrzyj do instrukcji ' +
+    'rozwiązywania problemów, zanim zaczniesz od nowa.',
+  'main.workspace.vaultOpenFailed':
+    'Hasło jest prawidłowe, ale aplikacja HilbertRaum nie mogła dokończyć otwierania ' +
+    'obszaru roboczego. Zaszyfrowany obszar roboczy na dysku pozostał bez zmian. Upewnij ' +
+    'się, że na dysku jest wolne miejsce, i spróbuj ponownie. Jeśli problem pojawił się po ' +
+    'aktualizacji, poprzednia wersja aplikacji HilbertRaum nadal może go otworzyć.',
   'main.workspace.recoveryBlocked':
     'Nie udało się jeszcze otworzyć obszaru roboczego: inny program ma otwarty plik odzyskiwania ' +
     'z twoimi najnowszymi danymi. Zamknij wszystko, co może skanować dysk (program antywirusowy, ' +
@@ -2609,6 +2711,11 @@ export const pl: UiCatalog<'pl'> = {
     'aplikację, aby go otworzyć. Niczego nie zmieniono.',
   'main.workspace.createFailed': 'Nie udało się utworzyć obszaru roboczego.',
   'main.workspace.passwordTooShort': 'Hasło musi mieć co najmniej {min} znaków.',
+  'main.workspace.exists':
+    'Na tym dysku jest już obszar roboczy, więc nie utworzono nowego. Odblokuj obszar roboczy jego ' +
+    'hasłem.',
+  'main.workspace.plaintextNotAllowed':
+    'Obszar roboczy bez hasła nie jest tu dozwolony. Zamiast tego utwórz obszar roboczy z hasłem.',
   'main.workspace.newPasswordTooShort': 'Nowe hasło musi mieć co najmniej {min} znaków.',
   'main.workspace.unlockBeforeChange': 'Odblokuj obszar roboczy, zanim zmienisz jego hasło.',
   'main.workspace.wrongCurrentPassword':
@@ -2616,6 +2723,9 @@ export const pl: UiCatalog<'pl'> = {
   'main.workspace.changeFailed': 'Nie udało się zmienić hasła. Obecne hasło nadal działa.',
   'main.workspace.busyPasswordChange':
     'Hasło obszaru roboczego jest właśnie zmieniane. Spróbuj ponownie za chwilę.',
+  'main.workspace.busyDocumentWork':
+    'Dokumenty są nadal importowane lub ponownie indeksowane. Poczekaj, aż to się skończy, i spróbuj ' +
+    'ponownie.',
   'main.workspace.lockFailed':
     'Nie udało się zablokować obszaru roboczego – nadal jest otwarty, a twoje dane są ' +
     'bezpieczne. Zwolnij trochę miejsca na dysku i spróbuj ponownie.',
@@ -2794,7 +2904,7 @@ export const pl: UiCatalog<'pl'> = {
     'ponownym rozpoczęciu pobieranie zacznie się od początku.',
   'main.engine.alreadyRunning': 'Silnik AI jest już pobierany.',
   'main.engine.noSources':
-    'Na tym dysku nie znaleziono źródeł silnika (brak pliku runtime-sources.yaml).',
+    'W tej kopii HilbertRaum nie znaleziono źródeł silnika (brak pliku runtime-sources.yaml).',
   'main.engine.noHostBuild': 'Dla tego komputera nie ma dostępnej wersji silnika AI.',
   'main.engine.alreadyInstalled': 'Silnik AI jest już zainstalowany.',
   'main.engine.unknownJob': 'Nieznane zadanie pobierania silnika.',
@@ -2832,15 +2942,21 @@ export const pl: UiCatalog<'pl'> = {
   'main.engine.updateBusy':
     'Silnik AI jest teraz w użyciu (trwa generowanie odpowiedzi, import, tłumaczenie lub zadanie ' +
     'dotyczące dokumentu). Spróbuj ponownie zaktualizować silnik, gdy praca się zakończy.',
+  'main.engine.notEnoughSpace':
+    'Na tym dysku jest za mało wolnego miejsca: rozpakowany silnik wymaga {needed}, wolne miejsce: ' +
+    '{free}. Zwolnij miejsce na dysku i spróbuj ponownie.',
+  'main.engine.filesInUse':
+    'Nie udało się zastąpić silnika, ponieważ inny program używa jednego z jego plików (na przykład ' +
+    'skaner antywirusowy). Spróbuj ponownie za minutę.',
   'main.ocr.badRequest': 'Nie rozpoznano polecenia pobrania plików OCR. Spróbuj ponownie.',
   'main.ocr.alreadyRunning': 'Pliki OCR są już pobierane.',
   'main.ocr.noSources':
     'Na tym dysku nie ma listy pobierania plików OCR. Zamiast tego dodaj je za pomocą skryptów ' +
     'konfiguracji dysku („fetch-runtime --family ocr”).',
   'main.ocr.sourcesMismatch':
-    'Lista pobierania plików OCR na tym dysku nie pasuje do tej wersji aplikacji HilbertRaum, ' +
-    'więc niczego nie pobrano. Zamiast tego dodaj pliki za pomocą skryptów konfiguracji dysku ' +
-    '(„fetch-runtime --family ocr”).',
+    'Ani lista pobierania plików OCR na tym dysku, ani lista w tej kopii HilbertRaum nie zawiera ' +
+    'plików, których używa ta wersja, więc niczego nie pobrano. Zamiast tego dodaj pliki za ' +
+    'pomocą skryptów konfiguracji dysku („fetch-runtime --family ocr”).',
   'main.ocr.alreadyInstalled':
     'Pliki OCR są już na tym dysku. Jeśli rozpoznawanie tekstu nadal nie jest dostępne, uruchom ' +
     'ponownie aplikację HilbertRaum.',
@@ -2887,6 +3003,16 @@ export const pl: UiCatalog<'pl'> = {
     'nową transkrypcję.',
   'main.models.noManifests':
     'Na tym dysku nie znaleziono listy modeli – brak folderu model-manifests.',
+  'main.models.unknown': 'Tego modelu nie ma już na liście modeli tego dysku.',
+  'main.models.notChat': '„{name}” nie jest modelem czatu, więc nie można go tu uruchomić.',
+  'main.models.startDamaged':
+    'Model „{name}” nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +
+    'ponownie na ekranie Model AI.',
+  'main.models.startMissing':
+    'Nie można uruchomić modelu „{name}” – jego pliku nie ma jeszcze na tym dysku.',
+  'main.models.startNeedsRam':
+    'Model „{name}” wymaga co najmniej {min}\u00A0GB pamięci RAM – ten komputer ma około ' +
+    '{ram}\u00A0GB. Wybierz mniejszy model – jakość pozostanie bardzo dobra.',
   'main.models.autoSelected':
     'Ten model jest używany automatycznie po zainstalowaniu – nie trzeba go wybierać.',
   'main.models.locked': 'Obszar roboczy jest zablokowany. Odblokuj go, aby zarządzać modelami AI.',
@@ -2921,6 +3047,12 @@ export const pl: UiCatalog<'pl'> = {
   'main.dictation.busy': 'Trwa jeszcze transkrypcja ostatniego dyktowania – to potrwa chwilę.',
   'main.dictation.engineCannotRun':
     'Silnik mowy nie może działać na tym komputerze. Ekran Model AI pokazuje, czego brakuje.',
+  'main.dictation.voiceModelPathUnsupported':
+    'W systemie Windows silnik mowy nie może otworzyć jednego ze swoich modeli (modelu transkrypcji ' +
+    'lub modelu wykrywania aktywności głosowej), ponieważ nazwa folderu lub pliku w ścieżce tego ' +
+    'modelu zawiera literę ze znakiem diakrytycznym (na przykład ą, ł, ü, é) albo inny znak spoza ' +
+    'ASCII. Umieść model w ścieżce bez takich znaków i zaktualizuj jego wpis w manifeście modelu – a ' +
+    'potem spróbuj ponownie.',
   'main.preflight.readOnly':
     'Wygląda na to, że ten dysk jest tylko do odczytu, więc aplikacja nie może utworzyć obszaru ' +
     'roboczego. Użyj innego portu USB albo zajrzyj do instrukcji rozwiązywania problemów.',
@@ -3301,6 +3433,9 @@ export const pl: UiCatalog<'pl'> = {
   'images.avail.noModel': 'Analiza obrazów wymaga lokalnego modelu wizyjnego na tym dysku.',
   'images.avail.noRuntime': 'Analiza obrazów wymaga najpierw zainstalowania silnika AI.',
   'images.avail.incompatible': 'Model wizyjny na tym dysku wymaga nowszego silnika AI.',
+  'images.avail.damaged':
+    'Model wizyjny na tym dysku nie przeszedł sprawdzenia plików. Pobierz go ponownie na ekranie ' +
+    'Model AI.',
   'images.avail.cta': 'Otwórz Model AI',
   'images.avail.ocrPointer':
     'Zeskanowane dokumenty? Na ekranie Dokumenty użyj przycisku „Umożliw wyszukiwanie (OCR)”.',
@@ -3361,6 +3496,9 @@ export const pl: UiCatalog<'pl'> = {
     'Nie udało się uruchomić modelu wizyjnego. Spróbuj ponownie albo wybierz inny model.',
   'images.err.engineCannotRun':
     'Silnik AI nie może działać na tym komputerze. Na ekranie Model AI widać, czego brakuje.',
+  'images.err.modelDamaged':
+    'Model wizyjny nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +
+    'ponownie na ekranie Model AI.',
   'images.err.emptyResponse':
     'Nie otrzymano odpowiedzi dotyczącej tego obrazu. Spróbuj inaczej sformułować pytanie.',
   'images.err.emptyQuestion': 'Najpierw wpisz pytanie o obraz.',
@@ -3464,6 +3602,9 @@ export const pl: UiCatalog<'pl'> = {
     'inne aplikacje lub uruchom ponownie aplikację HilbertRaum, a następnie spróbuj ponownie.',
   'translate.err.engineCannotRun':
     'Silnik AI nie może działać na tym komputerze. Na ekranie Model AI widać, czego brakuje.',
+  'translate.err.modelDamaged':
+    'Model tłumaczenia nie przeszedł sprawdzenia plików, więc nie został uruchomiony. Pobierz go ' +
+    'ponownie na ekranie Model AI.',
   'translate.err.empty': 'Nie otrzymano tłumaczenia. Spróbuj ponownie albo przeformułuj tekst.',
   'translate.err.sameLang': 'Wybierz dwa różne języki.',
   'translate.err.tooLong':
@@ -3558,12 +3699,17 @@ export const pl: UiCatalog<'pl'> = {
   'review.rename.save': 'Zapisz',
   'review.loading': 'Wczytywanie weryfikacji…',
   'review.notFound': 'Nie znaleziono tej weryfikacji. Mogła zostać usunięta.',
+  'review.openFailed': 'Nie udało się otworzyć tej weryfikacji.',
   'review.question.toggle': 'Pytanie',
   'review.answerPane.aria': 'Weryfikowana odpowiedź',
   'review.autosave.saving': 'Zapisywanie…',
   'review.autosave.saved': 'Zapisano',
   'review.autosave.error': 'Nie udało się jeszcze zapisać części zmian.',
   'review.autosave.retry': 'Spróbuj ponownie',
+  'review.unsaved.body':
+    'Nie udało się jeszcze zapisać części zmian w weryfikacji „{title}”, dlatego nie otwarto ' +
+    'wybranej weryfikacji. Spróbuj ponownie albo odrzuć te zmiany, aby ją otworzyć.',
+  'review.unsaved.discard': 'Odrzuć zmiany i otwórz',
   'review.evidence.title': 'Potwierdzenia',
   'review.evidence.captionRelevance':
     'Pokazane źródła to fragmenty przekazane lokalnemu modelowi AI na potrzeby tej odpowiedzi.',
@@ -3784,6 +3930,7 @@ export const pl: UiCatalog<'pl'> = {
   'review.export.done': 'Wyeksportowano pakiet potwierdzeń.',
   'review.export.error':
     'Nie udało się wyeksportować pakietu potwierdzeń. Nie zapisano żadnego pliku.',
+  'review.export.failed': 'Eksport pakietu potwierdzeń nie został ukończony.',
   'review.export.copyHash': 'Kopiuj SHA-256',
   'review.export.hashCopied': 'Skopiowano SHA-256 do schowka.'
 }

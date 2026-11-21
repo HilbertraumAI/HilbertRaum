@@ -1,4 +1,5 @@
 import { guardedHandleFor } from './guarded-handle'
+import { notifyPerformanceChanged } from './performance-notify'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { DownloadJob } from '../../shared/types'
@@ -33,7 +34,18 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
       // Issue #40: a completed download re-runs the availability selectors that were frozen at
       // startup (main/index.ts wires the ctx hook) — e.g. TranslateGemma activates without a
       // restart. Read late off ctx (the audit-hook pattern) so registration order can't matter.
-      onModelInstalled: (modelId) => ctx.onModelInstalled?.(modelId)
+      // #914: the Performance rows say which models are on this drive, so an open screen re-reads
+      // once the files are in place — after the selectors re-ran (performance-notify's "after the
+      // mutation" rule), and even if that hook throws (the manager swallows it). Only `done` calls
+      // this hook (verified, or a placeholder-hash completion: the files are in place either way);
+      // a failed or cancelled download puts nothing in place and pushes nothing.
+      onModelInstalled: (modelId) => {
+        try {
+          ctx.onModelInstalled?.(modelId)
+        } finally {
+          notifyPerformanceChanged()
+        }
+      }
     })
 
   // #782: switching internet access off stops the running download (settings:update calls this).
@@ -53,7 +65,11 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
       if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
       const { manifests } = discoverManifests(ctx.manifestsDir)
       const found = manifests.find((m) => m.manifest.id === modelId)
-      if (!found) throw new Error(`Unknown model id: ${modelId}`)
+      // #930: in the interface language, without the id (the log keeps it).
+      if (!found) {
+        log.warn('Download refused: unknown model id', { modelId })
+        throw new Error(tMain('main.models.unknown'))
+      }
       return downloads.start({
         rootPath: ctx.paths.rootPath,
         manifest: found.manifest,

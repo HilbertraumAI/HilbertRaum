@@ -4,7 +4,8 @@ import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import type { DocumentInfo, ImportJobStatus } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
 // DOC-1 (frontend audit 2026-08-09, #141): the import progress poll used to exist only as a
@@ -32,6 +33,7 @@ function doc(over: Partial<DocumentInfo>): DocumentInfo {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () => {
@@ -45,12 +47,12 @@ describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () 
       .mockResolvedValueOnce(live)
       .mockResolvedValue(done)
     const listDocuments = vi.fn(async () => [doc({})])
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments,
       getActiveImportJob,
       getImportJob
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />
@@ -69,7 +71,7 @@ describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () 
 
     // …and the re-attached poll runs (pre-fix getImportJob was never called again after a
     // remount, so the screen never noticed the backend finishing).
-    await waitFor(() => expect(getImportJob).toHaveBeenCalledWith('j1'), { timeout: hangBudgetMs(3000) })
+    await waitFor(() => expect(getImportJob).toHaveBeenCalledWith('j1'))
     await waitFor(
       () => expect(screen.getByRole('button', { name: 'Import files' })).toBeEnabled(),
       { timeout: hangBudgetMs(5000) }
@@ -87,12 +89,12 @@ describe('DocumentsScreen — import poll re-attach on mount (DOC-1, #141)', () 
         failed: 0,
         done: true
       }))
-      stubApi({
+      stubApi(documentsScreenStubs({
         listCollections: vi.fn(async () => []),
         listDocuments: vi.fn(async () => [doc({ status: 'indexed', chunkCount: 3 })]),
         getActiveImportJob,
         getImportJob
-      })
+      }))
       render(
         <ToastProvider>
           <DocumentsScreen />
@@ -130,7 +132,7 @@ describe('DocumentsScreen — Import folder happy path (#147)', () => {
       .fn<(jobId: string) => Promise<ImportJobStatus>>()
       .mockResolvedValueOnce({ jobId: 'j7', total: 1, completed: 0, failed: 0, done: false })
       .mockResolvedValue({ jobId: 'j7', total: 1, completed: 1, failed: 0, done: true })
-    stubApi({
+    stubApi(documentsScreenStubs({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [doc({ id: 'd7', title: 'a.pdf', status: 'indexed', chunkCount: 2 })]),
       getActiveImportJob: vi.fn(async () => null),
@@ -138,7 +140,7 @@ describe('DocumentsScreen — Import folder happy path (#147)', () => {
       importPreflight,
       importDocuments,
       getImportJob
-    })
+    }))
     render(
       <ToastProvider>
         <DocumentsScreen />

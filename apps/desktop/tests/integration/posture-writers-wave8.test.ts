@@ -22,6 +22,9 @@ import {
 } from '../../src/main/services/rag/device-posture'
 import { tryGpuAgain } from '../../src/main/ipc/registerBenchmarkIpc'
 import { startModelRuntime } from '../../src/main/ipc/registerModelIpc'
+import { applyUiLanguageSetting } from '../../src/main/services/i18n'
+import { machineRamGb } from '../../src/main/services/models'
+import { t } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import type { AppSettings } from '../../src/shared/types'
 import { deferred } from '../helpers/deferred'
@@ -160,7 +163,20 @@ describe('Wave 8 ruling (a): the pending-switch counter', () => {
       runtime,
       reranker: { suspend: async () => { suspendCalled = true } }
     })
-    await expect(startModelRuntime(ctx, 'huge-model')).rejects.toThrow(/needs at least 9999 GB RAM/)
+    // #930: the refusal is the catalog's, in the interface language (English, then German), figures included.
+    const ramRefusal = (lang: 'en' | 'de'): string =>
+      t(lang, 'main.models.startNeedsRam', {
+        name: 'Huge Model',
+        min: (9999).toLocaleString(lang),
+        ram: machineRamGb().toLocaleString(lang)
+      })
+    await expect(startModelRuntime(ctx, 'huge-model')).rejects.toThrow(ramRefusal('en'))
+    applyUiLanguageSetting('de')
+    try {
+      await expect(startModelRuntime(ctx, 'huge-model')).rejects.toThrow(ramRefusal('de'))
+    } finally {
+      applyUiLanguageSetting('en')
+    }
     expect(suspendCalled).toBe(false) // never reached the pending/suspend section at all
     expect(ctx.pendingModelSwitches.count).toBe(0)
   })

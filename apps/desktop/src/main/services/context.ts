@@ -20,6 +20,7 @@ import type { LocalApiServer } from './local-api/server'
 import type { PlaintextOpsRegistry } from './ingestion/plaintext-ops'
 import type { PendingModelSwitchCounter } from './rag/device-posture'
 import type { TranscriberMissing } from '../../shared/types'
+import type { ModelStartCheck } from './models'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -83,8 +84,20 @@ export interface AppContext {
    * it off ctx per call (`ctx.translator`), never capture the value at wiring time.
    */
   translator?: Translator | null
-  /** Directory holding model-manifests, or null if it could not be located. */
+  /**
+   * Directory holding model-manifests, or null if it could not be located. The model list reads
+   * it; a launcher start points it at the drive's copy (`HILBERTRAUM_MANIFESTS_DIR`).
+   */
   manifestsDir: string | null
+  /**
+   * The app's OWN `model-manifests/` (`resolveBundledManifestsDir`: packaged, exactly
+   * `resources/model-manifests`; dev, the checkout's), never `HILBERTRAUM_MANIFESTS_DIR`. The AI-engine
+   * pins come from here, never from `manifestsDir` (#842: on a launcher start that is the drive's
+   * copy, so a new app on a drive whose manifests were not refreshed compared the engine with the
+   * drive's old pin and never offered its update). Also the OCR installer's second source list, per
+   * file (#410, #841). Required, so no context can leave it out by accident; null reads as "no engine sources".
+   */
+  bundledManifestsDir: string | null
   /**
    * Session-cached GPU probe: `--list-devices` on a drive-local binary,
    * shared between the start ladder, Diagnostics, and the benchmark so they never
@@ -244,6 +257,13 @@ export interface AppContext {
    * test contexts stay valid; never throws.
    */
   refreshTranslatorSlot?: () => void
+  /**
+   * #913: the start check every non-chat role runs before it spawns its model (`checkModelBeforeStart` over this
+   * workspace's hash store, with the policy-aware leniency). Built in `main/index.ts` by `createModelStartCheck`;
+   * held here so the mid-session re-compositions (`refreshTranscriberSlot` from both install hooks) give a refreshed
+   * service the same check. Required (#913 review S3): a context built without it does not compile.
+   */
+  checkModel: ModelStartCheck
   /**
    * Wave 8 ruling (a): the per-call counter of `startModelRuntime` calls presently awaiting the
    * reranker's single-flight suspend after committing to a REAL model switch — shared between

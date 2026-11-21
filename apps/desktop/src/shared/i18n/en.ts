@@ -1235,6 +1235,10 @@ export const en = {
   'models.library.translation': 'Translation',
   'models.library.images': 'Images',
   'models.library.voice': 'Voice',
+  'models.newerApp.heading': 'Needs a newer HilbertRaum',
+  'models.newerApp.badge': 'Needs newer app',
+  'models.newerApp.hint':
+    'This model is for a newer version of HilbertRaum. Update the app on this computer to use it.',
   'models.library.memory': 'Minimum memory: {size}',
   'models.library.clear': 'Clear filters',
   'models.library.showVariants': 'Show all variants ({count})',
@@ -1258,10 +1262,14 @@ export const en = {
   'models.state.installed': 'Installed',
   'models.state.missing': 'Not downloaded',
   'models.state.checksumFailed': 'Can’t verify',
+  'models.state.noChecksum': 'No checksum',
   'models.state.unsupported': 'Unsupported',
   'models.state.notRecommended': 'Not recommended',
   'models.state.ready': 'Ready',
   'models.state.running': 'Running',
+  'models.noChecksum.hint':
+    'This model has no checksum on record, so it runs only in developer mode on a drive whose policy ' +
+    'allows unverified models.',
   // #599: the running model failed a health re-check, or an answer on it timed out.
   'models.badge.notResponding': 'Not responding',
   'models.notRespondingHint': 'The AI model has stopped answering. Restarting it usually fixes this.',
@@ -1359,6 +1367,18 @@ export const en = {
   'models.engine.downloadingNoTotal': 'Downloading the AI engine…',
   'models.engine.verifying': 'Verifying the AI engine…',
   'models.engine.extracting': 'Unpacking the AI engine…',
+  'models.engineConfirm.chatEngine': 'AI engine (llama.cpp)',
+  'models.engineConfirm.voiceEngine': 'Voice engine (whisper.cpp)',
+  'models.engineConfirm.safetyNet': 'processor-only fallback',
+  'models.engineConfirm.version': 'Version',
+  'models.engineConfirm.total': 'Total size',
+  'models.engineConfirm.licenseIncludes': '{license}, includes {bundled}',
+  'models.engineConfirm.hint':
+    'Each file is downloaded from the address shown and checked against its expected checksum before ' +
+    'it is used. Nothing about you or your documents is sent.',
+  'models.engineConfirm.updateNote':
+    'Your model keeps answering while the download runs. It pauses for a few seconds only while the ' +
+    'files are replaced.',
   // Voice-engine-only note: the chat engine is installed (chat works for real); only the
   // optional voice engine (whisper.cpp) is missing, so this is a quiet info note — never the
   // "demo mode" alarm. Reuses the engine download job (progress/retry/policy) keys above.
@@ -1426,7 +1446,8 @@ export const en = {
   'models.transcriber.engineUnsupported':
     'On this operating system the app cannot install the voice engine yet, so this model does not enable voice dictation or audio import here.',
   // #539: these "where it is used" lines show on the card itself, not in Technical details.
-  'models.vision.installed': 'Installed — used automatically on the Images screen. Nothing to start here.',
+  'models.vision.installed':
+    'Installed — the Images screen picks its vision model automatically. Nothing to start here.',
   'models.vision.notInstalled': 'Used automatically on the Images screen once installed — no setup needed.',
   'models.vision.goToImages': 'Go to Images',
   'models.translation.installed': 'Installed — used automatically for translation. Nothing to start here.',
@@ -1978,6 +1999,12 @@ export const en = {
   'diag.audit.model_download_started': 'Download started',
   'diag.audit.model_download_verified': 'Download verified',
   'diag.audit.model_download_failed': 'Download failed',
+  'diag.audit.engine_install_started': 'Engine or tools download started',
+  'diag.audit.engine_install_finished': 'Engine or tools installed',
+  'diag.audit.engine_install_failed': 'Engine or tools install failed',
+  'diag.audit.ocr_install_started': 'OCR file download started',
+  'diag.audit.ocr_install_finished': 'OCR files installed',
+  'diag.audit.ocr_install_failed': 'OCR file install failed',
   'diag.audit.document_imported': 'Document imported',
   'diag.audit.document_reindexed': 'Document re-indexed',
   'diag.audit.document_deleted': 'Document deleted',
@@ -1995,6 +2022,7 @@ export const en = {
   'diag.audit.workspace_unlock_failed': 'Unlock attempt failed',
   'diag.audit.workspace_lock_failed': 'Lock attempt failed (workspace stayed open)',
   'diag.audit.workspace_password_changed': 'Workspace password changed',
+  'diag.audit.workspace_working_copy_lost': 'Recent changes lost',
   'diag.audit.settings_changed': 'Settings changed',
   'diag.audit.local_api_toggled': 'Local API switched on or off',
   'diag.audit.policy_warning': 'Policy notice',
@@ -2122,6 +2150,8 @@ export const en = {
   // stays `{context}` (the forms read the same in English).
   'perf.model.line.one': '{model} · {size} GB on disk · {context}-token context',
   'perf.model.line.other': '{model} · {size} GB on disk · {context}-token context',
+  'perf.model.lineNoSize.one': '{model} · {context}-token context',
+  'perf.model.lineNoSize.other': '{model} · {context}-token context',
   'perf.model.none': 'No model selected yet. Pick one on the AI Model screen.',
   'perf.model.need': 'Takes {need} GB with this context.',
   'perf.model.needEstimate':
@@ -2193,11 +2223,15 @@ export const en = {
   'perf.models.device.processor': 'processor',
   'perf.models.loaded': 'loaded now',
   'perf.models.notLoaded': 'not loaded',
+  'perf.models.notOnDrive': 'not on this drive',
+  'perf.models.damaged': 'failed its file check',
+  'perf.models.noChecksum': 'no checksum on record',
   'perf.models.lifetime.session': 'stays loaded',
   'perf.models.lifetime.idle': 'unloads when idle',
   'perf.models.lifetime.per-use': 'runs only while working',
   'perf.models.split': '{gpuLayers} of {layers} layers on the card',
   'perf.models.card': 'Graphics card: chat {chat} GB + translation {translation} GB, of {vram} GB.',
+  'perf.models.cardChat': 'Graphics card: chat {chat} GB, of {vram} GB.',
   // #476: a separate line for the reranker — it may share the card with either, both, or neither
   // of chat/translation, so it is not folded into perf.models.card's fixed two-slot template.
   // #495 follow-up: "ranking", not "reranker" — the row label above is "Document search
@@ -2455,6 +2489,25 @@ export const en = {
     "Enter your password to open this drive's workspace. Everything stays on this drive.",
   'gate.unlock.submit': 'Unlock',
   'gate.unlock.submitBusy': 'Unlocking…',
+  'gate.unlock.workingCopyLost':
+    "The workspace's working file on the drive was removed or damaged. Your workspace is kept as " +
+    'it was the last time it was locked or the app was closed; changes made since then are lost.',
+  'gate.unlock.sessionNotClosed':
+    'HilbertRaum didn\'t lock your workspace the last time it closed, for example because the drive ' +
+    'was removed, the computer lost power or the app was stopped. Your workspace opens as it was ' +
+    'when it was last locked; any changes made since then are lost. Next time, quit HilbertRaum ' +
+    'before you remove the drive.',
+  'gate.unlock.sessionNotClosedFull':
+    'HilbertRaum couldn\'t lock your workspace the last time it closed, because the drive was full. ' +
+    'Your workspace opens as it was when it was last locked; any changes made since then are lost. ' +
+    'Make sure the drive has free space before you continue: without it, the next lock can\'t save ' +
+    'your changes either.',
+  // #911: `.enc` was missing at the start, so the working file, the only copy of the workspace, was kept unencrypted
+  // as `.recovery`; the next unlock encrypts it again. Nothing is lost.
+  'gate.unlock.encryptedFileMissing':
+    'The encrypted workspace file was missing from the drive, so HilbertRaum kept the unencrypted ' +
+    'copy your last session left. Unlock now to encrypt it again, then find out what removed the ' +
+    'file, for example a sync or cleanup tool.',
   'gate.welcome.title': 'Welcome',
   'gate.welcome.intro':
     'This is your private AI workspace. Chat with an AI model and ask questions about your ' +
@@ -2520,6 +2573,14 @@ export const en = {
   'main.ingest.engineCannotRun': "The AI engine can't run on this computer, so this document could not be indexed. The AI Model screen says what to do — then try again.",
   'main.ingest.engineLibraryMissing': "The AI engine can't run on this computer because the system library {library} is missing. The AI Model screen says how to fix it — then try again.",
   'main.ingest.voiceEngineCannotRun': "The voice engine can't run on this computer, so this recording could not be transcribed. The AI Model screen says what to do — then re-index this document.",
+  // #869: persist-canonical (display-mapped) — the pinned whisper-cli cannot read the model's
+  // path on a Windows command line; refused before it starts. No path in it. Imports run without
+  // VAD, so only the transcription model can be refused here; the dictation key covers both.
+  'main.ingest.voiceModelPathUnsupported':
+    'On Windows, the voice engine cannot open the transcription model because a folder or file name ' +
+    'in the model’s path contains an umlaut, an accent or another non-ASCII character. Store the ' +
+    'model under a path without such characters and update its entry in the model’s manifest, then ' +
+    're-index this document.',
   // #634 (design-guidelines §11.23): the search model (the E5 embedder) failed. Chosen by the error's
   // kind, never its text: a start failure's text names the weight file by absolute path. A lock or
   // quit that cut the embed off stores `main.ingest.interrupted` instead.
@@ -2632,6 +2693,31 @@ export const en = {
     'will connect to this site.',
   'main.dialog.openLink.open': 'Open',
   'main.dialog.openLink.cancel': 'Cancel',
+  // #888: the native dialog when closing or quitting finds a review change it could not save (a full
+  // or failing drive). Buttons in order: Try again (the default), Keep open (Esc), Close anyway.
+  'main.dialog.unsavedReview.title': 'Some review changes could not be saved.',
+  'main.dialog.unsavedReview.message': 'Some review changes could not be saved.',
+  'main.dialog.unsavedReview.detail':
+    'If you close now, they are lost. Check that the drive is still connected and has free space, ' +
+    'then try again.',
+  'main.dialog.unsavedReview.tryAgain': 'Try again',
+  'main.dialog.unsavedReview.keepOpen': 'Keep open',
+  'main.dialog.unsavedReview.closeAnyway': 'Close anyway',
+  // #935: the native dialog when a window close that quits the app (Windows, Linux) would stop an
+  // OCR run or a document translation, running or waiting. Asked before the save above. No count in
+  // the copy (no plural forms). Buttons in order: Keep open (the default and Esc), Close anyway; they
+  // read as the unsaved dialog's two buttons do.
+  'main.dialog.taskRunning.title': 'A document task is not finished yet.',
+  'main.dialog.taskRunning.message': 'A document task is not finished yet.',
+  'main.dialog.taskRunning.detailOcr':
+    'If you close now, reading the scan stops, and the pages read so far are lost.',
+  'main.dialog.taskRunning.detailTranslation':
+    'If you close now, the translation stops, and the part translated so far is lost.',
+  'main.dialog.taskRunning.detailSeveral':
+    'If you close now, the document tasks that are running or waiting stop, and their work so far is ' +
+    'lost.',
+  'main.dialog.taskRunning.keepOpen': 'Keep open',
+  'main.dialog.taskRunning.closeAnyway': 'Close anyway',
   'main.workspace.wrongPassword':
     "That password didn't unlock your workspace. Check it and try again.",
   'main.workspace.openFailed': 'Could not open the workspace.',
@@ -2639,6 +2725,34 @@ export const en = {
     'Your password is correct, but the workspace data on the drive is damaged and could ' +
     'not be opened. Retyping the password will not help. Do not create a new workspace — ' +
     'keep the files as they are and restore the workspace folder from a backup.',
+  // #911: the password verified, but `.enc` is missing and no copy was left to restore it from. A new workspace would
+  // replace the data key the stored documents need, so the copy warns against it.
+  'main.workspace.vaultMissing':
+    'Your password is correct, but the encrypted workspace file is missing from the drive, and no ' +
+    'copy was left to recover it from. Do not create a new workspace. Put the file back, or restore ' +
+    'the workspace folder from a backup.',
+  // #807 (C-S2): `.enc` is on the drive, but the descriptor that holds the wrapped key (and the password verifier) is
+  // missing or unreadable, so no password can be checked or open it. A new workspace would replace that key for good.
+  'main.workspace.descriptorMissing':
+    "The file that holds your workspace's key (config/workspace.json) is missing from the drive or " +
+    "can't be read, so no password can open the workspace. Do not create a new workspace. Put the " +
+    'file back, or restore it from a backup.',
+  // #955 item 1: the descriptor file is on the drive but can't be read, and `.enc` is not beside it. Never "no data is
+  // left": a `.recovery`, a staged `.enc.new` or stored documents may still need that key. A file damaged by an edit
+  // can often be repaired, hence "don't delete" (#974: a byte-order mark alone no longer makes it unreadable).
+  'main.workspace.descriptorUnreadable':
+    'The file that holds your workspace\'s key (config/workspace.json) can\'t be read, and the ' +
+    'encrypted workspace file isn\'t on the drive, so no password can open the workspace. Don\'t ' +
+    'delete the key file. Restore both files from a backup, or see the troubleshooting guide before ' +
+    'you start over.',
+  // #844: the password verified and the data is a database, but opening it could not finish (an
+  // upgrade step: a full drive, an I/O error, a bug in a new step). Not damage: the failed open never
+  // rewrites `.enc`.
+  'main.workspace.vaultOpenFailed':
+    'Your password is correct, but HilbertRaum could not finish opening the workspace. The ' +
+    'encrypted workspace on the drive was left as it was. Make sure the drive has free ' +
+    'space, then try again. If this started after an update, the previous version of ' +
+    'HilbertRaum can still open it.',
   // #242: the start-up salvage could not move the last session's newest data aside because
   // another program holds the recovery file on that name; opening now would lose that data.
   'main.workspace.recoveryBlocked':
@@ -2651,6 +2765,16 @@ export const en = {
     'was changed.',
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
+  // #807: create's two refusals, each its own `reason`. A workspace appeared on the drive after the lock screen read it
+  // (#955 item 3: the gate then re-reads the state and shows its unlock form, so no restart is needed); a create without
+  // a password that the policy or the build doesn't allow (only a direct call can send one: the gate offers the switch
+  // only when allowed).
+  'main.workspace.exists':
+    'A workspace already exists on this drive, so no new one was created. Unlock it with its ' +
+    'password.',
+  'main.workspace.plaintextNotAllowed':
+    "A workspace without a password isn't allowed here. Create the workspace with a password " +
+    'instead.',
   'main.workspace.newPasswordTooShort': 'The new password must be at least {min} characters.',
   'main.workspace.unlockBeforeChange': 'Unlock the workspace before changing its password.',
   'main.workspace.wrongCurrentPassword':
@@ -2659,6 +2783,9 @@ export const en = {
     'Could not change the password. Your current password still works.',
   'main.workspace.busyPasswordChange':
     'The workspace password is being changed right now. Try again in a moment.',
+  // #807: a password change while an import or re-index holds the vault (the other direction of busyPasswordChange).
+  'main.workspace.busyDocumentWork':
+    'Documents are still being imported or re-indexed. Wait for that to finish, then try again.',
   // full-audit 2026-07-11 CODE-1a: the lock re-encrypt failed (typically a full drive).
   // The workspace stays unlocked and usable; nothing is lost.
   'main.workspace.lockFailed':
@@ -2845,7 +2972,8 @@ export const en = {
     'The server sent the wrong part of the file, so the partial download was discarded. ' +
     'Starting it again will begin from the start.',
   'main.engine.alreadyRunning': 'The AI engine is already downloading.',
-  'main.engine.noSources': 'No engine sources were found on this drive (runtime-sources.yaml is missing).',
+  'main.engine.noSources':
+    'No engine sources were found in this copy of HilbertRaum (runtime-sources.yaml is missing).',
   'main.engine.noHostBuild': 'No AI-engine build is available for this computer.',
   'main.engine.alreadyInstalled': 'The AI engine is already installed.',
   'main.engine.unknownJob': 'Unknown engine-download job.',
@@ -2882,6 +3010,17 @@ export const en = {
   // #516: the update pauses the engine for the file swap, which would cut off work in progress.
   'main.engine.updateBusy':
     'The AI engine is in use right now (an answer, an import, a translation or a document task is running). Try the update again when it has finished.',
+  // #986: refused before anything is touched — the archives' unpacked size (from the archives
+  // themselves) against the drive's free space; the figures follow main.download.notEnoughSpace.
+  'main.engine.notEnoughSpace':
+    'There is not enough free space on this drive: the engine needs {needed} once unpacked, and ' +
+    '{free} is free. Free up space on the drive, then try again.',
+  // #986: the staged swap's rename was refused after its retries (a file held in the folder). The
+  // installed copy was put back; or, when even that was refused, both copies were kept, and the retry
+  // (or the next start) moves the new one in, so "try again" holds either way.
+  'main.engine.filesInUse':
+    'The engine could not be replaced because another program is using one of its files (an ' +
+    'antivirus scan, for example). Please try again in a minute.',
   // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
   // errors and refusals, localized at emission (i18n record §3.3 rule 2).
   'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',
@@ -2890,9 +3029,9 @@ export const en = {
     'This drive has no download list for the OCR files. Add them with the drive setup ' +
     'scripts instead ("fetch-runtime --family ocr").',
   'main.ocr.sourcesMismatch':
-    'The OCR download list on this drive does not match this version of HilbertRaum, so ' +
-    'nothing was downloaded. Add the files with the drive setup scripts instead ' +
-    '("fetch-runtime --family ocr").',
+    'Neither the OCR download list on this drive nor the one in this copy of HilbertRaum names ' +
+    'the files this version uses, so nothing was downloaded. Add the files with the drive setup ' +
+    'scripts instead ("fetch-runtime --family ocr").',
   'main.ocr.alreadyInstalled':
     'The OCR files are already on this drive. If text recognition is still not offered, ' +
     'restart HilbertRaum.',
@@ -2933,6 +3072,14 @@ export const en = {
     'No transcript is stored for this recording yet. Re-index it to transcribe again.',
   'main.models.noManifests':
     'No model list was found on this drive — the model-manifests folder is missing.',
+  'main.models.unknown': 'This model is no longer in this drive’s model list.',
+  'main.models.notChat': '“{name}” is not a chat model, so it can’t be started here.',
+  'main.models.startDamaged':
+    '“{name}” failed its file check, so it wasn’t started. Download it again on the AI Model screen.',
+  'main.models.startMissing': '“{name}” can’t be started: its model file isn’t on this drive yet.',
+  'main.models.startNeedsRam':
+    '“{name}” needs at least {min} GB RAM; this computer has about {ram} GB. Pick a smaller model — ' +
+    'quality stays great.',
   'main.models.autoSelected':
     'This model is used automatically once installed — there is nothing to select.',
   // F16 (audit-postmerge-2026-06-29): localized lock copy for the model / activity / settings
@@ -2972,6 +3119,11 @@ export const en = {
   'main.dictation.tooLong': 'That recording is too long for dictation. For long recordings, import the audio file as a document instead.',
   'main.dictation.busy': 'Still transcribing the last dictation — one moment.',
   'main.dictation.engineCannotRun': "The voice engine can't run on this computer. The AI Model screen says what is missing.",
+  'main.dictation.voiceModelPathUnsupported':
+    'On Windows, the voice engine cannot open one of its models (the transcription model or the ' +
+    'voice-activity model) because a folder or file name in that model’s path contains an umlaut, an ' +
+    'accent or another non-ASCII character. Store the model under a path without such characters and ' +
+    'update its entry in the model’s manifest, then try again.',
   'main.preflight.readOnly':
     'This drive appears to be read-only, so the app cannot create its workspace. ' +
     'Try a different USB port, or see the troubleshooting guide.',
@@ -3365,6 +3517,8 @@ export const en = {
   'images.avail.noModel': 'Image understanding needs a local vision model on this drive.',
   'images.avail.noRuntime': 'Image understanding needs the AI engine installed first.',
   'images.avail.incompatible': "This drive's vision model needs a newer AI engine.",
+  'images.avail.damaged':
+    'This drive\'s vision model failed its file check. Download it again on the AI Model screen.',
   'images.avail.cta': 'Go to AI Model',
   'images.avail.ocrPointer': 'Scanned documents? Use Make searchable (OCR) under Documents.',
   // Drop zone (§5.2) — a large, focusable target; the "choose" button is the non-drag path.
@@ -3426,6 +3580,9 @@ export const en = {
   'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
   // #530: another model would not help — the OS refused the engine program.
   'images.err.engineCannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
+  'images.err.modelDamaged':
+    'The vision model failed its file check, so it wasn\'t started. Download it again on the AI ' +
+    'Model screen.',
   'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
   // #120 item 1: a BLANK question is an input problem, not an empty model answer.
   'images.err.emptyQuestion': 'Type a question about the image first.',
@@ -3547,6 +3704,9 @@ export const en = {
     "The translation model couldn't start — the device may be low on memory. Close other apps or restart HilbertRaum, then try again.",
   // #530: not a memory problem — the OS refused the engine program.
   'translate.err.engineCannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
+  'translate.err.modelDamaged':
+    'The translation model failed its file check, so it wasn\'t started. Download it again on the AI ' +
+    'Model screen.',
   'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
   'translate.err.sameLang': 'Pick two different languages.',
   // #160 (BE-3): the finite paste bound (TRANSLATE_MAX_TEXT_CHARS — keep the number in sync).
@@ -3634,6 +3794,8 @@ export const en = {
   'review.rename.save': 'Save',
   'review.loading': 'Loading review…',
   'review.notFound': 'This review could not be found. It may have been deleted.',
+  // #807: the lead above a failed open's own message (a locked workspace, a read error), which shows as the detail.
+  'review.openFailed': 'This review could not be opened.',
   'review.question.toggle': 'Question',
   'review.answerPane.aria': 'Answer under review',
   // Auto-save status (plan §7.5) — quiet text, never an unlabeled spinner (guidelines §6).
@@ -3641,6 +3803,13 @@ export const en = {
   'review.autosave.saved': 'Saved',
   'review.autosave.error': 'Some changes could not be saved yet.',
   'review.autosave.retry': 'Try again',
+  // #837: the card shown instead of another review while the open one still has edits a failed
+  // write left unsaved. {title} = that open review's title. Its buttons: Try again
+  // (review.autosave.retry), review.unsaved.discard, and Back to chat (review.back).
+  'review.unsaved.body':
+    'Some changes to “{title}” could not be saved yet, so the other review was not opened. Try ' +
+    'again, or discard those changes and open it.',
+  'review.unsaved.discard': 'Discard changes and open',
   // Evidence pane honesty captions (spec §11.4/§24.3). The whole-document caption is the
   // load-bearing "provenance, not citations" claim — asserted by exact key in tests.
   'review.evidence.title': 'Evidence',
@@ -3847,6 +4016,9 @@ export const en = {
   'review.export.cancel': 'Close',
   'review.export.done': 'Evidence pack exported.',
   'review.export.error': 'The evidence pack could not be exported. No file was written.',
+  // #807: the lead above every failed export's own message (true for each, including a file that was saved but not
+  // recorded, which review.export.error's "No file was written" is not); a refused flush keeps review.export.error.
+  'review.export.failed': 'The evidence pack export did not finish.',
   'review.export.copyHash': 'Copy SHA-256',
   'review.export.hashCopied': 'SHA-256 copied to the clipboard.',
 

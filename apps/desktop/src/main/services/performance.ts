@@ -364,7 +364,7 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
  * row, so on a graphics-card machine the chat and translation weights that live ON THE CARD
  * were counted against RAM and the pill said "Too much at once" for a machine that was fine.
  *
- *  - `cpu` class: every row runs from RAM — the plain sum.
+ *  - `cpu` class: every row on the drive runs from RAM — the plain sum.
  *  - `discrete`: the rows that run on the processor (pinned by design, or `'cpu'` by
  *    configuration/observation/headroom) at full size, plus what the card-resident rows spill:
  *    the active model's OBSERVED partial-offload spill (`verdict.spillMb`, the CPU-side model +
@@ -373,10 +373,20 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
  *    card, from its reported split; not live, no split, or every layer on the card → 0), and a
  *    `'gpu'`-posture reranker row (Wave 8 ruling (d)/NF-3: its own headroom gate only resolves
  *    `'gpu'` when the whole placement fits, and no split is tracked for it, so it contributes 0).
- *  - `unified`: one pool, so the full sum — the copy says "memory" and the pill compares
- *    against the unified budget, not RAM.
+ *  - `unified`: one pool, so the full sum of the rows on the drive — the copy says "memory"
+ *    and the pill compares against the unified budget, not RAM.
  *
- * null when no row has a size (nothing installed).
+ * On every class, a row whose files are not on this drive (`onDrive: false`, #914) adds nothing:
+ * the row still names the catalog's model, but nothing will load it. Nor does a row whose files the
+ * checksum cache knows are damaged or have no checksum on record (`fileCheck`, #933): every start
+ * refuses it. A row that is LOADED counts whatever `onDrive` and `fileCheck` say (#914 code review:
+ * a weight deleted while the runtime holds it open, a manifest removed under a running model): its
+ * memory is in use.
+ *
+ * null only when no counted row has a size (nothing installed, or nothing installed will start). A drive
+ * whose every counted row runs on the card gives 0, the honest number (the screen leaves the line
+ * out when it would read 0.0 GB). An ESTIMATED chat spill is not counted until a start is
+ * observed (`!verdict.estimated`).
  */
 export function loadedAtOnceMb(input: {
   memoryClass: MemoryClass
@@ -386,7 +396,9 @@ export function loadedAtOnceMb(input: {
   const { memoryClass, rows, verdict } = input
   let total: number | null = null
   for (const row of rows) {
-    if (row.sizeOnDiskGb == null) continue
+    // #933: a row on the drive whose files a check found damaged, or that has no checksum on record, will not load
+    // either (every start refuses it): out, unless it is loaded.
+    if ((!row.loaded && (!row.onDrive || row.fileCheck !== 'ok')) || row.sizeOnDiskGb == null) continue
     const sizeMb = row.sizeOnDiskGb * 1024
     let mb: number
     if (memoryClass === 'unified' || row.device === 'cpu') {

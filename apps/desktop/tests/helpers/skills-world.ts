@@ -17,6 +17,7 @@ import { createSkillRegistry, type SkillRegistry } from '../../src/main/services
 import { runningManager } from './chat-runtime-stub'
 import { tempRoot } from './db-fixtures'
 import { ANY_SENDER } from './ipc'
+import { workspaceStandIn } from './workspace-stand-in'
 
 export interface SkillsWorld {
   root: string
@@ -80,7 +81,7 @@ export function makeSkillsIpcContext(
     trustedSenders: ANY_SENDER,
     db: w.db,
     paths: { workspacePath: w.root },
-    workspace: { isUnlocked: () => unlocked, documentCipher: () => null },
+    workspace: workspaceStandIn({ unlocked }),
     isDev: false,
     ...(o.audit === false ? {} : { audit: createAuditRecorder(() => w.db) }),
     skills: w.skills,
@@ -98,7 +99,7 @@ export interface RagAuditEvent {
  * The AppContext the RAG-ask suites hand to registerRagIpc; `audit` records `{ type, meta }` (unread by the noop-audit
  * suites). `skills` is optional: without it the context has no `skills` key at all (the regenerate suites' shape,
  * regenerate-fixtures.ts `regenWorkspace`; replaces their `makeCtx` at 27bd0b0d: regenerate-evidence-review-guard.test.ts:95
- * and regenerate-result-table-restore.test.ts:127).
+ * and regenerate-result-table-restore.test.ts:127, and at 11e3a5f7 rag-regenerate-ipc.test.ts:48, #898).
  */
 export function makeRagAskContext(
   w: Pick<SkillsWorld, 'db' | 'root' | 'workspacePath'> & { skills?: SkillRegistry },
@@ -111,7 +112,7 @@ export function makeRagAskContext(
     get db() {
       return w.db
     },
-    workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
+    workspace: workspaceStandIn(),
     runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,

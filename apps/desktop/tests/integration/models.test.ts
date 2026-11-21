@@ -1,9 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, utimesSync } from 'node:fs'
-import { join, parse } from 'node:path'
+import { dirname, join, parse } from 'node:path'
 import type { Db } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
+import { log } from '../../src/main/services/logging'
+import { applyUiLanguageSetting } from '../../src/main/services/i18n'
+import { t } from '../../src/shared/i18n'
 import {
   MIN_READ_SAMPLE_MS,
   latestEffectiveRead,
@@ -14,6 +17,7 @@ import {
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   beginChecksumInstrumentation,
+  checkModelBeforeStart,
   sha256File,
   verifyChecksum,
   computeInstallState,
@@ -21,11 +25,17 @@ import {
   checksumCacheStats,
   createSettingsHashStore,
   invalidateChecksum,
+  knownFileVerdict,
   manifestFiles,
   primeChecksum,
   recommendModelId,
   recommendModelIdByRam,
   recommendModelIdByVram,
+  landedPartlyOnCard,
+  cardEvidenceFor,
+  PARTIAL_EVIDENCE_TOLERANCE_MIB,
+  type CardEvidence,
+  type HashStore,
   recommendChatModelId,
   estimateGraphicsNeedMib,
   fitsGraphicsMemory,
@@ -37,13 +47,15 @@ import {
   launchContextTokens,
   selectModel,
   resolveManifestsDir,
+  resolveBundledManifestsDir,
+  setManifestAppVersion,
   weightPath
 } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
-import type { ModelVerifyProgress } from '../../src/shared/types'
+import type { ModelInfo, ModelVerifyProgress } from '../../src/shared/types'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seededFreshDb } from '../helpers/seeded-db'
-import { until } from '../helpers/hang-budget'
+import { testBudgetMs, until } from '../helpers/hang-budget'
 import { manifestsDirWith, rawManifest, sha256, validManifest, writeDriveFile, writeManifest } from '../helpers/manifest-fixtures'
 
 /** What every `buildModelList` call passes for the machine's RAM, as production always does. Never the host's. */
@@ -69,11 +81,22 @@ function armPerfLog(): () => string[] {
   }
 }
 
-/** The parsed `checksum_done` marks: the read's own close, which lands AFTER a cancelled caller rejects. */
-function doneMarks(readLog: () => string[]): Array<{ ok: boolean }> {
+/**
+ * The parsed `checksum_done` marks of ONE read label: the read's own close, which lands AFTER a cancelled caller
+ * rejects. The perf log is process-wide, so a hash that outlives its row (a timeout under load) writes its mark into
+ * the next row's log; filtering on the label keeps a row from counting another row's read (#957). A read with no
+ * label carries `modelId: null`.
+ */
+function doneMarks(readLog: () => string[], modelId: string | null = null): Array<{ ok: boolean }> {
   return readLog()
     .filter((l) => l.includes(' checksum_done '))
-    .map((l) => JSON.parse(l.slice(l.indexOf('{'))))
+    .map((l) => JSON.parse(l.slice(l.indexOf('{'))) as { ok: boolean; modelId: string | null })
+    .filter((m) => m.modelId === modelId)
+}
+
+/** The parsed `checksum_start` marks: one per PHYSICAL read, written synchronously when the read begins. */
+function startMarks(readLog: () => string[]): string[] {
+  return readLog().filter((l) => l.includes(' checksum_start '))
 }
 
 describe('checksum verification', () => {
@@ -649,6 +672,53 @@ describe('computeInstallState — vision (both files verified)', () => {
     })
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
   })
+
+  // #913 (S-913-1): a full check stops at the first damaged file, so one file of the pair can hold a cached mismatch
+  // while the other has no cache entry at all. The lazy answer must honour that mismatch; master said `installed`
+  // because it trusted the cache only when every file had an entry.
+  it.each([
+    ['the GGUF', 'models/vision/vl.gguf'],
+    ['the projector', 'models/vision/mmproj.gguf']
+  ])('skipHash reports checksum_failed when only %s has a cached mismatch (#913)', async (_file, damaged) => {
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytes')
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = visionManifest({
+      sha256: sha256('lm-bytes'),
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+    })
+    primeChecksum(join(root, ...damaged.split('/')), sha256('bytes a check found damaged'))
+    const before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, skipHash: true })).toBe('checksum_failed')
+    expect(checksumCacheStats.computed).toBe(before) // answered from the cache: nothing hashed
+  })
+
+  // #913 (S-913-1): what "Check all model files" does on the AI Model screen — the full pass, then the lazy refresh
+  // the screen fires right after it. On master the refresh flipped a damaged vision GGUF back to installed, and Images
+  // kept running it.
+  it('the lazy refresh after a full check keeps a damaged vision GGUF checksum_failed (#913)', async () => {
+    const root = tempRoot('vision')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytez') // same length as the real bytes: a bit flip
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const manifestsDir = manifestsDirWith(
+      rawManifest({
+        id: 'qwen2.5-vl-3b-instruct-q4',
+        role: 'vision',
+        family: 'qwen2.5-vl',
+        local_path: 'models/vision/vl.gguf',
+        sha256: sha256('lm-bytes'),
+        mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+      })
+    )
+    const opts = { manifestsDir, rootPath: root, developerMode: false, machineRamGb: PINNED_RAM_GB }
+    const before = checksumCacheStats.computed
+    const full = await buildModelList(opts)
+    expect(full.models[0].state).toBe('checksum_failed')
+    expect(checksumCacheStats.computed - before).toBe(1) // it stopped at the GGUF: the projector was never hashed
+    const lazy = await buildModelList({ ...opts, onlyVerifyModelId: null })
+    expect(lazy.models[0].state).toBe('checksum_failed')
+    expect(checksumCacheStats.computed - before).toBe(1)
+  })
 })
 
 // #310: a weight that ships as a `-00001-of-00004` shard set is FOUR files. The manifest's
@@ -772,6 +842,77 @@ describe('#310 multi-file install state (shard set)', () => {
   })
 })
 
+// #913: the start check the non-chat roles run before they spawn. Only a proven case refuses (the #876 rule): a file a
+// check found damaged, or a placeholder hash outside developer mode, as for chat. `hash: false` reads the cache only;
+// `hash: true` (the search and voice models, G-4 d2) hashes an uncached file. The service rows fake this verdict.
+describe('checkModelBeforeStart (#913)', () => {
+  const REL = 'models/transcriber/voice.bin'
+  type Case = [string, { body?: string; sha?: string; primeBad?: boolean; developerMode?: boolean; hash: boolean }, string, number]
+  it.each<Case>([
+    ['a cached mismatch, cache only', { primeBad: true, hash: false }, 'damaged', 0],
+    ['no cache entry, cache only: nothing is hashed', { hash: false }, 'ok', 0],
+    ['no cache entry, hashed: a match', { hash: true }, 'ok', 1],
+    ['no cache entry, hashed: damaged', { body: 'voice bytez', hash: true }, 'damaged', 1],
+    ['a placeholder hash outside developer mode', { sha: 'REPLACE_WITH_REAL_HASH', hash: false }, 'damaged', 0],
+    ['a placeholder hash in developer mode', { sha: 'REPLACE_WITH_REAL_HASH', developerMode: true, hash: true }, 'ok', 0]
+  ])('%s', async (_label, c, verdict, hashed) => {
+    const root = tempRoot('start-check')
+    const path = join(root, ...REL.split('/'))
+    writeDriveFile(root, REL, c.body ?? 'voice bytes')
+    if (c.primeBad) primeChecksum(path, sha256('bytes a check found damaged'))
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: c.sha ?? sha256('voice bytes') })
+    const before = checksumCacheStats.computed
+    expect(await checkModelBeforeStart(m, root, { developerMode: c.developerMode ?? false, hash: c.hash })).toBe(verdict)
+    expect(checksumCacheStats.computed - before).toBe(hashed)
+  })
+
+  it('a missing file, or a check that cannot read the file, is no proof: the start goes on as before', async () => {
+    const root = tempRoot('start-check')
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: sha256('voice bytes') })
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hash: true })).toBe('ok') // missing
+    mkdirSync(join(root, ...REL.split('/')), { recursive: true }) // a folder where the file should be: the read fails
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hash: true })).toBe('ok')
+  })
+
+  // #913 review S2: "check today, start tomorrow". After an app restart the in-memory cache is empty, so the workspace
+  // store is all that holds a "Check all model files" verdict. A mismatch found there must still refuse.
+  it('a mismatch only the workspace store remembers (the in-memory entry gone) still refuses, nothing hashed', async () => {
+    const root = tempRoot('start-check')
+    const db = seededFreshDb('start-check')
+    writeDriveFile(root, 'models/vision/vl.gguf', 'lm-bytez') // a bit flip
+    writeDriveFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = validManifest({
+      id: 'vl',
+      role: 'vision',
+      local_path: 'models/vision/vl.gguf',
+      sha256: sha256('lm-bytes'),
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: sha256('proj-bytes') }
+    })
+    // Today: the full check finds the GGUF damaged and writes it to both caches (the projector is never hashed).
+    const today = createSettingsHashStore(() => db, root)
+    expect(await computeInstallState(m, root, { developerMode: false, hashStore: today })).toBe('checksum_failed')
+    // Tomorrow: a new process. Drop the in-memory entry only (no store passed); read through a fresh store.
+    invalidateChecksum(join(root, 'models', 'vision', 'vl.gguf'))
+    const tomorrow = createSettingsHashStore(() => db, root)
+    const before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, hashStore: tomorrow, skipHash: true })).toBe(
+      'checksum_failed'
+    )
+    expect(await checkModelBeforeStart(m, root, { developerMode: false, hashStore: tomorrow, hash: false })).toBe('damaged')
+    expect(checksumCacheStats.computed).toBe(before)
+  })
+
+  it('an aborted check rejects with the abort, never ok: a lock or quit ends the start', async () => {
+    const root = tempRoot('start-check')
+    writeDriveFile(root, REL, 'voice bytes')
+    const m = validManifest({ id: 'voice', role: 'transcriber', runtime: 'whisper_cpp', format: 'ggml', local_path: REL, sha256: sha256('voice bytes') })
+    const controller = new AbortController()
+    const check = checkModelBeforeStart(m, root, { developerMode: false, hash: true, signal: controller.signal })
+    controller.abort() // the read is open: the hash is under way
+    await expect(check).rejects.toThrow(/cancelled/i)
+  })
+})
+
 describe('recommendModelId', () => {
   const tiny = validManifest({ id: 'tiny', recommended_profiles: ['TINY', 'UNKNOWN'] })
   const lite = validManifest({ id: 'lite', recommended_profiles: ['LITE'] })
@@ -803,6 +944,95 @@ describe('recommendModelId', () => {
 // highest-RANKED eligible model (ties by tier, then size) takes over; where nothing is eligible
 // the RAM pick stands as the documented partial-offload fallback. RAM stays a hard gate, and the
 // §6.5 step-down is confined to the eligible pool on both ends (R1/R2).
+// §6.8: the card path with a catalog that carries card ranks, the runtime's own projection as
+// the need, and the evidence of earlier starts. Fixture catalogs only; the committed catalog's
+// grid is pinned in committed-catalog.test.ts.
+describe('card path §6.8: projected need, card ranks, partial-load evidence', () => {
+  const tiny = validManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const mid = validManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3 })
+  const g12 = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2 })
+  const g12Card = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_min_ram_gb: 14, recommended_ram_gb: 24, recommendation_rank: 2, recommendation_rank_gpu: 3 })
+  const BUDGET = 10_000
+  const seen = (over: Partial<CardEvidence['placements'][string]> = {}, override: number | null = null): CardEvidence => ({
+    placements: { g12: { backend: 'gpu', gpuLayers: 40, totalLayers: 49, contextTokens: 4096, gpuFreeAtStartMb: BUDGET, ...over } },
+    contextTokensOverride: override
+  })
+
+  it('a projected need replaces the estimate: the projection plus the fit margin, nothing else', () => {
+    const projected = validManifest({ id: 'p', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0.3, host_mapped_weights_mib: 545.62, projected_graphics_need_mib: 5856 })
+    expect(estimateGraphicsNeedMib(projected)).toBe(5856 + 1024)
+    expect(fitsGraphicsMemory(projected, 6880)).toBe(true)
+    expect(fitsGraphicsMemory(projected, 6879)).toBe(false)
+    // Zero is a figure, not "absent".
+    expect(estimateGraphicsNeedMib(validManifest({ id: 'z', size_on_disk_gb: 6.0, projected_graphics_need_mib: 0 }))).toBe(1024)
+  })
+
+  it('without card ranks it is rule C: the RAM pick stands where it fits the card', () => {
+    expect(recommendModelIdByVram([tiny, mid, g12], BUDGET, 16)).toBe('mid')
+  })
+
+  it('with card ranks the highest card-ranked model that fits is the pick outright, RAM floor kept', () => {
+    expect(recommendModelIdByVram([tiny, mid, g12Card], BUDGET, 16)).toBe('g12')
+    // g12 needs 14 GB of RAM: at 12 the next card-ranked model that fits.
+    expect(recommendModelIdByVram([tiny, mid, g12Card], BUDGET, 12)).toBe('mid')
+    // Too small a card for g12 (9,214 MiB by the estimate): the next one down.
+    expect(recommendModelIdByVram([tiny, mid, g12Card], 9000, 16)).toBe('mid')
+    // A card rank of 0 takes a model out of the card pick (the next by card rank is the rank-3 tiny,
+    // ahead of the rank-2 g12); the ordinary rank still serves the RAM path.
+    const midOff = validManifest({ id: 'mid', size_on_disk_gb: 6.0, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 3, recommendation_rank_gpu: 0 })
+    expect(recommendModelIdByVram([tiny, midOff, g12], BUDGET, 16)).toBe('tiny')
+    expect(recommendModelIdByRam([tiny, midOff, g12], 16, 'chat')).toBe('mid')
+    // Nothing card-ranked fits: the RAM pick of the ordinary ranks, partially offloaded.
+    expect(recommendModelIdByVram([tiny, mid, g12Card], 1500, 16)).toBe('mid')
+  })
+
+  it('a model seen landing only partly on this card is not picked for it again', () => {
+    const all = [tiny, mid, g12Card]
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen())).toBe('mid')
+    expect(recommendChatModelId(all, { memoryClass: 'discrete', ramGb: 16, budgetMb: BUDGET, card: seen() })).toBe('mid')
+    // A full offload, a processor start or no layer figures are no evidence against it.
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ gpuLayers: 49 }))).toBe('g12')
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ backend: 'cpu' }))).toBe('g12')
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ gpuLayers: null }))).toBe('g12')
+    // The same under rule C (no card ranks): the RAM pick that landed partly gives way.
+    const partMid: CardEvidence = { placements: { mid: { backend: 'gpu', gpuLayers: 20, totalLayers: 33, contextTokens: 4096, gpuFreeAtStartMb: BUDGET } } }
+    expect(recommendModelIdByVram([tiny, mid, g12], BUDGET, 16, 'chat', null, partMid)).toBe('tiny')
+  })
+
+  it('the evidence counts only under conditions that still hold: context no larger, card no fuller than now', () => {
+    const all = [tiny, mid, g12Card]
+    // Measured at a larger context than the next start uses: proves nothing.
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ contextTokens: 32_768 }))).toBe('g12')
+    // ...unless that larger context is what Settings now launch with.
+    expect(recommendModelIdByVram(all, BUDGET, 16, 'chat', null, seen({ contextTokens: 32_768 }, 32_768))).toBe('mid')
+    // A manifest without its own window launches with the legacy setting (`launchContextTokens`'
+    // precedence), so a partial start at a larger context than that proves nothing either.
+    const noWindow = validManifest({ id: 'g12', size_on_disk_gb: 7.0, recommended_context_tokens: 0, recommendation_rank_gpu: 3 })
+    expect(landedPartlyOnCard(noWindow, BUDGET, { ...seen({ contextTokens: 8192 }), contextTokens: 4096 })).toBe(false)
+    expect(landedPartlyOnCard(noWindow, BUDGET, { ...seen({ contextTokens: 4096 }), contextTokens: 4096 })).toBe(true)
+    // The card was fuller then than now (something else held it): no evidence. Inside the tolerance it counts.
+    expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: BUDGET - PARTIAL_EVIDENCE_TOLERANCE_MIB - 1 }))).toBe(false)
+    expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: BUDGET - PARTIAL_EVIDENCE_TOLERANCE_MIB }))).toBe(true)
+    // An unknown free figure counts: the layers are the evidence.
+    expect(landedPartlyOnCard(g12Card, BUDGET, seen({ gpuFreeAtStartMb: null }))).toBe(true)
+    expect(landedPartlyOnCard(g12Card, BUDGET, null)).toBe(false)
+  })
+
+  it('cardEvidenceFor keeps this machine’s placements and unstamped ones, never another machine’s', () => {
+    const placement = (machineKey: string | null) => ({
+      modelId: 'x', contextTokens: 8192, backend: 'gpu' as const, gpuLayers: 20, totalLayers: 33, gpuModelMb: null, cpuModelMb: null,
+      gpuKvMb: null, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey, at: '2026-11-20T00:00:00Z'
+    })
+    const evidence = cardEvidenceFor(
+      { modelPlacements: { here: placement('A'), legacy: placement(null), other: placement('B') }, contextTokensOverride: 16_384, contextTokens: 4096 },
+      'A'
+    )
+    expect(Object.keys(evidence.placements).sort()).toEqual(['here', 'legacy'])
+    expect(evidence.contextTokensOverride).toBe(16_384)
+    expect(evidence.contextTokens).toBe(4096)
+  })
+})
+
 describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
   const tiny = validManifest({ id: 'tiny', size_on_disk_gb: 2.9, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 3 })
   const small12 = validManifest({ id: 'small12', size_on_disk_gb: 3.3, recommended_min_ram_gb: 8, recommended_ram_gb: 12, recommendation_rank: 3 })
@@ -1133,6 +1363,24 @@ describe('buildModelList — the download size the confirmation states (#768)', 
   })
 })
 
+// #848 review: an embeddings card has nothing to select (the app composes its own pick), so its ★ marks the model the
+// app composes — the flagged default (`pickManifestForRole`) — and only when that model fits this machine's RAM (the ★
+// is runnable by construction, design-guidelines §11). Never another embeddings manifest the RAM ranking prefers.
+describe('buildModelList — the ★ on the embedder follows the composed model (#848)', () => {
+  it('stars the flagged default, not a better-ranked embeddings manifest, and nothing when the default does not fit', async () => {
+    const dir = manifestsDirWith(
+      rawManifest({ id: 'a-ranked', role: 'embeddings', recommendation_rank: 10, recommended_min_ram_gb: 1, recommended_ram_gb: 2 }),
+      rawManifest({ id: 'z-default', role: 'embeddings', default_for_role: true, recommended_min_ram_gb: 4, recommended_ram_gb: 8 })
+    )
+    const starred = async (machineRamGb: number): Promise<string[]> =>
+      (await buildModelList({ manifestsDir: dir, rootPath: tempRoot('root'), developerMode: true, machineRamGb })).models
+        .filter((m) => m.recommended)
+        .map((m) => m.id)
+    expect(await starred(16)).toEqual(['z-default'])
+    expect(await starred(2)).toEqual([]) // the default needs 4 GB: no ★ at all, never the model the app would not run
+  })
+})
+
 describe('buildModelList — RAM gate', () => {
   it('flags models above the machine RAM and recommends the best RAM fit', async () => {
     const dir = manifestsDirWith(
@@ -1226,6 +1474,45 @@ describe('buildModelList — RT-3 lazy verification', () => {
     expect(checksumCacheStats.computed).toBe(before)
     expect(models.find((m) => m.id === 'a')?.state).toBe('installed')
     expect(models.find((m) => m.id === 'b')?.state).toBe('checksum_failed')
+  })
+
+  // #932 (G-2 (d)): outside developer leniency a placeholder hash reads `checksum_failed`, decided from the manifest
+  // alone, the same state as a file that failed its check. The card must tell the two apart ("No checksum", and no
+  // Download that cannot help), so the list flags it `noChecksum`, a placeholder on the projector alone included. A
+  // cached mismatch on a real hash is not flagged; with leniency the placeholder model is simply installed.
+  it('flags a present model with no checksum on record noChecksum; a cached mismatch and a lenient list do not (#932)', async () => {
+    const root = tempRoot('root')
+    writeDriveFile(root, 'models/chat/ph.gguf', 'PH')
+    const hB = writeDriveFile(root, 'models/chat/b.gguf', 'BBBB')
+    const hV = writeDriveFile(root, 'models/vision/v.gguf', 'VV')
+    writeDriveFile(root, 'models/vision/v-mmproj.gguf', 'PROJ')
+    const dir = manifestsDirWith(
+      rawManifest({ id: 'ph', local_path: 'models/chat/ph.gguf' }), // the fixture's hash is the placeholder
+      rawManifest({ id: 'b', local_path: 'models/chat/b.gguf', sha256: hB }),
+      rawManifest({
+        id: 'v',
+        role: 'vision',
+        family: 'qwen2.5-vl',
+        local_path: 'models/vision/v.gguf',
+        sha256: hV,
+        mmproj: { local_path: 'models/vision/v-mmproj.gguf', sha256: 'REPLACE_WITH_REAL_HASH' }
+      })
+    )
+    primeChecksum(join(root, 'models', 'chat', 'b.gguf'), 'a'.repeat(64)) // "Check all model files" found it damaged
+    const list = async (developerMode: boolean): Promise<Record<string, ModelInfo>> =>
+      Object.fromEntries(
+        (
+          await buildModelList({ manifestsDir: dir, rootPath: root, developerMode, machineRamGb: PINNED_RAM_GB, onlyVerifyModelId: null })
+        ).models.map((m) => [m.id, m])
+      )
+    const strict = await list(false)
+    expect(strict['ph']).toMatchObject({ state: 'checksum_failed', noChecksum: true })
+    expect(strict['v']).toMatchObject({ state: 'checksum_failed', noChecksum: true })
+    expect(strict['b'].state).toBe('checksum_failed')
+    expect(strict['b'].noChecksum).toBeUndefined()
+    const lenient = await list(true)
+    expect(lenient['ph'].state).toBe('installed')
+    expect(lenient['ph'].noChecksum).toBeUndefined()
   })
 })
 
@@ -1324,6 +1611,17 @@ describe('cancellable verification (#420)', () => {
     return file
   }
 
+  /** The single-flight rows below abort in the SAME tick as their calls, before `fs.open` completes, so what they prove
+   *  does not depend on the file's size: 4 KiB instead of 70 MiB (#915; the same four mutations of the sharing rule
+   *  stay red as on the big file). */
+  const SMALL_FILE = Buffer.alloc(4096, 7)
+  const smallFileSha = createHash('sha256').update(SMALL_FILE).digest('hex')
+  function smallFile(): string {
+    const file = join(tempRoot('abort'), 'weight.bin')
+    writeFileSync(file, SMALL_FILE)
+    return file
+  }
+
   // ---- trap 1: the promise must REJECT, never hang -----------------------------------
   // `sha256File` attaches only `error` and `end`. A naive `stream.destroy()` emits `close`
   // and NEITHER of those, so the promise would simply never settle and every awaiting caller
@@ -1362,17 +1660,33 @@ describe('cancellable verification (#420)', () => {
     const file = bigFile()
     const before = checksumCacheStats.computed
     const controller = new AbortController()
+    const store: HashStore = { get: () => null, set: vi.fn(), delete: vi.fn() }
     // The 64 MiB throttle fires once with ~6 MiB still to read — a genuine mid-read abort.
     await expect(
-      verifyChecksum(file, bigFileSha(), undefined, () => controller.abort(), undefined, controller.signal)
+      verifyChecksum(file, bigFileSha(), store, () => controller.abort(), undefined, controller.signal)
     ).rejects.toThrow(/cancelled/i)
     // The caller rejects first; the read's own catch closes the pair after it.
     await until(() => doneMarks(readLog).length > 0, 'the cancelled read closing')
     expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
     expect(checksumCacheStats.computed).toBe(before)
-    // Nothing was cached: a fresh verify hashes for real and matches.
-    expect((await verifyChecksum(file, bigFileSha())).matched).toBe(true)
-    expect(checksumCacheStats.computed).toBe(before + 1)
+    // Nothing was cached, proven without a second 70 MiB hash (#957: two hashes in one budget flaked under load).
+    // L2: the persistent store was never written. L1: the in-memory cache holds no digest for the file, so a manifest
+    // naming a DIFFERENT sha reads 'ok' (a cached digest would make it 'damaged').
+    expect(store.set).not.toHaveBeenCalled()
+    const manifest = validManifest({ local_path: 'weight.bin', sha256: sha256('not this file') })
+    expect(knownFileVerdict(manifest, dirname(file), { developerMode: false })).toBe('ok')
+  }, testBudgetMs(30_000))
+
+  it('a mark from another label never counts (#957)', async () => {
+    const readLog = armPerfLog()
+    // An unlabelled read (modelId null) finishes and logs its mark; a labelled read's count must not include it.
+    await verifyChecksum(smallFile(), smallFileSha)
+    await until(() => doneMarks(readLog).length > 0, 'the unlabelled read closing')
+    expect(doneMarks(readLog, 'm')).toEqual([])
+    await verifyChecksum(smallFile(), smallFileSha, undefined, undefined, { modelId: 'm', file: 'weight' })
+    await until(() => doneMarks(readLog, 'm').length > 0, 'the labelled read closing')
+    expect(doneMarks(readLog, 'm')).toEqual([expect.objectContaining({ ok: true })])
+    expect(doneMarks(readLog)).toHaveLength(1)
   })
 
   // ---- trap 2: single-flight sharing --------------------------------------------------
@@ -1381,39 +1695,48 @@ describe('cancellable verification (#420)', () => {
   // same weight. The rule: the shared read is aborted only when EVERY waiter has abandoned
   // it, so an uncancellable caller can never be collateral damage.
   it('a cancelled screen pass does not abort the hash an uncancellable caller joined', async () => {
-    const file = bigFile()
-    const expected = bigFileSha()
+    const readLog = armPerfLog()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     // Same tick: the leader registers in `inFlightHashes` synchronously, so the second call
     // JOINS it rather than starting a second multi-GB read.
     const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
     const gate = verifyChecksum(file, expected) // the §7.4 start gate — no signal
+    expect(startMarks(readLog)).toHaveLength(1) // the gate joined: ONE physical read began
     controller.abort()
 
     await expect(screen).rejects.toThrow(/cancelled/i)
     expect((await gate).matched).toBe(true) // the shared read ran to the end for the gate
-    expect(checksumCacheStats.computed).toBe(before + 1) // and it was ONE physical hash
+    expect(checksumCacheStats.computed).toBe(before + 1)
+    // The one read closed ok:true; a failed join would also leave the screen's own ok:false read.
+    await until(() => doneMarks(readLog).length > 0, 'the shared read closing')
+    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: true })])
   })
 
   it('…and the other way round: a cancelled JOINER leaves the uncancellable leader alone', async () => {
-    const file = bigFile()
-    const expected = bigFileSha()
+    const readLog = armPerfLog()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     const gate = verifyChecksum(file, expected) // leads, uncancellable
     const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
+    expect(startMarks(readLog)).toHaveLength(1) // the screen joined the gate's read
     controller.abort()
 
     await expect(screen).rejects.toThrow(/cancelled/i)
     expect((await gate).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1)
+    await until(() => doneMarks(readLog).length > 0, 'the shared read closing')
+    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: true })])
   })
 
   it('the physical read DOES stop once every waiter has cancelled', async () => {
     const readLog = armPerfLog()
-    const file = bigFile()
-    const expected = bigFileSha()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const a = new AbortController()
     const b = new AbortController()
@@ -1433,8 +1756,8 @@ describe('cancellable verification (#420)', () => {
   // The stream closes some ticks after the abort. A caller landing in that gap used to join the
   // dying read and reject, which from the §7.4 start gate fails a model start with "Hashing was cancelled".
   it('a caller arriving after every waiter left gets its own read, not the abandoned one (#752)', async () => {
-    const file = bigFile()
-    const expected = bigFileSha()
+    const file = smallFile()
+    const expected = smallFileSha
     const before = checksumCacheStats.computed
     const controller = new AbortController()
     const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
@@ -1462,8 +1785,8 @@ describe('cancellable verification (#420)', () => {
         controller.signal
       )
     ).rejects.toThrow(/cancelled/i)
-    await until(() => doneMarks(readLog).length > 0, 'the cancelled read closing')
-    expect(doneMarks(readLog)).toEqual([expect.objectContaining({ ok: false })])
+    await until(() => doneMarks(readLog, 'm').length > 0, 'the cancelled read closing')
+    expect(doneMarks(readLog, 'm')).toEqual([expect.objectContaining({ ok: false })])
     // Weak alone on a fast disk (under the 250 ms floor); the warm mark below carries the proof, its registration ignores the elapsed floor.
     expect(latestEffectiveReadBySource('checksum')).toBeNull()
 
@@ -1472,7 +1795,7 @@ describe('cancellable verification (#420)', () => {
     // the contrast case below.)
     recordModelLoadRead(file, 10_000, 'm', 6_000_000_000)
     expect(latestEffectiveReadBySource('model_load')).not.toBeNull()
-  })
+  }, testBudgetMs(30_000))
 
   it('…while a COMPLETED hash of the same file does mark it warm (the contrast)', async () => {
     resetEffectiveReadForTests()
@@ -1486,7 +1809,7 @@ describe('cancellable verification (#420)', () => {
     )
     recordModelLoadRead(file, 10_000, 'm', 6_000_000_000)
     expect(latestEffectiveReadBySource('model_load')).toBeNull()
-  })
+  }, testBudgetMs(30_000))
 
   // ---- the loops, not only the stream --------------------------------------------------
   it('a cancel between two weights stops the pass immediately — the next model never hashes', async () => {
@@ -1632,6 +1955,208 @@ describe('discoverManifests', () => {
   })
 })
 
+/** `raw` without `keys` (a manifest that omits a field, which `rawManifest`'s overrides cannot express). */
+function without(raw: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
+  const out = { ...raw }
+  for (const k of keys) delete out[k]
+  return out
+}
+
+// #847: an older app meeting a newer drive. A manifest whose role this build does not know, or (a+) whose
+// `min_app_version` is newer than this app, is listed for display in `unsupported` instead of vanishing, and never
+// reaches `manifests`, so no consumer can pick it. Frozen old-reader contract: the app-update plan's Appendix B.
+describe('discoverManifests — a manifest for a newer HilbertRaum (#847)', () => {
+  afterEach(() => setManifestAppVersion(''))
+
+  it('lists an unknown role for display only: in unsupported, never in manifests or errors', () => {
+    const dir = manifestsDirWith(
+      rawManifest({
+        id: 'holo',
+        display_name: 'Holo Model',
+        role: 'hologram',
+        family: 'holo',
+        size_on_disk_gb: 3.5,
+        local_path: 'models/holo/holo.gguf',
+        mmproj: { local_path: 'models/holo/holo-proj.gguf', sha256: 'REPLACE_WITH_REAL_HASH' }
+      })
+    )
+    const res = discoverManifests(dir)
+    expect(res.manifests).toEqual([])
+    expect(res.errors).toEqual([])
+    expect(res.unsupported.map((u) => u.manifest)).toEqual([
+      {
+        id: 'holo',
+        displayName: 'Holo Model',
+        role: 'hologram',
+        family: 'holo',
+        sizeOnDiskGb: 3.5,
+        minAppVersion: null,
+        localPaths: ['models/holo/holo.gguf', 'models/holo/holo-proj.gguf']
+      }
+    ])
+    expect(res.unsupported[0].sourceFile).toBe(join(dir, 'm0.yaml'))
+  })
+
+  // The forward tolerance release 1 freezes: a later role may use fields under rules this build applies to its own.
+  it('reads only the display fields of an unknown role: the rules for known roles do not apply to it', () => {
+    const raw = without(
+      rawManifest({
+        id: 'future-gen',
+        role: 'video',
+        speculative_decoding: 'mtp',
+        disable_prompt_cache: true,
+        recommended_profiles: ['ULTRA'],
+        license_review: { status: 'someday' }
+      }),
+      'recommended_context_tokens',
+      'format'
+    )
+    const res = discoverManifests(manifestsDirWith(raw))
+    expect(res.errors).toEqual([])
+    expect(res.unsupported.map((u) => [u.manifest.id, u.manifest.role])).toEqual([['future-gen', 'video']])
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['an unknown role with no id', without(rawManifest({ role: 'hologram' }), 'id')],
+    ['an unknown role with a blank display name', rawManifest({ role: 'hologram', display_name: '  ' })],
+    ['an unknown role whose weight path escapes the drive', rawManifest({ role: 'hologram', local_path: '../outside.gguf' })],
+    [
+      'an unknown role whose projector path is absolute',
+      rawManifest({ role: 'hologram', mmproj: { local_path: 'C:/x.gguf', sha256: 'x' } })
+    ],
+    ['no role', without(rawManifest(), 'role')],
+    ['a blank role', rawManifest({ role: '  ' })],
+    ['a role that is not a string', rawManifest({ role: 7 })],
+    ['a known role with a field its rules refuse', rawManifest({ role: 'embeddings', speculative_decoding: 'mtp' })]
+  ])('still reports %s as an error, never as unsupported', (_title, raw) => {
+    const res = discoverManifests(manifestsDirWith(raw))
+    expect(res.unsupported).toEqual([])
+    expect(res.manifests).toEqual([])
+    expect(res.errors).toHaveLength(1)
+  })
+
+  // F-847-4 (orchestrator decision, round 1): one id space, and a manifest this app can use ALWAYS keeps its id, whatever
+  // the walk order. Otherwise `a-newer.yaml` (a later release's file for the same model) beside `b-current.yaml` would
+  // leave no usable manifest: no embedder, the mock fallback, where master and v0.1.65 keep the model. Among files of one
+  // kind the first in walk order wins; every loser is a duplicate-id error, never a second entry.
+  it.each<[string, Array<[string, Record<string, unknown>]>, { manifests: string[]; unsupported: string[]; loser: string }]>([
+    ['a usable file, then a newer one', [['a.yaml', {}], ['b.yaml', { min_app_version: '9.0.0' }]], { manifests: ['a.yaml'], unsupported: [], loser: 'b.yaml' }],
+    ['a newer file, then a usable one', [['a.yaml', { min_app_version: '9.0.0' }], ['b.yaml', {}]], { manifests: ['b.yaml'], unsupported: [], loser: 'a.yaml' }],
+    ['an unknown role, then a usable file', [['a.yaml', { role: 'hologram' }], ['b.yaml', {}]], { manifests: ['b.yaml'], unsupported: [], loser: 'a.yaml' }],
+    ['two newer files', [['a.yaml', { role: 'hologram' }], ['b.yaml', { min_app_version: '9.0.0' }]], { manifests: [], unsupported: ['a.yaml'], loser: 'b.yaml' }]
+  ])('shares one id space with the models, and a usable manifest keeps its id: %s', (_title, files, expected) => {
+    setManifestAppVersion('1.0.0')
+    const dir = tempRoot('manifests')
+    for (const [name, over] of files) writeManifest(dir, name, rawManifest({ id: 'same', role: 'embeddings', ...over }))
+    const res = discoverManifests(dir)
+    expect(res.manifests.map((m) => parse(m.sourceFile).base)).toEqual(expected.manifests)
+    expect(res.unsupported.map((u) => parse(u.sourceFile).base)).toEqual(expected.unsupported)
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]).toContain(expected.loser)
+    expect(res.errors[0]).toContain('duplicate id "same"')
+  })
+
+  it('(a+) a min_app_version newer than this app lists the manifest whatever else fails; a met one is validated as usual', () => {
+    setManifestAppVersion('1.4.0')
+    const dir = manifestsDirWith(
+      without(rawManifest({ id: 'next', role: 'embeddings', min_app_version: '1.5.0', recommended_profiles: ['ULTRA'] }), 'sha256'),
+      rawManifest({ id: 'now', role: 'embeddings', min_app_version: '1.4.0' }),
+      without(rawManifest({ id: 'met-but-broken', min_app_version: '1.0.0' }), 'sha256'),
+      rawManifest({ id: 'unreadable', min_app_version: 'next year' })
+    )
+    const res = discoverManifests(dir)
+    expect(res.unsupported.map((u) => [u.manifest.id, u.manifest.role, u.manifest.minAppVersion])).toEqual([
+      ['next', 'embeddings', '1.5.0'],
+      ['unreadable', 'chat', 'next year'] // a version this build cannot read is one it cannot vouch for
+    ])
+    expect(res.manifests.map((m) => m.manifest.id)).toEqual(['now'])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0]).toContain('m2.yaml')
+  })
+
+  it('(a+) a build that does not know its own version cannot vouch for a manifest that names one', () => {
+    const res = discoverManifests(manifestsDirWith(rawManifest({ id: 'next', min_app_version: '0.0.1' }), rawManifest({ id: 'plain' })))
+    expect(res.unsupported.map((u) => u.manifest.id)).toEqual(['next'])
+    expect(res.manifests.map((m) => m.manifest.id)).toEqual(['plain'])
+  })
+})
+
+describe('buildModelList — a manifest for a newer HilbertRaum (#847)', () => {
+  it('appends a display-only entry: unsupported, never recommended, nothing to download, presence by file existence', async () => {
+    const root = tempRoot('root')
+    writeDriveFile(root, 'models/holo/present.gguf', 'weight')
+    writeDriveFile(root, 'models/holo/half.gguf', 'weight')
+    const dir = manifestsDirWith(
+      rawManifest({ id: 'chat-a' }),
+      rawManifest({
+        id: 'holo-present',
+        display_name: 'Holo Present',
+        role: 'hologram',
+        family: 'holo',
+        recommendation_rank: 1000,
+        local_path: 'models/holo/present.gguf',
+        download: { url: 'https://example.test/holo.gguf', sha256: 'REPLACE_WITH_REAL_HASH', size_bytes: 6 }
+      }),
+      rawManifest({
+        id: 'holo-half',
+        role: 'hologram',
+        local_path: 'models/holo/half.gguf',
+        files: [{ local_path: 'models/holo/half-2.gguf', sha256: 'x' }]
+      }),
+      rawManifest({ id: 'holo-absent', role: 'hologram', local_path: 'models/holo/absent.gguf' }),
+      without(rawManifest({ id: 'holo-no-file', role: 'hologram' }), 'local_path')
+    )
+    const { models, manifestErrors } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      developerMode: true,
+      machineRamGb: PINNED_RAM_GB
+    })
+    expect(manifestErrors).toEqual([])
+    expect(models.map((m) => m.id)).toEqual(['chat-a', 'holo-present', 'holo-half', 'holo-absent', 'holo-no-file'])
+    expect(models[1]).toMatchObject({
+      displayName: 'Holo Present',
+      family: 'holo',
+      role: 'unknown',
+      declaredRole: 'hologram',
+      needsNewerApp: true,
+      state: 'unsupported',
+      recommended: false,
+      insufficientRam: false,
+      filesPresent: true
+    })
+    expect(models[1].download).toBeUndefined()
+    expect(models[1].startableAsMock).not.toBe(true)
+    expect(models[2].filesPresent).toBe(false) // one of its two files is missing
+    expect(models[3].filesPresent).toBe(false)
+    expect(models[4].filesPresent).toBe(false) // it declares no file: nothing is on this drive
+  })
+
+  // Round 1 (N7) + review: one line per NEWLY seen id in the session (not one per Models-screen refresh), naming the file
+  // and the role as written. A role TYPO lands here too ("embedding", "Chat" read as a newer role), and it no longer
+  // reaches the invalid-manifest warning, so this line is where app.log makes it findable.
+  it('logs each entry for a newer HilbertRaum once per session, naming its file and its role as written', async () => {
+    const root = tempRoot('root')
+    const dir = manifestsDirWith(rawManifest({ id: 'log-once-a', role: 'hologram' }))
+    const info = vi.spyOn(log, 'info')
+    const lines = (): unknown[][] => info.mock.calls.filter((c) => /newer HilbertRaum/.test(String(c[0])))
+    try {
+      const list = (): Promise<unknown> => buildModelList({ manifestsDir: dir, rootPath: root, developerMode: true, machineRamGb: PINNED_RAM_GB })
+      await list()
+      await list()
+      expect(lines()).toEqual([[expect.any(String), { file: join(dir, 'm0.yaml'), role: 'hologram' }]])
+      writeManifest(dir, 'm1.yaml', rawManifest({ id: 'log-once-b', role: 'embedding' })) // a typo of "embeddings"
+      await list()
+      expect(lines()).toEqual([
+        [expect.any(String), { file: join(dir, 'm0.yaml'), role: 'hologram' }],
+        [expect.any(String), { file: join(dir, 'm1.yaml'), role: 'embedding' }]
+      ])
+    } finally {
+      info.mockRestore()
+    }
+  })
+})
+
 // full-audit 2026-07-10 BE-5: launchContextTokens is the ONE spelling of the launch-window
 // precedence (override ?? manifest recommended ?? legacy setting). startModelRuntime launches
 // with it and the no-runtime doc-task budget fallback (index.ts getContextTokens) mirrors it —
@@ -1698,6 +2223,40 @@ describe('resolveManifestsDir', () => {
   })
 })
 
+// #842: the engine pins' source. A packaged app sits inside a drive whose own `model-manifests/` is
+// user-writable, so the packaged answer never walks up to it.
+describe('resolveBundledManifestsDir', () => {
+  /** A drive with its own model-manifests/, and an app folder on it (resources/app.asar). */
+  function driveWithApp(name: string): { drive: string; resources: string; appPath: string } {
+    const drive = tempRoot(name)
+    mkdirSync(join(drive, 'model-manifests'), { recursive: true })
+    const resources = join(drive, 'app', 'resources')
+    const appPath = join(resources, 'app.asar')
+    mkdirSync(appPath, { recursive: true })
+    return { drive, resources, appPath }
+  }
+
+  it('a packaged build takes its resources copy, not the drive’s copy above it', () => {
+    const { resources, appPath } = driveWithApp('bundled-packaged')
+    mkdirSync(join(resources, 'model-manifests'))
+    expect(resolveBundledManifestsDir({ isPackaged: true, resourcesPath: resources, appPath })).toBe(
+      join(resources, 'model-manifests')
+    )
+  })
+
+  it('a packaged build without its resources copy has none, rather than the drive’s', () => {
+    const { resources, appPath } = driveWithApp('bundled-missing')
+    expect(resolveBundledManifestsDir({ isPackaged: true, resourcesPath: resources, appPath })).toBe(null)
+  })
+
+  it('a dev build takes the checkout’s, by the walk-up', () => {
+    const { drive, resources, appPath } = driveWithApp('bundled-dev')
+    expect(resolveBundledManifestsDir({ isPackaged: false, resourcesPath: resources, appPath })).toBe(
+      join(drive, 'model-manifests')
+    )
+  })
+})
+
 describe('selectModel', () => {
   function setup(): { db: Db; manifestsDir: string } {
     const manifestsDir = tempRoot('manifests')
@@ -1720,9 +2279,16 @@ describe('selectModel', () => {
     expect(getSettings(db).activeModelId).toBe(null) // chat slot untouched
   })
 
-  it('throws on an unknown model id', () => {
+  // #930 (G-5): in the interface language, the same text as the chat start's unknown id.
+  it('throws on an unknown model id, in the interface language', () => {
     const { db, manifestsDir } = setup()
-    expect(() => selectModel(db, manifestsDir, 'nope')).toThrow()
+    expect(() => selectModel(db, manifestsDir, 'nope')).toThrow(t('en', 'main.models.unknown'))
+    applyUiLanguageSetting('de')
+    try {
+      expect(() => selectModel(db, manifestsDir, 'nope')).toThrow(t('de', 'main.models.unknown'))
+    } finally {
+      applyUiLanguageSetting('en')
+    }
   })
 
   // Phase 36 fix + TG-1: availability-driven roles have no settings slot. The old role-else-chat fallback would have

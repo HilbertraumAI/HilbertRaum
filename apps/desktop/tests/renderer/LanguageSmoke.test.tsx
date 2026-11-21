@@ -6,7 +6,6 @@ import { App } from '../../src/renderer/App'
 import { uiLanguageInfo, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import { appShellStubs } from '../helpers/app-shell'
-import { LAZY_SCREEN_WAIT } from '../helpers/hang-budget'
 import { catalogOf } from '../helpers/i18n-catalogs'
 import { assertNoUnexpectedApiCalls, stubApi } from '../helpers/renderer'
 
@@ -57,7 +56,7 @@ describe('language smoke: the shell and Settings → General in each registered 
     expect(document.documentElement.lang).toBe(lang)
 
     await userEvent.click(within(nav).getByRole('button', { name: text['nav.settings'] }))
-    const picker = await screen.findByRole('combobox', { name: text['settings.language.aria'] }, LAZY_SCREEN_WAIT)
+    const picker = await screen.findByRole('combobox', { name: text['settings.language.aria'] })
     expect(picker).toHaveValue(lang)
     expect(picker).toHaveDisplayValue(uiLanguageInfo(lang).nativeName)
   })

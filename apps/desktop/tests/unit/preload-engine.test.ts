@@ -51,4 +51,16 @@ describe('preload — engine downloader surface (#339 P8-2)', () => {
     expect(ipc.invoke).toHaveBeenCalledWith(IPC.downloadEngine, request)
     expect(IPC.downloadEngine).toBe('engine:download')
   })
+
+  // #843: the confirmation dialog previews exactly the request its Confirm then sends, so the preview
+  // follows the same payload rule: no argument stays no argument.
+  it('getEnginePlan() with no argument invokes engine:plan with no payload, and forwards a request verbatim', async () => {
+    const api = await loadApi()
+    await api.getEnginePlan()
+    expect(ipc.invoke.mock.calls).toEqual([[IPC.getEnginePlan]])
+    const request: EngineDownloadRequest = { families: ['llama_cpp'], update: true }
+    await api.getEnginePlan(request)
+    expect(ipc.invoke).toHaveBeenLastCalledWith(IPC.getEnginePlan, request)
+    expect(IPC.getEnginePlan).toBe('engine:plan')
+  })
 })

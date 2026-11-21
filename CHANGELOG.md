@@ -38,6 +38,14 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Closing the window while a scan is being read or a document is being translated now asks
+  first.** On Windows and Linux, closing the window quits HilbertRaum, and that stopped text
+  recognition (OCR) or a document translation without a word, and everything it had done so far
+  was lost. Now, while one is running or waiting to start, closing the window asks first: Keep
+  open (the default) lets it finish, Close anyway stops it, and it starts over from the beginning
+  when you run it again. Until you answer, the app stays open and the workspace stays unlocked.
+  Quitting with Ctrl+Q on Linux or ⌘Q on macOS and Lock now still stop it without asking. On
+  macOS, closing the window leaves the app and the task running, as before (#935).
 - **You now choose the interface language from a drop-down list.** Settings → General → Language used to
   show System, English and Deutsch as three buttons side by side; it is now a list, with room for
   more languages. The choices are unchanged. Your choice shows at once; the interface switches to
@@ -65,15 +73,235 @@ from its first public `1.0.0` release onward.
   Copy report on the Performance screen copy the report in your language, then a line "--- English ---", then
   the same report in English, so the people helping you can read it. In English and German you
   get one report, as before (#812).
+- **Ctrl+R no longer reloads the window, and the menu bar is gone on Windows and Linux.** Ctrl+R
+  and Ctrl+Shift+R reloaded the window, which could lose a review change that was not saved yet,
+  and Ctrl+Shift+I opened the developer tools. None of the three does anything in the released
+  app now. On Windows and Linux the English menu bar (File, Edit, View, Window) no longer shows,
+  which leaves a little more room in the window. Its shortcuts still work: zoom in (Ctrl+Plus),
+  zoom out (Ctrl+Minus), actual size (Ctrl+0), full screen (F11), minimize (Ctrl+M) and close
+  (Ctrl+W). Ctrl+= now zooms in too. To quit on Windows, close the window (the X or Alt+F4); on
+  Linux, Ctrl+Q still quits (#912).
+- **An encrypted workspace written by a newer HilbertRaum is left untouched.** If the workspace's
+  own files (`config/workspace.json`, the encrypted data, an interrupted password change) are in a
+  format a newer version of the app wrote, for example on a drive where only one computer's copy
+  was updated, this version no longer reads them as its own: the unlock screen says "This
+  workspace was written by a newer HilbertRaum — update the app to open it. Nothing was changed.",
+  whatever password you type, and nothing of the workspace is changed. A password change no longer
+  rewrites a newer version's `config/workspace.json` in the older format. And when your password is right
+  but the encrypted data itself was damaged (its bytes changed, for example by a copy that was cut
+  short), the unlock screen now says the data is damaged and to restore it from a backup, instead
+  of "Could not open the workspace" (#845).
+- **Installing, updating or reinstalling the AI engine now asks first.** Install AI engine,
+  Install voice engine, Update and Install the AI engine again used to start the download on the
+  click. Each now opens a confirmation, as model and OCR downloads do, that lists every file the
+  action will fetch with its version, size, license and full download address, and nothing is
+  downloaded until you confirm. The activity log (Settings → Diagnostics → Activity) now also
+  records each AI engine and OCR-file install: when it started and whether it finished or failed,
+  never a file path (#843).
+- **Downloads trust the certificates installed on your computer.** Antivirus programs that check
+  secure connections, such as Norton, and company proxies re-sign those connections with a
+  certificate of their own, which they install on your computer. The downloads of models, the AI
+  engine, the knowledge-pack tools and the text-recognition (OCR) files now trust those
+  certificates, so they work behind such a program without any extra setting. The
+  released app no longer reads the `NODE_EXTRA_CA_CERTS` environment variable: if your company's
+  proxy certificate was set only there, downloads fail until it is installed on the computer,
+  which your IT department can do. Every downloaded file is still checked against a fixed checksum
+  before use (#564).
+- **A log you copy or save for support hides your folders and your account name.** Copy and Save
+  to file… in Settings → Diagnostics (advanced) → Recent logs handed out full paths, such as
+  `C:\Users\<your name>\AppData\…`. Now the drive, your home folder and the app's data and
+  temporary folders show as `<drive>`, `<home>`, `<app-data>` and `<temp>`, and this computer's
+  account name shows as `<user>` wherever it appears, as do account names in the usual folder paths
+  from another computer. The rest of each path stays, so support can still see which file failed.
+  A name in an unusual place can remain, for example in a folder you named yourself, so read a log
+  before you share it. The log on the drive keeps the full paths (#975).
 
 ### Fixed
 
+- **A failed AI engine update or reinstall no longer leaves the drive with no engine.** Installing,
+  updating or reinstalling an engine deleted the engine on the drive first and then unpacked the new
+  one in its place. If the drive filled up, an antivirus program held one of the new files, or the
+  computer slept or the drive was unplugged during that step, there was no engine at all, and chat
+  stopped until it was downloaded again. Now the new engine is unpacked and checked beside the old
+  one, and only then swapped in, so a failure or a cancel leaves the old engine as it was and
+  working. Before it touches anything, the app checks that the drive has room for the unpacked
+  engine and says how much it needs if not. If a security program holds a file, the app waits a
+  few seconds and tries again, and otherwise puts the old engine back and says so (if even that is
+  refused, trying again finishes the swap once the other program lets go). If the app stopped in the middle of the swap, the next
+  start finishes it or puts the old engine back.
+  Cancel now stops an update until the swap begins, even after the files were unpacked (#986).
+- **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
+  workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
+  a password, creating the workspace replaced that file, and with it the only key that opens that
+  workspace. Creating is now refused. A setup that failed partway also no longer leaves a file
+  behind that the next start would write over a workspace you put back into the same folder (#954).
+- **A workspace you put back after a setup that a crash cut short now opens.** When a crash or a
+  power cut stopped the setup of a new workspace, it left a file behind in `workspace/`. If you then
+  copied a workspace back into the same folder (its `config/workspace.json` and its encrypted file),
+  the next start could replace that workspace with the leftover file, and every unlock said the
+  workspace was damaged, for good. The next start now removes the leftover, and the unlock checks
+  such a file against your workspace's key before it uses it (#973).
+- **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
+  source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
+  letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the
+  order your language uses, as the project list already does. Answers still search packs in the same
+  order as before (#958).
+- **The Performance screen now notices when a file check finds a model damaged.** If checking a model's
+  files (Check all model files, Verify checksum, or the check before a model starts) changed the
+  result, the screen kept showing the old one until you left it and came back. Its row now turns
+  to "failed its file check" as soon as the check finishes (#959).
+- **The lock screen says when the file with your workspace's key is missing.** If
+  `config/workspace.json` was removed from the drive or damaged while the encrypted workspace was
+  still there, every unlock said "Could not open the workspace." The lock screen now says that this
+  file is missing or can't be read, that no password can open the workspace without it, and that you
+  should put it back or restore it from a backup instead of creating a new workspace (#807).
+- **Two workspace messages now follow your language.** Changing the password while documents are
+  being imported or re-indexed said "Documents are still being imported or re-indexed …" in English
+  whatever the interface language; it is now in your language. And when setting up the workspace
+  failed because another program, such as antivirus, held one of its new files, the lock screen
+  showed the system's own English error with the full path of the file on the drive; it now says
+  "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
+- **The lock screen says when the workspace's key file can't be read and the encrypted file is
+  gone.** With `config/workspace.json` damaged and the encrypted workspace file not on the drive,
+  every unlock said "Could not open the workspace." The lock screen now says so, also when you try to
+  create a workspace then, and that you should not delete the key file but restore both files from a
+  backup. And when creating a workspace finds
+  one on the drive after all, the lock screen no longer asks you to restart: it switches to the
+  unlock screen for that workspace at once (#955).
+- **A key file saved with a byte-order mark opens.** If `config/workspace.json` was saved by a
+  program that adds a byte-order mark in front of the text (Windows PowerShell 5.1, older versions
+  of Notepad, some sync tools), the lock screen said the file can't be read, and no password could
+  open the workspace. It now opens normally (#974).
+- **A quit that waits to save no longer starts the next document task only to stop it.** When
+  Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
+  running, the next document task in line started during that wait and was stopped a moment
+  later. Now nothing new starts while the quit waits; if you pick Keep open, the next task starts
+  as usual (#936).
+- **On Windows, audio import and voice dictation work in folders with umlauts, accents or other
+  alphabets.** When the drive or the app's data folder had such a character in its path (a user
+  named Jürgen, a Kit folder named `Übungen`, a folder in Cyrillic or Japanese), the voice engine
+  could not open its speech model: every recording failed to import and every dictation failed,
+  and with an umlaut the voice engine crashed. A recording whose own name or folder used another
+  alphabet could not be read either. The voice engine now gets every path in a form it can read;
+  in an encrypted workspace, a recording it still cannot reach by name is copied into the
+  workspace for the transcription and shredded right after. A speech model you added yourself
+  whose folder or file name has such a character is refused with a message that says to move it
+  to a plain path (#869).
+- **The OCR files can be downloaded in the app on a drive set up with an older version.** If the
+  drive's download list predated the files this version of HilbertRaum uses (a drive prepared with
+  a version before 0.1.63 has no page-orientation file in it), the AI Model screen and the Documents rows
+  offered no download, only the setup scripts. The app now takes each file from the drive's list
+  when it names the right file, and from its own list otherwise (#841).
+- **A lock that finds the workspace's working file removed or damaged now finishes, and says what
+  was lost.** If something outside HilbertRaum deleted or overwrote the open working copy of an
+  encrypted workspace, the lock was refused and the workspace stayed half open until you quit:
+  every screen failed with "database is not open", Lock now kept failing with advice to free
+  space, and the workspace key stayed in memory; on macOS and Linux, trying again or quitting
+  could even save an empty workspace over your encrypted one (#853). Now the workspace locks as it was the last time
+  it was locked or the app was closed, the lock screen says that the changes since then are lost,
+  and you can unlock again right away (#855). The lock now also recognises a working copy that was
+  overwritten but whose beginning still looked like a database: before, it could save that
+  damaged copy over the last good one, and the workspace could no longer be opened (#876).
+  When this happens as the app closes, the lock screen says so the next time you start
+  HilbertRaum, and Settings → Diagnostics (advanced) → Activity records it when you unlock (#875).
+  The lock screen now also says, in its own words, when HilbertRaum ended without locking the
+  workspace: the drive pulled out, a power cut, the app stopped by force, or a quit on a drive too
+  full to lock. The changes made after the last lock were lost then too, and until now the next
+  start said nothing. When the drive is too full, the message asks you to free space first, so the
+  next session doesn't end the same way (#892).
+- **Error lines in the diagnostics log no longer contain your drive's or your user folder's paths.**
+  When unlocking, changing the password, locking or quitting failed on a file, the line in the
+  diagnostics log, which Copy and Save log hand out, carried the file's full path, which can include
+  your user name. It now names the error's code, such as `ENOSPC`, and a lock that fails now says what
+  caused it (#956).
+- **A workspace whose encrypted file was removed from the drive is no longer lost.** If something
+  outside HilbertRaum deleted the workspace's encrypted file (a sync or cleanup tool, a disk check)
+  and the app then started, it also removed the unencrypted copy your last session left, and the
+  lock screen answered every correct password with "Could not open the workspace." Now the app keeps
+  that copy, the lock screen says the encrypted file was missing, and your password brings the
+  workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
+  encrypted. When no copy was left, the lock screen now says so, and that you should not create a
+  new workspace (#911).
+- **A copy of your workspace that a later version left on the drive is kept.** If a later version
+  of HilbertRaum could not lock the workspace when it closed (on a full drive, for example) and you
+  then start this version on the same drive, this version could delete the readable copy that held
+  the later version's last session, or the whole workspace when its encrypted file was missing
+  too. It now keeps that copy as it is, and the unlock says the workspace was written by a newer
+  HilbertRaum: start the newer version to open it (#985).
+- **A workspace file you put back while the app is open keeps your newest changes.** Putting
+  `config/workspace.json` back while the lock screen was open, as the lock screen advises when it is
+  missing, and then unlocking could open the workspace at its last saved state and drop the newer
+  changes the drive still held from a lock that had failed. The unlock now first runs the same
+  checks a start runs (#955).
+- **The AI engine update is offered however you start the app.** After a new version of
+  HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
+  older engine list still on the drive, so the AI Model screen never offered the engine update;
+  starting the app file directly did. Both now use the list built into the app, and Settings →
+  Diagnostics compares the engine with the version this app is built for. The voice engine's
+  install hint follows the same list. If you added engine entries to your drive's
+  `model-manifests/runtime-sources.yaml` yourself, only the drive scripts use them now (#842).
+- **`fetch-runtime` no longer replaces an AI engine that the app updated.** After the app updated
+  an engine on a drive whose engine list was not refreshed, running `fetch-runtime` on that drive
+  saw a version that differed from the drive's list and downloaded the older one over it. The
+  script now keeps an engine that is newer than the drive's list and says so; pass
+  `-AllowDowngrade` (`--allow-downgrade` in the `.sh` script) to replace it anyway. Building a
+  Kit with `build-commercial-drive` still installs exactly the version the app ships with (#873).
+- **The Kit builder no longer calls a drive sellable while it still holds files from a used
+  workspace.** Its final check looked for five workspace files and a non-empty
+  `workspace/documents/` only, so a drive wiped by hand could pass with a leftover such as the
+  unencrypted working copy of the workspace, the copy a failed lock kept, a password change's
+  journal, the image history, the logs or the note about a lost working copy. `build-commercial-drive`
+  and its final check now require `workspace/` and `logs/` to hold nothing but empty folders, and
+  `config/` to hold no `workspace.json` or `working-copy-lost.json` or a temporary copy of either.
+  Each leftover is named, so you know what to delete; a Finder `.DS_Store` in those folders counts
+  too. A folder the check cannot open, or a file in the place of one of these folders, is refused
+  as well instead of passing as empty (#893).
+- **A workspace that could not finish opening is no longer reported as damaged.** When unlocking
+  failed after the password was accepted, for example because the drive was nearly full while
+  the app updated the workspace after an update, the lock screen said the workspace data was
+  damaged and should be restored from a backup. Nothing was damaged, and the failed open does not
+  change the encrypted workspace on the drive. The lock screen now says so, and suggests freeing
+  space and trying again, or starting the previous version of HilbertRaum after an update. The
+  damaged message remains for data that really is damaged (#844).
+- **On Windows, the AI engine installs from a folder whose name uses another alphabet.** When the
+  drive or the app's data folder had a name in, for example, Cyrillic or Japanese on a Windows set
+  up for a Western language (such as a user folder named in Cyrillic on an English Windows), the
+  install from the AI Model screen downloaded and checked the engine, then stopped with "The AI
+  engine downloaded but could not be unpacked" on every try. It now installs. German umlauts
+  were not affected (#856).
+- **On Linux, the AppImage started directly from a Kit opens the Kit's workspace.** Started without
+  the drive's launcher, for example by a double-click in the file manager, the AppImage looked for
+  the drive from the temporary folder it unpacks itself into, found nothing, and opened a new, empty
+  workspace on the computer. It now looks from where the AppImage file really is. An empty
+  `HILBERTRAUM_DRIVE_ROOT` setting is also ignored now instead of disabling that search (#858).
+- **On a Mac, starting the app twice during its first unpack no longer risks a broken copy.** The
+  first start from a Kit unpacks the app into a folder on the Mac, which takes about a minute. A
+  second double-click on the launcher in that minute could delete the first start's unpack while
+  it was still being written: either start could then stop with an error, or both could run an
+  incomplete app, and every later start reused that copy. Each start now leaves an unpack that is
+  still running alone and uses whichever copy was finished first. A leftover from an unpack that
+  was stopped and cannot be removed no longer stops every start, and an unpacked app that lacks
+  its program file is not kept: the launcher says so, and the next start unpacks it again instead
+  of pointing you to the Gatekeeper advice each time. A full disk, or a cache folder this Mac
+  will not let you write to, now gets its own message instead of the one about an earlier
+  unpack (#887, #919).
+- **An unlock request on a workspace that is already open no longer pretends to unlock it.** The
+  lock screen never sends one, but if one arrived it answered "unlocked" whatever the password,
+  wrote a "Workspace unlocked" entry to the activity log, repeated earlier lines in the
+  diagnostics log, and ran the start-up steps for the model and the local API again. It now only
+  reports that the workspace is open (#858).
+- **The local API reports a stop as a stop.** A request still streaming when the endpoint stopped
+  could end with `preempted_by_user` and a "retry shortly" hint instead of `server_stopped`: when
+  a settings change was still being applied at the moment of the lock or quit, and always when the
+  endpoint moved to another port. A request waiting in the queue got 429 `busy` with a
+  `Retry-After`, and a new request arriving during the stop was told the workspace was locked, or
+  was let in only to be cut off. All of these now get `server_stopped` (#859).
 - **Unlock and setup errors now appear in the language the lock screen shows.** If the language
   you chose in Settings differs from your operating system's, the lock screen was already in your
   language, but a wrong password or a problem opening or creating the workspace was reported in
-  the operating system's language. These messages now match the rest of the screen. Two rare
-  refusals when creating a workspace (one already exists, or the drive's policy doesn't allow an
-  unencrypted one) are still shown in English.
+  the operating system's language. These messages now match the rest of the screen, and so do the
+  two rare refusals when creating a workspace (one already exists on the drive, or a workspace
+  without a password isn't allowed), which were always in English (#807).
 - **Turkish dotted and dotless I now match in the text filters.** In the Documents name filter,
   the AI Model search and the review's evidence filter, typing "ısı" didn't find a name written
   "ISI", and "istanbul" didn't find "İSTANBUL". The Documents filter also compared names by the
@@ -88,6 +316,15 @@ from its first public `1.0.0` release onward.
   leaving "(12" at the end of a line. It now stays together, and the line breaks before it when
   it must. The same line in Settings → Diagnostics is kept together too. The reports the Copy
   buttons make are unchanged (#805).
+- **The Performance screen no longer counts models that are not on the drive.** "Models on this
+  computer" still lists a model for every task, so you can see what it would take before you
+  download it. A model whose files are not on this drive now says "not on this drive" instead of
+  "not loaded", and "Everything loaded at once" leaves it out: on a drive with only the chat model,
+  it counted every other model too. The line is left out when it would read 0.0 GB, as on a
+  drive whose models all run on the graphics card. A chat model the app has no size for no longer
+  shows "0.0 GB", and with no chat model selected the graphics-card line no longer reads
+  "chat  GB". On the AI Model screen, an installed image model no longer says Images always uses
+  it (#914).
 - **Sizes, percentages and labels now follow each language's typography.** In Spanish, French,
   Italian, Dutch, Polish, Turkish, Russian and Ukrainian a size such as "23 GB" no longer breaks
   across two lines between the figure and the unit. The chat's context meter and an audio file's
@@ -113,7 +350,12 @@ from its first public `1.0.0` release onward.
   English message ("Invalid PDF structure."), a line in the interface language now stands above
   that message: "This file couldn't be processed." on the document's row on the Documents screen,
   and "Couldn't add report.pdf to this chat.", with the file's name, in the chat's banner for a
-  failed attachment. Messages the app recognises read as before (#807).
+  failed attachment. Translating such a file on the Translate screen now shows the same line as its
+  row. Messages the app recognises read as before. Other errors in a program's own words now come
+  after a line in your language too: on a review, "Some changes could not be saved yet." before a
+  message such as "database is locked", and "This review could not be opened." when it can't be
+  opened; and for an evidence pack, "The evidence pack export did not finish." before the reason
+  (#807).
 - **Search now finds Turkish words with "İ" and "ı", and words typed with separate accent
   marks.** In conversation search and the keyword part of document search, a word typed with the
   capital "İ" was cut at that letter: "İstanbul" looked for "i" and "stanbul", found neither
@@ -129,9 +371,14 @@ from its first public `1.0.0` release onward.
   the same way, is now found by neither spelling; typing the letter without its mark ("и" for
   "й") finds it. Search still doesn't add an "ı" you didn't type: "isi" doesn't find "ısı"
   (#818).
-- **Projects in the conversation list are sorted the way your interface language sorts.** The
-  project sections followed the system's language instead, so in a Turkish interface on a German
-  system "Çanta" came before "Cuma" (#818).
+- **Projects are sorted the way your interface language sorts, wherever they are listed.** The
+  conversation list's project sections followed the system's language instead, so in a Turkish
+  interface on a German system "Çanta" came before "Cuma" (#818). The Documents list, the
+  "Choose a project" window, the chat's source picker and the project tags on a document row
+  sorted by character code, which puts accented and non-Latin names at the end; they now use the
+  same order (#828).
+- **The German chat header says "Demo-Modus".** It said "Demomodus" while the rest of the app
+  wrote "Demo-Modus" (#829).
 - **A thank-you or greeting in the new languages no longer starts a read of the whole
   document.** In a chat about one document, a short thank-you, greeting or goodbye in Spanish,
   French, Italian, Dutch, Polish, Turkish, Russian or Ukrainian ("Gracias", "Merci beaucoup",
@@ -145,17 +392,57 @@ from its first public `1.0.0` release onward.
   document had a deep index, and "Find every mention of …" never said that the answer may miss
   items. Both now work as they do in English and German, also when you put your own word in the
   quotes (#809).
+- **With a whole-document skill selected, a single fact in a long document is looked up in more of
+  it on a small model.** With What Changed?, Contract Brief, Meeting Minutes, Share-Safe Review or
+  Deadline & Obligation Finder selected, a question such as "When is the notice deadline?" about a
+  document too long to read whole was answered from a single passage on a model with a 4,096-token
+  context, such as the 4B model, and the fact was often missed. The skill's instructions are already
+  shortened for such a question; the room that frees now goes to the document, so the answer reads two
+  passages instead of one, and a document that now fits is read whole. With a larger context nothing
+  changes (#962).
 - **A French question about a dispute is no longer read as a comparison.** With two documents in
   the chat, a question with "différend" (a dispute), "différé" (deferred) or "différer" (to
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.
   Questions with "différence", "différent", "diffère" or "différencier" still compare them
   (#809).
-- **With What Changed? selected, a question that isn't a comparison gets a plain answer.** With one
-  document in scope, or three or more, a question such as "Who is the tenant?" or "How do I change
-  the rent?" was often answered in the skill's comparison layout, an executive summary and then the
-  changes between versions, instead of with the fact you asked for. Such a question is now answered
-  plainly from the documents, and the answer still shows that the skill was applied. Comparing two
-  documents works as before (#632).
+- **With a whole-document skill selected, a question the skill isn't for gets a plain answer.** With
+  What Changed? selected and one document in scope, or three or more, a question such as "Who is the
+  tenant?" or "How do I change the rent?" was often answered in the skill's comparison layout, an
+  executive summary and then the changes between versions, instead of with the fact you asked for.
+  Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder did the same
+  with their own reports for a question asked over several documents or a single fact looked up in a
+  long document: "Who attended?" could get full meeting minutes. Such a question is
+  now answered plainly from the documents, and the answer still shows that the skill was applied.
+  Comparing two documents, and a skill's report on one document, work as before (#632, #831).
+- **A short thank-you, greeting or goodbye in a chat about your documents gets a short reply.** "Danke!",
+  "Thanks!", "Merci !" or "How are you?" in a chat with documents was answered with a summary of the
+  documents, with sources and the coverage line under it, and with a skill selected, in that skill's
+  layout. It now gets a short reply in the language you wrote in, without sources, and nothing is read
+  for it: not the documents, not the knowledge packs in the chat. A short question about the last
+  answer, such as "Sure?" or "Alles?", and a plain "ok" or "all" in answer to the assistant's question
+  are still answered from the documents, and so is a thank-you that says more, such as "Thanks for the
+  summary" (#963).
+- **The "every mention" example question reads a long document whole in every language.** With a
+  whole-document skill such as Contract Brief selected and one long document in scope, the German
+  example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching
+  passages and could miss mentions, while the English "Find every mention of 'indemnity'" read the
+  whole document. Every language's example now reads the whole document, whatever word you put in
+  its quotes (#834).
+- **With a whole-document skill, a question about a long document is answered from notes taken for
+  it.** A document too long to read at once is read in parts, and the answer is written from notes on
+  each part. Those notes were taken for the skill's report only, so "Find every mention of 'indemnity'"
+  under Contract Brief could miss mentions, or say there were none, and "Tell me about the parking
+  rules" could say the document had nothing more on parking, while the answer said the whole document
+  was read. Any question that doesn't ask for the skill's report, such as "List every deadline", the
+  "every mention" example or "Tell me about the parking rules", now gets notes for what you asked as
+  well as for the report. This holds for the bundled whole-document skills and for your own. A request
+  for the report itself is read as before, even when it names a list ("Summarize all the decisions",
+  "Write the minutes with every action item") (#939, #953).
+- **A summary of a long document with no skill selected follows your request.** With the document's
+  deep index built and no skill selected, a summary of a long document is written from notes on each
+  part. Each note step was told to follow a task that wasn't given, so a focused summary such as
+  "Summarize the rent and the notice deadline of each lease" could leave out what you asked for. The
+  notes are now taken for your request (#952).
 - **The Documents filter's search icon no longer covers the text.** The magnifier in the "Filter
   by name…" box sat over the start of the placeholder and of what you typed, at every window
   size and in every language. The text now starts after the icon (#803).
@@ -170,13 +457,130 @@ from its first public `1.0.0` release onward.
   Russian, the placeholder of the empty message box in document mode is shorter («Interrogez vos
   documents…», «Вопрос по документам…»), so it fits the narrower message box on one line
   (#803).
-- **The navigation rail scrolls in a short window.** In a window less than about 696 pixels high
-  (636 for a workspace without encryption, which has no Lock now button; about 15 more in
-  Turkish, whose "AI Model" label takes two lines), the foot of the rail,
-  Lock now and the network indicator, sat below the window, and the whole window scrolled to
-  reach it. The rail now scrolls on its own, with the mouse wheel or by moving to its buttons
-  with the Tab key. It shows no scrollbar, so the labels keep their width, and its buttons keep
-  their size (#803).
+- **The navigation rail scrolls in a short window.** In a window less than about 670 pixels high
+  (610 for a workspace without encryption, which has no Lock now button; about 15 more in
+  Turkish, whose "AI Model" label takes two lines; 26 more where the menu bar shows), the foot of
+  the rail, Lock now and the network indicator, sat below the window, and the whole window
+  scrolled to reach it. The rail now scrolls on its own, with the mouse wheel or by moving to its
+  buttons with the Tab key. It shows no scrollbar, so the labels keep their width, and its buttons
+  keep their size (#803).
+- **A change in an evidence review that could not be saved is no longer lost or hidden.** If
+  saving a decision or a note failed, for example because the drive was full, opening another
+  review dropped the change without a word, and opening the same review again showed the old
+  value. Running a bulk action, such as Clear all decisions, hid the error, kept showing
+  "Saving…", and saved the failed change after the bulk action, so a decision came back that
+  the screen showed as cleared. Now the change stays on screen with "Some changes could not be
+  saved yet." and Try again, and Bulk actions waits until it is saved. Opening another review
+  instead says which review has unsaved changes and offers Try again, Discard changes and open,
+  or Back to chat. Locking the workspace still drops a change that could not be saved. The
+  saving status and the Outdated warning are now in place before their text appears, the way
+  screen readers announce text most reliably (#837).
+- **Mark review ready, Create evidence pack and Reopen review now wait until every change in
+  the review is saved.** A change made while one of them was saving could be left out: Mark
+  review ready decided without it and then could not save it, the evidence pack missed it, and
+  a title or note typed meanwhile went back to its old text on screen. Removing a text selection
+  you had just edited no longer shows "Some changes could not be saved yet." or blocks Mark
+  review ready and Create evidence pack. Linking a source right after typing a note no longer
+  blanks the note on screen, and a change typed while Try again reloads the review stays. While
+  Mark review ready runs, the passages can briefly not be edited (#889, #901).
+- **Closing or quitting HilbertRaum right after a review change no longer loses it.** Closing
+  the window, Ctrl+Q on Linux or Cmd+Q on macOS now saves the review changes and a language just
+  picked in Settings before the app closes. If a change cannot be saved, for example because the
+  drive is full, the app asks first: Try again, Keep open, or Close anyway. Before, a change made
+  in the last second, or one whose save had failed, was lost without a word. A Windows shutdown or
+  log-off with the app open still cannot wait for this (#888).
+- **Closing the window while a scan is being made searchable now quits HilbertRaum and locks
+  the workspace.** On Windows and Linux, closing the window during text recognition (OCR) or a
+  PDF export left the app running with no window and the workspace unlocked until the run ended,
+  and the finished recognition was then thrown away. Closing the window now stops the run, the
+  same as quitting, and the workspace locks; start it again the next time. (During text
+  recognition, closing the window now asks first, #935.) On macOS, clicking the Dock icon during
+  the run now opens the window again (#910).
+- **On Linux, logging out or shutting down with HilbertRaum open should now lock the workspace.**
+  A log-out ended the app without locking it, so every change since the last lock was lost. A
+  shutdown, or stopping the app with `kill` or Ctrl+C in a terminal, could wait on a question about
+  unsaved review changes or a running scan until the system ended the app, also without locking.
+  A shutdown, a log-out or a `kill` should now lock the workspace before the app ends, without
+  asking, as on Windows. This is checked with the signals that stop the app and with a lost
+  session, not yet on a real desktop log-out. Quitting first is still the sure way: a change made
+  in the last second is not kept (#964).
+- **A failed skill export no longer destroys the file you chose to replace.** The transactions
+  and invoice CSV, the invoice JSON and XML, and the redacted or edited text copy were written
+  straight onto the chosen file: a full drive or another failure part-way through left a
+  partial file, and an existing file you were replacing was lost, while the message said "The
+  file could not be saved. Nothing was changed." They are now written to a temporary file
+  first and put in place only when complete, like the other exports, so that message is true.
+  When an export fails while writing, for example an evidence pack, the error shown now names
+  the real cause, such as a full drive, instead of a later error from closing the file (#838).
+- **A settings save from the app's window can change only the settings a screen offers.** It
+  could also write records that only the app itself keeps: whether the workspace is encrypted,
+  which models are active, the benchmark and graphics card results, and the list of model files
+  already checked, which lets a file skip its next check. No screen did this, but a fault in the
+  window could have. Such values are now ignored and the rest of the save goes through. The
+  retrieval settings that no screen shows are kept within fixed limits as well: a negative or
+  huge number of excerpts is brought into range, and NaN or infinity, which used to be stored as
+  an empty value, is no longer stored (#868).
+- **A built-in skill that needed a newer HilbertRaum switches itself on once you update.** The
+  app kept such a skill off, as it should, but nothing turned it back on after the update, so it
+  looked like a skill you had switched off yourself. The app now records why a skill is off. A
+  built-in skill that was off only because the app was too old comes back on; a skill you switched
+  off stays off, and so does one you imported (#846).
+- **A model meant for a newer HilbertRaum is now listed on the AI Model screen instead of
+  disappearing.** When the drive holds a model this version of the app can't use, for example
+  after the app on another computer was updated, the model used to vanish from the list without a
+  word, even when its files were on the drive. It now shows at the end of the list under "Needs a
+  newer HilbertRaum", with a note to update the app on this computer. It can't be downloaded,
+  started or checked from here. It also shows under "On this drive" when its files are there
+  (#847).
+- **"Check all model files" now keeps showing a damaged image or voice model.** These models
+  have more than one file. When the check found the first file damaged, it stopped there, and the
+  screen's refresh right after it showed the model as installed again; "Verify checksum" did the
+  same. Images then went on using the damaged image model. The model now stays marked as damaged
+  until you download it again (#913).
+- **A model that a check found damaged is no longer started.** Only the chat model was checked
+  when it started. The image, translation, voice and both document-search models started from
+  whatever file was on the drive, even one that "Check all model files" had just found damaged.
+  Now each of them refuses such a file, and Images and Translate say so and point to the AI Model
+  screen, where you can download it again. The Performance screen agrees: such a model says
+  "failed its file check" and "Everything loaded at once" no longer counts it, nor do the
+  graphics-card lines (#933). The voice model and the document-search model that
+  indexes your documents are also checked once before their first use in a workspace, which takes
+  a few seconds, because a damaged one would put wrong results into the index. A model from your
+  own manifest that has no real checksum now needs developer mode in every role, as the chat model
+  already did; for the document-search model, imports fail without it. The AI Model screen now says
+  "No checksum" for such a model and what it needs, instead of "Can't verify" with a Download that
+  could not help (#913, #932).
+- **Refusals to start a chat model are now in your language.** When "Use this model" or the
+  Performance screen could not start a chat model (its file failed its check, it is not on the
+  drive yet, it needs more memory than the computer has, or it is no longer in the drive's model
+  list), the message was in English in every language, with English figures. It is now in the
+  interface language and names the model (#930).
+- **The document-search model no longer depends on the order a drive lists its files in.** On a
+  drive formatted like most USB sticks, a second document-search model added to the drive could
+  have taken over from the current one, depending only on which file was copied first. Every
+  document would then have needed indexing again. The app now always uses the one marked as the
+  default, and otherwise reads the model list in a fixed order on every computer (#848).
+- **The suggested file name of an evidence pack no longer ends in a broken character.** A long
+  review title was cut to 60 text units, which could split an emoji or a rare character in two
+  and leave a space before the extension. It is now cut at 60 whole characters and trimmed (#839).
+- **Suggested file names keep their accents and vowel signs.** When you saved a chat, a document,
+  its original file, its summary or an evidence pack, the suggested name dropped the marks that
+  many alphabets use for vowels and accents: Hindi "हिन्दी" became "हनद", and a Hindi translation
+  of report.pdf was suggested as "report (हनद).md". A file name whose accents arrived as separate
+  marks, as on a Mac, lost them too ("Prüfung" became "Prufung"). The name now keeps them. A long
+  chat or document title is now cut between whole characters as well, so the name no longer ends in
+  a broken character or a space, and a long translation's name keeps its whole language, so two
+  translations of one document no longer get the same name. Words separated by a line break or a
+  no-break space no longer run together. A title with no letter or number left gets the plain default name,
+  and a name Windows keeps for itself, such as CON or NUL, gets an `_` added. A suggested name no
+  longer starts or ends with `-`, or ends with `(` (#899).
+- **A file whose name ends in a space or a dot after its extension now imports.** macOS and Linux
+  allow names such as `notes.txt ` or `report.pdf.`, and so do some Windows tools. Picked or
+  dropped, such a file was refused with "This file type isn't supported (.txt ). Try TXT, …", and a
+  folder import skipped it without a word. It now imports under its name without the trailing
+  spaces or dots, and Save original suggests that name with its extension. A name such as
+  "Washington, D.C." or "v2.1" keeps its dots, and a file of a type that isn't supported is still
+  refused, now naming its type without the trailing spaces or dots (#918).
 
 ## [0.1.65] — 2026-11-11
 

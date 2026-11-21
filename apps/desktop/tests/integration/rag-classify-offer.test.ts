@@ -49,6 +49,7 @@ import type { Message } from '../../src/shared/types'
 import { runningManager } from '../helpers/chat-runtime-stub'
 import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
@@ -129,7 +130,7 @@ function makeCtx(
     get db() {
       return db
     },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
+    workspace: workspaceStandIn(),
     runtime: runningManager(runtime),
     embedder: createMockEmbedder(),
     reranker: null,

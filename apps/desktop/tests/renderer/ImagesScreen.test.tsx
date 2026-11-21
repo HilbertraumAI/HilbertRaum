@@ -71,12 +71,13 @@ async function selectImageViaPicker(user: ReturnType<typeof userEvent.setup>): P
 }
 
 describe('ImagesScreen — availability (§5.6)', () => {
-  // #539: one target for all three reasons — with the engine missing its banner leads that view,
-  // with an engine too old the vision model's row says so.
+  // #539: one target for every reason — with the engine missing its banner leads that view,
+  // with an engine too old the vision model's row says so, and a damaged model (#913) is downloaded again there.
   it.each([
     ['no-model', 'images.avail.noModel'],
     ['no-runtime', 'images.avail.noRuntime'],
-    ['incompatible', 'images.avail.incompatible']
+    ['incompatible', 'images.avail.incompatible'],
+    ['damaged', 'images.avail.damaged']
   ] as const)('the %s card shows its note, the OCR pointer, and a CTA to the vision model (#539)', async (reason, noteKey) => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()

@@ -8,6 +8,7 @@ import {
   buildCsp,
   buildMetaCsp,
   createWindowOpenPolicy,
+  devToolsAllowed,
   disableSpellCheckerDownloads
 } from '../../src/main/window-security'
 
@@ -261,6 +262,33 @@ describe('call-site wiring (the flags cannot be re-inlined)', () => {
     // Unlike the other two windows, the print page has no IPC surface at all — a
     // `preload:` appearing in print-pdf.ts would silently widen it.
     expect(printPdfSrc).not.toMatch(/preload\s*:/)
+  })
+
+  // #912: Electron has no DevTools fuse, and a DevTools console holds the renderer's `window.api`. A released build
+  // turns them off on the main window (the helpers keep exactly the shared constant, pinned above and in their own
+  // suites).
+  it('DevTools are off in a released build and on in a development build — on the main window, and nowhere else inline', () => {
+    expect(devToolsAllowed(true)).toBe(false)
+    expect(devToolsAllowed(false)).toBe(true)
+    expect(indexSrc.split('devTools: devToolsAllowed(app.isPackaged)').length - 1).toBe(1)
+    const mainDir = join(__dirname, '../../src/main')
+    const mainIndex = join(mainDir, 'index.ts') // that file only, not any other index.ts under src/main
+    const offenders: string[] = []
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name)
+        if (statSync(full).isDirectory()) walk(full)
+        else if (/\.ts$/.test(name)) {
+          const hits = readFileSync(full, 'utf8').match(/\bdevTools\s*:[^\n]*/g) ?? []
+          for (const hit of hits) {
+            const allowed = full === mainIndex && hit === 'devTools: devToolsAllowed(app.isPackaged)'
+            if (!allowed) offenders.push(`${full}: ${hit}`)
+          }
+        }
+      }
+    }
+    walk(mainDir)
+    expect(offenders).toEqual([])
   })
 })
 

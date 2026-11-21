@@ -7,8 +7,16 @@ import { createSelectedOcrEngine, listOcrLanguages, ocrAssetsDir, type OcrSelect
 import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
-import { discoverManifests, type DiscoveredManifest } from './models'
+import {
+  discoverManifests,
+  findManifestById,
+  type BoundModelStartCheck,
+  type DiscoveredManifest,
+  type ModelStartCheck
+} from './models'
 import { engineFamilyHasHostBuild } from './runtime-download'
+import { clearModelLoadLatch } from './runtime/factory'
+import { rearmStartRefusals, type RearmTargets } from './model-start-check'
 import { log } from './logging'
 import { perfMark } from './perf'
 import type { Embedder } from './embeddings'
@@ -89,6 +97,48 @@ export interface ComposeServicesDeps {
    * additive, never a behaviour change there.
    */
   rerankerRequestCeiling?: () => number
+  /**
+   * #913: the start check every non-chat role runs before it spawns its model (`main/index.ts` builds it from the
+   * workspace: the manifest by id, the policy-aware developer leniency, the hash store). Each composer binds it to its
+   * role's model and hashing choice (`HASH_BEFORE_FIRST_START`). Optional on this shared base only (the
+   * transcriber's own composition reads it off the context); `composeServices` and `composeTranslator` require it,
+   * so a composition root that forgets it does not compile (the NF-1 rule below, #913 review S3).
+   */
+  checkModel?: ModelStartCheck
+}
+
+/**
+ * #913, G-4 (d2): the roles whose file is hashed before its first start in a workspace (cold: seconds, once; then the
+ * cache answers in about 1 ms). Their bad output is stored: damaged search vectors go into the index, a damaged voice
+ * model writes wrong transcripts. The other roles only read the cache, so they refuse a file a check already found
+ * damaged and never pay a first-use hash (vision 10–33 s, translation 22–73 s on USB 3).
+ */
+export const HASH_BEFORE_FIRST_START = {
+  embeddings: true,
+  transcriber: true,
+  reranker: false,
+  translation: false
+} as const
+
+/**
+ * #913: `check` bound to one role's model, its hashing choice and the manifest the service is composed from, or
+ * undefined (no check) without a check or a model. The manifest comes from this composition's walk (`discovered`),
+ * else from one read now, so a cold start (and every transcription) reads no manifest folder (#913 code review): the
+ * service runs the file this manifest names until it is composed again, and the check goes by the same manifest.
+ */
+function startCheckFor(
+  check: ModelStartCheck | undefined,
+  model: { id: string } | null,
+  role: keyof typeof HASH_BEFORE_FIRST_START,
+  deps: Pick<ComposeServicesDeps, 'manifestsDir' | 'discovered'>
+): BoundModelStartCheck | undefined {
+  if (!check || !model) return undefined
+  const hash = HASH_BEFORE_FIRST_START[role]
+  const manifest =
+    deps.discovered?.find((d) => d.manifest.id === model.id)?.manifest ??
+    findManifestById(deps.manifestsDir, model.id) ??
+    undefined
+  return (signal) => check(model.id, { hash, signal, manifest })
 }
 
 /**
@@ -100,7 +150,30 @@ export interface ComposeServicesDeps {
  * (`// @ts-expect-error`).
  */
 export type ComposeServicesArgs = ComposeServicesDeps &
-  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling'>>
+  EnginePinsDeps &
+  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling' | 'checkModel'>>
+
+/** The translator's composition: the drive layout plus the start check, required (#913 review S3). */
+export type ComposeTranslatorDeps = ComposeServicesDeps & Required<Pick<ComposeServicesDeps, 'checkModel'>>
+
+/**
+ * #842: where the engine pins live, for the transcriber's composition and `composeServices`. Never on
+ * the shared base: `composeTranslator` takes that and never reads it, and an optional field there would
+ * be one a composer could drop without a compile error (the NF-1 rule above).
+ */
+export interface EnginePinsDeps {
+  /**
+   * The app's own `model-manifests/` (`AppContext.bundledManifestsDir`): its `runtime-sources.yaml`
+   * says whether the in-app installer could fetch the voice engine here (#527), the same pins the
+   * installer reads. Null: no engine build to fetch.
+   */
+  bundledManifestsDir: string | null
+}
+
+/** The transcriber's composition: the drive layout plus the engine pins (#842) and the start check (#913, required). */
+export type ComposeTranscriberDeps = ComposeServicesDeps &
+  EnginePinsDeps &
+  Required<Pick<ComposeServicesDeps, 'checkModel'>>
 
 /**
  * Build (or re-build) JUST the translation sidecar selection from the current drive layout.
@@ -109,14 +182,16 @@ export type ComposeServicesArgs = ComposeServicesDeps &
  * both call sites stay byte-identical in their deps. Cheap + synchronous by design (the sidecar is
  * lazy; construction spawns nothing).
  */
-export function composeTranslator(deps: ComposeServicesDeps, reranker?: Reranker | null): Translator | null {
+export function composeTranslator(deps: ComposeTranslatorDeps, reranker?: Reranker | null): Translator | null {
+  const model = resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
+    discovered: deps.discovered
+  })
   return createSelectedTranslator({
     beforeGpuStart: translationGpuYield(reranker),
     rootPath: deps.rootPath,
     isDev: deps.isDev ?? false,
-    model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
-      discovered: deps.discovered
-    }),
+    model,
+    checkModel: startCheckFor(deps.checkModel, model, 'translation', deps),
     gpu: deps.gpu,
     onDeviceFallback: (reason) =>
       log.warn('Translation sidecar fell back to CPU for this session', { reason }),
@@ -183,7 +258,7 @@ export function shouldReplaceTranslator(current: Translator | null | undefined):
  * three moments the slot itself is, so the reason can never describe a different drive state than the slot;
  * `getAppStatus` (polled by the shell) only reads it back.
  */
-export function composeTranscriberSlot(deps: ComposeServicesDeps): {
+export function composeTranscriberSlot(deps: ComposeTranscriberDeps): {
   transcriber: Transcriber | null
   missing: TranscriberMissing | null
 } {
@@ -196,6 +271,7 @@ export function composeTranscriberSlot(deps: ComposeServicesDeps): {
     rootPath: deps.rootPath,
     isDev,
     model,
+    checkModel: startCheckFor(deps.checkModel, model, 'transcriber', deps),
     onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
   })
   if (transcriber) return { transcriber, missing: null }
@@ -204,7 +280,7 @@ export function composeTranscriberSlot(deps: ComposeServicesDeps): {
       rootPath: deps.rootPath,
       model,
       isDev,
-      engineFetchable: engineFamilyHasHostBuild(deps.manifestsDir, 'whisper_cpp')
+      engineFetchable: engineFamilyHasHostBuild(deps.bundledManifestsDir, 'whisper_cpp')
     }) ??
     // Both pieces are on the drive, yet nothing was selected (the ladder and this check read
     // the same files, so only a race with a removal lands here): the model is the honest guess.
@@ -238,7 +314,10 @@ export interface TranscriberSlot {
   /** Only the drive root is read (binary + weight paths resolve against it). */
   paths: Pick<AppContext['paths'], 'rootPath'>
   manifestsDir: AppContext['manifestsDir']
+  bundledManifestsDir: AppContext['bundledManifestsDir']
   isDev: AppContext['isDev']
+  /** #913: the start check the refreshed transcriber gets, as at startup. Required (#913 code review). */
+  checkModel: AppContext['checkModel']
 }
 
 export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
@@ -247,7 +326,9 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
     const next = composeTranscriberSlot({
       rootPath: ctx.paths.rootPath,
       manifestsDir: ctx.manifestsDir,
-      isDev: ctx.isDev
+      bundledManifestsDir: ctx.bundledManifestsDir,
+      isDev: ctx.isDev,
+      checkModel: ctx.checkModel
     })
     // #527: the reason moves with every refresh — an engine install that lands without the model
     // turns "engine" into "model", which the composer hint must say on the next status read.
@@ -259,6 +340,22 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
     log.warn('Transcriber refresh after an install failed', { error: String(err) })
     return false
   }
+}
+
+/**
+ * `AppContext.onModelInstalled`, the hook a completed in-app download runs. Never throws: the download manager
+ * swallows the whole hook, so a throw would skip what follows it.
+ * - #372: a freshly downloaded weight is a new file — re-arm the chat ladder for this model first.
+ * - #497: fill an empty transcriber slot, before the translator refresh (a different slot).
+ * - #634 / #913 review S1: re-arm the role that refused, if this model is its (`rearmStartRefusals`: the search
+ *   model and the reranker by their id, the images and translation roles by role — an empty translator slot is
+ *   filled, issue #40). The role comes from the model's manifest; one no manifest names re-arms by id only.
+ */
+export function afterModelInstalled(ctx: TranscriberSlot & RearmTargets, modelId: string): void {
+  clearModelLoadLatch(modelId)
+  refreshTranscriberSlot(ctx)
+  const role = findManifestById(ctx.manifestsDir, modelId)?.role ?? 'unknown'
+  rearmStartRefusals(ctx, [{ id: modelId, role }])
 }
 
 export interface ComposeOcrEngineDeps {
@@ -403,10 +500,12 @@ export async function refreshOcrSlot(
 export function composeServices({
   rootPath,
   manifestsDir,
+  bundledManifestsDir,
   isDev = false,
   gpu,
   rerankerDevicePosture,
-  rerankerRequestCeiling
+  rerankerRequestCeiling,
+  checkModel
 }: ComposeServicesArgs): AvailabilityServices {
   // PF-4 (full-audit 2026-07-10): ONE manifest walk + YAML parse serves every role resolution
   // of this composition pass — initBackend runs it synchronously before the window exists, and
@@ -421,10 +520,13 @@ export function composeServices({
   } catch {
     discovered = []
   }
+  const embeddingModel = resolveModelByRole(manifestsDir, rootPath, 'embeddings', { discovered })
   const embedder = createSelectedEmbedder({
     rootPath,
     isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'embeddings', { discovered }),
+    model: embeddingModel,
+    // #913 (d2): hashed before its first start in a workspace — damaged vectors would go into the index.
+    checkModel: startCheckFor(checkModel, embeddingModel, 'embeddings', { manifestsDir, discovered }),
     onSelect: (kind, reason) => {
       log.info('Embedder backend selected', { kind, reason })
       // Measurement-run validity check: an ingestion timed against the mock embedder is
@@ -436,10 +538,12 @@ export function composeServices({
   // otherwise; retrieval then keeps today's ordering byte-identical). `rerankerDevicePosture`
   // is consulted by `rerank()` on every call (Wave 8 ruling (b)(Q)); `rerankerRequestCeiling`
   // gates the CPU posture's request size (Wave 8 ruling (b)(G)).
+  const rerankerModel = resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered })
   const reranker = createSelectedReranker({
     rootPath,
     isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered }),
+    model: rerankerModel,
+    checkModel: startCheckFor(checkModel, rerankerModel, 'reranker', { manifestsDir, discovered }),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason }),
     devicePosture: rerankerDevicePosture,
     requestCeiling: rerankerRequestCeiling,
@@ -455,8 +559,10 @@ export function composeServices({
   const { transcriber, missing: transcriberMissing } = composeTranscriberSlot({
     rootPath,
     manifestsDir,
+    bundledManifestsDir,
     isDev,
-    discovered
+    discovered,
+    checkModel
   })
   // Local OCR — tesseract.js over the drive's vendored `ocr/` language files; selected
   // only when those exist (null otherwise; photo imports fail per-file and detected scans
@@ -470,7 +576,7 @@ export function composeServices({
   // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.
   // Shares `composeTranslator` with the issue-#40 post-download re-selection so the two call
   // sites can never drift.
-  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered }, reranker)
+  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered, checkModel }, reranker)
 
   return { embedder, reranker, transcriber, transcriberMissing, ocrEngine, translator }
 }

@@ -75,7 +75,8 @@ export interface AuditRow {
 
 /** At-rest artifacts that each mean an unclean last session or an interrupted password change. */
 export interface AtRestFlags {
-  /** `<db>.recovery` — a failed lock left the working file as the only fresh copy (CODE-1b). */
+  /** `<db>.recovery` — a failed lock left the working file as the only fresh copy (CODE-1b), or a start found
+   *  `.enc` missing and kept the only copy of the workspace (#911). */
   recovery: boolean
   /** `<db>-wal` at rest — the last session did not check-point/close cleanly. */
   wal: boolean
@@ -537,7 +538,7 @@ export function formatStoredCopyAuditReport(report: StoredCopyAuditReport): stri
   L.push(`    -> audio rows    ${String(report.audioRows)}   (#190 checkbox 3 hypothesis)`)
   L.push('')
   L.push('(10) at rest')
-  L.push(`    .recovery        ${report.atRest.recovery ? 'PRESENT — a lock failed' : 'no'}`)
+  L.push(`    .recovery        ${report.atRest.recovery ? 'PRESENT — a lock failed, or .enc was missing' : 'no'}`)
   L.push(`    -wal             ${report.atRest.wal ? 'PRESENT — unclean last session' : 'no'}`)
   L.push(`    -shm             ${report.atRest.shm ? 'PRESENT — unclean last session' : 'no'}`)
   L.push(

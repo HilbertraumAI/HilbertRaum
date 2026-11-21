@@ -5,7 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { clearDocTaskSession } from '../../src/renderer/lib/doctasks'
 import { type DocTaskStatus, type DocumentInfo, type DocumentSummary } from '../../src/shared/types'
-import { stubApi } from '../helpers/renderer'
+import { stubApi, assertNoUnexpectedApiCalls } from '../helpers/renderer'
+import { documentsScreenStubs } from '../helpers/documents-screen'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 33 renderer tests: the Summarize row action + polling busy state, and the summary
@@ -63,6 +64,7 @@ afterEach(() => {
   cleanup()
   clearDocTaskSession()
   vi.restoreAllMocks()
+  assertNoUnexpectedApiCalls()
 })
 
 describe('DocumentsScreen — Summarize action (Phase 33)', () => {
@@ -73,12 +75,13 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     const startDocTask = vi.fn(async () => ({ jobId: 'j1' }))
     const getDocTask = vi.fn(async () => status)
     const previewDocument = vi.fn(async () => preview)
-    stubApi({
+    stubApi(documentsScreenStubs({
+      documentCoverage: vi.fn(async () => null),
       listDocuments: vi.fn(async () => docs),
       startDocTask,
       getDocTask,
       previewDocument
-    })
+    }))
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
@@ -98,7 +101,7 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
       progress: { stepsDone: 3, stepsTotal: 3 },
       resultRef: { documentId: 'd1' }
     })
-    await waitFor(() => expect(previewDocument).toHaveBeenCalledWith('d1'), { timeout: hangBudgetMs(3000) })
+    await waitFor(() => expect(previewDocument).toHaveBeenCalledWith('d1'))
 
     // The preview shows the summary section: text, attribution, Regenerate.
     expect(await screen.findByText(/payment is due in 30 days/)).toBeInTheDocument()
@@ -114,12 +117,12 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
   it('cancelling the busy task calls cancelDocTask', async () => {
     const user = userEvent.setup()
     const cancelDocTask = vi.fn(async () => {})
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc()]),
       startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
       getDocTask: vi.fn(async () => task({ state: 'running' })),
       cancelDocTask
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
@@ -139,12 +142,12 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     const cancelDocTask = vi.fn(async () => {
       throw new Error("Error invoking remote method 'cancelDocTask': Error: cancel exploded")
     })
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc()]),
       startDocTask: vi.fn(async () => ({ jobId: 'j1' })),
       getDocTask: vi.fn(async () => task({ state: 'running' })),
       cancelDocTask
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
@@ -159,12 +162,12 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
 
   it('surfaces the backend refusal (e.g. answer streaming) as the error banner', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
       listDocuments: vi.fn(async () => [doc()]),
       startDocTask: vi.fn(async () => {
         throw new Error('An answer is being written right now. Wait for it to finish (or stop it), then try again.')
       })
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
@@ -175,12 +178,13 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
   it('Preview shows an existing summary with attribution; Regenerate starts a new task', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'j2' }))
-    stubApi({
+    stubApi(documentsScreenStubs({
+      documentCoverage: vi.fn(async () => null),
       listDocuments: vi.fn(async () => [doc({ summary: summary() })]),
       previewDocument: vi.fn(async () => preview),
       startDocTask,
       getDocTask: vi.fn(async () => task({ state: 'running', jobId: 'j2' }))
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     // The row flags the stored summary.
@@ -198,14 +202,15 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     const user = userEvent.setup()
     const copyToClipboard = vi.fn(async () => true)
     const exportSummary = vi.fn(async () => '/tmp/contract-summary.md')
-    stubApi({
+    stubApi(documentsScreenStubs({
+      documentCoverage: vi.fn(async () => null),
       listDocuments: vi.fn(async () => [
         doc({ summary: summary({ text: '**Bold point** and detail.' }) })
       ]),
       previewDocument: vi.fn(async () => preview),
       copyToClipboard,
       exportSummary
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: /^preview$/i }))
@@ -224,10 +229,11 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
 
   it('shows the honest truncation note for a long document (the map-call ceiling)', async () => {
     const user = userEvent.setup()
-    stubApi({
+    stubApi(documentsScreenStubs({
+      documentCoverage: vi.fn(async () => null),
       listDocuments: vi.fn(async () => [doc({ summary: summary({ truncated: true }) })]),
       previewDocument: vi.fn(async () => preview)
-    })
+    }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: /^preview$/i }))
@@ -236,7 +242,7 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
 
   it('offers no Summarize action for unready documents', async () => {
     const user = userEvent.setup()
-    stubApi({ listDocuments: vi.fn(async () => [doc({ status: 'extracting', chunkCount: 0 })]) })
+    stubApi(documentsScreenStubs({ listDocuments: vi.fn(async () => [doc({ status: 'extracting', chunkCount: 0 })]) }))
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))

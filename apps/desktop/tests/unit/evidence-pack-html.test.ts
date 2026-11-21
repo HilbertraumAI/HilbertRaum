@@ -421,6 +421,45 @@ describe('honesty rendering', () => {
     expect(render(makeDetail())).toContain(t('en', 'packExport.sources.pathNote'))
   })
 
+  // #839 P1a: a selection is a slice the reviewer carved out of a block; without its tag it reads as a whole answer block.
+  it('a reviewer selection is tagged as one; a block item is not', () => {
+    const html = render(
+      makeDetail({
+        items: [
+          makeItem({ id: 'i1', ordinal: 0 }),
+          makeItem({ id: 'i2', ordinal: 1, kind: 'selection', startOffset: 0, endOffset: 5, textSnapshot: 'Alpha' })
+        ]
+      })
+    )
+    const tag = ` · ${t('en', 'packExport.item.selection')}</p>`
+    expect(html.split(tag)).toHaveLength(2) // exactly one tagged item…
+    expect(html).toContain(`${t('en', 'packExport.item.number', { n: 2 })}${tag}`) // …and it is the selection
+  })
+
+  // #839 P1b: an extract answer read structured records; captioning it as a whole-document read would overstate it.
+  it('an extract answer captions its coverage and its sources as structured, never as a whole-document read', () => {
+    const detail = makeDetail({ coverageSnapshot: { mode: 'extract', chunksCovered: 4, chunksTotal: 4 } })
+    detail.sources[0]!.kind = 'structured_record'
+    const html = render(detail)
+    expect(html).toContain(t('en', 'packExport.coverage.modeStructured'))
+    expect(html).not.toContain(t('en', 'packExport.coverage.modeWholeDoc'))
+    expect(html).toContain(t('en', 'packExport.evidence.kindStructured'))
+  })
+
+  // #839 P1c: no question turn and no coverage counts are stated as unknown, never as an empty question or "0 of 0".
+  it('no recorded question and no coverage counts are stated as "no record"', () => {
+    const html = render(makeDetail({ questionSnapshot: '', coverageSnapshot: null })) // a legacy answer: no coverage record
+    expect(html).toContain(t('en', 'packExport.qa.noQuestion'))
+    expect(html).toContain(t('en', 'packExport.coverage.inputUnknown'))
+  })
+
+  // #839 P1d: open follow-ups are a warning on the summary, not only a decision inside the items.
+  it('an item marked for follow-up raises the outstanding follow-ups warning', () => {
+    const html = render(makeDetail({ items: [makeItem({ id: 'i1', ordinal: 0, decision: 'follow_up' })] }))
+    expect(html).toContain(t('en', 'packExport.summary.followUps', { count: 1 }))
+    expect(render(makeDetail())).not.toContain(t('en', 'packExport.summary.followUps', { count: 0 }))
+  })
+
   it('a reviewer-made link reads "Reviewer linked" with its relation, never "Cited by the answer", and the register lists the relation (§4)', () => {
     const html = render(
       makeDetail({
@@ -567,6 +606,18 @@ describe('P4 freshness in the pack (spec §16.1.7/§28.6 — INJECTED verdict, m
     expect(html).toContain(t('en', 'packExport.evidence.missingAtCreation'))
     // A deleted source never makes the pack outdated (spec §28.7) — no cover warning.
     expect(html).not.toContain(t('en', 'packExport.coverage.outdated'))
+  })
+
+  // #839 P1e (spec §28.6): the pack records every mismatch, the answer's and the coverage's too, not only sources.
+  it.each([
+    ['answer', { answerState: 'changed' as const }, 'packExport.coverage.answerChangedNow', 'packExport.coverage.coverageChangedNow'],
+    ['coverage', { coverageState: 'changed' as const }, 'packExport.coverage.coverageChangedNow', 'packExport.coverage.answerChangedNow']
+  ] as const)('a changed %s since creation is recorded as a warning', (_what, verdict, shown, notShown) => {
+    const html = renderEvidencePackHtml(
+      buildEvidencePackModel(makeDetail(), packOptions(), META, makeFreshness({ outdated: true, ...verdict }))
+    )
+    expect(html).toContain(t('en', shown))
+    expect(html).not.toContain(t('en', notShown))
   })
 
   it('a source key absent from the verdict degrades to unverifiable, never to a claim', () => {

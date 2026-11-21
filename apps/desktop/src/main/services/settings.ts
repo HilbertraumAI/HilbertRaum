@@ -20,8 +20,8 @@ const MAX_SETTINGS_ARRAY = 10_000
  *  the SEC-1 bounding style so a buggy/hostile renderer can't bloat the encrypted settings
  *  blob. Generous on purpose: model ids are short slugs; `gpuLastError` is a one-line
  *  timestamped reason (`persistGpuFailure` truncates it to 2 000 chars before it gets here). */
-export const MAX_SETTINGS_ID_LENGTH = 512
-export const MAX_SETTINGS_ERROR_LENGTH = 4096
+const MAX_SETTINGS_ID_LENGTH = 512
+const MAX_SETTINGS_ERROR_LENGTH = 4096
 
 /** Serialized-JSON ceiling for the object-valued settings (`checksumCache` map, plus the
  *  `lastBenchmark`/`gpuProbe` result blobs). These are read on start/hot paths and persist into
@@ -29,7 +29,7 @@ export const MAX_SETTINGS_ERROR_LENGTH = 4096
  *  so a buggy/hostile renderer could otherwise bloat the blob without bound (CODE-16,
  *  full-audit 2026-07-11). 256 KB dwarfs a real benchmark/probe blob and a large checksum map
  *  (~120 B/entry ⇒ ~2 000 weights) — an over-cap payload is dropped, SEC-1 bounding style. */
-export const MAX_SETTINGS_OBJECT_BYTES = 256 * 1024
+const MAX_SETTINGS_OBJECT_BYTES = 256 * 1024
 
 /** Floor for `contextTokens` (HIGH_BUG vuln-scan-2026-06-21). The doc-task window budget is
  *  derived from this; below this floor the summary-tree builder's per-level node summaries can
@@ -47,10 +47,22 @@ const MIN_CONTEXT_TOKENS = 2048
  *  friendly error rather than wedging the app. */
 export const MAX_CONTEXT_TOKENS_OVERRIDE = 131_072
 
-/** Bounds for `localApiPort` (local-api wave P2) — defined in shared/ so the Settings
- *  card's number field and this write gate can never disagree. A value outside the range
- *  is pulled to the nearest bound here. */
-export { MIN_LOCAL_API_PORT, MAX_LOCAL_API_PORT } from '../../shared/local-api'
+/** Bounds for the retrieval tuning keys (#868). No screen writes them, but they stay renderer-writable
+ *  (a maintainer may tune them in the running app), so the gate bounds them instead of trusting
+ *  `typeof`: a negative count or a huge budget was stored as given, and NaN / ±Infinity (they survive
+ *  the IPC's structured clone) were stored as JSON `null` and read back by retrieval
+ *  (`ragSettingsFrom`) and the reranker's request ceiling (`cpuRequestCeilingFor`). A finite value is
+ *  floored (the counts and the token budget) and clamped into its range; a non-finite one is dropped
+ *  and the previous value kept (the `localApiPort` convention). The ranges are generous: they keep
+ *  every sane tuning and refuse only values no retrieval can use (`ragMinSimilarity` is a cosine
+ *  floor, 0 keeps every non-negative hit; the budget ceiling is the largest context window the app
+ *  launches). `contextTokens` keeps its own floor and gains the same ceiling, below. */
+const RETRIEVAL_TUNING_BOUNDS = {
+  ragTopKInitial: { min: 1, max: 200, integer: true },
+  ragTopKFinal: { min: 1, max: 200, integer: true },
+  ragMaxContextTokens: { min: 256, max: MAX_CONTEXT_TOKENS_OVERRIDE, integer: true },
+  ragMinSimilarity: { min: 0, max: 1, integer: false }
+} as const satisfies Partial<Record<keyof AppSettings, { min: number; max: number; integer: boolean }>>
 
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.
@@ -188,10 +200,17 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // safe, but junk must not be stored either).
     // contextTokens floor: clamp UP a too-small value so the doc-task budget can never drop
     // below a single summary's size (else the tree builder cannot reduce — HIGH_BUG). A
-    // non-finite value falls back to the floor rather than persisting NaN.
+    // non-finite value falls back to the floor rather than persisting NaN. #868: and clamp DOWN
+    // to the override's RAM-safety ceiling, which bounds the window this falls back to.
     if (key === 'contextTokens') {
       const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : MIN_CONTEXT_TOKENS
-      toStore = Math.max(MIN_CONTEXT_TOKENS, n)
+      toStore = Math.min(MAX_CONTEXT_TOKENS_OVERRIDE, Math.max(MIN_CONTEXT_TOKENS, n))
+    }
+    // #868: the four retrieval tuning keys (RETRIEVAL_TUNING_BOUNDS above).
+    if (Object.hasOwn(RETRIEVAL_TUNING_BOUNDS, key)) {
+      const bound = RETRIEVAL_TUNING_BOUNDS[key as keyof typeof RETRIEVAL_TUNING_BOUNDS]
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue
+      toStore = Math.min(bound.max, Math.max(bound.min, bound.integer ? Math.floor(value) : value))
     }
     // contextTokensOverride: null = automatic (model default) and stores as-is. A number is
     // clamped into [MIN_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS_OVERRIDE] — the same tree-builder
@@ -211,6 +230,8 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
       toStore = Math.min(MAX_LOCAL_API_PORT, Math.max(MIN_LOCAL_API_PORT, Math.floor(value)))
     }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
+    // #858: the two modes a workspace can be in; anything else would make Settings misreport it.
+    if (key === 'workspaceMode' && value !== 'encrypted' && value !== 'plaintext_dev') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue
     // uiLanguage: 'system' or a language this build registers. The READ path stays tolerant on
     // purpose: a value a newer build wrote (a shared drive) resolves like 'system' and its row

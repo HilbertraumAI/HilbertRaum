@@ -3,7 +3,7 @@ import type { Db } from '../../src/main/services/db'
 import { runBankExtraction, runCashflowSummary, runCategorization, runCsvExport, latestBankStatementId } from '../../src/main/services/skills/run'
 import { withDocumentLock, activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
-import { hangPolls } from '../helpers/hang-budget'
+import { until } from '../helpers/hang-budget'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { seedDocWithChunks } from '../helpers/doc-fixtures'
 import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
@@ -192,13 +192,11 @@ describe('cross-lane write safety — per-document serialization (audit PC-1)', 
     // or the leaked module-global chain poisons every later activeDocumentLockCount() test.
     try {
       // The parked waiter rejects on the abort; the controller flips to 'cancelled' WITHOUT waiting for
-      // lane A (which is still parked on its barrier). Bounded poll — no dependence on hop counts.
-      const polls = hangPolls(50, 10)
-      let i = 0
-      while (controller.get(started.runHandle)!.state === 'running') {
-        if (++i > polls) throw new Error('cancelled run still "running" after the poll budget (queued waiter never rejected)')
-        await new Promise((r) => setTimeout(r, 10))
-      }
+      // lane A (which is still parked on its barrier). Bounded by time — no dependence on hop counts.
+      await until(
+        () => controller.get(started.runHandle)!.state !== 'running',
+        'the cancelled run leaving "running" (a queued waiter that never rejected)'
+      )
       expect(controller.get(started.runHandle)!.state).toBe('cancelled')
 
       // Lane B never created ANY run row (cancelled BEFORE acquiring — nothing to strand, and no

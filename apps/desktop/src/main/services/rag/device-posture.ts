@@ -1,5 +1,6 @@
 import type { AppSettings } from '../../../shared/types'
 import { DEFAULT_SETTINGS } from '../../../shared/types'
+import type { RendererSettingsKey } from '../../../shared/settings-writers'
 import { primaryUsefulDevice } from '../../../shared/gpu-rules'
 import { eligibleDevicesFor, machineKey } from '../performance'
 import { detectSystem } from '../benchmark'
@@ -37,7 +38,7 @@ import {
  *
  * **Wave 8 ruling (a) (step 4-8) resolved a THIRD gap, finding C3 (scoped Opus review of step
  * 4-7):** `settings.activeModelId` is a PROXY for "the chat model that will be loaded" — a proxy
- * this helper trusted at the one moment it is guaranteed false, the whole `models:use` hash +
+ * this helper trusted at the one moment it is guaranteed false, the whole `runtime:use` hash +
  * load window, during which the OLD model is still resident while the setting already names the
  * NEW one. This helper's chat-model input is now the RUNTIME's COMMITTED model
  * (`RuntimeManager.activeModelId()`, `occupancy.committedModelId` below) — never the setting, and
@@ -49,7 +50,7 @@ import {
  * only at cold-start, is Q (`reranker/llama.ts`'s `resolveServer`) — this helper is consulted
  * fresh on every `rerank()` call, not once per sidecar lifetime. Wave 7's three event-time
  * suspends (`gpuMode`/`gpuAutoDisabled`/`activeModelId` via `settings:update`/`models:select`/
- * `models:use`) stay as early release — a head start before the next `rerank()` would have
+ * `runtime:use`) stay as early release — a head start before the next `rerank()` would have
  * resolved the new posture on its own — not what makes the posture correct; Q is.
  *
  * Impure (reads `settings.gpuProbe`, resolves a manifest off disk, reads the runtime manager and
@@ -335,24 +336,20 @@ export function snapshotRerankerOccupancy(
 }
 
 /**
- * Wave 7 ruling (a) (step 4-7, resolving the scoped Opus review of step 4-6's finding C2) — the
- * settings keys the EVENT-TIME suspend trigger below watches: the `gpuMode`/`gpuAutoDisabled`
- * gate and `activeModelId`. Since Wave 8 ruling (a), `activeModelId` here is early release only
- * — a head start before the very next `rerank()` would have resolved the new posture on its own
- * via Q (`reranker/llama.ts`) — not what makes the posture correct. This is NOT the complete
- * list of everything the posture resolver reads: it also reads `settings.gpuProbe` (a known,
- * pre-existing, out-of-scope residual — `channels.json` id 4) and, since Wave 8, the runtime
- * manager's committed model and in-flight/pending state and the translator's occupancy — none of
- * which are settings keys a `settings:update` patch could carry, so they have no place in this
- * list. `activeEmbeddingModelId` is deliberately absent — it is not a posture input (the
- * embedder is a separate slot the reranker's placement estimate never contends with) and must
- * never trigger a suspend.
+ * The settings keys whose presence in a `settings:update` patch makes that handler take the
+ * EVENT-TIME suspend check below (step 4-4 watched `gpuMode` and `gpuAutoDisabled`; Wave 7 ruling
+ * (a), step 4-7, added `activeModelId`). Since #868 that channel carries renderer-owned keys only, so `gpuMode` is
+ * the one left: `gpuAutoDisabled` and `activeModelId` are main-owned and dropped from the patch,
+ * and `models:select` / `runtime:use` run the `activeModelId` check themselves
+ * (`registerModelIpc.ts`). Typed to the renderer-owned keys so a main-owned one cannot come back
+ * here. The suspend is early release only: Q (`reranker/llama.ts`, Wave 8) is what makes the
+ * posture correct. This is NOT the list of everything the posture resolver reads (it also reads
+ * `gpuAutoDisabled`, `settings.gpuProbe` — a known, pre-existing, out-of-scope residual,
+ * `channels.json` id 4 — the runtime's committed model and in-flight/pending state and the
+ * translator's occupancy). `activeEmbeddingModelId` is not a posture input at all (the
+ * embedder is a separate slot the reranker's placement estimate never contends with).
  */
-export const RERANKER_POSTURE_SETTINGS_KEYS: ReadonlyArray<keyof AppSettings> = [
-  'gpuMode',
-  'gpuAutoDisabled',
-  'activeModelId'
-]
+export const RERANKER_POSTURE_SETTINGS_KEYS: ReadonlyArray<RendererSettingsKey> = ['gpuMode']
 
 /** The posture's settings inputs, snapshotted before or after a write (Wave 7 ruling (c)). */
 export interface RerankerPostureSnapshot {
@@ -366,7 +363,7 @@ export interface RerankerPostureSnapshot {
  * the resident reranker sidecar's EARLY-RELEASE posture?" (Wave 8: Q, not this event-time check,
  * is what makes the posture correct at every moment — see `resolveRerankerDevicePosture`'s own
  * doc comment), called from `registerCoreIpc.ts`'s `settings:update` handler and from both of
- * `registerModelIpc.ts`'s `selectModel` call sites (`models:select`, `models:use`) — never three
+ * `registerModelIpc.ts`'s `selectModel` call sites (`models:select`, `runtime:use`) — never three
  * independent copies of the same comparison.
  *
  * REAL-flip only: a caller must snapshot `before` off `getSettings` BEFORE the write and pass the

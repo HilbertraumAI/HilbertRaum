@@ -69,11 +69,28 @@ master pipeline** that produces a finished, sellable drive (see the last section
     settling `run()` counts as busy. That NARROWS the second-install-into-the-same-dir window to the
     ≤2 s SIGKILL grace (the extractor rejects after signalling the child, not after its exit; a tar
     wedged in uninterruptible I/O can outlive even that) — an accepted residual: rejecting only after
-    the child's exit would reintroduce the unbounded wait this fix removes.
-    **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install pre-cleans the dir EVERY
+    the child's exit would reintroduce the unbounded wait this fix removes. Since #986 such a late
+    tar writes into the staging folder `<os>.new/`, never the install folder.
+    **`tar` runs from inside the target and gets `-xf ./<archive>`, with no `-C`** (#856), on every
+    host. Windows' tar (bsdtar) converts the paths on its command line through the ANSI code page,
+    so under a Cyrillic or Japanese folder on a Western Windows an absolute archive path failed with
+    "Error opening archive" and a `-C` with "could not chdir"; the child's working directory
+    reaches tar intact. The installer downloads the archive into the target, so its name is all tar
+    needs: ASCII when it comes from the URL (`ARCHIVE_NAME_RULE`), while the fallback name built
+    from the yaml's `version` is not checked. The `./` keeps a name starting with `-` from meaning
+    stdin and one holding a `:` from meaning GNU tar's `host:file`. `extractWithTar` refuses an
+    archive kept anywhere else, since its path would have to go on the command line again.
+    **The in-use guard is per family** (F-32): a `llama_cpp` (re-)install replaces the dir EVERY
     llama-server sidecar runs from (chat + embedder + reranker + vision + translation), so it is
     refused while any of them has a live child; a `whisper_cpp` install is refused mid-transcription/
     dictation. Installs touching only the OTHER family still proceed.
+    **Staged swap (#986).** The install never deletes first: each archive is moved into
+    `<extract_to>.new/`, extracted and checked there and marked last, then swapped in by rename
+    (`<extract_to>` → `.old`, `.new` → `<extract_to>`, the `cpu/` net carried over, `.old` deleted after
+    the job); a failure leaves the installed copy as it was. Before anything is touched the job checks
+    the drive's free space against the archives' unpacked size, read from the archives themselves
+    (`main.engine.notEnoughSpace`). The next start finishes or rolls back an interrupted swap. Design:
+    `architecture.md` "In-app engine updates" §6; layout: `drive-layout.md`.
 - **Model weights** — GGUF files under `models/`, resolved from each manifest's declared paths
   (`local_path` plus, since #310, any `files:` entries — every one relative to the drive root) via
   `weightPath(rootPath, manifest)` / `manifestFiles(rootPath, manifest)`. They are **git-ignored**;
@@ -282,7 +299,8 @@ Key config points:
   rewritten resource section: the same code sections and fuse wire (measured on 43.7.7, #551). So a
   copy of `win-unpacked` with that binary copied in as `HilbertRaum.exe` runs the packaged app's
   code against its `app.asar`, with `app.isPackaged` true. **The packaged exe's fuses differ from
-  the stock binary's** (since #562 wire `001011001`, the stock binary `101100011`), so that copy
+  the stock binary's** (wire `000011001` since #564, `001011001` from #562 to #564; the stock
+  binary `101100011`), so that copy
   runs the packaged app with Electron's default fuses. That is fine for everything except the
   fuses themselves: no asar integrity check, RunAsNode and `--inspect` still honoured. To
   reproduce the shipped fuses, first add electron-builder's integrity resource to the copy
@@ -297,9 +315,14 @@ Key config points:
   600–700 ms later than the stock binary, whatever the app code. A timing A/B must run both sides
   on equally modified binaries (`architecture.md` #560 record §7).
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
-  finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
-  `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
-  **never** bundled — they live on the prepared drive.
+  finds them for the model list via `resolveManifestsDir(app.getAppPath())`, which walks up to
+  `resources/model-manifests`; `HILBERTRAUM_MANIFESTS_DIR` (the launchers set it to the drive's copy)
+  overrides that. The AI-engine pins (install, repair, the update notice) and the OCR installer's
+  second source list (per file, where the drive's list lacks it or pins another file, #841) read
+  this bundled copy only, by `resolveBundledManifestsDir`: exactly `<process.resourcesPath>/model-manifests`,
+  no walk-up and no override, and none when it is missing (#842). Engine entries added to a drive's
+  `runtime-sources.yaml` therefore reach the scripts, never the app. Weights + sidecar binaries + the
+  `ocr/` language files are **never** bundled — they live on the prepared drive.
 - **`THIRD-PARTY-NOTICES.md` ships as an `extraResource` too** (beside `model-manifests`, LIC-2):
   the aggregated license texts + copyright notices for every npm package that lands in `app.asar`
   or the Vite-compiled bundles (Apache-2.0 NOTICE preservation for pdfjs-dist/tesseract.js, the
@@ -318,18 +341,23 @@ Key config points:
   string. `third-party-notices.test.ts` pins the entry.
 - The build output goes to `apps/desktop/release/` (git-ignored).
 
-### Electron fuses (#560, #562)
+### Electron fuses (#560, #562, #564)
 `electron-builder.yml` `electronFuses` sets six fuses, measured and explained in `architecture.md`
-"Electron fuses — design record (#562)":
+"Electron fuses — design record (#562)" (§8 for #564):
 
 - `runAsNode: false`: `ELECTRON_RUN_AS_NODE` no longer turns the exe into a Node.js runtime.
 - `enableNodeCliInspectArguments: false`: `--inspect`, `--inspect-brk` and SIGUSR1 open no
   debugger. Chromium's `--remote-debugging-port`, which the CDP harnesses use, is a different
   switch and still works.
-- `enableNodeOptionsEnvironmentVariable: true`, deliberately (owner decision 2026-10-03). Off, the
-  exe drops `NODE_EXTRA_CA_CERTS`, and the in-app downloads then fail behind TLS-scanning antivirus
-  and corporate proxies (measured with Norton). A packaged app ignores `NODE_OPTIONS` itself except
-  two parser flags.
+- `enableNodeOptionsEnvironmentVariable: false` (#564): the exe reads neither `NODE_OPTIONS` nor
+  `NODE_EXTRA_CA_CERTS`. TLS-scanning antivirus and corporate proxies used to get their root trusted
+  through that variable; they also install it in the operating system's certificate store, and
+  since #564 the in-app downloads trust that store's usable roots (`src/main/services/net/trust.ts`:
+  self-signed CAs whose signature verifies with their own key, valid now, RSA ≥ 2048, P-256/P-384/
+  P-521 or Ed25519; added once before the first download's
+  first request, never at startup). A root that is only in
+  `NODE_EXTRA_CA_CERTS` no longer counts in a packaged build. Until #564 the fuse stayed on (owner
+  decision 2026-10-03), because with it off the downloads failed behind Norton (measured).
 - `enableEmbeddedAsarIntegrityValidation: true` + `onlyLoadAppFromAsar: true`: a modified `app.asar`
   ends the app, and only `app.asar` is ever loaded. They need `asar: true` and the header hash that
   electron-builder writes on every build: the exe's integrity resource on Windows, `Info.plist` on
@@ -348,7 +376,8 @@ maps every option and still writes the integrity hash, and fails on `asar: false
 `disableAsarIntegrity`.
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
-Decode it with the library, not by hand. Expected for 43.8.6 (as for 43.7.7, 43.8.0 and 43.8.3): `001011001`.
+Decode it with the library, not by hand. Expected for 43.8.6 since #564: `000011001`. Before #564
+it was `001011001` (43.7.7 through 43.8.6).
 `release.yml`'s build-win decodes the Windows exe it packages against `verify-mac-build.sh`'s
 `EXPECTED_WIRE` on every run (#769); by hand:
 
@@ -357,8 +386,8 @@ Decode it with the library, not by hand. Expected for 43.8.6 (as for 43.7.7, 43.
 node -e "require('@electron/fuses').getCurrentFuseWire(process.argv[1]).then((w) => console.log(Object.keys(w).filter((k) => /^\d+$/.test(k)).map((k) => String.fromCharCode(w[k])).join('')))" apps/desktop/release/win-unpacked/HilbertRaum.exe
 ```
 
-The nine positions on Electron 43.8.3 (unchanged since 43.7.7), as shipped: **0 RunAsNode (off, #562)**,
-1 EnableCookieEncryption (off), 2 EnableNodeOptionsEnvironmentVariable (on),
+The nine positions on Electron 43.8.6 (unchanged since 43.7.7), as shipped: **0 RunAsNode (off, #562)**,
+1 EnableCookieEncryption (off), **2 EnableNodeOptionsEnvironmentVariable (off, #564)**,
 **3 EnableNodeCliInspectArguments (off, #562)**, **4 EnableEmbeddedAsarIntegrityValidation (on,
 #562)**, **5 OnlyLoadAppFromAsar (on, #562)**, 6 LoadBrowserProcessSpecificV8Snapshot (off),
 **7 GrantFileProtocolExtraPrivileges (off, #560)**, 8 (unnamed in `@electron/fuses` 1.8.0; the
@@ -549,7 +578,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 |---|---|
 | `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs + **the root license/attribution notices** (`LICENSE`, `THIRD-PARTY-NOTICES.md`, `DRIVE-NOTICES.md` — LIC-1), generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (~10.4 GB: chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber + Qwen2.5-VL vision) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
 | `fetch-models.{ps1,sh}` | Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model (exit 2 when no manifest has that id, or its manifest declares no `download:` block, #767); `-Bundled`/`--bundled` for the Kit's bundled set only (#766); `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Half a download pair (a top-level `download:` without one on `mmproj` or a `files:` member, or the other way round, which the app refuses) → `BLOCK` with the validator's message, nothing of that model fetched, exit 1 (#767). Idempotent (present + verified → skip). |
-| `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), `kiwix_tools` (optional; the knowledge-pack tools — `kiwix-serve`/`kiwix-manage`/`kiwix-search` plus, on Windows, the five ICU DLLs; never part of `--with-assets`, only fetched by an explicit `--family kiwix_tools`, #339 P8-3), or `ocr` (the language files + the `osd` page-orientation data, #538). The DRIVE's `runtime-sources.yaml` wins over the repo's, so on a drive whose manifests predate a pin bump it re-installs the OLD pin; since #516 it prints a **Note** when the two pin different versions. **To move a drive to the repo's pin:** re-run `prepare-drive` on it (it overwrites `model-manifests/` and leaves `config/` alone unless `-Force`), then `fetch-runtime` (plus `-Backend cpu` for the safety net and `-Family whisper_cpp`). The app offers the same update in-app (AI Model screen, #516; `architecture.md` "In-app engine updates"). |
+| `fetch-runtime.{ps1,sh}` | Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades). An engine **newer** than the drive's pin — one the app's in-app update installed while the drive's yaml stayed behind — is **kept**, whatever its backend, with a line naming both versions (#873; the app's `compareRuntimeVersions` order, so `3.10.0` is newer than `3.8.1`; a version that cannot be ordered re-fetches as before). `-AllowDowngrade`/`--allow-downgrade` replaces it anyway, and `-Commercial`/`--commercial` always does (a sold drive carries its app's pin; the commercial match stays exact); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), `kiwix_tools` (optional; the knowledge-pack tools — `kiwix-serve`/`kiwix-manage`/`kiwix-search` plus, on Windows, the five ICU DLLs; never part of `--with-assets`, only fetched by an explicit `--family kiwix_tools`, #339 P8-3), or `ocr` (the language files + the `osd` page-orientation data, #538). The DRIVE's `runtime-sources.yaml` wins over the repo's, so on a drive whose manifests predate a pin bump it re-installs the OLD pin; since #516 it prints a **Note** when the two pin different versions. **To move a drive to the repo's pin:** re-run `prepare-drive` on it (it overwrites `model-manifests/` and leaves `config/` alone unless `-Force`), then `fetch-runtime` (plus `-Backend cpu` for the safety net and `-Family whisper_cpp`). The app offers the same update in-app (AI Model screen, #516; `architecture.md` "In-app engine updates"). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1; no runtime, or a runtime/format pair the app does not run → *UNSUPPORTED*, #767). `-Generate`/`--generate` writes `config/checksums.json` (`entries: []` when there is no manifest, #767). `-Strict`/`--strict` fails unless every manifest's weight is VERIFIED; `-Kit`/`--kit` is the same gate over what a Kit ships (the bundled set + any model with a file on the drive; the rest is listed as `CATALOG`, #766). |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
 | `release-issues-section.sh` | Not drive prep: `.github/workflows/release.yml` runs it while building a tag and appends its output to the release notes. It emits an "Issues resolved" section — the ISSUES closed by the PRs merged since the last **published** release (the same baseline GitHub's own generated "What's Changed" uses, so the two agree), resolved via each commit's associated PRs + `closingIssuesReferences` rather than by parsing "(#N)" out of subjects (which would miss true merge commits). Read-only `gh` API calls, so it is locally testable: `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`. Best-effort by design — a failure is downgraded to a workflow warning, so release notes can never block a release build. |
@@ -668,7 +697,7 @@ The drive root ships an obvious, double-clickable launcher (spec §6 names). Sou
 | OS | File | What it does |
 |---|---|---|
 | Windows | `Start HilbertRaum.cmd` | `%~dp0` → drive root → set `HILBERTRAUM_DRIVE_ROOT` → spawn the portable `.exe`. |
-| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, publishes that folder only when an `.app` landed in it (#769), and runs the bundle from there. An extracted `.app` at the root runs in place. |
+| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. exFAT holds no symlinks, so a drive normally carries the `HilbertRaum-<version>-mac-arm64.app.zip`: the launcher unpacks it once with `ditto` into `$HOME/Library/Caches/HilbertRaum/<zip name without .zip>/`, and runs the bundle from there. Each start unpacks into its own `<zip name without .zip>.partial.<pid>` folder beside it and publishes that folder only when an `.app` with its app binary landed in it (#769, #887). Every start, also once the cache is published, first removes the partial folders of its zip whose start has ended, and only those: a PID that is no longer running, another user's, or the start's own, and a name that is no PID (empty, starting with `0`, or holding anything but digits). So a second double-click during the first unpack leaves that unpack alone, and the next start removes what a stopped one left, a copy it left nested inside the published cache included; the second start then uses whichever copy was published first, drops a copy of its own that a concurrent publish nested inside the cache, and drops its own copy when a concurrent publish won the rename (#887). A start never reuses a partial folder: one of its own PID that the sweep could not remove stops it with "An earlier unpack at '…' could not be removed", naming the folder to delete. A partial folder that cannot be created at all (a full disk, a cache folder that cannot be written) stops it with "Could not create '…'" instead (#919). An archive with no `.app` stops with "found no .app inside it", an `.app` without its app binary with "the app inside it lacks its program file", and a publish that fails with no copy published with "Could not finish unpacking" (#887). An extracted `.app` at the root runs in place. |
 | Linux | `start-hilbertraum.sh` | same, next to the AppImage. |
 | all | `READ ME FIRST.txt` | friendly first-run + SmartScreen/Gatekeeper instructions. |
 
@@ -678,6 +707,13 @@ zip), naming the files to delete and never deleting anything themselves (#235); 
 (`/check` on Windows) prints the drive root, the manifests folder the app will read and the app it
 resolved, and exits without starting it.
 `tests/integration/launcher-execution.test.ts` executes all three in scratch roots.
+
+**The Mac unpack cache is shared by every start and every version (#887, a contract for #849).**
+Anything that prunes `$HOME/Library/Caches/HilbertRaum/` must leave each `*.partial.<pid>` folder
+alone while its PID is running, whatever version it unpacks: a start is still writing into it, and
+two Kits of different versions can unpack on one Mac at the same time. The launcher itself removes,
+on every start, only the dead partial folders of the zip it starts; another version's partials and
+caches stay for #849.
 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
 > **its own location every launch** (`%~dp0` / `dirname "$0"`), so the same drive works on a second
@@ -696,8 +732,10 @@ vars / a git-ignored secrets file on the build machine — secrets NEVER enter t
 green gate does not sign** (it never invokes electron-builder).
 
 - **Windows** (`win.signtoolOptions`): supply the OV/EV cert via `WIN_CSC_LINK` (path/URL to the
-  `.pfx` or base64) + `WIN_CSC_KEY_PASSWORD`. **EV** certs (hardware token / cloud HSM) build
-  SmartScreen reputation fastest. The launcher `.cmd` is a script (not signed); the portable `.exe` it
+  `.pfx` or base64) + `WIN_CSC_KEY_PASSWORD`. Signing lets SmartScreen build reputation for the
+  publisher; Microsoft's current guidance treats certificate types alike for this, so an OV
+  certificate or a cloud signing service (Microsoft's Artifact Signing, formerly Trusted Signing) is
+  the cost-effective choice — confirm against Microsoft's code-signing documentation before buying. The launcher `.cmd` is a script (not signed); the portable `.exe` it
   spawns **is** signed — that is what SmartScreen evaluates.
 - **macOS** (`mac.notarize` + `hardenedRuntime` + `build/entitlements.mac.plist`): supply the
   *Developer ID Application* cert via `CSC_LINK`/`CSC_KEY_PASSWORD` and the notarization creds via
@@ -737,7 +775,10 @@ final check: THE canonical gate — node apps/desktop/out/tools/assert-commercia
              + every shipped weight VERIFIED and approved, at least one model bundled (#766)
              + runtime install markers match the pin AND record a matching binary hash (#234)
              + exactly one app artifact + the launcher per declared platform (--platforms; #233)
-             + no user data
+             + no user data: nothing but empty folders in workspace/ and logs/,
+               no config/workspace.json or config/working-copy-lost.json (exact, or
+               with a .<suffix>, any case), and every
+               one of those folders readable (#893)
              + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
              + root license/attribution artifacts present + non-empty (LIC-1)
 ```
@@ -804,7 +845,10 @@ a non-empty `SOURCES.md` beside it.
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, **no phone-home** — model downloads are a permitted user action,
 but update-checks + telemetry are denied) **and** that **every weight the Kit ships is VERIFIED** (#766) **and**
-that **no user data is present** (spec §12.2) **and** that **at least one trusted product skill is
+that **no user data is present** (spec §12.2: `workspace/` and `logs/` hold nothing but empty folders,
+and `config/` holds no `workspace.json` or `working-copy-lost.json`, exact or with a `.<suffix>`, in any case; the gate names each leftover,
+OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder it cannot list or a
+file in a folder's place fails the check as unreadable, #893) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
 declared platform has exactly one app artifact of the version being built plus its launcher** (#233)
 **and** that **every sidecar binary matches the SHA-256 its install marker records** (#234) — the
@@ -1014,7 +1058,14 @@ fails fast at the desk.
 **A hand-rolled wall-clock bound does NOT widen with them** — a `Date.now() - start > N` poll
 guard, a fixture's own `waitFor` default, or a child-process `timeout` is invisible to vitest's
 config, so each one needs its own CI headroom (the header of `tests/helpers/hang-budget.ts`
-records the case that taught it). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
+records the case that taught it). The two **library defaults** are the same trap (#915): vitest's
+`vi.waitFor` and testing-library's `waitFor` / `find*` both give up after 1 s and follow neither
+`testTimeout` nor `CI`. testing-library's is raised once for every jsdom file in `tests/setup.ts`
+(`configure({ asyncUtilTimeout: hangBudgetMs(5_000) })`, asserted by `hang-budget.dom.test.ts`);
+vitest has no such config key, so every `vi.waitFor` passes `{ timeout: hangBudgetMs(n) }` (5000 is the usual n), a testing-library
+wait passes one only to go above its default (n of 5000 or more), and a literal `timeout:` on any wait
+is refused. A repo-hygiene row enforces all of it. A heavy row (real
+hashing, process spawns, hundreds of fs calls) takes `testBudgetMs` as its per-test timeout instead. Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
 far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
 #389).
 
@@ -1102,11 +1153,17 @@ caught only `Date.now() - start > N`. CI then failed `vision-security.test.ts` (
 hard-coded in disguise, and worse than the wall-clock form in two ways: it does not widen on CI
 **and it falls through silently**, leaving the next assertion to fail with something opaque —
 here `expected [] to have a length of 1`, which says nothing about the event that never arrived.
-The suite's **16** counted loops across 7 files now use `hangPolls(n, stepMs)`, which applies the
-same 4×/45 s contract in steps. Where a counted loop can fall through, prefer failing by name
-after it (`vision-security`'s `waitForDoneEvent` is the pattern); `waitForTerminal` in the same
-file already did. **When adding a poll loop, bound it in wall-clock terms through one of these
-two helpers and make its exhaustion an error, never a `break` into the next assertion.**
+**A count of loop turns is not a time bound either, and its length depends on the platform
+(#895).** A 0 or 1 ms `setTimeout` step lasts about 1.1 ms on Linux but about 15.6 ms on Windows
+(its timer resolution), and a 5 ms step 5 ms vs 15.6 ms, so `for (i < 200) await setTimeout(r, 0)`
+is a ~0.23 s detector on the ubuntu runner and a ~3 s one at a Windows desk: ~14× narrower exactly
+where CI runs. The flake was a skill-run poll waiting on real file and database work
+(`model-occupancy-ipc`). #895 moved every counted poll onto `until` (a sync condition) or
+`untilValue` (a sync or async probe whose answer the caller wants back; each probe call is raced
+against the time left, so a probe that never settles still fails by name), both of which read the
+real clock, and retired the counted-loop helper. **When adding a poll loop, bound it in wall-clock
+terms through one of these helpers and make its exhaustion an error, never a `break` into the next
+assertion.**
 
 **Widening does not help a race the desk loses too: start the clock at the event (#549).** Both
 helpers widen only on CI, and wave DEP-6's two flakes lost at a desk under full-suite load.
@@ -1198,7 +1255,7 @@ publicly linkable.
 | --- | --- | --- |
 | 0 — now | none | unsigned `.exe` (SmartScreen "More info → Run anyway"), ad-hoc-signed `.app` (macOS 15+: System Settings → Privacy & Security → "Open Anyway"), `SHA256SUMS.txt` as the integrity floor — flows documented in [`troubleshooting.md`](troubleshooting.md) |
 | 1 — Apple | `CSC_LINK` / `CSC_KEY_PASSWORD` + `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` | Developer ID-signed + notarized `.app` (electron-builder auto-notarizes; `hardenedRuntime` + entitlements already wired). Also remove the `CSC_IDENTITY_AUTO_DISCOVERY: 'false'` line from `release.yml` |
-| 2 — Windows | `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` (OV/EV `.pfx` or Azure Trusted Signing via signtool env) | signed `.exe`; SmartScreen reputation builds |
+| 2 — Windows | `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` (OV/EV `.pfx` or Microsoft's Artifact Signing, formerly Trusted Signing, via signtool env) | signed `.exe`; SmartScreen reputation builds |
 
 Non-clash with `ci.yml`: `release.yml` never fires on `pull_request`/`push: master` — only tags and
 manual dispatch. It runs on **Node 24** (electron-builder ships its own pinned Electron runtime),
@@ -1216,7 +1273,16 @@ on a tag (a release leg has no PR gate ahead of it) — a deliberate, registered
 
 The green gate (`typecheck`/`test`/`build`) runs on mocks with zero weight files, so real-runtime /
 real-drive behaviour never shows up in CI. Before any drive ships (commercial or a DIY hand-off),
-run one real-model session covering:
+run one real-model session covering the items below.
+
+These sessions create a workspace, documents and logs. Run them on a scratch drive, not the Kit
+that ships. If they ran on the Kit, wipe it afterwards (delete everything inside `workspace/` and
+`logs/` but keep the two folders, and delete `config/workspace.json`, `config/working-copy-lost.json`
+and any `.<suffix>` copy of either), then run `build-commercial-drive` with `-VerifyOnly`
+(`--verify-only`) again: the sell gate names every file the wipe missed (#893). On a Mac, Finder
+writes a `.DS_Store` into each folder you open on the stick, and macOS writes `._<name>` companion
+files beside files it copies or tags there (exFAT keeps no extended attributes); the gate counts
+both. Delete them too before that final check, or do not browse `workspace/` and `logs/` in Finder.
 
 1. **Post-package smoke on the produced `.exe`:** import a PDF, a DOCX, and a CSV; create + unlock
    an encrypted workspace (exercises the externalized parser libs and `@noble/hashes` argon2id,
@@ -1262,6 +1328,23 @@ run one real-model session covering:
    bump or a local `npm run package:win`, from `apps/desktop`: set `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar`
    and `HILBERTRAUM_PACKED_EXE=release/win-unpacked/HilbertRaum.exe`, then
    `npm test -- tests/integration/packaging.test.ts tests/integration/third-party-notices.test.ts tests/integration/asar-unpack-closure.test.ts`.
+12. **The menu and DevTools of the packaged build (#912).** On Windows and Linux the window has no
+   menu bar, and Alt does not bring one up. Ctrl+R, Ctrl+Shift+R and Ctrl+Shift+I do nothing (no
+   reload, no developer tools). Ctrl+= and Ctrl+Shift+= zoom in (on a German keyboard, Ctrl and
+   the `+` key), Ctrl+- zooms out, Ctrl+0 resets, F11 toggles full screen, Ctrl+M minimizes, and
+   Ctrl+W closes through the save before closing. On Linux, Ctrl+Q quits. On a Mac: ⌘C and ⌘V
+   work in a text field, ⌘Q quits through the save before closing, and ⌘R does nothing. The
+   off-screen real-Electron row (`tests/integration/app-menu-electron-smoke.test.ts`) presses the
+   Windows keys against the production menu with `webContents.sendInputEvent`, but only a packaged
+   build and a physical keyboard prove the shipped binary.
+13. **A download behind TLS inspection, and the fuse wire (#564).** Decode the packaged binary's
+   fuse wire ("Electron fuses" above; `000011001` for 43.8.6). Then, on a computer whose antivirus or
+   proxy re-signs HTTPS (Norton's web protection does), start the packaged build with
+   `NODE_EXTRA_CA_CERTS` removed from its environment and begin one in-app download from github.com
+   or huggingface.co: the AI engine or a model, not an OCR file (jsDelivr is not re-signed by
+   Norton, so it proves nothing). It must get past the first megabytes; cancel it then. The app's
+   log then holds the line "Download trust: the system certificate store is trusted too". Before
+   #564 such a download failed with "fetch failed".
 
 ### Platform verification of the app scheme and the fuses (#560, #562)
 
@@ -1315,7 +1398,7 @@ HILBERTRAUM_OCR_DIR=/Volumes/HILBERTRAUM/ocr PROBE_ARGS='--scan ~/scan.pdf --sca
 
 It works in scratch folders under `$TMPDIR`, never on a real drive. It prints PASS / FAIL / NOTE
 lines for:
-1. **The fuse wire**, expected `001011001`.
+1. **The fuse wire**, expected `000011001` (`001011001` before #564).
 2. **The signature:** `codesign -dv` (ad hoc, and whether the hardened-runtime flag is set) and
    `codesign --verify --deep --strict`.
 3. **The entitlements:** whether `com.apple.security.device.audio-input` is present.
@@ -1395,7 +1478,7 @@ b11146, before it b9849).
 | `thinking-smoke` / `gemma-thinking` | `HILBERTRAUM_THINKING_SMOKE` / `HILBERTRAUM_GEMMA_THINKING` | deep-mode reasoning channel |
 | `prompt-cache-smoke` | `HILBERTRAUM_PROMPT_CACHE_SMOKE` | whether the pinned server RESTORES a chat GGUF's evicted conversation from its host-RAM prompt cache (the #399 evict-and-return protocol with the app's chat argv; the evicting conversation shares the system message, as every app chat does); prints `prompt_n` on return, RESTORED / RE-PREFILLED, restore == `cache_prompt: false` recompute, and the manifest advice for `disable_prompt_cache` (#512). Run it for every new chat manifest |
 | `rerank-smoke` | `HILBERTRAUM_RERANK_SMOKE` | the reranker sidecar reorders retrieval |
-| `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
+| `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation; with `HILBERTRAUM_WHISPER_869=1` also the #869 Windows layout matrix (non-ASCII roots and originals; see the file header) |
 | `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |
 | `vision-smoke` | `HILBERTRAUM_VISION_SMOKE` | the vision sidecar (`--mmproj`) cold-starts, analyzes a fixture image, streams, reuses the prefill, idle-tears-down + cold-restarts |
 | `compare-smoke` | `HILBERTRAUM_COMPARE_SMOKE` | the shipping compare prompts (mode-(a) full compare EN + DE, a mode-(b) pair map, a reduce over planted notes) on a real chat GGUF through a bare `LlamaRuntime`, printing the R-T2 format/placement/language findings — not the DocTaskManager pipeline (the earlier chat-model `translation-smoke` went away with the chat-model translation pipeline; `translategemma-smoke` below covers translation) |

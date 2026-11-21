@@ -16,6 +16,17 @@ export const UNLOCKED_DEV_WORKSPACE: WorkspaceStateInfo = {
   encryptionRequired: false
 }
 
+/** An encrypted workspace behind the lock gate (no row mutates it; spread it to add a `lockNotice`). */
+export const LOCKED_ENCRYPTED_WORKSPACE: WorkspaceStateInfo = {
+  state: 'locked',
+  mode: 'encrypted',
+  plaintextAllowed: false,
+  encryptionRequired: true
+}
+
+/** The same encrypted workspace, unlocked. */
+export const UNLOCKED_ENCRYPTED_WORKSPACE: WorkspaceStateInfo = { ...LOCKED_ENCRYPTED_WORKSPACE, state: 'unlocked' }
+
 /** What Home reads at mount: no documents, no packs, a healthy drive, nothing moved, no model running. */
 export function homeReadStubs(): Partial<PreloadApi> {
   return {
@@ -38,6 +49,8 @@ export function appShellStubs(over: Partial<PreloadApi> = {}): Partial<PreloadAp
     getPolicy: vi.fn(async () => makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })),
     getSettings: vi.fn(async () => DEFAULT_SETTINGS),
     onRuntimeNotice: vi.fn(() => () => {}),
+    // App's gate effect marks `gate_visible` on every mount (perf trace); a row that asserts the mark supplies its own spy.
+    perfMark: vi.fn(),
     ...over
   }
 }

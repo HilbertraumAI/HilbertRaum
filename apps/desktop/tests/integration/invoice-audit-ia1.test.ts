@@ -1,9 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { createQueuedDocument, documentsDir, processDocument, reindexDocument } from '../../src/main/services/ingestion'
 import { buildDocumentSegmentReader } from '../../src/main/ipc/documentSegments'
 import type { AppContext } from '../../src/main/services/context'
@@ -17,8 +16,10 @@ import {
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
-import type { DocumentChunkRead, RetrievalScope } from '../../src/shared/types'
+import type { DocumentChunkRead } from '../../src/shared/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
+import { freshWorkspaceDb } from '../helpers/db-fixtures'
+import { makeAnalysisCtx } from '../helpers/skill-contexts'
 
 // invoice-audit IA-1 (P-1): a re-indexed / OCR-re-ingested document re-extracts on the next analysis
 // question — the re-index teardown now purges the persisted bank/invoice skill rows in the same
@@ -83,8 +84,7 @@ interface Ingested {
 }
 
 async function ingest(text: string, title: string): Promise<Ingested> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ia1-'))
-  const db = openDatabase(join(root, 'test.sqlite'))
+  const { db, root } = freshWorkspaceDb('ia1')
   const storeDir = documentsDir(join(root, 'workspace'))
   const docPath = join(root, title)
   writeFileSync(docPath, text, 'utf8')
@@ -106,28 +106,10 @@ async function ingest(text: string, title: string): Promise<Ingested> {
   return { db, storeDir, docId: doc.id, rewrite, readDocumentSegments }
 }
 
-function invoiceCtx(h: Ingested, question: string): SkillAnalysisContext {
+/** The handler context over the ingested document, reading it through the production segment reader. */
+function analysisCtx(h: Ingested, question: string, skillInstallId: string): SkillAnalysisContext {
   return {
-    db: h.db,
-    scope: { collectionIds: [], documentIds: [h.docId] } as RetrievalScope,
-    question,
-    skillInstallId: INVOICE_INSTALL_ID,
-    conversationId: null,
-    audit: () => {},
-    tr,
-    readDocumentSegments: h.readDocumentSegments
-  }
-}
-
-function bankCtx(h: Ingested, question: string): SkillAnalysisContext {
-  return {
-    db: h.db,
-    scope: { collectionIds: [], documentIds: [h.docId] } as RetrievalScope,
-    question,
-    skillInstallId: BANK_STATEMENT_INSTALL_ID,
-    conversationId: null,
-    audit: () => {},
-    tr,
+    ...makeAnalysisCtx(h.db, { collectionIds: [], documentIds: [h.docId] }, question, { skillInstallId }),
     readDocumentSegments: h.readDocumentSegments
   }
 }
@@ -139,7 +121,7 @@ describe('invoice-audit IA-1 (P-1) — re-index purges skill rows so a content c
   it('soup invoice → refusal → re-index with clean text → a real totals answer (not the refusal)', async () => {
     const h = await ingest(SOUP, 'invoice.txt')
 
-    const before = await invoiceAnalysisHandler.run!(invoiceCtx(h, 'fasse die rechnung zusammen'))
+    const before = await invoiceAnalysisHandler.run!(analysisCtx(h, 'fasse die rechnung zusammen', INVOICE_INSTALL_ID))
     expect(before.answer).toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
     // The retry completed and was still soup → the flag is legitimately confirmed at this point.
     const flag = h.db.prepare('SELECT text_quality AS q FROM invoices').get() as { q: string | null }
@@ -151,7 +133,7 @@ describe('invoice-audit IA-1 (P-1) — re-index purges skill rows so a content c
     // The purge removed the stale soup extraction — nothing left to reuse.
     expect((h.db.prepare('SELECT COUNT(*) AS n FROM invoices').get() as { n: number }).n).toBe(0)
 
-    const after = await invoiceAnalysisHandler.run!(invoiceCtx(h, 'fasse die rechnung zusammen'))
+    const after = await invoiceAnalysisHandler.run!(analysisCtx(h, 'fasse die rechnung zusammen', INVOICE_INSTALL_ID))
     expect(after.answer).not.toBe(tr('skills.invoiceAnalysis.unreadableLayout'))
     expect(after.answer).toContain('120.00')
     expect(after.answer).toContain('144.00')
@@ -162,13 +144,13 @@ describe('invoice-audit IA-1 (P-1) — re-index purges skill rows so a content c
   it('invoice: a silent content change re-extracts on the next question (new figures, not the old)', async () => {
     const h = await ingest(INV_V1, 'invoice.txt')
 
-    const before = await invoiceAnalysisHandler.run!(invoiceCtx(h, 'give me a summary of this invoice'))
+    const before = await invoiceAnalysisHandler.run!(analysisCtx(h, 'give me a summary of this invoice', INVOICE_INSTALL_ID))
     expect(before.answer).toContain('144.00') // v1 gross
 
     h.rewrite(INV_V2)
     await reindexDocument(h.db, h.storeDir, h.docId, DEPS)
 
-    const after = await invoiceAnalysisHandler.run!(invoiceCtx(h, 'give me a summary of this invoice'))
+    const after = await invoiceAnalysisHandler.run!(analysisCtx(h, 'give me a summary of this invoice', INVOICE_INSTALL_ID))
     expect(after.answer).toContain('240.00') // v2 gross — re-extracted
     expect(after.answer).not.toContain('144.00') // the stale v1 figure is gone
     const row = h.db.prepare('SELECT gross_total AS g FROM invoices').get() as { g: number }
@@ -179,14 +161,14 @@ describe('invoice-audit IA-1 (P-1) — re-index purges skill rows so a content c
   it('bank statement: a silent content change re-extracts on the next question (new figures)', async () => {
     const h = await ingest(BANK_V1, 'statement.txt')
 
-    const before = await bankStatementAnalysisHandler.run!(bankCtx(h, 'summarize the cashflow'))
+    const before = await bankStatementAnalysisHandler.run!(analysisCtx(h, 'summarize the cashflow', BANK_STATEMENT_INSTALL_ID))
     expect(before.answer).toContain('2500.00') // v1 money-in
     expect(before.answer).toContain('2454.10') // v1 net change
 
     h.rewrite(BANK_V2)
     await reindexDocument(h.db, h.storeDir, h.docId, DEPS)
 
-    const after = await bankStatementAnalysisHandler.run!(bankCtx(h, 'summarize the cashflow'))
+    const after = await bankStatementAnalysisHandler.run!(analysisCtx(h, 'summarize the cashflow', BANK_STATEMENT_INSTALL_ID))
     expect(after.answer).toContain('3000.00') // v2 money-in — re-extracted
     expect(after.answer).toContain('2954.10') // v2 net change
     expect(after.answer).not.toContain('2500.00') // the stale v1 figure is gone

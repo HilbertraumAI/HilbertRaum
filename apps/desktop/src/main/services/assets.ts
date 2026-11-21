@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { dirname, join, posix, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeFamily, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
@@ -15,6 +15,7 @@ import {
   type ChecksumLabel,
   type HashStore
 } from './models'
+import { ensureSystemTrust } from './net/trust'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
 // (see docs/packaging.md).
@@ -329,12 +330,25 @@ export interface SidecarFamilySpec {
    */
   optional?: boolean
   /**
-   * The licence the consent dialog asks the user to acknowledge before an OPTIONAL family is
-   * fetched (#339 P8-2), SPDX-style. CODE-side on purpose: a user-writable drive yaml must not
-   * be able to change what the user is told they are accepting. Required families carry none —
-   * their permissive licences ride the notices files, not a consent step.
+   * The family's licence, SPDX-style, as its confirmation dialog states it. CODE-side on purpose:
+   * a user-writable drive yaml must not be able to change what the user is told. For the OPTIONAL
+   * family it is what the consent dialog asks the user to acknowledge (#339 P8-2); the required
+   * families' licences are pre-reviewed (docs/model-policy.md), so their dialog only states them
+   * (#843), with no acknowledgement.
    */
   license?: string
+  /**
+   * #843: the other licences an archive carries beside the family's own, per OS, as the dialog
+   * names them after "includes" (the licence records in docs/model-policy.md). Only the Windows
+   * archives bundle a library under another licence: LLVM's `libomp.dll` in llama.cpp's, SDL2 in
+   * whisper.cpp's.
+   */
+  bundledLicenses?: Partial<Record<RuntimeOs, string>>
+  /**
+   * #843: the upstream repository whose `LICENSE` at the pinned tag the dialog links to
+   * (`<repo>/blob/<version>/LICENSE`). Absent for a family whose dialog links elsewhere.
+   */
+  licenseRepo?: string
   /**
    * Executables the release archive carries that an install never keeps (#729), base names like
    * `binaryBase`. CODE-side on purpose, like `alsoRequired`: a user-writable drive yaml must not be
@@ -360,8 +374,25 @@ export const LLAMA_CONNECT_BINARY_BASE = 'llama-connect'
  * first REQUIRED family.
  */
 export const SIDECAR_FAMILY_SPECS: readonly SidecarFamilySpec[] = [
-  { family: 'llama_cpp', binaryBase: 'llama-server', neverInstalled: [LLAMA_CONNECT_BINARY_BASE] },
-  { family: 'whisper_cpp', binaryBase: WHISPER_BINARY_BASE },
+  {
+    family: 'llama_cpp',
+    binaryBase: 'llama-server',
+    neverInstalled: [LLAMA_CONNECT_BINARY_BASE],
+    // docs/model-policy.md "License-review record — llama.cpp b12110": MIT; both Windows archives
+    // ship LLVM's libomp.dll with its LICENSE-LLVM-OpenMP (Apache-2.0 WITH LLVM-exception).
+    license: 'MIT',
+    bundledLicenses: { win: 'Apache-2.0 WITH LLVM-exception (libomp.dll)' },
+    licenseRepo: 'https://github.com/ggml-org/llama.cpp'
+  },
+  {
+    family: 'whisper_cpp',
+    binaryBase: WHISPER_BINARY_BASE,
+    // docs/model-policy.md "License-review record — whisper.cpp v1.8.6": MIT; the Windows zip
+    // ships SDL2.dll (zlib licence).
+    license: 'MIT',
+    bundledLicenses: { win: 'zlib (SDL2.dll)' },
+    licenseRepo: 'https://github.com/ggml-org/whisper.cpp'
+  },
   {
     family: 'kiwix_tools',
     binaryBase: KIWIX_SERVE_BINARY_BASE,
@@ -525,6 +556,93 @@ export function requiredInstallFiles(plan: RuntimeDownloadPlan): string[] {
     if (!out.includes(p)) out.push(p)
   }
   return out
+}
+
+// ---- The staged engine swap's folders (#986) ---------------------------------------------------
+
+/**
+ * The three folders of one engine install's staged swap (#986, architecture.md "In-app engine updates"
+ * §6). An install builds the new copy in `staging`, moves the current one to `previous`, moves `staging`
+ * in and deletes `previous`; the next start finishes or rolls back a swap a kill interrupted. Exact
+ * names only: no reader ever lists `runtime/<family>/`, and the start must never touch a sibling it
+ * does not own (the app-update plan's `<os>@<pin>/` folders).
+ */
+export interface EngineSwapDirs {
+  /** The install folder (`extract_to`), the only one the engine resolvers read. */
+  live: string
+  /** `<live>.new`: the new copy, extracted, checked and marked before anything moves. */
+  staging: string
+  /** `<live>.old`: the replaced copy, from the swap until its deletion. */
+  previous: string
+}
+
+/**
+ * The swap folders of the install folder `extractTo` under `rootPath` (#986). Both siblings are
+ * contained by `resolveWithinRoot`, and an install folder that is the drive root itself (an
+ * `extract_to` of `.`) is refused: its swap would move the whole drive. Pure (no I/O).
+ */
+export function engineSwapDirs(rootPath: string, extractTo: string): EngineSwapDirs {
+  const root = resolve(rootPath)
+  const live = resolve(extractTo)
+  const rel = relative(root, live)
+  if (rel === '' || isAbsolute(rel)) {
+    throw new Error(`An engine install folder must lie inside the drive root: ${extractTo}`)
+  }
+  // `resolve` dropped any trailing separator, so the suffix extends the folder's own name.
+  const relPosix = rel.split(sep).join('/')
+  return {
+    live,
+    staging: resolveWithinRoot(root, `${relPosix}.new`),
+    previous: resolveWithinRoot(root, `${relPosix}.old`)
+  }
+}
+
+/**
+ * `plan` with every path under its install folder moved under `dir` (#986): the same files at the same
+ * relative places, so the marker keys (`markerBinaryKey`) a copy staged in `<live>.new` records are the
+ * keys the live folder needs. Pure.
+ */
+export function planInFolder(plan: RuntimeDownloadPlan, dir: string): RuntimeDownloadPlan {
+  const moved = (p: string): string => join(dir, relative(plan.extractTo, p))
+  return {
+    ...plan,
+    extractTo: dir,
+    zipDest: moved(plan.zipDest),
+    binaryPath: moved(plan.binaryPath),
+    binaryPaths: plan.binaryPaths.map(moved),
+    runtimeFilePaths: plan.runtimeFilePaths.map(moved),
+    excludedPaths: plan.excludedPaths.map(moved)
+  }
+}
+
+/**
+ * Is the copy of `plan` in `dir` (default: its install folder) one the swap and the start may trust
+ * (#986)? Its marker parses AND every file the copy ITSELF recorded is there: each key of the marker's
+ * `binaries` map (#986 review 2: judged by the current pin's list instead, an old copy that lacks a file a
+ * newer pin adds read as incomplete and was deleted instead of rolled back to). A marker without the map
+ * (a hashing failure, an older fetch-runtime) falls back to the files the plan requires. Existence alone is
+ * not enough: the install folder can exist empty (prepare-drive's layout, an archive's download, a `cpu/`
+ * net's folder), and a delete killed part-way can keep a marker over missing files.
+ */
+export function engineFolderComplete(plan: RuntimeDownloadPlan, dir: string = plan.extractTo): boolean {
+  const at = dir === plan.extractTo ? plan : planInFolder(plan, dir)
+  const marker = readRuntimeMarker(at.extractTo)
+  if (!marker) return false
+  if (marker.binaries) return Object.keys(marker.binaries).every((key) => markedFilePresent(at.extractTo, key))
+  return runtimeBinaryPresent(at)
+}
+
+/** A file a marker records (`markerBinaryKey` form) is there, as a file, inside `dir`; a key that leaves it is not. */
+function markedFilePresent(dir: string, key: string): boolean {
+  const base = resolve(dir)
+  const p = resolve(base, ...key.split('/'))
+  const rel = relative(base, p)
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
+  try {
+    return statSync(p).isFile()
+  } catch {
+    return false
+  }
 }
 
 // ---- OCR language files (the `ocr:` asset class) ------------------------------------
@@ -900,6 +1018,10 @@ function assertSafeDownloadUrl(raw: string): void {
  * D3: redirects are followed MANUALLY (`redirect: 'manual'`) so every hop is re-validated by
  * `assertSafeDownloadUrl` (no auto-follow to http:// or a LAN/loopback address), and the body is
  * capped so a hostile endpoint can't stream unbounded bytes onto the drive.
+ *
+ * #564: every in-app downloader (models, the AI engine, the knowledge-pack tools, the OCR files)
+ * reaches the network only through here, so this is where the OS certificate store joins Node's
+ * trust (`ensureSystemTrust`, net/trust.ts), before the first request.
  */
 export async function downloadToFile(
   url: string,
@@ -912,6 +1034,8 @@ export async function downloadToFile(
   for (let hop = 0; ; hop++) {
     // Re-validate scheme + host on the INITIAL URL and on EACH redirect target before fetching.
     assertSafeDownloadUrl(currentUrl)
+    // #564: the OS certificate store joins Node's trust before the first request leaves (once per process).
+    ensureSystemTrust()
     res = await doFetch(currentUrl, {
       redirect: 'manual',
       ...(deps.headers ? { headers: deps.headers } : {}),

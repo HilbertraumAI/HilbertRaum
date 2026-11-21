@@ -64,12 +64,12 @@ describe('composeTranslator (issue #40 — post-download re-selection)', () => {
     installBinary(root)
 
     // The startup composition on a drive WITHOUT the translation weight — issue #40's step 1.
-    expect(composeTranslator({ rootPath: root, manifestsDir })).toBeNull()
+    expect(composeTranslator({ rootPath: root, manifestsDir, checkModel: async () => 'ok' })).toBeNull()
 
     // The download completes (weight renamed into place) → onModelInstalled re-runs THIS —
     // and the selection flips without a restart.
     installWeight(root)
-    const translator = composeTranslator({ rootPath: root, manifestsDir })
+    const translator = composeTranslator({ rootPath: root, manifestsDir, checkModel: async () => 'ok' })
     expect(translator).not.toBeNull()
     expect(translator?.modelId).toBe('translategemma-test')
     expect(translator?.contextWindow()).toBe(8192) // the manifest's recommended_context_tokens
@@ -78,14 +78,14 @@ describe('composeTranslator (issue #40 — post-download re-selection)', () => {
   it('stays null when only the weight (no llama-server binary) is present', () => {
     const { root, manifestsDir } = tempDrive()
     installWeight(root)
-    expect(composeTranslator({ rootPath: root, manifestsDir })).toBeNull()
+    expect(composeTranslator({ rootPath: root, manifestsDir, checkModel: async () => 'ok' })).toBeNull()
   })
 
   it('returns null with no manifests dir (every role falls back)', () => {
     const { root } = tempDrive()
     installBinary(root)
     installWeight(root)
-    expect(composeTranslator({ rootPath: root, manifestsDir: null })).toBeNull()
+    expect(composeTranslator({ rootPath: root, manifestsDir: null, checkModel: async () => 'ok' })).toBeNull()
   })
 })
 

@@ -4,6 +4,8 @@ import {
   DEFAULT_SETTINGS,
   type DownloadJob,
   type EngineDownloadJob,
+  type EngineDownloadPreview,
+  type EngineDownloadPreviewItem,
   type EngineStatus,
   type ModelDownloadInfo,
   type ModelInfo,
@@ -77,6 +79,32 @@ export function engineJob(over: Partial<EngineDownloadJob> = {}): EngineDownload
     error: null,
     ...over
   }
+}
+
+/** #843: one archive of an engine preview — the Windows chat engine at the b12110 pin, as main states it. */
+export function enginePreviewItem(over: Partial<EngineDownloadPreviewItem> = {}): EngineDownloadPreviewItem {
+  return {
+    family: 'llama_cpp',
+    version: 'b12110',
+    installed: null,
+    backend: 'vulkan',
+    os: 'win',
+    arch: 'x64',
+    safetyNet: false,
+    url: 'https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-vulkan-x64.zip',
+    sizeBytes: 37_661_146,
+    license: 'MIT',
+    bundledLicense: 'Apache-2.0 WITH LLVM-exception (libomp.dll)',
+    licenseUrl: 'https://github.com/ggml-org/llama.cpp/blob/b12110/LICENSE',
+    ...over
+  }
+}
+
+/** #843: what `getEnginePlan` answers — by default the plain install of the chat engine. */
+export function enginePreview(over: Partial<EngineDownloadPreview> = {}): EngineDownloadPreview {
+  const items = over.items ?? [enginePreviewItem()]
+  const known = items.every((i) => i.sizeBytes != null)
+  return { kind: 'install', items, totalBytes: known ? items.reduce((n, i) => n + (i.sizeBytes ?? 0), 0) : null, ...over }
 }
 
 /** The chat engine is fetchable and not on the drive: the screen's "Install AI engine" banner. */

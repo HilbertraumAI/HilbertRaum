@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest'
 import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -16,12 +16,15 @@ const ipcState = vi.hoisted(() => ({
   clipboardText: null as string | null,
   clipboardThrows: false
 }))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   app: { getVersion: () => '0.0.0-test' },
+  BrowserWindow: { getFocusedWindow: () => null },
+  dialog: { showSaveDialog: saveDialog.showSaveDialog },
   clipboard: {
     writeText: (text: string) => {
       if (ipcState.clipboardThrows) throw new Error('clipboard unavailable')
@@ -53,7 +56,8 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
-import { checksumCacheStats, primeChecksum } from '../../src/main/services/models'
+import { checksumCacheStats, discoverManifests, machineRamGb, primeChecksum } from '../../src/main/services/models'
+import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import type { Db } from '../../src/main/services/db'
 import { recordChecksumRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
@@ -61,18 +65,31 @@ import { getSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, AppStatus, ModelInfo, RuntimeStatus, WorkspaceStateInfo } from '../../src/shared/types'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
-import { t } from '../../src/shared/i18n'
+import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import { reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
-import { CARDS, CATALOG_MANIFESTS, committingRuntime, sessionWorkspace, START_READS, writeChatManifest } from '../helpers/performance-fixture'
+import { CARDS, CATALOG_MANIFESTS, committingRuntime, START_READS, writeChatManifest } from '../helpers/performance-fixture'
 import { seededFreshDb } from '../helpers/seeded-db'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
+import { TranslationRuntime, isTranslationStartError } from '../../src/main/services/translation/runtime'
+import { afterModelInstalled, shouldReplaceTranslator } from '../../src/main/services/compose-services'
+import { createModelStartCheck } from '../../src/main/services/model-start-check'
+import { fakeSpawn, sseBody } from '../helpers/fake-sidecar'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import {
   resolveRerankerDevicePosture,
   snapshotRerankerOccupancy,
   createPendingModelSwitchCounter
 } from '../../src/main/services/rag/device-posture'
+import { attachVaultKey, detachVaultKey, initLogging, log, usesPlaintextLog } from '../../src/main/services/logging'
+import { setLogRedactionRoots } from '../../src/main/services/log-redact'
+import { decrypt, deserializeBlob } from '../../src/main/services/security/crypto'
+import { createLocalApiServer } from '../../src/main/services/local-api/lifecycle'
+import type { MainSettingsKey, RendererSettingsPatch } from '../../src/shared/settings-writers'
+import { benchmarkResult, modelPlacement } from '../helpers/benchmark-records'
+import { until } from '../helpers/hang-budget'
+import { freePort } from '../helpers/local-api-harness'
+import { workspaceStandIn, type WorkspaceStandIn } from '../helpers/workspace-stand-in'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -88,12 +105,13 @@ beforeEach(() => {
   ipcState.handlers.clear()
   ipcState.clipboardText = null
   ipcState.clipboardThrows = false
+  saveDialog.reset()
 })
 
 describe('registerCoreIpc', () => {
   it('getAppStatus keeps the offline ceiling while the workspace is locked', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -128,7 +146,7 @@ describe('registerCoreIpc', () => {
   // passing probe) kept reporting true. The flag now reads the engine's execution state.
   it('getAppStatus reports ocrAvailable from the engine’s execution state, not its presence (#232)', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -168,7 +186,7 @@ describe('registerCoreIpc', () => {
   // (startup + the install hooks) and only READ here — this handler is polled by the shell.
   it('getAppStatus reports why dictation is unavailable, and null once a transcriber is selected (#527)', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -208,7 +226,7 @@ describe('registerCoreIpc', () => {
       trustedSenders: ANY_SENDER,
       paths: { configPath: bogusConfigDir() },
       workspace: {
-        isUnlocked: () => false,
+        ...workspaceStandIn({ unlocked: false }),
         getState: (): WorkspaceStateInfo => ({ state: 'locked', mode: null, plaintextAllowed: false, encryptionRequired: true })
       }
     } as unknown as AppContext
@@ -223,7 +241,7 @@ describe('registerCoreIpc', () => {
 
   it('getAppStatus forwards the translation device outcome (issue #42 reopen — the Translate hint feed)', async () => {
     const lockedWorkspace = {
-      isUnlocked: () => false,
+      ...workspaceStandIn({ unlocked: false }),
       getState: (): WorkspaceStateInfo => ({
         state: 'locked',
         mode: null,
@@ -253,7 +271,7 @@ describe('registerCoreIpc', () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
       paths: {},
-      workspace: { isUnlocked: () => false }
+      workspace: workspaceStandIn({ unlocked: false })
     } as unknown as AppContext
     registerCoreIpc(ctx)
 
@@ -266,7 +284,7 @@ describe('registerCoreIpc', () => {
     const ctx = {
       trustedSenders: ANY_SENDER,
       paths: {},
-      workspace: { isUnlocked: () => false }
+      workspace: workspaceStandIn({ unlocked: false })
     } as unknown as AppContext
     registerCoreIpc(ctx)
     ipcState.clipboardThrows = true
@@ -283,7 +301,7 @@ describe('registerCoreIpc', () => {
       trustedSenders: ANY_SENDER,
       paths: { configPath: bogusConfigDir() },
       db: seededDb(),
-      workspace: { isUnlocked: () => true }
+      workspace: workspaceStandIn()
     } as unknown as AppContext
     registerCoreIpc(ctx)
 
@@ -297,21 +315,164 @@ describe('registerCoreIpc', () => {
     expect((result as AppSettings).theme).toBe('dark')
   })
 
+  // #868 (after #858, which closed it for `workspaceMode` only): `settings:update` writes only the keys
+  // SETTINGS_WRITERS gives the renderer. A main-owned key is dropped from the patch, whatever its value,
+  // and the rest of the patch is saved.
+  describe('updateSettings writes only the keys the renderer owns (#868)', () => {
+    function ctxOn(db: Db, extra: Record<string, unknown> = {}): AppContext {
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        db,
+        workspace: workspaceStandIn(),
+        ...extra
+      } as unknown as AppContext
+      registerCoreIpc(ctx)
+      return ctx
+    }
+
+    // One well-formed value per main-owned key. Typed by the table: a key that becomes main-owned fails
+    // typecheck here until it has a row, and one that becomes renderer-owned is an excess property.
+    const MAIN_KEY_VALUES: { [K in MainSettingsKey]: NonNullable<AppSettings[K]> } = {
+      workspaceMode: 'encrypted',
+      activeModelId: 'qwen3-4b-instruct-q4',
+      activeEmbeddingModelId: 'multilingual-e5-small-q8',
+      lastBenchmark: benchmarkResult(),
+      benchmarkHistory: [benchmarkResult()],
+      modelPlacements: { qwen: modelPlacement() },
+      gpuAutoDisabled: true,
+      gpuLastError: '2026-11-18T00:00:00.000Z: vk::Device::createBuffer failed',
+      gpuProbe: { devices: [CARDS.RTX_3090], probedAt: '2026-11-18T00:00:00.000Z' },
+      checksumCache: { 'models/chat/x.gguf': { size: 1, mtimeMs: 2, sha256: 'a'.repeat(64) } }
+    }
+
+    it.each(Object.entries(MAIN_KEY_VALUES) as Array<[MainSettingsKey, unknown]>)(
+      'a renderer patch of %s leaves the stored value as it was',
+      async (key, value) => {
+        const db = seededDb()
+        ctxOn(db)
+        const before = getSettings(db)[key]
+        await invoke(handlers, IPC.updateSettings, { [key]: value })
+        expect(getSettings(db)[key]).toEqual(before)
+        // The value is well formed: the main process's own write stores it. So the IPC drop above, not
+        // the write gate, is what kept the stored value.
+        expect(updateSettings(db, { [key]: value })[key]).toEqual(value)
+      }
+    )
+
+    it('a mixed patch saves its renderer keys, and the log names no key the renderer made up', async () => {
+      const db = seededDb()
+      ctxOn(db)
+      const lines: unknown[][] = []
+      vi.spyOn(log, 'info').mockImplementation((...args) => void lines.push(args))
+      vi.spyOn(log, 'warn').mockImplementation((...args) => void lines.push(args))
+      onTestFinished(() => {
+        vi.restoreAllMocks()
+      })
+      // Built with JSON.parse, as a patch arrives over IPC: an own `__proto__` key, not a prototype.
+      const patch = JSON.parse('{"__proto__":{"theme":"light"},"theme":"dark","renderer-made-up-key":1}') as Record<string, unknown>
+      patch.checksumCache = MAIN_KEY_VALUES.checksumCache
+      patch.gpuProbe = undefined // main-owned, but it writes nothing: not worth a name in the log (#858 rule)
+      const { result } = await invoke(handlers, IPC.updateSettings, patch)
+      for (const settings of [result as AppSettings, getSettings(db)]) {
+        expect(settings.theme).toBe('dark')
+        expect(settings.checksumCache).toEqual({})
+      }
+      const logged = JSON.stringify(lines)
+      expect(logged).toContain('checksumCache') // the dropped main-owned key is named
+      expect(logged).not.toContain('gpuProbe')
+      expect(logged).not.toContain('renderer-made-up-key')
+      expect(logged).not.toContain('__proto__')
+    })
+
+    // A key sent as `undefined` writes nothing, so it must not act as a change either: before, the audit
+    // trail recorded a privacy-relevant change that never happened.
+    it('a renderer key sent as undefined records no settings change; the same key with a value does', async () => {
+      const db = seededDb()
+      const audit = vi.fn()
+      ctxOn(db, { audit })
+      await invoke(handlers, IPC.updateSettings, { allowNetwork: undefined, localApiEnabled: undefined })
+      expect(audit).not.toHaveBeenCalled()
+      await invoke(handlers, IPC.updateSettings, { allowNetwork: false })
+      expect(audit.mock.calls.map((c) => c[0])).toEqual(['settings_changed'])
+    })
+
+    // The issue's "the allowed keys still save": each screen's own keys, at values other than the
+    // defaults, in one patch.
+    it('every key a screen writes still saves', async () => {
+      const db = seededDb()
+      ctxOn(db)
+      const byScreen: Record<string, RendererSettingsPatch> = {
+        Settings: {
+          allowNetwork: false,
+          theme: 'dark',
+          uiLanguage: 'en',
+          gpuMode: 'off',
+          ragRerankWideScope: true,
+          autoStartActiveModel: false,
+          chatCompactionEnabled: false,
+          developerMode: true
+        },
+        'Settings, Local API card': { localApiEnabled: true, localApiTokenRequired: false, localApiPort: 4990 },
+        'Settings, Skills tab': { skillsAutoFireEnabled: true },
+        'Chat, skill info card': { skillInfoSeen: ['bank-statement'] },
+        'AI Model, context size': { contextTokensOverride: 16_384 },
+        'retrieval tuning (no screen)': {
+          contextTokens: 8192,
+          ragTopKInitial: 20,
+          ragTopKFinal: 8,
+          ragMaxContextTokens: 4000,
+          ragMinSimilarity: 0.25
+        }
+      }
+      await invoke(handlers, IPC.updateSettings, Object.assign({}, ...Object.values(byScreen)))
+      const stored = getSettings(db)
+      for (const [screen, patch] of Object.entries(byScreen)) expect(stored, screen).toMatchObject(patch)
+    })
+
+    // #860 API7: "off" must close the port. The real server, through the real settings handler.
+    it('a localApiEnabled patch opens the listener, and the next one closes it (#860 API7)', async () => {
+      const db = seededDb()
+      updateSettings(db, { localApiPort: await freePort() })
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        isDev: true,
+        db,
+        workspace: workspaceStandIn(),
+        runtime: new RuntimeManager(() => {
+          throw new Error('no model in this row')
+        })
+      } as unknown as AppContext
+      ctx.localApi = createLocalApiServer(ctx, '0.0.0-test')
+      onTestFinished(() => ctx.localApi!.stop())
+      registerCoreIpc(ctx)
+      const models = (): Promise<Response> => fetch(`http://127.0.0.1:${getSettings(db).localApiPort}/v1/models`)
+
+      await invoke(handlers, IPC.updateSettings, { localApiEnabled: true })
+      await until(() => ctx.localApi!.status().running, 'the listener opening')
+      expect((await models()).status).toBe(401) // answering, and asking for the key
+
+      await invoke(handlers, IPC.updateSettings, { localApiEnabled: false })
+      await until(() => !ctx.localApi!.status().running, 'the listener closing')
+      await expect(models()).rejects.toThrow()
+    })
+  })
+
   // Step 4-4 (Wave 4 ruling (a)): a GPU settings change stops the reranker sidecar (suspend,
   // never the permanent stop()) so its NEXT start re-evaluates the device posture instead of
   // keeping a stale one for the rest of the session — a REAL flip only (BE-1 discipline).
-  // Step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped Opus review of step 4-6's finding
-  // C2): `activeModelId` joins gpuMode/gpuAutoDisabled as a posture input this SAME handler
-  // watches, through the ONE shared predicate `rerankerPostureInputsChanged`
-  // (`rag/device-posture.ts`) — `activeEmbeddingModelId` deliberately does not.
-  describe('updateSettings stops the reranker on a REAL gpuMode/gpuAutoDisabled/activeModelId flip (step 4-4; step 4-7 adds activeModelId)', () => {
+  // #868: `gpuMode` is the one posture input a renderer patch can still carry. `gpuAutoDisabled`
+  // and `activeModelId` are main-owned and dropped (the table above); `activeModelId` suspends
+  // through `models:select` / `runtime:use` (the registerModelIpc rows below).
+  describe('updateSettings stops the reranker on a REAL gpuMode flip (step 4-4)', () => {
     function ctxWithFakeReranker(): { ctx: AppContext; suspend: ReturnType<typeof vi.fn> } {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
         trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         db: seededDb(),
-        workspace: { isUnlocked: () => true },
+        workspace: workspaceStandIn(),
         reranker: { id: 'fake', rerank: async () => [], suspend }
       } as unknown as AppContext
       registerCoreIpc(ctx)
@@ -330,41 +491,9 @@ describe('registerCoreIpc', () => {
       expect(suspend).not.toHaveBeenCalled()
     })
 
-    it('gpuAutoDisabled false -> true suspends the sidecar', async () => {
-      const { suspend } = ctxWithFakeReranker()
-      await invoke(handlers, IPC.updateSettings, { gpuAutoDisabled: true })
-      expect(suspend).toHaveBeenCalledTimes(1)
-    })
-
     it('an unrelated settings key never suspends the sidecar', async () => {
       const { suspend } = ctxWithFakeReranker()
       await invoke(handlers, IPC.updateSettings, { theme: 'dark' })
-      expect(suspend).not.toHaveBeenCalled()
-    })
-
-    // Step 4-7, channel 1 of 3 (settings:update) — Wave 7 ruling (a): activeModelId feeds the
-    // posture through chatModelNeedMib, so a REAL change to it must suspend the sidecar exactly
-    // like a gpuMode/gpuAutoDisabled flip already does.
-    it('activeModelId set to a NEW value (a REAL flip) suspends the sidecar (Wave 7 ruling (a): activeModelId joins the posture inputs)', async () => {
-      const { suspend } = ctxWithFakeReranker() // default activeModelId is null
-      await invoke(handlers, IPC.updateSettings, { activeModelId: 'qwen3-4b-instruct-q4' })
-      expect(suspend).toHaveBeenCalledTimes(1)
-    })
-
-    it('activeModelId set to its CURRENT value (no real flip) does not suspend', async () => {
-      const { ctx, suspend } = ctxWithFakeReranker()
-      updateSettings(ctx.db, { activeModelId: 'qwen3-4b-instruct-q4' })
-      suspend.mockClear() // clear the setup write's own effect before the assertion
-      await invoke(handlers, IPC.updateSettings, { activeModelId: 'qwen3-4b-instruct-q4' })
-      expect(suspend).not.toHaveBeenCalled()
-    })
-
-    // Step 4-7, group 2 (the non-posture negative) — Wave 7 ruling (a) is explicit:
-    // activeEmbeddingModelId is NOT a posture input (the embedder never contends with the
-    // reranker's own placement estimate) and must never trigger a suspend, even on a real flip.
-    it('activeEmbeddingModelId set to a NEW value (a REAL flip) does NOT suspend the sidecar — it is not a posture input (Wave 7 ruling (a))', async () => {
-      const { suspend } = ctxWithFakeReranker() // default activeEmbeddingModelId is null
-      await invoke(handlers, IPC.updateSettings, { activeEmbeddingModelId: 'multilingual-e5-small-q8' })
       expect(suspend).not.toHaveBeenCalled()
     })
 
@@ -374,7 +503,7 @@ describe('registerCoreIpc', () => {
         trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         db: seededDb(),
-        workspace: { isUnlocked: () => true },
+        workspace: workspaceStandIn(),
         reranker: null
       } as unknown as AppContext
       registerCoreIpc(ctx)
@@ -395,7 +524,7 @@ describe('registerCoreIpc', () => {
         trustedSenders: ANY_SENDER,
         paths: { configPath: bogusConfigDir() },
         db,
-        workspace: { isUnlocked: () => true },
+        workspace: workspaceStandIn(),
         downloadsNetworkSwitched: downloads,
         installsNetworkSwitched: installs
       } as unknown as AppContext
@@ -429,6 +558,77 @@ describe('registerCoreIpc', () => {
       expect(installs).toHaveBeenCalledOnce()
     })
   })
+
+  // #975 (owner decision G-4 b, the exit rule): the log leaves the app two ways, the Diagnostics panel with its Copy
+  // button (`getLogTail`) and Save log (`exportLog`). Both hand it out redacted in each of the log's modes: held in
+  // memory before an unlock, sealed in app.log.enc while an encrypted workspace is open (both read the in-memory
+  // buffer), and a plain app.log on a plaintext_dev workspace (read from the file). What is stored keeps the paths.
+  // The redaction's own rules are log-redact.test.ts's; these rows hold the two exits and the registered roots.
+  describe('the diagnostics log leaves the app with no path and no account name (#975)', () => {
+    const account = 'hr975account'
+    const kit = 'E:\\HilbertRaum Kit'
+    const fileError = `EPERM: operation not permitted, open 'C:\\Users\\${account}\\AppData\\x'`
+    type LogMode = 'before an unlock' | 'encrypted' | 'plaintext'
+    const exits: Record<string, (dir: string) => Promise<string>> = {
+      'getLogTail (the panel and Copy)': async () => ((await invoke(handlers, IPC.getLogTail)).result as string[]).join('\n'),
+      'exportLog (Save log)': async (dir) => {
+        const filePath = join(dir, 'hilbertraum-logs.txt')
+        saveDialog.result = { canceled: false, filePath }
+        expect((await invoke(handlers, IPC.exportLog)).result).toBe(filePath)
+        return readFileSync(filePath, 'utf8')
+      }
+    }
+    const modes: LogMode[] = ['before an unlock', 'encrypted', 'plaintext']
+
+    it.each<[string, LogMode]>(Object.keys(exits).flatMap((exit) => modes.map((mode): [string, LogMode] => [exit, mode])))(
+      '%s hands the log out redacted, %s',
+      async (exit, mode) => {
+        const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-coreipc-log-'))
+        const key = randomBytes(32)
+        const quiet = (['log', 'warn', 'error'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+        initLogging(dir)
+        if (mode === 'encrypted') attachVaultKey(key)
+        if (mode === 'plaintext') usesPlaintextLog()
+        setLogRedactionRoots({ driveRoot: kit })
+        try {
+          registerCoreIpc({
+            trustedSenders: ANY_SENDER,
+            paths: {},
+            workspace: workspaceStandIn({ unlocked: false })
+          } as unknown as AppContext)
+          const marker = `#975 marker ${randomUUID()}`
+          log.warn(`${marker} ${fileError}`) // in the message: the raw spelling
+          log.warn(`${marker} as JSON`, { error: fileError }) // in the meta: JSON's doubled backslashes
+          log.error(`${marker} engine refused`, { binPath: `${kit}\\runtime\\llama.cpp\\win\\llama-server.exe` })
+          const lines = (await exits[exit](dir)).split(/\r?\n/).filter((l) => l.includes(marker))
+          expect(lines).toHaveLength(3)
+          expect(lines[0]).toContain("open 'C:\\Users\\<user>\\AppData\\x'")
+          expect(lines[1]).toContain("open 'C:\\\\Users\\\\<user>\\\\AppData\\\\x'")
+          expect(lines[2]).toContain('{"binPath":"<drive>\\\\runtime\\\\llama.cpp\\\\win\\\\llama-server.exe"}')
+          for (const line of lines) {
+            expect(line).not.toContain(account)
+            expect(line).not.toContain('HilbertRaum Kit')
+          }
+          // The log at rest is unchanged: the paths are still in it.
+          const stored =
+            mode === 'plaintext'
+              ? readFileSync(join(dir, 'app.log'), 'utf8')
+              : mode === 'encrypted'
+                ? decrypt(key, deserializeBlob(readFileSync(join(dir, 'app.log.enc')))).toString('utf8')
+                : null
+          if (stored !== null) {
+            expect(stored).toContain(fileError)
+            expect(stored).toContain(JSON.stringify(`${kit}\\runtime`).slice(1, -1))
+          }
+        } finally {
+          setLogRedactionRoots({})
+          if (mode === 'encrypted') detachVaultKey()
+          initLogging(dir) // back to the in-memory mode the rest of this file logs in
+          for (const spy of quiet) spy.mockRestore()
+        }
+      }
+    )
+  })
 })
 
 describe('registerModelIpc', () => {
@@ -441,10 +641,10 @@ describe('registerModelIpc', () => {
   const reg = (ctx: AppContext): void =>
     registerModelIpc({
       trustedSenders: ANY_SENDER,
-      workspace: { isUnlocked: () => true },
+      workspace: workspaceStandIn(),
       pendingModelSwitches: createPendingModelSwitchCounter(),
       ...(ctx as object)
-    } as AppContext)
+    } as unknown as AppContext)
 
   // Model handlers resolve the drive policy from `paths.configPath` (M10); a missing
   // config dir means "no policy file" → developer-friendly defaults.
@@ -467,6 +667,39 @@ describe('registerModelIpc', () => {
     )
     return dir
   }
+
+  // #930: a chat start refusal is the catalog's text in the interface language, and names the model by its display
+  // name. Main's language is module state, so every row that sets it gets English back here. `expectRefusalInEnAndDe`
+  // makes the same refused call in English, then in German: a refusal that falls back to English fails the German half.
+  afterEach(() => applyUiLanguageSetting('en'))
+  const refusalOf = (call: Promise<unknown>): Promise<string> =>
+    call.then(
+      () => 'started',
+      (e: unknown) => (e instanceof Error ? e.message : String(e))
+    )
+  async function expectRefusalInEnAndDe(
+    call: () => Promise<unknown>,
+    key: MessageKey,
+    params: (lang: 'en' | 'de') => MessageParams = () => ({})
+  ): Promise<void> {
+    applyUiLanguageSetting('en')
+    expect(await refusalOf(call())).toBe(t('en', key, params('en')))
+    applyUiLanguageSetting('de')
+    const german = await refusalOf(call())
+    expect(german).toBe(t('de', key, params('de')))
+    expect(german).not.toBe(t('en', key, params('en')))
+  }
+  const catalogName = (id: string): string => {
+    const found = discoverManifests(CATALOG_MANIFESTS).manifests.find((m) => m.manifest.id === id)
+    if (!found) throw new Error(`no catalog manifest ${id}`)
+    return found.manifest.displayName
+  }
+  /** The RAM refusal's figures, written as the interface language writes numbers (the AI Model card's RAM hint). */
+  const hugeModelRam = (lang: 'en' | 'de'): MessageParams => ({
+    name: 'Huge Model',
+    min: (9999).toLocaleString(lang),
+    ram: machineRamGb().toLocaleString(lang)
+  })
 
   it('returns an empty model list when no manifests directory is configured', async () => {
     const ctx = { db: seededDb(), manifestsDir: null } as unknown as AppContext
@@ -741,6 +974,175 @@ describe('registerModelIpc', () => {
     })
   })
 
+  // #913 review S1: a translation or re-ranking model that refused its start (a check found its file damaged) must
+  // start again once the file is put right and a check says so: a clean "Verify checksum", a clean "Check all model
+  // files", or a download. Before, only the chat ladder and the search model were re-armed, so Translate kept saying
+  // "failed its file check" and document search kept the fused order until a restart. The services run their real
+  // start checks (`createModelStartCheck` over the workspace store) against real files; only the spawn is fake.
+  describe('a model put right is started again: every role re-armed (#913 review S1)', () => {
+    const GOOD = 'the good weights'
+    const BAD = 'the bad weightz!' // same length: a bit flip, the size the cache keys on
+    const COMPLETION = 'data: {"content":"Good day.","stop":true,"stopping_word":"<end_of_turn>"}\n\n'
+    const serve = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (u.endsWith('/completion')) return { ok: true, status: 200, body: sseBody(COMPLETION) } as unknown as Response
+      if (u.endsWith('/v1/rerank')) {
+        const results = [
+          { index: 0, relevance_score: 0.9 },
+          { index: 1, relevance_score: 0.1 }
+        ]
+        return { ok: true, status: 200, json: async () => ({ results }) } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
+    function drive(): { root: string; manifestsDir: string; file: (id: string) => string } {
+      const root = mkdtempSync(join(tmpdir(), 'hilbertraum-rearm-913-'))
+      const manifestsDir = join(root, 'model-manifests')
+      mkdirSync(manifestsDir, { recursive: true })
+      for (const [id, role] of [
+        ['tg-test', 'translation'],
+        ['rr-test', 'reranker']
+      ]) {
+        mkdirSync(join(root, 'models', role), { recursive: true })
+        writeFileSync(join(root, 'models', role, `${id}.gguf`), BAD)
+        writeFileSync(
+          join(manifestsDir, `${id}.yaml`),
+          stringify({
+            id,
+            display_name: id,
+            family: 'test',
+            role,
+            format: 'gguf',
+            runtime: 'llama_cpp',
+            license: 'apache-2.0',
+            size_on_disk_gb: 0.1,
+            recommended_min_ram_gb: 1,
+            recommended_ram_gb: 1,
+            recommended_context_tokens: 4096,
+            local_path: `models/${role}/${id}.gguf`,
+            sha256: createHash('sha256').update(GOOD).digest('hex'),
+            license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-11-19', notes: '' }
+          })
+        )
+      }
+      const file = (id: string): string => join(root, 'models', id === 'tg-test' ? 'translation' : 'reranker', `${id}.gguf`)
+      return { root, manifestsDir, file }
+    }
+
+    function refusingCtx() {
+      const d = drive()
+      const db = seededDb()
+      const paths = { rootPath: d.root, configPath: bogusConfigDir() }
+      const checkModel = createModelStartCheck({
+        manifestsDir: d.manifestsDir,
+        paths,
+        isDev: false,
+        getSettings: () => getSettings(db),
+        getDb: () => db
+      })
+      const translatorSpawn = fakeSpawn()
+      const makeTranslator = (): TranslationRuntime =>
+        new TranslationRuntime({
+          modelId: 'tg-test',
+          binPath: '/bin/llama-server',
+          modelPath: d.file('tg-test'),
+          findPort: async () => 51200,
+          healthIntervalMs: 1,
+          idleClock: { set: () => ({ clear: () => undefined }) },
+          gpu: { getGpuMode: () => 'off' },
+          spawn: translatorSpawn.spawn,
+          fetchImpl: serve,
+          checkModel: (signal) => checkModel('tg-test', { hash: false, signal })
+        })
+      const rerankerSpawn = fakeSpawn()
+      const ctx = {
+        db,
+        manifestsDir: d.manifestsDir,
+        paths,
+        isDev: false,
+        runtime: { activeModelId: () => null },
+        checkModel,
+        translator: makeTranslator() as TranslationRuntime,
+        reranker: new LlamaReranker({
+          id: 'rr-test',
+          binPath: '/bin/llama-server',
+          modelPath: d.file('rr-test'),
+          findPort: async () => 53000,
+          healthIntervalMs: 1,
+          spawn: rerankerSpawn.spawn,
+          fetchImpl: serve,
+          checkModel: (signal) => checkModel('rr-test', { hash: false, signal })
+        }),
+        // What main/index.ts wires: the BE-7 rule, a latched instance is replaced by a fresh one.
+        refreshTranslatorSlot: () => {
+          if (shouldReplaceTranslator(ctx.translator)) ctx.translator = makeTranslator()
+        }
+      }
+      return { ctx, d, spawned: () => translatorSpawn.calls.length + rerankerSpawn.calls.length }
+    }
+
+    const translate = (ctx: { translator: TranslationRuntime }): Promise<string> =>
+      ctx.translator.translate({ sourceLang: 'de', targetLang: 'en', text: 'Guten Tag.' })
+
+    /** The file put right: the good bytes, with the old mtime (a copy from a backup) or a new one. */
+    function putRight(path: string, keepMtime: boolean): void {
+      const st = statSync(path)
+      writeFileSync(path, GOOD)
+      const mtime = keepMtime ? st.mtime : new Date(st.mtimeMs + 5_000)
+      utimesSync(path, st.atime, mtime)
+    }
+
+    it.each([
+      ['a clean Verify checksum (the file back from a backup, old mtime)', true],
+      ['a clean Check all model files (the file copied anew)', false],
+      ['a download of the model (afterModelInstalled)', false]
+    ] as const)('both refuse while damaged and start after %s', async (site, keepMtime) => {
+      const { ctx, d, spawned } = refusingCtx()
+      reg(ctx as unknown as AppContext)
+      // "Check all model files" finds both files damaged; each role then refuses and latches.
+      await invoke(handlers, IPC.listModels, undefined, 'run-913')
+      expect(await translate(ctx).catch((e: unknown) => isTranslationStartError(e) && e.modelDamaged)).toBe(true)
+      await expect(ctx.reranker.rerank('q', ['a', 'b'])).rejects.toThrow(/failed its check/)
+      expect(spawned()).toBe(0)
+
+      for (const id of ['tg-test', 'rr-test']) {
+        putRight(d.file(id), keepMtime)
+        if (site.startsWith('a clean Verify')) {
+          expect((await invoke(handlers, IPC.verifyModel, id)).result).toBe('installed')
+        } else if (site.startsWith('a download')) {
+          primeChecksum(d.file(id), createHash('sha256').update(GOOD).digest('hex')) // what the downloader does
+          afterModelInstalled(ctx as unknown as AppContext, id)
+        }
+      }
+      if (site.startsWith('a clean Check all')) await invoke(handlers, IPC.listModels, undefined, 'run-913b')
+
+      expect(await translate(ctx)).toBe('Good day.')
+      expect(await ctx.reranker.rerank('q', ['a', 'b'])).toHaveLength(2)
+      expect(spawned()).toBe(2)
+      await Promise.all([ctx.translator.stop(), ctx.reranker.stop()])
+    })
+
+    // #913 code review: a clean check re-arms only the roles whose model it checked. A clean Verify of the re-ranking
+    // model leaves the latched translator as it is: the same instance, with its session latches (the GPU fallback
+    // among them), still refusing.
+    it('a clean Verify of one model leaves the latch of another role alone', async () => {
+      const { ctx, d } = refusingCtx()
+      reg(ctx as unknown as AppContext)
+      await invoke(handlers, IPC.listModels, undefined, 'run-913c')
+      const latched = ctx.translator
+      expect(await translate(ctx).catch((e: unknown) => isTranslationStartError(e) && e.modelDamaged)).toBe(true)
+      await expect(ctx.reranker.rerank('q', ['a', 'b'])).rejects.toThrow(/failed its check/)
+      putRight(d.file('rr-test'), true)
+      expect((await invoke(handlers, IPC.verifyModel, 'rr-test')).result).toBe('installed')
+      expect(await ctx.reranker.rerank('q', ['a', 'b'])).toHaveLength(2) // its own role: re-armed
+      expect(ctx.translator).toBe(latched) // the other role: untouched
+      expect(await translate(ctx).catch((e: unknown) => isTranslationStartError(e) && e.modelDamaged)).toBe(true)
+      await Promise.all([ctx.translator.stop(), ctx.reranker.stop()])
+    })
+  })
+
 
   it('startRuntime throws on an unknown model id', async () => {
     const ctx = {
@@ -751,9 +1153,37 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model')).rejects.toThrow(
-      /Unknown model id/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model'), 'main.models.unknown')
+  })
+
+  // #930 (A S-A1): the refusal a user really sees (Use on a model whose file differs from its checksum: the lazy list
+  // showed it installed, the start's full hash finds the mismatch). No row covered it.
+  it('startRuntime refuses a chat model whose file failed its check, in the interface language (#930)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-damaged-chat-'))
+    const manifestsDir = join(root, 'model-manifests')
+    writeChatManifest(manifestsDir, {
+      id: 'damaged-chat',
+      display_name: 'Damaged Chat',
+      recommended_min_ram_gb: 1,
+      recommended_ram_gb: 1,
+      local_path: 'models/chat/damaged.gguf',
+      sha256: createHash('sha256').update('the bytes the manifest expects').digest('hex')
+    })
+    mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+    writeFileSync(join(root, 'models', 'chat', 'damaged.gguf'), 'other bytes')
+    const runtime = committingRuntime() // commits the model `start` is given: nothing committed = never started
+    const ctx = {
+      db: seededDb(),
+      manifestsDir,
+      paths: { rootPath: root, configPath: bogusConfigDir() },
+      isDev: false,
+      runtime
+    } as unknown as AppContext
+    reg(ctx)
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'damaged-chat'), 'main.models.startDamaged', () => ({
+      name: 'Damaged Chat'
+    }))
+    expect(runtime.activeModelId()).toBeNull()
   })
 
   // H6 (audit round 4): the zero-weights first-run journey — a MISSING chat model may be
@@ -916,9 +1346,9 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /can't be started/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+      name: catalogName('qwen3-4b-instruct-q4')
+    }))
   })
 
   it('a dev build counts as developer even with the toggle off (isDev)', async () => {
@@ -951,9 +1381,9 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /can't be started/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+      name: catalogName('qwen3-4b-instruct-q4')
+    }))
   })
 
   // M10: the drive POLICY is authoritative — a commercial policy.json disables developer
@@ -977,9 +1407,9 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /can't be started/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+      name: catalogName('qwen3-4b-instruct-q4')
+    }))
   })
 
   it('startRuntime rejects an embeddings model (the chat runtime loads chat models only)', async () => {
@@ -991,9 +1421,10 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
-      /not a chat model/
-    )
+    // #930: by its display name, without the role code ("a embeddings model" was never English either).
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8'), 'main.models.notChat', () => ({
+      name: catalogName('multilingual-e5-small-q8')
+    }))
   })
 
   // Post-MVP RAM gate: installed weights that exceed this machine's memory are refused
@@ -1015,9 +1446,7 @@ describe('registerModelIpc', () => {
       runtime: committingRuntime()
     } as unknown as AppContext
     reg(ctx)
-    await expect(invoke(handlers, IPC.startRuntime, 'huge-model')).rejects.toThrow(
-      /needs at least 9999 GB RAM/
-    )
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.startRuntime, 'huge-model'), 'main.models.startNeedsRam', hugeModelRam)
   })
 
   // Phase 20: getRuntimeStatus enriches the running model with its manifest's
@@ -1149,7 +1578,7 @@ describe('registerModelIpc', () => {
     reg(ctx)
     const { result } = await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
     expect(result).toBe('missing') // no weights on disk in this fixture
-    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+    await expectRefusalInEnAndDe(() => invoke(handlers, IPC.verifyModel, 'nope'), 'main.models.unknown') // #930
   })
 
   it('verifyModel re-arms the #372 unloadable-model latch for THAT model only (a re-verified file is a new file)', async () => {
@@ -1168,7 +1597,7 @@ describe('registerModelIpc', () => {
     expect(modelLoadLatchReason('other-model')).toBe('unknown model architecture')
     // An unknown id throws BEFORE the clear — nothing else is re-armed by a bad request.
     latchModelLoad('qwen3-4b-instruct-q4', 'again')
-    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(t('en', 'main.models.unknown'))
     expect(modelLoadLatchReason('qwen3-4b-instruct-q4')).toBe('again')
     clearModelLoadLatches()
   })
@@ -1319,9 +1748,9 @@ describe('registerModelIpc', () => {
         runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
-      await expect(invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-        /can't be started/
-      )
+      await expectRefusalInEnAndDe(() => invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4'), 'main.models.startMissing', () => ({
+        name: catalogName('qwen3-4b-instruct-q4')
+      }))
       expect(started).toBe(false)
     })
 
@@ -1341,9 +1770,7 @@ describe('registerModelIpc', () => {
         runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
-      await expect(invoke(handlers, IPC.useModel, 'huge-model')).rejects.toThrow(
-        /needs at least 9999 GB RAM/
-      )
+      await expectRefusalInEnAndDe(() => invoke(handlers, IPC.useModel, 'huge-model'), 'main.models.startNeedsRam', hugeModelRam)
       expect(started).toBe(false)
     })
 
@@ -1358,9 +1785,9 @@ describe('registerModelIpc', () => {
         runtime: { ...START_READS, start: async () => { started = true; return {} }, activeModelId: () => null }
       } as unknown as AppContext
       reg(ctx)
-      await expect(invoke(handlers, IPC.useModel, 'multilingual-e5-small-q8')).rejects.toThrow(
-        /not a chat model/
-      )
+      await expectRefusalInEnAndDe(() => invoke(handlers, IPC.useModel, 'multilingual-e5-small-q8'), 'main.models.notChat', () => ({
+        name: catalogName('multilingual-e5-small-q8')
+      }))
       expect(started).toBe(false)
       // The upfront role guard runs before selectModel — the chat slot is untouched (no embeddings
       // slot side effect either).
@@ -1369,12 +1796,12 @@ describe('registerModelIpc', () => {
   })
 
   // Step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped Opus review of step 4-6's finding
-  // C2): `models:select` and `models:use` both reach `activeModelId` through `selectModel` ->
+  // C2): `models:select` and `runtime:use` both reach `activeModelId` through `selectModel` ->
   // `updateSettings` (`services/models.ts`), bypassing `registerCoreIpc.ts`'s `settings:update`
   // handler (and its suspend hook) entirely — so each of these two channels must make the SAME
   // REAL-flip suspend decision on its own, through the SAME shared predicate
   // (`rerankerPostureInputsChanged`, `rag/device-posture.ts`), never a third independent copy.
-  describe('models:select / models:use suspend the reranker on a REAL activeModelId change (step 4-7, Wave 7 rulings (a), (c))', () => {
+  describe('models:select / runtime:use suspend the reranker on a REAL activeModelId change (step 4-7, Wave 7 rulings (a), (c))', () => {
     it('models:select with a chat model id suspends the sidecar (channel 2 of 3)', async () => {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
@@ -1419,7 +1846,7 @@ describe('registerModelIpc', () => {
       expect(suspend).not.toHaveBeenCalled()
     })
 
-    it('models:use (select + start) suspends the sidecar (channel 3 of 3) -- twice: the event-time release AND Wave 8 ruling (a)\'s committed-switch suspend (a REAL LlamaReranker\'s single-flight teardown shares these into ONE pass; this fake counts raw calls)', async () => {
+    it('runtime:use (select + start) suspends the sidecar (channel 3 of 3) -- twice: the event-time release AND Wave 8 ruling (a)\'s committed-switch suspend (a REAL LlamaReranker\'s single-flight teardown shares these into ONE pass; this fake counts raw calls)', async () => {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
         db: seededDb(),
@@ -1441,7 +1868,7 @@ describe('registerModelIpc', () => {
       expect(suspend).toHaveBeenCalledTimes(2)
     })
 
-    it('models:use with the SAME chat model id already COMMITTED (no real flip on either check) does not suspend', async () => {
+    it('runtime:use with the SAME chat model id already COMMITTED (no real flip on either check) does not suspend', async () => {
       const suspend = vi.fn(async () => undefined)
       const db = seededDb()
       updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
@@ -1470,7 +1897,7 @@ describe('registerModelIpc', () => {
     // `models:select`, which never commits a runtime at all — under Wave 8's option B′ the
     // posture reads `RuntimeManager.activeModelId()` (the COMMITTED model), never
     // `settings.activeModelId`, so a test that only ever writes the setting proves nothing about
-    // the posture any more. This version drives `models:use` — a REAL committed switch — against
+    // the posture any more. This version drives `runtime:use` — a REAL committed switch — against
     // a fake runtime manager that tracks its own commit, and a REAL LlamaReranker wired to the
     // SAME shared posture helper `main/index.ts`'s own seam uses
     // (`resolveRerankerDevicePosture`/`snapshotRerankerOccupancy`), proving the caller's job that
@@ -1486,7 +1913,7 @@ describe('registerModelIpc', () => {
     // step 4-6, finding C2). Committed qwen3.5-9b-ud-q4kxl needs ~7284.1 MiB (remainder 219.9 <
     // the 2808.2 MiB floor) => posture 'cpu'; switching to qwen3.5-4b-ud-q4kxl needs ~3837.4 MiB
     // (remainder 3666.6 >= the floor) => posture 'gpu' once COMMITTED.
-    it('end to end: a COMMITTED model switch (models:use) suspends the sidecar, and the NEXT rerank() lazily restarts and resolves the NEW posture from the runtime\'s committed model (not merely a restart)', async () => {
+    it('end to end: a COMMITTED model switch (runtime:use) suspends the sidecar, and the NEXT rerank() lazily restarts and resolves the NEW posture from the runtime\'s committed model (not merely a restart)', async () => {
       class FakeChild extends EventEmitter implements ChildProcessLike {
         pid = 9
         killed = false
@@ -1668,15 +2095,15 @@ describe('maybeAutoStartActiveModel', () => {
     unlocked?: boolean
     runningModelId?: string | null
     onStart?: () => void
-    /** AUD-03: a session-aware workspace stand-in (see `sessionWorkspace`). */
-    workspace?: unknown
+    /** AUD-03: a session-aware workspace stand-in (its `completeLock` / `completeUnlock` drive the session). */
+    workspace?: WorkspaceStandIn
   }): AppContext {
     return {
       db: opts.db,
       manifestsDir: CATALOG_MANIFESTS,
       paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: bogusConfigDir() },
       isDev: true, // developer leniency → the missing-weights model may start (mock fallback)
-      workspace: opts.workspace ?? { isUnlocked: () => opts.unlocked !== false },
+      workspace: opts.workspace ?? workspaceStandIn({ unlocked: opts.unlocked !== false }),
       runtime: {
         ...START_READS,
         start: async () => {
@@ -1767,7 +2194,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 
@@ -1792,7 +2219,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 
@@ -1818,7 +2245,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 
@@ -1841,7 +2268,7 @@ describe('maybeAutoStartActiveModel', () => {
     const db = seededDb()
     updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
     let started = false
-    const ws = sessionWorkspace()
+    const ws = workspaceStandIn()
     let release!: () => void
     hashGate.hold = new Promise<void>((r) => (release = r))
 

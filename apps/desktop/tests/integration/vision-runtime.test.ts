@@ -7,6 +7,7 @@ import {
   type VisionAnalyzeOptions
 } from '../../src/main/services/vision/runtime'
 import { VisionService, type VisionStreamEmitter } from '../../src/main/services/vision'
+import type { ModelStartVerdict } from '../../src/main/services/models'
 import { EngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import { until, within } from '../helpers/hang-budget'
@@ -229,6 +230,8 @@ describe('VisionRuntime — start + analyze', () => {
 
   it('the typed code rides the job to the renderer as job.error (#123, service mapping)', async () => {
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => ({
         analyze: async () => {
@@ -575,6 +578,8 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     }) as typeof fetch
     let built = 0
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         built++
@@ -602,6 +607,8 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // dies every time (corrupt GGUF)
     let built = 0
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         built++
@@ -677,6 +684,8 @@ describe('VisionService — OS loader refusal (#530)', () => {
     let built = 0
     let healthy = false
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         built++
@@ -711,12 +720,62 @@ describe('VisionService — OS loader refusal (#530)', () => {
       )
     )
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => new VisionRuntime({ ...base, spawn, fetchImpl: refusedFetch })
     })
     expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
     expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
     expect(calls.length).toBe(1)
+    await service.stop()
+  })
+})
+
+// #913: a cold start checks the model the status named against the cache before it builds or starts the runtime, so
+// a file a check found damaged never starts, even when the status was read before that check landed. The status reason
+// `damaged` is the first refusal (vision-status.test.ts); these pin the job's: its code and the cooldown.
+describe('VisionService — the start check (#913)', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['Date'] })) // the cooldown reads Date.now()
+
+  function checkedService(verdict: () => ModelStartVerdict, status: VisionStatus = VLM_AVAILABLE) {
+    let built = 0
+    const checkModel = vi.fn(async (_modelId: string, _signal?: AbortSignal) => verdict())
+    const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      getStatus: async () => status,
+      createRuntime: () => {
+        built++
+        return { analyze: async () => FIXTURE_ANSWER }
+      },
+      checkModel
+    })
+    return { service, checkModel, built: () => built }
+  }
+
+  it('a model the check finds damaged fails the job modelDamaged and builds no runtime; the cooldown repeats it', async () => {
+    const t0 = Date.now()
+    let verdict: ModelStartVerdict = 'damaged'
+    const { service, checkModel, built } = checkedService(() => verdict)
+    expect(await runToTerminal(service, serviceReq())).toMatchObject({ state: 'failed', error: 'modelDamaged' })
+    expect(built()).toBe(0)
+    expect(checkModel).toHaveBeenCalledWith('vlm', expect.any(AbortSignal)) // the model the status named
+    // Inside the #117 window the verdict is repeated without a new check.
+    expect((await runToTerminal(service, serviceReq())).error).toBe('modelDamaged')
+    expect(checkModel).toHaveBeenCalledTimes(1)
+    // Past it, the next analyze checks again: a re-download primed the cache with a good digest.
+    vi.setSystemTime(t0 + 5_000)
+    verdict = 'ok'
+    expect(await runToTerminal(service, serviceReq())).toMatchObject({ state: 'done', answer: FIXTURE_ANSWER })
+    expect(built()).toBe(1)
+    await service.stop()
+  })
+
+  it('a status that already says damaged fails the job modelDamaged too, not runtimeFailed', async () => {
+    const { service, checkModel, built } = checkedService(() => 'ok', { available: false, reason: 'damaged' })
+    expect(await runToTerminal(service, serviceReq())).toMatchObject({ state: 'failed', error: 'modelDamaged' })
+    expect(checkModel).not.toHaveBeenCalled()
+    expect(built()).toBe(0)
     await service.stop()
   })
 })
@@ -760,6 +819,8 @@ describe('#637 — a cancel during the vision cold start', () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
     })
@@ -789,6 +850,8 @@ describe('#637 — a cancel during the vision cold start', () => {
     const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
     const runtimes: VisionRuntime[] = []
     const service = new VisionService({
+      isWorkspaceLocking: () => false,
+      checkModel: async () => 'ok',
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })

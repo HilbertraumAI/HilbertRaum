@@ -303,6 +303,71 @@ describe('logging service (L17)', () => {
       expect(text).toContain('history before change')
     })
 
+    // #845: an app.log.enc in a frame a NEWER build wrote (HRAUMEN2) cannot be read, and must not be replaced either:
+    // before this, `loadEncrypted` swallowed the failure as "start fresh" and the next flush overwrote it with this
+    // build's frame. The session's lines stay in memory instead: no persist on an error, a rekey or the lock.
+    it('leaves an app.log.enc a newer build framed byte for byte: no flush on error, rekey or lock (#845)', () => {
+      const key = randomBytes(32)
+      const encPath = join(dir, 'app.log.enc')
+      const newer = Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(200)])
+      writeFileSync(encPath, newer)
+      initLogging(dir)
+      attachVaultKey(key)
+      log.error('a failure in this session')
+      rekeyVaultLog(key)
+      // The lines are still readable in this session (the Diagnostics tail reads the buffer).
+      expect(readLogTail().some((l) => l.includes('a failure in this session'))).toBe(true)
+      detachVaultKey()
+      expect(readFileSync(encPath).equals(newer)).toBe(true)
+      expect(existsSync(join(dir, 'app.1.log.enc'))).toBe(false)
+    })
+
+    it('never rotates over an app.log.enc a newer build framed (#845)', () => {
+      const encPath = join(dir, 'app.log.enc')
+      const newer = Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(200)])
+      writeFileSync(encPath, newer)
+      initLogging(dir)
+      attachVaultKey(randomBytes(32))
+      // Past MAX_BYTES: an unguarded rotation seals app.1.log.enc and deletes the live app.log.enc.
+      log.info('x'.repeat(1_100_000))
+      log.info('after the threshold')
+      expect(existsSync(join(dir, 'app.1.log.enc'))).toBe(false)
+      expect(readFileSync(encPath).equals(newer)).toBe(true)
+    })
+
+    // #845, W2 review finding 6: with no live app.log.enc, the newer build's rotated generation is the only sign, and
+    // a rotation would overwrite it with this build's frame.
+    it('never rotates over an app.1.log.enc a newer build framed, with no app.log.enc beside it (#845)', () => {
+      const rotated = join(dir, 'app.1.log.enc')
+      const newer = Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(200)])
+      writeFileSync(rotated, newer)
+      initLogging(dir)
+      attachVaultKey(randomBytes(32))
+      log.info('x'.repeat(1_100_000))
+      log.error('after the threshold')
+      detachVaultKey()
+      expect(readFileSync(rotated).equals(newer)).toBe(true)
+    })
+
+    // W2 review 2: the newer generation blocks only the rotation onto it, not this build's own live log. A rotation
+    // that would overwrite it is skipped; the live log keeps persisting, capped like the buffer.
+    it('keeps persisting app.log.enc beside an app.1.log.enc a newer build framed, and skips the rotation (#845)', () => {
+      const key = randomBytes(32)
+      const rotated = join(dir, 'app.1.log.enc')
+      const newer = Buffer.concat([Buffer.from('HRAUMEN2'), randomBytes(200)])
+      writeFileSync(rotated, newer)
+      initLogging(dir)
+      attachVaultKey(key)
+      log.error('a failure worth keeping')
+      const live = join(dir, 'app.log.enc')
+      expect(decrypt(key, deserializeBlob(readFileSync(live))).toString('utf8')).toContain('a failure worth keeping')
+      log.info('x'.repeat(1_100_000))
+      log.error('after the threshold')
+      detachVaultKey()
+      expect(readFileSync(rotated).equals(newer)).toBe(true)
+      expect(decrypt(key, deserializeBlob(readFileSync(live))).toString('utf8')).toContain('after the threshold')
+    })
+
     it('trims the buffer on a line boundary by UTF-8 byte length (multibyte content)', () => {
       const key = randomBytes(32)
       initLogging(dir)

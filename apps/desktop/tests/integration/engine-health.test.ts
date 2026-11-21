@@ -34,6 +34,7 @@ import {
 } from '../../src/main/services/runtime/sidecar'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 
 const LINUX = { platform: 'linux' as const }
 const WIN = { platform: 'win32' as const, systemDllExists: () => true }
@@ -72,7 +73,7 @@ afterEach(() => {
 })
 
 const unlockedCtx = (db: Db): Pick<AppContext, 'db' | 'workspace'> =>
-  ({ db, workspace: { isUnlocked: () => true } }) as unknown as Pick<AppContext, 'db' | 'workspace'>
+  ({ db, workspace: workspaceStandIn() }) as unknown as Pick<AppContext, 'db' | 'workspace'>
 
 /** A document row in a given state (the file need not exist; only the row matters here). */
 function addDoc(db: Db, status: string, errorMessage: string | null): string {
@@ -143,10 +144,10 @@ describe('healEngineLoadState (#530)', () => {
     const db = freshDb()
     updateSettings(db, { gpuAutoDisabled: true, gpuLastError: LEGACY_GPU_ERROR })
     const id = addDoc(db, 'failed', LEGACY_ROW)
-    const locked = { db, workspace: { isUnlocked: () => false } } as unknown as Pick<AppContext, 'db' | 'workspace'>
+    const locked = { db, workspace: workspaceStandIn({ unlocked: false }) } as unknown as Pick<AppContext, 'db' | 'workspace'>
     const locking = {
       db,
-      workspace: { isUnlocked: () => true, isLocking: () => true }
+      workspace: workspaceStandIn({ locking: true })
     } as unknown as Pick<AppContext, 'db' | 'workspace'>
     for (const ctx of [locked, locking]) {
       expect(healEngineLoadState(ctx, LINUX)).toEqual({ gpuFlagCleared: false, rowsRewritten: 0, searchModelRowsRewritten: 0 })

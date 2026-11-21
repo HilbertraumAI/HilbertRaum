@@ -154,7 +154,7 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
     // effect (keyed only on skill + conversation ids) never re-fired and the run bar stayed stale.
     await user.click(screen.getByRole('button', { name: /answering from/i }))
     await user.click(await screen.findByRole('checkbox', { name: /library/i }))
-    expect(await screen.findByRole('button', RUN_BUTTON, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
+    expect(await screen.findByRole('button', RUN_BUTTON)).toBeInTheDocument()
   })
 
   it('the run button appears when an attach-job settles (the #44 invisible-run-button class)', async () => {
@@ -201,6 +201,6 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
     if (!target) throw new Error('no .chat-main drop target')
     drops.drop(target, 'statement.pdf', '/tmp/statement.pdf')
 
-    expect(await screen.findByRole('button', RUN_BUTTON, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
+    expect(await screen.findByRole('button', RUN_BUTTON)).toBeInTheDocument()
   })
 })

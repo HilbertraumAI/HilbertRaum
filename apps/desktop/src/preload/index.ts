@@ -34,6 +34,7 @@ import type {
   DownloadJob,
   DriveStatus,
   EngineDownloadJob,
+  EngineDownloadPreview,
   EngineDownloadRequest,
   EngineRecheckResult,
   EngineStatus,
@@ -77,6 +78,7 @@ import type {
   RuntimeInstallInfo,
   RunnableToolSet,
   RuntimeStatus,
+  SaveBeforeCloseResult,
   VisionStatus,
   SkillInfo,
   SkillPickResult,
@@ -94,6 +96,7 @@ import type {
   WorkspaceMode,
   WorkspaceStateInfo
 } from '../shared/types'
+import type { RendererSettingsPatch } from '../shared/settings-writers'
 
 // The single, typed bridge between renderer and main. The renderer has no
 // direct Node or network access — it can only call what is exposed here.
@@ -101,9 +104,30 @@ const api = {
   getAppStatus: (): Promise<AppStatus> => ipcRenderer.invoke(IPC.getAppStatus),
   /** One-way timing mark for opt-in measurement runs; main enforces an event allowlist. */
   perfMark: (event: string): void => ipcRenderer.send(IPC.perfMark, event),
+  /**
+   * #888: run `cb` when the window is about to close, and answer main with its result. The
+   * preload sends the answer itself once `cb` settles, so the renderer cannot forget to answer;
+   * a `cb` that throws or rejects (or answers anything but `unsaved: false`) answers "unsaved",
+   * and main asks the user before closing. Returns an unsubscribe fn.
+   */
+  onSaveBeforeClose: (cb: () => Promise<SaveBeforeCloseResult>): (() => void) => {
+    const handler = (_e: unknown, requestId: unknown): void => {
+      void Promise.resolve()
+        .then(() => cb())
+        .then(
+          (result) => result?.unsaved !== false,
+          () => true
+        )
+        .then((unsaved) => ipcRenderer.send(IPC.saveBeforeCloseDone, { requestId, unsaved }))
+    }
+    ipcRenderer.on(EVENTS.saveBeforeClose, handler)
+    return () => ipcRenderer.removeListener(EVENTS.saveBeforeClose, handler)
+  },
   getDriveStatus: (): Promise<DriveStatus> => ipcRenderer.invoke(IPC.getDriveStatus),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
-  updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
+  /** Renderer-owned keys only (#868): main drops any other key from the patch, and this type makes a
+   *  literal patch that names one fail typecheck at the call site. */
+  updateSettings: (patch: RendererSettingsPatch): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.updateSettings, patch),
 
   // ---- Privacy / offline policy ----
@@ -199,6 +223,15 @@ const api = {
   // ---- In-app engine (llama.cpp sidecar) downloader ----
   /** Is the real AI engine installed, and (if not) can it be fetched for this host? */
   getEngineStatus: (): Promise<EngineStatus> => ipcRenderer.invoke(IPC.getEngineStatus),
+  /**
+   * #843: what `downloadEngine(request)` would fetch — every archive with its version, size, licence
+   * and full address — for the confirmation dialog. The same payload rule as `downloadEngine`: no
+   * argument = the default install. Read-only.
+   */
+  getEnginePlan: (request?: EngineDownloadRequest): Promise<EngineDownloadPreview> =>
+    request === undefined
+      ? ipcRenderer.invoke(IPC.getEnginePlan)
+      : ipcRenderer.invoke(IPC.getEnginePlan, request),
   /**
    * Start fetching + extracting the host's engine build(s). Gated like model downloads. No
    * argument = the DEFAULT install (every missing required family: llama.cpp, whisper.cpp) —
@@ -679,9 +712,6 @@ const api = {
   /** The full review read-model, or null on an unknown id. */
   getEvidenceReview: (reviewId: string): Promise<EvidenceReviewDetail | null> =>
     ipcRenderer.invoke(IPC.getEvidenceReview, reviewId),
-  /** The message's review as a light summary (the entry-point/action-row state), or null. */
-  getEvidenceReviewForMessage: (messageId: string): Promise<EvidenceReviewSummary | null> =>
-    ipcRenderer.invoke(IPC.getEvidenceReviewForMessage, messageId),
   /** EVERY review in one conversation as light summaries — the transcript's whole chip state
    *  in ONE round trip (AUD-12), keyed by `messageId` on the renderer side. Empty array for
    *  an unknown conversation. */
@@ -760,9 +790,6 @@ const api = {
     sourceKey: string
   ): Promise<EvidenceSourceContext | null> =>
     ipcRenderer.invoke(IPC.getEvidenceSourceContext, reviewId, sourceKey),
-  /** Delete a review (items/links/export records CASCADE); true when a row was deleted. */
-  deleteEvidenceReview: (reviewId: string): Promise<boolean> =>
-    ipcRenderer.invoke(IPC.deleteEvidenceReview, reviewId),
   /** How many reviews this conversation's messages carry — the D-2 delete-confirm count. */
   countEvidenceReviewsForConversation: (conversationId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.countEvidenceReviewsForConversation, conversationId),

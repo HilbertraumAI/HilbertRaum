@@ -39,6 +39,16 @@ describe('codeBlockExtension (#286 D6 allowlist)', () => {
     expect(codeBlockExtension(info)).toBe(ext)
   })
 
+  // #839 R3: the table above pins what the allowlist holds, so an entry ADDED to it fails nothing there. These binary,
+  // installer, shortcut and script-host types stay outside D6's set (which does map bat/cmd, js, ps1 and sh, by decision):
+  // a fence labelled with one of these names saves as .txt. The row sees a new KEY from this list, not a new value.
+  it.each(['exe', 'com', 'scr', 'msi', 'lnk', 'vbs', 'vbscript', 'vbe', 'wsf', 'hta', 'cpl', 'jar', 'reg', 'dll', 'pif', 'msc'])(
+    '%s is not on the allowlist: a fence labelled so saves as txt',
+    (info) => {
+      expect(codeBlockExtension(info)).toBe('txt')
+    }
+  )
+
   it('falls back to txt for an unknown language, an empty string and whitespace', () => {
     expect(codeBlockExtension('rust')).toBe('txt')
     expect(codeBlockExtension('')).toBe('txt')

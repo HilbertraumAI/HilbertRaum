@@ -18,6 +18,16 @@
 // must not be silently relaxed here. A test about a product timer drives the shipped constant with
 // fake timers instead (CONTRIBUTING "Pin the bound that ships"). Use this only where exceeding the bound means "it hung", never "it
 // was too slow".
+//
+// The two LIBRARY defaults are the same trap, and they are handled here too (#915). `vi.waitFor` and
+// testing-library's `waitFor` / `find*` default to 1 s, and neither follows `testTimeout`. testing-library's is
+// raised once for every jsdom file, in `tests/setup.ts`: `configure({ asyncUtilTimeout: hangBudgetMs(5_000) })`.
+// Vitest has no such config key, so every `vi.waitFor` passes `{ timeout: hangBudgetMs(n) }` itself (5000 is the usual n); a testing-library wait
+// passes one only to go above its 5000 default, never below it. A literal
+// `timeout:` on any wait never widens on CI, so it is not allowed. The repo-hygiene row "every wait takes its
+// ceiling from hang-budget" enforces those source rules; `tests/unit/hang-budget.dom.test.ts` asserts the setup
+// default itself. A HEAVY row (real hashing, process spawns) takes
+// `testBudgetMs` as its per-test timeout instead.
 
 /** Multiplier applied on CI. 4x is exactly the ratio `testTimeout` already uses: 15 s -> 60 s. */
 const CI_FACTOR = 4
@@ -39,21 +49,6 @@ const CI_CEILING_MS = 45_000
 export function hangBudgetMs(localMs: number): number {
   if (!process.env.CI) return localMs
   return Math.min(localMs * CI_FACTOR, CI_CEILING_MS)
-}
-
-/**
- * The same widening for a poll loop bounded by ITERATION COUNT rather than wall clock —
- * `for (let i = 0; i < hangPolls(200); i++)`. Pass the loop's own sleep so the 45 s cap still
- * lands on real time: 200 polls of 5 ms is a 1 s detector, and on CI becomes a 4 s one.
- *
- * This shape is the NASTIER of the two and was missed by the first sweep of #458 step 3 —
- * CI found it (`vision-security.test.ts`, run 34664328086). A counted loop does not merely
- * stay narrow on CI, it **falls through silently**: no named error, just the next assertion
- * failing with something opaque like `expected [] to have a length of 1`. Prefer failing
- * loudly after the loop where the surrounding test makes that practical.
- */
-export function hangPolls(iterations: number, stepMs: number): number {
-  return Math.max(1, Math.round(hangBudgetMs(iterations * stepMs) / stepMs))
 }
 
 /** The CI `testTimeout` in `vitest.config.ts` — the floor no per-test budget may sit under. */
@@ -111,26 +106,52 @@ const realNow = Date.now.bind(Date)
 /**
  * Poll `cond` until it holds, or fail by name once `hangBudgetMs(localMs)` of REAL time has
  * passed — the poll-shaped twin of `within`, for state that has no promise to await.
+ *
+ * Bound a poll by TIME, never by a count of loop turns. A counted loop
+ * (`for (let i = 0; i < 200; i++) { if (cond) break; await sleep(5) }`) is a detector hard-coded
+ * in disguise: it does not widen on CI, it **falls through silently** to an opaque next assertion
+ * (`vision-security.test.ts`, run 34664328086, #458), and its length depends on the platform: a
+ * 0-1 ms `setTimeout` step lasts about 1.1 ms on Linux but about 15.6 ms on Windows (timer
+ * resolution), and a 5 ms one 5 ms vs 15.6 ms, so a count of turns is several times narrower on the
+ * ubuntu runner than at a Windows desk (#895). The suite's counted polls were retired with #895.
  */
 export async function until(cond: () => boolean, what: string, localMs = 5_000): Promise<void> {
-  const deadline = realNow() + hangBudgetMs(localMs)
-  while (!cond()) {
-    if (realNow() > deadline) throw new Error(`${what} never happened`)
-    await new Promise<void>((r) => realSetTimeout(r, 1))
-  }
+  await untilValue(() => cond() || undefined, what, localMs)
 }
 
 /**
- * The wait options for a testing-library `findBy*` / `waitFor` that has to outlast a LAZY SCREEN's
- * dynamic import — `await screen.findByRole('heading', { name }, LAZY_SCREEN_WAIT)`. App.tsx's
- * `lazyScreen` (React `lazy` + `import()`) loads a screen's module on its first mount, and the wait
- * for anything that screen renders starts before the import has settled. Alone that takes a few
- * hundred ms, but under full-suite load on a Windows desktop it landed past testing-library's 1 s
- * default (1.1-1.6 s), failing tests whose only problem was a slow import. A hang bound like the
- * rest of this module, never a timing proof.
- *
- * Use it on the first wait for a lazy screen in each test, since a test run alone (`-t`) pays the
- * import itself. It isn't needed where the screen's module is already loaded: the test file imports
- * it statically, or the same test mounted it earlier and React renders it from its lazy cache.
+ * Poll a (sync or async) `probe` until it yields a value (anything but `undefined`, `null` or `false`), or fail by
+ * name once `hangBudgetMs(localMs)` of REAL time has passed: the twin of `until` for state read through an awaited
+ * call (an IPC channel, a job status) whose answer the caller wants back. Real time like `until`, so a poll bounded
+ * this way cannot narrow into a count of timer turns (#895), and it works under fake timers and a mocked `Date.now`.
+ * Each probe call is raced against the time left, so a probe that never settles (a handler parked on a gate) still
+ * fails by name at the deadline instead of running into the test timeout.
  */
-export const LAZY_SCREEN_WAIT: Readonly<{ timeout: number }> = { timeout: hangBudgetMs(5_000) }
+export async function untilValue<T>(
+  probe: () => T | null | undefined | false | Promise<T | null | undefined | false>,
+  what: string,
+  localMs = 5_000
+): Promise<T> {
+  const deadline = realNow() + hangBudgetMs(localMs)
+  const timedOut = (): Error => new Error(`${what} never happened`)
+  for (;;) {
+    const v = await new Promise<T | null | undefined | false>((resolve, reject) => {
+      const t = realSetTimeout(() => reject(timedOut()), Math.max(0, deadline - realNow()))
+      Promise.resolve()
+        .then(probe)
+        .then(
+          (value) => {
+            realClearTimeout(t)
+            resolve(value)
+          },
+          (e: unknown) => {
+            realClearTimeout(t)
+            reject(e)
+          }
+        )
+    })
+    if (v !== undefined && v !== null && v !== false) return v
+    if (realNow() > deadline) throw timedOut()
+    await new Promise<void>((r) => realSetTimeout(r, 1))
+  }
+}

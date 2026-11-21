@@ -22,7 +22,7 @@ set -euo pipefail
 [ "$(uname -s)" = "Darwin" ] || { echo "This script runs on macOS only."; exit 2; }
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hr-verify-mac.XXXXXX")"
-EXPECTED_WIRE="001011001"
+EXPECTED_WIRE="000011001"
 FAILS=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; FAILS=$((FAILS + 1)); }

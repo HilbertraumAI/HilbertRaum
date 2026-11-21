@@ -163,13 +163,18 @@ describe('map-reduce path + the hard ceiling', () => {
 })
 
 describe('state machine guards (D26)', () => {
-  it('refuses to start while a chat answer is streaming', async () => {
+  // The lock row is the manager's OWN AUD-02 latch (#860 L5): its tree and extract chains and the skills
+  // categorize run call `startDocTask` directly, so the IPC guard never stands in front of them.
+  it.each([
+    ['while a chat answer is streaming', { isChatStreaming: () => true }, TASK_REFUSED_CHAT_STREAMING_MESSAGE],
+    ['while a workspace lock is under way (AUD-02)', { isWorkspaceLocking: () => true }, t('en', 'main.task.workspaceLocked')]
+  ])('refuses to start %s', async (_label, guard, message) => {
     const docId = await importWords(w, 50)
     const runtime = docTaskRuntime()
-    const manager = docTaskManager(w, { getRuntime: () => runtime, isChatStreaming: () => true })
-    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(
-      TASK_REFUSED_CHAT_STREAMING_MESSAGE
-    )
+    const manager = docTaskManager(w, { getRuntime: () => runtime, ...guard })
+    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(message)
+    expect(manager.hasActiveTask()).toBe(false) // nothing queued
+    expect(runtime.calls).toHaveLength(0)
   })
 
   it.each([
@@ -334,6 +339,72 @@ describe('state machine guards (D26)', () => {
     release()
     await waitTerminal(manager, jobId)
     expect(manager.isDocumentBusy(docId)).toBe(false)
+  })
+})
+
+// #936: a quit the close guard holds closes the OCR window while the main window saves, and `will-quit` flushes the
+// queue only after the save. The hold keeps the queue from starting anything in between; Keep open releases it.
+describe('the quit hold (#936)', () => {
+  it('the running task finishes; the waiting one and one started meanwhile stay queued until the release, then run in order', async () => {
+    const doc1 = await importWords(w, 50, { name: 'a.txt' })
+    const doc2 = await importWords(w, 50, { name: 'b.txt' })
+    const doc3 = await importWords(w, 50, { name: 'c.txt' })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const runtime = docTaskRuntime({ gate: () => gate })
+    const manager = docTaskManager(w, { getRuntime: () => runtime })
+
+    const first = manager.startDocTask({ kind: 'summary', documentIds: [doc1] })
+    const second = manager.startDocTask({ kind: 'summary', documentIds: [doc2] })
+    await until(() => runtime.calls.length === 1, 'the first summary reaching the model')
+    manager.releaseQueueHold() // nothing held: still one task at a time
+    expect(manager.getDocTask(second.jobId).state).toBe('queued')
+    // A real quit holds twice (the before-quit belt, then the close guard): a flag, not a count.
+    manager.holdQueueForQuit()
+    manager.holdQueueForQuit()
+    const firstSettled = manager.awaitActiveTaskSettled() // the dispatch's `finally`, where the queue pumps
+    release()
+    await firstSettled
+    expect(manager.getDocTask(first.jobId).state).toBe('done')
+    expect(manager.getDocTask(second.jobId).state).toBe('queued')
+    // A task the user starts during the save is queued, not refused: it runs if the quit is called off.
+    const third = manager.startDocTask({ kind: 'summary', documentIds: [doc3] })
+    expect(manager.getDocTask(third.jobId).state).toBe('queued')
+    expect(runtime.calls).toHaveLength(1)
+    expect(manager.hasActiveTask()).toBe(true) // still busy for the chat guard: the work is only paused
+
+    manager.releaseQueueHold() // Keep open
+    expect(manager.getDocTask(second.jobId).state).toBe('running')
+    expect((await waitTerminal(manager, second.jobId)).state).toBe('done')
+    expect((await waitTerminal(manager, third.jobId)).state).toBe('done')
+    const names = ['a.txt', 'b.txt', 'c.txt']
+    expect(runtime.calls.map((c) => names.find((n) => userPromptOf(c).includes(n)))).toEqual(names) // FIFO
+    expect(runtime.maxConcurrent).toBe(1)
+  })
+
+  // Review SF-3: the path every held quit takes. Its `will-quit` flushes the queue (`performShutdown` →
+  // `cancelAllDocTasks`): the held task ends cancelled without ever starting (before the hold it started during the
+  // save and was cancelled running).
+  it('a held quit that goes on: will-quit cancels the waiting task before it ever starts', async () => {
+    const doc1 = await importWords(w, 50, { name: 'a.txt' })
+    const doc2 = await importWords(w, 50, { name: 'b.txt' })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const runtime = docTaskRuntime({ gate: () => gate })
+    const manager = docTaskManager(w, { getRuntime: () => runtime })
+
+    const first = manager.startDocTask({ kind: 'summary', documentIds: [doc1] })
+    const second = manager.startDocTask({ kind: 'summary', documentIds: [doc2] })
+    await until(() => runtime.calls.length === 1, 'the first summary reaching the model')
+    manager.holdQueueForQuit()
+    const firstSettled = manager.awaitActiveTaskSettled()
+    release()
+    await firstSettled
+    manager.cancelAllDocTasks() // will-quit
+    expect(manager.getDocTask(first.jobId).state).toBe('done')
+    expect(manager.getDocTask(second.jobId).state).toBe('cancelled')
+    expect(runtime.calls).toHaveLength(1)
+    expect(manager.hasActiveTask()).toBe(false)
   })
 })
 

@@ -256,7 +256,7 @@ describe('ChatScreen — the document-task busy banner and its cancel (D26)', ()
     vi.useFakeTimers()
     try {
       const cancelDocTask = vi.fn(async () => {
-        throw new Error("Error invoking remote method 'docs:cancelTask': Error: cancel exploded")
+        throw new Error("Error invoking remote method 'doctasks:cancel': Error: cancel exploded")
       })
       baseStub({ listMessages: vi.fn(async () => []), sendChatMessage: busySend(), cancelDocTask })
 

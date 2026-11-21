@@ -51,6 +51,7 @@ import { rangeStart, sendRawAnswer } from '../helpers/zim-http'
 import { archiveCandidate, searchXml, testArm } from '../helpers/zim-retrieval-fixtures'
 import { seedEmbeddedDoc } from '../helpers/doc-fixtures'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { recordExecutions } from '../helpers/db-spy'
 import {
   buildEvidenceSourceSnapshots,
   createEvidenceReviewFromMessage
@@ -85,42 +86,6 @@ import { testBudgetMs, until } from '../helpers/hang-budget'
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
 // ---- T03 — the full archive-identity matrix + the legacy document control (P2, H2) ------
-
-/**
- * A `Db` façade that counts the `documents` statements actually EXECUTED through it.
- * `prepareCached` compiles via `db.prepare` and caches per `Db` OBJECT, so a fresh façade
- * observes every statement the builder runs. Compilations are deliberately not counted: the
- * builder prepares both document statements up front, and what must never happen for an
- * archive citation is that one of them is RUN against the workspace.
- */
-function documentsQueryCounter(db: Db): { db: Db; executed: () => number } {
-  let executed = 0
-  const wrapStatement = (stmt: object): object =>
-    new Proxy(stmt, {
-      get(target, prop) {
-        const value = Reflect.get(target, prop) as unknown
-        if (typeof value !== 'function') return value
-        const fn = value as (...args: unknown[]) => unknown
-        return (...args: unknown[]): unknown => {
-          if (prop === 'get' || prop === 'all' || prop === 'run') executed += 1
-          return fn.apply(target, args)
-        }
-      }
-    })
-  const facade = new Proxy(db, {
-    get(target, prop) {
-      const value = Reflect.get(target, prop) as unknown
-      if (typeof value !== 'function') return value
-      const fn = value as (...args: unknown[]) => unknown
-      if (prop !== 'prepare') return (...args: unknown[]): unknown => fn.apply(target, args)
-      return (sql: string): unknown => {
-        const stmt = fn.apply(target, [sql]) as object
-        return /\bFROM documents\b/i.test(sql) ? wrapStatement(stmt) : stmt
-      }
-    }
-  })
-  return { db: facade, executed: () => executed }
-}
 
 describe('T03 — archive identity, freshness and the legacy document control (P2, H2)', () => {
   it('T03 multiple same-title documents, an absent source and accidental document-ID fields on an archive citation all stay unresolved with freshness explicitly unverifiable; a legacy document citation resolves as before', () => {
@@ -227,22 +192,25 @@ describe('T03 — archive identity, freshness and the legacy document control (P
     })
 
     // No `documents` query RUNS for an archive citation — proved directly, not merely implied
-    // by the null fields: the counting façade sees zero executions for an archive-only list
-    // against the very workspace that still holds both same-titled documents...
-    const counter = documentsQueryCounter(db)
+    // by the null fields: the execution-recording façade sees zero `documents` executions for an
+    // archive-only list against the very workspace that still holds both same-titled documents.
+    // Executions, not compilations: the builder prepares both document statements up front, and
+    // what must never happen for an archive citation is that one of them is RUN...
+    const recorded = recordExecutions(db)
+    const documentQueries = (): number => recorded.executed.filter((sql) => /\bFROM documents\b/i.test(sql)).length
     const archiveOnly = buildEvidenceSourceSnapshots(
-      counter.db,
+      recorded.db,
       [archive('S1', 'Treibhausgas', 'A/Treibhausgas')],
       'direct_excerpt'
     )
     expect(archiveOnly[0]!.identity).toBe('unresolved')
-    expect(counter.executed()).toBe(0)
+    expect(documentQueries()).toBe(0)
     // ...and DOES see the legacy title lookup, so the zero above means "never run", not
     // "never observable".
-    expect(buildEvidenceSourceSnapshots(counter.db, [citations[3]!], 'direct_excerpt')[0]!.identity).toBe(
+    expect(buildEvidenceSourceSnapshots(recorded.db, [citations[3]!], 'direct_excerpt')[0]!.identity).toBe(
       'resolved'
     )
-    expect(counter.executed()).toBeGreaterThan(0)
+    expect(documentQueries()).toBeGreaterThan(0)
 
     // (d) READ time: stored JSON that claims a resolved identity, a document id and a sha
     // ALONGSIDE the archive marker is repaired down, never up — the archive marker wins.
