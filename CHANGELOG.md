@@ -7,7 +7,7 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 from its first public `1.0.0` release onward.
 
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
-> since that day: **v0.1.50** was the first, **v0.1.65** is current. Versions stay in the
+> since that day: **v0.1.50** was the first, **v0.1.66** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
 > not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
 > page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
@@ -25,6 +25,10 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+Nothing yet — the next release's entries accumulate here.
+
+## [0.1.66] — 2026-11-21
+
 ### Added
 
 - **The interface is now available in Spanish, French, Italian, Dutch, Polish, Turkish, Russian
@@ -35,6 +39,13 @@ from its first public `1.0.0` release onward.
   computer is set to French and you never picked a language, HilbertRaum shows French as soon as
   your workspace is open after the update, and the lock screen follows from then on. Evidence
   packs exported from these languages are written in English, and the export panel says so.
+- **Qwen3.5 9B in a smaller file (UD-Q3_K_XL) can now be chosen on the AI Model screen.** It is the
+  same model as the Qwen3.5 9B already in the list, in a file of about 5.1 GB instead of about 6.0 GB,
+  so more of it fits on a small graphics card. On a laptop with a 6 GB card it put 25 of its 33 layers
+  on the card instead of 20 and answered about 1.6 to 2 times as fast; on the processor alone it was a
+  little faster too. In our 2026-11 answer-quality study it scored a little lower than the larger file
+  (83.2 against 86.1). It needs 12 GB of RAM, like the larger file. The app does not recommend it by
+  itself: choose it if you want it (#947).
 
 ### Changed
 
@@ -120,6 +131,19 @@ from its first public `1.0.0` release onward.
   brings its window up before it opens a dialog, so this is a safeguard. Chromium and Node.js are
   unchanged, workspaces open exactly as before, and the minimum operating systems are unchanged
   (#852).
+- **The recommended chat model now follows our 2026-11 answer-quality study and measured speed, on a
+  computer without a graphics card and on one with a card.** This changes the ★ on the AI Model screen
+  and the recommendation on the Performance screen; the model you already use stays selected. Without
+  a usable graphics card, 8 to 11 GB of RAM now gets Qwen3 4B Instruct 2507 (was Qwen3.5 4B), 12 to
+  15 GB Gemma 4 E4B (was Gemma 4 E2B), and 24 GB or more Gemma 4 26B-A4B (was Qwen3.8 27B); 16 to
+  23 GB keeps Qwen3.5 9B. With a usable graphics card, its free memory decides, judged by the memory
+  the AI engine itself expects each model to need: a 6 GB card now gets Gemma 4 E4B and an 8 GB card
+  Qwen3.5 9B (both were Qwen3.5 4B), a 12 or 16 GB card Gemma 4 12B (was Qwen3.5 9B), and a 24 GB card
+  Gemma 4 31B (was Qwen3.8 27B UD-Q5_K_M); a 20 GB card keeps Qwen3.8 27B UD-Q4_K_M. With less than
+  12 GB of RAM it is Qwen3 4B Instruct 2507 on every card. A benchmark under 5 tokens per second now
+  steps the recommendation down one model at a time, toward Gemma 4 E2B, and a model the app has seen
+  load only partly onto this card is not recommended for it again. Apple Silicon Macs keep their
+  recommendations. The README lists every tier (#948, #950).
 
 ### Fixed
 
@@ -625,6 +649,19 @@ from its first public `1.0.0` release onward.
   file can still hold the password typed on the lock screen, which opens your workspace, what they
   showed, and pages of your documents that the hidden windows for reading scans and printing
   evidence packs worked on (#982).
+- **A failed unlock no longer leaves the key to your workspace in memory, or its decrypted copy on
+  disk.** When the password was right but the unlock then failed (a damaged key file, encrypted data
+  that failed its integrity check, a step that could not write to the drive, or an error after the
+  workspace had opened), the key could stay in the app's memory; in the last case the decrypted working
+  copy of the workspace also stayed on disk and open. Every failure after the password check now
+  clears the keys, and once the workspace has been decrypted, the app also closes it and erases the
+  working copy. The next unlock works as before (#858).
+- **Settings no longer loses Change password on an encrypted workspace.** The app's record of
+  whether the open workspace is encrypted could be changed from the app's window, for example by an
+  older version of HilbertRaum started from the same drive, and Settings and Privacy then stopped
+  offering Change password. The window can no longer change that record, only its two real values
+  are kept, and every unlock sets it again, so a wrong value from before is put right at the next
+  unlock (#858).
 
 ## [0.1.65] — 2026-11-11
 
@@ -2290,7 +2327,8 @@ For what the product *is*, see the [README](README.md) and
 [`docs/known-limitations.md`](docs/known-limitations.md). Every release since has its own
 section in [`CHANGELOG.md`](CHANGELOG.md).
 
-[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.65...HEAD
+[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.66...HEAD
+[0.1.66]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.65...v0.1.66
 [0.1.65]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.64...v0.1.65
 [0.1.64]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.63...v0.1.64
 [0.1.63]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.62...v0.1.63
