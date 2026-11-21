@@ -216,7 +216,11 @@ text, chunks, embeddings, settings — the **stored copies of your imported docu
 (`workspace/documents/`), the **analyzed-image history** (`workspace/images/`), and the **local
 diagnostics log** (`logs/app.log.enc`) — all encrypted with the same vault key. The log never contains document contents or chat text, but may contain
 file names or paths, which is why it is encrypted too. (Lines written *before* you unlock are kept
-in memory only and never reach disk.)
+in memory only and never reach disk.) What you copy or save from Settings → Diagnostics shows the
+drive and your home folder as `<drive>` and `<home>`, this computer's account name as `<user>`
+wherever it appears, and account names in the usual folder paths from another computer as `<user>`
+too; the log on the drive keeps the full paths. A name in an unusual place can remain, for example
+in a folder you named yourself, so read a log before you share it.
 
 **What is not encrypted:** the AI model files (public weights, not your data), the app itself, and
 the vault descriptor `config/workspace.json` (the salt, KDF parameters, verifier, and

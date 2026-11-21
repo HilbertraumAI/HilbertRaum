@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest'
 import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -16,12 +16,15 @@ const ipcState = vi.hoisted(() => ({
   clipboardText: null as string | null,
   clipboardThrows: false
 }))
+const saveDialog = await vi.hoisted(async () => (await import('../helpers/save-dialog')).saveDialogFake())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   app: { getVersion: () => '0.0.0-test' },
+  BrowserWindow: { getFocusedWindow: () => null },
+  dialog: { showSaveDialog: saveDialog.showSaveDialog },
   clipboard: {
     writeText: (text: string) => {
       if (ipcState.clipboardThrows) throw new Error('clipboard unavailable')
@@ -78,7 +81,9 @@ import {
   snapshotRerankerOccupancy,
   createPendingModelSwitchCounter
 } from '../../src/main/services/rag/device-posture'
-import { log } from '../../src/main/services/logging'
+import { attachVaultKey, detachVaultKey, initLogging, log, usesPlaintextLog } from '../../src/main/services/logging'
+import { setLogRedactionRoots } from '../../src/main/services/log-redact'
+import { decrypt, deserializeBlob } from '../../src/main/services/security/crypto'
 import { createLocalApiServer } from '../../src/main/services/local-api/lifecycle'
 import type { MainSettingsKey, RendererSettingsPatch } from '../../src/shared/settings-writers'
 import { benchmarkResult, modelPlacement } from '../helpers/benchmark-records'
@@ -100,6 +105,7 @@ beforeEach(() => {
   ipcState.handlers.clear()
   ipcState.clipboardText = null
   ipcState.clipboardThrows = false
+  saveDialog.reset()
 })
 
 describe('registerCoreIpc', () => {
@@ -551,6 +557,77 @@ describe('registerCoreIpc', () => {
       expect((result as AppSettings).allowNetwork).toBe(false)
       expect(installs).toHaveBeenCalledOnce()
     })
+  })
+
+  // #975 (owner decision G-4 b, the exit rule): the log leaves the app two ways, the Diagnostics panel with its Copy
+  // button (`getLogTail`) and Save log (`exportLog`). Both hand it out redacted in each of the log's modes: held in
+  // memory before an unlock, sealed in app.log.enc while an encrypted workspace is open (both read the in-memory
+  // buffer), and a plain app.log on a plaintext_dev workspace (read from the file). What is stored keeps the paths.
+  // The redaction's own rules are log-redact.test.ts's; these rows hold the two exits and the registered roots.
+  describe('the diagnostics log leaves the app with no path and no account name (#975)', () => {
+    const account = 'hr975account'
+    const kit = 'E:\\HilbertRaum Kit'
+    const fileError = `EPERM: operation not permitted, open 'C:\\Users\\${account}\\AppData\\x'`
+    type LogMode = 'before an unlock' | 'encrypted' | 'plaintext'
+    const exits: Record<string, (dir: string) => Promise<string>> = {
+      'getLogTail (the panel and Copy)': async () => ((await invoke(handlers, IPC.getLogTail)).result as string[]).join('\n'),
+      'exportLog (Save log)': async (dir) => {
+        const filePath = join(dir, 'hilbertraum-logs.txt')
+        saveDialog.result = { canceled: false, filePath }
+        expect((await invoke(handlers, IPC.exportLog)).result).toBe(filePath)
+        return readFileSync(filePath, 'utf8')
+      }
+    }
+    const modes: LogMode[] = ['before an unlock', 'encrypted', 'plaintext']
+
+    it.each<[string, LogMode]>(Object.keys(exits).flatMap((exit) => modes.map((mode): [string, LogMode] => [exit, mode])))(
+      '%s hands the log out redacted, %s',
+      async (exit, mode) => {
+        const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-coreipc-log-'))
+        const key = randomBytes(32)
+        const quiet = (['log', 'warn', 'error'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+        initLogging(dir)
+        if (mode === 'encrypted') attachVaultKey(key)
+        if (mode === 'plaintext') usesPlaintextLog()
+        setLogRedactionRoots({ driveRoot: kit })
+        try {
+          registerCoreIpc({
+            trustedSenders: ANY_SENDER,
+            paths: {},
+            workspace: workspaceStandIn({ unlocked: false })
+          } as unknown as AppContext)
+          const marker = `#975 marker ${randomUUID()}`
+          log.warn(`${marker} ${fileError}`) // in the message: the raw spelling
+          log.warn(`${marker} as JSON`, { error: fileError }) // in the meta: JSON's doubled backslashes
+          log.error(`${marker} engine refused`, { binPath: `${kit}\\runtime\\llama.cpp\\win\\llama-server.exe` })
+          const lines = (await exits[exit](dir)).split(/\r?\n/).filter((l) => l.includes(marker))
+          expect(lines).toHaveLength(3)
+          expect(lines[0]).toContain("open 'C:\\Users\\<user>\\AppData\\x'")
+          expect(lines[1]).toContain("open 'C:\\\\Users\\\\<user>\\\\AppData\\\\x'")
+          expect(lines[2]).toContain('{"binPath":"<drive>\\\\runtime\\\\llama.cpp\\\\win\\\\llama-server.exe"}')
+          for (const line of lines) {
+            expect(line).not.toContain(account)
+            expect(line).not.toContain('HilbertRaum Kit')
+          }
+          // The log at rest is unchanged: the paths are still in it.
+          const stored =
+            mode === 'plaintext'
+              ? readFileSync(join(dir, 'app.log'), 'utf8')
+              : mode === 'encrypted'
+                ? decrypt(key, deserializeBlob(readFileSync(join(dir, 'app.log.enc')))).toString('utf8')
+                : null
+          if (stored !== null) {
+            expect(stored).toContain(fileError)
+            expect(stored).toContain(JSON.stringify(`${kit}\\runtime`).slice(1, -1))
+          }
+        } finally {
+          setLogRedactionRoots({})
+          if (mode === 'encrypted') detachVaultKey()
+          initLogging(dir) // back to the in-memory mode the rest of this file logs in
+          for (const spy of quiet) spy.mockRestore()
+        }
+      }
+    )
   })
 })
 

@@ -107,6 +107,14 @@ from its first public `1.0.0` release onward.
   proxy certificate was set only there, downloads fail until it is installed on the computer,
   which your IT department can do. Every downloaded file is still checked against a fixed checksum
   before use (#564).
+- **A log you copy or save for support hides your folders and your account name.** Copy and Save
+  to file… in Settings → Diagnostics (advanced) → Recent logs handed out full paths, such as
+  `C:\Users\<your name>\AppData\…`. Now the drive, your home folder and the app's data and
+  temporary folders show as `<drive>`, `<home>`, `<app-data>` and `<temp>`, and this computer's
+  account name shows as `<user>` wherever it appears, as do account names in the usual folder paths
+  from another computer. The rest of each path stays, so support can still see which file failed.
+  A name in an unusual place can remain, for example in a folder you named yourself, so read a log
+  before you share it. The log on the drive keeps the full paths (#975).
 
 ### Fixed
 

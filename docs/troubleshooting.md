@@ -1303,7 +1303,14 @@ pack server, which has no password of its own; locking or quitting stops it.
 Everything is on the drive:
 - `workspace/` — your encrypted/plaintext database (chats, documents, embeddings).
 - `logs/app.log` (`app.log.enc` on an encrypted workspace — the diagnostics log is encrypted at
-  rest, same as your data) — local logs only; never uploaded.
+  rest, same as your data) — local logs only; never uploaded. When you copy or save the log for
+  support (**Settings → Diagnostics (advanced) → Recent logs**, **Copy** or **Save to file…**),
+  the drive and your home folder show as `<drive>` and `<home>`, this computer's account name as
+  `<user>` wherever it appears, and account names in the usual folder paths from another computer
+  as `<user>` too. The rest of each path stays, so support can still see which file failed
+  (`<drive>\runtime\llama.cpp\win\llama-server.exe`). A name in an unusual place can remain, for
+  example in a folder you named yourself, so read a log before you share it. The log on the drive
+  keeps the full paths.
 - `models/` — model weights. `config/` — drive settings/policy, and `workspace.json`, which holds
   your encrypted workspace's key (encrypted under your password): it belongs with `workspace/`.
 

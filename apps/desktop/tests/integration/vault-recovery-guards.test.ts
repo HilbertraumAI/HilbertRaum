@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { existsSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
@@ -804,7 +804,9 @@ describe('a file error while a workspace is created (#807)', () => {
     }
     expect(failures.hits.renameStagedEnc).toBe(1)
     expect(result).toEqual({ ok: false, reason: 'error', message: tMain('main.workspace.createFailed') })
-    // Neither the root nor a vault file name, raw or as JSON escapes a Windows path, reaches the log.
+    // Neither the root nor a vault file name, raw or as JSON escapes a Windows path, reaches the log. `readLogTail`
+    // redacts what it hands out (#975), which hides a Windows profile's account segment: the root's own folder name,
+    // which it keeps, still shows a path.
     const logged = readLogTail(100_000).slice(linesBefore)
     const failure = logged.filter((line) => line.includes('Workspace create failed'))
     expect(failure).toHaveLength(1)
@@ -814,6 +816,7 @@ describe('a file error while a workspace is created (#807)', () => {
     for (const line of logged) {
       expect(line).not.toContain(vp.root)
       expect(line).not.toContain(escapedRoot)
+      expect(line).not.toContain(basename(vp.root))
       expect(line).not.toContain('hilbertraum.sqlite')
     }
     // The create did not finish, but it committed its key file: nothing is open, and the state reads `locked` (#954: a

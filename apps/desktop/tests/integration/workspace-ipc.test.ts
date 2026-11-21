@@ -66,7 +66,7 @@ import {
   type VaultPaths,
   type WorkingCopyLossCause
 } from '../../src/main/services/workspace-vault'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
@@ -1398,9 +1398,11 @@ describe('a workspace failure line names no path (#956)', () => {
     const all = readLogTail(100_000)
     return all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes(needle))
   }
-  /** Neither `root` nor its JSON-escaped spelling (a Windows path inside a JSON log field) is in `line`. */
+  /** Neither `root`, its JSON-escaped spelling (a Windows path inside a JSON log field), nor its own folder name is in
+   *  `line`. `readLogTail` redacts what it hands out (#975): under a Windows profile the account segment no longer
+   *  matches, so only the folder name, which the redaction keeps, still shows that a path reached the log. */
   const namesNoPath = (line: string, root: string): boolean =>
-    !line.includes(root) && !line.includes(JSON.stringify(root).slice(1, -1))
+    !line.includes(root) && !line.includes(JSON.stringify(root).slice(1, -1)) && !line.includes(basename(root))
   /** What Node throws for a file operation: code, syscall, path, and a message naming the path. */
   const nodeFileError = (code: string, syscall: string, path: string): NodeJS.ErrnoException =>
     Object.assign(new Error(`${code}: failed, ${syscall} '${path}'`), { code, syscall, path, errno: -1 })

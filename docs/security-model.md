@@ -800,7 +800,7 @@ enumerated this class.
 never uploads. Diagnostics surfaces local data only; it transmits nothing off-device.
 
 **The log is encrypted at rest on an encrypted workspace** — `app.log` can carry file
-names/paths and model ids (never document or chat text — a hard call-site rule), so it is sealed
+names, absolute paths and model ids (never document or chat text — a hard call-site rule), so it is sealed
 under the **same vault key as the database and the document cache** (AES-256-GCM, the framed
 `MAGIC | iv | tag | ciphertext` blob), at rest as `logs/app.log.enc` (rotated copy
 `app.1.log.enc`). On a `plaintext_dev` workspace the log stays a plain rotating `app.log`,
@@ -815,8 +815,73 @@ alone (a `cpSync` refusal carries only that), logs its kind, code and system cal
 which names the drive's or the user profile's paths. The system call is kept only as a bare name: a
 spawn error's names the binary's path. Any other error keeps its message, other Node `ERR_*` codes
 included (`ERR_SQLITE_ERROR` keeps SQLite's fixed text). A refused lock's `VaultLockError` carries what caused it (`failure`: where the lock stopped
-and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. About
-25 other main-process log lines still write an error's whole text (a separate issue).
+and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. Other
+main-process lines can still write an error's whole text, a path included; the exit rule below
+redacts it on the way out.
+
+**Lines that leave the log are redacted (#975).** The rule is an exit rule (owner decision
+G-4 b). The log at rest keeps full detail: absolute paths, a refused engine's binary path,
+a sidecar's stderr tail. It stays on the device, encrypted on an encrypted workspace. Every line that
+leaves it is redacted first, by `services/log-redact.ts`: the lines the Diagnostics panel shows and
+Copy hands out (`readLogTail`), and the file Save to file writes (`readLogFull`). The redaction is a
+best effort, not a guarantee. Three passes:
+- **Known folders become placeholders.** The main process registers them at the top of its entry
+  module, before anything in the start can log or fail (`setLogRedactionRoots`, `main/index.ts`):
+  the app's data folder (`<app-data>`), the home folder (`<home>`), the temp folder (`<temp>`) and
+  the app's own folders (`<app>`). It adds the drive root (`<drive>`) as soon as `resolvePaths` has
+  found it (`addLogRedactionRoots`). A source pin (`log-redact-wiring.test.ts`) holds that order.
+  The longest folder goes first, so a drive root inside the home folder reads `<drive>`. A folder
+  matches in every spelling a line can carry: `\` or `/` separators, JSON's doubled backslashes,
+  the `\?\` long form and a `file:` URL. A Windows folder matches in any letter case, and so does a
+  macOS one under `/Users` or `/Volumes` (APFS ignores case by default). A folder matches whole
+  segments only: `C:\Users\x` never takes the start of `C:\Users\xavier`, nor of `C:\Users\x y`.
+  When the workspace is on the app's data folder (no Kit), the root reads `<app-data>`.
+- **This computer's account becomes `<user>` wherever it appears.** The signed-in account
+  (`os.userInfo().username`) and the home folder's own name, both when they differ, are replaced
+  as whole tokens in any shape and any letter case: `C:\Users\O'Brien`, `C:\Users\Smith, Anna`, a
+  folder redirected to `\fs01\data\peter`, `spawn C:\Users\Anna Schmidt ENOENT`, prose. A whole
+  token has no letter, digit, `_` or `-` right beside it and no `.` joining it to more letters
+  (`peter.smith` and `petersen` stay). A name shorter than 3 characters, or a word that also turns
+  up in ordinary log text (`user`, `admin`, `home`, `test` and a few more, the placeholders' own
+  words included), is left to the other two passes.
+- **Other absolute paths lose the part that names someone.** A profile's account segment becomes
+  `<user>`: `C:\Users\<user>\…` (an 8.3 short name such as `PETERS~1`, and a name with an
+  apostrophe such as `O'Brien`, too), `/Users/<user>/…`, `/home/<user>/…`, also behind a path
+  prefix (`/nfs/home/<user>`, `/var/home/<user>`, `/System/Volumes/Data/Users/<user>`), but not
+  inside an `http(s)://` URL; `/media/<user>/…`, WSL's `/mnt/c/Users/<user>/…`, and a profile
+  anywhere in a network path (`\pc\c$\Users\<user>`, `\wsl$\Ubuntu\home\<user>`, a share or
+  folder named `home$`, `users$`, `homes` or `profiles`). A mounted volume's name becomes `<volume>`
+  (`/Volumes/<volume>/…`, `/media/<user>/<volume>/…`, `/media/<volume>/runtime/…` for a mount with no
+  user folder, `/mnt/<volume>/…`). A network path's server and share become `\<server>\<share>\…`.
+
+The rest of the path stays, so support still sees which file failed:
+`<drive>\runtime\llama.cpp\win\llama-server.exe`. Relative paths, file names, `http(s)` URLs,
+device paths (`\.\pipe\…`), a `//` in prose and ordinary text are left alone, and redacting a
+redacted line changes nothing. A sentence's period and an error code after a path stay outside it
+(`<home>.`, `C:\Users\<user> ENOENT`). A known folder that no shape of the third pass could hide
+(`C:\work\kit`) keeps its placeholder even when words follow it.
+
+**Limits.** The third pass works from path shapes, so for another computer's account it is a best
+effort:
+- A path on another drive outside a profile (`D:\Private\letter.pdf`) keeps its folders, and so
+  does a folder you named yourself, even after your own name.
+- A name of several words (`Anna Schmidt`) counts as one segment when a separator, a closing quote
+  or a backtick follows it, or when a quote opened the path. After an unquoted path the words are a
+  sentence: `C:\Users\peter is missing` hides `peter` only, so another computer's `spawn
+  C:\Users\Anna Schmidt ENOENT` keeps `Schmidt`. The other way round, a sentence that runs straight
+  on to a closing quote after an unquoted path (`"saved to C:\Users\peter and done"`) is hidden with
+  the name.
+- Another computer's account name holding `,`, `(`, `)`, `+`, `=`, `;` or `[` keeps the part after
+  that character (`C:\Users\<user>, Anna`); an AD-joined Linux home `/home/CORP/peter` hides
+  `CORP` only; a company name in `OneDrive - Contoso GmbH` and a host name outside a path
+  (`getaddrinfo ENOTFOUND PETERS-PC`) stay.
+- A URL path that looks like a home (`GET /home/index.html`) or a quoted protocol-relative URL
+  (`"//cdn.example.org/x.js"`) is redacted as one; none is logged today.
+
+The user docs (troubleshooting, PRIVACY.md, CHANGELOG) say so in one sentence: read a log before
+you share it. A full 10 MB log redacts in about 110 ms; the live log is capped at 2 MB. The console
+copy of each line (shown in the terminal of a dev run, or of an app started from a terminal) is not
+redacted: the app does not hand it out.
 
 ### Design record — encrypted log (2026-06-13)
 
