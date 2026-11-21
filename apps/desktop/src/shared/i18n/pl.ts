@@ -2942,6 +2942,9 @@ export const pl: UiCatalog<'pl'> = {
   'main.engine.updateBusy':
     'Silnik AI jest teraz w użyciu (trwa generowanie odpowiedzi, import, tłumaczenie lub zadanie ' +
     'dotyczące dokumentu). Spróbuj ponownie zaktualizować silnik, gdy praca się zakończy.',
+  'main.engine.filesInUse':
+    'Nie udało się zastąpić silnika, ponieważ inny program używa jednego z jego plików (na przykład ' +
+    'skaner antywirusowy). Spróbuj ponownie za minutę.',
   'main.ocr.badRequest': 'Nie rozpoznano polecenia pobrania plików OCR. Spróbuj ponownie.',
   'main.ocr.alreadyRunning': 'Pliki OCR są już pobierane.',
   'main.ocr.noSources':

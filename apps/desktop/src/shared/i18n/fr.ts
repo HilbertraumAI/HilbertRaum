@@ -3081,6 +3081,9 @@ export const fr: UiCatalog<'fr'> = {
     'Le moteur d’IA est actuellement utilisé (une réponse, une importation, une traduction ou ' +
     'une tâche sur un document est en cours). Relancez la mise à jour une fois l’opération ' +
     'terminée.',
+  'main.engine.filesInUse':
+    'Le moteur n’a pas pu être remplacé, car un autre programme utilise l’un de ses fichiers (une ' +
+    'analyse antivirus, par exemple). Réessayez dans une minute.',
   'main.ocr.badRequest':
     'La demande de téléchargement des fichiers OCR n’a pas été comprise. Réessayez.',
   'main.ocr.alreadyRunning': 'Les fichiers OCR sont déjà en cours de téléchargement.',

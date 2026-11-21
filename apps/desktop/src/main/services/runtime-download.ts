@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, readFileSync } from 'node:fs'
-import { lstat, mkdir, readdir, readlink, rename, rm } from 'node:fs/promises'
+import { chmodSync, existsSync, lstatSync, readFileSync } from 'node:fs'
+import { lstat, mkdir, readdir, readlink, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
@@ -22,24 +22,30 @@ import {
 } from '../../shared/runtime-sources'
 import {
   downloadToFile,
+  engineSwapDirs,
   failureReason,
+  flushToDevice,
   markerBinaryKey,
+  planInFolder,
   planRuntimeDownload,
   readRuntimeMarker,
   requiredInstallFiles,
   runtimeBinaryPresent,
   runtimeInstallCurrent,
   runtimeInstallRelation,
+  runtimeMarkerPath,
   selectRuntimeBuild,
   sidecarFamilySpec,
   verifyDownloadedFile,
   writeRuntimeMarker,
   ENGINE_DOWNLOAD_MAX_BYTES,
   SIDECAR_FAMILY_SPECS,
+  type EngineSwapDirs,
   type FetchFn,
   type SidecarFamilySpec,
   type RuntimeDownloadPlan
 } from './assets'
+import { renameWithRetry } from './fs-retry'
 import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
 import { assertDownloadAllowed, NetworkSwitch, type DownloadGates } from './downloads'
@@ -53,8 +59,11 @@ import type { EngineProblemBuilds } from './runtime/engine-load'
 // "no llama-server binary on the drive") and voice dictation never appears (no transcriber).
 // This service fetches + SHA-256-verifies + extracts the host's prebuilt build for EACH
 // engine family from model-manifests/runtime-sources.yaml into runtime/<family>/<os>/,
-// mirroring the canonical fetch-runtime scripts (download → verify → clean → extract →
-// flatten → install marker). The network (`fetchImpl`) and extraction (`extractImpl`,
+// mirroring the canonical fetch-runtime scripts (download → verify → extract → flatten →
+// install marker). Since #986 the in-app install never deletes first: it builds and marks the
+// new copy in `<os>.new/`, then swaps it in by rename, and the next start finishes or rolls
+// back a swap a kill interrupted (`recoverEngineSwaps`; architecture.md "In-app engine
+// updates" §6). The network (`fetchImpl`) and extraction (`extractImpl`,
 // default `tar -xf`) are injected seams so the unit suite stays zero-network; only the #856
 // rows in engine-download.test.ts run the OS's own tar.
 //
@@ -531,10 +540,10 @@ export interface StartEngineDownloadOptions {
   beforeReplace?: () => Promise<void>
   /**
    * True when a chat model runtime is currently RUNNING off the llama_cpp install dir
-   * (full-audit 2026-07-11 CODE-13). An engine (re-)install pre-cleans that dir
-   * (`install()` removes everything but the archive + `cpu/`), which on Windows fails
-   * confusingly against the running binary's file lock and on POSIX silently swaps the
-   * binary under the live process — so a job that would touch llama_cpp is refused with
+   * (full-audit 2026-07-11 CODE-13). An engine (re-)install replaces that dir (since #986 by
+   * a staged swap: the running binary would keep its old copy in `<os>.old/` open, so that
+   * copy could not be deleted, and the next swap would fail on it) — so a job that would
+   * touch llama_cpp is refused with
    * friendly copy while a model runs. Installs that only touch other families (e.g. a
    * missing whisper_cpp) are unaffected. The IPC layer passes `chatEngineInUse(ctx.runtime)`:
    * a model running or starting on the real engine, never the built-in demo runtime (#532).
@@ -545,7 +554,7 @@ export interface StartEngineDownloadOptions {
   /**
    * F-32: true while ANY OTHER llama-server-backed sidecar — the E5 embedder, reranker, vision
    * or translation — has a live child. They all execute the SAME `runtime/llama.cpp/<os>/`
-   * binary a llama_cpp (re-)install pre-cleans, so the guard must refuse the install while any
+   * binary a llama_cpp (re-)install replaces, so the guard must refuse the install while any
    * of them runs, not just the chat runtime. The IPC layer passes
    * `registeredSidecarPids('llama_cpp').length > 0`. #678: none of them runs the `cpu/` net, so a
    * job that replaces only that is not refused for them.
@@ -554,14 +563,14 @@ export interface StartEngineDownloadOptions {
   /**
    * F-32: true while a whisper transcription/dictation child is executing from
    * `runtime/whisper.cpp/<os>/` (a legitimate audio import can run for hours). A whisper_cpp
-   * install pre-cleans that dir, so it is refused while one runs. The IPC layer passes
+   * install replaces that dir, so it is refused while one runs. The IPC layer passes
    * `registeredSidecarPids('whisper_cpp').length > 0`.
    */
   whisperActive?: boolean
   /**
    * #339 P8-1: true while a `kiwix-serve` / `kiwix-manage` child is executing from
-   * `runtime/kiwix-tools/<os>/`. A kiwix_tools (re-)install pre-cleans that dir — on Windows
-   * it would fail against the live file lock (the F-32 precedent) — so it is refused while
+   * `runtime/kiwix-tools/<os>/`. A kiwix_tools (re-)install replaces that dir — on Windows
+   * the old copy could not be deleted under the live file lock (the F-32 precedent) — so it is refused while
    * one runs. The IPC layer passes `registeredSidecarPids('kiwix_tools').length > 0` (P8-2).
    */
   kiwixToolsActive?: boolean
@@ -742,6 +751,8 @@ export function previewEngineDownload(opts: EngineStepRequest): EngineDownloadPr
 /**
  * Why a job did not finish (#843), for its audit record: a content-free code, never the job's
  * `error` text. `cancelled` and `networkOff` (#782) are the stops; the rest name where it failed.
+ * #986: `filesInUse` — the swap's rename was refused (a file held in the folder) and the installed copy
+ * was put back.
  */
 export type EngineJobEndReason =
   | 'cancelled'
@@ -753,6 +764,7 @@ export type EngineJobEndReason =
   | 'incomplete'
   | 'install'
   | 'notReplaced'
+  | 'filesInUse'
   // A failure outside every step that records its own reason (an unexpected exception in the run).
   | 'internal'
 
@@ -845,7 +857,7 @@ export class EngineDownloadManager {
     const reinstall = opts.reinstall === true
     const update = opts.update === true
     const families = [...new Set(steps.map((s) => s.family))]
-    // CODE-13 + F-32: refuse an install that would pre-clean a dir a LIVE child executes from.
+    // CODE-13 + F-32: refuse an install that would replace a dir a LIVE child executes from.
     // A llama_cpp install is refused while the chat runtime OR any other llama-server-backed
     // sidecar (embedder/reranker/vision/translation) is up; a whisper_cpp install while a
     // transcription/dictation runs. Installs touching only the OTHER family stay allowed.
@@ -888,7 +900,7 @@ export class EngineDownloadManager {
       ...(reinstall ? { reinstall } : {}),
       ...(update ? { update } : {})
     })
-    void this.run(job, steps, controller, opts.beforeReplace)
+    void this.run(job, steps, opts.rootPath, controller, opts.beforeReplace)
       // Every expected failure sets the status and its reason where it happens. An unexpected exception
       // (one no step catches) used to leave the job reading 'downloading' or 'extracting' for good — a
       // renderer polling it never saw an end — and an unhandled rejection. It ends the job instead.
@@ -963,7 +975,8 @@ export class EngineDownloadManager {
    * hash and the extraction of a tens-of-MB archive take real time on a USB drive, and a
    * cancel landing there used to be silently dropped (the job kept installing).
    * `fetchArchive` re-checks the abort signal after the verify, `replaceInstall` after the
-   * extraction (before the marker write), and `run` between archives and between its phases.
+   * extraction and again before the swap (#986: a cancel is honoured until the swap's first
+   * rename; after it the step finishes), and `run` between archives and between its phases.
    */
   cancel(jobId: string): EngineDownloadJob {
     const job = this.jobs.get(jobId)
@@ -1039,11 +1052,13 @@ export class EngineDownloadManager {
    * is downloaded and verified first, while the installed engine stays untouched and usable; only
    * then (after `beforeReplace`, the update's pause) is each install replaced, which takes seconds.
    * A failure or cancel in the first phase replaces nothing. Archives not yet extracted when the
-   * job stops are deleted.
+   * job stops are deleted. #986: each replacement is a staged swap (`replaceInstall`), so a step
+   * that fails leaves its install as it was.
    */
   private async run(
     job: EngineDownloadJob,
     steps: InstallStep[],
+    rootPath: string,
     controller: AbortController,
     beforeReplace?: () => Promise<void>
   ): Promise<void> {
@@ -1076,6 +1091,8 @@ export class EngineDownloadManager {
     // for the swap (`spawn-gate.ts`) instead of running a half-extracted binary.
     const releases = [...new Set(steps.map((s) => s.family))].map((f) => holdEngineSpawns(f))
     const replaced: InstallStep[] = []
+    // #986: the replaced copies (`<live>.old/`), deleted once the gate is released.
+    const replacedFolders: string[] = []
     let complete = false
     try {
       if (beforeReplace) {
@@ -1095,7 +1112,7 @@ export class EngineDownloadManager {
         }
       }
       for (const [i, step] of steps.entries()) {
-        const outcome = await this.replaceInstall(job, step.plan, controller)
+        const outcome = await this.replaceInstall(job, step, rootPath, controller, replacedFolders)
         if (outcome === 'done') replaced.push(step)
         // A cancel stops what has not started; a swap it arrived too late to stop stays recorded.
         const last = i === steps.length - 1
@@ -1108,6 +1125,9 @@ export class EngineDownloadManager {
       complete = true
     } finally {
       for (const release of releases) release()
+      // #986: in the background and marker first, after the gate: a helper that was waiting starts
+      // on the new copy at once. The next swap waits for these deletes (`engineFolderDeletesSettled`).
+      for (const dir of replacedFolders) deleteEngineFolderLater(dir, this.deps.log)
       // #516: a job that stopped part-way still replaced what it replaced — the consumers of a new
       // main build need the same re-arm and probe refresh as after a complete install. #678: so does
       // a `cpu/` net a reinstall replaced alone: its old verdict goes, and the fresh copy is known.
@@ -1138,7 +1158,9 @@ export class EngineDownloadManager {
   /**
    * Phase 1 for ONE archive: download → verify. Returns 'ok' with the verified archive at
    * `plan.zipDest`; on 'failed' it sets `job.status`/`job.error`, and on anything but 'ok' the
-   * archive is gone. The installed engine is not touched. `job.unverified` stays false for
+   * archive is gone. The installed engine is not touched: the archive lands beside its files
+   * (`plan.zipDest`, inside the install folder, which a first install creates here), and phase 2
+   * moves it into the staging folder it is extracted in (#986). `job.unverified` stays false for
    * engines: RT-02 made a placeholder hash a hard FAILURE (the verify branch below), so there is
    * no "installed but unverified" engine state — unlike model weights.
    */
@@ -1247,189 +1269,345 @@ export class EngineDownloadManager {
   }
 
   /**
-   * Phase 2 for ONE verified archive: clean → extract → flatten → completeness check → marker.
-   * Returns the outcome; on 'failed' it sets `job.status`/`job.error`. The archive is deleted
-   * whatever happens.
+   * Phase 2 for ONE verified archive (#986): a staged swap, never a delete first. `stageEngineInstall`
+   * builds the new copy in `<live>.new/` (extract, flatten, left-out files, link sweep, required files,
+   * hashes, every file flushed, the marker written last INSIDE `.new`). A cancel is honoured until the
+   * swap's first rename; any failure or cancel before it deletes `.new` and leaves the install folder
+   * exactly as it was. The swap (`swapEngineFolder`) moves the install to `<live>.old/` and `.new` in,
+   * putting the old copy back when the second rename is refused; the main build then carries the
+   * `cpu/` net over from `.old`. `.old` joins `replacedFolders`, deleted after the job. Returns the
+   * outcome; on 'failed' it sets `job.status`/`job.error`. The archive is gone whatever happens.
    */
   private async replaceInstall(
     job: EngineDownloadJob,
-    plan: RuntimeDownloadPlan,
-    controller: AbortController
+    step: InstallStep,
+    rootPath: string,
+    controller: AbortController,
+    replacedFolders: string[]
   ): Promise<'done' | 'failed' | 'aborted'> {
+    const { plan } = step
+    let dirs: EngineSwapDirs | null = null
+    let keepStaging = false
     try {
       job.status = 'extracting'
-      // F-33: thread the job's abort signal into the extractor so a cancel actually kills the
-      // tar child (and a deadline bounds a wedged one), instead of the status flipping while tar
-      // keeps writing into `extractTo`.
-      await this.install(plan, controller.signal)
-      // CODE-13 / F-33: a cancel DURING the extraction kills tar, so `install()` rejects and the
-      // catch below reports the job cancelled (the half-extracted folder has no marker, and the
-      // missing files surface as #530 "files damaged", whose #532 reinstall repairs them).
-      // #516: a cancel that lands after `install()` finished arrives too late to stop anything —
-      // the old copy is gone and the new one is complete — so the install is finished and
-      // recorded. Skipping the marker used to leave a working engine without a version record,
-      // which no update offers to replace.
-      if (controller.signal.aborted) {
-        this.deps.log?.('Cancel arrived after the files were in place — finishing the install', {
-          extractTo: plan.extractTo
-        })
-      }
-      await rm(plan.zipDest, { force: true })
-
-      // #339 P8-1: the completeness check covers EVERY file the plan requires — the family's
-      // executables (the code floor ∪ the yaml's `executables`) and the build's `runtime_files`
-      // — after the flatten, so a tarball whose secondary executables were nested elsewhere
-      // fails loudly instead of installing half a bundle. The basenames are pinned artifact
-      // names, never user content.
-      const requiredFiles = requiredInstallFiles(plan)
-      const missingFiles = requiredFiles.filter((p) => !existsSync(p))
-      if (missingFiles.length > 0) {
-        this.deps.log?.('Engine extraction finished but required files are missing', {
-          extractTo: plan.extractTo,
-          missing: missingFiles.map((p) => basename(p))
-        })
-        await this.clearFailedInstall(plan)
-        job.status = 'failed'
-        job.error = tMain('main.engine.binaryMissing')
-        this.noteEnd(job, 'incomplete')
-        return 'failed'
-      }
-      if (plan.os !== 'win') {
-        for (const p of plan.binaryPaths) {
-          try {
-            chmodSync(p, 0o755)
-          } catch {
-            /* best-effort; a non-executable bit surfaces on the next start */
-          }
-        }
-      }
-      // Record every installed file's own SHA-256 so each executable can be re-hashed before
-      // spawn (vuln-scan B) and the sell gate can check the runtime files too. Best-effort at
-      // FAMILY granularity: a hashing failure must not fail an otherwise-good install — the
-      // marker is then written with NO map at all (→ verifier skip-legacy for every binary),
-      // never a partial one, so the verifier and the sell gate can never disagree about one
-      // install (#339 P8-1).
-      let binaries: Record<string, string> | undefined
-      try {
-        const entries: Record<string, string> = {}
-        for (const p of requiredFiles) entries[markerBinaryKey(plan.extractTo, p)] = await sha256File(p)
-        binaries = entries
-      } catch (err) {
-        this.deps.log?.('Could not hash the installed files for the marker', { error: String(err) })
-      }
-      writeRuntimeMarker(plan.extractTo, {
-        version: plan.version,
-        backend: plan.backend,
-        os: plan.os,
-        arch: plan.arch,
-        ...(binaries ? { binaries } : {})
+      dirs = engineSwapDirs(rootPath, plan.extractTo)
+      // F-33: the job's abort signal reaches the extractor, so a cancel kills the tar child (and a
+      // deadline bounds a wedged one).
+      const staged = await stageEngineInstall(plan, dirs.staging, {
+        extract: this.deps.extractImpl,
+        signal: controller.signal,
+        log: this.deps.log
       })
-      // CODE-12 (full-audit 2026-07-11): drop the binary-verifier's session-cached verdict
-      // for every executable we just replaced — a stale pre-install verdict (the `mismatch`
-      // after a tamper repair, or an `ok` hashed from the OLD bytes) must not apply to the new
-      // binary until app restart. The next spawn re-hashes against the fresh marker. Runtime
-      // files are never spawned, so they hold no cached verdict.
+      // #986: until the first rename nothing installed has been touched, so a cancel that landed
+      // after the extraction is honoured too. (#516 used to finish such an install: the old copy was
+      // already gone by then. It no longer is.)
+      if (controller.signal.aborted) throw new Error('engine install cancelled before the swap')
+      // A scanner can take a fresh file after the check: the antivirus case of #986. (The stage's
+      // own test, `existsSync`, again.)
+      if (!requiredInstallFiles(staged).every((p) => existsSync(p))) {
+        throw new EngineStepError('incomplete', tMain('main.engine.binaryMissing'))
+      }
+      try {
+        await swapEngineFolder(dirs, this.deps.log)
+      } catch (err) {
+        if (err instanceof EngineStepError && err.keepStaging) keepStaging = true
+        throw err
+      }
+      // The new copy is in place: from here a cancel is too late to stop anything.
+      const carried = step.main ? await carryCpuNet(dirs.previous, dirs.live, this.deps.log) : true
+      // A `.old` whose net could not be carried stays for the next start to carry (`recoverEngineSwaps`).
+      if (carried && present(dirs.previous)) replacedFolders.push(dirs.previous)
+      // CODE-12 (full-audit 2026-07-11): drop the binary-verifier's session-cached verdict for every
+      // executable we just replaced — a stale pre-install verdict (the `mismatch` after a tamper
+      // repair, or an `ok` hashed from the OLD bytes) must not apply to the new binary until app
+      // restart. The next spawn re-hashes against the fresh marker. Runtime files are never spawned.
       for (const p of plan.binaryPaths) invalidateBinaryVerification(p)
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'
     } catch (err) {
-      if (job.status === 'cancelled') {
-        await rm(plan.zipDest, { force: true })
-        return 'aborted'
-      }
-      // Before the status flips: the renderer refreshes once, on the terminal status.
-      await this.clearFailedInstall(plan)
-      job.status = 'failed'
-      job.error = friendlyEngineError(err)
-      this.noteEnd(job, 'install')
-      this.deps.log?.('Engine download failed', { error: String(err) })
+      // Before the status flips: the renderer refreshes once, on the terminal status. A `.new` the
+      // swap could not put back is the only whole copy left, so it stays for the next start.
+      if (dirs && !keepStaging) deleteEngineFolderLater(dirs.staging, this.deps.log)
       await rm(plan.zipDest, { force: true }).catch(() => undefined)
+      if (job.status === 'cancelled') return 'aborted'
+      job.status = 'failed'
+      if (err instanceof EngineStepError) {
+        job.error = err.message
+        this.noteEnd(job, err.reason)
+      } else {
+        job.error = friendlyEngineError(err)
+        this.noteEnd(job, 'install')
+      }
+      this.deps.log?.('Engine install failed', {
+        error: String(err),
+        ...(keepStaging ? { kept: 'both copies, for the next start' } : {})
+      })
       return 'failed'
     }
   }
+}
 
-  /**
-   * Clean a stale prior install, extract the archive, then flatten so the binary lands at
-   * the extract-dir root (the macOS/Linux tarballs + the whisper Windows zip nest under a
-   * release/Release folder). Mirrors the fetch-runtime scripts' extract + flatten steps.
-   */
-  private async install(plan: RuntimeDownloadPlan, signal?: AbortSignal): Promise<void> {
-    // Remove the previous install before extracting so two builds never mix — but keep the
-    // just-downloaded archive and the `cpu/` safety-net subdir (audit fix: the cpu→vulkan
-    // upgrade path; a stale root binary would otherwise satisfy the flatten guard).
-    for (const entry of await this.installEntries(plan)) {
-      await rm(entry, { recursive: true, force: true })
+/** A step failure with its own copy and audit reason (#986). */
+class EngineStepError extends Error {
+  constructor(
+    readonly reason: EngineJobEndReason,
+    message: string,
+    /** The swap could not put the old copy back: the staged copy is the only whole one, kept. */
+    readonly keepStaging = false
+  ) {
+    super(message)
+  }
+}
+
+type EngineLog = ((msg: string, meta?: unknown) => void) | undefined
+
+/** Is there anything at `p`, a dangling link included. */
+function present(p: string): boolean {
+  try {
+    lstatSync(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** A real folder at `p`: never a link (or a junction) posing as one. */
+function isRealFolder(p: string): boolean {
+  try {
+    return lstatSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+// ---- The staged swap (#986; architecture.md "In-app engine updates" §6) -------------------------
+
+/** The background deletes of replaced and abandoned copies, one after the other. */
+let engineFolderDeletes: Promise<void> = Promise.resolve()
+
+/**
+ * Settles once every engine-folder delete queued so far has run (#986). The stage and the swap wait for
+ * it, so a background delete never races a new `.new` or `.old` of the same name.
+ */
+export function engineFolderDeletesSettled(): Promise<void> {
+  return engineFolderDeletes
+}
+
+/** Queue `dir` for deletion in the background (`removeEngineFolder`: marker first). */
+function deleteEngineFolderLater(dir: string, log: EngineLog): void {
+  engineFolderDeletes = engineFolderDeletes.then(async () => {
+    await removeEngineFolder(dir, log)
+  })
+}
+
+/**
+ * Delete an engine copy, its marker FIRST (#986 gap 3): on exFAT a folder lists in creation order and
+ * the marker is written last, so a delete cut short by a kill or an unplug would otherwise keep the
+ * marker over missing files, and the start would take the copy for whole. A link (or junction) at
+ * `dir` is unlinked, never entered. False, and logged, when anything is left.
+ */
+async function removeEngineFolder(dir: string, log: EngineLog): Promise<boolean> {
+  try {
+    if (!present(dir)) return true
+    // `recursive`: whatever sits at the marker's name goes, a folder posing as it too.
+    if (isRealFolder(dir)) await rm(runtimeMarkerPath(dir), { force: true, recursive: true })
+    await rm(dir, { recursive: true, force: true })
+    return true
+  } catch (err) {
+    log?.('Could not remove an engine folder', { folder: basename(dir), error: String(err) })
+    return false
+  }
+}
+
+/** Flush every file under `dir` to the device (#986: the marker decides, so what it covers must be on the disk). */
+async function flushFolder(dir: string): Promise<void> {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name)
+    if (entry.isDirectory()) await flushFolder(p)
+    else if (entry.isFile()) flushToDevice(p)
+  }
+}
+
+export interface StageEngineOptions {
+  /** The extractor (default `extractWithTar`). */
+  extract?: ExtractFn
+  /** A cancel: it reaches the extractor, and a stage it lands on throws. */
+  signal?: AbortSignal
+  log?: (msg: string, meta?: unknown) => void
+}
+
+/**
+ * Build a complete, checked, marked install of `plan` in `stagingDir` (#986), from the verified archive at
+ * `plan.zipDest`, and return the plan rebased onto `stagingDir`. A leftover `stagingDir` goes first
+ * (marker first; one that cannot go fails the stage). The archive is moved in (#856: tar is given only
+ * `./<name>` and runs inside the folder), extracted, flattened, cleared of the family's left-out
+ * executables (#729), swept for escaping links (SEC-2), and deleted; then every required file must be
+ * there, the executables get their mode, every file is hashed into the marker (all or nothing) and
+ * flushed, and the marker is written LAST, inside `stagingDir`, before anything moves (W-67, lens F
+ * CE-F1). Nothing outside `stagingDir` is touched but the archive's move. Throws on any failure; the
+ * caller deletes `stagingDir`. The engine swap uses it per step; the app-update plan's install into a
+ * folder of its own (W-30, T8.5a) is meant to reuse it, without the swap.
+ */
+export async function stageEngineInstall(
+  plan: RuntimeDownloadPlan,
+  stagingDir: string,
+  opts: StageEngineOptions = {}
+): Promise<RuntimeDownloadPlan> {
+  await engineFolderDeletesSettled()
+  if (present(stagingDir) && !(await removeEngineFolder(stagingDir, opts.log))) {
+    throw new EngineStepError('filesInUse', tMain('main.engine.filesInUse'))
+  }
+  await mkdir(stagingDir, { recursive: true })
+  const staged = planInFolder(plan, stagingDir)
+  await renameWithRetry(plan.zipDest, staged.zipDest)
+  await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal)
+  if (opts.signal?.aborted) throw new Error('engine install cancelled after the extraction')
+  await flattenNestedBinary(staged)
+  // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before
+  // anything can start it. A file that cannot be removed fails the install like a bad archive.
+  // `lstat`, not `existsSync`: a dangling link of that name must go too.
+  for (const p of staged.excludedPaths) {
+    const there = await lstat(p).then(
+      () => true,
+      () => false
+    )
+    await rm(p, { recursive: true, force: true })
+    if (there) opts.log?.('Left out of the engine install', { file: basename(p) })
+  }
+  // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already refuses `..`
+  // members and the archive hash is verified before extraction, but a SYMLINK member pointing outside
+  // the install dir extracts fine and would be followed by any later read/write through it. Sweep the
+  // FINAL layout (after flatten, so a relative link is checked where it will actually live) and refuse
+  // the install if any link escapes. Legitimate engine archives carry no escaping links.
+  await assertExtractedSymlinksContained(stagingDir)
+  await rm(staged.zipDest, { force: true })
+
+  // #339 P8-1: the completeness check covers EVERY file the plan requires — the family's executables
+  // (the code floor ∪ the yaml's `executables`) and the build's `runtime_files` — after the flatten, so
+  // a tarball whose secondary executables were nested elsewhere fails loudly instead of installing half
+  // a bundle. The basenames are pinned artifact names, never user content.
+  const requiredFiles = requiredInstallFiles(staged)
+  const missingFiles = requiredFiles.filter((p) => !existsSync(p))
+  if (missingFiles.length > 0) {
+    opts.log?.('Engine extraction finished but required files are missing', {
+      folder: basename(stagingDir),
+      missing: missingFiles.map((p) => basename(p))
+    })
+    throw new EngineStepError('incomplete', tMain('main.engine.binaryMissing'))
+  }
+  if (staged.os !== 'win') {
+    for (const p of staged.binaryPaths) {
+      try {
+        chmodSync(p, 0o755)
+      } catch {
+        /* best-effort; a non-executable bit surfaces on the next start */
+      }
     }
+  }
+  // Record every installed file's own SHA-256 so each executable can be re-hashed before spawn
+  // (vuln-scan B) and the sell gate can check the runtime files too. Best-effort at FAMILY
+  // granularity: a hashing failure must not fail an otherwise-good install — the marker is then
+  // written with NO map at all (→ verifier skip-legacy for every binary), never a partial one, so the
+  // verifier and the sell gate can never disagree about one install (#339 P8-1). The keys are relative
+  // to the folder, so the ones recorded here are the live folder's after the swap.
+  let binaries: Record<string, string> | undefined
+  try {
+    const entries: Record<string, string> = {}
+    for (const p of requiredFiles) entries[markerBinaryKey(staged.extractTo, p)] = await sha256File(p)
+    binaries = entries
+  } catch (err) {
+    opts.log?.('Could not hash the installed files for the marker', { error: String(err) })
+  }
+  // #986: the marker decides which copy the start trusts, so the files it covers reach the device
+  // first (an exFAT stick has no journal), then the marker itself.
+  await flushFolder(stagingDir)
+  writeRuntimeMarker(stagingDir, {
+    version: plan.version,
+    backend: plan.backend,
+    os: plan.os,
+    arch: plan.arch,
+    ...(binaries ? { binaries } : {})
+  })
+  flushToDevice(runtimeMarkerPath(stagingDir))
+  return staged
+}
 
-    const extract = this.deps.extractImpl ?? extractWithTar
-    await extract(plan.zipDest, plan.extractTo, signal)
-    await this.flattenNestedBinary(plan)
-    // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before
-    // anything can start it. A file that cannot be removed fails the install like a bad archive.
-    // `lstat`, not `existsSync`: a dangling link of that name must go too.
-    for (const p of plan.excludedPaths) {
-      const there = await lstat(p).then(() => true, () => false)
-      await rm(p, { recursive: true, force: true })
-      if (there) this.deps.log?.('Left out of the engine install', { file: basename(p) })
-    }
-
-    // SEC-2 (full-audit 2026-07-12): post-extract containment sweep. The OS tar already
-    // refuses `..` members and the archive hash is verified before extraction, but a
-    // SYMLINK member pointing outside the install dir extracts fine and would be followed
-    // by any later read/write through it. Sweep the FINAL layout (after flatten, so a
-    // relative link is checked where it will actually live) and refuse the install if any
-    // link escapes. Legitimate engine archives carry no escaping links, so this changes
-    // nothing for a good archive. A refusal clears here, ahead of `replaceInstall`'s catch:
-    // a cancel that happened to land in this window must not keep a refused archive (#752).
+/**
+ * Swap a staged copy in (#986): delete a stale `.old` (marker first; Windows never renames onto an
+ * existing folder, and POSIX would replace only an empty one), move the install folder to `.old` and
+ * `.new` in. Each rename is tried again while Windows reports a held handle (`renameWithRetry`). A
+ * stale `.old` that cannot go (a program of an earlier session still runs from it) or a refused first
+ * rename fails before the install folder is touched; a refused second rename moves the old copy back.
+ * Each of those is `filesInUse`, with the install folder as it was. Only when the old copy cannot be
+ * moved back either are both copies left for the next start, which moves the new one in.
+ */
+async function swapEngineFolder(dirs: EngineSwapDirs, log: EngineLog): Promise<void> {
+  await engineFolderDeletesSettled()
+  const inUse = (keepStaging = false): EngineStepError =>
+    new EngineStepError('filesInUse', tMain('main.engine.filesInUse'), keepStaging)
+  if (present(dirs.previous) && !(await removeEngineFolder(dirs.previous, log))) throw inUse()
+  const hadLive = present(dirs.live)
+  if (hadLive) {
     try {
-      await assertExtractedSymlinksContained(plan.extractTo)
+      await renameWithRetry(dirs.live, dirs.previous)
     } catch (err) {
-      await this.clearFailedInstall(plan)
-      throw err
+      log?.('The installed engine could not be moved aside: nothing was replaced', { error: String(err) })
+      throw inUse()
     }
   }
-
-  /** What a clean of the install dir removes: all but the archive and the real `cpu/` net. */
-  private async installEntries(plan: RuntimeDownloadPlan): Promise<string[]> {
-    const archiveName = basename(plan.zipDest)
-    const entries = await readdir(plan.extractTo, { withFileTypes: true })
-    return entries
-      .filter((e) => e.name !== archiveName && !(e.name === 'cpu' && e.isDirectory()))
-      .map((e) => join(plan.extractTo, e.name))
-  }
-
-  /**
-   * A failed install leaves nothing installed (#752). The old copy is already gone, and a binary
-   * left here with no marker reads as installed and passes the verifier as `skip-legacy`. A cancel
-   * of a running tar does not come here: that half-extracted folder is #530's to report. `rm`
-   * unlinks a link it meets, never its target. Best-effort, one entry at a time: the failure
-   * itself is what gets reported, and one locked file must not spare the binary sorted after it.
-   */
-  private async clearFailedInstall(plan: RuntimeDownloadPlan): Promise<void> {
-    const entries = await this.installEntries(plan).catch(() => [])
-    for (const entry of entries) {
-      await rm(entry, { recursive: true, force: true }).catch((err: unknown) => {
-        this.deps.log?.('Could not clear a failed engine install', { error: String(err) })
-      })
+  try {
+    await renameWithRetry(dirs.staging, dirs.live)
+  } catch (err) {
+    log?.('The new engine copy could not be moved in', { error: String(err) })
+    if (hadLive) {
+      try {
+        await renameWithRetry(dirs.previous, dirs.live)
+      } catch (back) {
+        log?.('The installed engine could not be moved back: both copies stay for the next start', {
+          error: String(back)
+        })
+        throw inUse(true)
+      }
     }
+    throw inUse()
   }
+}
 
-  /**
-   * Flatten: when the binary is nested, move its directory's contents up to the extract
-   * root, where services/runtime/sidecar.ts resolves it. The `cpu/` subdir is excluded
-   * from the search so a re-fetch of the DEFAULT build never mistakes the safety net for
-   * the freshly extracted nested binary.
-   */
-  private async flattenNestedBinary(plan: RuntimeDownloadPlan): Promise<void> {
-    if (existsSync(plan.binaryPath)) return
-    const binName = basename(plan.binaryPath)
-    const found = await findBinary(plan.extractTo, binName, join(plan.extractTo, 'cpu'))
-    if (!found) return
-    const srcDir = join(found, '..')
-    if (resolveSame(srcDir, plan.extractTo)) return
-    for (const entry of await readdir(srcDir)) {
-      await rename(join(srcDir, entry), join(plan.extractTo, entry))
-    }
+/**
+ * The `cpu/` safety net sits INSIDE the main install folder (`<os>/cpu/`), so the main build's swap moves
+ * it to `.old` with the old copy (#986 gap 1). Carry it into the new copy when that has none, before
+ * `.old` is deleted. True when there was nothing to carry or it was carried; false (logged) when it is
+ * still in `.old`, which must then stay for the start to carry.
+ */
+async function carryCpuNet(previous: string, live: string, log: EngineLog): Promise<boolean> {
+  const from = join(previous, 'cpu')
+  const to = join(live, 'cpu')
+  if (!isRealFolder(from) || present(to)) return true
+  try {
+    await renameWithRetry(from, to)
+    return true
+  } catch (err) {
+    log?.('The cpu/ safety net could not be carried into the new copy: the next start carries it', {
+      error: String(err)
+    })
+    return false
+  }
+}
+
+/**
+ * Flatten: when the binary is nested, move its directory's contents up to the extract root, where
+ * services/runtime/sidecar.ts resolves it. A `cpu/` subdir is excluded from the search so a nested
+ * folder of that name is never mistaken for the freshly extracted nested binary.
+ */
+async function flattenNestedBinary(plan: RuntimeDownloadPlan): Promise<void> {
+  if (existsSync(plan.binaryPath)) return
+  const binName = basename(plan.binaryPath)
+  const found = await findBinary(plan.extractTo, binName, join(plan.extractTo, 'cpu'))
+  if (!found) return
+  const srcDir = join(found, '..')
+  if (resolveSame(srcDir, plan.extractTo)) return
+  for (const entry of await readdir(srcDir)) {
+    await renameWithRetry(join(srcDir, entry), join(plan.extractTo, entry))
   }
 }
 
@@ -1439,7 +1617,7 @@ export class EngineDownloadManager {
  * `extractTo`. Lexical resolution via `readlink` (not `realpath`) so a BROKEN escaping
  * link is still caught, and no recursion THROUGH links (a link dirent is never a
  * directory dirent, so link cycles cannot loop the walk). The offending link is removed
- * best-effort before throwing — `install()` then clears the rest (`clearFailedInstall`).
+ * best-effort before throwing — the install then deletes the whole staging folder (#986).
  * Exported for tests.
  */
 export async function assertExtractedSymlinksContained(extractTo: string): Promise<void> {

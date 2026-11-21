@@ -3010,6 +3010,11 @@ export const en = {
   // #516: the update pauses the engine for the file swap, which would cut off work in progress.
   'main.engine.updateBusy':
     'The AI engine is in use right now (an answer, an import, a translation or a document task is running). Try the update again when it has finished.',
+  // #986: the staged swap's rename was refused after its retries (a file held in the folder); the
+  // installed copy was put back as it was.
+  'main.engine.filesInUse':
+    'The engine could not be replaced because another program is using one of its files (an ' +
+    'antivirus scan, for example). Please try again in a minute.',
   // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
   // errors and refusals, localized at emission (i18n record §3.3 rule 2).
   'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',

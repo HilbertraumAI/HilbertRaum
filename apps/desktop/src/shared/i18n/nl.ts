@@ -2877,6 +2877,9 @@ export const nl: UiCatalog<'nl'> = {
   'main.engine.updateBusy':
     'De AI-engine is op dit moment in gebruik (er is een antwoord, een import, een vertaling of ' +
     'een documenttaak bezig). Probeer de update opnieuw als dat klaar is.',
+  'main.engine.filesInUse':
+    'De engine kon niet worden vervangen, omdat een ander programma een van de bestanden gebruikt ' +
+    '(bijvoorbeeld een virusscan). Probeer het over een minuut opnieuw.',
   'main.ocr.badRequest':
     'Het verzoek om de OCR-bestanden te downloaden werd niet begrepen. Probeer het opnieuw.',
   'main.ocr.alreadyRunning': 'De OCR-bestanden worden al gedownload.',

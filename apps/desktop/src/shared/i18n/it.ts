@@ -2963,6 +2963,9 @@ export const it: UiCatalog<'it'> = {
   'main.engine.updateBusy':
     'Il motore IA è in uso in questo momento (è in corso una risposta, un’importazione, una ' +
     'traduzione o un’attività sui documenti). Riprova l’aggiornamento quando avrà finito.',
+  'main.engine.filesInUse':
+    'Non è stato possibile sostituire il motore perché un altro programma sta usando uno dei suoi ' +
+    'file (ad esempio una scansione antivirus). Riprova tra un minuto.',
   'main.ocr.badRequest': 'La richiesta di download dei file OCR non è stata compresa. Riprova.',
   'main.ocr.alreadyRunning': 'Il download dei file OCR è già in corso.',
   'main.ocr.noSources':
