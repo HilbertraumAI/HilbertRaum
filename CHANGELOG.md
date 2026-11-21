@@ -378,13 +378,14 @@ from its first public `1.0.0` release onward.
   long document: "Who attended?" could get full meeting minutes. Such a question is
   now answered plainly from the documents, and the answer still shows that the skill was applied.
   Comparing two documents, and a skill's report on one document, work as before (#632, #831).
-- **A thank-you or greeting in a chat about your documents gets a short reply.** "Danke!",
+- **A short thank-you, greeting or goodbye in a chat about your documents gets a short reply.** "Danke!",
   "Thanks!", "Merci !" or "How are you?" in a chat with documents was answered with a summary of the
   documents, with sources and the coverage line under it, and with a skill selected, in that skill's
   layout. It now gets a short reply in the language you wrote in, without sources, and nothing is read
   for it: not the documents, not the knowledge packs in the chat. A short question about the last
   answer, such as "Sure?" or "Alles?", and a plain "ok" or "all" in answer to the assistant's question
-  are still answered from the documents (#963).
+  are still answered from the documents, and so is a thank-you that says more, such as "Thanks for the
+  summary" (#963).
 - **The "every mention" example question reads a long document whole in every language.** With a
   whole-document skill such as Contract Brief selected and one long document in scope, the German
   example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching
