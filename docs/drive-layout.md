@@ -85,6 +85,9 @@ HILBERTRAUM/
 ├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Vulkan on win/linux)
 │   ├── .hilbertraum-runtime.json                       # install marker: { version, backend, os, arch }
 │   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only)
+├── runtime/<family>/<os>.new/, <os>.old/       # TRANSIENT (#986): an in-app install's staged copy and the copy
+│                                                #   it replaces, beside the install (and <os>/cpu.new/, cpu.old/);
+│                                                #   gone after the job, finished or rolled back at the next start
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family: the whisper-cli transcriber
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin + the Silero VAD .bin its manifest requires since #504; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
@@ -290,6 +293,16 @@ build comes from `model-manifests/runtime-sources.yaml`. See
 
 Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
 exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).
+
+**Transient swap folders (#986).** An in-app install, update or reinstall never deletes the engine
+first. It builds the new copy in **`<os>.new/`** beside the install folder (the `cpu/` net in
+**`<os>/cpu.new/`**), marks it, then moves the install to **`<os>.old/`** (`cpu.old/`) and the new
+copy in, and deletes `.old` after the job. No resolver ever reads these names. A kill, an unplug or a
+crash between the steps can leave them; the app's next start on that OS finishes or rolls back the
+swap before anything starts an engine (`recoverEngineSwaps`, `architecture.md` "In-app engine
+updates" §6). Only these exact names are touched: any other folder beside the install (the app-update
+plan's `<os>@<pin>/`) is left alone. A Kit must not ship one: the sell gate and the Kit gate scripts
+refuse a leftover beside a pinned build.
 
 ### Second sidecar family: the whisper.cpp transcriber
 

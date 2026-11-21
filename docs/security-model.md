@@ -3085,7 +3085,10 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
    marker with no valid entry deep-equals the historical `{version,backend,os,arch}` so legacy reads are
    unchanged. The hash is recorded by **all three** marker writers: the in-app installer
    (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
-   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts.
+   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #986
+   the in-app installer hashes and marks the copy in its staging folder `<os>.new/` and swaps the
+   folder in by rename; the keys are relative to the folder, so they are the install folder's after
+   the swap, and the bytes the marker covers are flushed to the device before it is written.
 
 2. **One shared, session-cached verifier.** `binary-verifier.ts` exposes
    `verifyBinaryBeforeSpawn(binPath)` → `ok | skip-legacy | skip-dev | mismatch`. It walks **up** from the

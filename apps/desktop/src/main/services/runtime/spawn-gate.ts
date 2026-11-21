@@ -1,9 +1,10 @@
 // Engine spawn gate (#516; architecture.md "In-app engine updates" §3). While an engine install
-// replaces a family's files — the pre-clean, the extraction, the marker — a spawn of that family's
+// replaces a family's files — since #986 the swap's two renames, which put a staged, marked copy in
+// place of the installed one — a spawn of that family's
 // programs waits until the swap is over instead of running what is half there. Without it a helper
 // that restarts by itself (the embedder on a search, a vision analyze) or a model start that was still
 // hashing its weights when the pause ran could launch a half-extracted `llama-server`, and on Windows
-// hold a file the clean is about to delete. The gate covers every install, not only updates: a first
+// hold a file in the folder the swap is about to move. The gate covers every install, not only updates: a first
 // install or a #532 reinstall replaces the same folder.
 //
 // Module-level and session-scoped, like the verdict store (engine-load.ts). The installer holds it for
