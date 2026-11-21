@@ -115,6 +115,11 @@ from its first public `1.0.0` release onward.
   from another computer. The rest of each path stays, so support can still see which file failed.
   A name in an unusual place can remain, for example in a folder you named yourself, so read a log
   before you share it. The log on the drive keeps the full paths (#975).
+- **Electron 43.8.6 → 43.8.7**, the browser engine the app runs on. It fixes a crash on Linux
+  desktops that use Wayland when a dialog opens for a window that is not on screen; HilbertRaum
+  brings its window up before it opens a dialog, so this is a safeguard. Chromium and Node.js are
+  unchanged, workspaces open exactly as before, and the minimum operating systems are unchanged
+  (#852).
 
 ### Fixed
 
