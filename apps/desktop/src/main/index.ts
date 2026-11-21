@@ -1132,8 +1132,8 @@ app.whenReady().then(() => {
   // #964 (Linux), #977 (macOS): the POSIX signal legs. A SIGTERM (`kill`, `systemctl stop`, `launchctl stop`, a
   // forced restart), SIGINT (Ctrl+C) or SIGHUP (the terminal closed) locks the workspace at once and ends the app, as
   // a Windows session end does; Electron's own handler made it an ordinary quit that the close guard's question could
-  // hold, and a second signal then killed the app unlocked. On macOS every quit a user starts (⌘Q, the Dock, a
-  // log-out) is an Apple Event, never a signal, so this changes only quits that nobody is there to answer.
+  // hold, and a second signal then killed the app unlocked. On macOS the usual quits a user starts (⌘Q, the menu, the
+  // Dock, a log-out) are Apple Events, not signals, so this changes mostly quits that nobody is there to answer.
   // Registered HERE, after `ready`, never at module scope: Electron installs its own handlers for these signals
   // after the main script has run and so replaces any listener registered at load time (measured on Electron 43.8.6
   // Linux: a module-scope listener never fires; Electron's handlers are in place by `ready`; the same code path on

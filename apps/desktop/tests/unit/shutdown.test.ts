@@ -588,7 +588,7 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     ['the session-end lock', 'win32', (h) => h.handlers.onSessionEnd()],
     ['a signal lock', 'linux', (h) => h.handlers.onTerminationSignal('SIGTERM')],
     ['a lost session’s quit lock', 'linux', (h) => h.handlers.onQuitEvent()]
-  ])('a will-quit AFTER %s exits at once — no teardown, no second lock', async (_source, platform, lock) => {
+  ])('a will-quit AFTER %s exits at once — no teardown; the synchronous lock runs again first', async (_source, platform, lock) => {
     const h = sessionHarness(platform)
     const { order, exits, handlers } = h
     lock(h)
@@ -598,8 +598,10 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     await drain()
     expect(ev.defaultPrevented).toBe(true)
     expect(order).not.toContain('embedder.stop(parked)') // the awaited teardown never started
-    expect(order.filter((l) => l === 'lock')).toHaveLength(1)
-    expect(order.slice(-2)).toEqual(['reap', 'exit']) // reaped again right before the exit
+    // Review round 1: the second `emergencyLock` has nothing to do on a workspace still locked (this stand-in records
+    // every call; the P3 rows below use a stateful one) and locks one unlocked again after a cancelled shutdown.
+    expect(order.filter((l) => l === 'lock')).toHaveLength(2)
+    expect(order.slice(-3)).toEqual(['lock', 'reap', 'exit']) // locked and reaped again right before the exit
     expect(exits).toEqual([...exitsBefore, 0])
     // …and a will-quit re-entry after that exit is inert too.
     handlers.onWillQuit(quitEvent())
@@ -868,13 +870,75 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
   // so before this fix a `kill` then did nothing (the signal path returned once a lock had run) and only SIGKILL could
   // stop the app; a launchd stop waited out its exit timeout.
   describe('P3: a signal after a session-end lock that left the app running', () => {
-    it('reaps and exits once, without a second lock; later signals do nothing', () => {
-      const { order, exits, handlers } = sessionHarness('darwin')
+    /** The real legs over the real `emergencyLock`, on a workspace that can be unlocked again (the stand-in's states). */
+    function p3Harness() {
+      const order: string[] = []
+      const exits: number[] = []
+      const workspace = workspaceStandIn()
+      const close = workspace.shutdown
+      workspace.shutdown = () => {
+        order.push(workspace.isUnlocked() ? 'lock' : 'lock(already locked)')
+        close()
+      }
+      const ctx = { workspace } as unknown as AppContext
+      const handlers = createAppLifecycleHandlers({
+        performShutdown: async () => undefined,
+        emergencyLock: () =>
+          emergencyLock(ctx, { detachVaultKey: () => undefined, killSidecarChildren: () => order.push('reap'), log: quietLog }),
+        exit: (code) => {
+          order.push('exit')
+          exits.push(code)
+        },
+        createWindow: () => undefined,
+        mainWindowCount: () => 1,
+        platform: 'darwin',
+        quit: () => undefined,
+        killSidecarChildren: () => order.push('reap'),
+        log: quietLog
+      })
+      return { order, exits, workspace, handlers }
+    }
+
+    // Review round 1 (F1): the user unlocks again in the app that outlived the cancelled shutdown; the signal must not
+    // end it with that session's working copy plaintext on the drive.
+    it('a fresh unlock after the session-end lock: the signal locks again, then exits once', () => {
+      const { order, exits, workspace, handlers } = p3Harness()
       handlers.onSessionEnd({ reasons: ['shutdown'] }) // powerMonitor; the shutdown is then cancelled: no will-quit
+      expect(workspace.isUnlocked()).toBe(false)
+      workspace.completeUnlock()
+      handlers.onTerminationSignal('SIGTERM')
+      expect(workspace.isUnlocked()).toBe(false)
+      expect(order).toEqual(['lock', 'reap', 'lock', 'reap', 'exit'])
+      expect(exits).toEqual([0])
+      handlers.onTerminationSignal('SIGTERM')
+      handlers.onTerminationSignal('SIGINT')
+      expect(exits).toEqual([0])
+    })
+
+    // Review round 1, the twin of F1: ⌘Q in that app reaches `will-quit`'s session-end branch, which exited without a
+    // lock too (as on master).
+    it('a fresh unlock after the session-end lock: a will-quit (⌘Q) locks again, then exits once', () => {
+      const { order, exits, workspace, handlers } = p3Harness()
+      handlers.onSessionEnd({ reasons: ['shutdown'] })
+      workspace.completeUnlock()
+      const ev = quitEvent()
+      handlers.onWillQuit(ev)
+      expect(ev.defaultPrevented).toBe(true)
+      expect(workspace.isUnlocked()).toBe(false)
+      expect(order).toEqual(['lock', 'reap', 'lock', 'reap', 'exit'])
+      expect(exits).toEqual([0])
+      handlers.onWillQuit(quitEvent()) // a re-entry adds nothing
+      handlers.onTerminationSignal('SIGTERM') // nor a signal after that exit
+      expect(exits).toEqual([0])
+    })
+
+    it('still locked: the signal finds nothing to lock, reaps and exits once; later signals do nothing', () => {
+      const { order, exits, handlers } = p3Harness()
+      handlers.onSessionEnd({ reasons: ['shutdown'] })
       expect(exits).toEqual([])
       handlers.onTerminationSignal('SIGTERM')
-      expect(order.filter((l) => l === 'lock')).toHaveLength(1)
-      expect(order.slice(-2)).toEqual(['reap', 'exit']) // a child started since the lock is reaped first
+      // A child started since the session-end lock (a background model start) is reaped before the exit.
+      expect(order).toEqual(['lock', 'reap', 'lock(already locked)', 'reap', 'exit'])
       expect(exits).toEqual([0])
       handlers.onTerminationSignal('SIGTERM')
       handlers.onTerminationSignal('SIGINT')
@@ -898,10 +962,12 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       const h = sessionHarness('linux')
       await before(h)
       expect(h.exits).toEqual(expectedExits)
+      const locks = () => h.order.filter((l) => l === 'lock').length
+      const locksBefore = locks()
       h.handlers.onTerminationSignal('SIGTERM')
       h.handlers.onTerminationSignal('SIGHUP')
       expect(h.exits).toEqual(expectedExits)
-      expect(h.order.filter((l) => l === 'lock')).toHaveLength(1)
+      expect(locks()).toBe(locksBefore)
     })
   })
 
@@ -920,11 +986,16 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     const readyEnd = indexSrc.indexOf('\n})\n', readyAt)
     expect(readyAt).toBeGreaterThan(0)
     const ready = indexSrc.slice(readyAt, readyEnd)
-    const posixAt = ready.indexOf("if (process.platform === 'linux' || process.platform === 'darwin') {")
+    // The whole block, exactly: a narrower gate nested inside the loop (darwin dropped again) must not pass.
+    const posixBlock =
+      "\n  if (process.platform === 'linux' || process.platform === 'darwin') {\n" +
+      "    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {\n" +
+      '      process.on(signal, () => lifecycle.onTerminationSignal(signal))\n' +
+      '    }\n' +
+      '  }\n'
+    const posixAt = ready.indexOf(posixBlock)
     expect(posixAt, 'the signal legs are gated to Linux and macOS, inside whenReady').toBeGreaterThan(0)
-    const posix = ready.slice(posixAt, ready.indexOf('\n  }\n', posixAt))
-    expect(posix).toContain("for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const)")
-    expect(posix).toContain('process.on(signal, () => lifecycle.onTerminationSignal(signal))')
+    expect(indexSrc.split('lifecycle.onTerminationSignal(').length - 1, 'one signal listener').toBe(1)
     // The lost-session `quit` leg stays Linux-only, and the macOS session end stays a powerMonitor event; each line
     // once in the whole file, so neither can also sit elsewhere under another gate.
     const quitLeg = "\n  if (process.platform === 'linux') app.on('quit', () => lifecycle.onQuitEvent())\n"
@@ -936,11 +1007,17 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     expect(indexSrc.split("app.on('quit'").length - 1, 'one quit listener').toBe(1)
     expect(indexSrc.split('powerMonitor.on(').length - 1, 'one powerMonitor listener').toBe(1)
     // #964 security round (F3), and for the macOS legs since #977: first in the callback after the second-instance
-    // return, before the code that can throw (the protocol, the menu, the window): a throw there would otherwise skip
-    // the registration silently.
+    // return, before the code that can throw (the locale and i18n set-up, the back end, the protocol, the menu, the
+    // window): a throw there would otherwise skip the registration silently.
     for (const [name, at] of [['signals', posixAt], ['quit', ready.indexOf(quitLeg)], ['powerMonitor', ready.indexOf(powerLeg)]] as const) {
       expect(at, `${name} after the second-instance return`).toBeGreaterThan(ready.indexOf('if (!isPrimaryInstance) return'))
-      for (const later of ['installAppProtocol(', 'Menu.setApplicationMenu(', '\n  createWindow()']) {
+      for (const later of [
+        '\n  initMainI18n(app.getLocale())\n',
+        '\n    initBackend()\n',
+        'installAppProtocol(',
+        'Menu.setApplicationMenu(',
+        '\n  createWindow()'
+      ]) {
         expect(ready.indexOf(later), later).toBeGreaterThan(0)
         expect(at, `${name} before ${later.trim()}`).toBeLessThan(ready.indexOf(later))
       }
