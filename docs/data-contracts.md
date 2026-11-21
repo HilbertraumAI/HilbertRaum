@@ -1265,7 +1265,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   (format verdict → verify → decrypt → open). It throws **`VaultNewerError`** before the password is
   checked (#845); **`WrongPasswordError`** when the verifier fails; after the password verified,
   `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` the
-  probe calls `newer`, before anything is written), **`VaultDamagedError`** when `.enc`
+  probe calls `newer` that may hold the freshest data, right after the password check and before the
+  staged-file check, the roll-forward or any shred), **`VaultDamagedError`** when `.enc`
   fails its GCM tag (#860 V5b) or decrypts to something SQLite calls not a database or corrupt (#208;
   its `damage`, `'failed-authentication' | 'not-a-database'`, goes to the log only),
   and `VaultOpenFailedError` when the open could not finish otherwise (#844).
@@ -1306,8 +1307,12 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   verdict for the lock's guard and its #855 verdict, the startup salvage, the
   `.recovery` roll-forward and `stageRekey`. **`newer` is never discarded** (#985): the salvage
   keeps the file as `.recovery` (`preserved`, or `kept-only-copy` with `.enc` missing; no #875
-  marker), the `.recovery` roll-forward throws `WorkspaceNewerError(found)` before anything is
-  written (→ `workspace_newer`), and the lock and `stageRekey` read it as a database.
+  marker; with `.enc` missing no `encrypted_file_missing` notice), the unlock throws
+  `WorkspaceNewerError(found)` (→ `workspace_newer`) for a `.recovery` that may hold the freshest
+  data (`.enc` missing or not judged, or the copy at least as new by mtime) before anything is
+  written, and leaves one older than a present `.enc` (a spent leftover) as it is, the create
+  refuses with the same error while a working file or `.recovery` probes `newer`, and the lock and
+  `stageRekey` read it as a database.
   `sqliteJudgedDamaged(err)` (the #844 classifier) lives beside it.
   `plaintextAllowed(policy, { isDev })` gates plaintext (now **enforced**): it needs a policy that
   allows it and a dev build; the `developerMode` setting plays no part (it lives in the encrypted DB).

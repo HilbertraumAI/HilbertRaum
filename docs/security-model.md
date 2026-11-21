@@ -1263,8 +1263,8 @@ explicitly:
   an unclean end the session's last commits sit there), probes the file, and moves a database to
   `<db>.recovery`. A `-wal` that SQLite cannot replay (it reports the database as corrupt) is
   dropped by the sweep, so a copy kept then lacks the session's last commits. A copy a newer build
-  stamped is kept the same way (#985); this build's unlock then refuses it as newer (see "Vault
-  format versions" below). The next unlock with
+  stamped is kept the same way (#985), with no notice; this build's unlock then refuses it as newer
+  (see "Vault format versions" below). The next unlock with
   the right password rolls it forward over the missing `.enc`
   through the CODE-1b path above, which every build since 0.1.47 has. Until then the lock screen
   says so (`lockNotice: 'encrypted_file_missing'`), read from the disk at every start (descriptor
@@ -1587,10 +1587,17 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   last session, or the whole workspace. The probe now reads the schema stamp from the header first:
   above this build's `SCHEMA_VERSION` the file is `newer`. The start keeps it as `<db>.recovery`,
   like a database (`preserved`, or `kept-only-copy` with `.enc` missing), never as damage: no #875
-  marker and no loss notice. The unlock refuses a `.recovery` judged `newer`, whatever its age,
-  before anything is rolled forward or shredded, with the #247 error (`WorkspaceNewerError` →
+  marker, no loss notice, and with `.enc` missing no "your password brings it back" notice either.
+  Right after the password verified, before the staged-file check (#973), the roll-forward or any
+  shred, the unlock refuses a `.recovery` judged `newer` that may hold the freshest data (`.enc`
+  missing or not judged, or the copy at least as new) with the #247 error (`WorkspaceNewerError` →
   `workspace_newer`, "written by a newer HilbertRaum — update the app"); the newer build's own
-  unlock rolls it forward. The lock and the v1 rekey stage read `newer` as a database (the session's
+  unlock rolls it forward. One older than a present `.enc` is a spent leftover: left as it is,
+  neither rolled forward nor shredded, and the workspace opens at `.enc`. A create on a drive that
+  holds such a working file or `.recovery` (its key file and `.enc` gone, so the state reads
+  `uninitialized`) is refused with the same answer before anything is written: it would commit a
+  new workspace that every unlock then refuses. The lock and the v1 rekey stage read `newer` as a
+  database (the session's
   own file cannot be newer: the open refuses one). **Cost:** the newer session's working copy rests
   in plaintext on the drive until a newer build unlocks it, the same exposure as any failed lock
   (the CODE-1b trade in "Lock failure & durability"). **Limits:** a working file beside live

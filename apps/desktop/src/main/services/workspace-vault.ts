@@ -30,6 +30,7 @@ import {
   probeDatabaseFile,
   sqliteJudgedDamaged,
   walAwaitsCheckpoint,
+  SCHEMA_VERSION,
   WorkspaceNewerError,
   type DatabaseFileProbe,
   type WalCheckpointRetry
@@ -1160,6 +1161,19 @@ function startsLikeDatabase(path: string): boolean {
   }
 }
 
+/** #985 (review round 2 R8): the schema stamp (`user_version`: header offset 60, a big-endian signed 32-bit integer) in
+ *  the 100-byte database header at `path`, or 0 for a file shorter than the header. Throws when the file cannot be read. */
+function headerSchemaStamp(path: string): number {
+  const fd = openSync(path, 'r')
+  try {
+    const header = Buffer.alloc(SQLITE_DATABASE_HEADER_BYTES)
+    if (readSync(fd, header, 0, header.length, 0) < header.length) return 0
+    return header.readInt32BE(60)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /** #911: what one stat of `.enc` says: `present` (with its mtime); `missing` (ENOENT, the one answer that proves no
  *  snapshot is there); or `unknown`, any other failure (a delete-pending file on Windows, a permission or I/O error),
  *  which proves neither. */
@@ -2039,6 +2053,27 @@ export function createEncryptedVaultOnDisk(
   }
 }
 
+/** #985: the probe of the `.recovery` copy, or null when there is none. */
+function probeRecoveryCopy(vaultPaths: VaultPaths): DatabaseFileProbe | null {
+  const recoveryPath = `${vaultPaths.dbPath}${RECOVERY_SUFFIX}`
+  return existsSync(recoveryPath) ? probeDatabaseFile(recoveryPath) : null
+}
+
+/**
+ * #985 (review round 2 R6): may the `.recovery` copy hold fresher data than `.enc`? Not when `.enc` is there and strictly
+ * newer by mtime: that is a spent leftover, as the CODE-1b roll-forward judges one. Yes in every other case (`.enc`
+ * missing or not judged, the copy as new or newer, its own age unreadable): any doubt keeps the copy.
+ */
+function recoveryMayBeFreshest(vaultPaths: VaultPaths): boolean {
+  const enc = statEncryptedFile(vaultPaths)
+  if (enc.state !== 'present') return true
+  try {
+    return statSync(`${vaultPaths.dbPath}${RECOVERY_SUFFIX}`).mtimeMs >= enc.mtimeMs
+  } catch {
+    return true
+  }
+}
+
 /** The in-memory result of a successful unlock. */
 export interface UnlockedVault {
   db: Db
@@ -2063,7 +2098,7 @@ export interface UnlockedVault {
  * fails, the DB is never touched). Before the password is even checked: `VaultNewerError` when a
  * vault artifact is in a format a newer build wrote (#845). After the password verified:
  * `VaultRecoveryBlockedError` (#242), `WorkspaceNewerError` (#247; #985: also for a `.recovery` copy a newer build
- * stamped, before anything is written), `VaultDamagedError` when `.enc`
+ * stamped that may hold the freshest data, before the staged-file check, the roll-forward or any shred), `VaultDamagedError` when `.enc`
  * fails its tag (#860 V5b) or SQLite finds no database or a corrupt one (#208),
  * `VaultOpenFailedError` when the open could not finish otherwise (#844), and `VaultMissingError` when there is no `.enc`
  * and no `.recovery` copy to roll forward over it (#911).
@@ -2104,6 +2139,15 @@ export function unlockEncryptedVault(
     // leave the derived key sitting in the heap.
     key.fill(0)
     throw new WrongPasswordError()
+  }
+  // #985 (W-66; review round 2 R6, R7): a `.recovery` copy a NEWER build stamped is judged now, after the password
+  // verified and before anything below can write (the staged-file check, the roll-forward, a shred). One that may hold
+  // the freshest data refuses the unlock, as the open refuses a newer database (#247); one older than a present `.enc`
+  // is a spent leftover, left as it is by the roll-forward below. The probe is kept for that block.
+  const recoveryProbe = probeRecoveryCopy(vaultPaths)
+  if (recoveryProbe?.verdict === 'newer' && recoveryMayBeFreshest(vaultPaths)) {
+    key.fill(0)
+    throw new WorkspaceNewerError(recoveryProbe.found)
   }
   // #858: from here on, EVERY failure zeroes the file key (the catch below), not only the named
   // ones. A corrupt wrapped data key used to leave the KEK in the heap; a tag-failing `.enc`, a
@@ -2169,26 +2213,25 @@ export function unlockEncryptedVault(
       let fresher: boolean | null = null
       try {
         // A probe that cannot decide (a hold, the file vanishing) is the probe error handled below.
-        const probe = probeDatabaseFile(recoveryPath)
+        const probe = recoveryProbe ?? probeDatabaseFile(recoveryPath)
         if (probe.verdict === 'unknown' || probe.verdict === 'gone') {
           throw new Error(`The .recovery probe could not decide (${probe.verdict})`)
         }
-        // #985 (W-66): a copy a NEWER build stamped is neither rolled forward nor shredded, whatever its age: this build
-        // cannot judge its schema, and it may be that build's last session (a failed lock, or the only copy over a
-        // missing `.enc`). Refused at once, as the open refuses a newer database (#247), before `.enc` or the copy is
-        // written (the catch below lets it through: it is no probe error).
-        if (probe.verdict === 'newer') throw new WorkspaceNewerError(probe.found)
+        // #985 (W-66): a copy a NEWER build stamped is never rolled forward or shredded: this build cannot judge its
+        // schema. One that may be the freshest data was refused before the key was used (above); one that gets here
+        // is a spent leftover older than `.enc` (review round 2 R6), left as it is, and the unlock goes on.
+        const spentNewer = probe.verdict === 'newer'
         const newer =
+          !spentNewer &&
           probe.verdict !== 'not-database' &&
           (enc.state === 'missing' || statSync(recoveryPath).mtimeMs > enc.mtimeMs)
         // A structure SQLite cannot read for a reason that is not damage: judged by the header, as
         // before (#876 review round 2).
-        fresher = readsAsDatabase(probe, 'recovery', onProbeFallback) && newer
+        fresher = spentNewer ? null : readsAsDatabase(probe, 'recovery', onProbeFallback) && newer
         // #875: our own shred never leaves a header, so a newer copy whose header reads but whose
         // structure does not was the failed lock's session, and shredding it loses that session.
         recoveryDiscarded = probe.verdict === 'damaged' && newer
-      } catch (err) {
-        if (isWorkspaceNewerError(err)) throw err
+      } catch {
         // #242 — a probe error means we cannot read the header. If `.recovery` could still be
         // the fresh failed-lock delta — newer than `.enc`, `.enc` missing, or the mtime
         // unreadable too — we must NOT unlock into the stale `.enc` and leave the snapshot to
@@ -2567,7 +2610,10 @@ export class WorkspaceController {
   private encMissingKeptOnDisk(): boolean {
     if (encryptedFileState(this.vaultPaths) !== 'missing') return false
     try {
-      return startsLikeDatabase(`${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`)
+      const kept = `${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`
+      // #985 (review round 2 R8): a copy a newer build stamped is not one this unlock encrypts again: it answers
+      // "written by a newer HilbertRaum" instead, so no notice promises it.
+      return startsLikeDatabase(kept) && headerSchemaStamp(kept) <= SCHEMA_VERSION
     } catch {
       return false // absent, or unreadable
     }
@@ -3063,6 +3109,14 @@ export class WorkspaceController {
         throw new VaultDescriptorUnreadableError()
       }
       throw new WorkspaceExistsError()
+    }
+    // #985 (review round 2 F3): a working file or `.recovery` a NEWER build stamped is that build's data (its last
+    // session, or with its key file and `.enc` gone, the whole workspace). A create here would commit a new workspace
+    // whose every unlock then refuses on that copy, so it is refused first, before anything is written (the create IPC
+    // answers `workspace_newer`).
+    for (const path of [this.vaultPaths.dbPath, `${this.vaultPaths.dbPath}${RECOVERY_SUFFIX}`]) {
+      const probe = probeDatabaseFile(path)
+      if (probe.verdict === 'newer') throw new WorkspaceNewerError(probe.found)
     }
     // #875: no vault is here, so a marker a wiped one left names no snapshot of the workspace about to be created.
     // Startup reads the marker only beside a vault, so nothing else would remove it, and a reset drive would carry it.

@@ -371,7 +371,9 @@ describe('a working copy or .recovery a newer build stamped is kept, never disca
     try {
       expect(sha(recoveryOf(vp))).toBe(working)
       expect(ctl.discardedOnlyCopy()).toBe(false)
-      expect(ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'encrypted_file_missing' })
+      // Review round 2 R8: no "the encrypted file is missing, your password brings it back" notice: this unlock answers
+      // "written by a newer HilbertRaum" for this copy instead.
+      expect(ctl.getState()).toEqual({ state: 'locked', mode: 'encrypted', plaintextAllowed: false, encryptionRequired: true })
       expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
       expect(sha(recoveryOf(vp))).toBe(working)
       expect(existsSync(vp.encPath)).toBe(false)
@@ -380,17 +382,19 @@ describe('a working copy or .recovery a newer build stamped is kept, never disca
     }
   })
 
-  // Whatever its age: one older than `.enc` looks like a spent leftover, which the roll-forward shreds, and this build
-  // cannot tell a newer build's copy from one.
-  it.each<[string, number]>([
-    ['newer than .enc', 0],
-    ['older than .enc', 120_000]
-  ])('a .recovery %s: the unlock refuses it before anything is written, every file byte for byte', (_age, olderBy) => {
+  /** A `.recovery` a newer build stamped, `olderBy` ms older than the (backdated) `.enc` when positive, else newer. */
+  function newerRecovery(olderBy: number): FreshVaultPaths {
     const vp = lockedVault('fmtguard-985', PW)
     failedLockState(vp, 7171, PW) // `.enc` backdated 60 s
     writeNewerSchema(vp.dbPath)
     renameSync(vp.dbPath, recoveryOf(vp))
     if (olderBy > 0) backdate(recoveryOf(vp), olderBy)
+    return vp
+  }
+
+  // One that may hold the freshest data (newer than `.enc`) is refused before anything is written.
+  it('a .recovery newer than .enc: the unlock refuses it before anything is written, every file byte for byte', () => {
+    const vp = newerRecovery(0)
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     try {
@@ -399,6 +403,44 @@ describe('a working copy or .recovery a newer build stamped is kept, never disca
       expect(thrownBy(() => ctl.unlock(PW))).toEqual(NEWER)
       expect(ctl.isUnlocked()).toBe(false)
       expect(snapshot(vp.root)).toEqual(before)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 R6: one older than a present `.enc` is a spent leftover (the newer build's own unlock consumed it and
+  // a later lock made `.enc` newer). Refusing it would block every unlock for good; shredding it is not this build's to
+  // judge. It is left as it is, and the workspace opens at `.enc`.
+  it('a .recovery older than .enc (a spent leftover): the unlock opens the workspace and leaves the copy byte for byte', () => {
+    const vp = newerRecovery(120_000)
+    const copy = sha(recoveryOf(vp))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.unlock(PW).state).toBe('unlocked')
+      expect(sha(recoveryOf(vp))).toBe(copy)
+      ctl.lock()
+      expect(sha(recoveryOf(vp))).toBe(copy)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2 F3 (FU-V1): with only a newer build's `.recovery` on the drive (its key file and `.enc` gone), the
+  // state reads `uninitialized`. A create used to commit a new workspace and then answer "newer", and every unlock of it
+  // refused on that copy. It is refused before anything is written.
+  it('a create over a drive that holds only a newer build’s .recovery is refused, nothing written', () => {
+    const vp = newerRecovery(0)
+    rmSync(vp.descriptorPath)
+    rmSync(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(ctl.getState().state).toBe('uninitialized')
+      const before = snapshot(vp.root)
+      expect(thrownBy(() => ctl.create('brand-new-password', 'encrypted'))).toEqual(NEWER)
+      expect(snapshot(vp.root)).toEqual(before)
+      expect(ctl.isUnlocked()).toBe(false)
     } finally {
       ctl.shutdown()
     }

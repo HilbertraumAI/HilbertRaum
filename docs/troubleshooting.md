@@ -421,8 +421,10 @@ for example on a full drive. The older copy keeps that file as it is and does no
 newer copy's last session is not lost: start the newer copy and unlock, and it encrypts the file
 again. Here the message comes after the password is checked. If no newer copy ever ran on this
 drive, that file may be damaged instead: to open the workspace at its last lock with this copy,
-quit HilbertRaum, move `workspace/hilbertraum.sqlite.recovery` off the drive (keep it), and unlock
-again. Copies up to 0.1.65 can delete such a file when they cannot read it.
+quit HilbertRaum, move `workspace/hilbertraum.sqlite.recovery` off the drive, and unlock again.
+Keep that file somewhere safe: it is your workspace's data, not encrypted. Copies up to 0.1.65 can
+delete such a file when they cannot read it. Creating a new workspace is refused with the same
+message while such a file is on the drive.
 
 ---
 
