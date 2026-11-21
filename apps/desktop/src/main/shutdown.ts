@@ -452,7 +452,8 @@ export interface AppLifecycleHandlers {
    * The OS is ending the session (#248): Windows `session-end` on the main window (a shutdown,
    * restart or log-off — cannot be prevented; the process is killed once the handler returns),
    * or macOS `powerMonitor` `shutdown` (unverified on a Mac — #226). Runs `emergencyLock` once. It does not exit: the
-   * OS ends the process, or, after a shutdown another app cancelled (macOS), a later quit or signal does.
+   * OS ends the process, or, after a shutdown another app cancelled (macOS), a later quit or signal does. A later
+   * session end, quit or signal locks again first (#977): the user may have unlocked since.
    */
   onSessionEnd: (event?: SessionEndEventLike) => void
   /**
@@ -465,7 +466,7 @@ export interface AppLifecycleHandlers {
    * lock and exits from its own finally). After a lock whose exit is under way (a signal's, a quit's, or Electron's
    * `quit`) a signal does nothing. After a session-end lock that left the app running (a shutdown another app
    * cancelled, and the user may have unlocked again since), it runs `emergencyLock` again, which has nothing to do on
-   * a workspace still locked, and exits once (P3, follow-ups wave 6).
+   * a workspace still locked, and exits once (#977; `docs/security-model.md` "OS session end locks the workspace").
    */
   onTerminationSignal: (signal: NodeJS.Signals) => void
   /**
@@ -504,8 +505,8 @@ export interface AppLifecycleHandlers {
  * even occur, `session-end` is a window event and the quit closed every window before
  * `will-quit`); a `will-quit` AFTER the session-end lock exits at once instead of starting the
  * teardown — after the same synchronous lock again, which has nothing to do unless the user unlocked
- * after a cancelled shutdown (review round 1), and a prevented quit that never exited would make
- * macOS report the app as cancelling the shutdown.
+ * after a cancelled shutdown (#977), and a prevented quit that never exited would make macOS report
+ * the app as cancelling the shutdown.
  *
  * #964 — the Linux legs share it as well, and since #977 the signal leg runs on macOS too: a termination
  * signal takes the session-end lock and exits (`onTerminationSignal`), and Electron's `quit`, the one
@@ -513,9 +514,11 @@ export interface AppLifecycleHandlers {
  * is one lock: a signal during a running teardown defers to it, repeat signals do nothing, and `quit`
  * after the teardown's or a signal's lock does nothing. A `quit` DURING a running teardown is a session
  * lost mid-quit: Electron ends the process as the event returns, so the teardown never reaches its lock,
- * and `onQuitEvent` locks at once. P3 (follow-ups wave 6): a session-end lock does not end the process,
- * so a signal after it (a shutdown another app cancelled, then `kill`) must still lock (the user may have
- * unlocked again) and exit; `appEnding` tells that case from a lock whose exit is already under way.
+ * and `onQuitEvent` locks at once. #977: a session-end lock does not end the process, so a session end,
+ * quit or signal after it (a shutdown another app cancelled, then a second shutdown, ⌘Q or `kill`) must
+ * still lock (the user may have unlocked again) and, for a quit or signal, exit; `appEnding` tells that
+ * case from a lock whose exit is already under way (`docs/security-model.md` "OS session end locks the
+ * workspace").
  */
 /**
  * The line a lock handler writes right before `emergencyLock`, in its own guard (#964 security round, F4): the
@@ -541,10 +544,10 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
    */
   let lockRan = false
   /**
-   * P3 (follow-ups wave 6): the process is known to be ending: a signal's or a session-end `will-quit`'s own exit, the
-   * quit teardown's exit, or Electron's `quit`. A session-end lock alone does not end it (the OS does, and a shutdown
-   * another app cancels leaves the app running, perhaps unlocked again), so a signal after that lock still has to lock
-   * and end the app: our listener replaced the signal's default action.
+   * #977: the process is known to be ending: a signal's or a session-end `will-quit`'s own exit, the quit teardown's
+   * exit, or Electron's `quit`. A session-end lock alone does not end it (the OS does, and a shutdown another app
+   * cancels leaves the app running, perhaps unlocked again), so a later session end, quit or signal still has to lock
+   * (`lockAgain`), and a signal still has to end the app: our listener replaced the signal's default action.
    */
   let appEnding = false
   /** Reap the registered sidecar children right before an exit, best-effort. */
@@ -553,6 +556,24 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       deps.killSidecarChildren()
     } catch {
       /* best-effort */
+    }
+  }
+  /**
+   * #977: an end event after a session-end lock that did not end the app (a second session end, a quit or a signal)
+   * locks again first: on macOS a shutdown another app cancels leaves the app running, and the user may have unlocked
+   * since. The closure cannot see the workspace (no dep reads its state), so this always runs `emergencyLock`. On a
+   * workspace still locked (the usual case: the system's own quit right after the `powerMonitor` lock) that is safe
+   * and bounded: every step is synchronous, `lock()` and `shutdown()` find no open database and do nothing, the log
+   * flush has no key and writes no file, the operation registries are empty, and what is left is the lock latch, the
+   * local API's stop, one log line and the reap of any child started since.
+   */
+  const lockAgain = (line: () => void, failed: string): void => {
+    try {
+      // Logged BEFORE the lock so the line lands in the encrypted log when the workspace was unlocked again.
+      logBeforeLock(line)
+      deps.emergencyLock()
+    } catch (err) {
+      deps.log.error(failed, failureForLog(err))
     }
   }
   /**
@@ -568,19 +589,18 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       // it). The teardown's own finally is the only exit; `app.exit` re-emits nothing.
       event.preventDefault()
       if (shuttingDown) {
-        if (sessionEndLocked) {
+        if (sessionEndLocked && !appEnding) {
           sessionEndLocked = false // exit once; `app.exit` returns nothing to re-enter with
           appEnding = true
-          // Lock and reap again right before the exit (review round 1, the twin of the P3 signal branch): on macOS a
-          // cancelled system shutdown leaves the app alive after the lock, the user may have unlocked again (⌘Q then
-          // lands here), and a background model auto-start could have spawned a child since (`emergencyLock` arms the
-          // workspace latch, not the runtime latch). Nothing to lock on a workspace still locked.
-          try {
-            logBeforeLock(() => deps.log.info('quit: the app outlived a session-end lock — locking workspace'))
-            deps.emergencyLock()
-          } catch (err) {
-            deps.log.error('quit: lock failed', failureForLog(err))
-          }
+          // #977: lock and reap again right before the exit (`lockAgain`). On a normal macOS shutdown this is the
+          // system's quit right after the `powerMonitor` lock, with nothing left to lock; after a shutdown another app
+          // cancelled it is a later ⌘Q, perhaps after a fresh unlock. A background model auto-start could also have
+          // spawned a child since (`emergencyLock` arms the workspace latch, not the runtime latch). After a lock whose
+          // exit is already under way (a signal's, Electron's `quit`), nothing: one exit.
+          lockAgain(
+            () => deps.log.info('quit: after a session-end lock — locking workspace again'),
+            'quit: lock failed'
+          )
           deps.exit(0)
         }
         return
@@ -617,9 +637,21 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       deps.quit()
     },
     onSessionEnd: (event) => {
-      // #248: once only, and never beside a running quit teardown (see the factory comment).
+      // #248: never beside a running quit teardown (see the factory comment). #977: a second session end after a
+      // session-end lock that left the app running (a shutdown another app cancelled) locks again, since the user may
+      // have unlocked since; after a lock whose exit is under way, nothing.
       if (shuttingDown) {
-        deps.log.info('session-end: a quit teardown is already running — it owns the lock')
+        if (!lockRan) {
+          deps.log.info('session-end: a quit teardown is already running — it owns the lock')
+        } else if (!appEnding) {
+          lockAgain(
+            () =>
+              deps.log.info('session-end: after a session-end lock — locking workspace again', {
+                reasons: event?.reasons ?? []
+              }),
+            'session-end: lock failed'
+          )
+        }
         return
       }
       shuttingDown = true
@@ -640,16 +672,14 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
       // registered (`index.ts`): without it the next signal would kill the app at once.
       if (shuttingDown) {
         if (lockRan && !appEnding) {
-          // P3: a session-end lock left the app running (a shutdown another app cancelled), and the user may have
-          // unlocked again since. Lock (nothing to do on a workspace still locked; `emergencyLock` also reaps a child
-          // started since), then end the app as the signal asked, once.
+          // #977: a session-end lock left the app running (a shutdown another app cancelled), and the user may have
+          // unlocked again since. Lock again (`lockAgain`; it also reaps a child started since), then end the app as
+          // the signal asked, once.
           appEnding = true
-          try {
-            logBeforeLock(() => deps.log.info('signal: the app outlived a session-end lock — locking workspace', { signal }))
-            deps.emergencyLock()
-          } catch (err) {
-            deps.log.error('signal: lock failed', failureForLog(err))
-          }
+          lockAgain(
+            () => deps.log.info('signal: after a session-end lock — locking workspace again', { signal }),
+            'signal: lock failed'
+          )
           deps.exit(0)
         } else if (!lockRan) {
           deps.log.info('signal: a quit teardown is already running — it owns the lock', { signal })
