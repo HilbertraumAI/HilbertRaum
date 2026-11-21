@@ -2737,6 +2737,14 @@ export const en = {
     "The file that holds your workspace's key (config/workspace.json) is missing from the drive or " +
     "can't be read, so no password can open the workspace. Do not create a new workspace. Put the " +
     'file back, or restore it from a backup.',
+  // #955 item 1: the descriptor file is on the drive but can't be read, and `.enc` is not beside it. Never "no data is
+  // left": a `.recovery`, a staged `.enc.new` or stored documents may still need that key. A file saved with a
+  // byte-order mark reads as unreadable and can be repaired, hence "don't delete".
+  'main.workspace.descriptorUnreadable':
+    'The file that holds your workspace\'s key (config/workspace.json) can\'t be read, and the ' +
+    'encrypted workspace file isn\'t on the drive, so no password can open the workspace. Don\'t ' +
+    'delete the key file. Restore both files from a backup, or see the troubleshooting guide before ' +
+    'you start over.',
   // #844: the password verified and the data is a database, but opening it could not finish (an
   // upgrade step: a full drive, an I/O error, a bug in a new step). Not damage: the failed open never
   // rewrites `.enc`.
@@ -2758,11 +2766,12 @@ export const en = {
   'main.workspace.createFailed': 'Could not create the workspace.',
   'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
   // #807: create's two refusals, each its own `reason`. A workspace appeared on the drive after the lock screen read it
-  // (the create form stays up until a restart, which shows the unlock screen); a create without a password that the
-  // policy or the build doesn't allow (only a direct call can send one: the gate offers the switch only when allowed).
+  // (#955 item 3: the gate then re-reads the state and shows its unlock form, so no restart is needed); a create without
+  // a password that the policy or the build doesn't allow (only a direct call can send one: the gate offers the switch
+  // only when allowed).
   'main.workspace.exists':
-    'A workspace already exists on this drive, so no new one was created. Restart HilbertRaum to ' +
-    'unlock it with its password.',
+    'A workspace already exists on this drive, so no new one was created. Unlock it with its ' +
+    'password.',
   'main.workspace.plaintextNotAllowed':
     "A workspace without a password isn't allowed here. Create the workspace with a password " +
     'instead.',

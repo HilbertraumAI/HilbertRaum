@@ -2652,6 +2652,12 @@ export const es: UiCatalog<'es'> = {
     'no se puede leer, así que ninguna contraseña puede abrir el espacio de trabajo. No crees un ' +
     'espacio de trabajo nuevo. Vuelve a poner el archivo en su sitio o restáuralo desde una copia de ' +
     'seguridad.',
+  'main.workspace.descriptorUnreadable':
+    'El archivo con la clave de tu espacio de trabajo (config/workspace.json) no se puede leer y el ' +
+    'archivo cifrado del espacio de trabajo falta en la unidad, así que ninguna contraseña puede ' +
+    'abrir el espacio de trabajo. No elimines el archivo de la clave. Restaura los dos archivos ' +
+    'desde una copia de seguridad o consulta la guía de solución de problemas antes de empezar de ' +
+    'nuevo.',
   'main.workspace.vaultOpenFailed':
     'Tu contraseña es correcta, pero HilbertRaum no pudo terminar de abrir el espacio de ' +
     'trabajo. El espacio de trabajo cifrado en la unidad se dejó como estaba. Asegúrate de ' +
@@ -2668,8 +2674,8 @@ export const es: UiCatalog<'es'> = {
   'main.workspace.createFailed': 'No se pudo crear el espacio de trabajo.',
   'main.workspace.passwordTooShort': 'La contraseña debe tener al menos {min} caracteres.',
   'main.workspace.exists':
-    'Ya hay un espacio de trabajo en esta unidad, así que no se creó uno nuevo. Reinicia HilbertRaum ' +
-    'para desbloquearlo con su contraseña.',
+    'Ya hay un espacio de trabajo en esta unidad, así que no se creó uno nuevo. Desbloquéalo con su ' +
+    'contraseña.',
   'main.workspace.plaintextNotAllowed':
     'Aquí no se permite un espacio de trabajo sin contraseña. Crea el espacio de trabajo con una ' +
     'contraseña.',

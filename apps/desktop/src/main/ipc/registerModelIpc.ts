@@ -6,6 +6,7 @@ import type {
   AppSettings,
   EffectiveReadSample,
   LiveRecommendation,
+  ModelFileVerdict,
   ModelInfo,
   ModelState,
   RuntimeInstallInfo,
@@ -19,11 +20,13 @@ import { clearModelLoadLatch } from '../services/runtime/factory'
 import {
   buildModelList,
   checksumCacheStats,
+  checksumCacheView,
   computeInstallState,
   createSettingsHashStore,
   discoverManifests,
   graphicsBudgetMib,
   invalidateChecksum,
+  knownVerdicts,
   launchContextTokens,
   machineRamGb,
   manifestFiles,
@@ -167,6 +170,38 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   }
 }
 
+/**
+ * #959: what the checksum cache says about each manifest's files right now (`knownVerdicts`: no hashing, a read-only
+ * view of the settings). A pass that may write the cache takes one before and one after and pushes the Performance
+ * refresh only when a verdict moved, so the screen follows a file check without a reopen and a pass that merely
+ * confirms the cache sends nothing. Null when the workspace cannot be read (locked mid-pass): nothing to announce.
+ */
+function snapshotVerdicts(ctx: AppContext, manifests: readonly ModelManifest[]): Map<string, ModelFileVerdict> | null {
+  try {
+    const s = getSettings(ctx.db)
+    return knownVerdicts(manifests, ctx.paths.rootPath, {
+      developerMode: developerLeniency(ctx, s.developerMode),
+      hashStore: checksumCacheView(s.checksumCache, ctx.paths.rootPath)
+    })
+  } catch {
+    return null
+  }
+}
+
+/** One Performance push when any verdict differs between the two snapshots (#959). */
+function pushIfVerdictsChanged(
+  before: Map<string, ModelFileVerdict> | null,
+  after: Map<string, ModelFileVerdict> | null
+): void {
+  if (!before || !after) return
+  for (const [id, verdict] of after) {
+    if (before.get(id) !== verdict) {
+      notifyPerformanceChanged()
+      return
+    }
+  }
+}
+
 async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
   // AUD-03 — snapshot WHICH unlocked session this start belongs to, before the long pre-start
   // window below. `computeInstallState` hashes a multi-GB GGUF, which takes minutes on a cold
@@ -203,6 +238,9 @@ async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<R
   // (size+mtime) cache hit.
   const installT0 = performance.now()
   const computedBefore = checksumCacheStats.computed
+  // #959: this check can change a model's file verdict too. It needs no push of its own: `startModelRuntime`
+  // releases its start request (#599) after this, and that release is a runtime change, which the Performance
+  // screen already follows (`runtime.onChange` in `main/index.ts`), refused start or not.
   const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
     developerMode: lenient,
     hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
@@ -566,6 +604,10 @@ export function registerModelIpc(ctx: AppContext): void {
         return []
       }
       const s = getSettings(ctx.db)
+      // #959: the verdicts the cache holds before this pass (see `snapshotVerdicts`). One manifest read serves both
+      // snapshots: the pass changes the cache, not the manifest set (a download that lands mid-pass pushes on its own, #914).
+      const verdictManifests = discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
+      const verdictsBefore = snapshotVerdicts(ctx, verdictManifests)
       // #420: only a pass the renderer named is cancellable, and it is registered BEFORE any
       // hashing starts — so a Cancel clicked in the first seconds (before the first progress
       // event, or on a pass that emits none because everything is cached) still finds it.
@@ -610,6 +652,9 @@ export function registerModelIpc(ctx: AppContext): void {
         // #108: a cold-cache visit just hashed real multi-GB files — persist any fresh sample.
         // A CANCELLED pass reaches here too: whatever finished hashing is a genuine sample.
         persistEffectiveRead(ctx)
+        // #959: a pass that found a file damaged (or put a verdict right) tells the Performance screen once.
+        // After a cancelled pass too: whatever finished hashing is in the cache.
+        pushIfVerdictsChanged(verdictsBefore, snapshotVerdicts(ctx, verdictManifests))
         // #634: the search model's start-failure copy says "choose Check all model files — then try
         // again". A completed full check re-arms every role whose model it did not find damaged
         // (#913 review S1: the search model, the reranker, the images cooldown, the translator slot),
@@ -669,6 +714,9 @@ export function registerModelIpc(ctx: AppContext): void {
       throw new Error(tMain('main.models.unknown')) // #930
     }
     const store = createSettingsHashStore(() => ctx.db, ctx.paths.rootPath)
+    // #959: capture BEFORE the invalidate below: it drops the evidence of a cached mismatch, so a
+    // damaged-to-ok flip could not be told from "nothing changed" afterwards.
+    const verdictsBefore = snapshotVerdicts(ctx, [found.manifest])
     // Invalidate EVERY file the manifest carries (#106 adjacent fix): this used to drop
     // only the GGUF's cache entry, so "Verify checksum" on a vision model re-hashed the
     // weight but silently served the mmproj projector from cache.
@@ -683,6 +731,7 @@ export function registerModelIpc(ctx: AppContext): void {
       developerMode: developerLeniency(ctx, getSettings(ctx.db).developerMode),
       hashStore: store
     })
+    pushIfVerdictsChanged(verdictsBefore, snapshotVerdicts(ctx, [found.manifest]))
     log.info('Model re-verified', { modelId, state })
     ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
     // #913 review S1: the forced re-hash is the one action that clears a stale mismatch (a file put

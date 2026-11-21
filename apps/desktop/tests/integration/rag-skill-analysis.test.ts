@@ -565,12 +565,13 @@ describe('askDocuments — A4 tool-skill inversion (SKA-7 structural)', () => {
     expect(h.runtime.calls).toBe(1) // the relevance model call
   })
 
-  it('small talk ("danke") over an active tool skill → relevance path, no extraction, no narration', async () => {
+  it('small talk ("danke") over an active tool skill → no extraction, no narration', async () => {
     const h = await makeHarness({ fullyChunked: true, triggers: true })
     const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'danke', BANK_INSTALL_ID)
     const msg = result as Message
-    // The inversion's `!isSmallTalk` guard holds: a pleasantry over a signal-matching statement does NOT
-    // extract-and-narrate — it keeps the relevance path.
+    // A pleasantry over a signal-matching statement does NOT extract-and-narrate. Since #963 it gets the
+    // short small-talk reply before any skill handler runs (the inversion's `!isSmallTalk` guard still
+    // holds for a filler question such as "Sure?", which keeps the relevance path).
     expect(bankRows(h)).toBe(0)
     expect(msg.coverage?.mode).not.toBe('extract')
   })

@@ -2691,6 +2691,11 @@ export const pl: UiCatalog<'pl'> = {
     'Na dysku brakuje pliku z kluczem obszaru roboczego (config/workspace.json) albo nie da się go ' +
     'odczytać, więc żadne hasło nie otworzy obszaru roboczego. Nie twórz nowego obszaru roboczego. ' +
     'Odłóż plik na miejsce albo przywróć go z kopii zapasowej.',
+  'main.workspace.descriptorUnreadable':
+    'Nie da się odczytać pliku z kluczem obszaru roboczego (config/workspace.json), a na dysku ' +
+    'brakuje zaszyfrowanego pliku obszaru roboczego, więc żadne hasło nie otworzy obszaru roboczego. ' +
+    'Nie usuwaj pliku z kluczem. Przywróć oba pliki z kopii zapasowej albo zajrzyj do instrukcji ' +
+    'rozwiązywania problemów, zanim zaczniesz od nowa.',
   'main.workspace.vaultOpenFailed':
     'Hasło jest prawidłowe, ale aplikacja HilbertRaum nie mogła dokończyć otwierania ' +
     'obszaru roboczego. Zaszyfrowany obszar roboczy na dysku pozostał bez zmian. Upewnij ' +
@@ -2707,8 +2712,8 @@ export const pl: UiCatalog<'pl'> = {
   'main.workspace.createFailed': 'Nie udało się utworzyć obszaru roboczego.',
   'main.workspace.passwordTooShort': 'Hasło musi mieć co najmniej {min} znaków.',
   'main.workspace.exists':
-    'Na tym dysku jest już obszar roboczy, więc nie utworzono nowego. Uruchom ponownie aplikację ' +
-    'HilbertRaum, aby odblokować obszar roboczy jego hasłem.',
+    'Na tym dysku jest już obszar roboczy, więc nie utworzono nowego. Odblokuj obszar roboczy jego ' +
+    'hasłem.',
   'main.workspace.plaintextNotAllowed':
     'Obszar roboczy bez hasła nie jest tu dozwolony. Zamiast tego utwórz obszar roboczy z hasłem.',
   'main.workspace.newPasswordTooShort': 'Nowe hasło musi mieć co najmniej {min} znaków.',

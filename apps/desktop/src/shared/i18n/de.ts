@@ -2692,6 +2692,12 @@ export const de: Record<keyof typeof en, string> = {
     'Laufwerk oder lässt sich nicht lesen, deshalb kann kein Passwort den Arbeitsbereich öffnen. ' +
     'Lege keinen neuen Arbeitsbereich an. Lege die Datei an ihren Platz zurück oder stelle sie aus ' +
     'einem Backup wieder her.',
+  'main.workspace.descriptorUnreadable':
+    'Die Datei mit dem Schlüssel deines Arbeitsbereichs (config/workspace.json) lässt sich nicht ' +
+    'lesen, und die verschlüsselte Datei des Arbeitsbereichs fehlt auf dem Laufwerk, deshalb kann ' +
+    'kein Passwort den Arbeitsbereich öffnen. Lösche die Schlüsseldatei nicht. Stelle beide Dateien ' +
+    'aus einem Backup wieder her oder lies in der Anleitung zur Fehlerbehebung nach, bevor du neu ' +
+    'anfängst.',
   'main.workspace.vaultOpenFailed':
     'Dein Passwort ist richtig, aber HilbertRaum konnte das Öffnen des Arbeitsbereichs ' +
     'nicht abschließen. Der verschlüsselte Arbeitsbereich auf dem Laufwerk ist unverändert. ' +
@@ -2711,7 +2717,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
   'main.workspace.exists':
     'Auf diesem Laufwerk gibt es bereits einen Arbeitsbereich, deshalb wurde kein neuer angelegt. ' +
-    'Starte HilbertRaum neu, um ihn mit seinem Passwort zu entsperren.',
+    'Entsperre ihn mit seinem Passwort.',
   'main.workspace.plaintextNotAllowed':
     'Ein Arbeitsbereich ohne Passwort ist hier nicht erlaubt. Lege den Arbeitsbereich stattdessen ' +
     'mit einem Passwort an.',

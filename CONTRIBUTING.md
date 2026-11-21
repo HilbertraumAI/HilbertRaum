@@ -376,7 +376,7 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   compaction" used a 1,500-token window the compacted history never exceeded, so the trim it claimed never ran.
   Size the input past the branch's threshold and break the branch once to watch the row go red.
 - **A renderer row fails on an unmocked `window.api` call (#832).** `tests/setup.ts` runs `assertNoUnexpectedApiCalls()` in an
-  `afterEach` for every renderer file, after the file's own `afterEach(cleanup)`; a suite does not opt in. Supply what the
+  `afterEach` for every renderer file, after the file's own `afterEach(cleanup)`; a suite does not opt in, and a repo-hygiene row pins the hook. Supply what the
   screen reads at mount through a shared stub set: `chatScreenStubs` (below), `documentsScreenStubs`
   (`tests/helpers/documents-screen.ts`: DocumentsScreen and the suites that mount it), `appShellStubs` (App and Home),
   `diagnosticsEngineStubs` (`tests/helpers/settings-diagnostics.ts`) and `stubModelsApi`; a row-only read goes in that

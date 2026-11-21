@@ -531,7 +531,8 @@ your files.
    *"What are the termination rights in this contract?"*
 4. Each answer carries **▸ Sources (N)** — click it to see the cited files, with
    page/section and the exact passage each citation came from. If the documents don't
-   contain the answer, the app says so rather than guessing.
+   contain the answer, the app says so rather than guessing. A thank-you, a greeting or a
+   goodbye gets a short reply instead, which reads no documents and so has no sources.
    A short honesty line under the answer says how much it drew on — e.g. *"Based on sections:
    3 of 12"* — so you can tell an answer rested on a few passages, not the whole
    document. When the chat answers from **one** document that is short enough for the AI model

@@ -185,7 +185,7 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
     expect(msg.coverage).toBeUndefined()
   })
 
-  it('clear small talk keeps the relevance path (A3 opt-out — no capped coverage, no whole-doc model call)', async () => {
+  it('clear small talk gets the short small-talk reply, not the whole-document engine (A3 opt-out, #963)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -195,14 +195,20 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
       MEETING_INSTALL_ID
     )
     const msg = result as Message
-    // Small-talk opt-out ⇒ the whole-doc engine did NOT fire: no capped whole-document coverage claim
-    // (the ordinary relevance path handled it — renderer falls back to the relevance badge).
+    // The whole-doc engine did NOT fire: no capped whole-document coverage claim, and no stamp.
     expect(msg.coverage).toBeUndefined()
-    // …and it is the relevance path's own answer: nothing matches "thanks!", so the fixed no-context reply
-    // comes back with ZERO model calls. The whole-doc engine firing here would call the model once and
-    // answer with the minutes.
-    expect(msg.content).toBe(t('en', 'main.rag.noContext'))
-    expect(h.runtime.calls).toBe(0)
+    expect(msg.skillId ?? null).toBeNull()
+    // #963: one short model reply to the message alone. Before #963 the relevance path took it (here the fixed
+    // no-context reply, with no model call, because nothing matches "thanks!"); the engine firing would have sent the
+    // transcript and the minutes fence.
+    expect(h.runtime.calls).toBe(1)
+    expect(h.runtime.lastMessages.map((m) => [m.role, m.role === 'user' ? m.content : ''])).toEqual([
+      ['system', ''],
+      ['user', 'thanks!']
+    ])
+    expect(JSON.stringify(h.runtime.lastMessages)).not.toContain('second reviewer')
+    expect(JSON.stringify(h.runtime.lastMessages)).not.toContain('structured minutes')
+    expect(msg.content).not.toBe(t('en', 'main.rag.noContext'))
   })
 })
 

@@ -1337,7 +1337,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   launched context window (about 3 pages at the 4B's 4,096 tokens, about 7 at 8,192) hands the model
   the whole document in order instead of the best-matching passages. Everything else is still answered
   from the most relevant passages: a chat with several documents (there is no multi-document whole
-  read), a chat with knowledge packs selected (the whole read never searches a pack), small talk, a
+  read), a chat with knowledge packs selected (the whole read never searches a pack), a short question
+  about the last answer ("Sure?"; other small talk gets a short reply that reads no document, #963), a
   legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
   window. A summary question over such a longer document uses its deep index when one is built (#642);
   without one it is still answered from the most relevant passages, with no hint to build the index,
@@ -1349,6 +1350,22 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   prefill, for every question about a 30-page document. An off-topic question about a document read
   whole now costs a model call (the model says the document does not cover it) where the passage search
   could answer "not found" without one. Answers given before #643 keep their old source display.
+- **Small talk in a chat about documents gets a short reply that reads no document (#963, follow-ups
+  wave 5, owner call G-1; [`rag-design.md`](rag-design.md) §19).** A thank-you, a greeting, a goodbye or
+  "How are you?" gets one short reply from the model, which sees only the message: no document, no
+  earlier turn, no skill instructions and no knowledge pack. The reply has no sources, no coverage line
+  and no skill mark. What counts is a short list of questions to the assistant ("How are you?",
+  «Wie geht's?», "What can you do?"), of whole thanks and greeting formulas («Passt», "Muchas gracias") and
+  of thanks, greeting, goodbye and praise words in the ten interface languages, so four things follow. A
+  message with a question mark anywhere in it, in any script, is a question about the last answer and is
+  answered from the documents: "Sure?", «Alles?», «Bitte?» for "pardon?", «Passt?», «¿Vale?», "Sure? Thanks";
+  only the questions to the assistant keep the short reply with theirs. A message of acknowledgement words
+  alone ("ok", "sure", "all", «alles bitte», «klar», «vale», «tamam», «ладно») can answer the assistant's own
+  question or offer ("Shall I list the other deadlines?"), so it is answered from the documents with the
+  conversation, as before; with a thanks or a greeting in it ("Ok, thanks") it gets the short reply. Praise
+  counts as a thanks, so an offer accepted with "Great" or «Super» alone gets the short reply, not the list:
+  ask for it in words, or with "ok". And a thank-you longer than the lists is still taken for a question
+  about the documents (below).
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
@@ -1640,6 +1657,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   false needle is worse than a false deliverable), so an unusual phrasing of a needle over an over-budget doc
   can still take the truncated whole-doc read (honest via W1's in-prompt "beginning only" notice); and the
   needle downgrade is applied to the single whole-doc path only (**compare** keeps its whole-both read).
+  Since #963 most small talk never reaches the opt-out: it gets the short small-talk reply first (above);
+  what still reaches it is a short question about the last answer ("Sure?", «Alles?»), which keeps the
+  passage search.
   **A bundled whole-document skill's fall-through turn carries only the skill's rules (skills-audit-2026-07-07
   SK-3b, decision D-P2a — RESOLVED 2026-11-15 by #632, open-issues wave owner call G-1, for What Changed?;
   extended 2026-11-20 by #831, follow-ups wave 4 owner call G-9, to the other four).** Each of the five
@@ -1661,7 +1681,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   full minutes for "Who attended?". Since #632 and #831 the fence on such a turn carries only the skill's
   first paragraph, the heading and the honesty rules, which is also the minimum the fence keeps when the
   context is tight (SKA-15); the section format is left out, and the app log records the cap (skill id
-  and mode, never the body). The answer still shows the skill as applied (the per-message glyph), so the
+  and mode, never the body). Since #962 the room the shorter fence frees goes to the document: on a
+  4,096-token window, such as the 4B model's, a single-fact question over a long document reads two
+  passages instead of one, and one document short enough to read whole beside the first paragraph is
+  read whole; a larger window is unchanged. In exchange, on that window a follow-up under Share-Safe
+  Review or What Changed? can keep none of the earlier conversation ([`rag-design.md`](rag-design.md)
+  §15.9). The answer still shows the skill as applied (the per-message glyph), so the
   selection isn't silently dropped. Every read the engine takes keeps the whole fence, as before: the
   two-document compare (the exact changes, or both documents read whole when one is a full rewrite), and
   a whole-document skill's read of its one document, map-reduce included. Small talk over two documents is
@@ -3726,7 +3751,9 @@ reports and phase plans were working papers; their full text lives in git histor
 - **At most twelve packs take part in one ask, and not every candidate they find is
   used.** Ticking a 13th pack is refused; an older or hand-edited selection above the
   12-pack limit is trimmed in title order, with a per-answer note that it was not
-  searched. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
+  searched. "Title order" here is the plain code-point order (A to Z, then accented and non-Latin
+  initials); the chat picker and the Packs panel list packs in the interface language's own order
+  (#958), so for such titles the two can differ. Of the up to 24 archive candidates admitted per ask, each ticked pack's share
   is decided round-robin, in title order, only after every pack has finished searching —
   a short or empty pack's unused share goes to the others — and at most two packs are
   searched at a time, under a twenty-second limit for the whole question (a pack cut off

@@ -110,6 +110,20 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
+  workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
+  a password, creating the workspace replaced that file, and with it the only key that opens that
+  workspace. Creating is now refused. A setup that failed partway also no longer leaves a file
+  behind that the next start would write over a workspace you put back into the same folder (#954).
+- **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
+  source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
+  letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the
+  order your language uses, as the project list already does. Answers still search packs in the same
+  order as before (#958).
+- **The Performance screen now notices when a file check finds a model damaged.** If checking a model's
+  files (Check all model files, Verify checksum, or the check before a model starts) changed the
+  result, the screen kept showing the old one until you left it and came back. Its row now turns
+  to "failed its file check" as soon as the check finishes (#959).
 - **The lock screen says when the file with your workspace's key is missing.** If
   `config/workspace.json` was removed from the drive or damaged while the encrypted workspace was
   still there, every unlock said "Could not open the workspace." The lock screen now says that this
@@ -121,6 +135,13 @@ from its first public `1.0.0` release onward.
   failed because another program, such as antivirus, held one of its new files, the lock screen
   showed the system's own English error with the full path of the file on the drive; it now says
   "Could not create the workspace.", and the error's code goes to the diagnostics log (#807).
+- **The lock screen says when the workspace's key file can't be read and the encrypted file is
+  gone.** With `config/workspace.json` damaged and the encrypted workspace file not on the drive,
+  every unlock said "Could not open the workspace." The lock screen now says so, also when you try to
+  create a workspace then, and that you should not delete the key file but restore both files from a
+  backup. And when creating a workspace finds
+  one on the drive after all, the lock screen no longer asks you to restart: it switches to the
+  unlock screen for that workspace at once (#955).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When
   Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
   running, the next document task in line started during that wait and was stopped a moment
@@ -158,6 +179,11 @@ from its first public `1.0.0` release onward.
   full to lock. The changes made after the last lock were lost then too, and until now the next
   start said nothing. When the drive is too full, the message asks you to free space first, so the
   next session doesn't end the same way (#892).
+- **Error lines in the diagnostics log no longer contain your drive's or your user folder's paths.**
+  When unlocking, changing the password, locking or quitting failed on a file, the line in the
+  diagnostics log, which Copy and Save log hand out, carried the file's full path, which can include
+  your user name. It now names the error's code, such as `ENOSPC`, and a lock that fails now says what
+  caused it (#956).
 - **A workspace whose encrypted file was removed from the drive is no longer lost.** If something
   outside HilbertRaum deleted the workspace's encrypted file (a sync or cleanup tool, a disk check)
   and the app then started, it also removed the unencrypted copy your last session left, and the
@@ -166,6 +192,11 @@ from its first public `1.0.0` release onward.
   workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
   encrypted. When no copy was left, the lock screen now says so, and that you should not create a
   new workspace (#911).
+- **A workspace file you put back while the app is open keeps your newest changes.** Putting
+  `config/workspace.json` back while the lock screen was open, as the lock screen advises when it is
+  missing, and then unlocking could open the workspace at its last saved state and drop the newer
+  changes the drive still held from a lock that had failed. The unlock now first runs the same
+  checks a start runs (#955).
 - **The AI engine update is offered however you start the app.** After a new version of
   HilbertRaum was copied onto a drive, starting it with the launcher compared the AI engine with the
   older engine list still on the drive, so the AI Model screen never offered the engine update;
@@ -325,6 +356,14 @@ from its first public `1.0.0` release onward.
   document had a deep index, and "Find every mention of …" never said that the answer may miss
   items. Both now work as they do in English and German, also when you put your own word in the
   quotes (#809).
+- **With a whole-document skill selected, a single fact in a long document is looked up in more of
+  it on a small model.** With What Changed?, Contract Brief, Meeting Minutes, Share-Safe Review or
+  Deadline & Obligation Finder selected, a question such as "When is the notice deadline?" about a
+  document too long to read whole was answered from a single passage on a model with a 4,096-token
+  context, such as the 4B model, and the fact was often missed. The skill's instructions are already
+  shortened for such a question; the room that frees now goes to the document, so the answer reads two
+  passages instead of one, and a document that now fits is read whole. With a larger context nothing
+  changes (#962).
 - **A French question about a dispute is no longer read as a comparison.** With two documents in
   the chat, a question with "différend" (a dispute), "différé" (deferred) or "différer" (to
   defer), "différemment" or "différentiel" was answered as a request to compare the documents.
@@ -335,10 +374,17 @@ from its first public `1.0.0` release onward.
   tenant?" or "How do I change the rent?" was often answered in the skill's comparison layout, an
   executive summary and then the changes between versions, instead of with the fact you asked for.
   Contract Brief, Meeting Minutes, Share-Safe Review and Deadline & Obligation Finder did the same
-  with their own reports for a question asked over several documents, a single fact looked up in a
-  long document, or a thank-you: "Who attended?" could get full meeting minutes. Such a question is
+  with their own reports for a question asked over several documents or a single fact looked up in a
+  long document: "Who attended?" could get full meeting minutes. Such a question is
   now answered plainly from the documents, and the answer still shows that the skill was applied.
   Comparing two documents, and a skill's report on one document, work as before (#632, #831).
+- **A thank-you or greeting in a chat about your documents gets a short reply.** "Danke!",
+  "Thanks!", "Merci !" or "How are you?" in a chat with documents was answered with a summary of the
+  documents, with sources and the coverage line under it, and with a skill selected, in that skill's
+  layout. It now gets a short reply in the language you wrote in, without sources, and nothing is read
+  for it: not the documents, not the knowledge packs in the chat. A short question about the last
+  answer, such as "Sure?" or "Alles?", and a plain "ok" or "all" in answer to the assistant's question
+  are still answered from the documents (#963).
 - **The "every mention" example question reads a long document whole in every language.** With a
   whole-document skill such as Contract Brief selected and one long document in scope, the German
   example «Finde jede Erwähnung von „Haftungsfreistellung“» was answered from a few matching

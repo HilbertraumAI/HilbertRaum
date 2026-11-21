@@ -1896,8 +1896,9 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   answer, the turn is labelled as top-k since #736 — see the next bullet.)
   Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
   read (since #649, for list asks: an aggregation ask over one fitting document is read whole). **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
-  knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
-  (top-k answers it at zero model calls when nothing matches); a legacy, partly chunked document (its
+  knowledge packs (the whole read never queries them, so it would silently drop the packs); a filler
+  question about the last answer such as "Sure?" or «Alles?» (since #963 other small talk gets the short
+  small-talk reply before any of this, §19); a legacy, partly chunked document (its
   sections are not its whole text). The #80 classification is unchanged (decided before retrieval); the
   #641 notices are relevance-only — a whole read has every section in the prompt, so neither can be
   true. The answer's sources keep their `[Sn]` (§14.4 "#643 amendment"). Owner calls, all as
@@ -2571,6 +2572,11 @@ explicit budget is unaffected); `min()` keeps large-window models at the full 25
 small ones. Teeth: `rag-pipeline-floor.test.ts` asserts a small launched window packs strictly fewer
 excerpts than a large one.
 
+**The fence allowance is the fence that is sent (#962, 2026-11-21).** The reserve the helper subtracts for
+the turn's skill fence is the fence the turn sends: a bundled whole-document skill's fall-through turn
+(#632, #831), whose fence carries paragraph 1 only, reserves paragraph 1, and the fence placement reads the
+same `fenceMode`. Design record §15.9.
+
 ### 15.2 Token accounting + the compaction trigger (§4.2/§4.3, R9)
 
 Budgeting uses the cheap word estimate `messageTokens` (`approxTokenCount × CHAT_TOKENS_PER_WORD(1.3) ×
@@ -2824,6 +2830,74 @@ context size."* All four observations were real seams:
 `conversationId`'s history — nothing accumulates across chats), and the 5-page-PDF limit is real on a
 4096-token model: the whole-doc budget is `(window − reserve − framing) ÷ 1.5` ≈ 2–3 pages (§15.1) — the
 new context-size picker is the remedy the report asked for.
+
+### 15.9 The fence allowance is the fence that is sent (#962, follow-ups wave 5, owner call G-8, 2026-11-21)
+
+**Decision (Option 2).** Every budget of a grounded turn reserves the skill fence that the turn sends.
+`wholeDocumentBudgetTokens`, `retrievalExcerptBudgetTokens` and `wholeDocumentFitBudgetTokens`
+(`rag/index.ts`) take an optional `fenceMode`; absent means `'full'`, so every other caller is
+byte-identical. `generateGroundedAnswer` reads `opts.skillFenceMode` once, into one `fenceMode`, and uses
+it for the allowance (the relevance excerpt budget, the whole-read fit, the compare fit) and for the
+placement after retrieval. The small-document read in `registerRagIpc` (`wholeReadFor`, #643) passes the
+turn's `skillFenceMode` too, so the IPC layer and `generateGroundedAnswer` decide "fits" against the same
+number and a "fits" never turns into a truncated read and an unasked-for chunk map-reduce. The needle
+check stays sized for the whole fence, on purpose: it asks whether the engine's own read, which carries
+the whole fence, would truncate. Option 1 (rag only) was not taken: it left one fence-blind budget on the
+turn.
+
+**The facts it rests on.** Since #632 and #831 a bundled whole-document skill's fall-through turn (the
+engine declined it: a question outside the skill's vocabulary over several documents, small talk, the
+needle downgrade) sends paragraph 1 of its fence, but the allowance kept measuring the whole fence. Per
+skill, at the question "When is the notice deadline?" (units are `approxPromptTokens`, about 1.3 per
+word):
+
+| Skill | Whole fence | Paragraph 1 | Freed | Excerpt budget at 4,096 (whole → paragraph 1) | At 8,192 |
+|---|---|---|---|---|---|
+| What Changed? | 819 | 481 | 338 | 1,078 → 1,304 | 2,500 → 2,500 |
+| Contract Brief | 600 | 255 | 345 | 1,224 → 1,454 | 2,500 → 2,500 |
+| Meeting Minutes | 727 | 325 | 402 | 1,140 → 1,408 | 2,500 → 2,500 |
+| Share-Safe Review | 817 | 416 | 401 | 1,080 → 1,347 | 2,500 → 2,500 |
+| Deadline & Obligation Finder | 589 | 247 | 342 | 1,232 → 1,460 | 2,500 → 2,500 |
+
+A 500-token section costs 650 units, so on a 4,096 window one passage fit beside the whole fence and two
+fit beside paragraph 1. Above about 6,000 tokens of window the 2,500-token `ragMaxContextTokens` setting
+binds both ways, so nothing changes there. In wave 4's real-model runs (llama.cpp b9849, GTX 1070 Ti) the
+4B read 1 section of a 19-section lease (and of a 14-section meeting record) under every skill and
+stated the asked fact on none of the four single-fact turns; an emulation that sends the same prompt the
+fix now sends (a user skill whose whole body is paragraph 1) read 2 sections and stated it on 3 of 4. The
+9B, on 8,192, read 3 sections either way.
+
+**The invariant: one `fenceMode` for the allowance and the placement.** Nothing after the budgets can
+shrink the excerpts: `fitMessagesToContext` keeps the grounded turn mandatory and drops only history
+(§15.1). The placement (`skillFenceBudgetTokens`) measures the fence-less grounded turn at 1.3 tokens per
+word without the 1.5 German headroom, so it always finds room for a larger fence than the allowance
+reserved; the allowance is the only real guard on the fence's share of the window. With the placement
+built fuller than the allowance, the budget contract (everything but the excerpts at 1.3 per word, plus
+1.5 × the excerpts, plus the 1,024-token answer reserve) came to 4,114–4,118 of 4,096 tokens, and under
+German-dense text the answer is cut at the window.
+
+**What changes, as built.** Only a capped fall-through turn on a window below about 6,000 tokens: a
+single-fact question over a long document reads one more passage (two at 4,096), and one document
+between the two fit budgets (for What Changed? at 4,096 about 1,270 to 1,500 units, framing included) is
+read whole by the small-document read, where it got the passage search before (#643's rule: one
+document that fits is read whole). User skills, which keep their whole fence, turns with no skill, the
+engines' own reads and the map-reduce rescues (`whole-doc-tree.ts` already sized its reserve by the fence
+it sends) are unchanged. No KV-cache cost: in a documents chat the fence rides in the user turn, and
+`GROUNDED_SYSTEM_PROMPT` is unchanged.
+
+**Accepted cost (G-8).** On a 4,096 window the freed room goes to a passage, not to older history. Under
+Share-Safe Review and What Changed?, a follow-up's grounded turn then fills the history budget
+(`fitMessagesToContext` estimates 1.95 tokens per word: about 3,030 to 3,130 of 3,072), so it keeps no
+earlier turn, where it kept them before; Contract Brief, Meeting Minutes and Deadline & Obligation Finder
+keep them. The same rule already applied to any document turn whose passages fill the budget.
+
+**Proof.** `rag-whole-doc-compare.test.ts`, the #831 describe: per capped skill, the fall-through passage
+search over a long lease at 4,096 reads as many passages as the user twin whose body is paragraph 1
+(master: one against two, all five skills); the budget contract holds and paragraph 1 is placed
+untrimmed; the user twin with Contract Brief's whole body still reserves its whole fence; at 8,192 the
+bundled turn reads as many passages as the whole-fence reservation. The #632 describe: a document between
+the two fit budgets is read whole under What Changed? and stays on the passage search under its
+whole-body user twin.
 
 ## 16. Evidence-review snapshot read-model — how EP-1 freezes §8/§14 honestly (EP-1 Phase 1)
 
@@ -6172,3 +6246,84 @@ replaced with a mechanical citation check.
 This closes the retrieval-research effort described above; nothing in it changes what the app
 ships today, and everything in it describes one internal question bank, one archive and one
 machine — not the app in general and not any other product.
+
+## 19. Small talk in a documents chat — design record (#963, follow-ups wave 5, owner call G-1, 2026-11-21)
+
+**Decision (option a2).** A small-talk message in a documents chat ("Danke!", "Thanks!", «Merci !», "How
+are you?") gets one short model reply that reads nothing. `isSmallTalkReply` (`skills/vocabulary.ts`)
+decides, and `generateSmallTalkReply` (`rag/index.ts`) answers. The branch sits in the ask handler of
+`registerRagIpc`, right after the refusal of an explicit skill that no longer resolves (#132) and before
+any scope, skill-engine, router, classifier or knowledge-pack work.
+
+**The facts it rests on.** `isSmallTalk` only opted small talk out of the whole-document reads (A3): the
+engines of the five bundled whole-document skills, the small-document read (#643), the tool-skill
+inversion and the offer gate. The turn then took the passage search, whose prompt frames any message as a
+question over the excerpts ("Question: Danke!" and the passages), and the models summarized them. In wave
+4's runs (llama.cpp b9849, GTX 1070 Ti, qwen3-4b-instruct-q4 and qwen3.5-9b-ud-q4kxl) 3 of the 4
+thank-yous with no skill (two per model) got a summary of the document, and none of the 8 under a skill
+got an acknowledgement: each was a summary of 79 to 231 words, in 7.6 to 13.6 s on the 4B and 21.7 to
+31.6 s on the 9B. The persisted reply carried 1 or 2 citations, `relevance` coverage and
+the skill stamp, so Sources and the coverage meter sat under a thank-you; with no passage above the
+similarity floor it got "I couldn't find this in your documents"; with knowledge packs in scope it ran the
+pack arm (a query-expansion model call, then the archive search) and answered from articles.
+
+**The gate.** `isSmallTalkReply` holds for a whole-message chit-chat QUESTION to the assistant
+(`SMALL_TALK_QUESTION_FORMS`, with or without its question mark: "How are you?", «Wie geht's?», "What can
+you do?", «¿Qué tal?»). Any other message with a question mark anywhere in it (ASCII, the full-width one
+of an IME, the interrobang and its kin, the Arabic one, the Spanish «¿») reads the documents. Without one,
+a whole-message thanks, greeting, goodbye or praise formula (`SMALL_TALK_SOCIAL_FORMS`: «Passt», "Vale
+gracias", "Thanks a lot") takes the reply, an acceptance formula (`SMALL_TALK_ACCEPT_FORMS`: «vale», «de
+acuerdo», «ok va bene», «peki», «всё понятно», «будь ласка») does not, and a message of small-talk words
+takes it only when one of them is a social word (`SMALL_TALK_SOCIAL_WORDS`: thanks, a greeting, a goodbye,
+laughter, praise; the rest, `SMALL_TALK_FILLER_WORDS`, are acceptances and fillers such as "ok", "sure",
+"all", «bitte», «klar», «claro», «certo», «tamam», «ладно»; a word that can be either is a filler). It is
+stricter than `isSmallTalk` on purpose: a question about the last answer is made of small-talk words too
+("Sure?", «Alles?», «Bitte?» for "pardon?", "Sure? Thanks", «Passt?»), and so is an answer to the
+assistant's own question or offer ("All", «Alles bitte», «Claro»); both read the documents, with the
+conversation. The opt-outs keep `isSmallTalk`, which reads the union of the lists (G-11 kept «Alles gut?»
+as small talk for them). The question-mark test is one character class, so it is linear. Review round
+(follow-ups wave 5, findings G-1 to G-3): a "?" followed by more words, a non-ASCII question mark, a
+thanks or acknowledgement formula with a question mark, and an acceptance word alone had all taken the
+reply.
+
+**The reply, as built.** The system prompt `SMALL_TALK_SYSTEM_PROMPT` is `BASE_SYSTEM_PROMPT` and two fixed
+English lines (model-facing, like `GROUNDING_RULES`; no catalog): the message is small talk in a chat about
+the user's documents, no document text comes with it, reply briefly in one or two sentences in the
+message's language without summarizing, quoting or citing a document. The user turn is the message alone:
+no history (a reply that saw the conversation could continue it without the documents), no fence, no
+excerpts, no compaction pre-pass. `temperature` is `GROUNDED_TEMPERATURE` (0) and the cap
+`SMALL_TALK_MAX_TOKENS` (200); a reply cut there is badged as cut off. The reply is persisted with no
+citations, coverage, knowledge-pack outcomes or skill stamp, so it renders as a plain bubble with no
+Sources, no coverage meter, no skill glyph and no pack notice, and the composer's selected skill stays
+selected. It runs through `withChatStream`, `withRegenerateGuard` and the chat slot like every answer: Stop
+keeps the partial marked "Reply stopped", lock and quit end it, a failure leaves the message unanswered for
+"Send again", a failed regenerate brings the previous reply back, and a stream that completed with no
+token throws `EmptyCompletionError` (CB-4). The meter gets the real usage (the two messages).
+
+**What stays unchanged.** Every grounded prompt, `GROUNDED_SYSTEM_PROMPT` included, byte for byte; the
+renderer, IPC, preload, the `Message` shape and the catalogs. The knowledge-pack acceptance set holds no
+small talk (0 of the 100 questions of `eval/rag_de_en.jsonl`), so the §17 shipping rule is not triggered.
+The local API has no route to the documents, so it is not affected.
+
+**Residuals (accepted).** An offer the assistant made and the user accepts with praise alone ("Great",
+«Super», «Perfetto») gets the short reply, not the offer (before #963 it got a summary); "ok", "sure", «bitte»
+and the other acceptance words read the documents with the conversation. A question to the assistant
+keeps the reply with its question mark. The reply sees no earlier turn. "Review" still shows under it, as
+under every answer in a documents chat (a separate product call).
+
+**Not taken.** (a1) a plain chat turn (`generateAssistantMessage`): its prompt tells the model to answer
+from its own knowledge, so "ok" after an offer could continue from the history without the documents, and
+it can run the compaction pre-pass. (a3) a2 with the history: the same continuation risk. (b) a grounding
+rule: it changes every grounded turn's system prompt, still runs the search and still persists Sources and
+coverage under the reply. (c) a canned reply: a new key in ten catalogs, one line for "hi", "bye" and "tell
+me a joke", in the interface language rather than the message's.
+
+**Proof.** `rag-whole-doc-compare.test.ts` (the #963 describe: «Danke!», "Thanks!", «Merci !» and "How are
+you?" with no skill, under Contract Brief, What Changed? over two documents and a user skill with no
+engine; the reply's system prompt is `SMALL_TALK_SYSTEM_PROMPT` and carries none of the grounding rules; no
+earlier turn after an answer; "Sure?", «Alles?», "Sure? Thanks", «Alles bitte» and a real question still read
+the documents; "ok" after the assistant's offer reads them with the conversation;
+the rewritten small-talk rows of the #632 and #831 describes), `rag-whole-doc-skill.test.ts` and
+`rag-whole-read.test.ts` (the rewritten small-talk rows; knowledge packs in scope: no pack search, no pack
+outcome), `rag-regenerate-ipc.test.ts` (Stop, "Send again", regenerate), `skills-vocabulary.test.ts`
+(`isSmallTalkReply`).

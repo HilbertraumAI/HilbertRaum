@@ -957,7 +957,8 @@ file check"), `unverified` when the manifest has a placeholder hash and develope
 (the row reads "no checksum on record", the AI Model card's "No checksum"), else `ok`. The verdict
 is the cache's only: `knownFileVerdict` (`services/models.ts`) is synchronous and hashes nothing
 (a `statSync`, the in-memory cache, a read-only view of the `checksumCache` the snapshot has
-already read; it never writes settings), so a file nobody has checked yet is `ok`. Such a row adds
+already read; it never writes settings), so a file nobody has checked yet is `ok`. A file check that changes
+this verdict pushes the screen (#959, the push list below), so the row turns to "failed its file check" without a reopen. Such a row adds
 nothing to `totals.ramAllMb` and is not added to a graphics-card line; **loaded beats it**, as it
 beats `onDrive`. "Your model" carries the same verdict (`placement.model.fileCheck`, `ok` while
 resident) and makes no fit claim for a refused model; its line keeps the size on disk. The images
@@ -1100,7 +1101,15 @@ resident-sidecar transitions for the "Models on this computer" rows (`onResidenc
 `VisionService`: lazy start landed, idle teardown, suspend/stop, unexpected exit — the services
 stay Electron-free, the subscriptions live in `initBackend`); a model download that reaches `done`
 (#914: the rows say which models are on this drive; `registerDownloadIpc` pushes after the
-`onModelInstalled` selectors re-ran, and a failed or cancelled download pushes nothing); and the
+`onModelInstalled` selectors re-ran, and a failed or cancelled download pushes nothing); a file check that CHANGES a model's file verdict
+(#959: `knownVerdicts` before and after the pass, one push per pass that moved at least one verdict, none for a pass
+that only confirms the cache): the `listModels` handler (full, lazy or cancelled pass), `verifyModel` (the verdict is
+captured BEFORE its invalidate, so a damaged-to-intact flip counts), and the start check of the search and voice
+models (`createModelStartCheck`'s injected `onVerdictChanged`, wired in `main/index.ts`; the service never imports
+electron). The chat start gate in `startModelRuntime` needs no push of its own: its start request (#599) is released
+after the file check, refused start or not, and that release is a runtime change, which already pushes (measured in
+the real app). A hash of 64 MiB or more also pushes through its read-speed sample, which is why only smaller or faster
+hashes needed this; and the
 settings keys the snapshot reads when they change: the active slots through `models:select` /
 `runtime:use`, and `contextTokens`, `contextTokensOverride` and `gpuMode` through `settings:update`
 (`PERFORMANCE_SETTINGS_KEYS` — not every settings write; since #868 that channel drops the

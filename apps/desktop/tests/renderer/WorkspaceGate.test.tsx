@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
+import { useState } from 'react'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate } from '../../src/renderer/screens/WorkspaceGate'
@@ -389,6 +390,44 @@ describe('WorkspaceGate — unlock (existing vault, single calm screen)', () => 
   })
 })
 
+// #955 item 3: a create refused because a workspace is on the drive after all (its key file copied back while the
+// create form was up). The form used to stay until a restart, and its copy said "Restart HilbertRaum". Main now reads
+// `locked` (its unlock runs the start's steps over that vault), so the gate re-reads the state and hands it to its parent,
+// which shows the unlock form. Walk round: the create step and the unlock screen are one card, so the alert region the
+// create step mounted is the very element that receives the refusal; a region mounted by the switch got its text in the
+// same frame in the real app, which many screen readers miss (#436, M-U1).
+describe('WorkspaceGate — a create refused because a workspace is on the drive (#955 item 3)', () => {
+  it('re-reads the state and shows the unlock form, the refusal arriving in its alert region, focus on its field', async () => {
+    const user = userEvent.setup()
+    const createWorkspace = vi.fn(
+      async (): Promise<WorkspaceActionResult> => ({ ok: false, reason: 'workspace_exists', message: 'main’s text' })
+    )
+    const getWorkspaceState = vi.fn(async (): Promise<WorkspaceStateInfo> => LOCKED_ENCRYPTED_WORKSPACE)
+    const onUnlocked = vi.fn()
+    stubApi({ createWorkspace, getWorkspaceState })
+    function Parent(): JSX.Element {
+      const [state, setState] = useState<WorkspaceStateInfo>(UNINITIALIZED)
+      return <WorkspaceGate state={state} onUnlocked={onUnlocked} onStateChange={setState} />
+    }
+    render(<Parent />)
+    await toPasswordStep(user)
+    await user.type(screen.getByPlaceholderText('Password'), 'longenough')
+    await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+    // The create step's own region, in the document and empty before the refusal.
+    const region = screen.getByRole('alert')
+    expect(region).toBeEmptyDOMElement()
+    await user.click(screen.getByRole('button', { name: /create workspace/i }))
+
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    // The same element after the switch, the refusal now inside it.
+    expect(screen.getByRole('alert')).toBe(region)
+    expect(region).toHaveTextContent(t('en', 'main.workspace.exists'))
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Password'))
+    expect(getWorkspaceState).toHaveBeenCalledTimes(1)
+    expect(onUnlocked).not.toHaveBeenCalled()
+  })
+})
+
 // Second UI-languages wave owner call G-6 (2026-11-13): CSS uppercases the edition line
 // (`.gate-brand-edition`), and uppercasing follows the element's language, so under a Turkish UI
 // Chromium would show "HİLBERTRAUM LİTE". jsdom renders no text-transform; the row asserts the
@@ -419,7 +458,9 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
   afterEach(() => window.localStorage.clear())
 
   /** Render the gate in German, submit once, have main answer with `failure` (or the call reject with it), and expect
-   *  `shown` on a gate that stayed up. */
+   *  `shown` on a gate that stayed up. #955 item 3: after a create's `workspace_exists` the gate re-reads main's state;
+   *  here main still reads `uninitialized`, so the create form keeps the refusal (the switch to the unlock form when main
+   *  reads `locked` is the next describe's). */
   async function failIn(call: 'unlock' | 'create', failure: Failure | Error, shown: string): Promise<void> {
     const user = userEvent.setup()
     const answer = vi.fn(async (): Promise<WorkspaceActionResult> => {
@@ -427,9 +468,18 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
       return failure
     })
     const onUnlocked = vi.fn()
-    stubApi(call === 'unlock' ? { unlockWorkspace: answer } : { createWorkspace: answer })
+    const onStateChange = vi.fn()
+    stubApi(
+      call === 'unlock'
+        ? { unlockWorkspace: answer }
+        : { createWorkspace: answer, getWorkspaceState: vi.fn(async (): Promise<WorkspaceStateInfo> => UNINITIALIZED) }
+    )
     renderInLanguage(
-      <WorkspaceGate state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED} onUnlocked={onUnlocked} />,
+      <WorkspaceGate
+        state={call === 'unlock' ? LOCKED_ENCRYPTED_WORKSPACE : UNINITIALIZED}
+        onUnlocked={onUnlocked}
+        onStateChange={onStateChange}
+      />,
       'de'
     )
     if (call === 'unlock') {
@@ -447,6 +497,7 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     }
     expect(await screen.findByText(shown)).toBeInTheDocument()
     expect(onUnlocked).not.toHaveBeenCalled()
+    expect(onStateChange).not.toHaveBeenCalled()
     if (call === 'create' && !(failure instanceof Error)) {
       expect(screen.getByPlaceholderText(t('de', 'gate.passwordPlaceholder'))).toHaveValue('')
       expect(screen.getByPlaceholderText(t('de', 'gate.create.confirmPlaceholder'))).toHaveValue('')
@@ -465,7 +516,9 @@ describe('WorkspaceGate — unlock/create failures render in the gate’s langua
     ['create', 'workspace_exists', 'main.workspace.exists'],
     ['create', 'plaintext_not_allowed', 'main.workspace.plaintextNotAllowed'],
     ['create', 'refused', 'main.workspace.passwordTooShort'],
-    ['unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing']
+    ['unlock', 'vault_descriptor_missing', 'main.workspace.descriptorMissing'],
+    // Review V F-3: a create over an unreadable key file with no `.enc` shows the unlock's copy, on the create form.
+    ['create', 'vault_descriptor_unreadable', 'main.workspace.descriptorUnreadable']
   ] as const)('%s %s shows %s in German although main said it in English', async (call, reason, key) => {
     const params = { min: MIN_PASSWORD_LENGTH }
     await failIn(call, { ok: false, reason, message: t('en', key, params) }, t('de', key, params))
