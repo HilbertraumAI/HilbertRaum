@@ -2021,20 +2021,30 @@ re-encrypts (the bullet below).
   job's `ExitTimeOut`, 20 s by default), a forced `shutdown -r`, a closed Terminal (SIGHUP) and
   Ctrl+C; `npm run dev` on a Mac now locks at once on Ctrl+C or an electron-vite restart, as Linux
   dev does. Read from Electron v43.8.6's source, not measured on a Mac (the walk is owed with
-  #887/#888). **A signal after a session-end lock (P3, follow-ups wave 6):** the session-end lock
-  does not end the process, and the signal listener replaced the default action, so a signal
-  after that lock did nothing: a shutdown another app cancelled left an app that only SIGKILL
-  could stop (unreachable before #977: only Linux had the signal leg, and only Windows and macOS
-  the session-end leg). A closure flag, `appEnding`, set wherever the exit is already under way
-  (a signal's or a session-end `will-quit`'s exit, the teardown's `finally`, `quit`), now lets
-  that signal run `emergencyLock` again and `app.exit(0)` once; repeat signals stay inert. The
-  second lock has nothing to do on a workspace still locked, and locks one the user unlocked
-  again after the cancelled shutdown (review round 1), which would otherwise have ended with that
-  session's working copy plaintext (measured on Linux Electron with the stand-in app: the old
-  closure stayed alive until SIGKILL, the new one exited 0). A `will-quit` after a session-end
-  lock (⌘Q in that app) now runs `emergencyLock` the same way before its exit (review
-  round 1; it exited without locking before, on master too), so every exit after a session-end
-  lock ends with the workspace locked.
+  #887/#888). **After a session-end lock (#977):** the session-end lock does not end the process:
+  on macOS a shutdown another app cancels leaves the app running, locked, and the user may unlock
+  again. So every later end event runs `emergencyLock` again before it ends anything: a second
+  session end (which leaves the exit to the OS, as the first did), a `will-quit` (⌘Q in that app,
+  and on a normal shutdown the system's own quit right after the `powerMonitor` lock) and a signal.
+  Before #977's fix a second session end returned at once (logging that a quit teardown was
+  running, which none was), a `will-quit` exited without a lock, and a signal did nothing, because
+  the signal listener replaced the default action, so only SIGKILL could stop the app (that last
+  case was unreachable before #977: only Linux had the signal leg, and only Windows and macOS the
+  session-end leg). A closure flag, `appEnding`, set wherever the exit is already under way (a
+  signal's or a session-end `will-quit`'s exit, the teardown's `finally`, `quit`), keeps a later
+  quit or signal from locking or exiting a second time. The closure cannot see the workspace (no
+  dependency reads its state), so the repeat lock always runs. On a workspace still locked, the
+  usual case, it is safe and bounded: every step is synchronous, `lock()` and `shutdown()` find no
+  open database and do nothing, the log flush has no key and writes no file, and the operation
+  registries are empty. What is left is the lock latch, the local API's stop, one log line
+  (`… after a session-end lock — locking workspace again`) and the reap of any child started
+  since. Measured on Linux Electron with the stand-in app: after a session-end lock, a signal left
+  the old closure alive until SIGKILL; the new one exited 0. **Still open (pre-existing, not
+  changed; needs a Mac):** after a cancelled shutdown the closure never leaves its ending state
+  (`shuttingDown` stays set). A Dock click then opens no window, the close guard skips its save,
+  and ⌘Q takes the emergency lock instead of the normal teardown, so a review edit not saved yet,
+  a reply still being written or a scan still being read is lost. Quit and start the app again
+  after a cancelled shutdown.
   **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two legs, registered inside
   `app.whenReady` (the signal leg on Linux and macOS, the `quit` leg on Linux only), first in it
   after the second-instance return (before the code that can throw), over the same closure. (1) A
@@ -2080,9 +2090,11 @@ re-encrypts (the bullet below).
   (measured: a spawned child and Electron's network utility process read `00000000`). Not covered:
   the zygotes, which Electron starts before the main script runs, and what they fork, the renderers
   and (measured here) the GPU process, which keep the default `00000033`. They hold no vault key,
-  but a renderer's dump can hold the text it showed and the workspace password typed into the
-  unlock field, which passes through the renderer as a JavaScript string that cannot be zeroed
-  (whether a sandboxed renderer dumps core at all is not verified). systemd-coredump's journal
+  but a renderer's dump can hold the workspace password typed into the unlock field (a JavaScript
+  string that cannot be zeroed, and the password opens the workspace), the text the window showed,
+  and, in the hidden helper windows (the OCR rasterizer, the evidence-pack print window),
+  decrypted document pages that were never shown (whether a sandboxed renderer dumps core at all
+  is not verified). systemd-coredump's journal
   entry still records the command line, the environment and the open-file paths, without memory contents (not checked
   on such a host). The lock writes about twice the database's size (checkpoint, re-encrypt with an
   fsync, shred with an fsync), so with about 9 of the 10 s usable a workspace above roughly 75 to
@@ -2106,7 +2118,8 @@ re-encrypts (the bullet below).
   Pinned by `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings
   against `will-quit`, the reap on the exit path, throw-safety (a throwing log line before the lock
   included), the transient sweep, the duration line, the signal and `quit` legs (one lock
-  whatever came first), P3's one exit after a session-end lock, and the `index.ts` wiring (source
+  whatever came first), the repeat lock and the one exit after a session-end lock (#977, on a
+  workspace unlocked again and on one still locked), and the `index.ts` wiring (source
   text, including that the signal legs are gated to Linux and macOS, the `quit` leg to Linux and
   the `powerMonitor` leg to macOS, all inside `app.whenReady`, before the protocol, the menu and
   the window); the filter by `tests/unit/core-dump-filter.test.ts` (Linux writes `0`, other

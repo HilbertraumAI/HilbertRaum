@@ -92,7 +92,9 @@ password recovery — are documented in
   stand-in app: the dump shrank from about 785 MB, with a planted test string in it, to 164 KB
   with no trace of it). A dump can still name the files the app had open and hold the start of
   its command line. The processes that draw the app's windows are not covered: their dump can
-  still hold what they showed and a password typed on the lock screen. A signal (`kill`,
+  still hold the password typed on the lock screen, which opens the workspace, what they showed,
+  and, for the hidden windows that read scans and print evidence packs, document pages that were
+  never shown. A signal (`kill`,
   `systemctl stop`, Ctrl+C) has no such limit. Lock first, or quit, before you log out with a
   large workspace. The Linux legs are
   measured on Electron 43.8.6 under WSL with a stand-in app (the three signals, a lost D-Bus
@@ -103,7 +105,12 @@ password recovery — are documented in
   since the last **Lock now** or normal quit: nothing runs before the process ends. On macOS the
   `shutdown` leg is registered but not yet verified on a Mac (owner live check,
   #226), so quit first there (user-guide §13; `security-model.md` "OS session end locks the
-  workspace"). Wait for the window to close before you eject.
+  workspace"). If another app cancels a macOS shutdown after the app has locked, the app stays
+  open but treats every later quit as an emergency: a Dock click opens no window, and quitting
+  locks at once without saving a review change still being made, a reply still being written or a
+  scan still being read (a second shutdown, a quit or a `kill` still locks the workspace first,
+  also after you unlocked it again, #977). Quit and start the app again after a cancelled
+  shutdown. Wait for the window to close before you eject.
 - **On Linux, the AppImage can run without Chromium's sandbox.** The app's windows are configured
   `sandbox: true` (`window-security.ts`), but the operating-system sandbox behind that setting
   needs unprivileged user namespaces, which Ubuntu 24.04 and later restrict by default (as do some

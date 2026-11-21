@@ -560,7 +560,9 @@ from its first public `1.0.0` release onward.
   crash while it locked. The main process now tells Linux to leave its memory out of such a file,
   and so do the helper programs it starts, such as the model engine. The file can still name the
   files the app had open. The parts of the app that draw its windows are not covered: their crash
-  file can still hold what they showed, including a password typed on the lock screen (#982).
+  file can still hold the password typed on the lock screen, which opens your workspace, what they
+  showed, and pages of your documents that the hidden windows for reading scans and printing
+  evidence packs worked on (#982).
 
 ## [0.1.65] — 2026-11-11
 
