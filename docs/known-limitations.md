@@ -1692,14 +1692,18 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   notes. The notes are taken for the question, with no skill and under any whole-document skill, bundled
   or your own, unless the question asks for the skill's report: a summary, minutes, a brief or a review
   keeps the notes for the skill's task, list word or not, so "Summarize all the decisions" is answered
-  from notes shaped like minutes. The report words are English and German (and the summarize example
-  chip in every language), so a report request typed in the eight newer interface languages gets notes
-  for the question as well; the skill's instructions still set the report's format. Measured residuals
-  ([`rag-design.md`](rag-design.md) §14.10): on a 4B model, items buried in repetitive text can still be
-  lost ("List all action items" over a transcript where twenty near-identical commitments surround the
-  three real ones found none of them, with or without the question in the notes); on a 9B model, a list
-  request over a document whose clauses repeat can fill the notes with the repeated clause and miss the
-  real items (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12 with the
+  from notes shaped like minutes. A turn the skill's engine passes on to the ordinary answer, such as a
+  summary asked of What Changed? over one document, takes notes for the question too; a skill with no
+  analysis engine keeps the notes for its own instructions. The report words are English and German
+  (and the summarize example chip in every language), so a report request typed in the eight newer
+  interface languages gets notes for the question as well, and so does an English or German request for
+  the report in other words: "Is this safe to share?", «Prüfe diesen Vertrag», "Write up the meeting",
+  «Erstelle eine Niederschrift» or "Go ahead". The skill's instructions still set the report's format.
+  Measured residuals ([`rag-design.md`](rag-design.md) §14.10): on a 4B model, items buried in
+  repetitive text can still be lost ("List all action items" over a transcript where twenty
+  near-identical commitments surround the three real ones found none of them, with or without the
+  question in the notes); on a 9B model, a list request over a document whose clauses repeat can fill
+  the notes with the repeated clause and miss the real items (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12 with the
   question in the notes, 11 and 10 without, two runs each; left for a separate fix); and when the notes
   had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
   The answer still says it read the whole document, which is true of what it read, not of what the notes

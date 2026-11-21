@@ -2457,10 +2457,14 @@ request:`, before the fence, and their instruction adds "and everything the user
 "when it asks to find or list something, note each place with its exact wording"); the task clause stays word for
 word. A report request keeps the prompts as they were, byte for byte, list word or not ("Summarize this
 contract", the summarize chip, "Summarize all the decisions", «Erstelle das Protokoll mit allen Beschlüssen»,
-"Write the minutes including every action item"), and so does a fence-only skill on the tree route (it has a
-fence and no flag). The report words are English and German plus the chip, so a report request typed in the eight
-newer interface languages takes the question too (G-A3); the fence, not the question, sets the report's format.
-The reduce prompt is the same in every shape: it carried the question before #939. Wave 4 had shipped the flag
+"Write the minutes including every action item"). A bundled skill's fall-through turn carries paragraph 1 of its
+fence only (#632, #831: the heading and honesty rules, no task), so the core takes the question there too
+(`skillFenceMode === 'first-paragraph'`, wave 5 review round), on the request layout with paragraph 1 after the
+request; What Changed? over one document with a ready deep index is the case that reaches it. A skill with no
+analysis engine (a fence-only user skill) on the tree route keeps the prompts as they were, by design: its fence
+is the task its author wrote, and it has no flag. The report words are English and German plus the chip, so a
+report request typed in the eight newer interface languages takes the question too (G-A3); the fence, not the
+question, sets the report's format. The reduce prompt is the same in every shape: it carried the question before #939. Wave 4 had shipped the flag
 narrower (a bundled skill, a list question by the router's `asksForList`, and no report); wave 5 removed
 `asksForList`, which then had no caller. **Why (lane A, wave 5: GTX 1070 Ti, b9849, qwen3-4b-instruct-q4 at a
 4,096 window and qwen3.5-9b-ud-q4kxl at 8,192, one run per turn and variant plus a second run of two 9B turns,
@@ -2494,10 +2498,11 @@ deadline" and "List all action items" carry the request on every map call, the c
 a user skill's list question, "Tell me about the parking rules", "Explain the termination rules" and «Enumera todos
 los plazos» carry it before the fence with the task kept; five report requests, a user skill's among them, and
 four report requests with a list word send master's prompt for the skill's own fence, `asPreRequestMapPrompt`;
-the #952 describe: no skill over a ready deep index, en and de, every map step on the no-fence prompt),
-`rag-whole-doc-tree.test.ts` (master's whole map and fold prompts with a skill, `masterMapPrompt`, and the no-skill
-ones, `noFenceMapPrompt`, byte for byte, both frozen in `tests/helpers/whole-doc-fixtures.ts`; the window pin at
-4,096), `rag-whole-doc-mapreduce.test.ts` (the flag on, and no skill, map and fold) and `skills-vocabulary.test.ts`
+the #952 describe: no skill over a ready deep index, en and de, every map step on the no-fence prompt, and What
+Changed? over one document, every map step with the request before paragraph 1), `rag-whole-doc-tree.test.ts`
+(master's whole map and fold prompts with a skill, `masterMapPrompt`, and the no-skill ones, `noFenceMapPrompt`,
+byte for byte, both frozen in `tests/helpers/whole-doc-fixtures.ts`; the window pin at 4,096; a paragraph-1 fence
+takes the request), `rag-whole-doc-mapreduce.test.ts` (the flag on, and no skill, map and fold) and `skills-vocabulary.test.ts`
 (`isReportShaped`). Residuals, the 9B's list clause over a document whose clauses repeat among them:
 [`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
 

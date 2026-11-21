@@ -723,4 +723,29 @@ describe('askDocuments — with no skill, the whole-document map steps take note
       }
     }
   )
+
+  // Review round (N-2): a bundled skill's fall-through turn carries paragraph 1 of its fence only (#632), the heading
+  // and honesty rules, so its map steps over the deep index had no task either. What Changed? over ONE document
+  // declines the turn, and the router sends the summary to the tree: every map step now takes notes for the request,
+  // before paragraph 1, and the turn is still stamped.
+  it('What Changed? over one document with a ready deep index: every map step takes notes for the request, before paragraph 1', async () => {
+    const h = await makeFenceHarness([LONG_LEASE], 4096)
+    const section = (n: number): string => `Section ${n}: ${'the tenant shall pay the rent and the service charges on time '.repeat(120)}`
+    seedReadyTree(h.db, h.docIds[0], chunkIdsOf(h.db, h.docIds[0]), {
+      summary: 'Summary: a lease.',
+      sections: [section(1), section(2), section(3)]
+    })
+    const question = 'Summarize the rent and the notice deadline'
+    const msg = await ask(h, question, WHAT_CHANGED_INSTALL_ID)
+    expect(msg.coverage?.mode).toBe('tree')
+    expect(msg.skillId).toBe(WHAT_CHANGED_INSTALL_ID)
+    const firstParagraph = paragraphsOf(BODIES[WHAT_CHANGED_INSTALL_ID])[0]
+    expect(fenceBodies(h.runtime)).toEqual(Array(h.runtime.calls).fill(firstParagraph))
+    const maps = mapTurnsOf(h.runtime)
+    expect(maps.length).toBeGreaterThan(1)
+    for (const map of maps) {
+      expect(map).toContain(`\nUser request:\n${question}\n`)
+      expect(map.indexOf('User request:')).toBeLessThan(map.indexOf('Skill instructions:'))
+    }
+  })
 })

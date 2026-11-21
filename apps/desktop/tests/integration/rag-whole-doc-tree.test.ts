@@ -396,6 +396,39 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     expect(maps.map(windowOf)).toEqual([`${texts[0]}\n\n${texts[1]}`, `${texts[2]}\n\n${texts[3]}`])
   })
 
+  // #952 review (N-2): a bundled skill's fall-through turn carries paragraph 1 of its fence only (#632, #831), the
+  // heading and honesty rules, so it holds no task either. With no flag every map step takes notes for the request,
+  // on #939's request layout with paragraph 1 after the request; the later paragraphs never ride.
+  it('a fence of paragraph 1 alone holds no task: every map step takes notes for the request (#952 review)', async () => {
+    const h = await makeDoc()
+    seedSections(h, goldenSections(3))
+    const skill: TurnSkill = {
+      installId: 'app:what-changed',
+      title: 'What Changed?',
+      body: '# What changed\nWork only from the two documents. Never invent a change.\n\nProduce the report in this order: summary, changes.'
+    }
+    const question = 'Summarize the rent and the notice deadline'
+    const rt = fakeRuntime()
+    await answerWholeDocFromTree({
+      db: h.db,
+      runtime: rt,
+      conversationId: h.conversationId,
+      documentId: h.docId,
+      question,
+      skill,
+      skillFenceMode: 'first-paragraph',
+      contextTokens: 900
+    })
+    const fence = buildSkillFence({ title: skill.title, body: skill.body, mode: 'first-paragraph' }).text
+    const maps = userTurns(rt).slice(0, -1)
+    expect(maps).toHaveLength(3)
+    for (const map of maps) {
+      expect(map).toContain(`\nUser request:\n${question}\n\n${fence}\n`)
+      expect(map).toContain('note every detail the task needs, and everything in this part that the user request asks about')
+      expect(map).not.toContain('Produce the report')
+    }
+  })
+
   it('no ready tree → returns null (caller falls back to the capped path), no model call', async () => {
     const h = await makeDoc()
     // A tree exists structurally but tree_status is NOT 'ready' (still building) → not usable.

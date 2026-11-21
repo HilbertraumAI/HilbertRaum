@@ -76,8 +76,9 @@ function userRequestBlock(question: string): string {
  *  (its own guard line included) rides in this USER turn after the instruction.
  *  #939 (follow-ups wave 4, owner call 2026-11-20): under a skill, `request` is the user's question when the
  *  map takes notes for it too (the `notesForRequest` flag of `streamWholeDocMapReduce`, set by
- *  `registerRagIpc`); then the request rides before the fence and the instruction asks for every place it asks
- *  about. `null` is the prompt as it was, byte for byte (a request for the skill's report among them).
+ *  `registerRagIpc`, or a fence of paragraph 1 alone, which holds no task); then the request rides before the
+ *  fence and the instruction asks for every place it asks about. `null` is the prompt as it was, byte for byte
+ *  (a request for the skill's report among them).
  *  #952 (follow-ups wave 5, owner call G-2): with no skill there is no task, so the core always passes the
  *  request and it is the notes' only target: the same layout with the fence left out. */
 function mapUserPrompt(skillFence: string | null, request: string | null, part: number, total: number, text: string): string {
@@ -487,8 +488,8 @@ export interface WholeDocTreeDeps {
   /** How much of the skill body the fence carries (#632; absent ⇒ the whole body) — threaded to the core. */
   skillFenceMode?: SkillFenceMode
   /** #939: under a skill, the map and fold steps take notes for the user's question too (decided by
-   *  `registerRagIpc`). Absent ⇒ the prompts as they were. With no skill the core always takes notes for the
-   *  question, the only target there is (#952). */
+   *  `registerRagIpc`). Absent ⇒ the prompts as they were. With no skill, or a fence of paragraph 1 alone, the
+   *  core always takes notes for the question: there is no task (#952). */
   notesForRequest?: boolean
   /** The REAL launched context window (§L0) — sizes the per-call window budget. */
   contextTokens: number
@@ -533,8 +534,8 @@ export interface WholeDocMapReduceInput {
   /** How much of the skill body the fence carries (#632, `SkillFenceMode`; absent ⇒ the whole body). */
   skillFenceMode?: SkillFenceMode
   /** #939: under a skill, the map and fold steps take notes for the user's question too (decided by
-   *  `registerRagIpc`). Absent ⇒ the prompts as they were. With no skill the core always takes notes for the
-   *  question, the only target there is (#952). */
+   *  `registerRagIpc`). Absent ⇒ the prompts as they were. With no skill, or a fence of paragraph 1 alone, the
+   *  core always takes notes for the question: there is no task (#952). */
   notesForRequest?: boolean
   /** The REAL launched context window (§L0) — sizes the per-call window budget. */
   contextTokens: number
@@ -598,9 +599,12 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   const questionTokens = approxPromptTokens(question)
   // #939: the question the map and fold steps take notes for, or null (their prompts as they were). #952: with no
   // skill there is no task, so the request is always the target; deciding it here means no caller can build a
-  // "task described below" with no task below. Either way it is reserved per window like the fence (the reduce
+  // "task described below" with no task below. The same holds for paragraph 1 of a bundled skill's fence (#632,
+  // #831: a fall-through turn carries only the heading and honesty rules), which takes #939's request layout with
+  // paragraph 1 after the request. Either way the question is reserved per window like the fence (the reduce
   // carries it); the 200 covers the instruction and labels.
-  const request = notesForRequest === true || skillFence === null ? question : null
+  const request =
+    notesForRequest === true || skillFence === null || skillFenceMode === 'first-paragraph' ? question : null
   const reserveWords = Math.ceil((fenceTokens + questionTokens + 200) / SUMMARY_TOKENS_PER_WORD)
   const budgetWords = Math.max(200, summaryBudgetWords(contextTokens) - reserveWords)
   // Map-call HARD ceiling (follow-up #2): beyond `SUMMARY_MAP_CALL_HARD_CEILING` windows (~100 pages) the
