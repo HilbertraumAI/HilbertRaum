@@ -793,16 +793,19 @@ export function ChatScreen({
     let cancelled = false
     void (async () => {
       let byMessage = new Map<string, EvidenceReviewSummary>()
+      let readOk = false
       try {
         const summaries =
           (await window.api.getEvidenceReviewSummariesForConversation(activeId)) ?? []
         byMessage = new Map(summaries.map((s) => [s.messageId, s]))
+        readOk = true
       } catch {
         // Read failure ⇒ every candidate reads as "no review" — the chip hides rather than
         // claiming a state we could not verify.
       }
       if (cancelled) return
-      reviewReadForRef.current = activeId
+      // Only a read that succeeded counts as the first read: after a failure the next run of this effect reads again.
+      if (readOk) reviewReadForRef.current = activeId
       setReviewSummaries((prev) => {
         const next = new Map(prev)
         // Every review the batch returned is kept, and every candidate we asked about is now
