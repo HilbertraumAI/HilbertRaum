@@ -617,13 +617,32 @@ export function planInFolder(plan: RuntimeDownloadPlan, dir: string): RuntimeDow
 
 /**
  * Is the copy of `plan` in `dir` (default: its install folder) one the swap and the start may trust
- * (#986)? Its marker parses AND every file the plan requires is there. Existence alone is not enough:
- * the install folder can exist empty (prepare-drive's layout, an archive's download, a `cpu/` net's
- * folder), and a delete killed part-way can keep a marker over missing files.
+ * (#986)? Its marker parses AND every file the copy ITSELF recorded is there: each key of the marker's
+ * `binaries` map (#986 review 2: judged by the current pin's list instead, an old copy that lacks a file a
+ * newer pin adds read as incomplete and was deleted instead of rolled back to). A marker without the map
+ * (a hashing failure, an older fetch-runtime) falls back to the files the plan requires. Existence alone is
+ * not enough: the install folder can exist empty (prepare-drive's layout, an archive's download, a `cpu/`
+ * net's folder), and a delete killed part-way can keep a marker over missing files.
  */
 export function engineFolderComplete(plan: RuntimeDownloadPlan, dir: string = plan.extractTo): boolean {
   const at = dir === plan.extractTo ? plan : planInFolder(plan, dir)
-  return readRuntimeMarker(at.extractTo) !== null && runtimeBinaryPresent(at)
+  const marker = readRuntimeMarker(at.extractTo)
+  if (!marker) return false
+  if (marker.binaries) return Object.keys(marker.binaries).every((key) => markedFilePresent(at.extractTo, key))
+  return runtimeBinaryPresent(at)
+}
+
+/** A file a marker records (`markerBinaryKey` form) is there, as a file, inside `dir`; a key that leaves it is not. */
+function markedFilePresent(dir: string, key: string): boolean {
+  const base = resolve(dir)
+  const p = resolve(base, ...key.split('/'))
+  const rel = relative(base, p)
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
+  try {
+    return statSync(p).isFile()
+  } catch {
+    return false
+  }
 }
 
 // ---- OCR language files (the `ocr:` asset class) ------------------------------------

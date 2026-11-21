@@ -904,6 +904,29 @@ describe('the staged swap’s folders (#986)', () => {
     expect(engineFolderComplete(plan, dir)).toBe(true)
     expect(engineFolderComplete(plan)).toBe(false) // the install folder itself is another folder
   })
+
+  // #986 review 2: by the current pin's list, an old copy that lacks a file a newer pin adds read as
+  // incomplete, and the start deleted it instead of rolling back to it.
+  it('judges a copy by the files its own marker records, and by the plan only for a marker without them', () => {
+    const root = tempDir('hilbertraum-swap-own-')
+    const plan = planRuntimeDownload(root, { ...build('runtime/llama.cpp/win'), runtimeFiles: ['newdep.dll'] }, 'b2')
+    const dir = `${plan.extractTo}.old`
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'llama-server.exe'), 'binary')
+    const marker = { version: 'b1', backend: 'cpu', os: 'win' as const, arch: 'x64' }
+    const sha = 'a'.repeat(64)
+    writeRuntimeMarker(dir, { ...marker, binaries: { 'llama-server.exe': sha } })
+    expect(engineFolderComplete(plan, dir)).toBe(true) // newdep.dll is the new pin's, not this copy's
+    writeRuntimeMarker(dir, { ...marker, binaries: { 'llama-server.exe': sha, 'ggml.dll': sha } })
+    expect(engineFolderComplete(plan, dir)).toBe(false) // a file the copy recorded is gone
+    writeFileSync(join(dir, '..', 'outside.exe'), 'a file beside the copy')
+    writeRuntimeMarker(dir, { ...marker, binaries: { '../outside.exe': sha } })
+    expect(engineFolderComplete(plan, dir)).toBe(false) // a recorded name that leaves the folder
+    writeRuntimeMarker(dir, marker)
+    expect(engineFolderComplete(plan, dir)).toBe(false) // no map: the plan's list, newdep.dll missing
+    writeFileSync(join(dir, 'newdep.dll'), 'library')
+    expect(engineFolderComplete(plan, dir)).toBe(true)
+  })
 })
 
 describe('planOcrDownloads (the ocr: asset class, D32)', () => {
