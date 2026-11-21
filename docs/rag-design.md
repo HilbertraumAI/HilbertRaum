@@ -2524,6 +2524,66 @@ chunk map-reduce), `§4` (Phase 2 — adaptive reduce budget), `§5` (Phase 3 �
 continue-generation) **all map to §14.10**. Architecture-level summary: `architecture.md` §20 ("Skill-aware
 whole-document analysis", "Large documents").
 
+#### 14.10.1 Map-step wording measured (2026-11-21; #978, #979, #980 item 1)
+
+Three open reports asked for a rewording of the whole-document prompts: #978 (the 9B fills a list's notes with
+one repeated clause), #979 (the 4B copies the skill's report template into every map note) and #980 item 1 (the
+reduce's "following the task instructions exactly" line on a turn with no whole fence). A real-model session
+measured candidate wordings against today's prompts; **none passed the gates set beforehand, so nothing ships and
+the prompts stay as they are.**
+
+**Candidates.** List clause (map step, request-with-skill layout): V1 `distinct`, "note each distinct item once,
+with its exact wording and every place it appears" in place of "note each place with its exact wording"; V1+V2
+`distinctOnce`, V1 plus "When a clause repeats in this part, note it once, with every place it appears." Map fence
+(bundled whole-fence turns only; reduce, window reserve and window count unchanged): W1 `p1`, the skill's heading
+and first paragraph plus the user request on every map and fold call; W2 `outline`, W1 plus the skill's `## `
+section heading lines. Reduce line: R1 `request`, "complete the user request from the notes" for a reduce with
+no whole fence.
+
+**Setup.** `qwen3-4b-instruct-q4` at 4,096 and `qwen3.5-9b-ud-q4kxl` at 8,192, llama.cpp b9849 Vulkan, GTX 1070
+Ti, network off, two runs per cell (one for some 9B cells), 86 cells, every answer read by hand against fixed
+fact lists. Gates: #978, 9B "List every deadline" at least 10 of 12 on both runs with no loop, 4B at least 8 of
+12 with the whole badge, the indemnity chip 3 of 3 on both models, the user-skill turn not below the earlier
+measurement; #979, 4B Meeting Minutes 8 of 8 sections and at least 4 of 8 facts, Contract Brief summary at least
+4 of 11, map notes not cut on at least half of the 4B map calls, no 9B loss beyond 2 facts; #980, 4B portfolio
+question at least 7 of 31, 9B at least 16 of 31. A difference counted only at 3 or more facts, or a badge or loop
+change.
+
+| Turn (facts) | Variant | 4B run 1, run 2 | 9B run 1, run 2 |
+|---|---|---|---|
+| DOF list (12) | master | 8, 9 (loop) | 11, 11 |
+| | V1 | 8, 9 (loop) | 2, 4 |
+| | V1+V2 | 5, 7 (loop) | 8, 11 |
+| Meeting Minutes (8) | master | 2, 5 (recursion) | 8 |
+| | W1 | 4, 2 (recursion) | 8 |
+| | W2 | 2, 2 | 8 |
+| DOF list under #979 (12) | W1 | 6, 8 | 7 |
+| | W2 | 7 (loop), 7 (loop) | 8 |
+| Contract Brief summary (11) | master | 5, 5 | 6 |
+| | W1 | 6, 8 | 4 |
+| | W2 | 8, 6 | 6 |
+| Portfolio question (31) | master | 6, 10 | 17, 15 |
+| | R1 | 10, 6 | 17, 16 |
+
+**Verdicts.** #978: V1 broke the 9B list it targeted (the "every place it appears" wording made it write one
+"14 days" row per article until the 512-token cap) and dropped one indemnity article on a 4B run; V1+V2 failed the
+9B (8 on run 1), the 4B (5, 7) and the user-skill turn (9B 5). #979: W1 failed the 4B Meeting Minutes gate on run 2
+(2 of 8, recursion to the output cap) and lost 4 facts on the 9B list; W2 failed the 4B minutes on both runs, the
+uncut-notes gate (8 of 28 maps) and looped on the 4B list both times. #980 item 1: R1 failed the 4B bar on run 2
+(6 of 31), gained nothing over master on either model, added one 9B run-on loop, and left the deadline-to-wrong-
+lease mix-up untouched; the single-reduce case (no map step) wrote the same 7 of 11 either way.
+
+**The one positive signal.** W1 did what #979 asked of the map step: on the 4B, template-copy lines in the map
+notes fell from 175 to 22, "Not stated" filler rows from 88 to 0, and uncut map outputs rose from 6 to 14 of 28.
+The final answers did not improve, so it is a lead for a future design with its own measurement, not a change.
+
+**Variance dominates.** Master's 9B did not reproduce #978's loss this session: 11 and 11 of 12 with no loop,
+against 3 and 0 on the same prompt in the earlier session. Two runs per cell cannot rank wordings that differ by a
+few facts; if #978 is revisited, re-measure master over more runs first. Also seen on master and on variants alike:
+false "the text covers only Part 1" remarks from the 9B under a whole badge, 4B answers that never say they cover
+only the beginning, and 4B recursion of the minutes' "Formal minutes version". The user-facing residuals are in
+[`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
+
 ## 15. Context budgeting + conversation compaction — design record (Phases 0–2)
 
 _When a conversation approaches the model's context window, summarize the **older** turns once into a

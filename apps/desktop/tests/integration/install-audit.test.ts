@@ -43,6 +43,7 @@ import { updateSettings } from '../../src/main/services/settings'
 import type { Db } from '../../src/main/services/db'
 import type { AppContext } from '../../src/main/services/context'
 import type { EngineDownloadJob, OcrInstallJob } from '../../src/shared/types'
+import { makeSizeOnlyZip } from '../helpers/archives'
 import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
@@ -90,7 +91,7 @@ interface Harness {
  * files; the engine IPC over a real DB.
  */
 function harness(
-  opts: { fetchImpl?: FetchFn; extract?: ExtractFn; ocrFetch?: FetchFn; locked?: () => boolean; auditThrows?: boolean } = {}
+  opts: { fetchImpl?: FetchFn; extract?: ExtractFn; ocrFetch?: FetchFn; locked?: () => boolean; auditThrows?: boolean; archive?: Buffer } = {}
 ): Harness {
   const root = freshRoot()
   mkdirSync(join(root, 'config'), { recursive: true })
@@ -102,7 +103,7 @@ function harness(
     stringify({
       llama_cpp: {
         version: 'b200',
-        builds: [{ os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/llama.zip', sha256: SHA, size_bytes: 3_000, extract_to: `runtime/llama.cpp/${HOST_OS}` }]
+        builds: [{ os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/llama.zip', sha256: opts.archive ? createHash('sha256').update(opts.archive).digest('hex') : SHA, size_bytes: 3_000, extract_to: `runtime/llama.cpp/${HOST_OS}` }]
       },
       kiwix_tools: {
         version: '3.8.1',
@@ -147,7 +148,7 @@ function harness(
   handlers.clear()
   resetEngineProblemsForTest()
   const manager = new EngineDownloadManager({
-    fetchImpl: opts.fetchImpl ?? bodyFetch(BODY),
+    fetchImpl: opts.fetchImpl ?? (opts.archive ? archiveFetch(opts.archive) : bodyFetch(BODY)),
     extractImpl:
       opts.extract ??
       (async (_archive, destDir) => {
@@ -173,6 +174,12 @@ function harness(
       .map((r) => r.t)
       .join('\n')
   return { root, db, ctx, manager, ocr, rows, allText }
+}
+
+/** A download that serves `archive` byte for byte. */
+function archiveFetch(archive: Buffer): FetchFn {
+  return (async () =>
+    new Response(new Uint8Array(archive), { status: 200, headers: { 'content-length': String(archive.length) } })) as unknown as FetchFn
 }
 
 const installRows = (h: Harness, prefix: 'engine_install' | 'ocr_install'): Row[] => h.rows().filter((r) => r.type.startsWith(prefix))
@@ -289,6 +296,21 @@ describe('engine installs in the activity log (#843)', () => {
       expect(failed.type, label).toBe('engine_install_failed')
       expect(failed.metadata.reason, label).toBe(reason)
     }
+  })
+
+  // #986: a drive without room to unpack refuses before anything is touched; the record keeps the two byte
+  // counts the message named (counts, never the message).
+  it('a drive without room to unpack records noSpace with the bytes needed and free', async () => {
+    const h = harness({ archive: makeSizeOnlyZip(10_000, 0xfffffffe) })
+    const job = await startEngine(h)
+    expect((await runToEnd(h.manager, job.jobId)).status).toBe('failed')
+    await until(() => installRows(h, 'engine_install').length === 2, 'the no-room event')
+    const failed = installRows(h, 'engine_install')[1]
+    expect(failed.type).toBe('engine_install_failed')
+    expect(Object.keys(failed.metadata).sort()).toEqual([...ENGINE_KEYS, 'freeBytes', 'neededBytes', 'reason'].sort())
+    expect(failed.metadata.reason).toBe('noSpace')
+    expect(failed.metadata.neededBytes as number).toBeGreaterThan(failed.metadata.freeBytes as number)
+    expect(h.allText()).not.toContain(h.manager.get(job.jobId).error ?? '')
   })
 
   // Round 2: an unexpected failure outside every step that records a reason (here the spawn gate, between the

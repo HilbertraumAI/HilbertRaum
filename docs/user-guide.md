@@ -1420,11 +1420,20 @@ you quit.
 the workspace on its own as the session ends. On Linux it should do the same when you log out or
 shut down, or when the app is stopped with `kill` or Ctrl+C in a terminal: it locks the workspace
 and closes at once, without asking. This is checked with those signals and a lost session, not yet
-with a real desktop log-out. On Linux, a log-out with a very large workspace on a slow drive may
-not finish locking: lock first, or quit before you log out. Everywhere this is a best-effort
+with a real desktop log-out. On Linux, a log-out with a workspace of more than a few dozen MB on a
+slow USB stick may not finish locking: lock first, or quit before you log out. If the app crashes
+on Linux, its main process, which holds the key to your workspace, keeps its memory out of the
+crash file the system may save, and so do the helper programs it starts, such as the model
+engine. The parts that draw the app's windows are not covered: their crash file can still hold
+the password you typed on the lock screen, which opens your workspace, what they showed, and pages
+of your documents that the hidden windows for reading scans and printing evidence packs worked on.
+Everywhere this is a best-effort
 safety net — a very large workspace may not finish locking in the time the system allows, and a
 change made in the last second is not kept — so quitting the app first is still the sure way. On
-a Mac this is not yet verified: quit the app before you shut down.
+a Mac, the app also locks the workspace and closes at once when something stops it with `kill`,
+`launchctl stop`, a forced restart or Ctrl+C in a terminal; this follows from how the app and
+Electron handle such a stop, and is not yet checked on a Mac. Shutting down, restarting or logging
+out from the Apple menu is not yet verified either: quit the app before you shut down.
 
 **Performance remembers each computer separately** (§5a): plug the drive into a computer it has
 seen before and its hardware result comes back immediately, with nothing re-measured. On a

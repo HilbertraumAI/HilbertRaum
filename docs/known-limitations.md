@@ -66,27 +66,51 @@ password recovery — are documented in
   Open dialog lists `notes.txt ` under "All files" but cannot open it (an OS limit; a typed path
   loses its trailing space). Drop the file onto the app or import its folder instead.
 - **A large drop is slow on a fully busy machine (#934).** Checking a drop of up to 512 paths asks the file system once per path; when every CPU is busy with other work, that can take seconds instead of a fraction of a second. Nothing is lost, and the import carries on.
-- **Quit the app before shutting down or logging off, above all on macOS (#248, #964).** On
+- **Quit the app before shutting down or logging off, above all on macOS (#248, #964, #977).** On
   Windows the app locks the workspace itself as the session ends (PR #285). On Linux it does the
   same when a log-out, a shutdown or a `kill` ends it (#964): a termination signal (SIGTERM,
   SIGINT or SIGHUP) or a lost session locks the workspace at once and ends the app, with no
-  question. Both are best effort: a very large workspace may not finish locking in the time
-  Windows allows, and a review change made in the last second, a reply still being written or a
-  scan still being read is not kept, so quitting first is still the sure way. On Linux a log-out
-  usually arrives as a lost session, and then Electron gives the lock a fixed 10 seconds: a lock
-  that takes longer (a workspace of a few hundred MB on a slow stick may) ends in a crash
-  (status 133). The workspace is then left unencrypted on the drive until the next start, which
-  recovers its data as after any lock that was cut short; where the system keeps crash dumps
-  (systemd-coredump, apport), a memory image of the app, vault key included, may be stored on the
-  computer's disk. A signal (`kill`, `systemctl stop`, Ctrl+C) has no such limit. Lock first, or
-  quit, before you log out with a large workspace. The Linux legs are measured on Electron 43.8.6
-  under WSL with a stand-in app (the three signals, a lost D-Bus session bus, a lock slowed to 8,
-  12 and 15 seconds); a real desktop log-out (GNOME, KDE), a lost display and the packaged
-  AppImage are not checked yet. A forced kill (SIGKILL) or SIGQUIT (Ctrl+\ in a terminal) still
-  loses every change since the last **Lock now** or normal quit: nothing runs before the process
-  ends. On macOS the `shutdown` leg is registered but not yet verified on a Mac (owner live check,
+  question. On macOS a termination signal does the same (#977): `kill`, `killall`, `launchctl
+  stop`, a forced restart (`sudo shutdown -r now`, or one a management tool starts) or Ctrl+C in a
+  terminal. Before, such a stop was an ordinary quit that the question about unsaved review
+  changes could hold until the system killed the app, unlocked. Quit from the menu, the keyboard
+  or the Dock, and a log-out, are not signals and work as before (what Activity Monitor's Quit
+  sends is not checked yet). All of these are best effort: a
+  very large workspace may not finish locking in the time the system allows, and a review change
+  made in the last second, a reply still being written or a scan still being read is not kept, so
+  quitting first is still the sure way. On Linux a log-out usually arrives as a lost session, and
+  then Electron gives the lock a fixed 10 seconds: a lock that takes longer ends in a crash
+  (status 133). The lock writes about twice the workspace's size, so on a stick that writes
+  20 MB/s a workspace above roughly 75 to 100 MB may not fit, and on one that writes 5 to 10 MB/s
+  one above roughly 20 to 45 MB (worked out from the lock's writes, not yet measured on a stick,
+  #982). The workspace is then left unencrypted on the drive until the next start, which recovers
+  its data as after any lock that was cut short. Where the system keeps crash dumps
+  (systemd-coredump, apport, WSL), such a crash could store a memory image of the app, vault key
+  included, on the computer's disk. The app's main process, which holds that key, now tells Linux
+  to leave its memory out of a crash dump, and the helper programs it starts (the model engine,
+  speech recognition, the knowledge-pack server) inherit that (#982; measured under WSL with a
+  stand-in app: the dump shrank from about 785 MB, with a planted test string in it, to 164 KB
+  with no trace of it). A dump can still name the files the app had open and hold the start of
+  its command line. The processes that draw the app's windows are not covered: their dump can
+  still hold the password typed on the lock screen, which opens the workspace, what they showed,
+  and, for the hidden windows that read scans and print evidence packs, document pages that were
+  never shown. A signal (`kill`,
+  `systemctl stop`, Ctrl+C) has no such limit. Lock first, or quit, before you log out with a
+  large workspace. The Linux legs are
+  measured on Electron 43.8.6 under WSL with a stand-in app (the three signals, a lost D-Bus
+  session bus, a lock slowed to 8, 12 and 15 seconds); a real desktop log-out (GNOME, KDE), a lost
+  display and the packaged AppImage are not checked yet. The macOS signal leg runs the same code,
+  and Electron's source shows it reaches the app the same way; it is not yet checked on a Mac
+  (#887, #888). A forced kill (SIGKILL) or SIGQUIT (Ctrl+\ in a terminal) still loses every change
+  since the last **Lock now** or normal quit: nothing runs before the process ends. On macOS the
+  `shutdown` leg is registered but not yet verified on a Mac (owner live check,
   #226), so quit first there (user-guide §13; `security-model.md` "OS session end locks the
-  workspace"). Wait for the window to close before you eject.
+  workspace"). If another app cancels a macOS shutdown after the app has locked, the app stays
+  open but treats every later quit as an emergency: a Dock click opens no window, and quitting
+  locks at once without saving a review change still being made, a reply still being written or a
+  scan still being read (a second shutdown, a quit or a `kill` still locks the workspace first,
+  also after you unlocked it again, #977). Quit and start the app again after a cancelled
+  shutdown. Wait for the window to close before you eject.
 - **On Linux, the AppImage can run without Chromium's sandbox.** The app's windows are configured
   `sandbox: true` (`window-security.ts`), but the operating-system sandbox behind that setting
   needs unprivileged user namespaces, which Ubuntu 24.04 and later restrict by default (as do some
@@ -1790,9 +1814,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   repetitive text can still be lost ("List all action items" over a transcript where twenty
   near-identical commitments surround the three real ones found none of them, with or without the
   question in the notes); on a 9B model, a list request over a document whose clauses repeat can fill
-  the notes with the repeated clause and miss the real items (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12 with the
-  question in the notes, 11 and 10 without, two runs each; left for a separate fix); and when the notes
-  had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
+  the notes with the repeated clause and miss the real items in some runs (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12
+  in one session, 11 and 11 in a later one on the same prompt); two rewordings of the list instruction made it
+  worse, so the prompt stays as it is. A 4B model's notes on a long document copy the skill's report format
+  into every part, and its answers can loop or invent details; a shorter map prompt cut the copying but did
+  not improve the answers, so that stays too ([`rag-design.md`](rag-design.md) §14.10.1); and when the
+  notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
   The answer still says it read the whole document, which is true of what it read, not of what the notes
   kept.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
@@ -2984,8 +3011,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   followed by walking away no longer locks within seconds, but only once someone answers (there is
   deliberately no timer that answers for you), unless a quit arrives meanwhile (Ctrl+Q or ⌘Q):
   that closes the question and the app quits as if Close anyway had been picked. On Linux a
-  log-out, a shutdown or a `kill` meanwhile locks the workspace at once and ends the app, without
-  the question and without the save (#964). On macOS, a log-out or shutdown with the
+  log-out, a shutdown or a `kill` meanwhile, and on macOS a `kill`, a `launchctl stop` or a forced
+  restart, locks the workspace at once and ends the app, without the question and without the
+  save (#964, #977). On macOS, a log-out or shutdown with the
   app open may be interrupted once while the window saves: the order of the system's quit and its
   shutdown event is unverified (#226). Owed checks on a Mac: the red button, ⌘Q (also during a PDF
   export), a Dock click during an OCR run (it should bring the window back, #910), and a log-out or
@@ -3716,8 +3744,9 @@ reports and phase plans were working papers; their full text lives in git histor
   `runtime/kiwix-tools/<os>/` by hand still works as a last-resort fallback, but leaves no
   marker, so it resolves through the hashless `skip-legacy` verifier path (residual R-1) instead
   of integrity verification — and it is replaced **wholesale** the first time someone installs
-  the family from inside the app or the script (the installer pre-cleans the family's directory
-  before extracting), so a manually provisioned drive is not stranded, only superseded. The
+  the family from inside the app or the script (the in-app installer builds a fresh copy beside it
+  and swaps it in, #986; the script pre-cleans the family's directory before extracting), so a
+  manually provisioned drive is not stranded, only superseded. The
   in-app install needs **Settings → Allow internet access for downloads and updates** on
   and a drive policy that permits downloads (the same gate models and the engine use). Linux and
   macOS builders without the in-app path use the script.

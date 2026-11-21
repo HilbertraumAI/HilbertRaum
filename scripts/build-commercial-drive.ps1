@@ -447,6 +447,16 @@ if (-not $DryRun) {
     )) {
       $rtDir = $rt.dir
       $rtVersion = $famVersions[$rt.family]
+      # #986: an engine install interrupted on this drive leaves <dir>.new or <dir>.old beside
+      # the install until the app's next start there finishes or rolls back the swap. A Kit must
+      # not ship either: it is a second engine copy (assertCommercialDrive parity). Exact names.
+      foreach ($swapLeft in @("$rtDir.new", "$rtDir.old")) {
+        # Get-Item -Force sees the entry itself, a dangling link or junction too (Test-Path follows a
+        # symbolic link to its missing target); the .sh twin tests -e || -L, the canonical gate lstat.
+        if (Get-Item -LiteralPath (Join-Path $Target $swapLeft) -Force -ErrorAction SilentlyContinue) {
+          $problems += "runtime: $swapLeft is left from an interrupted engine install (start the app on this drive once, or delete it)"
+        }
+      }
       $markerFile = Join-Path $Target "$rtDir/.hilbertraum-runtime.json"
       $binFile = Join-Path $Target "$rtDir/$($rt.bin)"
       if (-not (Test-Path -LiteralPath $binFile)) {
@@ -463,6 +473,23 @@ if (-not $DryRun) {
     }
   } else {
     $problems += 'model-manifests/runtime-sources.yaml missing on the drive'
+  }
+}
+# #986: the knowledge-pack tools are optional, so the matrix above has no row for them, but an engine
+# install interrupted on this drive leaves their swap folders just the same (assertCommercialDrive
+# parity; script-drift.test.ts holds this list to runtime-sources.yaml). Exact names only.
+$KiwixToolsDirs = @(
+  'runtime/kiwix-tools/win',
+  'runtime/kiwix-tools/mac',
+  'runtime/kiwix-tools/linux'
+)
+if (-not $DryRun) {
+  foreach ($ktDir in $KiwixToolsDirs) {
+    foreach ($swapLeft in @("$ktDir.new", "$ktDir.old")) {
+      if (Get-Item -LiteralPath (Join-Path $Target $swapLeft) -Force -ErrorAction SilentlyContinue) {
+        $problems += "runtime: $swapLeft is left from an interrupted engine install (start the app on this drive once, or delete it)"
+      }
+    }
   }
 }
 # OCR asset gate (Phase 38, assertCommercialDrive parity): every pinned ocr file must

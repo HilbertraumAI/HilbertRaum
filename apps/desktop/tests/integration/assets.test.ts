@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os'
 import { basename, join, win32 } from 'node:path'
 import {
   archiveNameFromUrl,
+  engineFolderComplete,
+  engineSwapDirs,
+  markerBinaryKey,
+  planInFolder,
   planModelDownloads,
   planOcrDownloads,
   selectRuntimeBuild,
@@ -840,6 +844,88 @@ describe('planRuntimeDownload', () => {
     expect(runtimeBinaryName('win')).toBe('llama-server.exe')
     expect(runtimeBinaryName('mac')).toBe('llama-server')
     expect(runtimeBinaryName('linux')).toBe('llama-server')
+  })
+})
+
+describe('the staged swap’s folders (#986)', () => {
+  const build = (extractTo: string) => ({
+    os: 'win' as const,
+    arch: 'x64',
+    backend: 'cpu',
+    url: 'https://example.test/llama.zip',
+    sha256: 'a'.repeat(64),
+    extractTo
+  })
+
+  it('names the two siblings of an install folder, a trailing slash in the yaml included', () => {
+    const root = tempDir('hilbertraum-swap-')
+    for (const extractTo of ['runtime/llama.cpp/win', 'runtime/llama.cpp/win/']) {
+      const plan = planRuntimeDownload(root, build(extractTo), 'b1')
+      const live = join(root, 'runtime', 'llama.cpp', 'win')
+      expect(engineSwapDirs(root, plan.extractTo)).toEqual({ live, staging: `${live}.new`, previous: `${live}.old` })
+    }
+  })
+
+  // An `extract_to` of `.` passes `planRuntimeDownload`'s containment (it IS the root), but its swap would
+  // move the whole drive to `<root>.old`, outside it.
+  it.each(['.', ''])('refuses an install folder that is the drive root itself (extract_to %j)', (extractTo) => {
+    const root = tempDir('hilbertraum-swap-root-')
+    const plan = planRuntimeDownload(root, build(extractTo), 'b1')
+    expect(() => engineSwapDirs(root, plan.extractTo)).toThrow(/inside the drive root/)
+    expect(() => engineSwapDirs(root, join(root, '..', 'elsewhere'))).toThrow(/escapes the drive root/)
+  })
+
+  it('moves a plan into another folder file for file, so the marker keys stay the live folder’s', () => {
+    const root = tempDir('hilbertraum-swap-plan-')
+    const plan = planRuntimeDownload(root, { ...build('runtime/kiwix-tools/win'), runtimeFiles: ['icudt74.dll'] }, '3.8.1', 'kiwix-serve', {
+      alsoRequired: ['kiwix-manage'],
+      neverInstalled: ['kiwix-search']
+    })
+    const staged = planInFolder(plan, `${plan.extractTo}.new`)
+    expect(staged.extractTo).toBe(`${plan.extractTo}.new`)
+    expect(requiredInstallFiles(staged)).toEqual(requiredInstallFiles(plan).map((p) => p.replace(plan.extractTo, staged.extractTo)))
+    expect(staged.excludedPaths).toEqual([join(staged.extractTo, 'kiwix-search.exe')])
+    expect(staged.zipDest).toBe(join(staged.extractTo, 'llama.zip'))
+    expect(requiredInstallFiles(staged).map((p) => markerBinaryKey(staged.extractTo, p))).toEqual(
+      requiredInstallFiles(plan).map((p) => markerBinaryKey(plan.extractTo, p))
+    )
+  })
+
+  // #986 gaps 2 and 3: a folder that exists, or a marker that survived a cut-short delete, is not a copy.
+  it('calls a copy complete only with its marker AND every required file', () => {
+    const root = tempDir('hilbertraum-swap-complete-')
+    const plan = planRuntimeDownload(root, build('runtime/llama.cpp/win'), 'b1')
+    const dir = `${plan.extractTo}.old`
+    mkdirSync(dir, { recursive: true })
+    expect(engineFolderComplete(plan, dir)).toBe(false)
+    writeRuntimeMarker(dir, { version: 'b1', backend: 'cpu', os: 'win', arch: 'x64' })
+    expect(engineFolderComplete(plan, dir)).toBe(false)
+    writeFileSync(join(dir, 'llama-server.exe'), 'binary')
+    expect(engineFolderComplete(plan, dir)).toBe(true)
+    expect(engineFolderComplete(plan)).toBe(false) // the install folder itself is another folder
+  })
+
+  // #986 review 2: by the current pin's list, an old copy that lacks a file a newer pin adds read as
+  // incomplete, and the start deleted it instead of rolling back to it.
+  it('judges a copy by the files its own marker records, and by the plan only for a marker without them', () => {
+    const root = tempDir('hilbertraum-swap-own-')
+    const plan = planRuntimeDownload(root, { ...build('runtime/llama.cpp/win'), runtimeFiles: ['newdep.dll'] }, 'b2')
+    const dir = `${plan.extractTo}.old`
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'llama-server.exe'), 'binary')
+    const marker = { version: 'b1', backend: 'cpu', os: 'win' as const, arch: 'x64' }
+    const sha = 'a'.repeat(64)
+    writeRuntimeMarker(dir, { ...marker, binaries: { 'llama-server.exe': sha } })
+    expect(engineFolderComplete(plan, dir)).toBe(true) // newdep.dll is the new pin's, not this copy's
+    writeRuntimeMarker(dir, { ...marker, binaries: { 'llama-server.exe': sha, 'ggml.dll': sha } })
+    expect(engineFolderComplete(plan, dir)).toBe(false) // a file the copy recorded is gone
+    writeFileSync(join(dir, '..', 'outside.exe'), 'a file beside the copy')
+    writeRuntimeMarker(dir, { ...marker, binaries: { '../outside.exe': sha } })
+    expect(engineFolderComplete(plan, dir)).toBe(false) // a recorded name that leaves the folder
+    writeRuntimeMarker(dir, marker)
+    expect(engineFolderComplete(plan, dir)).toBe(false) // no map: the plan's list, newdep.dll missing
+    writeFileSync(join(dir, 'newdep.dll'), 'library')
+    expect(engineFolderComplete(plan, dir)).toBe(true)
   })
 })
 

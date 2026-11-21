@@ -1,5 +1,5 @@
-import { accessSync, constants as fsConstants, existsSync, opendirSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { accessSync, constants as fsConstants, existsSync, lstatSync, opendirSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
+import { basename, join, relative, resolve, sep } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import {
   isKitPlatform,
@@ -12,6 +12,7 @@ import {
 } from '../../shared/runtime-sources'
 import { isCommercialPolicy, loadPolicy } from './policy'
 import {
+  engineSwapDirs,
   findNeverInstalledFiles,
   markerBinaryKey,
   planOcrDownloads,
@@ -384,6 +385,29 @@ function userDataArtifacts(rootPath: string): { present: string[]; unreadable: s
 }
 
 /**
+ * The staged-swap leftovers beside the install folder `extractTo` (#986): its `.new` and `.old` siblings
+ * that exist (a link of that name counts), drive-relative with `/`. Empty for a folder the swap cannot have
+ * (one that is the drive root).
+ */
+function engineSwapLeftovers(rootPath: string, extractTo: string): string[] {
+  let dirs: { staging: string; previous: string }
+  try {
+    dirs = engineSwapDirs(rootPath, extractTo)
+  } catch {
+    return []
+  }
+  const there = (p: string): boolean => {
+    try {
+      lstatSync(p)
+      return true
+    } catch {
+      return false
+    }
+  }
+  return [dirs.staging, dirs.previous].filter(there).map((p) => relative(resolve(rootPath), p).split(sep).join('/'))
+}
+
+/**
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (every weight the Kit ships VERIFIED, at
  * least one model bundled, #766) and checks the drive carries no user data. When `runtimeSources` (the yaml pin) is passed, each pinned
@@ -581,6 +605,16 @@ export async function assertCommercialDrive(
       const marker = readRuntimeMarker(plans[0]!.plan.extractTo)
       const { build, plan } = plans.find((p) => marker !== null && p.build.arch === marker.arch) ?? plans[0]!
       const label = `${familyLabel} build ${build.os}/${build.arch} ${build.backend}`
+      // #986: an engine install interrupted on this drive leaves `<extract_to>.new` / `.old` beside the
+      // install (the app's next start on that OS finishes or rolls back the swap). A Kit must not ship one:
+      // it is a second engine copy no check below looks at. Exact names only, as the app's recovery.
+      for (const leftover of engineSwapLeftovers(rootPath, plan.extractTo)) {
+        fail(
+          'current',
+          `${label}: ${leftover} is left from an interrupted engine install — start the app on this ` +
+            'drive once (it finishes or rolls back the swap) or delete the folder'
+        )
+      }
       // #729: an executable the family never keeps (`llama-connect`, the `--connect` tunnel) must not
       // ship, wherever it landed under the install dir: an install made before the installers left it
       // out, or a hand-copied one, would convey a program no licence record covers. The other builds'

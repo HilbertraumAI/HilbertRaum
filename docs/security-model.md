@@ -800,7 +800,7 @@ enumerated this class.
 never uploads. Diagnostics surfaces local data only; it transmits nothing off-device.
 
 **The log is encrypted at rest on an encrypted workspace** — `app.log` can carry file
-names/paths and model ids (never document or chat text — a hard call-site rule), so it is sealed
+names, absolute paths and model ids (never document or chat text — a hard call-site rule), so it is sealed
 under the **same vault key as the database and the document cache** (AES-256-GCM, the framed
 `MAGIC | iv | tag | ciphertext` blob), at rest as `logs/app.log.enc` (rotated copy
 `app.1.log.enc`). On a `plaintext_dev` workspace the log stays a plain rotating `app.log`,
@@ -815,8 +815,73 @@ alone (a `cpSync` refusal carries only that), logs its kind, code and system cal
 which names the drive's or the user profile's paths. The system call is kept only as a bare name: a
 spawn error's names the binary's path. Any other error keeps its message, other Node `ERR_*` codes
 included (`ERR_SQLITE_ERROR` keeps SQLite's fixed text). A refused lock's `VaultLockError` carries what caused it (`failure`: where the lock stopped
-and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. About
-25 other main-process log lines still write an error's whole text (a separate issue).
+and the cause's kind, code and system call), so its line names the `ENOSPC` it used to drop. Other
+main-process lines can still write an error's whole text, a path included; the exit rule below
+redacts it on the way out.
+
+**Lines that leave the log are redacted (#975).** The rule is an exit rule (owner decision
+G-4 b). The log at rest keeps full detail: absolute paths, a refused engine's binary path,
+a sidecar's stderr tail. It stays on the device, encrypted on an encrypted workspace. Every line that
+leaves it is redacted first, by `services/log-redact.ts`: the lines the Diagnostics panel shows and
+Copy hands out (`readLogTail`), and the file Save to file writes (`readLogFull`). The redaction is a
+best effort, not a guarantee. Three passes:
+- **Known folders become placeholders.** The main process registers them at the top of its entry
+  module, before anything in the start can log or fail (`setLogRedactionRoots`, `main/index.ts`):
+  the app's data folder (`<app-data>`), the home folder (`<home>`), the temp folder (`<temp>`) and
+  the app's own folders (`<app>`). It adds the drive root (`<drive>`) as soon as `resolvePaths` has
+  found it (`addLogRedactionRoots`). A source pin (`log-redact-wiring.test.ts`) holds that order.
+  The longest folder goes first, so a drive root inside the home folder reads `<drive>`. A folder
+  matches in every spelling a line can carry: `\` or `/` separators, JSON's doubled backslashes,
+  the `\?\` long form and a `file:` URL. A Windows folder matches in any letter case, and so does a
+  macOS one under `/Users` or `/Volumes` (APFS ignores case by default). A folder matches whole
+  segments only: `C:\Users\x` never takes the start of `C:\Users\xavier`, nor of `C:\Users\x y`.
+  When the workspace is on the app's data folder (no Kit), the root reads `<app-data>`.
+- **This computer's account becomes `<user>` wherever it appears.** The signed-in account
+  (`os.userInfo().username`) and the home folder's own name, both when they differ, are replaced
+  as whole tokens in any shape and any letter case: `C:\Users\O'Brien`, `C:\Users\Smith, Anna`, a
+  folder redirected to `\fs01\data\peter`, `spawn C:\Users\Anna Schmidt ENOENT`, prose. A whole
+  token has no letter, digit, `_` or `-` right beside it and no `.` joining it to more letters
+  (`peter.smith` and `petersen` stay). A name shorter than 3 characters, or a word that also turns
+  up in ordinary log text (`user`, `admin`, `home`, `test` and a few more, the placeholders' own
+  words included), is left to the other two passes.
+- **Other absolute paths lose the part that names someone.** A profile's account segment becomes
+  `<user>`: `C:\Users\<user>\…` (an 8.3 short name such as `PETERS~1`, and a name with an
+  apostrophe such as `O'Brien`, too), `/Users/<user>/…`, `/home/<user>/…`, also behind a path
+  prefix (`/nfs/home/<user>`, `/var/home/<user>`, `/System/Volumes/Data/Users/<user>`), but not
+  inside an `http(s)://` URL; `/media/<user>/…`, WSL's `/mnt/c/Users/<user>/…`, and a profile
+  anywhere in a network path (`\pc\c$\Users\<user>`, `\wsl$\Ubuntu\home\<user>`, a share or
+  folder named `home$`, `users$`, `homes` or `profiles`). A mounted volume's name becomes `<volume>`
+  (`/Volumes/<volume>/…`, `/media/<user>/<volume>/…`, `/media/<volume>/runtime/…` for a mount with no
+  user folder, `/mnt/<volume>/…`). A network path's server and share become `\<server>\<share>\…`.
+
+The rest of the path stays, so support still sees which file failed:
+`<drive>\runtime\llama.cpp\win\llama-server.exe`. Relative paths, file names, `http(s)` URLs,
+device paths (`\.\pipe\…`), a `//` in prose and ordinary text are left alone, and redacting a
+redacted line changes nothing. A sentence's period and an error code after a path stay outside it
+(`<home>.`, `C:\Users\<user> ENOENT`). A known folder that no shape of the third pass could hide
+(`C:\work\kit`) keeps its placeholder even when words follow it.
+
+**Limits.** The third pass works from path shapes, so for another computer's account it is a best
+effort:
+- A path on another drive outside a profile (`D:\Private\letter.pdf`) keeps its folders, and so
+  does a folder you named yourself, even after your own name.
+- A name of several words (`Anna Schmidt`) counts as one segment when a separator, a closing quote
+  or a backtick follows it, or when a quote opened the path. After an unquoted path the words are a
+  sentence: `C:\Users\peter is missing` hides `peter` only, so another computer's `spawn
+  C:\Users\Anna Schmidt ENOENT` keeps `Schmidt`. The other way round, a sentence that runs straight
+  on to a closing quote after an unquoted path (`"saved to C:\Users\peter and done"`) is hidden with
+  the name.
+- Another computer's account name holding `,`, `(`, `)`, `+`, `=`, `;` or `[` keeps the part after
+  that character (`C:\Users\<user>, Anna`); an AD-joined Linux home `/home/CORP/peter` hides
+  `CORP` only; a company name in `OneDrive - Contoso GmbH` and a host name outside a path
+  (`getaddrinfo ENOTFOUND PETERS-PC`) stay.
+- A URL path that looks like a home (`GET /home/index.html`) or a quoted protocol-relative URL
+  (`"//cdn.example.org/x.js"`) is redacted as one; none is logged today.
+
+The user docs (troubleshooting, PRIVACY.md, CHANGELOG) say so in one sentence: read a log before
+you share it. A full 10 MB log redacts in about 110 ms; the live log is capped at 2 MB. The console
+copy of each line (shown in the terminal of a dev run, or of an app started from a terminal) is not
+redacted: the app does not hand it out.
 
 ### Design record — encrypted log (2026-06-13)
 
@@ -1222,7 +1287,9 @@ explicitly:
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
   good `.enc`). Anything not matching that narrow signature is shredded as before, as long as an
-  encrypted snapshot is there (with none at all, see "Encrypted file missing" below).
+  encrypted snapshot is there (with none at all, see "Encrypted file missing" below). A working
+  file or `.recovery` a newer build stamped (#985) is kept and never rolled forward by this build:
+  see "Vault format versions" below.
   When the salvage cannot judge or move the fresh copy safely because a program holds the
   `.recovery` file, the app **refuses to open** rather than losing it (#242). Two legs: at
   startup, if the move-aside cannot land — another program holds the spent `.recovery`
@@ -1260,7 +1327,9 @@ explicitly:
   waits), `preserveNewerPlaintext` keeps the copy: it replays the `-wal` into the main file (after
   an unclean end the session's last commits sit there), probes the file, and moves a database to
   `<db>.recovery`. A `-wal` that SQLite cannot replay (it reports the database as corrupt) is
-  dropped by the sweep, so a copy kept then lacks the session's last commits. The next unlock with
+  dropped by the sweep, so a copy kept then lacks the session's last commits. A copy a newer build
+  stamped is kept the same way (#985), with no notice; this build's unlock then refuses it as newer
+  (see "Vault format versions" below). The next unlock with
   the right password rolls it forward over the missing `.enc`
   through the CODE-1b path above, which every build since 0.1.47 has. Until then the lock screen
   says so (`lockNotice: 'encrypted_file_missing'`), read from the disk at every start (descriptor
@@ -1319,6 +1388,61 @@ explicitly:
   as the single atomic commit point. A crash before the descriptor write leaves the
   workspace `uninitialized` (onboarding simply retries); a crash after it rolls the staged
   file forward via the existing `recoverPendingRekey` path.
+  **A create's leftover is never rolled over a workspace (#973).** The create stages with no
+  rekey journal, so a crash before the commit leaves a `.enc.new` that nothing tells apart from a
+  committed password change of a build that wrote no journal. Every build before #973 rolled any
+  `.enc.new` forward under a v2 descriptor at the start, so a workspace put back into the same
+  folder later had its `.enc` shredded and replaced by an empty database under a key nothing holds,
+  and every unlock then said "damaged". Two rules close it (owner decision G-1, option 2 plus a
+  narrow option 3). First, a staged `.enc.new` that no rekey journal lists, beside an `.enc` that is
+  there (any stat answer but ENOENT), under a v2 descriptor, is a doubt. A journal entry lists the
+  stage only by its full path (folded as for every journal entry): the folder and file names are the
+  same in every workspace, so a match by name let a stale journal (one kept because its entries look
+  unreachable, or one a restored folder brings) vouch for a foreign stage. A Kit that comes back under
+  another drive letter or mount point after a change was cut short therefore has its stage in doubt,
+  and the unlock rolls it forward once it authenticates. The start's recovery holds
+  no key, so it leaves the whole staged set as it is, and so does the unlock's recovery before the
+  password check (a wrong password changes nothing). A loss the start judged meanwhile (#875, #892:
+  the session it swept) is held, not shown, until the next successful unlock settles it: recorded
+  when `.enc` is still the snapshot it was judged against (the stage removed, left, or gone by then),
+  dropped when the stage rolled forward (the stage holds that session) or `.enc` changed otherwise.
+  It is never carried past that unlock. The hold is in memory, so a restart before that unlock
+  forgets the notice. Once the
+  password verified and the data key is
+  unwrapped, the unlock streams the staged file through the AES-256-GCM decipher with no output
+  (`authenticatesUnder`; a vault frame is one GCM stream with one tag, so one pass proves the whole
+  file). If it authenticates, it is this workspace's (a v1 password change by a build before
+  0.1.60, cut short after its commit), and the staged set rolls forward as before. If its tag fails,
+  it is ciphertext under another key: it is deleted, the unlock opens `.enc` as it is, and the rest
+  of the staged set (document and image twins, the journal's deletions) gets what the start's
+  recovery would have given it without that file. A file that is no frame of this build's at
+  all (cut short inside its header, another magic; a newer frame is refused earlier, #845) cannot be
+  a staged copy of this workspace and is deleted the same way. A read the pass cannot make splits by
+  its cause: a file gone since the check is no stage; a folder at the name (EISDIR, ENOTDIR) is no
+  data, so it is left exactly as it is and the unlock opens `.enc` (never blocked for good); any
+  other failure (a hold: EBUSY, EPERM, EACCES; an I/O error such as EIO) may hide a stage this
+  workspace needs, so it changes nothing and refuses the unlock with the #242 "try again" answer
+  (`vault_recovery_blocked`), before the `.recovery` roll-forward could write over `.enc`. A delete
+  that fails leaves the file too, and the unlock opens `.enc`. The unlock logs one content-free
+  line when it deleted or left such a file, also when a later step of that unlock fails (no audit
+  type, as #911's). The cost is one read of the staged file, only in this state, timed as the perf
+  mark `vault_stage_check` (about 1.5 s for 500 MB on a warm NVMe drive in review; expect 5 to 17 s
+  on a USB stick). Second, a start with no key file, no `.enc` and no rekey journal
+  (each a stat that says ENOENT) removes a stray `.enc.new` and its write temp, best-effort: that
+  is the `uninitialized` state, where the next create overwrites the file anyway, and with it gone
+  an older build on the same Kit cannot roll it over a workspace put back later either. Journal'd
+  stages, a v1 descriptor (the stage is discarded) and a staged file with `.enc` gone (a create or a
+  swap cut short after its commit, rolled forward at the start) are unchanged. **Residuals:** a
+  build before #973 still rolls such a leftover forward at its start: one this build has not removed
+  yet, or one it left as a doubt beside a workspace until its next unlock. The start's removal (the
+  second rule) also deletes the stage of a create that committed and then lost its key file before
+  its rename; such a stage holds only the fresh, empty workspace the create built. It loses data in
+  one double fault only: a v1 → v2 password change by a build before #241 (0.1.50–0.1.59, no
+  journal) cut short between the shred of `.enc` and the rename of its stage, and then the key file
+  removed before the next start (owner decision: the removal stays). Journal-less document and image
+  twins (`documents/*.enc.new`, `images/*.enc.new`) under a v2 descriptor are still rolled forward
+  at the start without any check, as before #973, which can replace a stored copy with a foreign one
+  (a folder merged from a workspace whose migration was cut short); a follow-up issue.
 - **Accepted trade-off (decision): a hard power cut / kill mid-session loses the changes
   since the last successful lock.** Whole-file encryption means the at-rest `.enc` is only
   updated on lock/quit; a mid-session crash leaves a working file with live WAL sidecars,
@@ -1404,7 +1528,11 @@ password. Four guards close this:
   which SQLite refuses with a plain error) and a row whose record claims a value longer than SQLite
   allows (TOOBIG; damage for the probe's own reads only, not for the unlock's open), two shapes of
   noise the review's fuzz found (review round 3); any other failure means the probe could not
-  decide, which is never read as lost. It reads the schema with `trusted_schema` OFF (on by default
+  decide, which is never read as lost. Before it opens the file with SQLite it reads the schema stamp
+  in the header (`user_version`, offset 60, signed): above this build's `SCHEMA_VERSION` the file is
+  `newer` (#985), which no site discards (see "Vault format versions" below), because a newer
+  build's schema can hold text this SQLite cannot parse, which fails every schema read with CORRUPT
+  although the file is intact. It reads the schema with `trusted_schema` OFF (on by default
   in `node:sqlite`), since it may parse a file found on the drive before any unlock. On Windows it
   opens the file in the `\\?\` long-path form, which SQLite needs for a path of 260 characters or
   more (a `.recovery` beside a 251-character working file). A
@@ -1505,7 +1633,8 @@ password. Four guards close this:
   an encrypt that fails removes only its own temp, so a staged file that was there before is not
   touched. Left behind, the next start's rekey recovery rolled the `.enc.new` forward under a v2
   descriptor, over the `.enc` of a workspace put back into the same folder, which then read as
-  damaged (S-1). A crash between the stage and the commit still leaves the file (a separate issue).
+  damaged (S-1). A crash between the stage and the commit still leaves the file, and #973 keeps it
+  from replacing a workspace (see "Crash-safe creation" above).
   A refused create writes nothing. A descriptor the last `init()` did not adopt (put back after the
   start, as the #807 copy advises, or one it could not read), or one whose `init()` threw part-way
   (a held file in the rekey recovery), gets the start's steps (the salvage, the sweep, the rekey
@@ -1515,8 +1644,11 @@ password. Four guards close this:
   with no `.enc` beside it (a stat says ENOENT; any other stat failure proves nothing), throws
   `VaultDescriptorUnreadableError` → `vault_descriptor_unreadable`, at the unlock and at a create
   over such a file. Its copy says not to delete the key file and never that no data is left: a
-  `.recovery`, an `.enc.new` or stored documents may still be there, and a file saved with a UTF-8
-  byte-order mark reads as unreadable (a separate issue).
+  `.recovery`, an `.enc.new` or stored documents may still be there. Since #974 one UTF-8
+  byte-order mark in front of the file (Windows PowerShell 5.1 `Set-Content -Encoding utf8`, older
+  Notepad) no longer makes it unreadable: the descriptor, the rekey journal (both readers) and the
+  #875 marker are read past one leading mark. Node keeps the mark when it decodes UTF-8, and
+  `JSON.parse` refused it. The app writes none of these files with a mark.
 
 ### Vault format versions (#845)
 
@@ -1535,6 +1667,38 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   written, shredded or renamed, the workspace stays locked, and the create flow is refused. A
   stale verdict does not outlive its cause: while it stands, an unlock or create re-reads the disk,
   so once the newer artifact is gone the skipped salvage runs before anything is decrypted.
+- **A newer build's working copy is kept, never discarded (#985, owner decision G-2 A, the
+  app-update plan's W-66).** The plaintext working files the start and the unlock judge (a failed
+  lock's working copy, the only copy over a missing `.enc`, a `.recovery`) are outside the verdict
+  above: they are judged by `probeDatabaseFile`. A newer build may write schema text this SQLite
+  cannot parse (a newer clause in an index, a trigger, a generated column, a table option); SQLite
+  then fails every schema read with CORRUPT ("malformed database schema"), while `PRAGMA
+  user_version` still reads (measured), so the probe called such a file damaged, and the start's
+  salvage, the start with `.enc` missing and the unlock's roll-forward shredded it: the newer build's
+  last session, or the whole workspace. The probe now reads the schema stamp from the header first:
+  above this build's `SCHEMA_VERSION` the file is `newer`. The start keeps it as `<db>.recovery`,
+  like a database (`preserved`, or `kept-only-copy` with `.enc` missing), never as damage: no #875
+  marker, no loss notice, and with `.enc` missing no "your password brings it back" notice either.
+  Right after the password verified, before the staged-file check (#973), the roll-forward or any
+  shred, the unlock refuses a `.recovery` judged `newer` that may hold the freshest data (`.enc`
+  missing or not judged, or the copy at least as new) with the #247 error (`WorkspaceNewerError` →
+  `workspace_newer`, "written by a newer HilbertRaum — update the app"); the newer build's own
+  unlock rolls it forward. One older than a present `.enc` is a spent leftover: this unlock keeps it
+  as it is (neither rolled forward nor shredded), opens the workspace at `.enc`, and logs one
+  content-free line. That copy is the workspace's data, not encrypted, and it stays on the drive
+  until a later failed lock's salvage replaces it (REL-1's pre-shred of the `.recovery` name) or a
+  newer build's unlock shreds it as spent. A create on a drive that
+  holds such a working file or `.recovery` (its key file and `.enc` gone, so the state reads
+  `uninitialized`) is refused with the same answer before anything is written: it would commit a
+  new workspace that every unlock then refuses. The lock and the v1 rekey stage read `newer` as a
+  database (the session's
+  own file cannot be newer: the open refuses one). **Cost:** the newer session's working copy rests
+  in plaintext on the drive until a newer build unlocks it, the same exposure as any failed lock
+  (the CODE-1b trade in "Lock failure & durability"). **Limits:** a working file beside live
+  `-wal`/`-shm` (a newer build's mid-session crash) is still swept, as this build's own (the accepted
+  power-cut trade-off there, unchanged); a damaged file whose stamp happens to read above
+  `SCHEMA_VERSION` is kept and refused too, so the unlock keeps answering "newer" until the copy is
+  moved off the drive (`troubleshooting.md`). The rule for later releases is in `data-contracts.md` "Schema stamp".
 - **No downgrade.** A password change re-reads the descriptor on disk first and refuses a newer
   (or replaced) one; the diagnostics log never persists over a newer-framed `app.log.enc` and
   never rotates onto a newer-framed `app.1.log.enc`.
@@ -1794,7 +1958,11 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   discard them and the journal, the old password + old files win; with a **v2** descriptor the
   commit happened → roll the staged files forward and apply the deletions, the new password
   wins. Old-or-new, never a mix — tests cut the journal at every step, over every class, and
-  prove both directions (`password-change.test.ts`).
+  prove both directions (`password-change.test.ts`). One exception (#973): a staged
+  `hilbertraum.sqlite.enc.new` that the journal does not list (no journal: the builds before
+  0.1.60 wrote none, and a create stages with none either), beside an `.enc` that is there, waits
+  for the unlock, which rolls the staged set forward only when that file authenticates under the
+  unwrapped data key, and deletes the file when it does not (see "Crash-safe creation" above).
   **Downgrade caveat (on-disk format, #241):** the journal file and the staged `images/` and
   out-of-store twins are new on-disk shapes. A build older than the #241 fix that starts on a
   vault with a *pending* migration rolls the DB and `documents/` forward but never reads the
@@ -1966,8 +2134,9 @@ re-encrypts (the bullet below).
   deliberately no auto-answer timeout (a time limit with a destructive effect, WCAG 2.2.1). Pinned
   by `tests/unit/close-guard.test.ts` and, locally, the real-Electron smoke (`stop-keep`,
   `quit-hold`).
-- **OS session end locks the workspace — Windows handled, Linux handled (#964), macOS registered but
-  unverified (#248; owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown,
+- **OS session end locks the workspace — Windows handled, Linux handled (#964), macOS: the shutdown
+  leg registered but unverified (#248; owner decision #226 "handler", 2026-09-03; PR #285), signals
+  handled as on Linux, read from Electron's source (#977).** A Windows shutdown,
   restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above
   never ran and the process was killed with the working DB still plaintext on the drive — the next
@@ -1990,7 +2159,8 @@ re-encrypts (the bullet below).
   session end
   during a running quit teardown defers to that teardown (on Windows the ordering cannot occur —
   the quit closed every window before `will-quit`), and a `will-quit` after the session-end lock
-  exits at once (a prevented quit that never exited would make macOS report the app as
+  runs the same synchronous lock again, which has nothing to do unless the workspace was unlocked
+  since, and exits at once (a prevented quit that never exited would make macOS report the app as
   cancelling the shutdown). `session-end: locking workspace` (with the OS reasons) is logged
   before the lock so it lands in the encrypted log. Best-effort: the lock is synchronous but not
   instantaneous, and the OS grants a bounded grace — a session cut mid-lock is left to the next
@@ -2002,10 +2172,51 @@ re-encrypts (the bullet below).
   reads as `shutdown` first), whether a Dock-menu Quit also reaches it, and what a shutdown the
   system then CANCELS leaves behind (the app alive with the workspace locked and no window
   recreated on a Dock click — quit and relaunch) — owner live check pending (#226); until then
-  quit before shutting down. **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two
-  legs, both registered inside `app.whenReady` on Linux only, first in it after the second-instance
-  return (before the code that can throw), over the same closure. (1) A termination
-  signal — SIGTERM (`kill`, `systemctl stop`, a session manager), SIGINT (Ctrl+C), SIGHUP (the
+  quit before shutting down. Since #977 the leg is registered first in `app.whenReady`, with the
+  signal leg, before the code that can throw (it sat after `createWindow()`, where a throw in the
+  protocol, the menu or the window skipped it: the #964 security round's F3, which Linux got
+  first). Electron's source posts `NSWorkspaceWillPowerOffNotification`, and so `shutdown`, before
+  AppKit's `terminate:` (Electron PR #24111), which reads as `shutdown` before `before-quit` and
+  `will-quit`. **macOS signals (#977; owner gate G-11 (a), 2026-11-21):** Electron installs the
+  same POSIX signal handlers on macOS as on Linux (`electron_browser_main_parts_posix.cc`, built
+  for every POSIX target and installed in the same start-up step), so a SIGTERM, SIGINT or SIGHUP
+  was the same holdable quit, and a second one killed the app unlocked. The signal leg (1) below
+  is registered on darwin too: the same listeners over the same closure. The usual quits a user
+  starts on macOS are Apple Events, not signals (⌘Q, the menu and Dock Quit, `osascript`, a log-out,
+  restart or shutdown from the Apple menu), so those are unchanged; what Activity Monitor's Quit
+  sends is not checked (on the Mac walk list). The signals come from `kill`
+  and `killall`, scripts and management agents, `launchctl stop` (launchd sends SIGKILL after the
+  job's `ExitTimeOut`, 20 s by default), a forced `shutdown -r`, a closed Terminal (SIGHUP) and
+  Ctrl+C; `npm run dev` on a Mac now locks at once on Ctrl+C or an electron-vite restart, as Linux
+  dev does. Read from Electron v43.8.6's source, not measured on a Mac (the walk is owed with
+  #887/#888). **After a session-end lock (#977):** the session-end lock does not end the process:
+  on macOS a shutdown another app cancels leaves the app running, locked, and the user may unlock
+  again. So every later end event runs `emergencyLock` again before it ends anything: a second
+  session end (which leaves the exit to the OS, as the first did), a `will-quit` (⌘Q in that app,
+  and on a normal shutdown the system's own quit right after the `powerMonitor` lock) and a signal.
+  Before #977's fix a second session end returned at once (logging that a quit teardown was
+  running, which none was), a `will-quit` exited without a lock, and a signal did nothing, because
+  the signal listener replaced the default action, so only SIGKILL could stop the app (that last
+  case was unreachable before #977: only Linux had the signal leg, and only Windows and macOS the
+  session-end leg). A closure flag, `appEnding`, set wherever the exit is already under way (a
+  signal's or a session-end `will-quit`'s exit, the teardown's `finally`, `quit`), keeps a later
+  quit or signal from locking or exiting a second time. The closure cannot see the workspace (no
+  dependency reads its state), so the repeat lock always runs. On a workspace still locked, the
+  usual case, it is safe and bounded: every step is synchronous, `lock()` and `shutdown()` find no
+  open database and do nothing, the log flush has no key and writes no file, and the operation
+  registries are empty. What is left is the lock latch, the local API's stop, one log line
+  (`… after a session-end lock — locking workspace again`) and the reap of any child started
+  since. Measured on Linux Electron with the stand-in app: after a session-end lock, a signal left
+  the old closure alive until SIGKILL; the new one exited 0. **Still open (pre-existing, not
+  changed; needs a Mac):** after a cancelled shutdown the closure never leaves its ending state
+  (`shuttingDown` stays set). A Dock click then opens no window, the close guard skips its save,
+  and ⌘Q takes the emergency lock instead of the normal teardown, so a review edit not saved yet,
+  a reply still being written or a scan still being read is lost. Quit and start the app again
+  after a cancelled shutdown.
+  **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two legs, registered inside
+  `app.whenReady` (the signal leg on Linux and macOS, the `quit` leg on Linux only), first in it
+  after the second-instance return (before the code that can throw), over the same closure. (1) A
+  termination signal — SIGTERM (`kill`, `systemctl stop`, a session manager), SIGINT (Ctrl+C), SIGHUP (the
   terminal closed) — runs `onTerminationSignal`: `emergencyLock` once, then `app.exit(0)`. Electron's
   own handler made each signal an ordinary, preventable quit with one shot: the close guard's
   question or a failed save held it, and a second signal then killed the app with the working DB
@@ -2024,19 +2235,49 @@ re-encrypts (the bullet below).
   manager allows: a lock that takes longer ends in a crash (`Failed to shutdown.`, status 133;
   measured with a stand-in lock that blocks: 8 s finished, 12 s and 15 s crashed). The workspace
   is then left unencrypted on the drive until the next start, which recovers it as after any cut
-  lock (the working file is checkpointed and closed before the re-encrypt). Where the host keeps
-  core dumps (systemd-coredump, apport), that crash may store a memory image of the main process,
-  vault key and decrypted pages included, on the host's disk (seen as "core dumped" under WSL; a
-  given desktop's setting is not checked). The lock writes about twice the database's size, so a
-  workspace of a few hundred MB on a slow stick may not fit; the lock's duration is logged after
-  it. The signal leg has no such bound: its lock runs before `app.exit` (a 5 s lock with three more
-  signals during it finished, status 0). Owner call (2026-11-21): keep this leg and document the
+  lock (the working file is checkpointed and closed before the re-encrypt). That crash is a kernel
+  core dump: Electron starts no crash reporter in the main process until JS asks for one, and the
+  app never does. Many hosts store it: systemd-coredump keeps a full core by default (systemd
+  raises the core-size limit to unlimited for what it starts), a pipe handler ignores that limit
+  (core(5)), and under WSL the stand-in's crashes stored full cores of about 780 MB on the Windows
+  host (measured). Such a core is a memory image of the main process, vault key and decrypted
+  pages included. **Core dump filter (#982 part 2; owner gate G-15, 2026-11-21):** the first
+  statement of the main process (`main/index.ts` → `services/core-dump-filter.ts`, Linux only)
+  writes `0` to `/proc/self/coredump_filter`, so the kernel dumps no memory mapping, anonymous or
+  file-backed (no V8 heap, no malloc arena, no mapped database), whatever the handler. A refused
+  write is kept as its errno code (never the path; a code of any other shape becomes null), the
+  app goes on, and `initBackend` logs one line right after `initLogging`: at the first statement
+  logging does not exist yet, and `initLogging` starts an empty buffer. Measured under WSL
+  with the branch's helper and a marker planted 66 times in the stand-in's heap: 823,214,080 bytes
+  with 66 copies of the marker without the filter, 167,936 bytes with none with it. What a dump
+  still holds: its own headers, the registers of every thread (the lock may be inside AES when the
+  watchdog fires; whether round-key state can sit in registers is not verified), the paths of
+  mapped files (such as the working database's `-shm`), the first 80 characters of the command
+  line, and the vdso, which the kernel always dumps. A child inherits the filter across fork and
+  exec, so the sidecars started later (llama-server, whisper-cli, kiwix-serve) are covered
+  (measured: a spawned child and Electron's network utility process read `00000000`). Not covered:
+  the zygotes, which Electron starts before the main script runs, and what they fork, the renderers
+  and (measured here) the GPU process, which keep the default `00000033`. They hold no vault key,
+  but a renderer's dump can hold the workspace password typed into the unlock field (a JavaScript
+  string that cannot be zeroed, and the password opens the workspace), the text the window showed,
+  and, in the hidden helper windows (the OCR rasterizer, the evidence-pack print window),
+  decrypted document pages that were never shown (whether a sandboxed renderer dumps core at all
+  is not verified). systemd-coredump's journal
+  entry still records the command line, the environment and the open-file paths, without memory contents (not checked
+  on such a host). The lock writes about twice the database's size (checkpoint, re-encrypt with an
+  fsync, shred with an fsync), so with about 9 of the 10 s usable a workspace above roughly 75 to
+  100 MB may not fit on a stick that writes 20 MB/s, and above roughly 20 to 45 MB at 5 to 10 MB/s
+  (a model of the lock's writes; no lock time above 0.5 MB is measured yet, #982); the lock's
+  duration is logged after it. The signal leg has no such bound: its lock runs before `app.exit`
+  (a 5 s lock with three more signals during it finished, status 0; re-run with the #977 closure,
+  the same). Owner call (2026-11-21): keep this leg and document the
   bound. A lost bus also brought a SIGTERM a few milliseconds after the `quit` lock in two of four
   runs (most likely GLib's exit-on-close for its D-Bus connection): whichever comes first locks,
   the other does nothing. A signal that lands in the last milliseconds of the exit, after the
   lock, ends the process with status 143. Not covered: SIGKILL and SIGQUIT (Ctrl+\ in a
   terminal), whose default action ends the process at once, SIGQUIT with a core dump where the
-  host keeps them; nothing locks. Same trade-off as Windows: no question, no save, and no partial
+  host keeps them (on Linux without memory, by the filter above); nothing locks. Same trade-off
+  as Windows: no question, no save, and no partial
   reply kept; the decrypted transients of the operations in flight are shredded (above). Not yet
   checked: a real desktop log-out (GNOME, KDE), a lost display (needs Xvfb), the packaged AppImage
   (`AppRun` is believed to `exec` Electron). The Linux `powerMonitor` leg (logind's
@@ -2044,9 +2285,15 @@ re-encrypts (the bullet below).
   registered: a poweroff reaches the two legs above, the lost session's under its 10 s bound.
   Pinned by `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings
   against `will-quit`, the reap on the exit path, throw-safety (a throwing log line before the lock
-  included), the transient sweep, the duration line, the Linux signal and `quit` legs (one lock
-  whatever came first), and the `index.ts` wiring (source text, including that the Linux legs sit
-  inside `app.whenReady`, before the protocol, the menu and the window).
+  included), the transient sweep, the duration line, the signal and `quit` legs (one lock
+  whatever came first), the repeat lock and the one exit after a session-end lock (#977, on a
+  workspace unlocked again and on one still locked), and the `index.ts` wiring (source
+  text, including that the signal legs are gated to Linux and macOS, the `quit` leg to Linux and
+  the `powerMonitor` leg to macOS, all inside `app.whenReady`, before the protocol, the menu and
+  the window); the filter by `tests/unit/core-dump-filter.test.ts` (Linux writes `0`, other
+  platforms touch nothing, a refusal keeps only an errno-shaped code, the call sits at module scope
+  before the single-instance lock and `app.whenReady`, and its outcome is logged in `initBackend`
+  after `initLogging`).
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so
@@ -3085,7 +3332,10 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
    marker with no valid entry deep-equals the historical `{version,backend,os,arch}` so legacy reads are
    unchanged. The hash is recorded by **all three** marker writers: the in-app installer
    (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
-   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts.
+   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #986
+   the in-app installer hashes and marks the copy in its staging folder `<os>.new/` and swaps the
+   folder in by rename; the keys are relative to the folder, so they are the install folder's after
+   the swap, and the bytes the marker covers are flushed to the device before it is written.
 
 2. **One shared, session-cached verifier.** `binary-verifier.ts` exposes
    `verifyBinaryBeforeSpawn(binPath)` → `ok | skip-legacy | skip-dev | mismatch`. It walks **up** from the

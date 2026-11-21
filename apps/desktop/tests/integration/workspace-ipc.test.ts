@@ -66,7 +66,7 @@ import {
   type VaultPaths,
   type WorkingCopyLossCause
 } from '../../src/main/services/workspace-vault'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { applyUiLanguageSetting, mainUiLanguage, tMain } from '../../src/main/services/i18n'
 import { log, readLogTail } from '../../src/main/services/logging'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
@@ -97,6 +97,7 @@ import {
   unlockedController,
   upgradeBlockedVault,
   workspaceIpcCtx,
+  writeNewerSchema,
   type WorkspaceIpcCtxOptions
 } from '../helpers/vault-fixtures'
 import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
@@ -1398,9 +1399,11 @@ describe('a workspace failure line names no path (#956)', () => {
     const all = readLogTail(100_000)
     return all.slice(all.findIndex((l) => l.includes(marker)) + 1).filter((l) => l.includes(needle))
   }
-  /** Neither `root` nor its JSON-escaped spelling (a Windows path inside a JSON log field) is in `line`. */
+  /** Neither `root`, its JSON-escaped spelling (a Windows path inside a JSON log field), nor its own folder name is in
+   *  `line`. `readLogTail` redacts what it hands out (#975): under a Windows profile the account segment no longer
+   *  matches, so only the folder name, which the redaction keeps, still shows that a path reached the log. */
   const namesNoPath = (line: string, root: string): boolean =>
-    !line.includes(root) && !line.includes(JSON.stringify(root).slice(1, -1))
+    !line.includes(root) && !line.includes(JSON.stringify(root).slice(1, -1)) && !line.includes(basename(root))
   /** What Node throws for a file operation: code, syscall, path, and a message naming the path. */
   const nodeFileError = (code: string, syscall: string, path: string): NodeJS.ErrnoException =>
     Object.assign(new Error(`${code}: failed, ${syscall} '${path}'`), { code, syscall, path, errno: -1 })
@@ -1428,6 +1431,41 @@ describe('a workspace failure line names no path (#956)', () => {
     }
   })
 
+  // #973: an unlock that removes a staged copy of the database which does not open under the workspace's key (a create's
+  // leftover beside a workspace put back) says so once, on the success path, in fixed words: no path, no file name.
+  it('an unlock that removes a staged copy from another key logs one line that names no path (#973)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    copyFileSync(lockedVault('wsipc-leftover', 'other-password').encPath, `${vp.encPath}.new`)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(existsSync(`${vp.encPath}.new`)).toBe(false)
+      const lines = linesAfter(marker, 'removed a staged copy')
+      expect(lines).toHaveLength(1)
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+      expect(lines[0]).not.toContain('.enc')
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // Review round 2 F4: the removal is a fact on disk as soon as it happens, so it is logged even when a later step of the
+  // same unlock fails (here `.enc` itself fails its tag: "damaged").
+  it('an unlock that removes a staged copy and then fails still logs the removal once, with no path (#973)', async () => {
+    const vp = tagFailingVault(lockedVault('wsipc', PW))
+    copyFileSync(lockedVault('wsipc-leftover', 'other-password').encPath, `${vp.encPath}.new`)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'vault_damaged' })
+    expect(existsSync(`${vp.encPath}.new`)).toBe(false)
+    const lines = linesAfter(marker, 'removed a staged copy')
+    expect(lines).toHaveLength(1)
+    expect(namesNoPath(lines[0], vp.root)).toBe(true)
+  })
+
   it('a password change whose key file write meets a file error logs its code, not the path', async () => {
     const vp = lockedVault('wsipc', PW)
     const ctrl = unlockedController(vp, PW)
@@ -1441,6 +1479,31 @@ describe('a workspace failure line names no path (#956)', () => {
       expect(lines).toHaveLength(1)
       expect(lines[0]).toContain('EISDIR')
       expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // #985 (review round 3 F3): an unlock that opens `.enc` beside an older copy a newer build stamped (a spent leftover)
+  // keeps that copy as it is, unencrypted, so it says so once, in fixed words.
+  it('an unlock that leaves a spent copy a newer build stamped logs one line that names no path (#985)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    failedLockState(vp, 7171, PW) // `.enc` backdated 60 s
+    writeNewerSchema(vp.dbPath)
+    copyFileSync(vp.dbPath, `${vp.dbPath}${RECOVERY_SUFFIX}`)
+    rmSync(vp.dbPath)
+    backdate(`${vp.dbPath}${RECOVERY_SUFFIX}`, 120_000) // older than `.enc`: spent
+    const copy = readFileSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(readFileSync(`${vp.dbPath}${RECOVERY_SUFFIX}`).equals(copy)).toBe(true)
+      const lines = linesAfter(marker, 'unencrypted copy of the workspace')
+      expect(lines).toHaveLength(1)
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+      expect(lines[0]).not.toContain('.recovery')
     } finally {
       ctrl.lock()
     }

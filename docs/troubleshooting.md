@@ -136,11 +136,12 @@ the app cannot override them.
 **"Some of its files on this drive are missing or damaged".** A library that the engine keeps next
 to its program could not be loaded, which usually means an interrupted copy. Choose **Install the
 AI engine again** in the banner (for the voice engine: **Install the voice engine again**, under
-the speech model). It downloads a fresh copy, checks it against its pinned checksum, replaces the
-engine folder and starts your model again. On a Kit it replaces the part that could not start: the
-main engine, its `cpu/` safety net, or both. If the download fails or you cancel it, the copy on the
-drive stays as it was. Like every download, it needs **Allow internet access…** in Settings; if
-the button is greyed out, the line under it says why.
+the speech model). It downloads a fresh copy, checks it against its pinned checksum, unpacks and
+checks it beside the engine folder, swaps it in and starts your model again. On a Kit it replaces
+the part that could not start: the main engine, its `cpu/` safety net, or both. If the download
+fails, you cancel it, or the new copy cannot be unpacked or swapped in, the copy on the drive stays
+as it was (#986). Like every download, it needs **Allow internet access…** in Settings; if the
+button is greyed out, the line under it says why.
 
 If the drive does not allow downloads (an offline Kit), or this computer has no internet:
 - On a drive someone prepared for you, ask them to copy the engine folder again.
@@ -175,8 +176,21 @@ and tested with. It still works; the update brings it to the version the app exp
 
 - **To update:** choose **Update** in the notice on the **AI Model** screen. The new version
   downloads and is checked against its pinned checksum first, while your model keeps answering.
-  Then the models pause for a few seconds while the files are replaced, and the selected model
-  starts again. If the download fails or you cancel it, the engine on the drive stays as it was.
+  Then the models pause for a few seconds while the new version is unpacked beside the old one and
+  swapped in, and the selected model starts again. If the download fails, you cancel it before the
+  swap, or the new version cannot be unpacked or swapped in, the engine on the drive stays as it
+  was and keeps working (#986).
+- **"There is not enough free space on this drive: the engine needs … once unpacked":** the app
+  checks this before it touches anything, so the engine on the drive is unchanged. Free up at least
+  the space it names (the old version is removed only after the new one is in place, so both fit at
+  once for a moment), then choose Update again. The same check runs before an install or a reinstall.
+- **"The engine could not be replaced because another program is using one of its files":** often
+  an antivirus program scanning the new files. The app waited and tried again, then put the old
+  engine back. Rarely even that is refused: the AI Model screen then says the engine is missing, and
+  both copies wait on the drive. Wait a minute and try again (in that case with **Install the AI
+  engine**): the app first puts the new copy in place, so nothing is lost; restarting the app does
+  the same. If the other program still holds the folder, the app says so again and changes nothing;
+  wait a little longer, or restart the computer. If it keeps happening, see whether your antivirus program reports the engine's files.
 - **"The AI engine is in use right now":** an answer, an import, a translation or a document task is
   running. Wait until it has finished, then choose Update again.
 - **The button is greyed out:** like every download, the update needs **Allow internet access…** in
@@ -415,7 +429,20 @@ same message also covers the encrypted workspace's own files (issue #845): its
 `config/workspace.json` or its encrypted data in a format a newer copy wrote. The unlock screen
 shows it whatever password you type, because the older copy cannot check a password in a format
 it does not know; your password is not the problem, and nothing was changed. Copies up to 0.1.65
-cannot give it for those files.
+cannot give it for those files. It also covers a readable copy of the workspace that a newer copy
+left on the drive (issue #985): `workspace/hilbertraum.sqlite.recovery`, after a lock that failed,
+for example on a full drive. The older copy keeps that file as it is and does not open it, so the
+newer copy's last session is not lost: start the newer copy and unlock, and it encrypts the file
+again. Here the message comes after the password is checked. If no newer copy ever ran on this
+drive, that file may be damaged instead: to open the workspace at its last lock with this copy,
+quit HilbertRaum, move `workspace/hilbertraum.sqlite.recovery` off the drive, and unlock again.
+Keep that file somewhere safe: it is your workspace's data, not encrypted. Copies up to 0.1.65 can
+delete such a file when they cannot read it. Creating a new workspace is refused with the same
+message while such a file is on the drive. When that file is older than the encrypted workspace
+file (the newer copy already opened and locked the workspace since), the older copy opens the
+workspace without the message, leaves the file as it is and notes it in the diagnostics log. It is
+still your workspace's data, not encrypted: the newer copy removes it at its next unlock, and this
+copy replaces it if a later lock fails.
 
 ---
 
@@ -603,8 +630,10 @@ a session left, see "The encrypted workspace file was missing from the drive" ab
 What to do:
 
 - **Don't delete the key file**, and keep a copy of it. It can be damaged in a way that can be
-  repaired: a file saved by an editor that adds a byte-order mark (Windows PowerShell 5.1, older
-  versions of Notepad) reads as unreadable, for example.
+  repaired: a key file that was edited by hand or by a tool (a bracket removed, text a sync tool
+  added) can often be put right. (A UTF-8 byte-order mark that an editor such as Windows PowerShell
+  5.1 or an older Notepad adds no longer makes the file unreadable, issue #974. A file saved as
+  UTF-16, the default of PowerShell 5.1's `>` and `Out-File`, still does.)
 - Look for the encrypted file first, as "Your password is correct, but the encrypted workspace file
   is missing from the drive" above describes: the recycle bin or trash, a sync tool's deleted or
   conflict files, a `FOUND.000` folder. Put it back as `workspace/hilbertraum.sqlite.enc`.
@@ -1303,7 +1332,14 @@ pack server, which has no password of its own; locking or quitting stops it.
 Everything is on the drive:
 - `workspace/` — your encrypted/plaintext database (chats, documents, embeddings).
 - `logs/app.log` (`app.log.enc` on an encrypted workspace — the diagnostics log is encrypted at
-  rest, same as your data) — local logs only; never uploaded.
+  rest, same as your data) — local logs only; never uploaded. When you copy or save the log for
+  support (**Settings → Diagnostics (advanced) → Recent logs**, **Copy** or **Save to file…**),
+  the drive and your home folder show as `<drive>` and `<home>`, this computer's account name as
+  `<user>` wherever it appears, and account names in the usual folder paths from another computer
+  as `<user>` too. The rest of each path stays, so support can still see which file failed
+  (`<drive>\runtime\llama.cpp\win\llama-server.exe`). A name in an unusual place can remain, for
+  example in a folder you named yourself, so read a log before you share it. The log on the drive
+  keeps the full paths.
 - `models/` — model weights. `config/` — drive settings/policy, and `workspace.json`, which holds
   your encrypted workspace's key (encrypted under your password): it belongs with `workspace/`.
 

@@ -28,6 +28,7 @@ import { stringify } from 'yaml'
 import { isRealSha256 } from '../../src/shared/manifest'
 import {
   EngineDownloadManager,
+  engineFolderDeletesSettled,
   engineStatus,
   extractWithTar,
   hostRuntimeArch,
@@ -485,10 +486,15 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     expect(existsSync(markerFor(rootPath))).toBe(false)
   })
 
-  // Unlike a tar that fails by itself (#752): the user stopped this one, and #530's "files damaged"
-  // report plus the #532 reinstall are its documented way back.
-  it('a cancelled extraction leaves the half-extracted folder as it is', async () => {
+  // #986: the extraction runs in `<os>.new/`, so a cancel of it touches nothing installed. It used to
+  // leave the half-extracted files in the install folder, over the deleted old copy (#530's "files
+  // damaged" was the way back).
+  it('a cancelled extraction leaves the installed engine as it was and no half copy (#986)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
+    const dir = join(rootPath, 'runtime', 'llama.cpp', HOST_OS)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, BIN_NAME), 'old binary')
+    writeRuntimeMarker(dir, { version: 'bold', backend: 'cpu', os: HOST_OS, arch: HOST_ARCH })
     const reached = deferred()
     const extractImpl: ExtractFn = (_archive, destDir, signal) =>
       new Promise((_resolve, reject) => {
@@ -498,16 +504,20 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
         })
       })
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
-    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'] })
     await within(reached.promise, 'the extraction writing its first file')
     mgr.cancel(started.jobId)
     expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
-    expect(readFileSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME), 'utf8')).toBe('half')
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    await engineFolderDeletesSettled()
+    expect(readFileSync(join(dir, BIN_NAME), 'utf8')).toBe('old binary')
+    expect(JSON.parse(readFileSync(markerFor(rootPath), 'utf8')).version).toBe('bold')
+    expect(existsSync(`${dir}.new`)).toBe(false)
   })
 
-  it('a cancel that arrives after the files are complete finishes the install and records it (#516)', async () => {
-    // The old copy is already gone and the new one is whole: skipping the marker would leave a
-    // working engine without a version record, which no update offers to replace.
+  it('a cancel that arrives after the extraction, before the swap, is honoured: nothing is replaced (#986)', async () => {
+    // #516 used to finish this install, because the old copy was already gone by then. With the staged
+    // swap nothing installed has been touched until the first rename, so the cancel stands.
     const { rootPath, manifestsDir } = makeDrive()
     const { extractImpl, release } = gatedExtract(false)
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
@@ -515,8 +525,12 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     await waitForStatus(mgr, started.jobId, 'extracting')
     mgr.cancel(started.jobId)
     release()
-    expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
-    expect(existsSync(markerFor(rootPath))).toBe(true)
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    await engineFolderDeletesSettled()
+    expect(existsSync(markerFor(rootPath))).toBe(false)
+    expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
+    expect(existsSync(`${join(rootPath, 'runtime', 'llama.cpp', HOST_OS)}.new`)).toBe(false)
   })
 
   it('refuses a chat-engine install while a model runtime is running — fetch never called', async () => {
@@ -766,8 +780,8 @@ describe('extraction bounds + concurrency (F-33)', () => {
     let releaseExtract: () => void = () => undefined
     const wedged = new Promise<void>((r) => (releaseExtract = r))
     // A wedged tar that only settles when we let it — and then, like `extractWithTar`, rejects
-    // for a job that was cancelled meanwhile (a late cancel after a COMPLETE extraction finishes
-    // the install instead, #516 — pinned below).
+    // for a job that was cancelled meanwhile (a cancel after a COMPLETE extraction is honoured too
+    // since #986 — pinned above).
     const neverExtract: ExtractFn = async (_a, destDir, signal) => {
       await wedged
       if (signal?.aborted) throw new Error('tar extraction cancelled')
@@ -1447,26 +1461,32 @@ describe('engine updates (#516)', () => {
     expect([...zips(llamaDir(rootPath)), ...zips(cpuDir(rootPath))]).toEqual([])
   })
 
-  it('a job that stops part-way still reports what it replaced: the main build swapped, the cpu/ net failed', async () => {
+  // #986 review: phase 2 installs a family's cpu/ net before its main build (its archive sits inside the
+  // main folder, which the main build's swap moves), so here the net is swapped and the main build fails.
+  it('a job that stops part-way still reports what it replaced: the cpu/ net swapped, the main build failed', async () => {
     const { rootPath, manifestsDir } = makeUpdateDrive()
     await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
     await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
     const mgr = new EngineDownloadManager({
       fetchImpl: okFetch,
       extractImpl: async (archive, destDir, signal) => {
-        if (destDir === cpuDir(rootPath)) throw new Error('tar exited with code 1')
+        // #986: each archive unpacks into its staging folder beside the install.
+        if (destDir === `${llamaDir(rootPath)}.new`) throw new Error('tar exited with code 1')
         await familyExtract(archive, destDir, signal)
       }
     })
-    const installedFamilies: string[][] = []
-    mgr.onInstalled((families) => installedFamilies.push(families))
+    const installed_: Array<[string[], Partial<Record<string, string[]>>]> = []
+    mgr.onInstalled((families, programs) => installed_.push([families, programs]))
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
     await runToEnd(mgr, started.jobId)
     await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
     expect(mgr.get(started.jobId).status).toBe('failed')
-    expect(markerVersion(llamaDir(rootPath))).toBe('b200')
-    // The new main build is on the drive, so its consumers hear of it (re-arm, probe refresh).
-    expect(installedFamilies).toEqual([['llama_cpp']])
+    // The failed main build left the installed one as it was; the new net sits inside it.
+    expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+    expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
+    expect(markerVersion(cpuDir(rootPath))).toBe('b200')
+    // The new net is on the drive, so its consumers hear of it (its old verdict goes, #678).
+    expect(installed_).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
     expect(engineSpawnsHeld('llama_cpp')).toBe(false)
   })
 
@@ -1477,7 +1497,7 @@ describe('engine updates (#516)', () => {
     const mgr = new EngineDownloadManager({
       fetchImpl: okFetch,
       extractImpl: async (archive, destDir, signal) => {
-        if (destDir === whisperDir(rootPath)) throw new Error('tar exited with code 1')
+        if (destDir === `${whisperDir(rootPath)}.new`) throw new Error('tar exited with code 1')
         await familyExtract(archive, destDir, signal)
       }
     })
