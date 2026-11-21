@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -116,11 +116,17 @@ import {
   REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
 } from './services/binary-verifier'
 import { createAppLifecycleHandlers, emergencyLock, performShutdown } from './shutdown'
+import { limitCoreDumps, reportCoreDumpLimit } from './services/core-dump-filter'
 import type { AppContext } from './services/context'
 
 // HilbertRaum — Electron main process (the "backend").
 // Security posture (spec §3.5): context isolation on, node integration off,
 // sandboxed renderer, and NO network code in the core path.
+
+// #982: on Linux a crash of this process must not write its memory, the workspace key included, into a crash file.
+// The first statement, at module scope: every child started later (the sidecars) inherits the filter, and nothing
+// secret exists yet. Every other platform: a no-op. Logging does not exist yet, so `initBackend` reports a refusal.
+const coreDumpLimit = limitCoreDumps({ platform: process.platform, writeFile: writeFileSync })
 
 // The main bundle is ESM (out/main/index.mjs) — `__dirname` doesn't exist. Reconstruct it
 // from import.meta.url (the fileURLToPath idiom already used across the test suite).
@@ -227,6 +233,9 @@ function initBackend(): void {
   addLogRedactionRoots({ driveRoot: paths.rootPath })
   ensureWorkspaceDirs(paths)
   initLogging(paths.logsPath)
+  // #982: the core dump filter ran before logging existed (`initLogging` starts an empty buffer); a refusal is
+  // recorded here, once, by its errno code.
+  reportCoreDumpLimit(coreDumpLimit, log)
   // Perf marks (opt-in, HILBERTRAUM_PERF_LOG=1) land beside app.log; buffered marks
   // (app_ready) flush here. See services/perf.ts for the content rules.
   initPerf(paths.logsPath)
@@ -1149,23 +1158,32 @@ app.whenReady().then(() => {
   // instance must not reach initBackend() — its workspace.init() crash-sweep is the very
   // thing that shreds the primary's live working DB.
   if (!isPrimaryInstance) return
-  // #964: the Linux legs. A SIGTERM (`kill`, `systemctl stop`), SIGINT (Ctrl+C) or SIGHUP (the terminal closed)
-  // locks the workspace at once and ends the app, as a Windows session end does; Electron's own handler made it an
-  // ordinary quit that the close guard's question could hold, and a second signal then killed the app unlocked.
+  // #964 (Linux), #977 (macOS): the POSIX signal legs. A SIGTERM (`kill`, `systemctl stop`, `launchctl stop`, a
+  // forced restart), SIGINT (Ctrl+C) or SIGHUP (the terminal closed) locks the workspace at once and ends the app, as
+  // a Windows session end does; Electron's own handler made it an ordinary quit that the close guard's question could
+  // hold, and a second signal then killed the app unlocked. On macOS the usual quits a user starts (⌘Q, the menu, the
+  // Dock, a log-out) are Apple Events, not signals, so this changes mostly quits that nobody is there to answer.
   // Registered HERE, after `ready`, never at module scope: Electron installs its own handlers for these signals
   // after the main script has run and so replaces any listener registered at load time (measured on Electron 43.8.6
-  // Linux: a module-scope listener never fires; Electron's handlers are in place by `ready`). And FIRST in this
-  // callback, before anything that can throw (the back end, the protocol, the menu, the window), so a throw there
-  // cannot skip it. Never removed: removing the last listener leaves the signal at its default action, so the next
-  // one would kill the app with nothing locked. A lost session (the display or the D-Bus session bus gone, which is
-  // how a log-out usually arrives) emits neither `before-quit` nor `will-quit`, only `quit`: that leg locks if
-  // nothing has. Both share the quit closure (`createAppLifecycleHandlers`); `ctx` is read when they run.
-  if (process.platform === 'linux') {
+  // Linux: a module-scope listener never fires; Electron's handlers are in place by `ready`; the same code path on
+  // macOS, read from Electron's source). And FIRST in this callback, before anything that can throw (the back end,
+  // the protocol, the menu, the window), so a throw there cannot skip it. Never removed: removing the last listener
+  // leaves the signal at its default action, so the next one would kill the app with nothing locked.
+  if (process.platform === 'linux' || process.platform === 'darwin') {
     for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
       process.on(signal, () => lifecycle.onTerminationSignal(signal))
     }
-    app.on('quit', () => lifecycle.onQuitEvent())
   }
+  // #964: on Linux a lost session (the display or the D-Bus session bus gone, which is how a log-out usually arrives)
+  // emits neither `before-quit` nor `will-quit`, only `quit`: that leg locks if nothing has. Linux only: macOS has no
+  // lost-session exit, so there the leg would only add a lock to an `app.exit` that needs none (an update hand-off).
+  if (process.platform === 'linux') app.on('quit', () => lifecycle.onQuitEvent())
+  // #248: the macOS session-end leg. A system shutdown or restart reaches the app as a `powerMonitor` event (usable
+  // only after `ready`); registered here, before the code that can throw, for the same reason as the signals.
+  // UNVERIFIED on a Mac (#226): Electron's source posts it before the system's quit (`terminate:`, Electron PR
+  // #24111); how much time the app gets is not measured. Either order is safe: these legs all share the quit closure
+  // (`createAppLifecycleHandlers`), and `ctx` is read when they run.
+  if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())
   perfMark('app_ready')
   // `app.getLocale()` is only meaningful after whenReady (R-L1: verified on Windows —
   // it returns a BCP-47 tag like "en-US"/"de"). Best guess until settings are readable.
@@ -1196,12 +1214,6 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', lifecycle.onActivate)
-
-  // #248: the macOS leg — a system shutdown/restart is a `powerMonitor` event there (usable only
-  // after `ready`). UNVERIFIED on a Mac — owner live check pending (#226): whether the event
-  // fires before or after `will-quit` on a macOS shutdown, and whether the app is given the
-  // time. Either ordering is safe by the shared closure (see `createAppLifecycleHandlers`).
-  if (process.platform === 'darwin') powerMonitor.on('shutdown', () => lifecycle.onSessionEnd())
 })
 
 // #888: every quit (File → Exit, Ctrl+Q, Cmd+Q, Dock Quit) fires `before-quit` before it closes the
