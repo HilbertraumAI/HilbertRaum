@@ -123,6 +123,12 @@ from its first public `1.0.0` release onward.
   a password, creating the workspace replaced that file, and with it the only key that opens that
   workspace. Creating is now refused. A setup that failed partway also no longer leaves a file
   behind that the next start would write over a workspace you put back into the same folder (#954).
+- **A workspace you put back after a setup that a crash cut short now opens.** When a crash or a
+  power cut stopped the setup of a new workspace, it left a file behind in `workspace/`. If you then
+  copied a workspace back into the same folder (its `config/workspace.json` and its encrypted file),
+  the next start could replace that workspace with the leftover file, and every unlock said the
+  workspace was damaged, for good. The next start now removes the leftover, and the unlock checks
+  such a file against your workspace's key before it uses it (#973).
 - **Knowledge packs are now listed in your interface language's alphabetical order.** The chat's
   source picker and the Packs panel put a pack whose title starts with an accented or non-Latin
   letter (for example Ärzteblatt, Çanta or Гора) after every plain A-to-Z title. They now follow the
@@ -150,6 +156,10 @@ from its first public `1.0.0` release onward.
   backup. And when creating a workspace finds
   one on the drive after all, the lock screen no longer asks you to restart: it switches to the
   unlock screen for that workspace at once (#955).
+- **A key file saved with a byte-order mark opens.** If `config/workspace.json` was saved by a
+  program that adds a byte-order mark in front of the text (Windows PowerShell 5.1, older versions
+  of Notepad, some sync tools), the lock screen said the file can't be read, and no password could
+  open the workspace. It now opens normally (#974).
 - **A quit that waits to save no longer starts the next document task only to stop it.** When
   Ctrl+Q on Linux or ⌘Q on macOS waited to save review changes while text recognition (OCR) was
   running, the next document task in line started during that wait and was stopped a moment
@@ -200,6 +210,12 @@ from its first public `1.0.0` release onward.
   workspace back as your last session left it, encrypted again. Until you unlock, that copy is not
   encrypted. When no copy was left, the lock screen now says so, and that you should not create a
   new workspace (#911).
+- **A copy of your workspace that a later version left on the drive is kept.** If a later version
+  of HilbertRaum could not lock the workspace when it closed (on a full drive, for example) and you
+  then start this version on the same drive, this version could delete the readable copy that held
+  the later version's last session, or the whole workspace when its encrypted file was missing
+  too. It now keeps that copy as it is, and the unlock says the workspace was written by a newer
+  HilbertRaum: start the newer version to open it (#985).
 - **A workspace file you put back while the app is open keeps your newest changes.** Putting
   `config/workspace.json` back while the lock screen was open, as the lock screen advises when it is
   missing, and then unlocking could open the workspace at its last saved state and drop the newer

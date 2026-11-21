@@ -1093,6 +1093,12 @@ export function corpusGeneration(db: Db): number {
  * what a newer schema means, so opening it would degrade silently. Bump it whenever the schema
  * changes in a way an older build must not open. Builds ≤ 0.1.59 never read the stamp, so it
  * protects only pairs where the older build is newer than this change.
+ *
+ * #985 (W-66): `probeDatabaseFile` reads the same stamp from the header, before SQLite parses the schema, so a working
+ * copy or `.recovery` a newer build left is kept, never judged damaged and discarded. Rule for every later release:
+ * schema text an older SQLite cannot parse (a newer clause in an index, a trigger, a generated column, a table option)
+ * ships only with a bump of this constant. An older SQLite fails every schema read of such a file with SQLITE_CORRUPT
+ * ("malformed database schema"), which the probe would call damage when the stamp did not say "newer".
  */
 export const SCHEMA_VERSION = 1
 
@@ -1159,16 +1165,18 @@ const SQLITE_TOOBIG = 18
  * for a reason that is NOT damage (SQLite could not open the file through its URI, an I/O error, out of memory, a table
  * it cannot read; or an index-root read that failed after the header read). The probe may only ADD a refusal or a
  * discard for proven damage: on `unchecked` every caller judges the file by its header, exactly as before the probe
- * existed, and reports the fallback (the `code`) for the log.
+ * existed, and reports the fallback (the `code`) for the log. `newer` (#985): the header's schema stamp
+ * (`user_version`) is above {@link SCHEMA_VERSION}, so a newer build wrote the file, judged before SQLite reads its
+ * schema (which may hold text this SQLite cannot parse). No caller discards it: the salvage keeps it, the unlock
+ * refuses it as `WorkspaceNewerError`, and the lock and the rekey stage read it as a database.
  */
-export type DatabaseFileVerdict = 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown' | 'unchecked'
+export type DatabaseFileVerdict = 'database' | 'damaged' | 'not-database' | 'gone' | 'unknown' | 'unchecked' | 'newer'
 
 /** {@link probeDatabaseFile}'s answer: the verdict, and for `unchecked` what stopped the structural read (SQLite's result
- *  code and its fixed description, or a Node error code; content-free). */
-export interface DatabaseFileProbe {
-  verdict: DatabaseFileVerdict
-  code?: string
-}
+ *  code and its fixed description, or a Node error code; content-free); for `newer` the schema stamp it found. */
+export type DatabaseFileProbe =
+  | { verdict: Exclude<DatabaseFileVerdict, 'newer'>; code?: string }
+  | { verdict: 'newer'; found: number }
 
 /** A failure's content-free code for the log: SQLite's result code and fixed description, else the Node error code. */
 function failureCode(err: unknown): string {
@@ -1329,6 +1337,10 @@ export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
  *    index cannot be read by name (`INDEXED BY` throws "no query solution" on a partial index, and the app has one,
  *    `idx_documents_pending_dest`, so such a probe would refuse every lock; A1 §2.5, trap 2).
  *
+ * Step 1 also reads the schema stamp (#985): a `user_version` above {@link SCHEMA_VERSION} is `newer`, answered before
+ * SQLite reads anything, because a newer build's schema can hold text this SQLite cannot parse, which fails step 2
+ * with CORRUPT although the file is intact.
+ *
  * SQLite's CORRUPT, NOTADB or TOOBIG is `damaged` (as are a page size or a schema format number no SQLite writes, in
  * step 1); any other SQLite failure, and an index-root read that fails after the header read, is `unchecked` (with the
  * code): the probe adds a refusal or a discard only for proven damage, so the callers judge an `unchecked` file by its
@@ -1342,7 +1354,7 @@ export function checkpointLeftoverWal(dbPath: string): WalCheckpointRetry {
  * encrypt or discard asks {@link walAwaitsCheckpoint} first.
  */
 export function probeDatabaseFile(path: string): DatabaseFileProbe {
-  const answer = (verdict: DatabaseFileVerdict): DatabaseFileProbe => ({ verdict })
+  const answer = (verdict: Exclude<DatabaseFileVerdict, 'newer'>): DatabaseFileProbe => ({ verdict })
   let pageSize: number
   let usableSize: number
   try {
@@ -1358,6 +1370,11 @@ export function probeDatabaseFile(path: string): DatabaseFileProbe {
       // writes one above 4, and SQLite refuses it with a plain SQLITE_ERROR ("unsupported file format"), which step 2
       // would report as `unchecked` (#876 review round 3).
       if (header[47] > 4) return answer('damaged')
+      // #985 (W-66): the schema stamp (`PRAGMA user_version`: offset 60, a big-endian signed 32-bit integer, as SQLite
+      // stores it). Above this build's, a newer build wrote the file: kept by every caller, and judged here, before
+      // step 2, which reads a schema this SQLite may not parse (SQLITE_CORRUPT, "malformed database schema").
+      const userVersion = header.readInt32BE(60)
+      if (userVersion > SCHEMA_VERSION) return { verdict: 'newer', found: userVersion }
       usableSize = pageSize - header[20]
     } finally {
       closeSync(fd)

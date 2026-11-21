@@ -2738,8 +2738,8 @@ export const en = {
     "can't be read, so no password can open the workspace. Do not create a new workspace. Put the " +
     'file back, or restore it from a backup.',
   // #955 item 1: the descriptor file is on the drive but can't be read, and `.enc` is not beside it. Never "no data is
-  // left": a `.recovery`, a staged `.enc.new` or stored documents may still need that key. A file saved with a
-  // byte-order mark reads as unreadable and can be repaired, hence "don't delete".
+  // left": a `.recovery`, a staged `.enc.new` or stored documents may still need that key. A file damaged by an edit
+  // can often be repaired, hence "don't delete" (#974: a byte-order mark alone no longer makes it unreadable).
   'main.workspace.descriptorUnreadable':
     'The file that holds your workspace\'s key (config/workspace.json) can\'t be read, and the ' +
     'encrypted workspace file isn\'t on the drive, so no password can open the workspace. Don\'t ' +

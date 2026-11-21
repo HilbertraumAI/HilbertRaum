@@ -1287,7 +1287,9 @@ explicitly:
   shred can leave a spent `.recovery` behind, e.g. a Windows AV/indexer holding the file —
   it must never roll the vault back to a stale snapshot or encrypt shred-garbage over the
   good `.enc`). Anything not matching that narrow signature is shredded as before, as long as an
-  encrypted snapshot is there (with none at all, see "Encrypted file missing" below).
+  encrypted snapshot is there (with none at all, see "Encrypted file missing" below). A working
+  file or `.recovery` a newer build stamped (#985) is kept and never rolled forward by this build:
+  see "Vault format versions" below.
   When the salvage cannot judge or move the fresh copy safely because a program holds the
   `.recovery` file, the app **refuses to open** rather than losing it (#242). Two legs: at
   startup, if the move-aside cannot land — another program holds the spent `.recovery`
@@ -1325,7 +1327,9 @@ explicitly:
   waits), `preserveNewerPlaintext` keeps the copy: it replays the `-wal` into the main file (after
   an unclean end the session's last commits sit there), probes the file, and moves a database to
   `<db>.recovery`. A `-wal` that SQLite cannot replay (it reports the database as corrupt) is
-  dropped by the sweep, so a copy kept then lacks the session's last commits. The next unlock with
+  dropped by the sweep, so a copy kept then lacks the session's last commits. A copy a newer build
+  stamped is kept the same way (#985), with no notice; this build's unlock then refuses it as newer
+  (see "Vault format versions" below). The next unlock with
   the right password rolls it forward over the missing `.enc`
   through the CODE-1b path above, which every build since 0.1.47 has. Until then the lock screen
   says so (`lockNotice: 'encrypted_file_missing'`), read from the disk at every start (descriptor
@@ -1384,6 +1388,61 @@ explicitly:
   as the single atomic commit point. A crash before the descriptor write leaves the
   workspace `uninitialized` (onboarding simply retries); a crash after it rolls the staged
   file forward via the existing `recoverPendingRekey` path.
+  **A create's leftover is never rolled over a workspace (#973).** The create stages with no
+  rekey journal, so a crash before the commit leaves a `.enc.new` that nothing tells apart from a
+  committed password change of a build that wrote no journal. Every build before #973 rolled any
+  `.enc.new` forward under a v2 descriptor at the start, so a workspace put back into the same
+  folder later had its `.enc` shredded and replaced by an empty database under a key nothing holds,
+  and every unlock then said "damaged". Two rules close it (owner decision G-1, option 2 plus a
+  narrow option 3). First, a staged `.enc.new` that no rekey journal lists, beside an `.enc` that is
+  there (any stat answer but ENOENT), under a v2 descriptor, is a doubt. A journal entry lists the
+  stage only by its full path (folded as for every journal entry): the folder and file names are the
+  same in every workspace, so a match by name let a stale journal (one kept because its entries look
+  unreachable, or one a restored folder brings) vouch for a foreign stage. A Kit that comes back under
+  another drive letter or mount point after a change was cut short therefore has its stage in doubt,
+  and the unlock rolls it forward once it authenticates. The start's recovery holds
+  no key, so it leaves the whole staged set as it is, and so does the unlock's recovery before the
+  password check (a wrong password changes nothing). A loss the start judged meanwhile (#875, #892:
+  the session it swept) is held, not shown, until the next successful unlock settles it: recorded
+  when `.enc` is still the snapshot it was judged against (the stage removed, left, or gone by then),
+  dropped when the stage rolled forward (the stage holds that session) or `.enc` changed otherwise.
+  It is never carried past that unlock. The hold is in memory, so a restart before that unlock
+  forgets the notice. Once the
+  password verified and the data key is
+  unwrapped, the unlock streams the staged file through the AES-256-GCM decipher with no output
+  (`authenticatesUnder`; a vault frame is one GCM stream with one tag, so one pass proves the whole
+  file). If it authenticates, it is this workspace's (a v1 password change by a build before
+  0.1.60, cut short after its commit), and the staged set rolls forward as before. If its tag fails,
+  it is ciphertext under another key: it is deleted, the unlock opens `.enc` as it is, and the rest
+  of the staged set (document and image twins, the journal's deletions) gets what the start's
+  recovery would have given it without that file. A file that is no frame of this build's at
+  all (cut short inside its header, another magic; a newer frame is refused earlier, #845) cannot be
+  a staged copy of this workspace and is deleted the same way. A read the pass cannot make splits by
+  its cause: a file gone since the check is no stage; a folder at the name (EISDIR, ENOTDIR) is no
+  data, so it is left exactly as it is and the unlock opens `.enc` (never blocked for good); any
+  other failure (a hold: EBUSY, EPERM, EACCES; an I/O error such as EIO) may hide a stage this
+  workspace needs, so it changes nothing and refuses the unlock with the #242 "try again" answer
+  (`vault_recovery_blocked`), before the `.recovery` roll-forward could write over `.enc`. A delete
+  that fails leaves the file too, and the unlock opens `.enc`. The unlock logs one content-free
+  line when it deleted or left such a file, also when a later step of that unlock fails (no audit
+  type, as #911's). The cost is one read of the staged file, only in this state, timed as the perf
+  mark `vault_stage_check` (about 1.5 s for 500 MB on a warm NVMe drive in review; expect 5 to 17 s
+  on a USB stick). Second, a start with no key file, no `.enc` and no rekey journal
+  (each a stat that says ENOENT) removes a stray `.enc.new` and its write temp, best-effort: that
+  is the `uninitialized` state, where the next create overwrites the file anyway, and with it gone
+  an older build on the same Kit cannot roll it over a workspace put back later either. Journal'd
+  stages, a v1 descriptor (the stage is discarded) and a staged file with `.enc` gone (a create or a
+  swap cut short after its commit, rolled forward at the start) are unchanged. **Residuals:** a
+  build before #973 still rolls such a leftover forward at its start: one this build has not removed
+  yet, or one it left as a doubt beside a workspace until its next unlock. The start's removal (the
+  second rule) also deletes the stage of a create that committed and then lost its key file before
+  its rename; such a stage holds only the fresh, empty workspace the create built. It loses data in
+  one double fault only: a v1 → v2 password change by a build before #241 (0.1.50–0.1.59, no
+  journal) cut short between the shred of `.enc` and the rename of its stage, and then the key file
+  removed before the next start (owner decision: the removal stays). Journal-less document and image
+  twins (`documents/*.enc.new`, `images/*.enc.new`) under a v2 descriptor are still rolled forward
+  at the start without any check, as before #973, which can replace a stored copy with a foreign one
+  (a folder merged from a workspace whose migration was cut short); a follow-up issue.
 - **Accepted trade-off (decision): a hard power cut / kill mid-session loses the changes
   since the last successful lock.** Whole-file encryption means the at-rest `.enc` is only
   updated on lock/quit; a mid-session crash leaves a working file with live WAL sidecars,
@@ -1469,7 +1528,11 @@ password. Four guards close this:
   which SQLite refuses with a plain error) and a row whose record claims a value longer than SQLite
   allows (TOOBIG; damage for the probe's own reads only, not for the unlock's open), two shapes of
   noise the review's fuzz found (review round 3); any other failure means the probe could not
-  decide, which is never read as lost. It reads the schema with `trusted_schema` OFF (on by default
+  decide, which is never read as lost. Before it opens the file with SQLite it reads the schema stamp
+  in the header (`user_version`, offset 60, signed): above this build's `SCHEMA_VERSION` the file is
+  `newer` (#985), which no site discards (see "Vault format versions" below), because a newer
+  build's schema can hold text this SQLite cannot parse, which fails every schema read with CORRUPT
+  although the file is intact. It reads the schema with `trusted_schema` OFF (on by default
   in `node:sqlite`), since it may parse a file found on the drive before any unlock. On Windows it
   opens the file in the `\\?\` long-path form, which SQLite needs for a path of 260 characters or
   more (a `.recovery` beside a 251-character working file). A
@@ -1570,7 +1633,8 @@ password. Four guards close this:
   an encrypt that fails removes only its own temp, so a staged file that was there before is not
   touched. Left behind, the next start's rekey recovery rolled the `.enc.new` forward under a v2
   descriptor, over the `.enc` of a workspace put back into the same folder, which then read as
-  damaged (S-1). A crash between the stage and the commit still leaves the file (a separate issue).
+  damaged (S-1). A crash between the stage and the commit still leaves the file, and #973 keeps it
+  from replacing a workspace (see "Crash-safe creation" above).
   A refused create writes nothing. A descriptor the last `init()` did not adopt (put back after the
   start, as the #807 copy advises, or one it could not read), or one whose `init()` threw part-way
   (a held file in the rekey recovery), gets the start's steps (the salvage, the sweep, the rekey
@@ -1580,8 +1644,11 @@ password. Four guards close this:
   with no `.enc` beside it (a stat says ENOENT; any other stat failure proves nothing), throws
   `VaultDescriptorUnreadableError` → `vault_descriptor_unreadable`, at the unlock and at a create
   over such a file. Its copy says not to delete the key file and never that no data is left: a
-  `.recovery`, an `.enc.new` or stored documents may still be there, and a file saved with a UTF-8
-  byte-order mark reads as unreadable (a separate issue).
+  `.recovery`, an `.enc.new` or stored documents may still be there. Since #974 one UTF-8
+  byte-order mark in front of the file (Windows PowerShell 5.1 `Set-Content -Encoding utf8`, older
+  Notepad) no longer makes it unreadable: the descriptor, the rekey journal (both readers) and the
+  #875 marker are read past one leading mark. Node keeps the mark when it decodes UTF-8, and
+  `JSON.parse` refused it. The app writes none of these files with a mark.
 
 ### Vault format versions (#845)
 
@@ -1600,6 +1667,38 @@ v2 — and the startup salvage, crash sweep and rekey recovery ran over a newer 
   written, shredded or renamed, the workspace stays locked, and the create flow is refused. A
   stale verdict does not outlive its cause: while it stands, an unlock or create re-reads the disk,
   so once the newer artifact is gone the skipped salvage runs before anything is decrypted.
+- **A newer build's working copy is kept, never discarded (#985, owner decision G-2 A, the
+  app-update plan's W-66).** The plaintext working files the start and the unlock judge (a failed
+  lock's working copy, the only copy over a missing `.enc`, a `.recovery`) are outside the verdict
+  above: they are judged by `probeDatabaseFile`. A newer build may write schema text this SQLite
+  cannot parse (a newer clause in an index, a trigger, a generated column, a table option); SQLite
+  then fails every schema read with CORRUPT ("malformed database schema"), while `PRAGMA
+  user_version` still reads (measured), so the probe called such a file damaged, and the start's
+  salvage, the start with `.enc` missing and the unlock's roll-forward shredded it: the newer build's
+  last session, or the whole workspace. The probe now reads the schema stamp from the header first:
+  above this build's `SCHEMA_VERSION` the file is `newer`. The start keeps it as `<db>.recovery`,
+  like a database (`preserved`, or `kept-only-copy` with `.enc` missing), never as damage: no #875
+  marker, no loss notice, and with `.enc` missing no "your password brings it back" notice either.
+  Right after the password verified, before the staged-file check (#973), the roll-forward or any
+  shred, the unlock refuses a `.recovery` judged `newer` that may hold the freshest data (`.enc`
+  missing or not judged, or the copy at least as new) with the #247 error (`WorkspaceNewerError` →
+  `workspace_newer`, "written by a newer HilbertRaum — update the app"); the newer build's own
+  unlock rolls it forward. One older than a present `.enc` is a spent leftover: this unlock keeps it
+  as it is (neither rolled forward nor shredded), opens the workspace at `.enc`, and logs one
+  content-free line. That copy is the workspace's data, not encrypted, and it stays on the drive
+  until a later failed lock's salvage replaces it (REL-1's pre-shred of the `.recovery` name) or a
+  newer build's unlock shreds it as spent. A create on a drive that
+  holds such a working file or `.recovery` (its key file and `.enc` gone, so the state reads
+  `uninitialized`) is refused with the same answer before anything is written: it would commit a
+  new workspace that every unlock then refuses. The lock and the v1 rekey stage read `newer` as a
+  database (the session's
+  own file cannot be newer: the open refuses one). **Cost:** the newer session's working copy rests
+  in plaintext on the drive until a newer build unlocks it, the same exposure as any failed lock
+  (the CODE-1b trade in "Lock failure & durability"). **Limits:** a working file beside live
+  `-wal`/`-shm` (a newer build's mid-session crash) is still swept, as this build's own (the accepted
+  power-cut trade-off there, unchanged); a damaged file whose stamp happens to read above
+  `SCHEMA_VERSION` is kept and refused too, so the unlock keeps answering "newer" until the copy is
+  moved off the drive (`troubleshooting.md`). The rule for later releases is in `data-contracts.md` "Schema stamp".
 - **No downgrade.** A password change re-reads the descriptor on disk first and refuses a newer
   (or replaced) one; the diagnostics log never persists over a newer-framed `app.log.enc` and
   never rotates onto a newer-framed `app.1.log.enc`.
@@ -1859,7 +1958,11 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   discard them and the journal, the old password + old files win; with a **v2** descriptor the
   commit happened → roll the staged files forward and apply the deletions, the new password
   wins. Old-or-new, never a mix — tests cut the journal at every step, over every class, and
-  prove both directions (`password-change.test.ts`).
+  prove both directions (`password-change.test.ts`). One exception (#973): a staged
+  `hilbertraum.sqlite.enc.new` that the journal does not list (no journal: the builds before
+  0.1.60 wrote none, and a create stages with none either), beside an `.enc` that is there, waits
+  for the unlock, which rolls the staged set forward only when that file authenticates under the
+  unwrapped data key, and deletes the file when it does not (see "Crash-safe creation" above).
   **Downgrade caveat (on-disk format, #241):** the journal file and the staged `images/` and
   out-of-store twins are new on-disk shapes. A build older than the #241 fix that starts on a
   vault with a *pending* migration rolls the DB and `documents/` forward but never reads the

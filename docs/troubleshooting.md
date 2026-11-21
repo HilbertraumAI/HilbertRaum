@@ -415,7 +415,20 @@ same message also covers the encrypted workspace's own files (issue #845): its
 `config/workspace.json` or its encrypted data in a format a newer copy wrote. The unlock screen
 shows it whatever password you type, because the older copy cannot check a password in a format
 it does not know; your password is not the problem, and nothing was changed. Copies up to 0.1.65
-cannot give it for those files.
+cannot give it for those files. It also covers a readable copy of the workspace that a newer copy
+left on the drive (issue #985): `workspace/hilbertraum.sqlite.recovery`, after a lock that failed,
+for example on a full drive. The older copy keeps that file as it is and does not open it, so the
+newer copy's last session is not lost: start the newer copy and unlock, and it encrypts the file
+again. Here the message comes after the password is checked. If no newer copy ever ran on this
+drive, that file may be damaged instead: to open the workspace at its last lock with this copy,
+quit HilbertRaum, move `workspace/hilbertraum.sqlite.recovery` off the drive, and unlock again.
+Keep that file somewhere safe: it is your workspace's data, not encrypted. Copies up to 0.1.65 can
+delete such a file when they cannot read it. Creating a new workspace is refused with the same
+message while such a file is on the drive. When that file is older than the encrypted workspace
+file (the newer copy already opened and locked the workspace since), the older copy opens the
+workspace without the message, leaves the file as it is and notes it in the diagnostics log. It is
+still your workspace's data, not encrypted: the newer copy removes it at its next unlock, and this
+copy replaces it if a later lock fails.
 
 ---
 
@@ -603,8 +616,10 @@ a session left, see "The encrypted workspace file was missing from the drive" ab
 What to do:
 
 - **Don't delete the key file**, and keep a copy of it. It can be damaged in a way that can be
-  repaired: a file saved by an editor that adds a byte-order mark (Windows PowerShell 5.1, older
-  versions of Notepad) reads as unreadable, for example.
+  repaired: a key file that was edited by hand or by a tool (a bracket removed, text a sync tool
+  added) can often be put right. (A UTF-8 byte-order mark that an editor such as Windows PowerShell
+  5.1 or an older Notepad adds no longer makes the file unreadable, issue #974. A file saved as
+  UTF-16, the default of PowerShell 5.1's `>` and `Out-File`, still does.)
 - Look for the encrypted file first, as "Your password is correct, but the encrypted workspace file
   is missing from the drive" above describes: the recycle bin or trash, a sync tool's deleted or
   conflict files, a `FOUND.000` folder. Put it back as `workspace/hilbertraum.sqlite.enc`.
