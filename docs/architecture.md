@@ -6149,8 +6149,10 @@ in place on a read-only drive) stays the app-update plan's.
   5 minutes plus several 12 s rename budgets (the archive's move, the flatten, the swap's renames, a move
   back, the carry), the hashing, the flush and waits on queued deletes, and a job has up to two steps per
   family, so a job can hold the gate past its 6 minutes. That is enough: the install folder changes only
-  in the swap's renames, so a spawn that stops waiting meets a complete copy (for a moment, the new main
-  copy without its net). What a spawn let through early can do is run the old copy, which the swap moves
+  in the swap's renames, so a spawn that stops waiting meets a complete copy, old or new, with two gaps:
+  between the swap's two renames the install folder does not exist, for up to one 12 s rename-retry
+  budget (the spawn finds no program, as with no engine), and between the main build's swap and its carry
+  the new copy has no net for a moment (review round 3). What a spawn let through early can do is run the old copy, which the swap moves
   to `.old`, where Windows cannot delete it while it runs; the next swap or start deletes it.
 - **After the swap:** the main step carries `cpu/`; the verifier's cached verdicts for the replaced
   programs are dropped; `.old` is deleted in the background, marker first, once the job has released
@@ -6194,7 +6196,8 @@ start never waits on a lock): a refused one waits for the next start or job. Wit
 install folder (dev kits only; a real Kit has no links there), the swap renames the junction itself to
 `.old` and moves a real folder in, and the main build's carry then moves `cpu/` out of the junction's
 TARGET into the new folder: the target loses its net (on another volume the carry fails, EXDEV, and
-`.old` stays for the start). A dangling symbolic link at a leftover name is what the PowerShell Kit
+`.old` stays for the start). Deleting `.old` then unlinks the link and never enters it, so the old copy
+stays on the link's target, orphaned: no folder the app reads points at it any more. A dangling symbolic link at a leftover name is what the PowerShell Kit
 gate's `Get-Item -Force` check is for; this machine cannot create one (no symlink privilege), so only
 the junction case is exercised here. Not modelled: two hosts writing one drive at once.
 

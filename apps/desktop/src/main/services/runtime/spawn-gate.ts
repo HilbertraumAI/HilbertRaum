@@ -14,8 +14,10 @@
 // the extractor's 5-minute deadline plus several 12 s rename-retry budgets (the archive's move, the
 // flatten, the swap's renames, a move back, the `cpu/` carry), the hashing and the flush, and a job has up
 // to two steps per family. It does not need to be: since #986 the install folder changes only in the
-// swap's renames, so a spawn that stops waiting meets a complete copy, old or new (between the main
-// build's swap and its carry, a new copy without its `cpu/` net for a moment). What a spawn let through
+// swap's renames, so a spawn that stops waiting meets a complete copy, old or new, with two gaps (#986
+// review 3): between the swap's two renames the install folder does not exist, for up to one 12 s
+// rename-retry budget (the spawn finds no program and reports the engine missing, as with no engine); and
+// between the main build's swap and its carry the new copy has no `cpu/` net for a moment. What a spawn let through
 // early can do is run the old copy, which the swap then moves to `.old`, where Windows cannot delete it
 // while it runs; the next swap or start deletes it.
 
