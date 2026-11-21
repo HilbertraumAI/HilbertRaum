@@ -478,7 +478,7 @@ describe('isSmallTalkReply: Form B holds one phrase, and the common wordings are
     'Grazie per il tuo aiuto', "Grazie per l'aiuto", 'Thanks for the great summary', 'Thanks for all your help',
     'Thanks for all the help', 'Danke für all deine Hilfe', 'Danke für die tolle Hilfe',
     'Very good job', 'Really great summary', 'So nice work', 'Muy buen trabajo', 'Sehr gute Arbeit', 'Echt tolle Arbeit',
-    'Très bon travail', 'Zeer goed werk', 'Bardzo dobra robota', 'Очень хорошая работа',
+    'Très bon travail', 'Zeer goed werk', 'Bardzo świetna robota', 'Очень хорошая работа',
     'Çok güzel özet', 'Дуже гарна робота',
     'Teşekkürler, özet için', 'Teşekkür ederim, bu özet için',
     'Danke für die Info', 'Danke für die Tabelle', 'Danke fürs Zusammenfassen'
@@ -506,6 +506,9 @@ describe('isSmallTalkReply: Form B holds one phrase, and the common wordings are
     expect(isSmallTalkReply('Dziękuję za listę')).toBe(true)
     expect(isSmallTalkReply('Отличная таблицу')).toBe(false)
     expect(isSmallTalkReply('Dobra liste')).toBe(false)
+    // «dobra» is usually "OK" in Polish: «Dobra tabela» is an acceptance and a request, no compliment
+    for (const q of ['Dobra tabela', 'Dobry raport', 'Dobre podsumowanie', 'Dobra lista']) expect(isSmallTalkReply(q), q).toBe(false)
+    expect(isSmallTalkReply('Świetna robota')).toBe(true)
   })
 })
 
@@ -700,6 +703,30 @@ describe('isNeedleShaped: the new veto and frequencies (#981 review round 2)', (
     'When must every 3 invoices be paid, and which?', 'Wann kann ich jede Klausel kündigen?'
   ])('%s → a list', (question) => {
     expect(isNeedleShaped(question)).toBe(false)
+  })
+})
+
+// Review round 3: the English frequency units are whole words (no «tag»/«age» inside "stage", "outage"), a noun before "time" is no
+// modifier, German endings count after «jede[nmrs]» only, and German «alle» is the twin of "all" in the new veto.
+describe('isNeedleShaped: the new veto, round 3', () => {
+  it.each([
+    'When must each stage be completed?', 'When must every outage be reported?', 'When should each shortage be logged?',
+    'When can every advantage be claimed?', 'When must each percentage be paid?', 'When should every voltage test be run?',
+    'When must each employee time sheet be signed?', 'When should every customer visit be logged?',
+    'Wann müssen allen Mietern die Unterlagen zugehen?', 'Wann sollen aller Kunden Zahlungen geprüft werden?',
+    'Wann müssen wir alle Rechnungen zahlen?', 'Wann kann man alles kündigen?'
+  ])('%s → a list', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    'When must I pay each month?', 'When must I pay every 3 months?', 'When can I pay every 2nd week?',
+    'When should the rent be paid each calendar quarter?', 'When must the report be filed each business day?',
+    'When must the rent be paid every Monday?', 'When can I leave each time the lease renews?',
+    'Wann sollen wir jeden Werktag zahlen?', 'Wann sollen wir jede zweite Woche zahlen?', 'Wann kann ich jedes Wochenende gehen?',
+    'Wann müssen wir jedes Mal zahlen?', 'Wann sollen wir jeden 3. Monat zahlen?'
+  ])('%s → a lookup (a frequency)', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
   })
 })
 

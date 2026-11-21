@@ -1389,7 +1389,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   adjective and that noun, written with only spaces between them ("Great summary", «Gute Arbeit», "Very good job"),
   with a thanks after it at most. A comma, a dash or a full stop between the praise and the noun makes it an
   acceptance followed by a request, so "Great, list", «Gut, Liste», «Отлично, таблицу» and «Добре, таблицю» read the
-  documents. Praise adverbs («отлично», «świetnie», «чудово») and acceptance words («добре», «gut», «iyi») are no praise
+  documents. Praise adverbs («отлично», «świetnie», «чудово») and acceptance words («добре», «gut», «iyi», Polish «dobra», which is usually "OK") are no praise
   adjectives. Any other word keeps the request ("Thanks, now write the minutes", "Thanks for the summary of the
   risks"), and so does a noun first ("Summary, thanks!"). A thank-you longer
   than that is still taken for a question about the documents (below). **Review evidence (#976):** the action
@@ -1662,9 +1662,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   "where is", «wann ist», «wann muss», «was ist der/die/das», …) plus word-anchored forms for the questions it missed:
   "when must/should/was/can/could/shall", "who is/was the", «wann müssen/sollen/soll/war/wurde/kann/können/endet/beginnt/läuft»
   and «wer ist/war der/die/das». "When must they give notice?" and «Wann endet der Vertrag?» are lookups now, the same in
-  both languages. The forms are definite singular on purpose: "Who are the parties?", "When are the payments due?" and
-  "Who is responsible for the budget?" still get the whole read (slower, never wrong). A word-anchored veto turns such a
-  question into a list when it says "each", "every", "which", «jede[nmrs]» or «welche[nmrs]», or a bare "all" ("When must each
+  both languages. The «who»/«wer» forms are definite singular on purpose, and the «when»/«wann» forms name a verb:
+  "Who are the parties?", "Who is responsible for the budget?", "When are the payments due?" and «Wann sind die Zahlungen fällig?»
+  still get the whole read (slower, never wrong). A word-anchored veto turns such a
+  question into a list when it says "each", "every", "which", «jede[nmrs]», «welche[nmrs]», «alle[nmrs]» or a bare "all" ("When must each
   obligation be fulfilled?", "When must all invoices be paid?", "When must which documents be submitted?"). **The veto reads only
   a question that is a lookup through one of the new forms.** A question that one of the old lookup shapes already matches
   ("how much", "when is", "when does", «wann ist», «wo steht», «gibt es», …) is a lookup as on master, whatever else it says: "When is
@@ -1672,8 +1673,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   deadline?" and "Does the document say anything at all about pets?" are answered from a few passages, as before #981, never
   turned into the whole report (monotone against master; a test holds master's verdicts as literals). Two exceptions keep even a
   new-form lookup a lookup: a **frequency** ("When must I pay every 3 months?", "every other Friday", «Wann sollen wir jeden
-  Werktag zahlen?», «jedes Wochenende»: the quantifier, at most one word, then a time unit, a weekday, or a German word ending in
-  -tag, -woche, -monat, -quartal, -jahr, -stunde, -nacht, -abend, -morgen) and a relative or indirect
+  Werktag zahlen?», «jedes Wochenende»: the quantifier, at most a number or a short modifier ("other", "calendar", «weitere»,
+  «zweite»), then a whole time word, a weekday, or, after «jede[nmrs]» only, a German word ending in -tag, -woche, -monat,
+  -quartal, -jahr, -stunde, -nacht, -abend, -morgen; "each stage" and "every outage" are no frequency, and neither is "each
+  employee time sheet") and a relative or indirect
   "which" / «welche» right after a comma. The only veto that got narrower is "all the", a substring on master: it now needs a
   letter-free left edge, so "shall the", "call the", "install the" no longer veto a lookup ("When shall the tenant pay?"), while
   "all these" and "all their" still do. The other eight interface languages have no lookup list, so «¿Cuándo hay que avisar?»

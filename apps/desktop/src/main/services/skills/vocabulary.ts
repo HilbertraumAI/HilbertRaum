@@ -584,7 +584,9 @@ export function routeMatch(skillId: SkillVocabId, question: string): boolean {
 //       tree or not (SKA-12; a needle past the truncation cut would be missed; top-k finds it anywhere).
 //
 // Both are deliberately conservative. `isSmallTalk` can never fire on a real document question (a question
-// with any content word is not all-filler and matches no whole-question chit-chat form). `isNeedleShaped`
+// with any content word is not all-filler and matches no whole-question chit-chat form, and the closed thanks and
+// praise shapes of `isThanksForShape` ("Thanks for the summary", "Great job!") hold nothing but thanks words, one
+// praise word and one noun for what the assistant gave). `isNeedleShaped`
 // requires an unambiguous lookup interrogative AND the absence of any deliverable verb, because a false
 // needle (a summary sent to top-k) is worse than a false deliverable (a truncated whole read, still honest
 // via W1's in-prompt notice). Privacy: the question is CONTENT — matched here, NEVER logged.
@@ -802,7 +804,8 @@ const SMALL_TALK_EXACT: ReadonlySet<string> = new Set([
  * True when the question is clearly off-topic chatter (greeting / thanks / assistant-meta), so an active
  * analysis skill should NOT default to a whole-document read (A3 opt-out (a), audit §8.2). Conservative by
  * construction: it fires only when the WHOLE question is chatter — every token a filler, or the normalized
- * question is a known chit-chat form — so a genuine document question (which always carries a content word)
+ * question is a known chit-chat form, or a closed thanks / praise shape that names what it thanks for ("Thanks for
+ * the summary", `isThanksForShape`, #983) — so a genuine document question (which always carries a content word)
  * can never be misclassified. Deterministic; no model; the question is never logged.
  */
 export function isSmallTalk(question: string): boolean {
@@ -955,7 +958,7 @@ const THANKS_LANGS: readonly ThanksLang[] = [
       'notatka'],
     accusative: ['analizę', 'analize', 'listę', 'liste', 'tabelę', 'informację', 'pracę', 'prace', 'ocenę', 'notatkę'],
     praise: ['świetne', 'swietne', 'świetna', 'swietna', 'świetny', 'swietny', 'doskonałe', 'doskonała', 'doskonały',
-      'super', 'idealne', 'idealna', 'dobra', 'dobre', 'dobry', 'fajne', 'fajna'],
+      'super', 'idealne', 'idealna', 'fajne', 'fajna'],
     intensifiers: ['bardzo']
   },
   {
@@ -1231,20 +1234,30 @@ const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [/\balle\b/, /(?<![\p{L}\p{N}])
 // a few passages ("What is the clause which limits liability?", "First of all, when is the deadline?", "When is each
 // payment due?") is never turned into the whole report by this change (the #981 symptom). All are WORD matches on the
 // lower-cased question. Two exceptions keep a plain lookup a lookup: a FREQUENCY ("each month", "every 3 months",
-// "every other week", «jeden Werktag», «jede weitere Stunde»: the quantifier, then at most one word, then a time unit, a
-// weekday, or a German word ending in -tag, -woche, -monat, -quartal, -jahr, -stunde, -nacht, -abend, -morgen) is no
+// "every other week", «jeden Werktag», «jede weitere Stunde»: the quantifier, at most one number or short modifier,
+// then a time unit; the German endings -tag, -woche, ... count only after «jede[nmrs]») is no
 // list, and a relative or indirect "which"/«welche» right after a comma ("Where does it say, which notice period
 // applies?") asks for one fact. Linear: no nested quantifier.
-const TIME_UNIT =
+const EN_FREQUENCY_MODIFIER =
+  '(?:\\d+|\\d+(?:st|nd|rd|th)|other|single|additional|extra|calendar|business|working|following|next|first|second|third)'
+const EN_TIME_UNIT =
   '(?:times?|days?|weeks?|months?|quarters?|years?|mornings?|afternoons?|evenings?|nights?|hours?|minutes?|' +
-  'weekdays?|weekends?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?|' +
-  'montags?|dienstags?|mittwochs?|donnerstags?|freitags?|samstags?|sonntags?|mal|' +
-  '\\p{L}*tage?|\\p{L}*(?:woche|wochen|monat|monate|quartal|quartale|jahr|jahre|stunde|stunden|nacht|nächte|' +
-  'abend|abende|morgen|wochenende))'
+  'weekdays?|weekends?|mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)'
+const DE_FREQUENCY_MODIFIER = '(?:\\d+\\.?|weitere[nmrs]?|zweite[nmrs]?|dritte[nmrs]?|andere[nmrs]?|einzelne[nmrs]?)'
+const DE_TIME_UNIT =
+  '(?:mal|\\p{L}*(?:tag|woche|monat|quartal|jahr|stunde|nacht|abend|morgen|wochenende)(?:e|en|n|s)?)'
 const NEW_NEEDLE_VETO_RES: readonly RegExp[] = [
   /(?<![\p{L}\p{N}])all(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])alle[nmrs]?(?![\p{L}\p{N}])/u,
+  // English: "each" / "every", unless a number or a short modifier and a WHOLE time word follow ("each stage" and "each
+  // outage" hold the letters «tag» and «age» but no time unit; "each employee time sheet" has a noun before "time").
   new RegExp(
-    `(?<![\\p{L}\\p{N}])(?:each|every|jede[nmrs]?)(?![\\p{L}\\p{N}])(?!\\s+(?:[\\p{L}\\p{N}]+\\s+)?${TIME_UNIT}(?![\\p{L}\\p{N}]))`,
+    `(?<![\\p{L}\\p{N}])(?:each|every)(?![\\p{L}\\p{N}])(?!\\s+(?:${EN_FREQUENCY_MODIFIER}\\s+)?${EN_TIME_UNIT}(?![\\p{L}\\p{N}]))`,
+    'u'
+  ),
+  // German: the endings (-tag, -woche, ...) only after a German quantifier, so «Werktag» and «Geschäftsjahr» are units.
+  new RegExp(
+    `(?<![\\p{L}\\p{N}])jede[nmrs]?(?![\\p{L}\\p{N}])(?!\\s+(?:${DE_FREQUENCY_MODIFIER}\\s+)?${DE_TIME_UNIT}(?![\\p{L}\\p{N}]))`,
     'u'
   ),
   /(?<!,\s*)(?<![\p{L}\p{N}])(?:which|welche[nmrs]?)(?![\p{L}\p{N}])/u
