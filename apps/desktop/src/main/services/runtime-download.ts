@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { lstat, mkdir, readdir, readlink, rm, stat, statfs } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -1092,6 +1092,18 @@ export class EngineDownloadManager {
     controller: AbortController,
     beforeReplace?: () => Promise<void>
   ): Promise<void> {
+    // #986 review: an earlier attempt of this session can have left the only whole copies beside an
+    // install (a swap whose old copy could not be moved back) or the only `cpu/` net in a `.old` (a
+    // carry that was refused). Finish or roll that back first, with the start's own rule, main build
+    // before its net, and before phase 1 makes the install folder again for its archive: a retry must
+    // never delete what the last attempt kept. Renames only; the deletes run in the background.
+    for (const step of steps) {
+      try {
+        recoverEngineFolder(rootPath, step.family, step.plan, step.main, { info: this.deps.log, warn: this.deps.log })
+      } catch (err) {
+        this.deps.log?.('Engine swap recovery failed', { family: step.family, error: String(err) })
+      }
+    }
     const fetched: RuntimeDownloadPlan[] = []
     const discard = async (plans: readonly RuntimeDownloadPlan[]): Promise<void> => {
       for (const p of plans) await rm(p.zipDest, { force: true }).catch(() => undefined)
@@ -1362,8 +1374,11 @@ export class EngineDownloadManager {
    * swap's first rename; any failure or cancel before it deletes `.new` and leaves the install folder
    * exactly as it was. The swap (`swapEngineFolder`) moves the install to `<live>.old/` and `.new` in,
    * putting the old copy back when the second rename is refused; the main build then carries the
-   * `cpu/` net over from `.old`. `.old` joins `replacedFolders`, deleted after the job. Returns the
-   * outcome; on 'failed' it sets `job.status`/`job.error`. The archive is gone whatever happens.
+   * `cpu/` net over from `.old`. `.old` joins `replacedFolders`, deleted after the job. A leftover that
+   * `run()`'s recovery could not move where it belongs and that is still the only whole copy, or holds a
+   * net the install lacks, is never deleted: the step stops with `filesInUse` instead, nothing touched.
+   * Returns the outcome; on 'failed' it sets `job.status`/`job.error`. The archive is gone whatever
+   * happens.
    */
   private async replaceInstall(
     job: EngineDownloadJob,
@@ -1378,6 +1393,12 @@ export class EngineDownloadManager {
     try {
       job.status = 'extracting'
       dirs = engineSwapDirs(rootPath, plan.extractTo)
+      // #986 review: `run()` has finished or rolled back what an earlier attempt left; a leftover that
+      // is still the only whole copy, or holds the only `cpu/` net, is never deleted by this step.
+      if (irreplaceableLeftover(plan, dirs, step.main)) {
+        keepStaging = true
+        throw new EngineStepError('filesInUse', tMain('main.engine.filesInUse'))
+      }
       // F-33: the job's abort signal reaches the extractor, so a cancel kills the tar child (and a
       // deadline bounds a wedged one).
       const staged = await stageEngineInstall(plan, dirs.staging, {
@@ -1540,6 +1561,38 @@ async function removeEngineFolder(dir: string, log: EngineLog): Promise<boolean>
     log?.('Could not remove an engine folder', { folder: basename(dir), error: String(err) })
     return false
   }
+}
+
+/**
+ * {@link removeEngineFolder} on the start path (#986 review): synchronous, marker first, no retries (the
+ * start never waits on a lock; what is left waits for the next start).
+ */
+function removeEngineFolderSync(dir: string, log: EngineLog): boolean {
+  try {
+    if (!present(dir)) return true
+    if (isRealFolder(dir)) rmSync(runtimeMarkerPath(dir), { force: true, recursive: true })
+    rmSync(dir, { recursive: true, force: true })
+    return true
+  } catch (err) {
+    log?.('Could not remove an engine folder', { folder: basename(dir), error: String(err) })
+    return false
+  }
+}
+
+/**
+ * Is a leftover beside the install one a step must not delete (#986 review)? A `.new` or `.old` that is
+ * complete while the install folder is not (the only whole copy), or one that holds a real `cpu/` net the
+ * install folder lacks (a main build's carry that did not happen). `recoverEngineFolder` moves such a copy
+ * where it belongs; one still there means a rename was refused.
+ */
+function irreplaceableLeftover(plan: RuntimeDownloadPlan, dirs: EngineSwapDirs, main: boolean): boolean {
+  const liveWhole = engineFolderComplete(plan)
+  return [dirs.staging, dirs.previous].some(
+    (dir) =>
+      isRealFolder(dir) &&
+      ((!liveWhole && engineFolderComplete(plan, dir)) ||
+        (main && isRealFolder(join(dir, 'cpu')) && !present(join(dirs.live, 'cpu'))))
+  )
 }
 
 /** Flush every file under `dir` to the device (#986: the marker decides, so what it covers must be on the disk). */
@@ -1745,35 +1798,45 @@ function carryCpuNetSync(previous: string, live: string, log: EngineLog): boolea
  * (`engineFolderComplete`), never mere existence.
  *  - The install folder is complete: carry `.old/cpu` into it when it has none (main build), then
  *    delete `.new` and `.old` (an update killed before its first rename keeps the old engine).
- *  - Else `.new` is complete: move the incomplete install folder to `.old` (when that name is free), move
- *    `.new` in, carry `cpu/`, delete `.old` (the swap is finished).
- *  - Else `.old` is complete: move the incomplete install folder to `.new` (when free), move `.old` back,
- *    delete `.new` (rolled back).
+ *  - Else `.new` is complete: move the incomplete install folder to `.old`, move `.new` in, carry `cpu/`,
+ *    delete `.old` (the swap is finished).
+ *  - Else `.old` is complete: move the incomplete install folder to `.new`, move `.old` back, delete
+ *    `.new` (rolled back).
+ *  An incomplete copy already at that spare name is deleted first, synchronously and marker first (its
+ *  `cpu/` net carried into the install folder before), so a broken install folder never stays broken.
  *  - Else neither copy is whole: carry `.old/cpu` (the net must not go with an incomplete `.old`), then
  *    delete `.new` and `.old`.
  * Renames run here, synchronously, each once: a refusal is logged and the layout left as it is, never
  * made worse. Deletes run in the background, marker first. A rename refused because the drive cannot be
  * written is where the app-update plan's "run the complete copy where it lies" (CE-F10) would hook: the
- * family's resolver pointed at that copy. Not built (a non-goal of #986).
+ * family's resolver pointed at that copy. Not built (a non-goal of #986). An engine job runs the same
+ * rule for each of its folders before it downloads (#986 review). What it did goes to `log`; what it could
+ * not do (a refused move or delete, a failure) to `warn` (default `log`).
  */
 export function recoverEngineSwaps(
   rootPath: string,
   manifestsDir: string | null,
-  opts: { platform?: NodeJS.Platform; arch?: string; log?: (msg: string, meta?: unknown) => void } = {}
+  opts: {
+    platform?: NodeJS.Platform
+    arch?: string
+    log?: (msg: string, meta?: unknown) => void
+    warn?: (msg: string, meta?: unknown) => void
+  } = {}
 ): void {
+  const logs: RecoveryLogs = { info: opts.log, warn: opts.warn ?? opts.log }
   // Never throws: the start goes on whatever a pin or a folder holds.
   const recover = (family: EngineFamily, plan: RuntimeDownloadPlan, main: boolean): void => {
     try {
-      recoverEngineFolder(rootPath, family, plan, main, opts.log)
+      recoverEngineFolder(rootPath, family, plan, main, logs)
     } catch (err) {
-      opts.log?.('Engine swap recovery failed', { family, error: String(err) })
+      logs.warn?.('Engine swap recovery failed', { family, error: String(err) })
     }
   }
   let engines: EnginePlan[]
   try {
     engines = availableEngines(rootPath, manifestsDir, opts.platform, opts.arch)
   } catch (err) {
-    opts.log?.('Engine swap recovery failed', { error: String(err) })
+    logs.warn?.('Engine swap recovery failed', { error: String(err) })
     return
   }
   for (const e of engines) {
@@ -1782,12 +1845,18 @@ export function recoverEngineSwaps(
   }
 }
 
+/** Where the recovery reports: what it did, and what it could not do. */
+interface RecoveryLogs {
+  info: EngineLog
+  warn: EngineLog
+}
+
 function recoverEngineFolder(
   rootPath: string,
   family: EngineFamily,
   plan: RuntimeDownloadPlan,
   main: boolean,
-  log: EngineLog
+  { info, warn }: RecoveryLogs
 ): void {
   let dirs: EngineSwapDirs
   try {
@@ -1804,7 +1873,7 @@ function recoverEngineFolder(
       renameSync(from, to)
       return true
     } catch (err) {
-      log?.('Engine swap recovery: a folder could not be moved; left as it is', {
+      warn?.('Engine swap recovery: a folder could not be moved; left as it is', {
         ...where,
         from: basename(from),
         to: basename(to),
@@ -1813,22 +1882,29 @@ function recoverEngineFolder(
       return false
     }
   }
-  /** Move an incomplete install folder out of the way, to `spare` when that name is free. */
+  /**
+   * Move an incomplete install folder out of the way, to `spare`. An incomplete copy already there goes
+   * first (its `cpu/` net carried into the install folder when that has none); a whole one never does.
+   */
   const vacate = (spare: string): boolean => {
     if (!present(dirs.live)) return true
     if (present(spare)) {
-      log?.('Engine swap recovery: no free name to move the incomplete install to; left as it is', where)
-      return false
+      if (whole(spare)) {
+        warn?.('Engine swap recovery: no free name to move the incomplete install to; left as it is', where)
+        return false
+      }
+      if (main && !carryCpuNetSync(spare, dirs.live, warn)) return false
+      if (!removeEngineFolderSync(spare, warn)) return false
     }
     return move(dirs.live, spare)
   }
   const drop = (dir: string): void => {
-    if (present(dir)) deleteEngineFolderLater(dir, log)
+    if (present(dir)) deleteEngineFolderLater(dir, warn)
   }
   if (engineFolderComplete(plan)) {
-    const carried = main ? carryCpuNetSync(dirs.previous, dirs.live, log) : true
+    const carried = main ? carryCpuNetSync(dirs.previous, dirs.live, warn) : true
     for (const dir of leftovers) if (dir !== dirs.previous || carried) drop(dir)
-    log?.('Engine swap recovery: the install is complete; its leftovers are deleted', where)
+    info?.('Engine swap recovery: the install is complete; its leftovers are deleted', where)
     return
   }
   if (whole(dirs.staging)) {
@@ -1839,9 +1915,9 @@ function recoverEngineFolder(
       else if (whole(dirs.previous)) move(dirs.previous, dirs.live)
       return
     }
-    const carried = main ? carryCpuNetSync(dirs.previous, dirs.live, log) : true
+    const carried = main ? carryCpuNetSync(dirs.previous, dirs.live, warn) : true
     if (carried) drop(dirs.previous)
-    log?.('Engine swap recovery: the interrupted swap is finished', where)
+    info?.('Engine swap recovery: the interrupted swap is finished', where)
     return
   }
   if (whole(dirs.previous)) {
@@ -1852,14 +1928,14 @@ function recoverEngineFolder(
       return
     }
     // A net in the incomplete folder just moved aside comes back when the restored copy has none.
-    const carried = main && vacated ? carryCpuNetSync(dirs.staging, dirs.live, log) : true
+    const carried = main && vacated ? carryCpuNetSync(dirs.staging, dirs.live, warn) : true
     if (carried) drop(dirs.staging)
-    log?.('Engine swap recovery: the interrupted swap is rolled back', where)
+    info?.('Engine swap recovery: the interrupted swap is rolled back', where)
     return
   }
-  const carried = main ? carryCpuNetSync(dirs.previous, dirs.live, log) : true
+  const carried = main ? carryCpuNetSync(dirs.previous, dirs.live, warn) : true
   for (const dir of leftovers) if (dir !== dirs.previous || carried) drop(dir)
-  log?.('Engine swap recovery: incomplete leftovers are deleted', where)
+  info?.('Engine swap recovery: incomplete leftovers are deleted', where)
 }
 
 /**

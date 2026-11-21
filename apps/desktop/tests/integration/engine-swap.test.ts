@@ -270,6 +270,40 @@ const CRASH_LAYOUTS: CrashLayout[] = [
     expected: { live: '-|-', net: 'net b150|b150', ...NOTHING_LEFT }
   },
   {
+    // #986 review: the spare name held an incomplete leftover, and the start gave up on every start.
+    // It goes first now (marker first), then the move.
+    name: 'a broken install beside a whole old copy and a partial new one',
+    build: (root) => {
+      mkdirSync(liveDir(root), { recursive: true })
+      writeFileSync(join(liveDir(root), 'llama-main.zip'), 'a download the app never unpacked')
+      copy(`${liveDir(root)}.new`, 'b200', { marker: false })
+      copy(`${liveDir(root)}.old`, 'b150')
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+    },
+    expected: { live: 'engine b150|b150', net: 'net b150|b150', ...NOTHING_LEFT }
+  },
+  {
+    // The mirror case, with the only net in the incomplete leftover at the spare name: it is carried out first.
+    name: 'a broken install beside a whole new copy and a partial old one that holds the net',
+    build: (root) => {
+      mkdirSync(liveDir(root), { recursive: true })
+      copy(`${liveDir(root)}.new`, 'b200')
+      copy(`${liveDir(root)}.old`, 'b150', { exe: false, marker: false })
+      net(join(`${liveDir(root)}.old`, 'cpu'), 'b150')
+    },
+    expected: { live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT }
+  },
+  {
+    // Two whole copies and an install folder in the way: a whole copy is never deleted to make room.
+    name: 'two whole copies beside an empty install folder',
+    build: (root) => {
+      mkdirSync(liveDir(root), { recursive: true })
+      copy(`${liveDir(root)}.new`, 'b200')
+      copy(`${liveDir(root)}.old`, 'b150')
+    },
+    expected: { live: '-|-', net: 'absent', staging: 'engine b200|b200', previous: 'engine b150|b150', netStaging: 'absent', netPrevious: 'absent' }
+  },
+  {
     name: 'the cpu/ net’s own swap killed between its renames',
     build: (root) => {
       copy(liveDir(root), 'b200')
@@ -286,6 +320,28 @@ describe('recoverEngineSwaps: the start finishes or rolls back an interrupted sw
     build(rootPath)
     await recover(rootPath, manifestsDir)
     expect(layout(rootPath)).toEqual(expected)
+    expect(archivesUnder(rootPath)).toEqual([])
+  })
+
+  // #986 review: what the start could not do (a refused move or delete) is a warning; what it did, information.
+  it('reports what it could not do as a warning, and what it did as information', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    copy(`${liveDir(rootPath)}.new`, 'b200')
+    seams.renameSyncRefuses = (from) => (from === `${liveDir(rootPath)}.new` ? 'EPERM' : null)
+    const info: string[] = []
+    const warn: string[] = []
+    recoverEngineSwaps(rootPath, manifestsDir, { log: (m) => info.push(m), warn: (m) => warn.push(m) })
+    await engineFolderDeletesSettled()
+    expect(warn).toEqual(['Engine swap recovery: a folder could not be moved; left as it is'])
+    expect(info).toEqual([])
+    seams.renameSyncRefuses = null
+    copy(`${liveDir(rootPath)}.old`, 'b100')
+    seams.rmRefuses = (p) => p === `${liveDir(rootPath)}.old`
+    recoverEngineSwaps(rootPath, manifestsDir, { log: (m) => info.push(m), warn: (m) => warn.push(m) })
+    await engineFolderDeletesSettled()
+    expect(info).toEqual(['Engine swap recovery: the install is complete; its leftovers are deleted'])
+    expect(warn.slice(1)).toEqual(['Could not remove an engine folder'])
   })
 
   it('an install with nothing beside it is not touched', async () => {
@@ -391,6 +447,9 @@ describe('the staged swap in an engine job (#986)', () => {
     copy(`${liveDir(rootPath)}.new`, 'b100', { marker: false })
     writeFileSync(join(`${liveDir(rootPath)}.new`, 'stale.dll'), 'from an older build')
     copy(`${liveDir(rootPath)}.old`, 'b100')
+    // The first delete of the stale `.new` (in the background) is refused: the stage removes it itself.
+    let staleDeletes = 0
+    seams.rmRefuses = (p) => p === `${liveDir(rootPath)}.new` && staleDeletes++ === 0
     const mgr = manager()
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
     expect((await settle(mgr, started.jobId)).status).toBe('done')
@@ -471,6 +530,90 @@ describe('the staged swap in an engine job (#986)', () => {
     seams.renameRefuses = null
     await recover(rootPath, manifestsDir)
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // #986 review: the message after that keep-both end says "try again in a minute"; this is the retry.
+  it('“try again” after a swap that kept both copies works: the next job in the session installs the new engine', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    seams.renameRefuses = (from) => (from === `${liveDir(rootPath)}.new` || from === `${liveDir(rootPath)}.old` ? 'EPERM' : null)
+    const mgr = manager()
+    const first = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect(await settle(mgr, first.jobId)).toMatchObject({ status: 'failed', error: tMain('main.engine.filesInUse') })
+    expect(layout(rootPath)).toMatchObject({ live: 'absent', staging: 'engine b200|b200', previous: 'engine b150|b150' })
+    seams.renameRefuses = null
+    // The engine reads as missing now, so the screen offers the install.
+    const again = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    expect((await settle(mgr, again.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+    expect(archivesUnder(rootPath)).toEqual([])
+  })
+
+  // #986 review: a retry must never delete what the last attempt kept. It finishes that swap first, before
+  // its own download, so even a retry that fails itself leaves the new engine installed.
+  it('a retry after a swap that kept both copies finishes it first, even when the retry itself fails', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(`${liveDir(rootPath)}.new`, 'b200')
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    const mgr = manager({
+      extract: async () => {
+        throw new Error('tar exited with code 1')
+      }
+    })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'] })
+    expect((await settle(mgr, started.jobId)).status).toBe('failed')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'absent', ...NOTHING_LEFT })
+    expect(archivesUnder(rootPath)).toEqual([])
+  })
+
+  // #986 review: a carry refused in an earlier job left the only cpu/ net in `.old`. The next job carries it
+  // in before anything else (it used to delete `.old` with the net as a stale leftover).
+  it('a job after a refused carry carries the cpu/ net in first and keeps it', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    net(join(`${liveDir(rootPath)}.old`, 'cpu'), 'b150')
+    const mgr = manager()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], reinstall: true })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT })
+  })
+
+  it('…and when that carry is refused again, the job stops before it deletes the only net', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    copy(`${liveDir(rootPath)}.old`, 'b150')
+    net(join(`${liveDir(rootPath)}.old`, 'cpu'), 'b150')
+    const before = fingerprintTree(liveDir(rootPath))
+    seams.renameSyncRefuses = (from) => (from === join(`${liveDir(rootPath)}.old`, 'cpu') ? 'EPERM' : null)
+    const mgr = manager()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], reinstall: true })
+    expect(await settle(mgr, started.jobId)).toMatchObject({ status: 'failed', error: tMain('main.engine.filesInUse') })
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(summary(join(`${liveDir(rootPath)}.old`, 'cpu'))).toBe('net b150|b150')
+    seams.renameSyncRefuses = null
+    await recover(rootPath, manifestsDir)
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b150|b150', ...NOTHING_LEFT })
+  })
+
+  // #986 review: the cpu/ net's archive downloads into `<os>/cpu/`. With the main build first, its swap moved
+  // that archive into `.old/cpu/`, and a refused carry left the net step without it and the archive inside
+  // `cpu/` for good. The net goes first now; the main build's carry takes the NEW net across.
+  it('an update of both builds whose carry is refused loses no net and strands no archive', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    net(netDir(rootPath), 'b150')
+    seams.renameRefuses = (from) => (from === join(`${liveDir(rootPath)}.old`, 'cpu') ? 'EPERM' : null)
+    const mgr = manager()
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    // The new net waits in the replaced copy, which is kept for the carry.
+    expect(summary(join(`${liveDir(rootPath)}.old`, 'cpu'))).toBe('net b200|b200')
+    expect(archivesUnder(rootPath)).toEqual([])
+    seams.renameRefuses = null
+    await recover(rootPath, manifestsDir)
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+    expect(archivesUnder(rootPath)).toEqual([])
   })
 
   // #986 changes #516's rule: a cancel is honoured until the swap's first rename. One that lands after

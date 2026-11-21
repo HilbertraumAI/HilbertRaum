@@ -335,7 +335,11 @@ function initBackend(): void {
   // anything resolves an engine binary: the transcriber slot below is chosen once, from whether
   // whisper-cli is there, and the engine check (`startEngineCheck`) spawns the chat engine. Renames
   // only on this path (milliseconds); deletes run in the background. Reads the app's own pins (#842).
-  recoverEngineSwaps(paths.rootPath, bundledManifestsDir, { log: (m, meta) => log.info(m, meta) })
+  recoverEngineSwaps(paths.rootPath, bundledManifestsDir, {
+    log: (m, meta) => log.info(m, meta),
+    // A refused move or delete, or a failure: the layout waits for the next start, worth a warning.
+    warn: (m, meta) => log.warn(m, meta)
+  })
 
   // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
   // Both are opt-in by availability — the selectors return the real backend only when
