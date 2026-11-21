@@ -1966,8 +1966,9 @@ re-encrypts (the bullet below).
   deliberately no auto-answer timeout (a time limit with a destructive effect, WCAG 2.2.1). Pinned
   by `tests/unit/close-guard.test.ts` and, locally, the real-Electron smoke (`stop-keep`,
   `quit-hold`).
-- **OS session end locks the workspace — Windows handled, Linux handled (#964), macOS registered but
-  unverified (#248; owner decision #226 "handler", 2026-09-03; PR #285).** A Windows shutdown,
+- **OS session end locks the workspace — Windows handled, Linux handled (#964), macOS: the shutdown
+  leg registered but unverified (#248; owner decision #226 "handler", 2026-09-03; PR #285), signals
+  handled as on Linux, read from Electron's source (#977).** A Windows shutdown,
   restart or log-off
   with the app open never emits `will-quit` (Electron's `app` docs), so the awaited teardown above
   never ran and the process was killed with the working DB still plaintext on the drive — the next
@@ -2002,10 +2003,34 @@ re-encrypts (the bullet below).
   reads as `shutdown` first), whether a Dock-menu Quit also reaches it, and what a shutdown the
   system then CANCELS leaves behind (the app alive with the workspace locked and no window
   recreated on a Dock click — quit and relaunch) — owner live check pending (#226); until then
-  quit before shutting down. **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two
-  legs, both registered inside `app.whenReady` on Linux only, first in it after the second-instance
-  return (before the code that can throw), over the same closure. (1) A termination
-  signal — SIGTERM (`kill`, `systemctl stop`, a session manager), SIGINT (Ctrl+C), SIGHUP (the
+  quit before shutting down. Since #977 the leg is registered first in `app.whenReady`, with the
+  signal leg, before the code that can throw (it sat after `createWindow()`, where a throw in the
+  protocol, the menu or the window skipped it: the #964 security round's F3, which Linux got
+  first). Electron's source posts `NSWorkspaceWillPowerOffNotification`, and so `shutdown`, before
+  AppKit's `terminate:` (Electron PR #24111), which reads as `shutdown` before `before-quit` and
+  `will-quit`. **macOS signals (#977; owner gate G-11 (a), 2026-11-21):** Electron installs the
+  same POSIX signal handlers on macOS as on Linux (`electron_browser_main_parts_posix.cc`, built
+  for every POSIX target and installed in the same start-up step), so a SIGTERM, SIGINT or SIGHUP
+  was the same holdable quit, and a second one killed the app unlocked. The signal leg (1) below
+  is registered on darwin too: the same listeners over the same closure. Every quit a user starts
+  on macOS is an Apple Event, never a signal (⌘Q, the menu and Dock Quit, `osascript`, a log-out,
+  restart or shutdown from the Apple menu), so those are unchanged. The signals come from `kill`
+  and `killall`, scripts and management agents, `launchctl stop` (launchd sends SIGKILL after the
+  job's `ExitTimeOut`, 20 s by default), a forced `shutdown -r`, a closed Terminal (SIGHUP) and
+  Ctrl+C; `npm run dev` on a Mac now locks at once on Ctrl+C or an electron-vite restart, as Linux
+  dev does. Read from Electron v43.8.6's source, not measured on a Mac (the walk is owed with
+  #887/#888). **A signal after a session-end lock (P3, follow-ups wave 6):** the session-end lock
+  does not end the process, and the signal listener replaced the default action, so a signal
+  after that lock did nothing: a shutdown another app cancelled left an app that only SIGKILL
+  could stop (unreachable before #977: only Linux had the signal leg, and only Windows and macOS
+  the session-end leg). A closure flag, `appEnding`, set wherever the exit is already under way
+  (a signal's or a session-end `will-quit`'s exit, the teardown's `finally`, `quit`), now lets
+  that signal reap and `app.exit(0)` once; repeat signals stay inert (measured on Linux Electron
+  with the stand-in app: the old closure stayed alive until SIGKILL, the new one exited 0).
+  **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two legs, registered inside
+  `app.whenReady` (the signal leg on Linux and macOS, the `quit` leg on Linux only), first in it
+  after the second-instance return (before the code that can throw), over the same closure. (1) A
+  termination signal — SIGTERM (`kill`, `systemctl stop`, a session manager), SIGINT (Ctrl+C), SIGHUP (the
   terminal closed) — runs `onTerminationSignal`: `emergencyLock` once, then `app.exit(0)`. Electron's
   own handler made each signal an ordinary, preventable quit with one shot: the close guard's
   question or a failed save held it, and a second signal then killed the app with the working DB
@@ -2024,19 +2049,43 @@ re-encrypts (the bullet below).
   manager allows: a lock that takes longer ends in a crash (`Failed to shutdown.`, status 133;
   measured with a stand-in lock that blocks: 8 s finished, 12 s and 15 s crashed). The workspace
   is then left unencrypted on the drive until the next start, which recovers it as after any cut
-  lock (the working file is checkpointed and closed before the re-encrypt). Where the host keeps
-  core dumps (systemd-coredump, apport), that crash may store a memory image of the main process,
-  vault key and decrypted pages included, on the host's disk (seen as "core dumped" under WSL; a
-  given desktop's setting is not checked). The lock writes about twice the database's size, so a
-  workspace of a few hundred MB on a slow stick may not fit; the lock's duration is logged after
-  it. The signal leg has no such bound: its lock runs before `app.exit` (a 5 s lock with three more
-  signals during it finished, status 0). Owner call (2026-11-21): keep this leg and document the
+  lock (the working file is checkpointed and closed before the re-encrypt). That crash is a kernel
+  core dump: Electron starts no crash reporter in the main process until JS asks for one, and the
+  app never does. Many hosts store it: systemd-coredump keeps a full core by default (systemd
+  raises the core-size limit to unlimited for what it starts), a pipe handler ignores that limit
+  (core(5)), and under WSL the stand-in's crashes stored full cores of about 780 MB on the Windows
+  host (measured). Such a core is a memory image of the main process, vault key and decrypted
+  pages included. **Core dump filter (#982 part 2; owner gate G-15, 2026-11-21):** the first
+  statement of the main process (`main/index.ts` → `services/core-dump-filter.ts`, Linux only)
+  writes `0` to `/proc/self/coredump_filter`, so the kernel dumps no memory mapping, anonymous or
+  file-backed (no V8 heap, no malloc arena, no mapped database), whatever the handler; a refused
+  write logs one line with its errno code, never the path, and the app goes on. Measured under WSL
+  with the branch's helper and a marker planted 66 times in the stand-in's heap: 823,214,080 bytes
+  with 66 copies of the marker without the filter, 167,936 bytes with none with it. What a dump
+  still holds: its own headers, the registers of every thread (the lock may be inside AES when the
+  watchdog fires; whether round-key state can sit in registers is not verified), the paths of
+  mapped files (such as the working database's `-shm`), the first 80 characters of the command
+  line, and the vdso, which the kernel always dumps. A child inherits the filter across fork and
+  exec, so the sidecars started later (llama-server, whisper-cli, kiwix-serve) are covered
+  (measured: a spawned child and Electron's network utility process read `00000000`). Not covered:
+  the zygotes, which Electron starts before the main script runs, and what they fork, the renderers
+  and (measured here) the GPU process, which keep the default `00000033`; they hold no vault key,
+  but a renderer's dump can hold the text it showed. systemd-coredump's journal entry still records
+  the command line, the environment and the open-file paths, without memory contents (not checked
+  on such a host). The lock writes about twice the database's size (checkpoint, re-encrypt with an
+  fsync, shred with an fsync), so with about 9 of the 10 s usable a workspace above roughly 75 to
+  100 MB may not fit on a stick that writes 20 MB/s, and above roughly 20 to 45 MB at 5 to 10 MB/s
+  (a model of the lock's writes; no lock time above 0.5 MB is measured yet, #982); the lock's
+  duration is logged after it. The signal leg has no such bound: its lock runs before `app.exit`
+  (a 5 s lock with three more signals during it finished, status 0; re-run with the #977 closure,
+  the same). Owner call (2026-11-21): keep this leg and document the
   bound. A lost bus also brought a SIGTERM a few milliseconds after the `quit` lock in two of four
   runs (most likely GLib's exit-on-close for its D-Bus connection): whichever comes first locks,
   the other does nothing. A signal that lands in the last milliseconds of the exit, after the
   lock, ends the process with status 143. Not covered: SIGKILL and SIGQUIT (Ctrl+\ in a
   terminal), whose default action ends the process at once, SIGQUIT with a core dump where the
-  host keeps them; nothing locks. Same trade-off as Windows: no question, no save, and no partial
+  host keeps them (on Linux without memory, by the filter above); nothing locks. Same trade-off
+  as Windows: no question, no save, and no partial
   reply kept; the decrypted transients of the operations in flight are shredded (above). Not yet
   checked: a real desktop log-out (GNOME, KDE), a lost display (needs Xvfb), the packaged AppImage
   (`AppRun` is believed to `exec` Electron). The Linux `powerMonitor` leg (logind's
@@ -2044,9 +2093,13 @@ re-encrypts (the bullet below).
   registered: a poweroff reaches the two legs above, the lost session's under its 10 s bound.
   Pinned by `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings
   against `will-quit`, the reap on the exit path, throw-safety (a throwing log line before the lock
-  included), the transient sweep, the duration line, the Linux signal and `quit` legs (one lock
-  whatever came first), and the `index.ts` wiring (source text, including that the Linux legs sit
-  inside `app.whenReady`, before the protocol, the menu and the window).
+  included), the transient sweep, the duration line, the signal and `quit` legs (one lock
+  whatever came first), P3's one exit after a session-end lock, and the `index.ts` wiring (source
+  text, including that the signal legs are gated to Linux and macOS, the `quit` leg to Linux and
+  the `powerMonitor` leg to macOS, all inside `app.whenReady`, before the protocol, the menu and
+  the window); the filter by `tests/unit/core-dump-filter.test.ts` (Linux writes `0`, other
+  platforms touch nothing, a refused write logs no path, and the call sits at module scope before
+  the single-instance lock and `app.whenReady`).
 - **Doc-task pipeline is flushed on lock/quit (TA-1).** The lock/quit handlers call
   `ctx.docTasks.cancelAllDocTasks()` — cancelling the running task **and every queued task** —
   not just the active one. The DB stays *open* while the handler awaits the sidecar suspends, so
