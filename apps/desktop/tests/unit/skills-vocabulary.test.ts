@@ -407,6 +407,81 @@ describe('isNeedleShaped — "find a" is a word (#939 review)', () => {
   })
 })
 
+// #981 (follow-ups wave 6, G-9 = C2): "When must they give notice?" is a lookup, not a request for the report. The new
+// forms are WORD-anchored and definite-singular; German verb-second («Wann endet …») routes like the English twin
+// (#582); an each/every/jede/welche veto keeps a list a list. Rows are W §5 (c)'s table ("Should be" column).
+// #981 follow-up: the list-all substrings "all the" and «liste» matched inside other words.
+describe('isNeedleShaped: "all the" and «liste» are words, not substrings (#981)', () => {
+  it.each([
+    'When shall the tenant pay?', 'When is it ok to call the landlord before I give notice?',
+    'When is the tenant going to install the heating?', 'When was the property listed?', 'Who was the listener?'
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it.each([
+    'Show me all the deadlines', 'List all the action items', 'When is all the rent due?', 'Wann ist die Fristenliste fällig?',
+    'Wann sind die Listen fällig?', 'Wann ist die Liste fällig?'
+  ])('%s → a list', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+})
+
+describe('isNeedleShaped: word-anchored lookups and the each/every veto (#981)', () => {
+  it.each([
+    // the issue's phrases, English
+    'When must they give notice?', 'When should the rent be paid?', 'When was the contract signed?',
+    'When can I terminate the lease?', 'When could they leave?', 'When shall payment be made?',
+    'Who is the tenant?', 'Who was the landlord?',
+    // German, finite verb right after «wann»
+    'Wann müssen wir kündigen?', 'Wann sollen die Zahlungen erfolgen?', 'Wann soll gezahlt werden?',
+    'Wann endet der Vertrag?', 'Wann kann ich kündigen?', 'Wann beginnt das Mietverhältnis?',
+    'Wann wurde der Vertrag unterschrieben?', 'Wann war die Übergabe?', 'Wann läuft die Frist ab?',
+    'Wann können wir ausziehen?', 'Wer ist der Mieter?', 'Wer war die Vermieterin?', 'Wer ist das Unternehmen?'
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it.each([
+    // plural and open "who/when" forms stay out on purpose
+    'Who was present?', 'Who are the parties?', 'Wer sind die Parteien?', 'When are the payments due?',
+    'Who is responsible for the budget?', 'Who is mentioned in this document?',
+    // lists and reports that a loose substring would catch (W §5 c, C1's collisions)
+    'Who is responsible for what?', 'Who is responsible for each action item?', 'Wer ist wofür verantwortlich?',
+    'Who are the attendees and what was decided?', 'Wer sind die Teilnehmer und was wurde beschlossen?',
+    'When are the deadlines in this contract?', 'Who was assigned which action items?',
+    'Who is the tenant? Summarize the lease', 'When must the tenant do what? List every deadline',
+    'When are all the deadlines?', 'When is everything due?',
+    // a relative clause or a longer word holds the letters but no question
+    'Explain the penalty for a tenant who is late', 'Wie schwer ist der Verstoß?', 'wer istanbul',
+    'Who issued the invoice?', 'Who isolated the issue?',
+    'When arena tickets', 'Wer ist schuld', 'When mustard seeds are sown, I wait'
+  ])('%s → not a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  // C2's three residual collisions, all each/which: the veto reads them as lists.
+  it.each([
+    'When must each obligation be fulfilled?', 'When should I act on each obligation?',
+    'Wann müssen welche Pflichten erfüllt werden?'
+  ])('%s → a list (the veto)', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  // Two false lookups on master: 'when is' and 'wann ist' matched, nothing vetoed the "each".
+  it.each([
+    'When is each payment due?', 'When is every payment due?', 'Wann ist jede Zahlung fällig?',
+    'Wann ist jeder Betrag fällig?', 'Wann sind welche Zahlungen fällig?'
+  ])('%s → a list, no longer a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it('the veto is a word, not a substring: "jedoch" and "everyone" do not veto a lookup', () => {
+    expect(isNeedleShaped('Wann ist die Frist, jedoch ohne Verlängerung?')).toBe(true)
+    expect(isNeedleShaped('When is the deadline for everyone?')).toBe(true)
+  })
+})
+
 // #939 review B1: a request for the skill's report keeps the whole-document map prompt as it was, even with a list
 // word in it; a plain list request and the every-mention chip are no report.
 describe('isReportShaped — a report request, list word or not (#939 review)', () => {

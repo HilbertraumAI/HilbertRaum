@@ -1514,7 +1514,9 @@ logged or audited; audit events stay ids/kinds/counts._
 > in-prompt partial-document notice, the 1.5 German-subword whole-doc/compare budget divisor, char-based
 > (KMP) chunk de-overlap, and the tree-ceiling `coverage.truncated` flip; **A3** (audit §8.2) inverted the
 > whole-doc gate so an `analysis:`-mode skill over a fully-chunked scope defaults to this engine
-> (`isNeedleShaped` downgrades to top-k only when the whole-doc read would truncate); **R4** (audit §5.1)
+> (`isNeedleShaped` downgrades to top-k only when the whole-doc read would truncate; since #981 it also reads
+> word-anchored "when must/should/…" and «wann endet/müssen/…» forms and an each / every / jede / welche veto,
+> see [`known-limitations.md`](known-limitations.md)); **R4** (audit §5.1)
 > made the symmetric-compare pair deterministic (A/B by import date). See §39's §-anchor legend for the
 > `audit §N.M` mapping.
 

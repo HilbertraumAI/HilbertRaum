@@ -242,6 +242,33 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     }
   )
 
+  // #981: "When must …?" and the German verb-second «Wann endet …?» are lookups; "each" / «jede» make it a list.
+  it.each(['When must they give notice?', 'Who is the tenant?', 'Wann endet der Vertrag?', 'Wann müssen wir kündigen?'])(
+    'a NEEDLE ask "%s" keeps top-k over the over-budget doc (one call, not capped, stamped)',
+    async (question) => {
+      // The passage search needs a passage that holds the question's words, or it answers with the fixed no-context reply.
+      const text = `${bigTranscript(400)}
+The tenant, Max Huber, must give notice three months before the contract ends.`
+      const h = await makeHarness({ fullyChunked: true, text, contextWindow: 4096 })
+      const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, MEETING_INSTALL_ID)
+      const msg = result as Message
+      expect(h.runtime.calls).toBe(1)
+      expect(msg.coverage?.mode).not.toBe('capped')
+      expect(msg.skillId).toBe(MEETING_INSTALL_ID)
+    }
+  )
+
+  it.each(['When is each payment due?', 'Wann ist jede Zahlung fällig?', 'When must each obligation be fulfilled?'])(
+    'a LIST ask "%s" over the same doc keeps the whole read (chunk map-reduce, capped)',
+    async (question) => {
+      const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
+      const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, MEETING_INSTALL_ID)
+      const msg = result as Message
+      expect(h.runtime.calls).toBeGreaterThan(1)
+      expect(msg.coverage?.mode).toBe('capped')
+    }
+  )
+
   it('a DELIVERABLE ask over the SAME over-budget doc covers the WHOLE doc via chunk map-reduce (Phase 1)', async () => {
     const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
     const event = makeEvent()

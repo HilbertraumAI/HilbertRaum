@@ -1642,6 +1642,20 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   path), and **(b)** `isNeedleShaped` sends a targeted single-fact **lookup** to top-k when the whole-doc
   read would truncate (a needle past the truncation cut would be missed — W1's exact budget calculus is the
   input); a **deliverable** ask (summary/minutes/compare/…) never downgrades.
+  **(#981, follow-ups wave 6, owner call G-9)** The lookup list is substrings ("how much", "when is", "when does",
+  "where is", «wann ist», «wann muss», «was ist der/die/das», …) plus word-anchored forms for the questions it missed:
+  "when must/should/was/can/could/shall", "who is/was the", «wann müssen/sollen/soll/war/wurde/kann/können/endet/beginnt/läuft»
+  and «wer ist/war der/die/das». "When must they give notice?" and «Wann endet der Vertrag?» are lookups now, the same in
+  both languages. The forms are definite singular on purpose: "Who are the parties?", "When are the payments due?" and
+  "Who is responsible for the budget?" still get the whole read (slower, never wrong). A word-anchored veto turns a
+  lookup into a list when the question says "each", "every", «jede[nmrs]» or «welche[nmrs]» ("When is each payment due?",
+  «Wann ist jede Zahlung fällig?», "Who was assigned which action items?"); before #981 those two were lookups. The
+  other eight interface languages have no lookup list, so «¿Cuándo hay que avisar?» still gets the whole read (#809).
+  The list-all words "all the" and «liste» are matched as words, not as pieces of other words ("shall the",
+  "call the" and "listed" no longer make a list). **Not covered:** a report word inside another word ("registration"
+  holds «gist», "briefing" holds «brief») still makes the question a report, and "Somewhen is fine" still reads as a
+  lookup through "when is". A report shape that holds a lookup word ("When is the rent review?": "review" is a report word)
+  stays a report.
   **A4 (audit §3.2/§3.3) tuned this composition (SKA-8/SKA-12/SKA-23):**
   **(SKA-8)** the `intends()` predicate — the **W2 count-mismatch routing** gate, consulted only at the
   wrong doc count — was decoupled from `applies()` and made **vocabulary-shaped** (`routeMatch`) for the

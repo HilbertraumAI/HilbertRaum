@@ -872,7 +872,7 @@ const REPORT_SHAPES: string[] = [
 
 /** Whole-document LIST-ALL deliverables (EN+DE): "list every …", "all the …", «sämtliche …», «Liste …». A
  *  deliverable for the needle veto (a list is never a single fact), but no report: #939 takes list notes for them. */
-const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'all the', 'everything', 'sämtliche', 'liste', 'auflisten']
+const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'everything', 'sämtliche', 'auflisten']
 
 /** Every deliverable shape the needle veto reads: the report shapes and the list-all shapes. */
 const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHAPES]
@@ -881,7 +881,20 @@ const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHA
 // trailing-space substrings. 'alle ' could never veto a needle when 'alle' ended the question ("sind das
 // alle?"); \balle\b matches the bare word without hitting 'alles'/'allen' (word boundary before the 's').
 // Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
-const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [/\balle\b/]
+//
+// #981 (follow-ups wave 6, G-9): "each", "every" and "which" (German «jede[nmrs]», «welche[nmrs]») turn a lookup
+// question into a list ("When must each obligation be fulfilled?", "Who was assigned which action items?"). The
+// veto is a WORD match on the lower-cased question. It only turns needles into deliverables, the safe direction by
+// the rule above.
+const DELIVERABLE_SHAPE_RES: readonly RegExp[] = [
+  /\balle\b/,
+  // #981 follow-up: "all the" and «liste» were bare substrings, so "sh-all the", "c-all the", "inst-all the" and "listed"
+  // / "listener" vetoed a lookup ("When shall the tenant pay?" read as a list). "all the" is now a phrase of whole
+  // words; «liste» still matches inside a German compound («Fristenliste», «Listen») but not "listed" or "listener".
+  /(?<![\p{L}\p{N}])all the(?![\p{L}\p{N}])/u,
+  /liste(?!d(?![\p{L}\p{N}])|ners?(?![\p{L}\p{N}]))/u,
+  /(?<![\p{L}\p{N}])(?:each|every|jede[nmrs]?|welche[nmrs]?)(?![\p{L}\p{N}])/u
+]
 
 /** Unambiguous single-fact LOOKUP interrogatives (EN+DE) — a "find this one thing" ask. Kept tight (a false
  *  needle is worse than a false deliverable), substring-matched. */
@@ -899,7 +912,21 @@ const NEEDLE_SHAPES: string[] = [
 // Linear (word-anchored, no quantifier) per the ReDoS-regression contract.
 // #939 review (S1): "find a" / "find an" as words, so "Find all deadlines" and "Find any deadline" (a list) are no
 // needles; a letter or digit on either side ends the match, as in the module's other Unicode-safe matches.
-const NEEDLE_SHAPE_RES: readonly RegExp[] = [/\bfinde\b/, /(?<![\p{L}\p{N}])find an?(?![\p{L}\p{N}])/u]
+//
+// #981 (follow-ups wave 6, G-9 = C2): the lookups the substring list above misses, as WORD-anchored forms (a letter
+// or digit on either side ends the match, so "somewhen", «wie schwer ist der» and «wer istanbul» never match).
+// Definite singular only, like «was ist der/die/das»: "Who are the parties?" or "When are the payments due?" are
+// left out on purpose. The German verb-second forms keep English and German routing the same («Wann endet der
+// Vertrag?» next to "When does the contract end?", #582). The each/every/which veto above turns "When must each
+// obligation be fulfilled?" back into a list.
+const NEEDLE_SHAPE_RES: readonly RegExp[] = [
+  /\bfinde\b/,
+  /(?<![\p{L}\p{N}])find an?(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])when (?:must|should|was|can|could|shall)(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])who (?:is|was) the(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])wann (?:müssen|sollen|soll|war|wurde|kann|können|endet|beginnt|läuft)(?![\p{L}\p{N}])/u,
+  /(?<![\p{L}\p{N}])wer (?:ist|war) (?:der|die|das)(?![\p{L}\p{N}])/u
+]
 
 /**
  * True when the question is a targeted single-fact LOOKUP rather than a whole-document deliverable (A3

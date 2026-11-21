@@ -10589,7 +10589,10 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
    the whole-document engine the **default** when a matching skill is explicitly active over a
    fully-chunked scope; keywords only opt *out* (`isSmallTalk`) or distinguish a needle-ask
    (`isNeedleShaped` → top-k ONLY when the whole-doc read would truncate AND no tree exists — W1's exact
-   budget calculus is the input; deliverable asks never downgrade). Doc-count mismatch **routes
+   budget calculus is the input; deliverable asks never downgrade). *(Annotation, #981: SKA-12 dropped the "no
+   tree" conjunct, and follow-ups wave 6 added word-anchored lookups — "when must/should/was/can/could/shall",
+   "who is/was the", «wann müssen/sollen/…/endet/beginnt», «wer ist/war der/die/das» — and an each / every /
+   jede / welche veto; see known-limitations and rag-design §19.)* Doc-count mismatch **routes
    deterministically** (W2: a single-doc handler NARROWS to the one manifest-signal match that is also
    fully-chunked with an honest `scopeNarrowed` notice, else `selectOne`; `what-changed` at ≠2 →
    `selectTwo`) instead of silently degrading; a document-plausibility gate falls the bank/invoice

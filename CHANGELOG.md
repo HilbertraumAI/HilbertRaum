@@ -110,6 +110,13 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **"When must they give notice?" now gets the date, not a long report.** With a skill such as Share-Safe
+  Review or Contract Brief active and a document too long to read at once, a short question starting
+  "When must …", "When should …", "When can …", "Who is the …" (or the German «Wann müssen …», «Wann endet …»,
+  «Wer ist der …») was answered with the skill's whole report, which took 30 to 65 seconds. It is now
+  answered like "When is the notice period?" already was: from the best-matching passages, in seconds. A
+  question that asks for a list ("When is each payment due?", «Wann ist jede Zahlung fällig?») keeps the whole
+  read, which "each" and «jede» had not done before (#981).
 - **Creating a workspace no longer replaces a workspace's key file you put back.** If you copied a
   workspace's `config/workspace.json` back onto the drive while the lock screen asked you to create
   a password, creating the workspace replaced that file, and with it the only key that opens that
