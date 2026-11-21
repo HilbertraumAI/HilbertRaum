@@ -13,8 +13,10 @@
 // (llama-server, whisper-cli, kiwix-serve) is covered too. What a dump still holds: its own headers, every thread's
 // registers, the paths of mapped files, the first 80 characters of the command line, and the vdso, which the kernel
 // always dumps. Not covered: the zygotes, which Electron starts before the main script runs, and what they fork (the
-// renderers and, measured under WSL, the GPU process). They hold no vault key; a renderer holds what it showed and the
-// workspace password typed into the unlock field.
+// renderers and, measured under WSL, the GPU process). They hold no vault key, but a renderer can hold the workspace
+// password typed into the unlock field (and the password opens the workspace), the text its window showed, and, in
+// the hidden helper windows (the OCR rasterizer, the evidence-pack print window), decrypted document pages that were
+// never shown.
 //
 // Called once, as the first statement of the main entry (`main/index.ts`), before `app.whenReady`. A failure costs
 // only this protection, so the app goes on and keeps the outcome: logging does not exist yet (`initLogging` starts an

@@ -6,8 +6,9 @@ import { limitCoreDumps, reportCoreDumpLimit } from '../../src/main/services/cor
 // #982 (part 2): on Linux a crash of the main process (a lost session's lock that overruns Electron's 10 s shutdown
 // limit, or any fatal error) is a kernel core dump of the whole heap, the unlocked vault key included, and many hosts
 // store it (systemd-coredump by default; a pipe handler ignores the core-size limit). A dump filter of 0 keeps every
-// memory mapping out of it. The kernel's side is checked under WSL with a real Electron (follow-ups wave 6, lane P);
-// these rows hold what the app writes, where, and when, and how a refusal is reported.
+// memory mapping out of it. The kernel's side was checked under WSL with a real Electron (`docs/security-model.md`
+// "OS session end locks the workspace", core dump filter); these rows hold what the app writes, where, and when, and
+// how a refusal is reported.
 
 function recorder() {
   const writes: Array<[string, string]> = []
@@ -41,7 +42,7 @@ describe('limitCoreDumps (#982)', () => {
     expect(r.writes).toEqual([])
   })
 
-  // Review round 1 (F4): only an errno-shaped code is kept; anything else (a code that carries a path) becomes null.
+  // Only an errno-shaped code is kept; anything else (a code that carries a path) becomes null.
   it.each<[string, unknown, string | null]>([
     ['an errno code', 'EACCES', 'EACCES'],
     ['a code that carries a path', "open '/proc/self/coredump_filter'", null],
@@ -53,8 +54,8 @@ describe('limitCoreDumps (#982)', () => {
   })
 })
 
-// Review round 1 (F2): the filter runs before logging exists, and `initLogging` starts an empty buffer, so a line
-// logged then never reached app.log. The outcome is kept and reported once, after `initLogging`.
+// The filter runs before logging exists, and `initLogging` starts an empty buffer, so a line logged then would never
+// reach app.log. The outcome is kept and reported once, after `initLogging`.
 describe('reportCoreDumpLimit (#982)', () => {
   it('a failure logs one line with its code, never the path', () => {
     const r = recorder()
