@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, locateDriveRoot } from './services/workspace'
@@ -113,11 +113,17 @@ import {
   REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
 } from './services/binary-verifier'
 import { createAppLifecycleHandlers, emergencyLock, performShutdown } from './shutdown'
+import { limitCoreDumps } from './services/core-dump-filter'
 import type { AppContext } from './services/context'
 
 // HilbertRaum — Electron main process (the "backend").
 // Security posture (spec §3.5): context isolation on, node integration off,
 // sandboxed renderer, and NO network code in the core path.
+
+// #982: on Linux a crash of this process must not write its memory, the workspace key included, into a crash file.
+// The first statement, at module scope: every child started later (the sidecars) inherits the filter, and nothing
+// secret exists yet. Every other platform: a no-op.
+limitCoreDumps({ platform: process.platform, writeFile: writeFileSync, log })
 
 // The main bundle is ESM (out/main/index.mjs) — `__dirname` doesn't exist. Reconstruct it
 // from import.meta.url (the fileURLToPath idiom already used across the test suite).
