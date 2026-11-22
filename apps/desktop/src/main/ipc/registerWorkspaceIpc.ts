@@ -208,6 +208,11 @@ function logProbeFallbacks(ctx: AppContext): void {
  * journal listed: removed it, because it does not open under this workspace's key (a create cut short by a crash left
  * it, or it came from another workspace), or left it, because it could be neither read nor removed. Logged on the
  * unlock's success and failure paths alike (review round 2 F4). Fixed words only: no path, no file name.
+ * #1001: then, in one more line, what it did with the staged document and image copies no journal listed: how many it
+ * removed (they do not open under this workspace's key) and left (they could be neither read nor swapped in or removed;
+ * the next unlock checks them again), with the count it swapped in, and (review round 2) how many it set aside: a staged
+ * copy that could not be moved into place while its old copy could not be moved back either, which the next start
+ * finishes. Counts only. Nothing when it removed, left and set aside none.
  */
 function logStageOutcome(ctx: AppContext): void {
   const outcome = ctx.workspace.takeStageOutcome?.()
@@ -215,6 +220,27 @@ function logStageOutcome(ctx: AppContext): void {
     log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
   } else if (outcome === 'left') {
     log.warn('Workspace unlock: left a staged copy of the database that could be neither read nor removed (#973)')
+  }
+  const sidecars = ctx.workspace.takeSidecarStageOutcome?.()
+  if (!sidecars) return
+  const counts = {
+    removed: sidecars.removed,
+    left: sidecars.left,
+    setAside: sidecars.setAside,
+    rolledForward: sidecars.rolledForward
+  }
+  if (sidecars.setAside > 0) {
+    log.warn(
+      'Workspace unlock: could not move staged document or image copies into place, nor their old copies back; the next start removes the old copies and puts the staged ones in their place (#1001)',
+      counts
+    )
+  } else if (sidecars.left > 0) {
+    log.warn(
+      'Workspace unlock: left staged document or image copies that could not be checked or swapped in; the next unlock checks them again (#1001)',
+      counts
+    )
+  } else if (sidecars.removed > 0) {
+    log.info("Workspace unlock: removed staged document or image copies that do not open under this workspace's key (#1001)", counts)
   }
 }
 

@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { dirname, join, relative } from 'node:path'
 import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
@@ -30,7 +41,9 @@ import {
   failedLockState,
   freshVaultPaths,
   lockedVault,
+  readStoredCopy,
   setFrameMagic,
+  storeCopy,
   thrownBy,
   unlockedController,
   writeNewerSchema,
@@ -88,6 +101,11 @@ function rekeyJournal(vp: FreshVaultPaths, version: unknown, staged: string[]): 
   writeFileSync(path, JSON.stringify({ version, staged, remove: [] }, null, 2), 'utf8')
   return path
 }
+
+/** A journal entry spelled for the same workspace under another drive root (a Kit that came back under another letter
+ *  or mount point), or any other workspace's: the same folder and file names, another absolute path. */
+const underOtherRoot = (vp: FreshVaultPaths, path: string): string =>
+  join(process.platform === 'win32' ? 'Q:\\Kit' : '/media/other/Kit', relative(vp.root, path))
 
 /** The three bytes of a UTF-8 byte-order mark (U+FEFF), which some editors and tools put in front of a file (#974). */
 const BOM = Buffer.from([0xef, 0xbb, 0xbf])
@@ -960,11 +978,6 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
     return vp
   }
 
-  /** A journal entry spelled for the same workspace under another drive root (a Kit that came back under another letter
-   *  or mount point), or any other workspace's: the same folder and file names, another absolute path. */
-  const underOtherRoot = (vp: FreshVaultPaths, path: string): string =>
-    join(process.platform === 'win32' ? 'Q:\\Kit' : '/media/other/Kit', relative(vp.root, path))
-
   // Review round 3 F1: a journal vouches for the staged database only by its full path. With the exact path the start
   // rolls the committed change forward as before. An entry under another drive root (the Kit came back under another
   // letter after the change was cut short) leaves the stage in doubt: the unlock authenticates it under the data key and
@@ -1147,13 +1160,31 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
   // start's recovery would have given it with that file gone (master's start rolled all of it forward together with the
   // leftover): the document twin is swapped in, the journal cleared or, unreadable, quarantined. While the database
   // stage is in doubt, the start leaves all of it, the journal that does not list the database stage included.
-  it.each<[string, (vp: FreshVaultPaths, docStage: string) => void, boolean]>([
-    ['a journal that lists only the document twin', (vp, docStage) => void rekeyJournal(vp, 1, [docStage]), false],
-    ['a journal that cannot be read', (vp) => writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME), '{ not json', 'utf8'), true]
-  ])('a crash leftover beside %s and a staged document twin: the unlock removes the leftover, then swaps the document in', (_case, journalOf, quarantined) => {
+  // #1001: a journal that cannot be read vouches for no staged file, so there the twin is a real copy under the data
+  // key, which the unlock swaps in once it authenticates (a twin that does not open is removed: the #1001 rows below),
+  // beside a stored copy of the same length under the retired key, as a password change cut short leaves them.
+  it.each<[string, (vp: FreshVaultPaths, docStage: string) => void, boolean, 'plain text' | 'a copy under the data key']>([
+    ['a journal that lists only the document twin', (vp, docStage) => void rekeyJournal(vp, 1, [docStage]), false, 'plain text'],
+    [
+      'a journal that cannot be read',
+      (vp) => writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME), '{ not json', 'utf8'),
+      true,
+      'a copy under the data key'
+    ]
+  ])('a crash leftover beside %s and a staged document twin: the unlock removes the leftover, then swaps the document in', async (_case, journalOf, quarantined, twin) => {
     const vp = workspaceWithMarker('fmtguard-973')
     const doc = plant(join(dirname(vp.dbPath), 'documents', 'a.pdf.enc'), 'stored copy')
-    const docStage = plant(`${doc}${REKEY_SUFFIX}`, 'staged copy')
+    const docStage = `${doc}${REKEY_SUFFIX}`
+    if (twin === 'plain text') plant(docStage, 'staged copy')
+    else {
+      const seed = unlockedController(vp, PW)
+      await storeCopy(seed, vp.root, docStage, 'staged copy')
+      seed.lock()
+      const src = join(vp.root, 'retired-src.txt')
+      writeFileSync(src, 'stored copy')
+      encryptFile(src, doc, randomBytes(32)) // the retired key, which nothing holds any more
+      rmSync(src)
+    }
     journalOf(vp, docStage)
     writeFileSync(stagedOf(vp), leftoverStage())
     const before = snapshot(vp.root)
@@ -1164,11 +1195,449 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
       ctl.unlock(PW)
       expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
       expect(existsSync(stagedOf(vp))).toBe(false)
-      expect(readFileSync(doc, 'utf8')).toBe('staged copy')
+      expect(twin === 'plain text' ? readFileSync(doc, 'utf8') : await readStoredCopy(ctl, vp.root, doc)).toBe('staged copy')
       expect(existsSync(docStage)).toBe(false)
       const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
       expect(existsSync(journal)).toBe(false)
       expect(existsSync(`${journal}.corrupt`)).toBe(quarantined)
+    } finally {
+      ctl.shutdown()
+    }
+  })
+})
+
+// #1001: a document or image copy is stored once, as `documents/<id><ext>.enc` or `images/<id><ext>.enc` under the data
+// key, and a password change stages its new copy beside it as `.enc.new`. Every start swapped in ANY such stage under a
+// v2 key file, with no key at hand and whether or not a rekey journal listed it: a copy from another workspace, a file
+// planted at the name or a folder there shredded the stored copy and took its place, and that document never opened
+// again. Now a stage no journal lists by its full path, beside a stored copy that is there, waits for the unlock, which
+// swaps it in only when it opens under the data key, removes it when it does not (or is no frame of this build's), and
+// leaves it when it can be neither read nor swapped in. Each row stores its copies with the import's own writer.
+describe('staged document and image copies no rekey journal vouches for (#1001)', () => {
+  type Store = 'documents' | 'images'
+  const LEAF: Record<Store, string> = { documents: 'd1.pdf.enc', images: 'i1.png.enc' }
+  const textOf = (store: Store, label: string): string => `the ${store} copy of ${label}`
+  /** `path` as a key of `snapshot()`. */
+  const keyOf = (vp: FreshVaultPaths, path: string): string => relative(vp.root, path).split('\\').join('/')
+
+  /** A locked workspace under `password` that holds `contextTokens: 5151`, a stored document copy and a stored image
+   *  copy (`textOf(store, label)`). */
+  async function workspaceWithCopies(label: string, password = PW): Promise<{ vp: FreshVaultPaths; copies: Record<Store, string> }> {
+    const vp = lockedVault(label, password)
+    const ctl = unlockedController(vp, password)
+    try {
+      updateSettings(ctl.requireDb(), { contextTokens: 5151 })
+      const ws = dirname(vp.dbPath)
+      const copies: Record<Store, string> = {
+        documents: await storeCopy(ctl, vp.root, join(ws, 'documents', LEAF.documents), textOf('documents', label)),
+        images: await storeCopy(ctl, vp.root, join(ws, 'images', LEAF.images), textOf('images', label))
+      }
+      return { vp, copies }
+    } finally {
+      ctl.lock()
+    }
+  }
+
+  /** The same stored copy of another workspace (another password, so another data key): what a copied or restored
+   *  folder brings to the staged name. */
+  const foreignCopy = async (store: Store): Promise<Buffer> =>
+    readFileSync((await workspaceWithCopies('fmtguard-1001-other', 'other-password')).copies[store])
+
+  /** Runs `write` with `vp` unlocked under `PW` (for what only its data key can write), and locks it again. */
+  async function whileUnlocked<T>(vp: FreshVaultPaths, write: (ctl: WorkspaceController) => Promise<T>): Promise<T> {
+    const ctl = unlockedController(vp, PW)
+    try {
+      return await write(ctl)
+    } finally {
+      ctl.lock()
+    }
+  }
+
+  /** What a password change of a build before 0.1.60 left when it was cut short after its commit: the stored copy at
+   *  `store/leaf` still under the retired key, which nothing holds any more, and its new copy of `text` staged beside it
+   *  under the data key, by the unlocked `ctl`. */
+  async function retiredCopyAndStage(
+    ctl: WorkspaceController,
+    vp: FreshVaultPaths,
+    store: Store,
+    leaf: string,
+    text: string
+  ): Promise<{ target: string; staged: string }> {
+    const target = retiredCopy(vp, store, leaf, text)
+    return { target, staged: await storeCopy(ctl, vp.root, `${target}${REKEY_SUFFIX}`, text) }
+  }
+
+  /** A stored copy of `text` at `store/leaf` under a retired key, which nothing holds any more. */
+  function retiredCopy(vp: FreshVaultPaths, store: Store, leaf: string, text: string): string {
+    const target = join(dirname(vp.dbPath), store, leaf)
+    const src = join(vp.root, 'retired-src.txt')
+    writeFileSync(src, text)
+    mkdirSync(dirname(target), { recursive: true })
+    encryptFile(src, target, randomBytes(32))
+    rmSync(src)
+    return target
+  }
+
+  it.each<[Store]>([['documents'], ['images']])(
+    'a copy from another workspace at the staged name of a stored copy in %s, no journal: the start and a wrong password leave both, the unlock removes the stage',
+    async (store) => {
+      const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+      const target = copies[store]
+      const staged = `${target}${REKEY_SUFFIX}`
+      writeFileSync(staged, await foreignCopy(store))
+      const before = snapshot(vp.root)
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      try {
+        expect(snapshot(vp.root)).toEqual(before) // the start: the stage and the stored copy as they were
+        expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+        expect(snapshot(vp.root)).toEqual(before) // a wrong password writes nothing
+        ctl.unlock(PW)
+        expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+        expect(existsSync(staged)).toBe(false) // removed: it does not open under this workspace's key
+        expect(sha(target)).toBe(before[keyOf(vp, target)])
+        expect(await readStoredCopy(ctl, vp.root, target)).toBe(textOf(store, 'fmtguard-1001'))
+        expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+        expect(ctl.takeSidecarStageOutcome()).toBeNull() // once, for the unlock's one log line
+      } finally {
+        ctl.shutdown()
+      }
+    }
+  )
+
+  // A file at the staged name that is no frame of this build's cannot be a staged copy under any key here: the unlock
+  // removes it as it removes one that fails its tag. (A newer build's frame is refused before anything is written, #845.)
+  it.each<[string, (staged: string, target: string) => void]>([
+    [
+      'the stored copy itself in another frame (PAIDENC1)',
+      (staged, target) => {
+        copyFileSync(target, staged)
+        setFrameMagic(staged, 'PAIDENC1')
+      }
+    ],
+    ['a frame cut short inside its header', (staged) => writeFileSync(staged, Buffer.from('HRAUMEN1cut', 'latin1'))],
+    ['plain text', (staged) => writeFileSync(staged, 'not a staged copy', 'utf8')]
+  ])('beside a stored document copy, %s at the staged name: the start leaves both, the unlock removes the stage', async (_case, plantStage) => {
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    const staged = `${copies.documents}${REKEY_SUFFIX}`
+    plantStage(staged, copies.documents)
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(existsSync(staged)).toBe(false)
+      expect(sha(copies.documents)).toBe(before[keyOf(vp, copies.documents)])
+      expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // A folder at the staged name is no data at all. The start used to shred the stored copy and rename the folder into
+  // its place. Now it is no stage (review round 1): the start and every unlock leave both as they are and count nothing,
+  // so no line about it repeats at each unlock, and the workspace opens.
+  it('a folder at the staged name of a stored document copy is no stage: the start and two unlocks leave both and count nothing', async () => {
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    const staged = `${copies.documents}${REKEY_SUFFIX}`
+    mkdirSync(staged)
+    writeFileSync(join(staged, 'held'), 'x')
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      for (let unlock = 0; unlock < 2; unlock++) {
+        ctl.unlock(PW)
+        expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+        expect(readdirSync(staged)).toEqual(['held'])
+        expect(readFileSync(join(staged, 'held'), 'utf8')).toBe('x')
+        expect(sha(copies.documents)).toBe(before[keyOf(vp, copies.documents)])
+        expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+        expect(ctl.takeSidecarStageOutcome()).toBeNull()
+        ctl.lock()
+      }
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review rounds 1 and 2: a stage that opens under the data key is swapped in only when its stored copy does not (a
+  // legitimate stage only ever sits beside a stored copy under the retired key). The stored copy itself under the
+  // staged name (a hard link: one file, two names) authenticates too, and the swap's shred of the old copy would
+  // overwrite that one file; another stored copy of this workspace copied to the name authenticates as well, of the same
+  // length or not. Each time the stored copy opens under the data key: only the staged name is removed, and the stored
+  // copy keeps its own text.
+  it.each<[string, (vp: FreshVaultPaths, copies: Record<Store, string>) => Promise<void>]>([
+    ['a hard link of the stored copy', async (_vp, copies) => linkSync(copies.documents, `${copies.documents}${REKEY_SUFFIX}`)],
+    [
+      'a copy of another document of this workspace of the same length',
+      async (vp, copies) => {
+        const text = textOf('documents', 'fmtguard-1002')
+        expect(text).toHaveLength(textOf('documents', 'fmtguard-1001').length)
+        const d2 = await whileUnlocked(vp, (ctl) => storeCopy(ctl, vp.root, join(dirname(vp.dbPath), 'documents', 'd2.pdf.enc'), text))
+        copyFileSync(d2, `${copies.documents}${REKEY_SUFFIX}`)
+      }
+    ],
+    [
+      'a copy of another, longer document of this workspace',
+      async (vp, copies) => {
+        const d2 = await whileUnlocked(vp, (ctl) =>
+          storeCopy(ctl, vp.root, join(dirname(vp.dbPath), 'documents', 'd2.pdf.enc'), 'a second, longer document of this workspace')
+        )
+        copyFileSync(d2, `${copies.documents}${REKEY_SUFFIX}`)
+      }
+    ]
+  ])('%s at the staged name opens under the data key: the unlock removes only the staged name, the stored copy keeps its text', async (_case, plantStage) => {
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    await plantStage(vp, copies)
+    const staged = `${copies.documents}${REKEY_SUFFIX}`
+    const stored = sha(copies.documents)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(sha(copies.documents)).toBe(stored) // the start leaves both
+      expect(existsSync(staged)).toBe(true)
+      ctl.unlock(PW)
+      expect(existsSync(staged)).toBe(false)
+      expect(sha(copies.documents)).toBe(stored)
+      expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Beside a stored copy still under the retired key (where a legitimate stage would sit), only a stage that opens under
+  // the data key AND has the stored copy's length is swapped in. A copy from another workspace of the same length fails
+  // its tag; another document of this workspace of another length is no new copy of this one. Both are removed, and the
+  // stored copy stays byte for byte (still unreadable, as before: its key is gone).
+  it.each<[string, (vp: FreshVaultPaths, staged: string, length: number) => Promise<void>]>([
+    [
+      'a copy from another workspace of the same length',
+      async (_vp, staged, length) => {
+        const other = lockedVault('fmtguard-1001-other', 'other-password')
+        const ctl = unlockedController(other, 'other-password')
+        try {
+          const copy = await storeCopy(ctl, other.root, join(dirname(other.dbPath), 'documents', 'x.pdf.enc'), 'y'.repeat(length))
+          copyFileSync(copy, staged)
+        } finally {
+          ctl.lock()
+        }
+      }
+    ],
+    [
+      'a copy of another, longer document of this workspace',
+      async (vp, staged, length) => {
+        const d3 = await whileUnlocked(vp, (ctl) =>
+          storeCopy(ctl, vp.root, join(dirname(vp.dbPath), 'documents', 'd3.pdf.enc'), 'z'.repeat(length + 7))
+        )
+        copyFileSync(d3, staged)
+      }
+    ],
+    // Review round 3: a stage with more than one link is no new copy of anything (a password change writes each stage
+    // as a new file): here a hard link to another document's stored copy of the same length, which opens under the
+    // data key. Only the staged name goes; the other document keeps its file.
+    [
+      'a hard link to another document of this workspace of the same length',
+      async (vp, staged, length) => {
+        const d3 = await whileUnlocked(vp, (ctl) =>
+          storeCopy(ctl, vp.root, join(dirname(vp.dbPath), 'documents', 'd3.pdf.enc'), 'w'.repeat(length))
+        )
+        const d3Bytes = sha(d3)
+        linkSync(d3, staged)
+        expect(sha(d3)).toBe(d3Bytes)
+      }
+    ]
+  ])('beside a stored copy still under the retired key, %s at the staged name: the unlock removes it, the stored copy byte for byte', async (_case, plantStage) => {
+    const vp = lockedVault('fmtguard-1001', PW)
+    const text = 'the copy under the retired key'
+    const target = retiredCopy(vp, 'documents', 'd2.pdf.enc', text)
+    const staged = `${target}${REKEY_SUFFIX}`
+    await plantStage(vp, staged, text.length)
+    const stored = sha(target)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(sha(target)).toBe(stored)
+      ctl.unlock(PW)
+      expect(existsSync(staged)).toBe(false)
+      expect(sha(target)).toBe(stored)
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Review round 2: a journal entry vouches only for a FILE at the name, as the scan does. A folder at a name the
+  // journal lists used to pass (`existsSync` is true for a folder): the start shredded the stored copy and renamed the
+  // folder into its place.
+  it('a journal that lists a folder at the staged name of a stored document copy: the start and the unlock leave both, and the copy reads as before', async () => {
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    const staged = `${copies.documents}${REKEY_SUFFIX}`
+    mkdirSync(staged)
+    writeFileSync(join(staged, 'held'), 'x')
+    rekeyJournal(vp, 1, [staged])
+    const stored = sha(copies.documents)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(statSync(copies.documents).isFile(), 'the stored copy is still a file').toBe(true)
+      expect(sha(copies.documents)).toBe(stored)
+      expect(readdirSync(staged)).toEqual(['held'])
+      ctl.unlock(PW)
+      expect(sha(copies.documents)).toBe(stored)
+      expect(readdirSync(staged)).toEqual(['held'])
+      expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // A journal vouches for a stage only by its full path (#973 review round 3 F1): one that cannot be read lists nothing,
+  // and one written under another drive root lists other paths. Either leaves the stage in doubt.
+  it.each<[string, (vp: FreshVaultPaths, staged: string) => void]>([
+    ['a journal that cannot be read', (vp) => writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME), '{ not json', 'utf8')],
+    ['a journal that names the stage under another drive root', (vp, staged) => void rekeyJournal(vp, 1, [underOtherRoot(vp, staged)])]
+  ])('a copy from another workspace at the staged name of a stored document copy, beside %s: the start leaves the stored copy, the unlock removes the stage', async (_case, journalOf) => {
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    const staged = `${copies.documents}${REKEY_SUFFIX}`
+    writeFileSync(staged, await foreignCopy('documents'))
+    journalOf(vp, staged)
+    const stored = sha(copies.documents)
+    const stage = sha(staged)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(sha(copies.documents)).toBe(stored) // the start (an unreadable journal is quarantined, as before)
+      expect(sha(staged)).toBe(stage)
+      ctl.unlock(PW)
+      expect(existsSync(staged)).toBe(false)
+      expect(sha(copies.documents)).toBe(stored)
+      expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // #973 review round 2 R5 swapped the rest of the staged set in as soon as the unlock had removed a foreign staged
+  // database, journal or not, so a foreign document stage beside it was lost in that same unlock. Now each document or
+  // image stage in doubt is judged on its own, after the database's decision.
+  it('beside a staged database from another workspace: the unlock removes it and the foreign document stage, and swaps in the document stage that opens', async () => {
+    const other = await workspaceWithCopies('fmtguard-1001-other', 'other-password')
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    const d2 = await whileUnlocked(vp, (ctl) => retiredCopyAndStage(ctl, vp, 'documents', 'd2.pdf.enc', 'the new copy of d2'))
+    const foreignStage = `${copies.documents}${REKEY_SUFFIX}`
+    copyFileSync(other.copies.documents, foreignStage)
+    copyFileSync(other.vp.encPath, `${vp.encPath}${REKEY_SUFFIX}`) // a staged database under the other workspace's key
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before) // the staged database in doubt: the start leaves the whole set
+      expect(thrownBy(() => ctl.unlock('wrong-password')).name).toBe('WrongPasswordError')
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+      expect(ctl.takeStageOutcome()).toBe('removed')
+      expect(existsSync(foreignStage)).toBe(false)
+      expect(sha(copies.documents)).toBe(before[keyOf(vp, copies.documents)])
+      expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+      expect(existsSync(d2.staged)).toBe(false)
+      expect(await readStoredCopy(ctl, vp.root, d2.target)).toBe('the new copy of d2')
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 1, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // A staged database that opens under the data key (a password change of a build before 0.1.60, cut short after its
+  // commit) rolls the staged set forward at the unlock (#973). The document and image stages no journal lists are still
+  // judged one by one: the foreign document stage is removed, the image stage that opens is swapped in.
+  it('beside a staged database that opens under the data key: the unlock rolls it forward, removes the foreign document stage and swaps in the image stage that opens', async () => {
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    const i2 = await whileUnlocked(vp, (ctl) => retiredCopyAndStage(ctl, vp, 'images', 'i2.png.enc', 'the new copy of i2'))
+    const foreignStage = `${copies.documents}${REKEY_SUFFIX}`
+    writeFileSync(foreignStage, await foreignCopy('documents'))
+    copyFileSync(vp.encPath, `${vp.encPath}${REKEY_SUFFIX}`) // the database staged under this workspace's own key
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`)).toBe(false)
+      expect(ctl.takeStageOutcome()).toBeNull() // rolled forward: nothing to log
+      expect(existsSync(foreignStage)).toBe(false)
+      expect(sha(copies.documents)).toBe(before[keyOf(vp, copies.documents)])
+      expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
+      expect(existsSync(i2.staged)).toBe(false)
+      expect(await readStoredCopy(ctl, vp.root, i2.target)).toBe('the new copy of i2')
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 1, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // The rule never touches a stage a journal lists by its full path: the start swaps that one in and clears the journal
+  // as before (#241), and leaves only the image stage no journal lists, which the unlock removes.
+  it('a journal that lists a document stage, and a copy from another workspace at the staged name of a stored image copy: the start swaps the listed one in, the unlock removes the other', async () => {
+    const { vp, copies } = await workspaceWithCopies('fmtguard-1001')
+    const d2 = await whileUnlocked(vp, (ctl) => retiredCopyAndStage(ctl, vp, 'documents', 'd2.pdf.enc', 'the new copy of d2'))
+    const journal = rekeyJournal(vp, 1, [d2.staged])
+    const foreignStage = `${copies.images}${REKEY_SUFFIX}`
+    writeFileSync(foreignStage, await foreignCopy('images'))
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(d2.staged)).toBe(false) // the start swaps the listed stage in, as before
+      expect(sha(d2.target)).toBe(before[keyOf(vp, d2.staged)])
+      expect(existsSync(journal)).toBe(false)
+      expect(sha(copies.images)).toBe(before[keyOf(vp, copies.images)]) // and leaves the one no journal lists
+      expect(sha(foreignStage)).toBe(before[keyOf(vp, foreignStage)])
+      ctl.unlock(PW)
+      expect(existsSync(foreignStage)).toBe(false)
+      expect(await readStoredCopy(ctl, vp.root, copies.images)).toBe(textOf('images', 'fmtguard-1001'))
+      expect(await readStoredCopy(ctl, vp.root, d2.target)).toBe('the new copy of d2')
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // Controls, green before and after: a stage that opens under the data key beside a stored copy under the retired key
+  // ends swapped in (only the moment moves, from the start to the unlock), and a stage whose stored copy is gone (a swap
+  // cut short between its shred and its rename) is the only copy left, which the start renames into place as before.
+  it('a stage that opens under the data key beside a stored copy under the retired key: after the unlock the document reads the staged copy', async () => {
+    const vp = lockedVault('fmtguard-1001', PW)
+    const d2 = await whileUnlocked(vp, (ctl) => retiredCopyAndStage(ctl, vp, 'documents', 'd2.pdf.enc', 'the new copy of d2'))
+    const ctl = unlockedController(vp, PW)
+    try {
+      expect(existsSync(d2.staged)).toBe(false)
+      expect(await readStoredCopy(ctl, vp.root, d2.target)).toBe('the new copy of d2')
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  it('a stage whose stored copy is gone: the start renames it into place, as before', async () => {
+    const vp = lockedVault('fmtguard-1001', PW)
+    const d2 = await whileUnlocked(vp, (ctl) => retiredCopyAndStage(ctl, vp, 'documents', 'd2.pdf.enc', 'the new copy of d2'))
+    rmSync(d2.target)
+    const stage = sha(d2.staged)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(existsSync(d2.staged)).toBe(false)
+      expect(sha(d2.target)).toBe(stage)
+      ctl.unlock(PW)
+      expect(await readStoredCopy(ctl, vp.root, d2.target)).toBe('the new copy of d2')
     } finally {
       ctl.shutdown()
     }

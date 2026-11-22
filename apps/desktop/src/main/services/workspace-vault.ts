@@ -7,11 +7,13 @@ import {
   rmSync,
   renameSync,
   statSync,
+  lstatSync,
   openSync,
   readSync,
   writeSync,
   closeSync,
-  fsyncSync
+  fsyncSync,
+  type BigIntStats
 } from 'node:fs'
 import { open as openFileAsync, rename as renameAsync, rm as rmAsync, stat as statAsync } from 'node:fs/promises'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
@@ -1598,9 +1600,10 @@ function clearRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | n
 
 /** Every staged `<file>.new` of an (interrupted or in-progress) rekey: the DB, the in-store
  *  sidecars (`documents/`, `images/` — by scan, so a journal-less stage still resolves) and
- *  the journal's entries (the only way to find an out-of-store one). */
+ *  the journal's entries (the only way to find an out-of-store one). #1001: a journal-less
+ *  in-store sidecar stage beside its stored copy resolves at the unlock, under the data key
+ *  ({@link sidecarStagesInDoubt}); the recoveries before the password skip it. */
 function stagedRekeyFiles(vaultPaths: VaultPaths, journal = readRekeyJournal(vaultPaths)): string[] {
-  const ws = workspaceDirOf(vaultPaths)
   // Keyed on the folded path: the scan and the journal may spell one file two ways, and a
   // file listed twice would be shredded by its own second swap.
   const out = new Map<string, string>()
@@ -1608,20 +1611,41 @@ function stagedRekeyFiles(vaultPaths: VaultPaths, journal = readRekeyJournal(vau
     if (!out.has(pathKey(p))) out.set(pathKey(p), p)
   }
   if (existsSync(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) add(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
+  for (const staged of scannedSidecarStages(vaultPaths)) add(staged)
+  // #1001 (review round 2): a journal entry counts only when it names a file, as the scan does. `existsSync` is true for
+  // a folder too, and a folder at a listed name was renamed over its stored copy, which was shredded first.
+  for (const staged of journal?.staged ?? []) {
+    if (isFileAt(staged)) add(staged)
+  }
+  return [...out.values()]
+}
+
+/** Is there a regular file at `path`? False for a folder, and for a stat that fails for any reason (as `existsSync`). */
+function isFileAt(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/** The in-store sidecar stages, by scan: every file in `documents/` and `images/` named `*.enc.new`. #1001 (review round
+ *  1): a file only. A folder at such a name is no stage, and nothing here touches it: before, the start shredded the
+ *  stored copy and renamed the folder into its place. */
+function scannedSidecarStages(vaultPaths: VaultPaths): string[] {
+  const ws = workspaceDirOf(vaultPaths)
+  const out: string[] = []
   for (const sub of [DOCUMENTS_DIR_NAME, IMAGES_DIR_NAME]) {
     const dir = join(ws, sub)
     try {
-      for (const n of readdirSync(dir)) {
-        if (n.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) add(join(dir, n))
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) out.push(join(dir, entry.name))
       }
     } catch {
       /* dir not created yet */
     }
   }
-  for (const staged of journal?.staged ?? []) {
-    if (existsSync(staged)) add(staged)
-  }
-  return [...out.values()]
+  return out
 }
 
 /**
@@ -1703,8 +1727,12 @@ export function stageRekey(
  * the locked one) decrypted to a GCM-tag failure until `recoverPendingRekey` finished them on the
  * next unlock. We now attempt all files, retry the stragglers once, and only then throw — so at
  * most a genuinely-stuck file is deferred to recovery, never the whole tail of the list.
+ *
+ * #1001: `skip` holds the folded paths ({@link pathKey}) of staged files this pass leaves as they are: the recoveries
+ * pass the journal-less sidecar stages in doubt ({@link sidecarStagesInDoubt}), which the unlock judges under the data
+ * key ({@link resolveSidecarStagesInDoubt}). A password change passes none: every stage it swaps is its own, journal'd.
  */
-export function applyPendingRekey(vaultPaths: VaultPaths): void {
+export function applyPendingRekey(vaultPaths: VaultPaths, skip: ReadonlySet<string> = new Set()): void {
   const journal = readRekeyJournal(vaultPaths)
   // Committed, so the files the migration retires go first (idempotent, best-effort): a
   // later crash can then never skip them. Today that is the rotated log (#241).
@@ -1725,7 +1753,7 @@ export function applyPendingRekey(vaultPaths: VaultPaths): void {
     shredFile(target)
     renameSync(staged, target)
   }
-  let pending = stagedRekeyFiles(vaultPaths, journal)
+  let pending = stagedRekeyFiles(vaultPaths, journal).filter((staged) => !skip.has(pathKey(staged)))
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 2 && pending.length > 0; attempt++) {
     const failed: string[] = []
@@ -1779,6 +1807,11 @@ export function discardPendingRekey(vaultPaths: VaultPaths): void {
  * leaves the whole staged set (and any journal) as it is; the unlock decides once it has the data key
  * ({@link resolveStageInDoubt}). Journal'd stages, a v1 descriptor and a staged file with `.enc` gone (a create or a
  * swap cut short after the commit) go on as before.
+ *
+ * #1001: the same rule per stored copy. A `documents/` or `images/` stage no journal lists, beside a stored copy that is
+ * not proven gone ({@link sidecarStagesInDoubt}), may be a copy from another workspace or a file planted at the name,
+ * and swapping it in would shred the only copy of that document with no key to tell. So the swap skips it, and the
+ * unlock judges it under the data key ({@link resolveSidecarStagesInDoubt}). The rest of the set rolls as before.
  */
 export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDescriptor | null): void {
   // encryptFile's own atomic-write temp for the staged DB (a crash mid-stage leaves it;
@@ -1789,7 +1822,7 @@ export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDes
   if (stagedRekeyFiles(vaultPaths).length === 0 && !existsSync(rekeyJournalPath(vaultPaths))) return
   if (descriptor && descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
     if (stageInDoubt(vaultPaths)) return // #973: the unlock resolves it under the data key
-    applyPendingRekey(vaultPaths)
+    applyPendingRekey(vaultPaths, sidecarDoubtKeys(vaultPaths)) // #1001: and these, one by one
   } else {
     discardPendingRekey(vaultPaths)
   }
@@ -1808,6 +1841,8 @@ export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDes
  * restored folder) rolled a foreign stage over `.enc` with no key. An entry written under another drive letter or mount
  * point therefore leaves the stage in doubt, and the unlock authenticates it and rolls it forward when it opens: the
  * same outcome, one read slower.
+ * The database stage only: its answer decides which snapshot opens, and the loss hold reads it. The `documents/` and
+ * `images/` stages are judged one by one, by the same rule ({@link sidecarStagesInDoubt}, #1001).
  */
 function stageInDoubt(vaultPaths: VaultPaths): boolean {
   const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
@@ -1830,7 +1865,9 @@ export type StageInDoubtOutcome = 'rolled-forward' | 'removed' | 'left'
  * workspace), and one that is no frame of this build's (cut short, another magic) is no staged copy at all: either is
  * removed (a plain delete, as {@link discardPendingRekey} does), and the unlock opens `.enc` as it is. The rest of the
  * staged set then gets what the start's recovery would have given it with that file gone (review round 2 R5: the
- * journal's entries and its deletions, the in-store twins by scan). A read the check cannot make splits by its code
+ * journal's entries and its deletions, the in-store twins by scan). Both swaps skip the `documents/` and `images/`
+ * stages in doubt (#1001): the unlock judges each of them next ({@link resolveSidecarStagesInDoubt}), whatever the
+ * database stage turned out to be. A read the check cannot make splits by its code
  * (review round 2 R4, round 3 F4): ENOENT, the file gone since the check, is no stage; EISDIR or ENOTDIR, a folder at
  * the name, is no data at all, so it is left exactly as it is and the unlock opens `.enc` (never blocked for good);
  * any other code (a hold: EBUSY, EPERM, EACCES; an I/O error: EIO) may be a stage this workspace needs, so it changes
@@ -1862,7 +1899,7 @@ function resolveStageInDoubt(
     perfMark('vault_stage_check', { checkMs: perfMs(checkT0), stageBytes: fileSizeOrNull(staged) })
   }
   if (authentic) {
-    applyPendingRekey(vaultPaths)
+    applyPendingRekey(vaultPaths, sidecarDoubtKeys(vaultPaths)) // #1001: the sidecars in doubt are judged next
     note?.('rolled-forward')
     return
   }
@@ -1877,6 +1914,181 @@ function resolveStageInDoubt(
   recoverPendingRekey(vaultPaths, descriptor) // R5: no longer in doubt, so what the start would have done
 }
 
+/** Is `path` proven gone? Only a stat that says ENOENT proves it (the #911 rule): `existsSync` reads any failure (a
+ *  delete-pending file on Windows, EPERM, EBUSY, EIO) as "not there". */
+function statSaysAbsent(path: string): boolean {
+  try {
+    statSync(path)
+    return false
+  } catch (err) {
+    return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+  }
+}
+
+/**
+ * #1001: the `documents/` and `images/` stages ({@link scannedSidecarStages}) that no rekey journal lists by their full
+ * path, folded as {@link pathKey} folds it (no journal, one that cannot be read, or one that names other files or
+ * another drive root, as {@link stageInDoubt} reads it), beside a stored copy that is not proven gone
+ * ({@link statSaysAbsent}). Swapped in with no key at hand, such a stage would shred that stored copy, often the only
+ * copy of the document, and the file at the name may be a copy from another workspace, or a file planted there. A
+ * legitimate one is rare: since #241 a password change lists every stage it writes, so it takes a change of a
+ * build before 0.1.60 (which wrote no journal and never staged `images/`) cut short after its commit, or a journal of
+ * #241 or later that cannot be read or names the files under another drive root. With the stored copy gone the stage
+ * is no doubt: it is the only copy left (a swap cut short between its shred and its rename), and the start renames it
+ * into place as before, the mirror of #973's "`.enc` gone".
+ */
+function sidecarStagesInDoubt(vaultPaths: VaultPaths): string[] {
+  const listed = new Set((readRekeyJournal(vaultPaths)?.staged ?? []).map(pathKey))
+  return scannedSidecarStages(vaultPaths).filter(
+    (staged) => !listed.has(pathKey(staged)) && !statSaysAbsent(staged.slice(0, -REKEY_SUFFIX.length))
+  )
+}
+
+/** #1001: {@link sidecarStagesInDoubt} as the `skip` set of {@link applyPendingRekey}. */
+function sidecarDoubtKeys(vaultPaths: VaultPaths): ReadonlySet<string> {
+  return new Set(sidecarStagesInDoubt(vaultPaths).map(pathKey))
+}
+
+/** #1001: what the unlock did with the `documents/` and `images/` stages in doubt ({@link resolveSidecarStagesInDoubt}):
+ *  how many it swapped in (they open under the data key and their stored copy does not), removed (they do not open, or
+ *  are no frame of this build's, or their stored copy is current, or they are of another length), left as they were (a
+ *  read, a delete or a swap that failed; judged again at the next unlock), and set aside: the stage could not be moved
+ *  in and the stored copy not moved back, so it waits at `<stored copy>.tmp` until the next start shreds it and renames
+ *  the stage into place. Counts only: no path, no file name. */
+export interface SidecarStageOutcome {
+  rolledForward: number
+  removed: number
+  left: number
+  setAside: number
+}
+
+/**
+ * #1001: the unlock's answer to {@link sidecarStagesInDoubt}, once the password verified, the v2 data key is unwrapped
+ * and the staged database is decided ({@link resolveStageInDoubt}). Each stage is judged on its own
+ * ({@link judgeSidecarStage}): swapped in only when it opens under the data key and its stored copy does not (a v1 → v2
+ * password change cut short after its commit left that copy under the retired key); removed when it does not open, is
+ * no frame of this build's (owner decision D-2, the same plain delete as #973's), or cannot be a new copy of that
+ * document; nothing when it is gone since the scan; left as it is when a read, a delete or a swap fails (owner decision
+ * D-1), and judged again at the next unlock. (A folder at the name is no stage: {@link scannedSidecarStages}.)
+ * Unlike the staged database, whose answer decides which snapshot the session opens (so a read it cannot make refuses
+ * the unlock), a stored copy is written once and read only for its own document: a stage left loses nothing, and one
+ * file is never worth locking the user out of the whole workspace. A frame a newer build wrote at the stage throws its
+ * `VaultNewerError` (the unlock's format verdict refuses one before this runs). `note` hears the counts when the pass
+ * ends, also when it throws, for the IPC's one log line. The pass is timed as `vault_sidecar_stage_check`.
+ */
+function resolveSidecarStagesInDoubt(
+  vaultPaths: VaultPaths,
+  dataKey: Buffer,
+  note?: (outcome: SidecarStageOutcome) => void
+): void {
+  const doubtful = sidecarStagesInDoubt(vaultPaths)
+  if (doubtful.length === 0) return
+  const outcome: SidecarStageOutcome = { rolledForward: 0, removed: 0, left: 0, setAside: 0 }
+  const checkT0 = performance.now()
+  let stageBytes = 0
+  try {
+    for (const staged of doubtful) {
+      stageBytes += fileSizeOrNull(staged) ?? 0
+      try {
+        const verdict = judgeSidecarStage(staged, staged.slice(0, -REKEY_SUFFIX.length), dataKey)
+        if (verdict !== null) outcome[verdict] += 1
+      } catch (err) {
+        if (isVaultNewerError(err)) throw err
+        outcome.left += 1 // a read, a delete or a swap that failed: judged again at the next unlock
+      }
+    }
+  } finally {
+    perfMark('vault_sidecar_stage_check', { files: doubtful.length, stageBytes, checkMs: perfMs(checkT0) })
+    note?.(outcome)
+  }
+}
+
+/**
+ * #1001 (review rounds 1 to 3): one stage in doubt, beside its stored copy `target`, cheapest checks first.
+ *   1. Two `lstat` calls, which never follow a link, and no read of either file yet:
+ *      - the stage gone since the scan: nothing (`null`);
+ *      - either one no regular file (a symbolic link, a junction or another reparse point, a folder): `left`. A swap
+ *        would shred the old copy THROUGH a link at the stored copy's name, into a file outside the workspace;
+ *      - the stage with more than one link (where the filesystem counts them: a hard link of the stored copy itself or
+ *        of another document's copy), or of another length than the stored copy (a password change re-encrypts the
+ *        same plaintext, and a frame is its plaintext's length plus a fixed header): no new copy of that document, so
+ *        only the staged name is removed (`removed`). A planted file of another length therefore costs a stat, never a
+ *        read.
+ *   2. The stage, read under the data key ({@link authenticatesUnder}): it fails its tag or is no frame of this
+ *      build's: removed. A read that fails throws to the caller (`left`); ENOENT is `null`.
+ *   3. The stored copy, read under the data key. A legitimate pending stage only ever sits beside a stored copy under
+ *      the RETIRED key: only a v1 → v2 password change stages copies (a v2 change re-wraps the data key and writes no
+ *      file), and its commit leaves the stored copies under the v1 key until each swap. A stored copy that opens is
+ *      current, and the stage at most a second copy (another document of this workspace copied to the name; a hard
+ *      link on a mount that counts no links): removed. One that cannot be read: `left`. One that fails its tag or is
+ *      no frame: the swap, unless another name shares its file (more than one link): `left`, so the shred of the old
+ *      copy never reaches that other name.
+ *   4. The swap never destroys the stored copy before the stage is in its place: the stored copy moves aside to
+ *      `<target>.tmp` (a stale file there is shredded first), the stage is renamed into place, and only then is the old
+ *      copy shredded. A rename of the stage that fails (a hold that refuses a delete: an antivirus, an indexer) moves
+ *      the stored copy back and rethrows, so the caller counts `left` and the stage stays a doubt. When the move back
+ *      fails too, the stored copy stays at `<target>.tmp` for this session (`setAside`): the next start's sweep shreds
+ *      it, and that start renames the stage into place (its stored copy is gone, so it is no doubt). Nothing is lost:
+ *      the stage authenticates, and the copy set aside opened under no key this workspace holds. `<target>.tmp` is a
+ *      name the start's sweep shreds ({@link shredStalePlaintext}), and no writer uses it during an unlock
+ *      (`encryptFileAsync` writes `<new copy>.tmp` only for a new id, with the workspace unlocked), so a crash between
+ *      two steps leaves nothing the start does not resolve: with the stored copy aside and the stage not yet renamed,
+ *      the start shreds the aside copy and renames the stage into place; with the stage in place, it shreds the aside
+ *      copy.
+ */
+function judgeSidecarStage(staged: string, target: string, dataKey: Buffer): keyof SidecarStageOutcome | null {
+  let stage: BigIntStats
+  try {
+    stage = lstatSync(staged, { bigint: true })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return null // gone since the scan
+    throw err
+  }
+  const stored = lstatSync(target, { bigint: true })
+  if (!stage.isFile() || !stored.isFile()) return 'left'
+  if (stage.nlink > 1n || stage.size !== stored.size) {
+    rmSync(staged, { force: true })
+    return 'removed'
+  }
+  let authentic: boolean
+  try {
+    authentic = authenticatesUnder(staged, dataKey)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return null // gone since the scan
+    throw err
+  }
+  if (!authentic) {
+    rmSync(staged, { force: true })
+    return 'removed'
+  }
+  let current: boolean
+  try {
+    current = authenticatesUnder(target, dataKey)
+  } catch {
+    return 'left' // the stored copy cannot be judged: never swapped over
+  }
+  if (current) {
+    rmSync(staged, { force: true })
+    return 'removed'
+  }
+  if (stored.nlink > 1n) return 'left' // another name shares the stored copy's file: never shredded through it
+  const aside = `${target}.tmp`
+  shredFile(aside)
+  renameSync(target, aside)
+  try {
+    renameSync(staged, target)
+  } catch (err) {
+    try {
+      renameSync(aside, target) // the stored copy back
+    } catch {
+      return 'setAside' // it waits at `<target>.tmp`; the next start puts the stage in its place (see above)
+    }
+    throw err
+  }
+  shredFile(aside)
+  return 'rolledForward'
+}
+
 /**
  * #973 (narrow): a create cut short before its commit (a crash or power loss between its stage and its key file) leaves
  * a `.enc.new` with no key file, no `.enc` and no rekey journal beside it. The start reports that state as
@@ -1887,20 +2099,19 @@ function resolveStageInDoubt(
  * workspace comes back first. Nothing else is touched.
  * Residual (review round 2 R3, owner decision: the discard stays): the same state is left by a create that committed
  * and then lost its key file before the rename, and that stage only ever holds the fresh, empty workspace the create
- * built. The one double fault that loses data: a v1 → v2 password change by a build before #241 (0.1.50–0.1.59, which
- * wrote no journal) cut short between the shred of `.enc` and the rename of its stage, and then the key file removed
- * before the next start: the stage was the only copy of that workspace.
+ * built. The one double fault that loses data: a v1 → v2 password change by a build before #241 (a build before 0.1.60:
+ * v0.1.6–v0.1.59, the public ones 0.1.50–0.1.59, which wrote no journal) cut short between the shred of `.enc` and the
+ * rename of its stage, and then the key file removed before the next start: the stage was the only copy of that
+ * workspace.
  */
 function discardOrphanedStage(vaultPaths: VaultPaths): void {
-  const absent = (path: string): boolean => {
-    try {
-      statSync(path)
-      return false
-    } catch (err) {
-      return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT'
-    }
+  if (
+    !statSaysAbsent(vaultPaths.descriptorPath) ||
+    !statSaysAbsent(vaultPaths.encPath) ||
+    !statSaysAbsent(rekeyJournalPath(vaultPaths))
+  ) {
+    return
   }
-  if (!absent(vaultPaths.descriptorPath) || !absent(vaultPaths.encPath) || !absent(rekeyJournalPath(vaultPaths))) return
   const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
   for (const leftover of [staged, `${staged}.tmp`]) {
     try {
@@ -2145,7 +2356,10 @@ export function unlockEncryptedVault(
   onProbeFallback?: ProbeFallbackNote,
   /** #973: hears what this unlock did with a staged database in doubt, as soon as it did it (also when a later step
    *  fails). */
-  onStageInDoubt?: (outcome: StageInDoubtOutcome) => void
+  onStageInDoubt?: (outcome: StageInDoubtOutcome) => void,
+  /** #1001: hears what this unlock did with the `documents/` and `images/` stages in doubt, once it judged them (also
+   *  when a later step fails). */
+  onSidecarStages?: (outcome: SidecarStageOutcome) => void
 ): UnlockedVault {
   // #845: FIRST, before the rekey recovery, the `.recovery` roll-forward, the sidecar clean or the decrypt can write
   // anything, and independent of the password (a newer format's verifier may differ): a vault a newer build wrote is
@@ -2166,7 +2380,8 @@ export function unlockEncryptedVault(
   }
   // A crash during a password change must be resolved BEFORE any decrypt: the descriptor
   // decides whether staged `.new` files roll forward (committed) or are discarded. #973: a staged
-  // database it cannot vouch for waits for the data key below, so a wrong password leaves it as it is.
+  // database it cannot vouch for waits for the data key below, so a wrong password leaves it as it is;
+  // #1001: so does a staged document or image copy it cannot vouch for.
   recoverPendingRekey(vaultPaths, descriptor)
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const kdfT0 = performance.now()
@@ -2210,6 +2425,10 @@ export function unlockEncryptedVault(
       // refused as "try again" when a hold keeps it from being read, left when it can be neither read nor removed.
       // Before the `.recovery` block, so that block judges the `.enc` this unlock opens.
       resolveStageInDoubt(vaultPaths, descriptor, fileKey, onStageInDoubt)
+      // #1001: then each staged document or image copy no journal vouches for, beside a stored copy that is there:
+      // swapped in when it authenticates under the data key, removed when it does not (or is no frame of this build's),
+      // left when it can be neither read nor swapped in or removed (judged again at the next unlock).
+      resolveSidecarStagesInDoubt(vaultPaths, fileKey, onSidecarStages)
     }
     // full-audit 2026-07-11 CODE-1b — roll a preserved newer working file FORWARD now that
     // the key exists: re-encrypt it over the stale `.enc` (encryptFile is atomic tmp→rename
@@ -2645,6 +2864,12 @@ export class WorkspaceController {
   /** #973: what the last unlock did with a staged `.enc.new` in doubt, when it removed or left it (not when it rolled it
    *  forward), for the IPC to log once ({@link takeStageOutcome}), whether the unlock then succeeded or not. */
   private _stageOutcome: Exclude<StageInDoubtOutcome, 'rolled-forward'> | null = null
+  /** #1001: what the last unlock did with the staged document and image copies in doubt (counts), for the IPC to log
+   *  once ({@link takeSidecarStageOutcome}), whether the unlock then succeeded or not. */
+  private _sidecarStageOutcome: SidecarStageOutcome | null = null
+  private readonly noteSidecarStages = (outcome: SidecarStageOutcome): void => {
+    this._sidecarStageOutcome = outcome
+  }
   /**
    * #973 (review round 2 R2): a loss {@link init} judged (it then shredded that session) while a staged database was in
    * doubt. The recovery swapped nothing, so the unlock decides which snapshot opens: held here, not marked, until it
@@ -3087,6 +3312,16 @@ export class WorkspaceController {
     return outcome
   }
 
+  /** #1001: how many staged document and image copies no journal vouched for the last unlock swapped in, removed (they
+   *  do not open under this workspace's key) and left (they could be neither read nor swapped in or removed); null when
+   *  it found none. Returns it once, for the IPC's one content-free log line, on the unlock's success and failure paths
+   *  alike, as {@link takeStageOutcome}. */
+  takeSidecarStageOutcome(): SidecarStageOutcome | null {
+    const outcome = this._sidecarStageOutcome
+    this._sidecarStageOutcome = null
+    return outcome
+  }
+
   /** #875: a lock finished at the last snapshot, or a start swept the last session's broken working file (or, #892, the
    *  session an unclean end left): report it until the next unlock, in this run and (best-effort, the marker) the next. */
   private markWorkingCopyLost(cause: MarkedLossCause, enc?: string | null): void {
@@ -3151,7 +3386,13 @@ export class WorkspaceController {
     }
     let unlocked: UnlockedVault
     try {
-      unlocked = unlockEncryptedVault(this.vaultPaths, password, this.noteProbeFallback, this.noteStageInDoubt)
+      unlocked = unlockEncryptedVault(
+        this.vaultPaths,
+        password,
+        this.noteProbeFallback,
+        this.noteStageInDoubt,
+        this.noteSidecarStages
+      )
     } catch (err) {
       // #911: a failed unlock can end the state the notice is about (a damaged kept copy shredded; a roll-forward that
       // wrote `.enc` before the open failed, #844), never start it, so a notice shown is re-read from the disk.
