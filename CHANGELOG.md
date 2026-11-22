@@ -35,7 +35,7 @@ from its first public `1.0.0` release onward.
   program took one of them, the update stops with "could not be unpacked" and keeps the engine you
   had. Before, such an engine was put in place and could quietly run without your graphics card. An
   engine whose processor libraries are missing is now reported as damaged engine files, with the
-  offer to install it again, instead of as a model that cannot be loaded.
+  offer to install it again, instead of as a model that cannot be loaded (#998, #999, #1000).
 
 ## [0.1.66] — 2026-11-21
 
