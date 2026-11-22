@@ -40,7 +40,6 @@ import {
   shredFile,
   shredFileAsync,
   shredFileWithin,
-  applyPendingRekey,
   rewrapVaultKey,
   stageRekey,
   REKEY_SUFFIX,
@@ -910,34 +909,9 @@ describe('WorkspaceController', () => {
     expect(existsSync(join(imagesDir, 'img1.png.enc'))).toBe(true)
   })
 
-  it('applyPendingRekey swaps every swappable sidecar even when one is stuck (BUG vuln-scan-2026-06-21)', () => {
-    const vp = freshVaultPaths('vault')
-    const docsDir = join(dirname(vp.dbPath), 'documents')
-    mkdirSync(docsDir, { recursive: true })
-    // Two normal staged sidecars: target = old ciphertext, `.new` = the freshly re-keyed one.
-    writeFileSync(join(docsDir, `a.enc`), 'OLD-A')
-    writeFileSync(join(docsDir, `a.enc${REKEY_SUFFIX}`), 'NEW-A')
-    writeFileSync(join(docsDir, `c.enc`), 'OLD-C')
-    writeFileSync(join(docsDir, `c.enc${REKEY_SUFFIX}`), 'NEW-C')
-    // A staged sidecar whose target is a NON-EMPTY DIRECTORY ⇒ renameSync fails for THIS file
-    // only (shredFile's non-recursive rmSync can't remove a non-empty dir either). Simulates a
-    // persistently locked/unswappable file mid-rekey.
-    mkdirSync(join(docsDir, `bad.enc`))
-    writeFileSync(join(docsDir, `bad.enc`, 'keep'), 'x')
-    writeFileSync(join(docsDir, `bad.enc${REKEY_SUFFIX}`), 'NEW-BAD')
-
-    // It surfaces the incomplete swap (the caller logs/recovers) …
-    expect(() => applyPendingRekey(vp)).toThrow()
-
-    // … but the swappable sidecars completed — the old code abandoned them after the first
-    // failure, leaving them under the retired key (transiently undecryptable mid-session).
-    expect(readFileSync(join(docsDir, `a.enc`), 'utf8')).toBe('NEW-A')
-    expect(existsSync(join(docsDir, `a.enc${REKEY_SUFFIX}`))).toBe(false)
-    expect(readFileSync(join(docsDir, `c.enc`), 'utf8')).toBe('NEW-C')
-    expect(existsSync(join(docsDir, `c.enc${REKEY_SUFFIX}`))).toBe(false)
-    // The stuck file stays staged for recoverPendingRekey on the next unlock (old-or-new, never mixed).
-    expect(existsSync(join(docsDir, `bad.enc${REKEY_SUFFIX}`))).toBe(true)
-  })
+  // 'applyPendingRekey swaps every swappable sidecar even when one is stuck (BUG vuln-scan-2026-06-21)' moved to
+  // vault-recovery-guards.test.ts (#1015 round 3): its stand-in for a stuck file was a folder at the target's name, which
+  // the swap now leaves aside without failing; there a held file stands in, through that file's `node:fs` stand-in.
 })
 
 // ---- vault lock durability (full-audit 2026-07-11 CODE-1 / CODE-10 / CODE-14) -----
@@ -1699,28 +1673,19 @@ describe('a workspace put back after the start (#954, #955)', () => {
   }
 
   // Review V F-2 (probe P1, on the unlock path): the start's steps judge the session an unclean end left, sweep it, and
-  // record the loss at their end. Something holding `.enc.new.tmp` (a non-empty directory here) makes the rekey
-  // recovery throw after the sweep, so the first unlock fails; once the hold clears, the retry must run the steps
-  // again (the descriptor was adopted, so "appeared" alone no longer said so) and record the loss the first run judged.
-  it.each<[string, boolean]>([
-    ['with nothing in the way', false],
-    ['after a first unlock whose start steps stopped after the sweep', true]
-  ])('an unclean end put back under the create form: the unlock records the lost session %s', (_case, held) => {
-    const { vp, ctl } = startedEmpty()
-    putBackEndedUnlocked(vp)
-    if (held) {
-      const hold = `${vp.encPath}${REKEY_SUFFIX}.tmp`
-      mkdirSync(hold)
-      writeFileSync(join(hold, 'held'), 'x')
-      expect(thrownBy(() => ctl.unlock('pw')).name).not.toBe('(no error)')
-      expect(ctl.isUnlocked()).toBe(false)
-      expect(existsSync(vp.dbPath)).toBe(false) // the first run's sweep shredded the session
-      rmSync(hold, { recursive: true })
+  // record the loss at their end. The variant whose first unlock stops after the sweep needs a hold the rekey recovery
+  // waits on; since #1015 round 3 a folder at a temp name (the hold this row used) no longer stops it, so that variant
+  // moved to vault-recovery-guards.test.ts, whose `node:fs` stand-in holds a staged file the way an antivirus does.
+  it.each<[string, boolean]>([['with nothing in the way', false]])(
+    'an unclean end put back under the create form: the unlock records the lost session %s',
+    () => {
+      const { vp, ctl } = startedEmpty()
+      putBackEndedUnlocked(vp)
+      ctl.unlock('pw')
+      expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
+      ctl.lock()
     }
-    ctl.unlock('pw')
-    expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
-    ctl.lock()
-  })
+  )
 })
 
 // ---- #911: the encrypted file missing from the drive ------------------------------
@@ -1771,6 +1736,25 @@ describe('the encrypted file missing from the drive (#911)', () => {
     expect(getSettings(next.requireDb()).contextTokens).toBe(9119)
     expect(next.takeRestoredMissingEnc()).toBe(false)
     next.lock()
+  })
+
+  // #1014 round 3 (pre-existing): a folder at the staged database's name is no snapshot. The start counted it as one by
+  // its existence, left the working file to the sweep, and the sweep shredded the only copy of the workspace.
+  it('#911: .enc removed and a folder at the staged name: the start keeps the only copy, and the right password restores it', () => {
+    const vp = lockedVault('vault-911', 'pw')
+    failedLockState(vp, 9119)
+    rmSync(vp.encPath)
+    const folder = `${vp.encPath}${REKEY_SUFFIX}`
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'held'), 'x')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(existsSync(recoveryOf(vp)), 'the kept copy').toBe(true)
+    expect(ctl.getState()).toEqual({ ...LOCKED, lockNotice: 'encrypted_file_missing' })
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(9119)
+    expect(readdirSync(folder)).toEqual(['held'])
+    ctl.lock()
   })
 
   // Nothing left to keep (the session was locked, then `.enc` removed): the right password names the missing file

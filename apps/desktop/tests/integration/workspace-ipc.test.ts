@@ -1538,6 +1538,38 @@ describe('a workspace failure line names no path (#956)', () => {
     }
   })
 
+  // #1014 round 3: an entry is counted once, by the pass that drops it. A journal kept for an outside stage (it waits for
+  // the database) used to keep its refused entries too, so every start counted them again; the start now rewrites it to
+  // list only what still waits, and the unlock's line counts only what that unlock refused.
+  it('a journal kept for a later unlock is not counted again by the next start: the unlock counts only what it refused (#1014)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const outside = join(vp.root, 'notes.txt')
+    writeFileSync(outside, 'keep me')
+    const away = join(vp.root, 'elsewhere')
+    mkdirSync(away)
+    writeFileSync(join(away, 'letter.pdf.enc'), 'a stored copy no document lists')
+    const stage = join(away, 'letter.pdf.enc.new')
+    writeFileSync(stage, 'its stage')
+    writeFileSync(
+      join(dirname(vp.dbPath), 'rekey-journal.json'),
+      JSON.stringify({ version: 1, staged: [stage], remove: [outside] })
+    )
+    expect(startedOn(vp).takeJournalRefusals()).toBe(1) // what main/index.ts logs after that start: the `remove` entry
+    const ctrl = startedOn(vp) // the next start, before any unlock
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      const lines = linesAfter(marker, '(#1014)')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('"refused":1') // the stage no document lists, refused by this unlock
+      expect(readFileSync(outside, 'utf8')).toBe('keep me')
+      expect(readFileSync(stage, 'utf8')).toBe('its stage')
+    } finally {
+      ctrl.lock()
+    }
+  })
+
   // #973: an unlock that removes a staged copy of the database which does not open under the workspace's key (a create's
   // leftover beside a workspace put back) says so once, on the success path, in fixed words: no path, no file name.
   it('an unlock that removes a staged copy from another key logs one line that names no path (#973)', async () => {

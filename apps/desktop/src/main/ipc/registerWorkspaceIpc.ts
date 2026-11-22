@@ -217,12 +217,13 @@ function logProbeFallbacks(ctx: AppContext): void {
  */
 function logStageOutcome(ctx: AppContext): void {
   // #1014: the rekey journal entries the recoveries left as they were (outside the workspace, and not a stored copy the
-  // database lists, or not a stage at all), once, as a count: no path, no file name.
+  // database lists, or not a stage at all; round 3: and the folders left in place), once, as a count: no path, no name.
   const refused = ctx.workspace.takeJournalRefusals?.() ?? 0
   if (refused > 0) {
-    log.warn("Workspace unlock: left the password-change journal's entries it cannot vouch for as they are (#1014)", {
-      refused
-    })
+    log.warn(
+      "Workspace unlock: left as they are the password-change journal's entries it cannot vouch for or act on yet (#1014)",
+      { refused }
+    )
   }
   const outcome = ctx.workspace.takeStageOutcome?.()
   if (outcome === 'removed') {

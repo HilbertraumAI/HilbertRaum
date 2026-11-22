@@ -308,12 +308,13 @@ function initBackend(): void {
     )
   }
   // #1014: the rekey journal entries the start left as they were (outside the workspace folder and not the rotated log,
-  // or not a stage at all). A count only: no path, no file name.
+  // or not a stage at all; round 3: and the folders left in place). A count only: no path, no file name.
   const journalRefusals = workspace.takeJournalRefusals()
   if (journalRefusals > 0) {
-    log.warn("Workspace start: left the password-change journal's entries it cannot vouch for as they are (#1014)", {
-      refused: journalRefusals
-    })
+    log.warn(
+      "Workspace start: left as they are the password-change journal's entries it cannot vouch for or act on yet (#1014)",
+      { refused: journalRefusals }
+    )
   }
   if (workspace.discardedOnlyCopy()) {
     // #911 (owner decision D3): `.enc` was missing and the working copy, the only one, was damaged, so the start swept

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { existsSync, linkSync, lstatSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import {
@@ -12,6 +12,9 @@ import {
   REKEY_JOURNAL_NAME,
   VaultLockError,
   VaultRecoveryBlockedError,
+  applyPendingRekey,
+  shredFile,
+  shredFileWithin,
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
@@ -110,6 +113,8 @@ const failures = vi.hoisted(() => ({
   /** #1015 review R4: renameSync throws a plain `TypeError` (no `code`, no `syscall`: no file error) for a staged document
    *  or image copy renamed onto its stored copy's name while set: the stand-in for a programming error in the swap. */
   renameThrowsPlainErrorOnStagedSidecar: false,
+  /** #1015 round 3: renameSync throws EBUSY for exactly this staged file while set: one stuck file among several. */
+  renameThrowForStage: null as string | null,
   /** #1001 review round 2: renameSync throws this error code for a stored copy the unlock moved aside (`….enc.tmp` under
    *  `documents/` or `images/`) moved back onto its own name while set: the move back after a failed swap fails too. */
   renameThrowOnAsideRestore: null as string | null,
@@ -120,6 +125,9 @@ const failures = vi.hoisted(() => ({
   /** #1001 review round 3: lstatSync reports a symbolic link for exactly this path while set: the stand-in for a link at
    *  the stored copy's name where this machine may not create one (a Windows account without the symlink privilege). */
   lstatReportsSymlink: null as string | null,
+  /** #1014 round 3: lstatSync reports a link count of 0 for exactly this path while set, as some drivers do for a
+   *  regular file (the file itself and its other stats as they are). */
+  lstatReportsNoLinkCount: null as string | null,
   /** #1001 review round 3: the descriptors opened on a staged document or image copy, and the bytes read through them:
    *  what the unlock's pass actually reads of a stage. */
   stagedSidecarFds: new Set<number>(),
@@ -186,6 +194,10 @@ vi.mock('node:fs', async (importOriginal) => {
       if (heldStage !== null && isStagedSidecar(from) && String(to) === String(from).slice(0, -'.new'.length)) {
         failures.hits.renameStagedSidecar += 1
         throw errnoError(heldStage, `${heldStage}: rename (a held staged document copy)`)
+      }
+      if (failures.renameThrowForStage !== null && String(from) === failures.renameThrowForStage) {
+        failures.hits.renameStagedSidecar += 1
+        throw errnoError('EBUSY', 'EBUSY: rename (one held staged file)')
       }
       if (failures.renameThrowsPlainErrorOnStagedSidecar && isStagedSidecar(from)) {
         failures.hits.renameStagedSidecar += 1
@@ -273,6 +285,11 @@ vi.mock('node:fs', async (importOriginal) => {
     lstatSync: vi.fn((...args: unknown[]) => {
       const stats = (actual.lstatSync as unknown as (...a: unknown[]) => unknown)(...args)
       if (stats === undefined) return stats
+      if (failures.lstatReportsNoLinkCount !== null && String(args[0]) === failures.lstatReportsNoLinkCount) {
+        const real = stats as { nlink: number | bigint }
+        const none = typeof real.nlink === 'bigint' ? { nlink: 0n } : { nlink: 0 }
+        return Object.assign(Object.create(Object.getPrototypeOf(stats) as object) as object, stats, none)
+      }
       if (failures.lstatReportsSymlink !== null && String(args[0]) === failures.lstatReportsSymlink) {
         return Object.assign(Object.create(Object.getPrototypeOf(stats) as object) as object, stats, {
           isFile: () => false,
@@ -346,10 +363,12 @@ beforeEach(() => {
   failures.sidecarTargetDeletePending = null
   failures.renameThrowOnStagedSidecar = null
   failures.renameThrowsPlainErrorOnStagedSidecar = false
+  failures.renameThrowForStage = null
   failures.renameThrowOnAsideRestore = null
   failures.statReportsNoInode = false
   failures.openThrowOnSidecarTarget = null
   failures.lstatReportsSymlink = null
+  failures.lstatReportsNoLinkCount = null
   failures.stagedSidecarFds.clear()
   failures.stageBytesRead = 0
   failures.hits = {
@@ -1527,5 +1546,107 @@ describe("a staged copy the journal lists that the start cannot swap in (#1015)"
     }
     expect(failures.hits.renameStagedSidecar).toBeGreaterThan(0)
     expect(ctl.isRecoveryBlocked()).toBe(false)
+  })
+
+  // BUG vuln-scan-2026-06-21, moved here from workspace-vault.test.ts (#1015 round 3: its stand-in for a stuck file was a
+  // folder at the target's name, which the swap now leaves aside without failing; a held file stands in here): a swap
+  // that fails for ONE staged sidecar must not abandon the others, which would leave them under the retired key while the
+  // controller already holds the new one.
+  it('applyPendingRekey swaps every swappable sidecar even when one is stuck (BUG vuln-scan-2026-06-21)', () => {
+    const vp = freshVaultPaths('recovery-guards-vuln-scan')
+    const docsDir = join(dirname(vp.dbPath), 'documents')
+    mkdirSync(docsDir, { recursive: true })
+    // Two normal staged sidecars: target = old ciphertext, `.new` = the freshly re-keyed one.
+    writeFileSync(join(docsDir, `a.enc`), 'OLD-A')
+    writeFileSync(join(docsDir, `a.enc.new`), 'NEW-A')
+    writeFileSync(join(docsDir, `c.enc`), 'OLD-C')
+    writeFileSync(join(docsDir, `c.enc.new`), 'NEW-C')
+    // A staged sidecar another program holds: its rename fails, for THIS file only, on both attempts.
+    writeFileSync(join(docsDir, `bad.enc`), 'OLD-BAD')
+    writeFileSync(join(docsDir, `bad.enc.new`), 'NEW-BAD')
+    failures.renameThrowForStage = join(docsDir, `bad.enc.new`)
+    try {
+      // It surfaces the incomplete swap (the caller logs/recovers) …
+      expect(() => applyPendingRekey(vp)).toThrow()
+    } finally {
+      failures.renameThrowForStage = null
+    }
+    expect(failures.hits.renameStagedSidecar).toBe(2) // the swap and its one retry
+    // … but the swappable sidecars completed — the old code abandoned them after the first
+    // failure, leaving them under the retired key (transiently undecryptable mid-session).
+    expect(readFileSync(join(docsDir, `a.enc`), 'utf8')).toBe('NEW-A')
+    expect(existsSync(join(docsDir, `a.enc.new`))).toBe(false)
+    expect(readFileSync(join(docsDir, `c.enc`), 'utf8')).toBe('NEW-C')
+    expect(existsSync(join(docsDir, `c.enc.new`))).toBe(false)
+    // The stuck file stays staged for recoverPendingRekey on the next unlock (old-or-new, never mixed).
+    expect(existsSync(join(docsDir, `bad.enc.new`))).toBe(true)
+  })
+
+  // Review V F-2 (probe P1, on the unlock path), moved here from workspace-vault.test.ts: the start's steps judge the
+  // session an unclean end left, sweep it, and record the loss at their end. A hold the rekey recovery waits on (a staged
+  // document copy an antivirus holds) stops them after the sweep, so the first unlock is refused; once the hold clears,
+  // the retry must run the steps again (the descriptor was adopted, so "appeared" alone no longer said so) and record the
+  // loss the first run judged. (The row used a folder at `.enc.new.tmp` before; since #1015 round 3 a folder at a temp
+  // name holds no data and no longer stops the start.)
+  it('an unclean end put back under the create form: the unlock records the lost session after a first unlock whose start steps stopped after the sweep', () => {
+    const vp = freshVaultPaths('recovery-guards-f2')
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.getState().state).toBe('uninitialized')
+    const src = lockedVault('recovery-guards-f2-src', 'pw')
+    backdate(src.encPath)
+    endedUnlocked(src, 4242, 'pw')
+    copyFileSync(src.descriptorPath, vp.descriptorPath)
+    copyFileSync(src.encPath, vp.encPath)
+    backdate(vp.encPath)
+    for (const suffix of ['', '-wal', '-shm']) copyFileSync(`${src.dbPath}${suffix}`, `${vp.dbPath}${suffix}`)
+    // A password change cut short after its commit, with one document stage left to swap in.
+    const docs = join(dirname(vp.dbPath), 'documents')
+    mkdirSync(docs, { recursive: true })
+    const staged = join(docs, 'd3.pdf.enc.new')
+    writeFileSync(join(docs, 'd3.pdf.enc'), 'the old copy')
+    writeFileSync(staged, 'the new copy')
+    writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME), JSON.stringify({ version: 1, staged: [staged], remove: [] }))
+    failures.renameThrowOnStagedSidecar = 'EBUSY'
+    try {
+      expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
+      expect(ctl.isUnlocked()).toBe(false)
+      expect(existsSync(vp.dbPath)).toBe(false) // the first run's sweep shredded the session
+    } finally {
+      failures.renameThrowOnStagedSidecar = null
+    }
+    expect(failures.hits.renameStagedSidecar).toBeGreaterThan(0)
+    ctl.unlock('pw')
+    expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
+    ctl.lock()
+  })
+})
+
+// #1014 round 3: the secure delete overwrites a regular file whose link count reads 0 as one of one link. Some drivers
+// report 0 for every regular file, and treating that as "another name shares it" left the plaintext unlinked but whole
+// on the drive. A descriptor held across the shred shows what was written in place.
+describe('the secure delete where the drive reports no link count (#1014)', () => {
+  it.each<[string, (path: string) => unknown]>([
+    ['shredFile', (path) => shredFile(path)],
+    ['shredFileWithin', (path) => shredFileWithin(path, { deadline: Number.MAX_SAFE_INTEGER, now: () => 0 })]
+  ])('%s overwrites a file whose link count reads 0, then unlinks it', (_name, shred) => {
+    const path = join(freshVaultPaths('recovery-guards-nlink').root, 'plain.bin')
+    const plain = Buffer.alloc(64 * 1024, 0xa5)
+    writeFileSync(path, plain)
+    const view = openSync(path, 'r')
+    try {
+      failures.lstatReportsNoLinkCount = path
+      try {
+        shred(path)
+      } finally {
+        failures.lstatReportsNoLinkCount = null
+      }
+      expect(existsSync(path)).toBe(false)
+      const after = Buffer.alloc(plain.length)
+      expect(readSync(view, after, 0, after.length, 0)).toBe(plain.length)
+      expect(after.equals(plain)).toBe(false)
+    } finally {
+      closeSync(view)
+    }
   })
 })
