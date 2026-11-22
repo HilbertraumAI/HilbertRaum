@@ -35,7 +35,7 @@ import { t } from '../../src/shared/i18n'
 import { chunkIdsOf, seedReadyTree } from '../helpers/doc-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { REPO_APP_SKILLS_DIR, type SkillSpec, writeSkillPackage } from '../helpers/skill-fixtures'
-import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
+import { answerTurns, recordingRuntime, translationCalls, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { asNoFenceMapPrompt, asPreRequestMapPrompt } from '../helpers/whole-doc-fixtures'
 import { approxPromptTokens, buildSkillFence } from '../../src/main/services/skills/prompt'
@@ -424,7 +424,7 @@ const passagesSent = (rt: RecordingRuntime): number => (lastUserTurn(rt).match(/
 
 /** The skill instructions each model call saw (between the fence's label and its END line), call by call. */
 function fenceBodies(rt: RecordingRuntime): string[] {
-  return rt.turns.map((turn) => {
+  return answerTurns(rt).map((turn) => {
     const user = turn.filter((m) => m.role === 'user').at(-1)?.content ?? ''
     const match = user.match(/\nSkill instructions:\n([\s\S]*?)\n--- END LOCAL SKILL ---/)
     return match ? match[1] : '(no fence)'
@@ -564,13 +564,16 @@ describe('askDocuments — a thank-you that names the answer gets the short repl
 
 describe("askDocuments — the bundled compare skill's fall-through turn carries paragraph 1 of its fence (#632)", () => {
   it.each([
-    { name: 'what-changed over one document', skillId: WHAT_CHANGED_INSTALL_ID, texts: ONE_DRAFT, question: TENANT },
-    { name: 'what-changed over three documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: LEASE_DRAFTS, question: TENANT }
-  ])('$name: the heading + honesty rules only, and the answer is still stamped', async ({ skillId, texts, question }) => {
+    { name: 'what-changed over one document', skillId: WHAT_CHANGED_INSTALL_ID, texts: ONE_DRAFT, question: TENANT, translations: 0 },
+    { name: 'what-changed over three documents', skillId: WHAT_CHANGED_INSTALL_ID, texts: LEASE_DRAFTS, question: TENANT, translations: 1 }
+  ])('$name: the heading + honesty rules only, and the answer is still stamped', async ({ skillId, texts, question, translations }) => {
     const h = await makeFenceHarness(texts)
     const logged = capLogCount(skillId)
     const msg = await ask(h, question, skillId)
-    expect(h.runtime.calls).toBe(1)
+    // #1003: the German question over the English drafts is translated for the passage search first (the passage
+    // search only: one document is read whole, with no translation); one answer turn.
+    expect(answerTurns(h.runtime)).toHaveLength(1)
+    expect(translationCalls(h.runtime)).toBe(translations)
     expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId])[0]])
     expect(capLogCount(skillId) - logged).toBe(1)
     expect(fenceBodies(h.runtime).join('\n')).not.toContain('Produce ')
@@ -633,14 +636,15 @@ describe("askDocuments — the bundled compare skill's fall-through turn carries
   // for the bundled skills only (owner round WB2-1), so a user one keeps its whole fence. (#831 gave the four bundled
   // whole-document skills the reduction too: the describe below.)
   it.each([
-    { name: 'a user skill declaring analysis: compare, one document', skillId: USER_COMPARE_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped' },
-    { name: 'a user skill declaring analysis: whole-doc, three documents', skillId: USER_WHOLE_DOC_INSTALL_ID, texts: LEASE_DRAFTS, mode: 'relevance' },
-    { name: 'a user skill with no analysis engine, one document', skillId: USER_PLAIN_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped' }
-  ])("another skill's fall-through keeps its whole fence ($name)", async ({ skillId, texts, mode }) => {
+    { name: 'a user skill declaring analysis: compare, one document', skillId: USER_COMPARE_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped', translations: 0 },
+    { name: 'a user skill declaring analysis: whole-doc, three documents', skillId: USER_WHOLE_DOC_INSTALL_ID, texts: LEASE_DRAFTS, mode: 'relevance', translations: 1 },
+    { name: 'a user skill with no analysis engine, one document', skillId: USER_PLAIN_INSTALL_ID, texts: ONE_DRAFT, mode: 'capped', translations: 0 }
+  ])("another skill's fall-through keeps its whole fence ($name)", async ({ skillId, texts, mode, translations }) => {
     const h = await makeFenceHarness(texts)
     const logged = capLogCount(skillId)
     const msg = await ask(h, TENANT, skillId)
     expect(msg.coverage?.mode).toBe(mode)
+    expect(translationCalls(h.runtime)).toBe(translations) // #1003: the passage search only
     expect(capLogCount(skillId) - logged).toBe(0)
     expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[skillId]).join('\n\n')])
     expect(msg.skillId).toBe(skillId)
@@ -666,7 +670,8 @@ describe("askDocuments — the bundled compare skill's fall-through turn carries
     expect(fits(wholeDocumentFitBudgetTokens(4096, TENANT, skill, 'first-paragraph'))).toBe(true)
 
     const msg = await ask(h, TENANT, skillId)
-    expect(h.runtime.calls).toBe(1)
+    expect(answerTurns(h.runtime)).toHaveLength(1)
+    expect(translationCalls(h.runtime)).toBe(mode === 'relevance' ? 1 : 0) // #1003: the passage search only
     expect(msg.coverage?.mode).toBe(mode)
     if (mode === 'capped') {
       expect(msg.coverage).toMatchObject({ truncated: false, chunksCovered: sections })
@@ -700,7 +705,8 @@ describe("askDocuments — a bundled whole-document skill's fall-through turn ca
     const h = await makeFenceHarness(LEASE_DRAFTS)
     const logged = capLogCount(appId(id))
     const msg = await ask(h, TENANT, appId(id))
-    expect(h.runtime.calls).toBe(1)
+    expect(answerTurns(h.runtime)).toHaveLength(1)
+    expect(translationCalls(h.runtime)).toBe(1) // #1003: the German question over the English drafts
     expect(msg.coverage?.mode).toBe('relevance')
     expect(fenceBodies(h.runtime)).toEqual([paragraphsOf(BODIES[appId(id)])[0]])
     expect(fenceBodies(h.runtime).join('\n')).not.toContain('Produce ')

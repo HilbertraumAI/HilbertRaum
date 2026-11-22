@@ -3,6 +3,7 @@
 // scripts a reply + finish reason (or a Stop) per call; `failingRuntime` throws before its first token. Only
 // `finishScriptedRuntime` fires `onFinish`, and none emits `onReasoning`, so a test that needs reasoning keeps its own fake.
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../../src/main/services/runtime'
+import { TRANSLATE_RESPONSE_SCHEMA } from '../../src/main/services/rag/cross-language'
 
 export interface ScriptedCall {
   messages: ChatMessage[]
@@ -79,6 +80,20 @@ export function recordingRuntime(
     }
   }
   return rt
+}
+
+/**
+ * #1003: the turns of `rt` other than the cross-language translation call. A German question over English documents is
+ * first translated for the passage search (`rag/cross-language.ts`: one call constrained to `TRANSLATE_RESPONSE_SCHEMA`),
+ * so a suite about the answer turn counts and reads these.
+ */
+export function answerTurns(rt: RecordingRuntime): ChatMessage[][] {
+  return rt.turns.filter((_turn, i) => rt.options[i]?.responseSchema !== TRANSLATE_RESPONSE_SCHEMA)
+}
+
+/** #1003: how many of `rt`'s calls were the cross-language translation (at most one per answer, never one per map step). */
+export function translationCalls(rt: RecordingRuntime): number {
+  return rt.options.filter((o) => o?.responseSchema === TRANSLATE_RESPONSE_SCHEMA).length
 }
 
 export interface FinishStep {
