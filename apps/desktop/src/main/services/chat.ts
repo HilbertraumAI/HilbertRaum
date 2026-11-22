@@ -237,7 +237,8 @@ interface MessageRow {
   coverage_json: string | null
   /** 1 when this assistant reply was cut off at a ceiling (finish_reason 'length'); else NULL/0. */
   truncated: number | null
-  /** #498 — which ceiling cut it: 'context' | 'cap'. NULL on a complete reply and on a pre-#498
+  /** #498 — which ceiling cut it: 'context' | 'cap', or (#994) 'repeat' when the repetition guard stopped a
+   *  whole-document answer. NULL on a complete reply and on a pre-#498
    *  truncated row (read back as 'context', the flag's historical meaning). */
   truncated_cause?: string | null
   /** #600 — what ended this turn early ('model' | 'user' | 'lock'), or NULL (complete / pre-#600). */
@@ -455,9 +456,10 @@ function serializePackOutcomes(outcomes: KnowledgePackOutcome[] | null | undefin
 
 /** Read `messages.truncated_cause` (#498) for a row already known to be truncated. NULL (pre-#498)
  *  or an unrecognized value ⇒ 'context', the flag's historical meaning — so a legacy cut-off reply
- *  keeps exactly the advice it used to show. Only ever called when `truncated === 1`. */
+ *  keeps exactly the advice it used to show. Only ever called when `truncated === 1`. #994 adds
+ *  'repeat' (an answer the app stopped because it repeated itself). */
 function parseTruncationCause(raw: string | null | undefined): TruncationCause {
-  return raw === 'cap' ? 'cap' : 'context'
+  return raw === 'cap' || raw === 'repeat' ? raw : 'context'
 }
 
 function rowToMessage(r: MessageRow): Message {

@@ -447,6 +447,9 @@ export const tr: UiCatalog<'tr'> = {
   'chat.truncated.hint.cap':
     'Belgelere dayalı bu yanıt, uygulamanın tek bir yanıt için izin verdiği sabit uzunluğa ' +
     'ulaştı. Modelden kaldığı yerden devam etmesini isteyin.',
+  'chat.truncated.hint.repeat':
+    'Model kendini tekrar etmeye başladı, bu yüzden uygulama bu yanıtı durdurdu. Yeniden sorun veya ' +
+    'soruyu daraltın.',
   'chat.speed.line': '{tps}\u00A0tok/s · ilk token: {ttft}\u00A0s · {tokens} token',
   'chat.speed.hint':
     'Bu yanıtın ne kadar hızlı oluşturulduğu: yapay zekâ motorunun üretim hızı, ilk sözcüğe ' +

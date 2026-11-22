@@ -508,6 +508,9 @@ export const fr: UiCatalog<'fr'> = {
   'chat.truncated.hint.cap':
     'Cette réponse fondée sur vos documents a atteint la longueur maximale que l’application ' +
     'autorise pour une réponse. Demandez au modèle de continuer là où il s’est arrêté.',
+  'chat.truncated.hint.repeat':
+    'Le modèle a commencé à se répéter, l’application a donc arrêté cette réponse. Posez à nouveau ' +
+    'la question ou précisez-la.',
   'chat.speed.line':
     '{tps}\u00A0tok/s · premier token après {ttft}\u00A0s · tokens\u00A0: {tokens}',
   'chat.speed.hint':

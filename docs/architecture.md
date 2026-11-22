@@ -1225,8 +1225,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   **Since 2026-09-21 (#498)** the badge names no cause at all — it reads just "Reply cut off" — because
   the grounded paths DO flag their own pinned cap (they pin 1024 per pass and continue, §15.8/#491) and
   the "raise the context size" remedy is wrong for those. The cause rides per message instead, as
-  `Message.truncatedCause` (`'context' | 'cap'`, persisted `messages.truncated_cause`, NULL on a legacy
-  row ⇒ read as `'context'`), and the renderer picks the tooltip from it. Decided by the pure
+  `Message.truncatedCause` (`'context' | 'cap'`, plus `'repeat'` since #994 for a whole-document answer the
+  repetition guard stopped; persisted `messages.truncated_cause`, NULL on a legacy row ⇒ read as
+  `'context'`), and the renderer picks the tooltip from it. Decided by the pure
   `truncationCause(finishReason, sentCap, timings)` (`rag/whole-doc-tree.ts`): not `'length'` ⇒ no cause;
   no cap sent ⇒ `'context'`; the server generated FEWER tokens than the cap it was given ⇒ `'context'`
   (only the window explains stopping short); otherwise `'cap'`. On the continuation engine the window
@@ -1595,7 +1596,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         no longer pre-empts the external lane or stamps `lastPreemptedAt`.
       - **`persistAssistantMessage`** stamps `endedEarly: 'model'` from that reason. It is a new
         nullable column, `messages.ended_early`, because an older app reads an unknown
-        `truncated_cause` as "raise the context size", while it ignores a new column. The column is
+        `truncated_cause` as "raise the context size", while it ignores a new column (#994's
+        `'repeat'` cause accepts that older-app reading on purpose for a rare answer; see
+        `docs/data-contracts.md` `messages.truncated_cause`). The column is
         carried through `DeletedMessage`, read tolerantly, and its values `user`/`lock` are
         reserved for #612 (written since the #612 amendment below).
       - **`withRegenerateGuard`** now holds the model-stop rules for every turn:
@@ -9394,7 +9397,14 @@ output ≤ n_ctx` always); **(3)** the ephemeral `'analysis'` progress notice fi
 deliverable (same fence + notes + question + a resume anchor, seam de-duplicated) across ≤ 2 bounded passes,
 stamping an honest **`Message.truncated`** (OUTPUT-cut, parity with the single-turn grounded path) — kept
 distinct from `coverage.truncated` (INPUT coverage) — only when the cap is exhausted. The §14 ceiling + the
-fence/guard bracketing are unchanged throughout.
+fence/guard bracketing are unchanged throughout. **Repetition guard (#994, follow-ups wave 7, record:
+`rag-design.md` §14.10, §14.10.2).** The core watches what the model streams (`rag/repetition-guard.ts`, pure,
+complete lines only): the same line six times in a row, compared with its numbers, stops the pass by leaving the
+token loop (the stream's `finally` cancels the request). Rows that differ only in numbers never trip it; the Meeting
+Minutes recursion is not stopped (no heading rule passed its evaluation). The answer is cut back to before
+its repeated tail and ends there, stamped `truncatedCause: 'repeat'` (B1; a trip in a continuation ends it the same
+way). A map or fold note that loops is stopped and keeps one copy. The single-turn
+grounded path passes no guard to the shared engine, and a turn that never trips sends every request as before.
 
 **2-document whole-doc compare (Follow-up B, Wave 3, 2026-06-22).** `what-changed` registers a
 **`grounded-whole-doc-compare`** handler (`analysis/whole-doc-skills.ts`) whose `applies()` matches a

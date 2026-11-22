@@ -754,6 +754,21 @@ describe('generateGroundedAnswer', () => {
     expect(msg.truncatedCause).toBe('context')
   })
 
+  // #994, owner call G-5: the repetition guard watches whole-document answers only. The single-turn grounded path
+  // passes none to the shared engine, so its continuation is stored as the model wrote it, repeats and all.
+  it('#994: a grounded continuation is not watched by the repetition guard (whole-document answers only)', async () => {
+    const row = '| 14 days of the request | Party requesting consent must be told about reasonable conditions |\n'
+    const runtime = finishScriptedRuntime([
+      { reply: 'Deadlines:\n', finish: 'length' },
+      { reply: row.repeat(8), finish: 'stop' }
+    ])
+    const msg = await askGrounded(runtime)
+
+    expect(runtime.calls).toBe(2)
+    expect(msg.content).toBe(`Deadlines:\n${row.repeat(8)}`)
+    expect(msg.truncated).toBeUndefined()
+  })
+
   it('#498: a grounded answer that finishes cleanly carries neither the flag nor a cause', async () => {
     const msg = await askGrounded(finishScriptedRuntime([{ reply: 'A complete answer.', finish: 'stop' }]))
     expect(msg.truncated).toBeUndefined()
@@ -798,6 +813,19 @@ describe('generateGroundedAnswer', () => {
     const msg = await generateGroundedAnswer(db, rt, embedder, conv.id, q, SETTINGS)
     expect(msg.content).toBe('Cited answer [S1].')
     expect(listMessages(db, conv.id).at(-1)?.content).not.toContain('<think>')
+  })
+
+  // W1 surprise 2 (folded into #994's PR): `stripThinkBlocks` trims what it keeps, so a think-only reply after the
+  // scope notice left the notice without its blank line, which `content === seededPrefix` missed: the notice alone
+  // was persisted as the answer.
+  it('a think-only reply after the scope notice persists nothing: the notice alone is no answer', async () => {
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* () {
+      yield '<think>retrieval reasoning</think>'
+    })
+    const msg = await askGrounded(rt, { answerPrefix: 'This chat now asks about one document only.\n\n' })
+    expect(msg.content).toBe('')
+    expect(msg.coverage).toBeUndefined()
   })
 
   // F-02 (audit 2026-07-16) consumer semantics, grounded relevance path: a mid-stream in-band

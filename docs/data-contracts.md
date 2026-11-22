@@ -521,11 +521,15 @@ equal-ms ties → stable turn order). **System prompt is built per request, NOT 
 `messages.pack_outcomes_json` (#301 P4, findings M6/M7) is additive and null on every
 pre-P4 row and every message with no knowledge pack in scope — see "Knowledge packs"
 below for the shape and the whitelist that parses it.
-`messages.truncated_cause` (#498) is additive and nullable: `'context' | 'cap'` next to
+`messages.truncated_cause` (#498) is additive and nullable: `'context' | 'cap' | 'repeat'` next to
 `messages.truncated`, surfaced as `Message.truncatedCause` (`TruncationCause`) and written
 only alongside `truncated: true`. NULL on every complete reply and every pre-#498 row — a
 truncated legacy row reads back as `'context'`, the flag's historical meaning — and it is
 carried verbatim through the regenerate delete/restore snapshot (`DeletedMessage`).
+`'repeat'` (#994, follow-ups wave 7) marks a whole-document answer the app stopped because it kept
+repeating itself ([`rag-design.md`](rag-design.md) §14.10). An app older than that release reads it
+as an unknown value, so as `'context'`: its tooltip then advises a larger context, a harmless
+setting hint on a rare answer.
 `messages.ended_early` (#600) is additive and nullable: `'model' | 'user' | 'lock'` (`EndedEarly`),
 surfaced as `Message.endedEarly`: `'model'` = the user stopped or switched the chat model mid-turn
 (#600), `'user'` = the chat's Stop button, `'lock'` = "Lock now" or quit (both #612). On an assistant

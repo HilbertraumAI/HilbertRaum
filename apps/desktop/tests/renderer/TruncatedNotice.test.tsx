@@ -32,11 +32,14 @@ describe('Transcript truncation notice (#498)', () => {
     expect(screen.queryByText(/Kontextlimit/)).not.toBeInTheDocument()
   })
 
+  // #994: 'repeat' — the app stopped a whole-document answer that kept repeating itself.
   it.each([
     ['en', 'context', 'raise the context size', true],
     ['en', 'cap', 'raise the context size', false],
+    ['en', 'repeat', 'raise the context size', false],
     ['de', 'context', 'Kontextgröße', true],
-    ['de', 'cap', 'Kontextgröße', false]
+    ['de', 'cap', 'Kontextgröße', false],
+    ['de', 'repeat', 'Kontextgröße', false]
   ] as const)(
     '%s: a %s cut-off picks its tooltip; only the window cause advises a bigger context',
     (lang, cause, remedy, advises) => {

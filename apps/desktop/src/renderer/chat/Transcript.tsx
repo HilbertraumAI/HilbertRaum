@@ -607,15 +607,18 @@ const MessageBlock = memo(function MessageBlock({
             marker with an explanatory tooltip (guidelines §9); role="note" so AT reads it as
             supplementary to the answer, not an alert. #498: the label names no cause (two different
             ceilings produce the same signal) and the tooltip follows `truncatedCause` — a row that
-            carries none (written before #498) keeps the old context-window advice. */}
+            carries none (written before #498) keeps the old context-window advice. #994: 'repeat' = the
+            app stopped a whole-document answer that kept repeating itself. */}
         {m.role === 'assistant' && m.truncated && (
           <div
             className="msg-truncated"
             role="note"
             title={
-              (m.truncatedCause ?? 'context') === 'cap'
+              m.truncatedCause === 'cap'
                 ? t('chat.truncated.hint.cap')
-                : t('chat.truncated.hint.context')
+                : m.truncatedCause === 'repeat'
+                  ? t('chat.truncated.hint.repeat')
+                  : t('chat.truncated.hint.context')
             }
           >
             <span className="msg-truncated-glyph" aria-hidden="true">

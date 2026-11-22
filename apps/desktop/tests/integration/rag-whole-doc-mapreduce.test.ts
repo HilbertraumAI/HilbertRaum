@@ -17,12 +17,15 @@ import { ANALYSIS_RESPONSE_RESERVE_TOKENS, CHAT_RESPONSE_RESERVE_TOKENS, listMes
 import { retrieveWholeDocument, wholeDocumentFitBudgetTokens, type GroundedAnswerOptions } from '../../src/main/services/rag'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { buildSkillFence } from '../../src/main/services/skills/prompt'
+import { createRepetitionGuard } from '../../src/main/services/rag/repetition-guard'
+import { continueUntilComplete } from '../../src/main/services/rag/whole-doc-tree'
 import { finishScriptedRuntime, recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import {
   answerWholeDoc,
   asNoFenceMapPrompt,
   asPreRequestMapPrompt,
   germanDoc,
+  masterContinuationTurn,
   WHOLE_DOC_QUESTION,
   wholeDocHarness,
   type WholeDocHarness
@@ -294,6 +297,18 @@ describe('whole-document chunk map-reduce — the beginning-only line (#996 A)',
     expect(assistantRows).toHaveLength(0)
   })
 
+  // W1 surprise 2 (folded into #994's PR): `stripThinkBlocks` trims what it keeps, so a think-only reply after the
+  // scope notice left the notice without its blank line, which `content === seeded` missed: the notice alone was
+  // persisted as the answer, stamped with whole-document coverage.
+  it('a think-only reduce reply after the scope notice persists nothing, on a whole document too', async () => {
+    const runtime = reduceScriptRuntime('Notiz zum Abschnitt.', '<think>weighing the notes</think>')
+    const { msg, assistantRows } = await run(runtime, { answerPrefix: PREFIX })
+    expect(runtime.reduceCalls).toBe(1)
+    expect(msg.content).toBe('')
+    expect(msg.coverage).toBeUndefined()
+    expect(assistantRows).toHaveLength(0)
+  })
+
   /** Map and fold calls yield `note`; the reduce and its continuations (user turns ending "Answer:" or
    *  "Continuation:") take `steps` in order. Each yields its reply (nothing when empty: a pass a thinking model
    *  spent reasoning) and fires its finish reason; `stepTurns` records their user turns. */
@@ -490,6 +505,299 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
     expect(runtime.calls).toBe(2)
     expect(msg.content.endsWith(`${cutItem} unless the lease provides otherwise or`)).toBe(true)
     expect(msg.truncated).toBeUndefined() // a Stop is the user's choice, not a cut
+  })
+})
+
+// #994 (follow-ups wave 7, owner calls G-3, G-4, G-5): at temperature 0.3 a small model can write one table row or
+// one list line over and over until its output cap and every continuation are used up (20–38k characters, 67–435 s).
+// The whole-document engine now watches the text it streams for the same line six times in a row
+// (rag/repetition-guard.ts, unit rows in tests/unit/repetition-guard.test.ts). On a trip the pass is stopped (the
+// consumer leaves the stream, which cancels the request), the answer is cut back to before its repeated tail and ends
+// there with the cut stamp, cause 'repeat' (B1: in the GPU session the one continuation B2 allowed restarted the loop
+// in 3 of 3 runs). A map or fold note that loops is stopped and keeps one copy. A turn the guard never trips sends
+// every request as before.
+describe('whole-document chunk map-reduce — the repetition guard (#994)', () => {
+  type Ending = 'complete' | 'left'
+  interface LineRuntime extends ModelRuntime {
+    turns: ChatMessage[][]
+    options: Array<RuntimeChatOptions | undefined>
+    /** Per call: the stream ran to its end ('complete'), or its consumer left it early ('left': the cancel). */
+    endings: Ending[]
+  }
+  /** Map and fold calls stream `note(i)` (i counts the map and fold calls); the reduce and its continuations (user
+   *  turns ending "Answer:" or "Continuation:") take `steps` in order, the last one reused. Every reply streams one
+   *  line per token, and a step's finish reason fires after its last line (never when the consumer left). */
+  function lineRuntime(note: (i: number) => string, steps: Array<{ reply: string; finish: string }>, ctx = CTX): LineRuntime {
+    let maps = 0
+    let stepAt = 0
+    const rt: LineRuntime = {
+      modelId: 'mock',
+      turns: [],
+      options: [],
+      endings: [],
+      contextWindow: () => ctx,
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+        const at = rt.turns.push(messages) - 1
+        rt.options.push(options)
+        rt.endings.push('left')
+        const user = userTurnOf(messages)
+        const isStep = user.endsWith('\n\nAnswer:') || user.endsWith('\n\nContinuation:')
+        const reply = isStep ? steps[Math.min(stepAt, steps.length - 1)]!.reply : note(maps++)
+        const finish = isStep ? steps[Math.min(stepAt++, steps.length - 1)]!.finish : null
+        for (const line of reply.match(/[^\n]*\n|[^\n]+$/g) ?? []) yield line
+        if (finish !== null) options?.onFinish?.(finish)
+        rt.endings[at] = 'complete'
+      }
+    }
+    return rt
+  }
+  const lines = (...ls: string[]): string => ls.map((l) => `${l}\n`).join('')
+  const times = (n: number, f: (i: number) => string): string[] => Array.from({ length: n }, (_, i) => f(i))
+  const HEADER = ['## 1. Important deadlines', '', '| # | Deadline | What happens |', '|---|---|---|']
+  const FIRST = '| 1 | 31 December 2030 | Notice of termination must reach the landlord in writing |'
+  /** The looping row, written the same way each time (rows that count up a number are different lines, #994 round 3). */
+  const ROW = '| 14 days of the request | Party requesting consent must be told about reasonable conditions |'
+  const LOOP = (): string => ROW
+  const LATER = '| 10 | 1 March 2031 | The deposit is paid back within eight weeks of the handover |'
+  /** The reduce's text up to the first copy of the looping row: what the guard keeps of a looping reduce. */
+  const KEPT = lines(...HEADER, FIRST, ROW)
+  const LOOPING = lines(...HEADER, FIRST, ...times(9, LOOP))
+
+  async function ask(runtime: ModelRuntime, sentences = 90) {
+    const h = await makeHarness(sentences) // 90: one window, so call 0 is the reduce; 280: a real map step
+    const tokens: string[] = []
+    const msg = await answerWholeDoc(h, runtime, { onToken: (token) => tokens.push(token) })
+    return { msg, streamed: tokens.join('') }
+  }
+
+  it('a reduce that starts repeating a row is stopped at the sixth copy, cut back to one copy and stamped "repeat"', async () => {
+    const runtime = lineRuntime(() => 'Notiz.', [
+      { reply: LOOPING, finish: 'length' },
+      { reply: lines(LATER), finish: 'stop' }
+    ])
+    const { msg, streamed } = await ask(runtime)
+
+    // The reduce stream was left at the sixth copy (the live bubble showed the loop up to there and no further).
+    expect(runtime.endings).toEqual(['left'])
+    expect(streamed.split(ROW).length - 1).toBe(6)
+    // Nothing continues it (B1), although the pass would have been cut at its ceiling and a continuation was left.
+    expect(runtime.turns).toHaveLength(1)
+    expect(msg.content).toBe(KEPT)
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('repeat')
+    expect(msg.coverage?.truncated).toBe(false) // INPUT coverage is untouched
+  })
+
+  it('a continuation that starts repeating is stopped and cut back too, and no further pass runs', async () => {
+    const runtime = lineRuntime(() => 'Notiz.', [
+      { reply: lines(...HEADER, FIRST), finish: 'length' },
+      { reply: lines(LATER, ...times(9, LOOP)), finish: 'length' },
+      { reply: lines('This pass must never run.'), finish: 'stop' }
+    ])
+    const { msg } = await ask(runtime)
+
+    expect(runtime.endings).toEqual(['complete', 'left'])
+    expect(runtime.turns).toHaveLength(2) // one continuation was still left: the trip ends the answer anyway
+    expect(msg.content).toBe(lines(...HEADER, FIRST, LATER, ROW))
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('repeat')
+  })
+
+  // Code review round 5: a looping wholly bold line used to be cut back to nothing (read as an empty heading), so the
+  // turn the user had watched stream was not stored at all.
+  it('a reduce that loops on a bold line keeps its first copy and is stored, stamped "repeat"', async () => {
+    const bold = '**Clause 4.2: Tenant must give notice within fourteen days**'
+    const runtime = lineRuntime(() => 'Notiz.', [{ reply: lines('## Deadlines', '', ...times(9, () => bold)), finish: 'length' }])
+    const { msg } = await ask(runtime)
+
+    expect(runtime.endings).toEqual(['left'])
+    expect(msg.content).toBe(lines('## Deadlines', '', bold))
+    expect(msg.truncatedCause).toBe('repeat')
+  })
+
+  // Code review round 5: a Stop while a continuation's opening is still held back for the seam check flushes it in
+  // the engine's finally; that flush can complete a run, and the stored partial is cut back like any trip.
+  it('a Stop that flushes a looping continuation opening stores one copy of the loop, unstamped', async () => {
+    const first = lines(
+      'The tenant pays the rent on the third working day of every month.',
+      'The deposit equals three months of the net rent and is held by the landlord.',
+      'The lease runs for five years and can be renewed once for three more years.'
+    )
+    const row = '- The tenant pays rent monthly'
+    const runtime = finishScriptedRuntime([
+      { reply: first, finish: 'length' },
+      { reply: lines(...times(6, () => row)), abort: true }
+    ], CTX)
+    const msg = await answerWholeDoc(await makeHarness(90), runtime)
+
+    expect(runtime.calls).toBe(2)
+    expect(msg.content).toBe(first + lines(row))
+    expect(msg.truncated).toBeUndefined() // the user stopped it
+  })
+
+  it('a trip on the last pass left ends the answer with the cut stamp, cause "repeat"', async () => {
+    const runtime = lineRuntime(() => 'Notiz.', [
+      { reply: lines(...HEADER, FIRST), finish: 'length' },
+      { reply: lines(LATER), finish: 'length' },
+      { reply: lines(...times(9, LOOP)), finish: 'length' }
+    ])
+    const { msg } = await ask(runtime)
+
+    expect(runtime.endings).toEqual(['complete', 'complete', 'left'])
+    expect(msg.content).toBe(lines(...HEADER, FIRST, LATER, ROW))
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('repeat')
+  })
+
+  // Accepted escape (known-limitations.md, rag-design.md §14.10.2): the heading rules evaluated for the Meeting Minutes
+  // recursion each stopped answers about several entities, so a report that restarts itself runs on as before.
+  it('a report that restarts its own sections is not stopped (the minutes recursion, an accepted escape)', async () => {
+    const minutes = lines(
+      '## Meeting details',
+      'Date: Monday, 20 April 2026, 10:00 in the harbour office',
+      '## Decisions',
+      '- The board approves the new parking rules for the delivery yard from 1 June',
+      '## Formal minutes version'
+    )
+    const runtime = lineRuntime(() => 'Notiz.', [{ reply: minutes + minutes + minutes + minutes, finish: 'stop' }])
+    const { msg } = await ask(runtime)
+
+    expect(runtime.endings).toEqual(['complete'])
+    expect(msg.content).toBe(minutes + minutes + minutes + minutes)
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  it('a map note that loops is stopped and keeps one copy; the reduce reads that one copy', async () => {
+    const loopNote = lines('- Consent for subletting: 14 days after the request (Article 25.3)', ...times(12, () => '- Within 14 days of the request the landlord states reasonable conditions'))
+    const runtime = lineRuntime((i) => (i === 0 ? loopNote : `Notiz ${i}: keine Frist in diesem Teil.`), [
+      { reply: 'Antwort.', finish: 'stop' }
+    ])
+    await ask(runtime, 280)
+
+    const reduceAt = runtime.turns.length - 1
+    expect(reduceAt).toBeGreaterThan(1) // a real map step ran
+    expect(runtime.endings[0]).toBe('left') // the looping note's call was stopped
+    expect(runtime.endings.slice(1)).toEqual(Array(reduceAt).fill('complete'))
+    const reduceUser = userTurnOf(runtime.turns[reduceAt])
+    expect(reduceUser.split('Within 14 days of the request').length - 1).toBe(1)
+    expect(reduceUser).toContain('- Consent for subletting: 14 days after the request (Article 25.3)\n')
+  })
+
+  // Rows that differ only in their numbers and dates are real content, not a loop: an instalment schedule, or one
+  // clause the document repeats in many articles (#978's lease). The guard compares lines exactly, so neither the
+  // note nor the answer is stopped.
+  it('a 36-row instalment schedule and 30 per-article rows are never stopped, in a note or in the answer', async () => {
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+    const schedule = lines(...times(36, (i) => `- Instalment ${i + 1} of EUR 1,200 is due on 1 ${months[i % 12]} ${2026 + Math.floor(i / 12)}.`))
+    const perArticle = lines(...times(30, (i) => `- within fourteen days of the request (Article ${i + 3}.3)`))
+    const runtime = lineRuntime((i) => (i === 0 ? perArticle : `Notiz ${i}.`), [{ reply: schedule, finish: 'stop' }])
+    const { msg } = await ask(runtime, 280)
+
+    expect(runtime.endings.every((e) => e === 'complete')).toBe(true)
+    expect(userTurnOf(runtime.turns[runtime.turns.length - 1])).toContain(perArticle.trim())
+    expect(msg.content).toBe(schedule)
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  // #994 round 3 (an independent review): answers about several entities reuse sub-headings, labels and row text per
+  // entity. None of them is a loop: each is stored as written, unstamped.
+  it.each([
+    {
+      name: 'a portfolio brief with the same ### sub-headings under each lease',
+      reply: ['A', 'B', 'C', 'D'].map((n) => `## Lease ${n}\n\n### Parties\n- Landlord: Hausverwaltung ${n} GmbH\n- Tenant: Mieter ${n} AG\n\n### Key dates\n- Start: 1 January 202${n.charCodeAt(0) - 64}\n\n`).join('')
+    },
+    {
+      name: 'a portfolio brief with the same bold labels under each lease',
+      reply: ['A', 'B', 'C', 'D'].map((n) => `**Lease ${n}**\n\n**Parties**\nLandlord ${n} GmbH and Tenant ${n} AG\n\n**Termination**\nSix months, first possible on 30 June 203${n.charCodeAt(0) - 64}\n\n`).join('')
+    },
+    {
+      name: 'ten leases whose rows differ only in their number',
+      reply: lines('| Lease | Tenant | Notice |', '|---|---|---|', ...times(10, (i) => `| ${i + 1} | Not stated | Written notice three months before the end of term |`))
+    },
+    {
+      name: 'a year table',
+      reply: lines('| Year | Obligation |', '|---|---|', ...times(8, (i) => `| ${2024 + i} | Pay the annual service charge adjustment |`))
+    }
+  ])('$name is never stopped', async ({ reply }) => {
+    const runtime = lineRuntime(() => 'Notiz.', [{ reply, finish: 'stop' }])
+    const { msg } = await ask(runtime)
+    expect(runtime.endings).toEqual(['complete'])
+    expect(msg.content).toBe(reply)
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  // No trip, no change: the guard only reads. A whole turn whose answer comes close to every threshold (five
+  // identical rows in a row, thirty rows that differ only in numbers, every heading twice) sends master's map
+  // prompts with master's options, hands the reduce every note verbatim, continues with master's continuation turn,
+  // and stores the text the model wrote.
+  it('a turn the guard never trips sends every request byte for byte as master does', async () => {
+    const nearNote = (i: number): string =>
+      lines(
+        `**Deadlines ${i + 1}**`,
+        ...times(5, (j) => `- Within ${14 + j} days of request ${i + 1} the landlord states reasonable conditions`),
+        `**Deadlines ${i + 1}**`
+      )
+    const reduceReply = lines(...HEADER, ...times(5, LOOP), ...times(30, (i) => `| ${i + 7} | 14 days of the request | Consent for subletting, Article ${20 + i}.3 |`))
+    const contReply = lines(...HEADER, FIRST, 'These are all the deadlines in the document.')
+    const runtime = lineRuntime(nearNote, [
+      { reply: reduceReply, finish: 'length' },
+      { reply: contReply, finish: 'stop' }
+    ])
+    const { msg } = await ask(runtime, 280)
+
+    const reduceAt = runtime.turns.length - 2
+    expect(reduceAt).toBeGreaterThan(1)
+    expect(runtime.endings.every((e) => e === 'complete')).toBe(true)
+    for (let i = 0; i < reduceAt; i++) {
+      const user = userTurnOf(runtime.turns[i])
+      expect(user).toBe(asNoFenceMapPrompt(user, WHOLE_DOC_QUESTION))
+      expect(runtime.options[i]).toStrictEqual({ signal: undefined, maxTokens: 512, temperature: 0.3 })
+    }
+    const notes = times(reduceAt, (i) => nearNote(i).trim()).join('\n\n')
+    const reduceUser = userTurnOf(runtime.turns[reduceAt])
+    expect(reduceUser.endsWith(`\nNotes (whole document):\n${notes}\n\nAnswer:`)).toBe(true)
+    expect(userTurnOf(runtime.turns[reduceAt + 1])).toBe(masterContinuationTurn(reduceUser, reduceReply.slice(-200)))
+    expect(msg.content).toBe(reduceReply + contReply)
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  // The same at the engine: the whole-document reduce passes the guard, the single-turn grounded path passes none
+  // (G-5). On text that never trips it, the two make the same requests and keep the same text.
+  it('the continuation engine makes the same requests with the guard as without it when nothing trips', async () => {
+    const first = lines(...HEADER, ...times(5, LOOP))
+    const steps = [
+      { reply: lines(...times(30, (i) => `- Article ${20 + i}.3: consent may not be withheld unreasonably`)), finish: 'length' },
+      { reply: lines('**Important deadlines**', FIRST, 'End of the list.'), finish: 'stop' }
+    ]
+    const base: ChatMessage[] = [
+      { role: 'system', content: 'System.' },
+      { role: 'user', content: 'The notes and the request.\n\nAnswer:' }
+    ]
+    const runOnce = async (withGuard: boolean) => {
+      const runtime = lineRuntime(() => '', steps)
+      const acc = { content: first }
+      const guard = createRepetitionGuard()
+      guard.push(first)
+      const outcome = await continueUntilComplete({
+        runtime,
+        baseMessages: base,
+        contextTokens: CTX,
+        outputCap: 1024,
+        temperature: 0.3,
+        acc,
+        finishReason: 'length',
+        sentCap: 1024,
+        ...(withGuard ? { repetitionGuard: guard } : {})
+      })
+      return { turns: runtime.turns, caps: runtime.options.map((o) => [o?.maxTokens, o?.temperature]), acc, outcome }
+    }
+    const guarded = await runOnce(true)
+    const plain = await runOnce(false)
+    expect(guarded.turns).toHaveLength(2)
+    expect(guarded).toEqual(plain)
   })
 })
 

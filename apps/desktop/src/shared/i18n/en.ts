@@ -468,6 +468,9 @@ export const en = {
     'The model ran out of room to finish this answer. Ask it to continue, start a new chat, or raise the context size on the AI Model screen.',
   'chat.truncated.hint.cap':
     'This grounded answer reached the fixed length the app allows for one reply. Ask the model to continue where it stopped.',
+  'chat.truncated.hint.repeat':
+    'The model started repeating itself, so the app stopped this reply. Ask again or narrow the ' +
+    'question.',
   // #290: the per-answer speed line under a finished chat answer (this session only, never saved).
   // {tps} / {ttft} / {tokens} arrive pre-formatted for the UI language.
   'chat.speed.line': '{tps} tok/s · {ttft} s to first token · {tokens} tokens',

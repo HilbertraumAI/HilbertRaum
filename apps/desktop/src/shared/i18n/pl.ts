@@ -521,6 +521,9 @@ export const pl: UiCatalog<'pl'> = {
   'chat.truncated.hint.cap':
     'Ta odpowiedź oparta na dokumentach osiągnęła stałą długość, na jaką aplikacja pozwala w ' +
     'jednej odpowiedzi. Poproś model o kontynuowanie od miejsca, w którym odpowiedź się urwała.',
+  'chat.truncated.hint.repeat':
+    'Model zaczął się powtarzać, więc aplikacja zatrzymała tę odpowiedź. Zapytaj ponownie albo zawęź ' +
+    'pytanie.',
   'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s do pierwszego tokena · tokeny: {tokens}',
   'chat.speed.hint':
     'Szybkość generowania tej odpowiedzi: szybkość dekodowania podawana przez silnik AI, czas ' +

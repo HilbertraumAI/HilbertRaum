@@ -62,6 +62,9 @@ from its first public `1.0.0` release onward.
   shows the unlock screen, and after you unlock it works as usual. If the app could not lock the
   workspace at that moment (for example on a full drive), unlocking again no longer goes back to
   the last locked state and loses your changes since (#982, #1002).
+- An answer about a whole document that starts writing the same table row or line over and over now stops at the
+  repeat. HilbertRaum keeps the answer up to its first copy and shows "Reply cut off"; the tooltip says the model
+  started repeating itself. Before, such an answer ran on for minutes and filled the screen with copies (#994).
 
 ## [0.1.66] — 2026-11-21
 

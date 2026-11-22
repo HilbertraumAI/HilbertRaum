@@ -402,18 +402,19 @@ describe('message coverage persistence (full-doc-skills D48)', () => {
 // tooltip offers the remedy that applies. Additive + nullable: a pre-#498 truncated row has no
 // cause stored and must keep reading as 'context', which is exactly what the old badge claimed.
 describe('message truncation cause persistence (#498)', () => {
-  it('round-trips truncatedCause through appendMessage → listMessages', () => {
+  // #994 adds 'repeat': a whole-document answer the app stopped because it kept repeating itself.
+  it.each(['cap', 'repeat'] as const)('round-trips truncatedCause %s through appendMessage → listMessages', (cause) => {
     const db = freshDb()
     const conv = createConversation(db, {})
     const msg = appendMessage(db, {
       conversationId: conv.id,
       role: 'assistant',
-      content: 'a grounded answer that hit the app cap',
+      content: 'an answer the app cut',
       truncated: true,
-      truncatedCause: 'cap'
+      truncatedCause: cause
     })
-    expect(msg.truncatedCause).toBe('cap')
-    expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBe('cap')
+    expect(msg.truncatedCause).toBe(cause)
+    expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBe(cause)
   })
 
   it('a legacy truncated row (truncated=1, truncated_cause NULL) reads back as "context"', () => {

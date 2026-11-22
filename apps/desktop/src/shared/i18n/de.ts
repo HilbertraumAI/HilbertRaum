@@ -488,6 +488,9 @@ export const de: Record<keyof typeof en, string> = {
     'Dem Modell ging der Platz aus, um diese Antwort zu beenden. Bitte es fortzufahren, beginne einen neuen Chat oder erhöhe die Kontextgröße im Bereich „KI-Modell“.',
   'chat.truncated.hint.cap':
     'Diese Dokumentantwort hat die feste Länge erreicht, die die App für eine einzelne Antwort zulässt. Bitte das Modell, dort fortzufahren, wo es aufgehört hat.',
+  'chat.truncated.hint.repeat':
+    'Das Modell hat angefangen, sich zu wiederholen, deshalb hat die App diese Antwort gestoppt. ' +
+    'Frage noch einmal oder grenze deine Frage ein.',
 
   // ---- Chat: document scope ----
   'chat.scope.none': 'Noch keine Dokumente · Dokumente hinzufügen',

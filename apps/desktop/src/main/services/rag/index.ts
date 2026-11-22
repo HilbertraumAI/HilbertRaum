@@ -2224,8 +2224,11 @@ export async function generateGroundedAnswer(
   // A stop before the first token produced nothing — persist nothing. When a W2 scope-notice prefix was
   // seeded (`seededPrefix`), an empty model turn leaves ONLY that notice: it is not an answer and must
   // not be persisted alone stamped with `capped` coverage (W2 review), so treat prefix-only as empty too.
-  // With no prefix `seededPrefix` is '' → byte-identical to the prior `content === ''` guard.
+  // With no prefix `seededPrefix` is '' → byte-identical to the prior `content === ''` guard. A think-only reply
+  // after the prefix is the same case: `stripThinkBlocks` trims what it keeps (the prefix's blank line goes), so
+  // the comparison is on trimmed text too (follow-ups wave 7).
   if (content === '' || content === seededPrefix) return emptyAssistantMessage(conversationId)
+  if (seededPrefix !== '' && content.trim() === seededPrefix.trim()) return emptyAssistantMessage(conversationId)
   // Persist the assistant turn with the computed citations (source of truth = retrieval) and stamp
   // the skill only when its fence was actually placed (DS16/§22-A5). Via `persistAssistantMessage`
   // (full-audit 2026-07-11 CODE-18): the R1 abort+closed-DB guard now covers this grounded persist

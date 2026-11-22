@@ -478,6 +478,9 @@ export const es: UiCatalog<'es'> = {
   'chat.truncated.hint.cap':
     'Esta respuesta sobre documentos alcanzó la longitud fija que la aplicación permite para una ' +
     'respuesta. Pide al modelo que continúe donde se detuvo.',
+  'chat.truncated.hint.repeat':
+    'El modelo empezó a repetirse, así que la aplicación detuvo esta respuesta. Vuelve a preguntar o ' +
+    'acota la pregunta.',
   'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s hasta el primer token · tokens: {tokens}',
   'chat.speed.hint':
     'Con qué rapidez se generó esta respuesta: la velocidad de decodificación del motor de IA, ' +

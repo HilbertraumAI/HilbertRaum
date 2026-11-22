@@ -40,6 +40,7 @@ import {
 } from '../doctasks/summary'
 import { truncateToApproxTokens } from '../ingestion/chunker'
 import { endsMidSentence } from './answer-end'
+import { createRepetitionGuard, type RepetitionGuard } from './repetition-guard'
 
 // Skill-aware WHOLE-DOCUMENT answer over a DEEP-INDEX TREE (skill-whole-doc engine, Follow-up A —
 // architecture.md §20). Wave 2 read an over-budget document from the BEGINNING and stamped the honest
@@ -277,17 +278,27 @@ export interface ContinueGenerationInput {
    *  and in the same `onToken` call, so it never streams or persists alone, and the first continuation's anchor
    *  (built from the text before it) is the same as without it. */
   leadOnFirstText?: string
+  /** #994 (owner calls G-3, G-5; B1 since the GPU session): the whole-document answer's repetition guard, already
+   *  fed the answer's model text (never app text), so the answer is judged as one text. Each pass feeds it the text
+   *  it appends; when it trips, the pass is stopped (leaving the token loop cancels the request), `acc.content` is
+   *  cut back to before the repeated tail, and nothing continues it: the outcome says `repeated`. Absent ⇒ nothing
+   *  is watched: the single-turn grounded path passes none. */
+  repetitionGuard?: RepetitionGuard
 }
 
 /** What `continueUntilComplete` reports back about the LAST pass it saw (#498). */
 export interface ContinuationOutcome {
-  /** The final finish reason: 'length' = still cut after the bounded re-prompts; null on a user Stop. */
+  /** The final finish reason: 'length' = still cut after the bounded re-prompts; null on a user Stop, and when
+   *  the repetition guard stopped the last pass (`repeated`). */
   finishReason: string | null
   /** #996 B: a continuation pass ran and the last one ended 'stop', but the answer still ends mid-sentence
    *  (`endsMidSentence`), so the cut was never finished. The caller stamps it as cut, like 'length'. */
   unfinished?: boolean
-  /** Which ceiling ended it — undefined unless `finishReason === 'length'` or `unfinished`, where it is the
-   *  ceiling of the last pass that was cut. */
+  /** #994: the repetition guard stopped a continuation pass. The answer is the text before the repeated tail and
+   *  is not continued; the caller stamps it as cut, cause 'repeat'. */
+  repeated?: boolean
+  /** Which ceiling ended it — undefined unless `finishReason === 'length'`, `unfinished` or `repeated`, where it is
+   *  the ceiling of the last pass that was cut ('repeat' when the guard stopped it). */
   cause?: TruncationCause
 }
 
@@ -331,10 +342,15 @@ export function truncationCause(
  * #996 B: a continuation that ends 'stop' can still leave the answer mid-sentence; then the outcome says
  * `unfinished` with the cause of the last pass that was cut, and the caller stamps it too. A first pass that
  * ended 'stop' (no continuation ran) and a user Stop are never judged.
+ * #994: with a `repetitionGuard` (whole-document answers only), a pass whose text starts repeating is stopped, cut
+ * back to before its repeated tail and not continued: the outcome reports `repeated`. Without a trip every request
+ * is the one made without the guard.
  */
 export async function continueUntilComplete(input: ContinueGenerationInput): Promise<ContinuationOutcome> {
-  const { runtime, signal, onToken, baseMessages, contextTokens, outputCap, temperature, acc } = input
+  const { runtime, signal, onToken, baseMessages, contextTokens, outputCap, temperature, acc, repetitionGuard } = input
   let finishReason = input.finishReason
+  // #994: the guard stopped the last pass (B1: the answer ends there, stamped 'repeat').
+  let stoppedByGuard = false
   let continuations = 0
   // #498 cause bookkeeping, seeded with the pass the caller already ran so the cause is attributable
   // even when the room guard stops the loop before a single continuation pass gets to run.
@@ -351,7 +367,8 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
   let cutCause = truncationCause(finishReason, lastSentCap, lastTimings)
   // #996 A: app text the caller still owes the answer; it leads the first continuation text.
   let lead = input.leadOnFirstText ?? ''
-  /** Append continuation text to the answer and stream it, led by any app text still owed. */
+  /** Append continuation text to the answer and stream it, led by any app text still owed. The guard sees the
+   *  model's text only, so `acc.content` always ends with the guard's text. */
   const emitText = (text: string): void => {
     let piece = text
     if (lead !== '' && text !== '') {
@@ -360,6 +377,7 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
     }
     acc.content += piece
     onToken?.(piece)
+    repetitionGuard?.push(text)
   }
   try {
     while (finishReason === 'length' && continuations < MAX_REDUCE_CONTINUATIONS) {
@@ -405,19 +423,37 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
             seam += token
             if (seam.length >= anchor.length) flushSeam()
           }
+          // #994: leaving the loop returns the stream, whose `finally` cancels the request at once.
+          if (repetitionGuard?.trip) break
         }
       } finally {
         // A short pass (never reached the anchor length) OR a Stop mid-continuation still emits the
         // de-duplicated partial, so the accumulated answer is persisted (abort contract, §2).
         if (!seamResolved) flushSeam()
       }
+      // #994: the pass started repeating itself (a trip can also come from the final seam flush above). Keep the
+      // answer up to its repeated tail and end it here (B1: in the GPU session a continuation after a trip
+      // restarted the loop in 3 of 3 runs).
+      if (repetitionGuard?.trip) {
+        const cut = repetitionGuard.cutAtTrip()
+        acc.content = acc.content.slice(0, acc.content.length - cut.removed) + cut.append
+        stoppedByGuard = true
+        break
+      }
     }
   } catch (err) {
     if (!isAbortError(err, signal)) throw err
     // A user Stop mid-continuation: the seam partial was flushed into acc.content by the finally above.
     // Swallow and report null so the caller persists the partial and does NOT stamp it output-truncated.
+    // #994: that flush can itself complete a run of copies; the stored partial is cut back like any trip.
+    if (repetitionGuard?.trip) {
+      const cut = repetitionGuard.cutAtTrip()
+      acc.content = acc.content.slice(0, acc.content.length - cut.removed) + cut.append
+    }
     return { finishReason: null }
   }
+  // #994: the guard stopped the last pass; the answer ends there.
+  if (stoppedByGuard) return { finishReason: null, repeated: true, cause: 'repeat' }
   // #498 — attribute the final cut. The window wins over the cap whenever the window is what actually
   // bound the last pass: it left no room to continue at all (`stoppedForRoom`), or it shrank that pass's
   // ceiling below the app's own cap (`capShrunkByWindow`). Otherwise the per-pass helper decides.
@@ -661,12 +697,16 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     truncated = true
   }
 
-  /** One non-streamed model call (a MAP step). Reasoning stripped, like the doctask `generate`. */
+  /** One non-streamed model call (a MAP step). Reasoning stripped, like the doctask `generate`.
+   *  #994: a note that writes one line six times in a row is a loop to the cap; the
+   *  call is stopped there (leaving the loop cancels the request) and the note keeps the text before the repeated
+   *  tail, one copy of each line, so the loop never reaches the reduce. No continuation: a note is no answer. */
   const collect = async (user: string): Promise<string> => {
     const messages: ChatMessage[] = [
       { role: 'system', content: WHOLE_DOC_TREE_SYSTEM_PROMPT },
       { role: 'user', content: user }
     ]
+    const guard = createRepetitionGuard()
     let out = ''
     for await (const token of runtime.chatStream(messages, {
       signal,
@@ -674,6 +714,11 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
       temperature: SUMMARY_TEMPERATURE
     })) {
       out += token
+      if (guard.push(token)) break
+    }
+    if (guard.trip) {
+      const cut = guard.cutAtTrip()
+      out = out.slice(0, out.length - cut.removed) + cut.append
     }
     return stripThinkBlocks(out).trim()
   }
@@ -792,6 +837,9 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     // below). The prompt above is the same with or without it.
     beginningLead = truncated && beginningNotice ? `${beginningNotice}\n\n` : ''
     let leadPending = beginningLead !== ''
+    // #994 (owner calls G-3, G-5; rag-design §14.10): the answer's repetition guard, fed the model's text only
+    // (never the app's prefix or line) and shared with every continuation, so the answer is judged as one text.
+    const guard = createRepetitionGuard()
     for await (const token of runtime.chatStream(messages, {
       signal,
       maxTokens: reduceOutputCap,
@@ -808,6 +856,16 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
       }
       content += piece
       onToken?.(piece)
+      // A trip stops the pass: leaving the loop returns the stream, whose `finally` cancels the request.
+      if (guard.push(token)) break
+    }
+    // The live bubble showed the loop until the trip; the stored answer keeps the text before its repeated tail and
+    // ends there, stamped cut with cause 'repeat' (B1, owner call G-3's fallback: in the GPU session the one
+    // continuation B2 allowed restarted the loop in 3 of 3 runs and added no fact).
+    const repeated = guard.trip !== null
+    if (repeated) {
+      const cut = guard.cutAtTrip()
+      content = content.slice(0, content.length - cut.removed) + cut.append
     }
 
     // CONTINUE-GENERATION (Phase 4 — §6): the reduce was cut at the output ceiling, not stopped by the user.
@@ -828,19 +886,23 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
       outputCap: reduceOutputCap,
       temperature: SUMMARY_TEMPERATURE,
       acc,
-      finishReason,
+      // #994: a reduce the guard stopped reported no finish reason, so it is never continued.
+      finishReason: repeated ? null : finishReason,
       // #498: the reduce pass's own ceiling + timings, so the engine can attribute a cut that the
       // room guard ends before any continuation pass runs.
       sentCap: reduceOutputCap,
       timings: reduceTimings,
       // #996 A: a reduce that wrote no text (a thinking model's reasoning filled its cap) still owes the
       // beginning-only line, so it leads the first continuation text instead.
-      leadOnFirstText: leadPending ? beginningLead : undefined
+      leadOnFirstText: leadPending ? beginningLead : undefined,
+      // #994: the same guard watches the continuations of a reduce cut at its ceiling.
+      repetitionGuard: guard
     })
     content = acc.content
-    // #996 B: a continuation that ended 'stop' mid-sentence is cut too (`unfinished`).
-    outputTruncated = outcome.finishReason === 'length' || outcome.unfinished === true
-    outputCause = outcome.cause
+    // #996 B: a continuation that ended 'stop' mid-sentence is cut too (`unfinished`). #994: so is an answer the
+    // guard stopped, in the reduce (`repeated` here) or in a continuation (`outcome.repeated`), cause 'repeat'.
+    outputTruncated = repeated || outcome.finishReason === 'length' || outcome.unfinished === true || outcome.repeated === true
+    outputCause = repeated ? 'repeat' : outcome.cause
   } catch (err) {
     // A user Stop aborts mid-map (no partial) or mid-reduce (keep the partial); any other error is a
     // real failure and propagates. Same contract as `generateGroundedAnswer`'s stream.
@@ -854,8 +916,11 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // persisted alone stamped with coverage (W2 review). `content === seeded` catches the prefix-only case;
   // `content === ''` the no-prefix case — byte-identical to the pre-W2 guard when there is no prefix.
   // #996 A: the beginning-only line is app text too. It rides a model token, so a reply that strips to nothing
-  // (think-only; `stripThinkBlocks` trims) leaves only app text: that is no answer either.
+  // (think-only; `stripThinkBlocks` trims) leaves only app text: that is no answer either. The same holds for the
+  // prefix alone (follow-ups wave 7): `stripThinkBlocks` trims what it keeps, so a think-only reply after the
+  // scope notice leaves the notice without its blank line, which `content === seeded` misses.
   if (content === '' || content === seeded) return emptyAssistantMessage(conversationId)
+  if (seeded !== '' && content.trim() === seeded.trim()) return emptyAssistantMessage(conversationId)
   if (beginningLead !== '' && content.trim() === `${seeded}${beginningLead}`.trim()) return emptyAssistantMessage(conversationId)
   // `truncated` is now final (ceiling cut and/or notes truncation): a truncated answer is stamped as
   // covering only the beginning, never as whole-document coverage (audit §2.2). The renderer badge reads
