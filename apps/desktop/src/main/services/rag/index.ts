@@ -2199,7 +2199,8 @@ export async function generateGroundedAnswer(
       timings
     })
     content = acc.content
-    outputTruncated = outcome.finishReason === 'length'
+    // #996 B: a continuation that ended 'stop' mid-sentence is cut too (`unfinished`).
+    outputTruncated = outcome.finishReason === 'length' || outcome.unfinished === true
     outputCause = outcome.cause
   }
   // Reasoning never reaches the DB — same defense-in-depth strip as plain chat.
@@ -2235,7 +2236,8 @@ export async function generateGroundedAnswer(
     autoFired: skillFence ? opts.skill?.autoFired === true : false,
     // Honest OUTPUT-truncation stamp: 'length' with no cap = cut off at the context ceiling; after
     // continue-generation this is true only when the bounded re-prompts were EXHAUSTED and the answer is
-    // still cut (false on a clean finish and on a user Stop — computed above).
+    // still cut, or (#996 B) a continuation ended cleanly mid-sentence (false on a clean finish and on a
+    // user Stop — computed above).
     truncated: outputTruncated,
     // #498: the badge names no cause; this picks the remedy it offers ('context' ⇒ "raise the
     // context size", 'cap' ⇒ "ask it to continue").

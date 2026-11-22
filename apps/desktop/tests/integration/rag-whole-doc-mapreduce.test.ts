@@ -309,6 +309,54 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
     expect(msg.content).toBe('Eine vollständige Antwort.')
     expect(msg.truncated).toBeUndefined()
   })
+
+  // #996 B (follow-ups wave 7): the stamp read only the LAST pass's finish reason, so a cut reduce whose
+  // continuation ended 'stop' in the middle of a sentence was stored as complete. The real case (wave 6, 4B
+  // Contract Brief): 22 long items ending with a full stop, then "… unless the lease provides otherwise or".
+  const items = Array.from(
+    { length: 22 },
+    (_, i) => `- Clause ${i + 1}: the tenant keeps the premises in good repair and returns them clean.`
+  ).join('\n')
+  const cutItem = '- Costs: the costs incurred by a party in connection with these provisions are borne by that party'
+
+  it('#996 B: a continuation that ends stop mid-sentence is stamped cut, with the cause of the pass that was cut', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptedRuntime([
+      { reply: `${items}\n${cutItem}`, finish: 'length' },
+      { reply: ' unless the lease provides otherwise or', finish: 'stop' }
+    ], CTX)
+    const msg = await answerWholeDoc(h, runtime)
+
+    expect(runtime.calls).toBe(2) // the reduce + one continuation, which ended 'stop'
+    expect(msg.content.endsWith(`${cutItem} unless the lease provides otherwise or`)).toBe(true)
+    expect(msg.truncated).toBe(true)
+    // The reduce reached its own cap (no timings ⇒ the cap fired), so the remedy is "ask it to continue".
+    expect(msg.truncatedCause).toBe('cap')
+    expect(msg.coverage?.truncated).toBe(false) // INPUT coverage is untouched
+  })
+
+  it('#996 B: a first reduce that ends stop mid-sentence is not judged: no continuation ran, no stamp', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptedRuntime([{ reply: `${items}\n${cutItem} unless`, finish: 'stop' }], CTX)
+    const msg = await answerWholeDoc(h, runtime)
+
+    expect(runtime.calls).toBe(1)
+    expect(msg.content.endsWith(`${cutItem} unless`)).toBe(true)
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  it('#996 B: a user Stop mid-continuation is never judged, even when the answer stops mid-sentence', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptedRuntime([
+      { reply: `${items}\n${cutItem}`, finish: 'length' },
+      { reply: ' unless the lease provides otherwise or', abort: true }
+    ], CTX)
+    const msg = await answerWholeDoc(h, runtime)
+
+    expect(runtime.calls).toBe(2)
+    expect(msg.content.endsWith(`${cutItem} unless the lease provides otherwise or`)).toBe(true)
+    expect(msg.truncated).toBeUndefined() // a Stop is the user's choice, not a cut
+  })
 })
 
 // Follow-up #2 — hierarchical fold for the ≥~50-page tail (wholedoc-truncation-fix-plan §14.10 residual (a)).

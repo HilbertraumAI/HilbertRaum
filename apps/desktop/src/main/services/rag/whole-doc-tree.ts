@@ -39,6 +39,7 @@ import {
   SUMMARY_TOKENS_PER_WORD
 } from '../doctasks/summary'
 import { truncateToApproxTokens } from '../ingestion/chunker'
+import { endsMidSentence } from './answer-end'
 
 // Skill-aware WHOLE-DOCUMENT answer over a DEEP-INDEX TREE (skill-whole-doc engine, Follow-up A —
 // architecture.md §20). Wave 2 read an over-budget document from the BEGINNING and stamped the honest
@@ -277,7 +278,11 @@ export interface ContinueGenerationInput {
 export interface ContinuationOutcome {
   /** The final finish reason: 'length' = still cut after the bounded re-prompts; null on a user Stop. */
   finishReason: string | null
-  /** Which ceiling ended it — undefined unless `finishReason === 'length'`. */
+  /** #996 B: a continuation pass ran and the last one ended 'stop', but the answer still ends mid-sentence
+   *  (`endsMidSentence`), so the cut was never finished. The caller stamps it as cut, like 'length'. */
+  unfinished?: boolean
+  /** Which ceiling ended it — undefined unless `finishReason === 'length'` or `unfinished`, where it is the
+   *  ceiling of the last pass that was cut. */
   cause?: TruncationCause
 }
 
@@ -318,6 +323,9 @@ export function truncationCause(
  * propagates. Returns the FINAL finish reason together with its #498 CAUSE: the caller stamps an honest
  * OUTPUT-truncation when the reason is still 'length' (the cap was exhausted) and uses the cause to pick the
  * remedy the badge offers; `finishReason: null` on a user Stop (intentional, not an overflow).
+ * #996 B: a continuation that ends 'stop' can still leave the answer mid-sentence; then the outcome says
+ * `unfinished` with the cause of the last pass that was cut, and the caller stamps it too. A first pass that
+ * ended 'stop' (no continuation ran) and a user Stop are never judged.
  */
 export async function continueUntilComplete(input: ContinueGenerationInput): Promise<ContinuationOutcome> {
   const { runtime, signal, onToken, baseMessages, contextTokens, outputCap, temperature, acc } = input
@@ -332,6 +340,10 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
   let capShrunkByWindow = false
   // True when the loop stopped because no room was left to continue at all — the window again.
   let stoppedForRoom = false
+  // #996 B: a continuation pass actually ran (the room guard can stop the loop before the first one), and
+  // the ceiling of the last pass that ended 'length', starting with the caller's own pass.
+  let ranContinuation = false
+  let cutCause = truncationCause(finishReason, lastSentCap, lastTimings)
   try {
     while (finishReason === 'length' && continuations < MAX_REDUCE_CONTINUATIONS) {
       continuations++
@@ -346,6 +358,7 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
       lastSentCap = continueCap
       lastTimings = null
       capShrunkByWindow = continueCap < outputCap
+      ranContinuation = true
       finishReason = null
       // Hold back the continuation's opening until enough is buffered to resolve the seam overlap against
       // the anchor, then stream the DE-DUPLICATED remainder live.
@@ -368,6 +381,8 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
           onFinish: (reason, tm) => {
             finishReason = reason
             lastTimings = tm ?? null
+            // #996 B: the same attribution as the final one below, for this pass alone.
+            if (reason === 'length') cutCause = capShrunkByWindow ? 'context' : truncationCause(reason, continueCap, lastTimings)
           }
         })) {
           if (seamResolved) {
@@ -393,7 +408,14 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
   // #498 — attribute the final cut. The window wins over the cap whenever the window is what actually
   // bound the last pass: it left no room to continue at all (`stoppedForRoom`), or it shrank that pass's
   // ceiling below the app's own cap (`capShrunkByWindow`). Otherwise the per-pass helper decides.
-  if (finishReason !== 'length') return { finishReason }
+  if (finishReason !== 'length') {
+    // #996 B: a continuation ended 'stop' but the answer, as it will be stored, still ends mid-sentence
+    // ("… unless the lease provides otherwise or"): the cut was not finished, so report the cut pass's cause.
+    if (ranContinuation && finishReason === 'stop' && endsMidSentence(stripSkillFenceEcho(stripThinkBlocks(acc.content)))) {
+      return { finishReason, unfinished: true, cause: cutCause }
+    }
+    return { finishReason }
+  }
   if (stoppedForRoom || capShrunkByWindow) return { finishReason, cause: 'context' }
   return { finishReason, cause: truncationCause(finishReason, lastSentCap, lastTimings) }
 }
@@ -779,7 +801,8 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
       timings: reduceTimings
     })
     content = acc.content
-    outputTruncated = outcome.finishReason === 'length'
+    // #996 B: a continuation that ended 'stop' mid-sentence is cut too (`unfinished`).
+    outputTruncated = outcome.finishReason === 'length' || outcome.unfinished === true
     outputCause = outcome.cause
   } catch (err) {
     // A user Stop aborts mid-map (no partial) or mid-reduce (keep the partial); any other error is a
@@ -816,7 +839,8 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     autoFired: skill?.autoFired === true,
     // Phase 4 (§6): honest OUTPUT-truncation stamp when continue-generation was exhausted and the
     // deliverable is still cut at the ceiling — the "Answer truncated" badge, distinct from the coverage
-    // (INPUT) truncation above. False on a clean finish and on a user Stop.
+    // (INPUT) truncation above — or (#996 B) a continuation ended cleanly mid-sentence. False on a clean
+    // finish and on a user Stop.
     truncated: outputTruncated,
     // #498: the badge names no cause any more — this picks which remedy it offers.
     truncatedCause: outputCause

@@ -730,6 +730,30 @@ describe('generateGroundedAnswer', () => {
     expect(msg.truncatedCause).toBe('context')
   })
 
+  // #996 B (follow-ups wave 7): the shared engine judged only the last pass's finish reason, so a cut answer whose
+  // continuation ended 'stop' mid-sentence was stored as complete. The stamp takes the cause of the LAST pass that
+  // was cut: here the first pass reached the app's cap ('cap'), the second stopped short of it ('context').
+  it('#996 B: a grounded continuation that ends stop mid-sentence is stamped cut, with the last cut pass’s cause', async () => {
+    // The answer is written in full sentences (four terminated lines), so a last line ending in a word reads as cut.
+    const sentences = [
+      'Photosynthesis converts sunlight into chemical energy inside the leaves.',
+      'The energy is stored as sugar that the plant uses to grow.',
+      'Chlorophyll in the chloroplasts absorbs most of the red and blue light.',
+      'The plant releases the oxygen it does not need into the air.'
+    ].join('\n')
+    const runtime = finishScriptedRuntime([
+      { reply: `${sentences}\nalpha beta`, finish: 'length', timings: { predicted_n: 1024 } },
+      { reply: 'beta gamma', finish: 'length', timings: { predicted_n: 300 } },
+      { reply: 'gamma and the second half ends with the', finish: 'stop' }
+    ])
+    const msg = await askGrounded(runtime)
+
+    expect(runtime.calls).toBe(3)
+    expect(msg.content).toBe(`${sentences}\nalpha beta gamma and the second half ends with the`)
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('context')
+  })
+
   it('#498: a grounded answer that finishes cleanly carries neither the flag nor a cause', async () => {
     const msg = await askGrounded(finishScriptedRuntime([{ reply: 'A complete answer.', finish: 'stop' }]))
     expect(msg.truncated).toBeUndefined()
