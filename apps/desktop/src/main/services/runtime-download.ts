@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { lstat, mkdir, readdir, readlink, rm, stat, statfs } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { parse as parseYaml } from 'yaml'
@@ -26,7 +26,7 @@ import {
   engineFolderComplete,
   engineSwapDirs,
   failureReason,
-  flushToDevice,
+  flushToDeviceAsync,
   markerBinaryKey,
   planInFolder,
   planRuntimeDownload,
@@ -41,13 +41,14 @@ import {
   verifyDownloadedFile,
   writeRuntimeMarker,
   ENGINE_DOWNLOAD_MAX_BYTES,
+  RUNTIME_MARKER_FILE,
   SIDECAR_FAMILY_SPECS,
   type EngineSwapDirs,
   type FetchFn,
   type SidecarFamilySpec,
   type RuntimeDownloadPlan
 } from './assets'
-import { extractedArchiveBytes } from './archive-size'
+import { archiveMembers, extractedArchiveBytes, isMacMetadataName } from './archive-size'
 import { freeBytes } from './disk-space'
 import { removeRetry, renameMayClear, renameWithRetry } from './fs-retry'
 import { sha256File } from './models'
@@ -67,7 +68,8 @@ import type { EngineProblemBuilds } from './runtime/engine-load'
 // install marker). Since #986 the in-app install never deletes first: it builds and marks the
 // new copy in `<os>.new/`, then swaps it in by rename, and the next start finishes or rolls
 // back a swap a kill interrupted (`recoverEngineSwaps`; architecture.md "In-app engine
-// updates" §6). The network (`fetchImpl`) and extraction (`extractImpl`,
+// updates" §6). Since #1000 every copy of a job is staged while the models keep running, and
+// only the swaps happen under the update's pause (§7). The network (`fetchImpl`) and extraction (`extractImpl`,
 // default `tar -xf`) are injected seams so the unit suite stays zero-network; only the #856
 // rows in engine-download.test.ts run the OS's own tar.
 //
@@ -348,9 +350,15 @@ export function engineStatus(
  * other, #856). Injected so the install-flow tests never shell out. The optional
  * `signal` (F-33) lets a job cancel reach the child: without it `extractWithTar` was the only
  * unbounded child in the repo — a wedged tar pinned the job in 'extracting' with no way to stop
- * it, and a cancel merely flipped the status while tar kept writing.
+ * it, and a cancel merely flipped the status while tar kept writing. A stopped extraction settles
+ * only once its child has exited (#999), or after a bound, which `log` reports.
  */
-export type ExtractFn = (archivePath: string, destDir: string, signal?: AbortSignal) => Promise<void>
+export type ExtractFn = (
+  archivePath: string,
+  destDir: string,
+  signal?: AbortSignal,
+  log?: (msg: string, meta?: unknown) => void
+) => Promise<void>
 
 /**
  * Hard ceiling on ONE archive extraction (F-33). tar is short-lived + local, but a child wedged
@@ -363,6 +371,12 @@ export const DEFAULT_EXTRACT_DEADLINE_MS = 5 * 60 * 1000
 /** Grace after SIGTERM before escalating to SIGKILL on a wedged/cancelled tar (F-33; the whisper
  *  REL-2 killWithEscalation grace — native decode/IO code can ignore the polite signal). */
 const EXTRACT_KILL_GRACE_MS = 2_000
+/**
+ * #999: how long a stopped extraction waits for its tar to exit after the SIGKILL, before it settles
+ * anyway. Measured on Windows: TerminateProcess ends tar 2–5 ms after the kill. A tar wedged in kernel
+ * I/O on a failing stick can outlive even SIGKILL, and must not pin the job (F-33's reason).
+ */
+const EXTRACT_GONE_BOUND_MS = 10_000
 
 function extractDeadlineMs(): number {
   const raw = Number(process.env.HILBERTRAUM_EXTRACT_DEADLINE_MS)
@@ -418,82 +432,111 @@ function tarExtractArgs(archivePath: string, destDir: string): string[] {
   return ['-xf', `./${basename(archivePath)}`]
 }
 
-/**
- * Default extractor: the OS's pinned `tar` (see `resolveTarBinary`), `-xf ./<archive>` from
- * inside `destDir` (`tarExtractArgs`). One command covers every host because each platform's
- * archive is one its `tar` understands — Windows 10+ ships bsdtar (handles the .zip release
- * assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the same
- * native tools (unzip/ditto/tar); this is the in-app equivalent.
- */
-export const extractWithTar: ExtractFn = (archivePath, destDir, signal) =>
-  new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(resolveTarBinary(), tarExtractArgs(archivePath, destDir), {
-      stdio: 'ignore',
-      // The target: the archive's `./` name resolves against it and the files land in it, and
-      // the child never inherits a possibly attacker-influenced cwd.
-      cwd: destDir,
-      windowsHide: true
-    })
-    let settled = false
-    let deadline: ReturnType<typeof setTimeout> | undefined
-    const onAbort = (): void => stopChild(new Error('tar extraction cancelled'))
+/** What starts the extractor's child: `child_process.spawn`'s shape (a seam for the #999 rows). */
+export type ExtractSpawn = (command: string, args: string[], options: SpawnOptions) => ChildProcess
 
-    // SIGTERM then SIGKILL if the child ignores it (whisper REL-2), then settle: a tar wedged in
-    // native I/O on a failing USB can ignore the polite signal and never emit 'close', so the
-    // deadline/abort path rejects rather than waiting on a 'close' that may never come. The child
-    // is still killed (best-effort) so no orphan tar keeps writing into the extract dir.
-    const stopChild = (err: Error): void => {
-      if (settled) return
-      settled = true
-      if (deadline) clearTimeout(deadline)
-      signal?.removeEventListener('abort', onAbort)
-      let gone = false
-      const escalate = setTimeout(() => {
-        if (!gone) {
+export interface TarExtractorOptions {
+  /** Default `child_process.spawn`. */
+  spawn?: ExtractSpawn
+  /** After the polite kill, how long before SIGKILL (default 2 s). */
+  graceMs?: number
+  /** After the SIGKILL, how long the extraction waits for the child to exit before it settles anyway (default 10 s). */
+  goneBoundMs?: number
+}
+
+/**
+ * The default extractor's factory (#999): the OS's pinned `tar` (see `resolveTarBinary`),
+ * `-xf ./<archive>` from inside `destDir` (`tarExtractArgs`). One command covers every host because
+ * each platform's archive is one its `tar` understands — Windows 10+ ships bsdtar (handles the .zip
+ * release assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the
+ * same native tools (unzip/ditto/tar); this is the in-app equivalent.
+ *
+ * A cancel or the deadline kills the child: SIGTERM, then SIGKILL after `graceMs` (whisper REL-2; on
+ * Windows both are TerminateProcess). The extraction rejects only once the child has exited, so the
+ * job (`activeJob()`, the F-33 latch) stays busy while tar may still write, and the job's cleanup of
+ * the staging folder never races it. A child that has not exited `goneBoundMs` after the SIGKILL (a
+ * tar wedged in kernel I/O on a failing stick) is given up on with a log line, so it cannot pin the
+ * job either.
+ */
+export function makeTarExtractor(options: TarExtractorOptions = {}): ExtractFn {
+  const spawnChild = options.spawn ?? spawn
+  const graceMs = options.graceMs ?? EXTRACT_KILL_GRACE_MS
+  const goneBoundMs = options.goneBoundMs ?? EXTRACT_GONE_BOUND_MS
+  return (archivePath, destDir, signal, log) =>
+    new Promise<void>((resolvePromise, reject) => {
+      const child = spawnChild(resolveTarBinary(), tarExtractArgs(archivePath, destDir), {
+        stdio: 'ignore',
+        // The target: the archive's `./` name resolves against it and the files land in it, and
+        // the child never inherits a possibly attacker-influenced cwd.
+        cwd: destDir,
+        windowsHide: true
+      })
+      let settled = false
+      /** Set once a cancel or the deadline asked the child to stop: the extraction then rejects with it. */
+      let stopError: Error | null = null
+      const timers: Array<ReturnType<typeof setTimeout>> = []
+      const later = (ms: number, fn: () => void): void => {
+        const timer = setTimeout(fn, ms)
+        // Never let a timer keep Electron alive by itself (mirrors the whisper grace unref).
+        timer.unref?.()
+        timers.push(timer)
+      }
+      const onAbort = (): void => stopChild(new Error('tar extraction cancelled'))
+      const settle = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        for (const timer of timers) clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        fn()
+      }
+      const stopChild = (err: Error): void => {
+        if (settled || stopError) return
+        stopError = err
+        signal?.removeEventListener('abort', onAbort)
+        later(graceMs, () => {
           try {
             child.kill('SIGKILL')
           } catch {
             /* already gone */
           }
+          later(goneBoundMs, () => {
+            log?.('tar did not exit after it was killed: the extraction is given up on', { graceMs, goneBoundMs })
+            settle(() => reject(err))
+          })
+        })
+        try {
+          child.kill()
+        } catch {
+          /* already gone */
         }
-      }, EXTRACT_KILL_GRACE_MS)
-      escalate.unref?.()
+      }
       const onGone = (): void => {
-        gone = true
-        clearTimeout(escalate)
+        if (stopError) {
+          const err = stopError
+          settle(() => reject(err))
+        }
       }
-      child.once('exit', onGone)
-      child.once('close', onGone)
-      child.once('error', onGone)
-      try {
-        child.kill()
-      } catch {
-        /* already gone */
-      }
-      reject(err)
-    }
-    const settle = (fn: () => void): void => {
-      if (settled) return
-      settled = true
-      if (deadline) clearTimeout(deadline)
-      signal?.removeEventListener('abort', onAbort)
-      fn()
-    }
 
-    deadline = setTimeout(
-      () => stopChild(new Error(`tar extraction exceeded ${extractDeadlineMs()} ms; aborted`)),
-      extractDeadlineMs()
-    )
-    // Never let the deadline timer keep Electron alive by itself (mirrors the whisper grace unref).
-    deadline.unref?.()
-    if (signal?.aborted) onAbort()
-    else signal?.addEventListener('abort', onAbort, { once: true })
+      later(extractDeadlineMs(), () => stopChild(new Error(`tar extraction exceeded ${extractDeadlineMs()} ms; aborted`)))
+      if (signal?.aborted) onAbort()
+      else signal?.addEventListener('abort', onAbort, { once: true })
 
-    child.on('error', (err) => settle(() => reject(err)))
-    child.on('close', (code) =>
-      settle(() => (code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))))
-    )
-  })
+      child.on('exit', onGone)
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        if (!stopError) return settle(() => reject(err))
+        // A kill that could not be delivered says nothing about whether tar is gone: the SIGKILL and the
+        // bound settle it. A spawn that failed means there never was a child.
+        if (typeof err.syscall === 'string' && err.syscall.startsWith('spawn')) onGone()
+      })
+      child.on('close', (code: number | null) => {
+        if (stopError) return onGone()
+        settle(() => (code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))))
+      })
+    })
+}
+
+/** The default extractor (`makeTarExtractor` with the real `spawn`). */
+export const extractWithTar: ExtractFn = makeTarExtractor()
 
 export interface EngineDownloadDeps {
   fetchImpl?: FetchFn
@@ -535,11 +578,13 @@ export interface StartEngineDownloadOptions {
    */
   update?: boolean
   /**
-   * #516: awaited once, after EVERY archive of the job downloaded and verified and before the first
-   * installed file is touched — the IPC layer pauses the engine's users here, so a model keeps
-   * answering through the download and stops only for the file swap. A throw fails the job with
-   * its message (the archives are discarded, nothing was replaced). With it, the in-use flags below
-   * are not checked at start: the hook owns that check, after the pause.
+   * #516: awaited once, after EVERY archive of the job downloaded, verified and (#1000) was unpacked,
+   * checked and marked in its staging folder, with the spawn gate held, and before the first installed
+   * file is touched — the IPC layer pauses the engine's users here, so a model keeps answering through
+   * the download and the unpack and stops only for the swap's renames. A throw fails the job with its
+   * message (the staged copies are deleted, nothing was replaced). A job whose download or unpack fails
+   * or is cancelled never calls it. With it, the in-use flags below are not checked at start: the hook
+   * owns that check, after the pause.
    */
   beforeReplace?: () => Promise<void>
   /**
@@ -819,7 +864,9 @@ export class EngineDownloadManager {
    * the instant `cancel()` is called, but the `run()` — and the tar child it awaits — can still
    * be settling; `activeJob()` used to report null in that window, so a retry launched a SECOND
    * install into the same `extractTo` while the first tar kept writing (mixed build + a possible
-   * valid marker). This latch keeps the manager busy until `run()` actually settles.
+   * valid marker). This latch keeps the manager busy until `run()` actually settles — #999: and the
+   * extractor's promise, which `run()` awaits, settles only once its tar child has exited (or after a
+   * bound past SIGKILL), so the latch means "tar is gone", not merely "asked to stop".
    */
   private runSettled = true
   /** Issue #323: told the families a finished job installed, AFTER `job.status = 'done'`. */
@@ -1024,9 +1071,11 @@ export class EngineDownloadManager {
    * too (full-audit 2026-07-11 CODE-13 — the downloads.ts BE-4 precedent): the SHA-256
    * hash and the extraction of a tens-of-MB archive take real time on a USB drive, and a
    * cancel landing there used to be silently dropped (the job kept installing).
-   * `fetchArchive` re-checks the abort signal after the verify, `replaceInstall` after the
-   * extraction and again before the swap (#986: a cancel is honoured until the swap's first
-   * rename; after it the step finishes), and `run` between archives and between its phases.
+   * `fetchArchive` re-checks the abort signal after the verify, the stage after the extraction
+   * (#999: which ends only once tar has exited), `run` between archives, between stages and
+   * between its phases, and the swap right before its first rename (#986: a cancel is honoured
+   * until then; after it the step finishes). #1000: a cancel before the swaps never pauses
+   * anything, since the stage runs before the pause.
    */
   cancel(jobId: string): EngineDownloadJob {
     const job = this.jobs.get(jobId)
@@ -1105,13 +1154,20 @@ export class EngineDownloadManager {
   }
 
   /**
-   * Install every step; the first failure fails the whole job. Two phases (#516): every archive
-   * is downloaded and verified first, while the installed engine stays untouched and usable; only
-   * then (after `beforeReplace`, the update's pause) is each install replaced, which takes seconds.
-   * A failure or cancel in the first phase replaces nothing. Archives not yet extracted when the
-   * job stops are deleted. #986: between the phases the job checks that the drive has room to
-   * unpack every archive, before the pause; and each replacement is a staged swap
-   * (`replaceInstall`), so a step that fails leaves its install as it was.
+   * Install every step; the first failure fails the whole job. Three phases (#516, #1000), and only the
+   * last one touches an installed engine or stops anything:
+   *  1. every archive is downloaded and verified (`fetchArchive`);
+   *  2. after the room check (#986), every step is staged (`stageStep`: unpacked, checked and marked in
+   *     `<live>.new/`), while the installed engine keeps running and the spawn gate stays open: nothing
+   *     here reads or writes an install folder but the archive's move out of it;
+   *  3. only then are spawns held, `beforeReplace` (the update's pause) runs, and each staged copy is
+   *     swapped in (`swapStep`), which takes the renames' time.
+   * A cancel before phase 3 replaces nothing, never pauses and never holds the gate. A step that fails
+   * leaves its whole FAMILY as it was (round 1: the `cpu/` net with its main build) while the other families
+   * still install; the first failure is the job's, and a job none of whose families staged never pauses.
+   * Archives not yet staged when the job stops are deleted, and so is every copy the job staged and did not
+   * swap in, whatever ends the job (the `finally`; un-marked at once). Each swap is a staged swap, so a step
+   * that fails leaves its install as it was.
    */
   private async run(
     job: EngineDownloadJob,
@@ -1120,6 +1176,10 @@ export class EngineDownloadManager {
     controller: AbortController,
     beforeReplace?: () => Promise<void>
   ): Promise<void> {
+    // #998 round 1: the deletes an earlier job queued (its replaced copies, the copies it staged and did not
+    // swap in) finish first, so the recovery below never moves a copy that is about to be deleted into place
+    // without the gate or the pause.
+    await engineFolderDeletesSettled()
     // #986 review: an earlier attempt of this session can have left the only whole copies beside an
     // install (a swap whose old copy could not be moved back) or the only `cpu/` net in a `.old` (a
     // carry that was refused). Finish or roll that back first, with the start's own rule, main build
@@ -1187,43 +1247,117 @@ export class EngineDownloadManager {
       await discard(fetched)
       return
     }
-    // #516: from the pause to the last marker, no program of these families may start — a
-    // helper restarting by itself, or a model start that was still hashing its weights, waits
-    // for the swap (`spawn-gate.ts`) instead of running a half-extracted binary.
-    const releases = [...new Set(steps.map((s) => s.family))].map((f) => holdEngineSpawns(f))
+    const order = installOrder(steps)
+    const releases: Array<() => void> = []
     const replaced: InstallStep[] = []
     // #986: the replaced copies (`<live>.old/`), deleted once the gate is released.
     const replacedFolders: string[] = []
+    // #1000: the copies this job staged (`<live>.new/`, from the moment a stage begins) and has not swapped
+    // in: deleted in the `finally`, whatever ends the job — a failure, a cancel, a refused pause, a stop
+    // part-way or an unexpected throw. One the swap kept as the only whole copy is taken off the list.
+    const unswapped: string[] = []
+    // #1000 round 1: each FAMILY is all or nothing up to its swaps (the `cpu/` net with its main build). A family
+    // whose leftover guard, stage or swap fails is left as it is, the other families still install (a plain
+    // "Install the AI engine" on a bare drive fetches the chat and the voice engine: a voice engine that cannot
+    // be unpacked used to stop the chat engine too), and the FIRST failure is the job's, reported once at the end.
+    const failedFamilies = new Set<EngineFamily>()
+    const failure: { first: { error: unknown } | null } = { first: null }
+    const fail = (family: EngineFamily, error: unknown): void => {
+      failedFamilies.add(family)
+      failure.first ??= { error }
+    }
     let complete = false
     try {
-      if (beforeReplace) {
+      // #986 review: a leftover `run()`'s recovery could not move where it belongs, that is still the only
+      // whole copy or holds a net the install lacks, is never deleted: that family stops with `filesInUse`,
+      // nothing touched. #1000: every step's leftovers are judged before any step stages, so a net this job
+      // staged (`<os>/cpu.new`) is never mistaken for one.
+      for (const step of order) {
+        if (failedFamilies.has(step.family)) continue
         try {
-          await beforeReplace()
+          if (holdsIrreplaceableLeftover(rootPath, step)) {
+            fail(step.family, new EngineStepError('filesInUse', tMain('main.engine.filesInUse'), true))
+          }
         } catch (err) {
-          job.status = 'failed'
-          job.error = err instanceof Error ? err.message : String(err)
-          this.noteEnd(job, 'notReplaced')
-          await discard(fetched)
-          return
-        }
-        if (controller.signal.aborted) {
-          job.status = 'cancelled'
-          await discard(fetched)
-          return
+          fail(step.family, err)
         }
       }
-      const order = installOrder(steps)
+      // #1000: phase 2, stage every step while the installed engine keeps running and its spawns stay
+      // open: nothing is paused and the gate is not held, so a stage that fails or is cancelled (or hangs
+      // on a failing stick until the extractor's deadline) never stops a model.
+      const staged = new Map<InstallStep, EngineSwapDirs>()
       for (const [i, step] of order.entries()) {
-        const outcome = await this.replaceInstall(job, step, rootPath, controller, replacedFolders)
-        if (outcome === 'done') replaced.push(step)
-        // A cancel stops what has not started; a swap it arrived too late to stop stays recorded.
-        const last = i === order.length - 1
-        if (outcome !== 'done' || (controller.signal.aborted && !last)) {
-          if (outcome === 'done') job.status = 'cancelled'
-          // Every archive is in by now: the steps not yet installed hold the ones still to go.
-          await discard(order.slice(i + 1).map((s) => s.plan))
+        if (controller.signal.aborted) {
+          job.status = 'cancelled'
+          await discard(order.slice(i).map((s) => s.plan))
           return
         }
+        if (failedFamilies.has(step.family)) {
+          await discard([step.plan])
+          continue
+        }
+        // Its own archive is gone after the stage, whatever happened.
+        const result = await this.stageStep(step, rootPath, controller, unswapped)
+        if ('error' in result) fail(step.family, result.error)
+        else staged.set(step, result)
+      }
+      // A cancel that landed after the last extraction (in a flatten, the hashing or the flush) stands.
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        return
+      }
+      const swapping = order.filter((s) => !failedFamilies.has(s.family))
+      if (swapping.length > 0) {
+        // Deletes the job's recovery queued settle outside the gate.
+        await engineFolderDeletesSettled()
+        // #516: from the pause to the last swap, no program of these families may start — a helper
+        // restarting by itself, or a model start that was still hashing its weights, waits for the swap
+        // (`spawn-gate.ts`) instead of holding a file in a folder the swap renames.
+        for (const family of new Set(swapping.map((s) => s.family))) releases.push(holdEngineSpawns(family))
+        if (beforeReplace) {
+          try {
+            await beforeReplace()
+          } catch (err) {
+            if (failure.first) {
+              this.failStep(job, failure.first.error)
+              return
+            }
+            job.status = 'failed'
+            job.error = err instanceof Error ? err.message : String(err)
+            this.noteEnd(job, 'notReplaced')
+            return
+          }
+          if (controller.signal.aborted) {
+            job.status = 'cancelled'
+            return
+          }
+        }
+        // Phase 3: the swaps.
+        for (const [i, step] of swapping.entries()) {
+          // An earlier swap of its family failed: the rest of that family is not swapped.
+          if (failedFamilies.has(step.family)) continue
+          const dirs = staged.get(step)
+          if (!dirs) throw new Error('engine job: a step was never staged')
+          const outcome = await this.swapStep(job, step, dirs, controller, replacedFolders, unswapped)
+          if (outcome === 'done') replaced.push(step)
+          else {
+            // A cancel honoured before the swap's first rename ends the job; a swap that kept both copies is
+            // reported as such, never hidden behind a cancel recorded while it ran (#986 review 3).
+            const keep = outcome.error instanceof EngineStepError && outcome.error.keepStaging
+            if ((job.status as EngineDownloadJob['status']) === 'cancelled' && !keep) return
+            fail(step.family, outcome.error)
+          }
+          // A cancel stops what has not started; a swap it arrived too late to stop stays recorded.
+          if (controller.signal.aborted && i < swapping.length - 1) {
+            if (failure.first) this.failStep(job, failure.first.error)
+            else job.status = 'cancelled'
+            return
+          }
+        }
+      }
+      if (failure.first) {
+        this.failStep(job, failure.first.error)
+        return
       }
       complete = true
     } finally {
@@ -1231,6 +1365,12 @@ export class EngineDownloadManager {
       // #986: in the background and marker first, after the gate: a helper that was waiting starts
       // on the new copy at once. The next swap waits for these deletes (`engineFolderDeletesSettled`).
       for (const dir of replacedFolders) deleteEngineFolderLater(dir, this.deps.log)
+      // #998 round 1: a staged copy that is not swapped in loses its marker at once, before its delete waits in
+      // the queue: no recovery may take it for a whole copy meanwhile, nor after a delete that is refused.
+      for (const dir of unswapped) {
+        unmarkEngineFolder(dir, this.deps.log)
+        deleteEngineFolderLater(dir, this.deps.log)
+      }
       // #516: a job that stopped part-way still replaced what it replaced — the consumers of a new
       // main build need the same re-arm and probe refresh as after a complete install. #678: so does
       // a `cpu/` net a reinstall replaced alone: its old verdict goes, and the fresh copy is known.
@@ -1423,55 +1563,73 @@ export class EngineDownloadManager {
   }
 
   /**
-   * Phase 2 for ONE verified archive (#986): a staged swap, never a delete first. `stageEngineInstall`
-   * builds the new copy in `<live>.new/` (extract, flatten, left-out files, link sweep, required files,
-   * hashes, every file flushed, the marker written last INSIDE `.new`). A cancel is honoured until the
-   * swap's first rename; any failure or cancel before it deletes `.new` and leaves the install folder
-   * exactly as it was. The swap (`swapEngineFolder`) moves the install to `<live>.old/` and `.new` in,
-   * putting the old copy back when the second rename is refused; the main build then carries the
-   * `cpu/` net over from `.old`. `.old` joins `replacedFolders`, deleted after the job. A leftover that
-   * `run()`'s recovery could not move where it belongs and that is still the only whole copy, or holds a
-   * net the install lacks, is never deleted: the step stops with `filesInUse` instead, nothing touched.
-   * Returns the outcome; on 'failed' it sets `job.status`/`job.error`. The archive is gone whatever
-   * happens.
+   * Phase 2 for ONE verified archive (#986, #1000): `stageEngineInstall` builds the new copy in `<live>.new/`
+   * (extract, flatten, left-out files, link sweep, the archive's member check, required files, hashes,
+   * every file flushed, the marker written last INSIDE `.new`), while the installed engine keeps running.
+   * The staging folder joins `unswapped` before anything is written there, so `run()` deletes it whatever
+   * happens next. Nothing installed is touched but the archive's move out of the install folder. Returns
+   * the swap folders, or the error on a failure or cancel (`run()` decides what it means for the job, #1000
+   * round 1). The archive is gone either way.
    */
-  private async replaceInstall(
-    job: EngineDownloadJob,
+  private async stageStep(
     step: InstallStep,
     rootPath: string,
     controller: AbortController,
-    replacedFolders: string[]
-  ): Promise<'done' | 'failed' | 'aborted'> {
+    unswapped: string[]
+  ): Promise<EngineSwapDirs | { error: unknown }> {
     const { plan } = step
-    let dirs: EngineSwapDirs | null = null
-    let keepStaging = false
     try {
-      job.status = 'extracting'
-      dirs = engineSwapDirs(rootPath, plan.extractTo)
-      // #986 review: `run()` has finished or rolled back what an earlier attempt left; a leftover that
-      // is still the only whole copy, or holds the only `cpu/` net, is never deleted by this step.
-      const netDirs = step.main && step.cpuNet ? engineSwapDirs(rootPath, step.cpuNet.extractTo) : null
-      if (
-        irreplaceableLeftover(plan, dirs, step.main, step.cpuNet) ||
-        (netDirs !== null && step.cpuNet !== undefined && irreplaceableLeftover(step.cpuNet, netDirs, false))
-      ) {
-        keepStaging = true
-        throw new EngineStepError('filesInUse', tMain('main.engine.filesInUse'))
-      }
+      const dirs = engineSwapDirs(rootPath, plan.extractTo)
+      unswapped.push(dirs.staging)
       // F-33: the job's abort signal reaches the extractor, so a cancel kills the tar child (and a
-      // deadline bounds a wedged one).
-      const staged = await stageEngineInstall(plan, dirs.staging, {
+      // deadline bounds a wedged one); #999: the stage goes on only once that child has exited.
+      await stageEngineInstall(plan, dirs.staging, {
         extract: this.deps.extractImpl,
         signal: controller.signal,
         log: this.deps.log
       })
-      // #986: until the first rename nothing installed has been touched, so a cancel that landed
-      // after the extraction is honoured too: `swapEngineFolder` checks it right before that rename
-      // (after any wait on a stale `.old`). (#516 used to finish such an install: the old copy was
-      // already gone by then. It no longer is.)
-      // A scanner can take a fresh file after the check: the antivirus case of #986. (The stage's
-      // own test, `existsSync`, again.)
-      if (!requiredInstallFiles(staged).every((p) => existsSync(p))) {
+      return dirs
+    } catch (error) {
+      await rm(plan.zipDest, { force: true, ...removeRetry() }).catch(() => undefined)
+      return { error }
+    }
+  }
+
+  /**
+   * Phase 3 for ONE staged copy (#986, #1000), with the spawn gate held and after `beforeReplace`: the copy
+   * is checked again (a scanner can take a fresh file after the stage: the antivirus case of #986), then
+   * swapped in (`swapEngineFolder`: the install to `<live>.old/`, `.new` in, the old copy put back when the
+   * second rename is refused). A cancel is honoured until the swap's first rename; after it the step
+   * finishes. The main build then carries the `cpu/` net over from `.old`. `.old` joins `replacedFolders`,
+   * deleted after the job. A copy that moved in, or that the swap kept as the only whole one (the install
+   * folder gone for the moment), leaves `unswapped`. Returns 'done', or the error (`run()` decides what it
+   * means for the job, #1000 round 1).
+   */
+  private async swapStep(
+    job: EngineDownloadJob,
+    step: InstallStep,
+    dirs: EngineSwapDirs,
+    controller: AbortController,
+    replacedFolders: string[],
+    unswapped: string[]
+  ): Promise<'done' | { error: unknown }> {
+    const { plan } = step
+    const settled = (): void => {
+      const at = unswapped.indexOf(dirs.staging)
+      if (at >= 0) unswapped.splice(at, 1)
+    }
+    try {
+      // #998: judged by the staged copy's own marker (`engineFolderComplete`): every file it records, so a
+      // DLL a scanner took during the pause is caught too, not only the program. A marker with no map (a
+      // hashing failure) falls back to the stage's own test, `existsSync` of the required files; a copy
+      // whose marker went is not the copy the stage made.
+      const marker = readRuntimeMarker(dirs.staging)
+      const whole =
+        marker !== null &&
+        (marker.binaries
+          ? engineFolderComplete(plan, dirs.staging)
+          : requiredInstallFiles(planInFolder(plan, dirs.staging)).every((p) => existsSync(p)))
+      if (!whole) {
         throw new EngineStepError('incomplete', tMain('main.engine.binaryMissing'))
       }
       try {
@@ -1479,9 +1637,10 @@ export class EngineDownloadManager {
           this.swapping = job.jobId
         })
       } catch (err) {
-        if (err instanceof EngineStepError && err.keepStaging) keepStaging = true
+        if (err instanceof EngineStepError && err.keepStaging) settled()
         throw err
       }
+      settled()
       // The new copy is in place: from here a cancel is too late to stop anything.
       const carried = step.main ? await carryCpuNet(dirs.previous, dirs.live, this.deps.log, step.cpuNet) : true
       // #986 review 3: the carry can replace an incomplete `cpu/`: the net's cached verdicts go too.
@@ -1495,32 +1654,36 @@ export class EngineDownloadManager {
       for (const p of plan.binaryPaths) invalidateBinaryVerification(p)
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'
-    } catch (err) {
-      // Before the status flips: the renderer refreshes once, on the terminal status. A `.new` that is
-      // the only whole copy left (the swap could not put the old one back) stays: the next attempt in
-      // this session, or the next start, moves it in.
-      if (dirs && !keepStaging) deleteEngineFolderLater(dirs.staging, this.deps.log)
-      await rm(plan.zipDest, { force: true, ...removeRetry() }).catch(() => undefined)
-      // #986 review 3: a swap that kept both copies (the install folder gone for the moment) is reported as
-      // such, never hidden behind a cancel that was recorded while it ran.
-      if (job.status === 'cancelled' && !keepStaging) return 'aborted'
-      if (keepStaging) this.endReasons.delete(job.jobId)
-      job.status = 'failed'
-      if (err instanceof EngineStepError) {
-        job.error = err.message
-        this.noteEnd(job, err.reason)
-      } else {
-        job.error = friendlyEngineError(err)
-        this.noteEnd(job, 'install')
-      }
-      this.deps.log?.('Engine install failed', {
-        error: String(err),
-        ...(keepStaging ? { kept: 'the only whole copies, for the next attempt or start' } : {})
-      })
-      return 'failed'
+    } catch (error) {
+      return { error }
     } finally {
       if (this.swapping === job.jobId) this.swapping = null
     }
+  }
+
+  /**
+   * A step that failed (#986): the job fails with the error's copy and audit reason, unless a cancel already
+   * ended it ('aborted'). One that keeps the only whole copies (`EngineStepError.keepStaging`: a leftover
+   * the job must not delete, or a swap that could not put the old copy back) is reported as such, never
+   * hidden behind a cancel recorded while it ran (#986 review 3).
+   */
+  private failStep(job: EngineDownloadJob, err: unknown): 'failed' | 'aborted' {
+    const keep = err instanceof EngineStepError && err.keepStaging
+    if (job.status === 'cancelled' && !keep) return 'aborted'
+    if (keep) this.endReasons.delete(job.jobId)
+    job.status = 'failed'
+    if (err instanceof EngineStepError) {
+      job.error = err.message
+      this.noteEnd(job, err.reason)
+    } else {
+      job.error = friendlyEngineError(err)
+      this.noteEnd(job, 'install')
+    }
+    this.deps.log?.('Engine install failed', {
+      error: String(err),
+      ...(keep ? { kept: 'the only whole copies, for the next attempt or start' } : {})
+    })
+    return 'failed'
   }
 }
 
@@ -1539,12 +1702,13 @@ class EngineStepError extends Error {
 type EngineLog = ((msg: string, meta?: unknown) => void) | undefined
 
 /**
- * The order phase 2 installs a job's steps in (#986 review): per family, its `cpu/` net BEFORE its main
- * build. The net's folder sits inside the main one (`<os>/cpu/`) and its archive downloads into it, so
+ * The order a job stages and swaps its steps in (#986 review; #1000: phases 2 and 3): per family, its `cpu/`
+ * net BEFORE its main build. The net's folder sits inside the main one (`<os>/cpu/`) and its archive downloads into it, so
  * with the main build first its swap moved the net's archive to `<os>.old/cpu/`, and a refused carry
  * left the net step without it and the archive inside `cpu/` for good. Net first, the net's swap happens
  * inside the old install folder and the main build's carry takes the NEW net across; no archive is ever
- * inside a folder another step renames. Families keep their order; phase 1 keeps the plan's.
+ * inside a folder another step renames (since #1000 every archive has moved into its own `.new` before
+ * the first swap anyway). Families keep their order; phase 1 keeps the plan's.
  */
 function installOrder(steps: readonly InstallStep[]): InstallStep[] {
   const families = [...new Set(steps.map((s) => s.family))]
@@ -1632,6 +1796,19 @@ async function removeEngineFolder(dir: string, log: EngineLog): Promise<boolean>
 }
 
 /**
+ * Remove the marker of the engine copy at `dir` now (#998 round 1), so nothing takes it for a whole copy while
+ * its delete waits in the queue (or after a delete that is refused). A link (or junction) at `dir` is left
+ * alone, as `removeEngineFolder` leaves it. A failure is logged; the queued delete tries again.
+ */
+function unmarkEngineFolder(dir: string, log: EngineLog): void {
+  try {
+    if (isRealFolder(dir)) rmSync(runtimeMarkerPath(dir), { force: true, recursive: true })
+  } catch (err) {
+    log?.('Could not remove an engine folder', { folder: basename(dir), error: String(err) })
+  }
+}
+
+/**
  * {@link removeEngineFolder} on the start path (#986 review): synchronous, marker first, no retries (the
  * start never waits on a lock; what is left waits for the next start).
  */
@@ -1664,12 +1841,22 @@ function irreplaceableLeftover(
   // #986 review 2: a net in the leftover's own `cpu/`, or in a net swap left inside it (`cpu.new`, `cpu.old`).
   const holdsNet = (dir: string): boolean =>
     netPlan
-      ? ['cpu', 'cpu.new', 'cpu.old'].some((n) => netWhole(join(dir, n), netPlan))
+      ? NESTED_NET_FOLDERS.some((n) => netWhole(join(dir, n), netPlan))
       : isRealFolder(join(dir, 'cpu'))
   return [dirs.staging, dirs.previous].some(
     (dir) =>
       isRealFolder(dir) && ((!liveWhole && engineFolderComplete(plan, dir)) || (main && !liveHasNet && holdsNet(dir)))
   )
+}
+
+/**
+ * Does `step` find a leftover it must not delete (#986 review, `irreplaceableLeftover`) beside its install
+ * folder, or, for a main build, beside its `cpu/` net's? Throws when a folder lies outside the drive root.
+ */
+function holdsIrreplaceableLeftover(rootPath: string, step: InstallStep): boolean {
+  if (irreplaceableLeftover(step.plan, engineSwapDirs(rootPath, step.plan.extractTo), step.main, step.cpuNet)) return true
+  if (!step.main || !step.cpuNet) return false
+  return irreplaceableLeftover(step.cpuNet, engineSwapDirs(rootPath, step.cpuNet.extractTo), false)
 }
 
 /**
@@ -1682,12 +1869,15 @@ function netWhole(dir: string, netPlan: RuntimeDownloadPlan | undefined): boolea
   return isRealFolder(dir) && engineFolderComplete(netPlan, dir)
 }
 
-/** Flush every file under `dir` to the device (#986: the marker decides, so what it covers must be on the disk). */
+/**
+ * Flush every file under `dir` to the device (#986: the marker decides, so what it covers must be on the disk),
+ * one file at a time and off the main thread (#1000: the stage runs while the models answer).
+ */
 async function flushFolder(dir: string): Promise<void> {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name)
     if (entry.isDirectory()) await flushFolder(p)
-    else if (entry.isFile()) flushToDevice(p)
+    else if (entry.isFile()) await flushToDeviceAsync(p)
   }
 }
 
@@ -1703,13 +1893,16 @@ export interface StageEngineOptions {
  * Build a complete, checked, marked install of `plan` in `stagingDir` (#986), from the verified archive at
  * `plan.zipDest`, and return the plan rebased onto `stagingDir`. A leftover `stagingDir` goes first
  * (marker first; one that cannot go fails the stage). The archive is moved in (#856: tar is given only
- * `./<name>` and runs inside the folder), extracted, flattened, cleared of the family's left-out
- * executables (#729), swept for escaping links (SEC-2), and deleted; then every required file must be
- * there, the executables get their mode, every file is hashed into the marker (all or nothing) and
- * flushed, and the marker is written LAST, inside `stagingDir`, before anything moves (W-67, lens F
- * CE-F1). Nothing outside `stagingDir` is touched but the archive's move. Throws on any failure; the
- * caller deletes `stagingDir`. The engine swap uses it per step; the app-update plan's install into a
- * folder of its own (W-30, T8.5a) is meant to reuse it, without the swap.
+ * `./<name>` and runs inside the folder), listed (#998: `archiveMembers`), extracted, flattened, cleared
+ * of the family's left-out executables (#729), swept for escaping links (SEC-2), and deleted; then every
+ * member the archive lists must be there (#998: an antivirus can take a fresh file; a listing that cannot
+ * be read skips this with a log line), and every required file; the executables get their mode, EVERY
+ * file of the copy is hashed into the marker (#998: the archive's members and what the folder holds; a
+ * listed member that cannot be hashed fails the stage) and flushed (#1000: off the main thread), what the
+ * marker records is checked once more, and the marker is written LAST, inside `stagingDir`, before anything
+ * moves (W-67, lens F CE-F1). Nothing outside `stagingDir` is touched but the archive's move. Throws on any failure; the
+ * caller deletes `stagingDir`. The engine job stages every step before its pause (#1000); the app-update
+ * plan's install into a folder of its own (W-30, T8.5a) is meant to reuse it, without the swap.
  */
 export async function stageEngineInstall(
   plan: RuntimeDownloadPlan,
@@ -1723,9 +1916,11 @@ export async function stageEngineInstall(
   await mkdir(stagingDir, { recursive: true })
   const staged = planInFolder(plan, stagingDir)
   await renameWithRetry(plan.zipDest, staged.zipDest)
-  await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal)
+  // #998: what the verified archive holds, read from the archive itself (as its size, #986).
+  const members = await archiveMembers(staged.zipDest)
+  await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal, opts.log)
   if (opts.signal?.aborted) throw new Error('engine install cancelled after the extraction')
-  await flattenNestedBinary(staged)
+  const flattened = await flattenNestedBinary(staged)
   // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before
   // anything can start it. A file that cannot be removed fails the install like a bad archive.
   // `lstat`, not `existsSync`: a dangling link of that name must go too.
@@ -1744,6 +1939,40 @@ export async function stageEngineInstall(
   // the install if any link escapes. Legitimate engine archives carry no escaping links.
   await assertExtractedSymlinksContained(stagingDir)
   await rm(staged.zipDest, { force: true, ...removeRetry() })
+
+  // #998: tar's exit code is not a completeness signal: a scanner can take a file it just saw written
+  // (the silent cases: a missing `ggml-vulkan.dll` runs on the CPU and is remembered as "no graphics
+  // card", missing CPU variants are blamed on the model). Every member the archive lists, where the
+  // flatten put it and less what the family leaves out, must be in the copy as a file or a link (round 1:
+  // a folder in a file's place fails too), or the step fails and the installed engine stays.
+  /** The archive's members as the copy's keys; null when the listing could not be read. */
+  let listed: Set<string> | null = null
+  if (members === null) {
+    opts.log?.('The engine archive could not be listed: no member check', { archive: basename(staged.zipDest) })
+  } else {
+    const leftOut = new Set(staged.excludedPaths.map((p) => markerBinaryKey(stagingDir, p).toLowerCase()))
+    listed = new Set()
+    for (const member of members) {
+      const key = stagedMemberKey(member, flattened)
+      if (key !== null && !leftOut.has(key.toLowerCase())) listed.add(key)
+    }
+    const missing: string[] = []
+    const notFiles: string[] = []
+    for (const key of listed) {
+      const st = await lstat(join(stagingDir, ...key.split('/'))).catch(() => null)
+      if (!st) missing.push(key)
+      else if (!st.isFile() && !st.isSymbolicLink()) notFiles.push(key)
+    }
+    if (missing.length > 0 || notFiles.length > 0) {
+      opts.log?.('Engine extraction finished but files the archive lists are missing', {
+        folder: basename(stagingDir),
+        count: missing.length + notFiles.length,
+        missing: missing.slice(0, 20),
+        ...(notFiles.length > 0 ? { notFiles: notFiles.slice(0, 20) } : {})
+      })
+      throw new EngineStepError('incomplete', tMain('main.engine.extractFailed'))
+    }
+  }
 
   // #339 P8-1: the completeness check covers EVERY file the plan requires — the family's executables
   // (the code floor ∪ the yaml's `executables`) and the build's `runtime_files` — after the flatten, so
@@ -1768,22 +1997,67 @@ export async function stageEngineInstall(
     }
   }
   // Record every installed file's own SHA-256 so each executable can be re-hashed before spawn
-  // (vuln-scan B) and the sell gate can check the runtime files too. Best-effort at FAMILY
-  // granularity: a hashing failure must not fail an otherwise-good install — the marker is then
-  // written with NO map at all (→ verifier skip-legacy for every binary), never a partial one, so the
-  // verifier and the sell gate can never disagree about one install (#339 P8-1). The keys are relative
-  // to the folder, so the ones recorded here are the live folder's after the swap.
-  let binaries: Record<string, string> | undefined
-  try {
-    const entries: Record<string, string> = {}
-    for (const p of requiredFiles) entries[markerBinaryKey(staged.extractTo, p)] = await sha256File(p)
-    binaries = entries
-  } catch (err) {
-    opts.log?.('Could not hash the installed files for the marker', { error: String(err) })
+  // (vuln-scan B) and the sell gate can check the runtime files too. #998: EVERY file of the copy (the
+  // required ones first), so the copy's own marker says what "complete" is for it: the start's
+  // recovery, the leftover guard and the swap's check (`engineFolderComplete`) and the sell gate judge
+  // it by its keys, whatever a later pin lists. The keys are relative to the folder, so the ones recorded
+  // here are the live folder's after the swap.
+  // #998 round 1: the keys are the archive's members AND what the folder holds, so a member a scanner took
+  // after the check above is not simply left out of the map. When the archive could be listed, a member
+  // (or a required file) that cannot be hashed fails the step: the copy is not what the archive holds. Only
+  // when it could not be listed does a required file that cannot be hashed leave the marker with NO map at
+  // all (→ verifier skip-legacy; never a partial one, #339 P8-1), as before. Any other file that cannot be
+  // read, or a link to something that is not a file, is not recorded (logged).
+  const requiredKeys = new Set(requiredFiles.map((p) => markerBinaryKey(staged.extractTo, p)))
+  const keys = new Set([...requiredKeys, ...(listed ?? []), ...(await installedFileKeys(stagingDir))])
+  let binaries: Record<string, string> | undefined = {}
+  for (const key of keys) {
+    const p = join(stagingDir, ...key.split('/'))
+    const kind = await recordedKind(p)
+    let problem: string = kind
+    if (kind === 'file') {
+      try {
+        binaries[key] = await sha256File(p)
+        continue
+      } catch (err) {
+        problem = (err as NodeJS.ErrnoException).code ?? String(err)
+      }
+    } else if (kind === 'link-to-other' && !requiredKeys.has(key)) {
+      opts.log?.('A link in the engine copy that is not a file is not recorded', { file: key })
+      continue
+    }
+    if (listed !== null && (listed.has(key) || requiredKeys.has(key))) {
+      opts.log?.('An engine file could not be read after the unpack', { folder: basename(stagingDir), file: key, problem })
+      throw new EngineStepError('incomplete', tMain('main.engine.extractFailed'))
+    }
+    if (requiredKeys.has(key)) {
+      opts.log?.('Could not hash the installed files for the marker', { file: key, problem })
+      binaries = undefined
+      break
+    }
+    opts.log?.('An engine file could not be read; it is not recorded', { file: key, problem })
   }
   // #986: the marker decides which copy the start trusts, so the files it covers reach the device
-  // first (an exFAT stick has no journal), then the marker itself.
+  // first (an exFAT stick has no journal), then the marker itself. #1000: asynchronously, file by file.
   await flushFolder(stagingDir)
+  // #998 round 1: and a scanner can take a file during the hashing or the flush, so what the marker is about to
+  // record is checked once more right before it is written (with no map: the required files, as above).
+  const gone: string[] = []
+  if (binaries) {
+    for (const key of Object.keys(binaries)) {
+      if ((await recordedKind(join(stagingDir, ...key.split('/')))) !== 'file') gone.push(key)
+    }
+  } else {
+    for (const p of requiredFiles) if (!existsSync(p)) gone.push(markerBinaryKey(staged.extractTo, p))
+  }
+  if (gone.length > 0) {
+    opts.log?.('Engine files went missing before the copy was marked', {
+      folder: basename(stagingDir),
+      count: gone.length,
+      missing: gone.slice(0, 20)
+    })
+    throw new EngineStepError('incomplete', tMain('main.engine.extractFailed'))
+  }
   writeRuntimeMarker(stagingDir, {
     version: plan.version,
     backend: plan.backend,
@@ -1791,7 +2065,7 @@ export async function stageEngineInstall(
     arch: plan.arch,
     ...(binaries ? { binaries } : {})
   })
-  flushToDevice(runtimeMarkerPath(stagingDir))
+  await flushToDeviceAsync(runtimeMarkerPath(stagingDir))
   return staged
 }
 
@@ -2081,18 +2355,69 @@ function recoverEngineFolder(
 /**
  * Flatten: when the binary is nested, move its directory's contents up to the extract root, where
  * services/runtime/sidecar.ts resolves it. A `cpu/` subdir is excluded from the search so a nested
- * folder of that name is never mistaken for the freshly extracted nested binary.
+ * folder of that name is never mistaken for the freshly extracted nested binary. Returns the folder it
+ * emptied, relative to the root with `/` (`llama-b200`), or '' when nothing moved (#998: the archive's
+ * members under it now lie at the root).
  */
-async function flattenNestedBinary(plan: RuntimeDownloadPlan): Promise<void> {
-  if (existsSync(plan.binaryPath)) return
+async function flattenNestedBinary(plan: RuntimeDownloadPlan): Promise<string> {
+  if (existsSync(plan.binaryPath)) return ''
   const binName = basename(plan.binaryPath)
   const found = await findBinary(plan.extractTo, binName, join(plan.extractTo, 'cpu'))
-  if (!found) return
+  if (!found) return ''
   const srcDir = join(found, '..')
-  if (resolveSame(srcDir, plan.extractTo)) return
+  if (resolveSame(srcDir, plan.extractTo)) return ''
   for (const entry of await readdir(srcDir)) {
     await renameWithRetry(join(srcDir, entry), join(plan.extractTo, entry))
   }
+  return markerBinaryKey(plan.extractTo, resolve(srcDir))
+}
+
+/**
+ * Where an archive member lies in the staged copy (#998), `markerBinaryKey` form: its name without `./`
+ * steps, and without the release folder the flatten emptied (`flattened`) when it sat under it. Null for a
+ * name tar never writes where it says (absolute, or with a `..` step), which is then not expected.
+ */
+function stagedMemberKey(member: string, flattened: string): string | null {
+  const parts = member.split('/').filter((p) => p !== '' && p !== '.')
+  if (parts.length === 0 || member.startsWith('/') || /^[A-Za-z]:/.test(member) || parts.includes('..')) return null
+  const name = parts.join('/')
+  return flattened && name.startsWith(`${flattened}/`) ? name.slice(flattened.length + 1) : name
+}
+
+/** The `cpu/` safety net and a net swap left inside an install folder: each carries a marker of its own. */
+const NESTED_NET_FOLDERS: readonly string[] = ['cpu', 'cpu.new', 'cpu.old']
+
+/** What sits at a path an engine marker would record (#998 round 1): a regular file (or a link to one), or not. */
+type RecordedKind = 'file' | 'link-to-other' | 'missing' | 'not-file'
+
+async function recordedKind(p: string): Promise<RecordedKind> {
+  const st = await lstat(p).catch(() => null)
+  if (!st) return 'missing'
+  if (st.isFile()) return 'file'
+  if (!st.isSymbolicLink()) return 'not-file'
+  const target = await stat(p).catch(() => null)
+  return target?.isFile() ? 'file' : 'link-to-other'
+}
+
+/**
+ * #998: every file of the engine copy in `dir`, `markerBinaryKey` form, sorted: files and links (a link by its
+ * own name, never entered: the stage records it only when it resolves to a file, `recordedKind`), without the
+ * marker, without macOS metadata (`isMacMetadataName`, round 1) and, at the top, without a nested net folder
+ * (`NESTED_NET_FOLDERS`). Throws when a folder cannot be read.
+ */
+async function installedFileKeys(dir: string): Promise<string[]> {
+  const keys: string[] = []
+  const walk = async (current: string, rel: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      if (!rel && (entry.name === RUNTIME_MARKER_FILE || NESTED_NET_FOLDERS.includes(entry.name))) continue
+      const key = rel ? `${rel}/${entry.name}` : entry.name
+      if (isMacMetadataName(key)) continue
+      if (entry.isDirectory()) await walk(join(current, entry.name), key)
+      else if (entry.isFile() || entry.isSymbolicLink()) keys.push(key)
+    }
+  }
+  await walk(dir, '')
+  return keys.sort()
 }
 
 /**

@@ -2523,7 +2523,9 @@ whole renderer-visible surface.
   into `installed` or `missingFamilies`, and never fetched by the argument-less `downloadEngine`).
   The install marker's `binaries` map (unchanged shape, `Record<string, string>`) now holds one
   entry per declared file for a multi-file family — every executable plus every `runtimeFiles`
-  entry, hashed all-or-nothing. `CommercialGateOptions` (the sell-gate options object) gains
+  entry, hashed all-or-nothing. *Since #998 (`architecture.md` "In-app engine updates" §7) every
+  writer records EVERY file of the copy, the declared ones first, never the marker or a nested
+  `cpu`, `cpu.new` or `cpu.old`; same shape, so a reader that looks up its own keys is unaffected.* `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two
   grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains
   `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every
@@ -2640,6 +2642,28 @@ whole renderer-visible surface.
   rounded to the unit; null for anything it cannot size, Zip64 included). `assertCommercialDrive` fails
   `runtimeCurrent` (or `optionalRuntimesConsistent`) for a leftover `<extract_to>.new` / `.old` beside a
   pinned build, and the Kit gate scripts' pre-flight says so too.
+  **#998 / #999 / #1000 additions (no IPC, no preload, no schema, no copy change; `architecture.md` "In-app
+  engine updates" §7):** the marker's `binaries` records every file of the copy (above). `runtime-download.ts`:
+  `makeTarExtractor({ spawn?, graceMs?, goneBoundMs? })` builds the default extractor (`extractWithTar =
+  makeTarExtractor()`), whose promise settles only once its tar child has exited (or 10 s after SIGKILL,
+  logged); `ExtractFn` gains an optional fourth parameter `log`; `ExtractSpawn`, `TarExtractorOptions`.
+  `StartEngineDownloadOptions.beforeReplace` is now awaited after every copy is staged, with the spawn gate
+  held. **Behaviour change:** a job stages every step (unpacked, member-checked, hashed, flushed, marked in
+  `<live>.new`) before it holds the spawn gate or calls `beforeReplace`, so a download or stage that fails or
+  is cancelled never pauses anything and replaces nothing; the deletes of every copy it staged and did not swap
+  in are queued in a `finally`; a stage whose archive lists a member the copy lacks fails `incomplete`
+  (`main.engine.extractFailed`); the pre-swap check reads the staged marker's keys. `assets.ts`
+  `flushToDeviceAsync(path)` (`FileHandle.sync()`, best-effort). `archive-size.ts` `archiveMembers(path)` (every
+  non-folder member name as written, links included; null for an unreadable, Zip64 or non-ASCII listing).
+  `assertCommercialDrive` fails `runtimeHashed` (or `optionalRuntimesConsistent`) for a further key a marker
+  records that is missing, modified or outside its folder; a marker that records only the required files passes
+  as before. `classifyLoadFailure` reads `no CPU backend found` as `files-damaged`. **Round 1:** each family is
+  all or nothing up to its swaps and the job's other families still install, with the first failure as the
+  job's end; a member or required file that cannot be hashed fails the stage when the archive could be listed
+  (no map only for an unlisted archive); links that are not files and macOS metadata (`archive-size.ts`
+  `isMacMetadataName(path)`: `._*`, `__MACOSX/`, `.DS_Store`) are never recorded nor expected; a job awaits
+  `engineFolderDeletesSettled()` before its recovery, and a staged copy it does not swap in loses its marker at
+  once.
 - **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
   (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
   all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:

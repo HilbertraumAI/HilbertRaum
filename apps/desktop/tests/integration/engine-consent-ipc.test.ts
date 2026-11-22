@@ -40,6 +40,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { engineProblemFor, reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { updateSettings } from '../../src/main/services/settings'
+import { tMain } from '../../src/main/services/i18n'
 import { log } from '../../src/main/services/logging'
 import { bodyFetch, hangingFetch, runToEnd } from '../helpers/download-fixtures'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
@@ -750,7 +751,9 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
     expect(h.vision.stop).not.toHaveBeenCalled()
   })
 
-  it('a failed swap still brings the model back (on the engine left on the drive)', async () => {
+  // #1000 split this row by design: its "failed swap" was a failing extraction, which now ends the job
+  // before the pause, so the model is never stopped for it.
+  it('a failed unpack never stops the model: nothing is paused or restarted, and the engine stays as it was', async () => {
     const runtime = liveRuntime()
     const d = makeDrive({
       runtime,
@@ -759,11 +762,37 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
         throw new Error('tar exited with code 1')
       }
     })
-    Object.assign(d.ctx, helpers())
+    const h = helpers()
+    Object.assign(d.ctx, h)
     withOlderEngine(d)
     const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
     expect((await settle(d, result as EngineDownloadJob)).status).toBe('failed')
+    await vi.waitFor(() => expect(d.manager.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    expect(runtime.stop).not.toHaveBeenCalled()
+    expect(h.embedder.suspend).not.toHaveBeenCalled()
+    expect(runtime.start).not.toHaveBeenCalled()
+    expect(versionOnDrive(d)).toBe('b150')
+  })
+
+  // …and a swap that fails after the pause still brings the model back. Here an antivirus took the new
+  // program from the staged copy while the model was stopping: the check before the swap refuses it.
+  it('a failed swap still brings the model back (on the engine left on the drive)', async () => {
+    const runtime = liveRuntime()
+    const d = makeDrive({ runtime, llamaVersion: 'b200' })
+    Object.assign(d.ctx, helpers())
+    withOlderEngine(d)
+    const staged = join(d.root, 'runtime', 'llama.cpp', `${HOST_OS}.new`, BIN_NAME)
+    const stop = runtime.stop.getMockImplementation()
+    runtime.stop.mockImplementation(async (...args: unknown[]) => {
+      rmSync(staged, { force: true })
+      return stop?.(...args)
+    })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
+    const job = await settle(d, result as EngineDownloadJob)
+    expect(job.status).toBe('failed')
+    expect(job.error).toBe(tMain('main.engine.binaryMissing'))
     expect(runtime.stop).toHaveBeenCalledTimes(1)
+    expect(versionOnDrive(d)).toBe('b150')
     await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })), { timeout: hangBudgetMs(5000) })
   })
 

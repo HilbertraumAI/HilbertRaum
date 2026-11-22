@@ -552,6 +552,32 @@ marker_hash_for() {
   sed -n 's/.*"binaries":{[^}]*"'"$1"'":"\([a-fA-F0-9]\{64\}\)".*/\1/p' "$2" | tr '[:upper:]' '[:lower:]'
 }
 
+# marker_recorded_names MARKER_PATH — every key of the marker's `binaries` map, one per line (#998; the
+# marker is our own flat single-line JSON, whose keys hold no `"`, `,` or `}`). The markers end without a
+# newline, so one is added: `read` drops a last line that has none.
+marker_recorded_names() {
+  { sed -n 's/.*"binaries":{\([^}]*\)}.*/\1/p' "$1"; printf '\n'; } | tr ',' '\n' | sed -n 's/^"\(.*\)":"[a-fA-F0-9]\{64\}"$/\1/p'
+}
+
+# installed_file_names DIR — #998: every file an install holds, relative to it with `/` (the app's
+# markerBinaryKey form): the files and the links that resolve to a file (a link by its own name, never
+# entered; a link to a folder or a dangling one is not recorded, with a line), without the marker, without
+# macOS metadata (`._*`, `__MACOSX`, `.DS_Store`) and, at the top, without the cpu/ safety net or a net swap
+# the app left inside (cpu.new, cpu.old), which carry markers of their own. Mirrors runtime-download.ts
+# installedFileKeys. One per line, sorted.
+installed_file_names() {
+  local name
+  ( cd "$1" && find . -mindepth 1 \( -path ./cpu -o -path ./cpu.new -o -path ./cpu.old -o -path ./.hilbertraum-runtime.json \) -prune -o \( -type f -o -type l \) -print ) |
+    sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r name; do
+      case "/$name" in */__MACOSX/*|*/._*|*/.DS_Store) continue ;; esac
+      if [[ -L "$1/$name" && ! -f "$1/$name" ]]; then
+        echo "  not recorded (a link that is not a file): $name" >&2
+        continue
+      fi
+      printf '%s\n' "$name"
+    done
+}
+
 # Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
 # "binary exists" alone would silently keep a CPU-era build in place after the default
 # became vulkan. Skip only when EVERY required file is present (#339 P8-3 — a half-installed
@@ -580,7 +606,17 @@ if [[ -f "$BIN_PATH" ]]; then
       fi
     elif [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]]; then
       SKIP=1
-      if [[ $COMMERCIAL -eq 1 ]]; then
+      # #998: a file the install's own marker records that is gone (an antivirus took it after the
+      # install) makes it a damaged install: re-fetched, in any mode (the app's engineFolderComplete).
+      RECORDED_MISSING=""
+      while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        [[ -f "$EXTRACT_TO/$key" ]] || RECORDED_MISSING="${RECORDED_MISSING:+$RECORDED_MISSING, }$key"
+      done < <(marker_recorded_names "$MARKER_PATH")
+      if [[ -n "$RECORDED_MISSING" ]]; then
+        SKIP=0
+        WHY="a file its install marker records is missing ($RECORDED_MISSING)"
+      elif [[ $COMMERCIAL -eq 1 ]]; then
         for f in "${REQUIRED_FILE_NAMES[@]}"; do
           m_hash="$(marker_hash_for "$f" "$MARKER_PATH")"
           if ! is_real_sha "$m_hash"; then
@@ -793,19 +829,29 @@ for exe in "${EXEC_NAMES[@]}"; do
 done
 
 # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker). The
-# `binaries` map records every required file's own SHA-256 (keyed exactly like
-# markerBinaryKey — the path relative to the extract dir; everything here is flat) so the
-# app can re-hash each executable immediately before spawn (binary-verifier.ts, #234) and
-# the sell gate can check the runtime files too. ALL-OR-NOTHING (#339 P8-3, mirrors
-# runtime-download.ts installOne): only a VERIFIED archive earns hashes at all, and a
-# hashing failure on ANY required file drops the whole map rather than writing a partial
-# one — the verifier and the sell gate must never disagree about one install.
+# `binaries` map records the SHA-256 of EVERY file the install holds (#998: the required ones
+# first, then every other file the archive put here, never cpu/, cpu.new or cpu.old), keyed
+# exactly like markerBinaryKey — the path relative to the extract dir, `/` separators — so the
+# app can re-hash each executable immediately before spawn (binary-verifier.ts, #234), judge
+# the copy complete by its own list (engineFolderComplete) and the sell gate can check every
+# file. ALL-OR-NOTHING (#339 P8-3, mirrors runtime-download.ts stageEngineInstall): only a
+# VERIFIED archive earns hashes at all, and a hashing failure on ANY file drops the whole map
+# rather than writing a partial one — the verifier and the sell gate must never disagree about
+# one install.
+declare -a RECORD_NAMES=("${REQUIRED_FILE_NAMES[@]}")
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  known=0
+  for r in "${RECORD_NAMES[@]}"; do [[ "$r" == "$f" ]] && { known=1; break; }; done
+  [[ $known -eq 1 ]] || RECORD_NAMES+=("$f")
+done < <(installed_file_names "$EXTRACT_TO")
 if [[ $ARCHIVE_VERIFIED -eq 1 ]]; then
   ALL_HASHED=1
   declare -a ENTRIES=()
-  for f in "${REQUIRED_FILE_NAMES[@]}"; do
+  for f in "${RECORD_NAMES[@]}"; do
     if h="$(sha256_of "$EXTRACT_TO/$f" 2>/dev/null)"; then
-      ENTRIES+=("\"$f\":\"$h\"")
+      key="$(printf '%s' "$f" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+      ENTRIES+=("\"$key\":\"$h\"")
     else
       ALL_HASHED=0
       break
@@ -818,7 +864,7 @@ if [[ $ARCHIVE_VERIFIED -eq 1 ]]; then
   else
     printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \
       "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" > "$MARKER_PATH"
-    echo "  marker written WITHOUT binary hashes (could not hash every required file) — the sell gate refuses this install"
+    echo "  marker written WITHOUT binary hashes (could not hash every installed file) — the sell gate refuses this install"
   fi
 else
   printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \

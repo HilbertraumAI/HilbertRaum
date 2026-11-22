@@ -20,7 +20,7 @@ master pipeline** that produces a finished, sellable drive (see the last section
   runtime/
     llama.cpp/
       win/    llama-server.exe  (+ DLLs — Vulkan full build, incl. all CPU backends)
-              .hilbertraum-runtime.json            (install marker: version/backend/os/arch)
+              .hilbertraum-runtime.json            (install marker: version/backend/os/arch + every file's SHA-256)
         cpu/  llama-server.exe  (+ DLLs — pure-CPU safety net) + .hilbertraum-runtime.json
       mac/    llama-server      (Metal build) + .hilbertraum-runtime.json
       linux/  llama-server      (Vulkan full build) + .hilbertraum-runtime.json
@@ -773,7 +773,8 @@ verify-models  --generate         # capture real hashes -> config/checksums.json
 final check: THE canonical gate — node apps/desktop/out/tools/assert-commercial-drive.mjs (built by npm run build)
              commercial posture (encrypted, no phone-home — downloads OK, update-checks + telemetry denied)
              + every shipped weight VERIFIED and approved, at least one model bundled (#766)
-             + runtime install markers match the pin AND record a matching binary hash (#234)
+             + runtime install markers match the pin AND record a matching binary hash (#234),
+               and every further file a marker records is there with its bytes (#998)
              + exactly one app artifact + the launcher per declared platform (--platforms; #233)
              + no user data: nothing but empty folders in workspace/ and logs/,
                no config/workspace.json or config/working-copy-lost.json (exact, or
@@ -804,7 +805,9 @@ download runs first (#769: the missing artifact used to surface at step 4). `--p
 `mac-arm64`, `linux-x64` — decision #229 on its default); the kit's label names them and the gate
 requires the artifact + launcher for each and none for any other. Every `fetch-runtime` run gets
 `--commercial` (#234): a placeholder hash is refused **before** any download, a hashless install marker
-is re-fetched instead of skipped, and the marker records the binary hash only after a verified archive.
+is re-fetched instead of skipped, and the marker records the file hashes only after a verified archive.
+Since #998 every `fetch-runtime` run records the hash of every file the archive put in the install folder (never
+the `cpu/` net's, which has its own marker), and re-fetches an install whose marker records a file that is gone.
 
 **What a Kit ships: its bundled set, with the rest as an in-app catalog (#766, owner call
 2026-11-02).** A Kit preloads only the manifests flagged `bundled_on_preconfigured_drive: true`:
@@ -851,7 +854,8 @@ OS litter such as a Finder `.DS_Store` in those folders counts too, and a folder
 file in a folder's place fails the check as unreadable, #893) **and** that **at least one trusted product skill is
 provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) **and** that **every
 declared platform has exactly one app artifact of the version being built plus its launcher** (#233)
-**and** that **every sidecar binary matches the SHA-256 its install marker records** (#234) — the
+**and** that **every sidecar binary matches the SHA-256 its install marker records** (#234), as does every further
+file a marker records (#998: an engine copy that lost a DLL fails; a marker that records only the binary passes) — the
 canonical gate is `assertCommercialDrive(...)`, and since PR #271 both scripts **call it** (through the
 built `apps/desktop/out/tools/assert-commercial-drive.mjs`; `npm run build` produces it, `node` runs it):
 `SELLABLE` is printed only from its verdict, the scripts' own native checks are a pre-flight, not a

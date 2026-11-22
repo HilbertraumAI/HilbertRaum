@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
@@ -33,7 +33,13 @@ vi.mock('../../src/main/services/runtime/spawn-gate', async (importOriginal) => 
 
 import { IPC } from '../../src/shared/ipc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
-import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
+import {
+  EngineDownloadManager,
+  engineFolderDeletesSettled,
+  hostRuntimeArch,
+  hostRuntimeOs,
+  type ExtractFn
+} from '../../src/main/services/runtime-download'
 import { OcrInstallManager, type OcrPin } from '../../src/main/services/ocr-install'
 import { writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
 import { createAuditRecorder } from '../../src/main/services/audit'
@@ -325,6 +331,11 @@ describe('engine installs in the activity log (#843)', () => {
       await until(() => installRows(h, 'engine_install').length === 2, 'the failure event')
       expect(installRows(h, 'engine_install')[1]).toMatchObject({ type: 'engine_install_failed', metadata: { reason: 'internal' } })
       expect(h.allText()).not.toContain('the spawn gate failed')
+      // #1000: the gate is taken after every copy is staged, so an unexpected throw there still leaves no
+      // staged copy behind (the job's cleanup runs in a `finally`).
+      await until(() => h.manager.activeJob() === null, 'the job settled')
+      await engineFolderDeletesSettled()
+      expect(existsSync(`${join(h.root, 'runtime', 'llama.cpp', HOST_OS)}.new`)).toBe(false)
     } finally {
       spawnGate.throwOnHold = false
     }
