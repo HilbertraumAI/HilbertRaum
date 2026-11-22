@@ -283,7 +283,9 @@ describe('EngineDownloadManager install flow', () => {
     await writeFile(join(nested, 'ggml.dll'), 'lib')
   }
 
-  it('leaves llama-connect out of the install, after the flatten, and the marker records only the server (#729)', async () => {
+  // #998: the marker records EVERY file the copy holds (it used to record the server alone), so the copy is
+  // judged complete by its own list: a DLL a scanner takes later reads as missing. Never the left-out tunnel.
+  it('leaves llama-connect out of the install, after the flatten, and the marker records every installed file but it (#729, #998)', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: connectExtract })
     const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
@@ -293,7 +295,8 @@ describe('EngineDownloadManager install flow', () => {
     const files = readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name)
     expect(files.sort()).toEqual(['.hilbertraum-runtime.json', BIN_NAME, 'ggml.dll'].sort())
     const marker = JSON.parse(readFileSync(runtimeMarkerPath(dir), 'utf8'))
-    expect(Object.keys(marker.binaries)).toEqual([BIN_NAME])
+    const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
+    expect(marker.binaries).toEqual({ [BIN_NAME]: sha('binary'), 'ggml.dll': sha('lib') })
   })
 
   // A dangling link of that name goes too: `existsSync` follows links and would have missed it. POSIX only

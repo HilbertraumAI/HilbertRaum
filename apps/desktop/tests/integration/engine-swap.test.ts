@@ -52,7 +52,7 @@ vi.mock('node:timers/promises', async (importOriginal) => {
 })
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -61,6 +61,7 @@ import {
   EngineDownloadManager,
   engineFolderDeletesSettled,
   engineStatus,
+  extractWithTar,
   hostRuntimeArch,
   hostRuntimeOs,
   recoverEngineSwaps,
@@ -665,6 +666,25 @@ describe('the staged swap in an engine job (#986)', () => {
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
   })
 
+  // #998: the cpu/ net, and a net swap left inside an install, carry markers of their own. A main build's
+  // marker never records them, even when its archive brings a folder of that name: the carry replaces it.
+  it('a main copy whose archive brings its own cpu/ folder records none of it in its marker (#998)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    net(netDir(rootPath), 'b200')
+    const withCpu: ExtractFn = async (archive, destDir, signal) => {
+      await newEngine(archive, destDir, signal)
+      mkdirSync(join(destDir, 'cpu'))
+      await writeFile(join(destDir, 'cpu', 'stray.dll'), 'from the archive')
+    }
+    const mgr = manager({ extract: withCpu })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    const marker = JSON.parse(readFileSync(runtimeMarkerPath(liveDir(rootPath)), 'utf8')) as { binaries: Record<string, string> }
+    expect(Object.keys(marker.binaries)).toEqual([BIN])
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
   it('a stale .new and .old an earlier session left go before the swap, which then goes through', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     copy(liveDir(rootPath), 'b150')
@@ -1166,5 +1186,68 @@ describe.skipIf(!isAbsolute(OS_TAR))('the staged swap with the OS tar (#856, #98
     expect(readdirSync(liveDir(rootPath)).filter((n) => n.endsWith('.zip') || n.endsWith('.tar.gz'))).toEqual([])
     expect(layout(rootPath)).toMatchObject({ live: 'engine b200 from tar|b200', ...NOTHING_LEFT })
     expect(engineStatus(rootPath, manifestsDir).engineVersions?.[0]).toMatchObject({ installed: 'b200', relation: 'current' })
+  })
+
+  /** The platform's release format holding `files` (name → content); a tar.gz lists each folder too. */
+  function osArchive(files: Array<[string, string]>): Buffer {
+    const entries = files.map(([name, data]) => ({ name, data: Buffer.from(data) }))
+    if (process.platform === 'win32') return makeZip(entries)
+    const folders = [...new Set(files.flatMap(([name]) => name.split('/').slice(0, -1).map((_, i, all) => `${all.slice(0, i + 1).join('/')}/`)))]
+    return makeTarGz([...folders.map((name) => ({ name, dir: true as const })), ...entries])
+  }
+
+  // #998: tar's exit code is not a completeness signal. A scanner that takes a file tar just wrote, before
+  // the copy is marked, went unseen: the copy was swapped in without it (a missing `ggml-vulkan.dll` then
+  // runs on the CPU, missing CPU variants are blamed on the model). The archive's own list now decides.
+  it('a member the archive lists that is gone after the extraction fails the step and keeps the installed engine (#998)', async () => {
+    const archive = osArchive([
+      [BIN, 'engine b200 from tar'],
+      ['ggml.dll', 'ggml']
+    ])
+    const { rootPath, manifestsDir } = makeDrive(archive)
+    copy(liveDir(rootPath), 'b150')
+    const before = fingerprintTree(liveDir(rootPath))
+    const scanned: ExtractFn = async (archivePath, destDir, signal, log) => {
+      await extractWithTar(archivePath, destDir, signal, log)
+      rmSync(join(destDir, 'ggml.dll'))
+    }
+    const mgr = manager({ archive, extract: scanned })
+    const ends: EngineJobEnd[] = []
+    mgr.onSettled((_job, end) => ends.push(end))
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    const job = await settle(mgr, started.jobId)
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.extractFailed') })
+    expect(ends.map((e) => e.reason)).toEqual(['incomplete'])
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // …and the same check reads each member where the flatten put it, never expects a file the family leaves
+  // out, and the marker records every file the copy holds.
+  it('every member is checked where the flatten put it, and the marker records each file but the left-out llama-connect (#998, #729)', async () => {
+    const connect = process.platform === 'win32' ? 'llama-connect.exe' : 'llama-connect'
+    const release = 'llama-b200-bin'
+    const files: Array<[string, string]> = [
+      [`${release}/${BIN}`, 'engine b200 from tar'],
+      [`${release}/ggml.dll`, 'ggml'],
+      [`${release}/backends/ggml-cpu.dll`, 'cpu variant'],
+      [`${release}/${connect}`, 'tunnel'],
+      ['LICENSE', 'licence']
+    ]
+    const archive = osArchive(files)
+    const { rootPath, manifestsDir } = makeDrive(archive)
+    copy(liveDir(rootPath), 'b150')
+    const mgr = manager({ archive, extract: 'os-tar' })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(existsSync(join(liveDir(rootPath), connect))).toBe(false)
+    const marker = JSON.parse(readFileSync(runtimeMarkerPath(liveDir(rootPath)), 'utf8')) as { binaries: Record<string, string> }
+    expect(marker.binaries).toEqual({
+      [BIN]: sha256(Buffer.from('engine b200 from tar')),
+      'ggml.dll': sha256(Buffer.from('ggml')),
+      'backends/ggml-cpu.dll': sha256(Buffer.from('cpu variant')),
+      LICENSE: sha256(Buffer.from('licence'))
+    })
+    expect(layout(rootPath)).toMatchObject({ live: 'engine b200 from tar|b200', ...NOTHING_LEFT })
   })
 })

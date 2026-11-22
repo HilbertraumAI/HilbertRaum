@@ -41,13 +41,14 @@ import {
   verifyDownloadedFile,
   writeRuntimeMarker,
   ENGINE_DOWNLOAD_MAX_BYTES,
+  RUNTIME_MARKER_FILE,
   SIDECAR_FAMILY_SPECS,
   type EngineSwapDirs,
   type FetchFn,
   type SidecarFamilySpec,
   type RuntimeDownloadPlan
 } from './assets'
-import { extractedArchiveBytes } from './archive-size'
+import { archiveMembers, extractedArchiveBytes, isMacMetadataName } from './archive-size'
 import { freeBytes } from './disk-space'
 import { removeRetry, renameMayClear, renameWithRetry } from './fs-retry'
 import { sha256File } from './models'
@@ -1831,7 +1832,7 @@ function irreplaceableLeftover(
   // #986 review 2: a net in the leftover's own `cpu/`, or in a net swap left inside it (`cpu.new`, `cpu.old`).
   const holdsNet = (dir: string): boolean =>
     netPlan
-      ? ['cpu', 'cpu.new', 'cpu.old'].some((n) => netWhole(join(dir, n), netPlan))
+      ? NESTED_NET_FOLDERS.some((n) => netWhole(join(dir, n), netPlan))
       : isRealFolder(join(dir, 'cpu'))
   return [dirs.staging, dirs.previous].some(
     (dir) =>
@@ -1883,13 +1884,16 @@ export interface StageEngineOptions {
  * Build a complete, checked, marked install of `plan` in `stagingDir` (#986), from the verified archive at
  * `plan.zipDest`, and return the plan rebased onto `stagingDir`. A leftover `stagingDir` goes first
  * (marker first; one that cannot go fails the stage). The archive is moved in (#856: tar is given only
- * `./<name>` and runs inside the folder), extracted, flattened, cleared of the family's left-out
- * executables (#729), swept for escaping links (SEC-2), and deleted; then every required file must be
- * there, the executables get their mode, every file is hashed into the marker (all or nothing) and
- * flushed, and the marker is written LAST, inside `stagingDir`, before anything moves (W-67, lens F
- * CE-F1). Nothing outside `stagingDir` is touched but the archive's move. Throws on any failure; the
- * caller deletes `stagingDir`. The engine swap uses it per step; the app-update plan's install into a
- * folder of its own (W-30, T8.5a) is meant to reuse it, without the swap.
+ * `./<name>` and runs inside the folder), listed (#998: `archiveMembers`), extracted, flattened, cleared
+ * of the family's left-out executables (#729), swept for escaping links (SEC-2), and deleted; then every
+ * member the archive lists must be there (#998: an antivirus can take a fresh file; a listing that cannot
+ * be read skips this with a log line), and every required file; the executables get their mode, EVERY
+ * file of the copy is hashed into the marker (#998: the archive's members and what the folder holds; a
+ * listed member that cannot be hashed fails the stage) and flushed (#1000: off the main thread), what the
+ * marker records is checked once more, and the marker is written LAST, inside `stagingDir`, before anything
+ * moves (W-67, lens F CE-F1). Nothing outside `stagingDir` is touched but the archive's move. Throws on any failure; the
+ * caller deletes `stagingDir`. The engine job stages every step before its pause (#1000); the app-update
+ * plan's install into a folder of its own (W-30, T8.5a) is meant to reuse it, without the swap.
  */
 export async function stageEngineInstall(
   plan: RuntimeDownloadPlan,
@@ -1903,9 +1907,11 @@ export async function stageEngineInstall(
   await mkdir(stagingDir, { recursive: true })
   const staged = planInFolder(plan, stagingDir)
   await renameWithRetry(plan.zipDest, staged.zipDest)
+  // #998: what the verified archive holds, read from the archive itself (as its size, #986).
+  const members = await archiveMembers(staged.zipDest)
   await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal, opts.log)
   if (opts.signal?.aborted) throw new Error('engine install cancelled after the extraction')
-  await flattenNestedBinary(staged)
+  const flattened = await flattenNestedBinary(staged)
   // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before
   // anything can start it. A file that cannot be removed fails the install like a bad archive.
   // `lstat`, not `existsSync`: a dangling link of that name must go too.
@@ -1924,6 +1930,40 @@ export async function stageEngineInstall(
   // the install if any link escapes. Legitimate engine archives carry no escaping links.
   await assertExtractedSymlinksContained(stagingDir)
   await rm(staged.zipDest, { force: true, ...removeRetry() })
+
+  // #998: tar's exit code is not a completeness signal: a scanner can take a file it just saw written
+  // (the silent cases: a missing `ggml-vulkan.dll` runs on the CPU and is remembered as "no graphics
+  // card", missing CPU variants are blamed on the model). Every member the archive lists, where the
+  // flatten put it and less what the family leaves out, must be in the copy as a file or a link (round 1:
+  // a folder in a file's place fails too), or the step fails and the installed engine stays.
+  /** The archive's members as the copy's keys; null when the listing could not be read. */
+  let listed: Set<string> | null = null
+  if (members === null) {
+    opts.log?.('The engine archive could not be listed: no member check', { archive: basename(staged.zipDest) })
+  } else {
+    const leftOut = new Set(staged.excludedPaths.map((p) => markerBinaryKey(stagingDir, p).toLowerCase()))
+    listed = new Set()
+    for (const member of members) {
+      const key = stagedMemberKey(member, flattened)
+      if (key !== null && !leftOut.has(key.toLowerCase())) listed.add(key)
+    }
+    const missing: string[] = []
+    const notFiles: string[] = []
+    for (const key of listed) {
+      const st = await lstat(join(stagingDir, ...key.split('/'))).catch(() => null)
+      if (!st) missing.push(key)
+      else if (!st.isFile() && !st.isSymbolicLink()) notFiles.push(key)
+    }
+    if (missing.length > 0 || notFiles.length > 0) {
+      opts.log?.('Engine extraction finished but files the archive lists are missing', {
+        folder: basename(stagingDir),
+        count: missing.length + notFiles.length,
+        missing: missing.slice(0, 20),
+        ...(notFiles.length > 0 ? { notFiles: notFiles.slice(0, 20) } : {})
+      })
+      throw new EngineStepError('incomplete', tMain('main.engine.extractFailed'))
+    }
+  }
 
   // #339 P8-1: the completeness check covers EVERY file the plan requires — the family's executables
   // (the code floor ∪ the yaml's `executables`) and the build's `runtime_files` — after the flatten, so
@@ -1948,22 +1988,67 @@ export async function stageEngineInstall(
     }
   }
   // Record every installed file's own SHA-256 so each executable can be re-hashed before spawn
-  // (vuln-scan B) and the sell gate can check the runtime files too. Best-effort at FAMILY
-  // granularity: a hashing failure must not fail an otherwise-good install — the marker is then
-  // written with NO map at all (→ verifier skip-legacy for every binary), never a partial one, so the
-  // verifier and the sell gate can never disagree about one install (#339 P8-1). The keys are relative
-  // to the folder, so the ones recorded here are the live folder's after the swap.
-  let binaries: Record<string, string> | undefined
-  try {
-    const entries: Record<string, string> = {}
-    for (const p of requiredFiles) entries[markerBinaryKey(staged.extractTo, p)] = await sha256File(p)
-    binaries = entries
-  } catch (err) {
-    opts.log?.('Could not hash the installed files for the marker', { error: String(err) })
+  // (vuln-scan B) and the sell gate can check the runtime files too. #998: EVERY file of the copy (the
+  // required ones first), so the copy's own marker says what "complete" is for it: the start's
+  // recovery, the leftover guard and the swap's check (`engineFolderComplete`) and the sell gate judge
+  // it by its keys, whatever a later pin lists. The keys are relative to the folder, so the ones recorded
+  // here are the live folder's after the swap.
+  // #998 round 1: the keys are the archive's members AND what the folder holds, so a member a scanner took
+  // after the check above is not simply left out of the map. When the archive could be listed, a member
+  // (or a required file) that cannot be hashed fails the step: the copy is not what the archive holds. Only
+  // when it could not be listed does a required file that cannot be hashed leave the marker with NO map at
+  // all (→ verifier skip-legacy; never a partial one, #339 P8-1), as before. Any other file that cannot be
+  // read, or a link to something that is not a file, is not recorded (logged).
+  const requiredKeys = new Set(requiredFiles.map((p) => markerBinaryKey(staged.extractTo, p)))
+  const keys = new Set([...requiredKeys, ...(listed ?? []), ...(await installedFileKeys(stagingDir))])
+  let binaries: Record<string, string> | undefined = {}
+  for (const key of keys) {
+    const p = join(stagingDir, ...key.split('/'))
+    const kind = await recordedKind(p)
+    let problem: string = kind
+    if (kind === 'file') {
+      try {
+        binaries[key] = await sha256File(p)
+        continue
+      } catch (err) {
+        problem = (err as NodeJS.ErrnoException).code ?? String(err)
+      }
+    } else if (kind === 'link-to-other' && !requiredKeys.has(key)) {
+      opts.log?.('A link in the engine copy that is not a file is not recorded', { file: key })
+      continue
+    }
+    if (listed !== null && (listed.has(key) || requiredKeys.has(key))) {
+      opts.log?.('An engine file could not be read after the unpack', { folder: basename(stagingDir), file: key, problem })
+      throw new EngineStepError('incomplete', tMain('main.engine.extractFailed'))
+    }
+    if (requiredKeys.has(key)) {
+      opts.log?.('Could not hash the installed files for the marker', { file: key, problem })
+      binaries = undefined
+      break
+    }
+    opts.log?.('An engine file could not be read; it is not recorded', { file: key, problem })
   }
   // #986: the marker decides which copy the start trusts, so the files it covers reach the device
   // first (an exFAT stick has no journal), then the marker itself. #1000: asynchronously, file by file.
   await flushFolder(stagingDir)
+  // #998 round 1: and a scanner can take a file during the hashing or the flush, so what the marker is about to
+  // record is checked once more right before it is written (with no map: the required files, as above).
+  const gone: string[] = []
+  if (binaries) {
+    for (const key of Object.keys(binaries)) {
+      if ((await recordedKind(join(stagingDir, ...key.split('/')))) !== 'file') gone.push(key)
+    }
+  } else {
+    for (const p of requiredFiles) if (!existsSync(p)) gone.push(markerBinaryKey(staged.extractTo, p))
+  }
+  if (gone.length > 0) {
+    opts.log?.('Engine files went missing before the copy was marked', {
+      folder: basename(stagingDir),
+      count: gone.length,
+      missing: gone.slice(0, 20)
+    })
+    throw new EngineStepError('incomplete', tMain('main.engine.extractFailed'))
+  }
   writeRuntimeMarker(stagingDir, {
     version: plan.version,
     backend: plan.backend,
@@ -2261,18 +2346,69 @@ function recoverEngineFolder(
 /**
  * Flatten: when the binary is nested, move its directory's contents up to the extract root, where
  * services/runtime/sidecar.ts resolves it. A `cpu/` subdir is excluded from the search so a nested
- * folder of that name is never mistaken for the freshly extracted nested binary.
+ * folder of that name is never mistaken for the freshly extracted nested binary. Returns the folder it
+ * emptied, relative to the root with `/` (`llama-b200`), or '' when nothing moved (#998: the archive's
+ * members under it now lie at the root).
  */
-async function flattenNestedBinary(plan: RuntimeDownloadPlan): Promise<void> {
-  if (existsSync(plan.binaryPath)) return
+async function flattenNestedBinary(plan: RuntimeDownloadPlan): Promise<string> {
+  if (existsSync(plan.binaryPath)) return ''
   const binName = basename(plan.binaryPath)
   const found = await findBinary(plan.extractTo, binName, join(plan.extractTo, 'cpu'))
-  if (!found) return
+  if (!found) return ''
   const srcDir = join(found, '..')
-  if (resolveSame(srcDir, plan.extractTo)) return
+  if (resolveSame(srcDir, plan.extractTo)) return ''
   for (const entry of await readdir(srcDir)) {
     await renameWithRetry(join(srcDir, entry), join(plan.extractTo, entry))
   }
+  return markerBinaryKey(plan.extractTo, resolve(srcDir))
+}
+
+/**
+ * Where an archive member lies in the staged copy (#998), `markerBinaryKey` form: its name without `./`
+ * steps, and without the release folder the flatten emptied (`flattened`) when it sat under it. Null for a
+ * name tar never writes where it says (absolute, or with a `..` step), which is then not expected.
+ */
+function stagedMemberKey(member: string, flattened: string): string | null {
+  const parts = member.split('/').filter((p) => p !== '' && p !== '.')
+  if (parts.length === 0 || member.startsWith('/') || /^[A-Za-z]:/.test(member) || parts.includes('..')) return null
+  const name = parts.join('/')
+  return flattened && name.startsWith(`${flattened}/`) ? name.slice(flattened.length + 1) : name
+}
+
+/** The `cpu/` safety net and a net swap left inside an install folder: each carries a marker of its own. */
+const NESTED_NET_FOLDERS: readonly string[] = ['cpu', 'cpu.new', 'cpu.old']
+
+/** What sits at a path an engine marker would record (#998 round 1): a regular file (or a link to one), or not. */
+type RecordedKind = 'file' | 'link-to-other' | 'missing' | 'not-file'
+
+async function recordedKind(p: string): Promise<RecordedKind> {
+  const st = await lstat(p).catch(() => null)
+  if (!st) return 'missing'
+  if (st.isFile()) return 'file'
+  if (!st.isSymbolicLink()) return 'not-file'
+  const target = await stat(p).catch(() => null)
+  return target?.isFile() ? 'file' : 'link-to-other'
+}
+
+/**
+ * #998: every file of the engine copy in `dir`, `markerBinaryKey` form, sorted: files and links (a link by its
+ * own name, never entered: the stage records it only when it resolves to a file, `recordedKind`), without the
+ * marker, without macOS metadata (`isMacMetadataName`, round 1) and, at the top, without a nested net folder
+ * (`NESTED_NET_FOLDERS`). Throws when a folder cannot be read.
+ */
+async function installedFileKeys(dir: string): Promise<string[]> {
+  const keys: string[] = []
+  const walk = async (current: string, rel: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      if (!rel && (entry.name === RUNTIME_MARKER_FILE || NESTED_NET_FOLDERS.includes(entry.name))) continue
+      const key = rel ? `${rel}/${entry.name}` : entry.name
+      if (isMacMetadataName(key)) continue
+      if (entry.isDirectory()) await walk(join(current, entry.name), key)
+      else if (entry.isFile() || entry.isSymbolicLink()) keys.push(key)
+    }
+  }
+  await walk(dir, '')
+  return keys.sort()
 }
 
 /**
