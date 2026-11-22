@@ -2572,16 +2572,73 @@ where only the badge told the truth.
   [S1]"; that is why both stay. The issue's alternative ("a stop within a few tokens of the continuation's
   start") would have missed the one real case.
 
+**The repetition guard (#994, follow-ups wave 7, owner calls G-3, G-4, G-5; measured in §14.10.2).** At
+temperature 0.3 a small model can loop: one table row 60 or 70 times until its cap and both continuations are used
+up (20–38k characters, 67–435 s). Nothing read the stream. Sampler penalties are no fix (§14.10.2), so the core now
+watches the text it streams. The other loop on record, the Meeting Minutes recursion (qwen3-4b-instruct-q4 writes
+the minutes again inside their own "Formal minutes version" in 8 of 11 stored runs), is **not** stopped: every
+heading rule evaluated for it also stopped answers about several entities (§14.10.2).
+- **The detector** ([`rag/repetition-guard.ts`](../apps/desktop/src/main/services/rag/repetition-guard.ts),
+  pure, complete lines only): **run(6)**, the same line six times in a row. Lines are compared with their numbers: a
+  number cell, a year, a list number or a counter makes a line a different line, so a year table, a numbered list
+  with the same text or ten leases' "| N | Not stated | … |" rows never trip it. A line takes part only with at
+  least 20 letters of information: in a table only cells of 12 letters or more count, in a "Label: value" line only
+  the value counts, a separator row never does. A blank line or a separator row does not break a run; any other line
+  that takes no part does, so a filler line repeated under six or more entities with short lines between ("Lease F:",
+  "### Break option", "None stated in the document.") is no run.
+  - Left out after evaluation (§14.10.2): the same line twenty times in a row with its digits ignored (it adds one
+    of the 18 recorded loops, the 9B "Article 278" runaway, and stops instalment schedules and per-article rows of
+    real document text, #978's case), and every heading rule for the minutes recursion (a heading seen a third time;
+    with its first content line; scoped to its parent; the answer's first heading only): each stopped a portfolio
+    or meeting answer that reuses headings per entity, or caught no stored recursion.
+- **Where it watches.** A reduce pass and its continuations share one guard, fed the model's text only, never
+  the scope notice, the sum hint or the beginning-only line. Each map or fold call has its own, with the same rule. The single-turn grounded path passes no guard to the shared engine (G-5: no loop was seen there).
+- **What a trip does (B1).** The pass is stopped by leaving the token loop, so the stream's `finally` cancels
+  the request at once (measured: the GPU went from 92–93 % to 0 % within 0.7 s). The answer is cut back to
+  before its repeated tail (`dropRepeatedTail`: from the line that tripped back over every blank line, separator
+  row or line already written earlier, compared as the run compares lines but without a row-number cell or a list
+  number; the first new line stops it), so the first copy of everything and every new line before the repeat (a
+  short line, new rows) stays; a heading left at the end with nothing under it goes, but never the looping line's
+  own first copy or anything above it (a wholly bold line or a heading that loops is the answer's content and
+  stays); a code block the cut leaves open is closed with its own fence (`````` or `~~~`, at its indentation); and
+  the answer ends there:
+  `Message.truncated` with the new cause **`'repeat'`** (G-4), tooltip `chat.truncated.hint.repeat` ("The model
+  started repeating itself, so the app stopped this reply. Ask again or narrow the question."). That holds for
+  a trip in the reduce and in a continuation of a reduce cut at its ceiling; nothing continues an answer the
+  guard stopped. A Stop while a continuation's first lines are still held back keeps the partial, cut back the
+  same way when those lines complete a run, and unstamped like any Stop. A note that loops is stopped and keeps
+  one copy. The live bubble shows the loop up to the trip;
+  the stored answer replaces it when the turn ends. The design measured first was B2 (one continuation from the
+  cut-back text); in the GPU session that continuation restarted the loop in 3 of 3 runs and added no fact, which
+  met the fallback condition set beforehand, so B1 shipped (§14.10.2).
+- **No notes dedup.** Dropping note lines that repeat across the map notes passed its GPU gate (#979) but was left
+  out after the review: it drops facts when two entities share a line (§14.10.2).
+- **No trip, no change.** The guard only reads. A turn it never trips sends every request byte for byte as
+  before and stores the same text (rows compare the map prompts with master's frozen templates and options,
+  the reduce's notes and master's continuation turn; the engine makes the same requests with the guard as
+  without it; in the GPU session every map request body was identical call for call across guard-off and
+  guard-on runs of a turn).
+- **The prefix alone is no answer** (W1 surprise 2, fixed here): `stripThinkBlocks` trims what it keeps, so a
+  think-only reply after the scope notice left the notice without its blank line and `content === seeded`
+  missed it. Both the core and `generateGroundedAnswer` now compare the trimmed text too.
+
 Tests: `tests/unit/answer-end.test.ts` (every complete ending, the review's inputs, prose in eight languages
 and scripts, the style rows and the accepted list-style miss), the #996 rows of `rag-whole-doc-mapreduce.test.ts` (both parts), `rag-whole-doc-tree.test.ts`,
 `rag.test.ts` (the grounded continuation, the last cut pass's cause), `rag-skill-analysis.test.ts` and
-`rag-whole-read.test.ts` (the line through `askDocuments`).
+`rag-whole-read.test.ts` (the line through `askDocuments`). #994: `tests/unit/repetition-guard.test.ts` (the
+trips, the near misses real answers contain, the cut), the repetition-guard describe of
+`rag-whole-doc-mapreduce.test.ts` (a reduce and a continuation stopped, cut back and stamped; the last pass; the
+recursion; a looping note; number-only rows and the review's portfolio answers never stopped; the no-trip byte
+rows; the minutes recursion as an accepted escape), `rag.test.ts` (the grounded path unwatched),
+`chat.test.ts` and `TruncatedNotice.test.tsx` (the `'repeat'` cause).
 
 **Residuals** (see `known-limitations.md`): a document beyond the **hard** ceiling (~100 pages) is still
 beginning-only (INPUT, tree territory; since #996 its answer says so in its first line); a deliverable long
 enough to still be cut after the 2-cap keeps the honest OUTPUT-truncated badge, and so does one whose
-continuation ended cleanly mid-sentence (#996); 2–24 map calls (+ fold) of latency on a large analysis (with
-the Phase 3 affordance).
+continuation ended cleanly mid-sentence (#996) or that the guard stopped (#994, cause 'repeat'); a row
+restated three to five times, a block restated three times, near-copies that differ in a word, two alternating
+lines, a counter cell, a loop with no newline and the minutes recursion are not caught; 2–24 map
+calls (+ fold) of latency on a large analysis (with the Phase 3 affordance).
 Tests: `rag-whole-doc-mapreduce.test.ts` (Phase 1 reach + Phase 2 `maxTokens` + Phase 3 notice +
 Phase 4 continuation/cap/abort + #2 fold-coverage/hard-ceiling), `rag-whole-doc-tree.test.ts` (the hard
 ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation, and the shared engine's seam de-dup), and
@@ -2651,6 +2708,166 @@ few facts; if #978 is revisited, re-measure master over more runs first. Also se
 false "the text covers only Part 1" remarks from the 9B under a whole badge, 4B answers that never say they cover
 only the beginning, and 4B recursion of the minutes' "Formal minutes version". The user-facing residuals are in
 [`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
+
+#### 14.10.2 Repetition guard and part labels measured (follow-ups wave 7; #994, #995, #978, #979)
+
+Lane G of follow-ups wave 7 measured four reports offline and on a loopback llama-server; a GPU session on the
+real app then measured what changes model input (owner call G-6: those changes ship only on gates set
+beforehand). Evidence: 413 stored real answers and 440 map and fold notes of waves 4–6; 18 labelled loops (the
+13 hand-labelled ones and 5 more answers holding the same minutes recursion, three or more copies).
+
+**Sampler penalties are no fix (#994).** llama-server feeds the prompt into the sampler's history before it
+generates, so DRY and the penalties see the document text the answer must quote.
+- b9849 (DRY's default window is the whole context), "quote section 34.1 / 34.2 exactly" over a 700-word excerpt
+  of the lease, two seeds each: no penalty 4 of 4 exact copies; `dry_multiplier 0.8` **0 of 4** ("31 December
+  2020" for 2030, "six (5) months", Chinese characters inside a word, words run together);
+  `dry_multiplier 0.8, dry_penalty_last_n 256`, `repeat_penalty 1.1` and `frequency_penalty 0.3` 4 of 4 each. On
+  the wave-6 reduce prompts rebuilt byte for byte: the 4B T4 prompt that looped in wave 6 looped again 2 of 2
+  (runs of 30 and 19 identical rows); DRY with a 256 window and `repeat_penalty 1.1` each removed that run 2 of 2
+  (the penalty then wrote per-article near-copies), but on the minutes prompt DRY with a 256 window did not stop
+  the recursion and wrote "20 April 2027" for 2026 and Hamburg in Chinese characters.
+- b12110 (the pin): DRY's default window is 64 tokens, and a request with `dry_penalty_last_n: -1` or
+  `repeat_last_n: -1` gets HTTP 400 there. Copies stayed exact (2 of 2 each), but nothing stopped the loop: on
+  the T4 prompt no penalty looped (17 identical rows), DRY 0.8 looped (19) and `repeat_penalty 1.1` looped (17),
+  because one table row is longer than the 64-token window. On the minutes prompt DRY 0.8 ended without a
+  recursion in its one run; DRY with a 256 window recursed.
+- The stream guard tripped on every looping re-run on both builds. Verdict: a window long enough to see a
+  repeated row penalises quoting the notes; b12110's default is safe for quotes and misses the loop. No sampler
+  setting is sent (owner call G-3 rejected the penalty option).
+
+**The detectors, evaluated offline** (lane G; keys and info rule as built, §14.10).
+
+| Detector | Loops caught (of 13 hand-labelled) | False trips, 75 labelled good | Trips, 325 unlabelled | Map-note trips (440) |
+|---|---|---|---|---|
+| any line 5 times (count) | 6 | 2 | 2 | 8 |
+| same line 4–8 times in a row | 3 | 0 | 0 | 3 |
+| same line, digits masked, 12 in a row | 4 | 1 | 1 | 8 |
+| digits masked, 16 / 20 in a row | 4 | 0 | 0 | 4 / 2 |
+| 4-line block 3 times | 7 | 0 | 1 (a recursion) | 6 |
+| share of repeated lines ≥ 0.7 in the last 30 | 7 | 1 | 1 | 0 |
+| a 200-character tail seen 3 times (the issue's idea) | 10 | 5 | 1 | 22 |
+| heading seen 3 times | 4 (+ 5 unlabelled recursions) | 0 | 5, all recursions | 0 |
+
+Lane G proposed run(6) ∪ run(20, masked) ∪ heading(3) for answers (13 of 18 loops, 0 false trips, 5 of 440 notes).
+The wave's independent review then fed it answers about several entities, which the stored corpus does not hold,
+and found false trips: a portfolio brief with `## Lease A … ### Parties … ### Key dates` per lease, the same bold
+labels per lease, "**Notice period:** **3 months**" read as a heading, a year table, a numbered list with the same
+text, ten leases' "| N | Not stated | … |" rows. Each candidate was then evaluated over the 413 stored answers, 440
+notes, the GPU session's 59 answers (11 minutes recursions of three or more copies among them) and the review's
+inputs plus five more of the same kind (a table under each lease, a filler line under each lease's sub-heading,
+"Open questions: None stated." under three meetings, two recursion shapes):
+
+| Rule (run key with numbers kept unless noted) | Recursions caught (of 11) | Loops caught (of 18) | False trips: stored / session | Notes tripped | Synthetic inputs wrong |
+|---|---|---|---|---|---|
+| as first shipped: heading(3) anywhere, numbers stripped | 11 | 12 | 0 / 0 | 3 of 440 | 8 of the review's inputs |
+| heading(3) anywhere | 11 | 12 | 0 / 0 | 3 | portfolio sub-headings, bold labels, sections with new content, bold "Not stated" |
+| (a) the first content line must repeat too | 9 | 10 | 0 / 0 | 3 | a table per lease, filler under a sub-heading, "None stated." per meeting |
+| (b) the first two content lines must repeat | 6 | 7 | 0 / 0 | 3 | two recursion shapes missed |
+| (c) counts scoped to the parent heading | 11 | 12 | 0 / 0 | 3 | bold labels, sections with new content |
+| (a) + (c) | 9 | 10 | 0 / 0 | 3 | "None stated." per meeting |
+| (a) + (c) + a content line of 12 letters or more (round 3; replaced, below) | 9 | 10 | 0 / 0 | 3 | none of the round-3 inputs; the second review round found more (below) |
+| (a) + (c) + the table header row skipped | 7 | 8 | 0 / 0 | 3 | — |
+
+A second review round found what (a)+(c)+info still stopped, all answers about several entities whose entity line
+is not a `#` heading: a table header as the first line under `**Lease C**` / `**Key dates**`; numbered or plain
+lease lines (`1. Lease A` / `### Notice`, `Lease A:` / `### Break option` / "None stated in the document.");
+bold meetings (`**Meeting of 17 May**` / `**Decisions**` / "No decisions were recorded."); a short first line that
+let a heading take the next heading's content. The decision was then to narrow what a heading repeat means rather
+than add shapes: a recursion restarts the answer from its own top, so the **first-heading rule** trips when the
+answer's first heading-like line occurs a third time, each time followed by the same first informative line (12
+letters or more, never a table header row, never inherited from a later heading). It ships only with 0 false trips
+and 0 controls wrong, and only if it catches at least 5 recursions; else run(6) alone ships. Evaluated over the
+same texts and 39 controls (every input of both review rounds and the round-3 set: 9 must trip, 24 must not, 6
+documented escapes):
+
+| Rule | Recursions caught (of 11) | Loops caught (of 18) | False trips (395 stored, 57 session) | Notes tripped | Controls wrong |
+|---|---|---|---|---|---|
+| first-heading rule, same level | 0 | 3 | 0 | 3 of 440 | "Lease A:" lines + `### Break option` (the first heading is the label) |
+| first-heading rule, any level | 0 | 3 | 0 | 3 | the same |
+| **run(6) alone (shipped)** | **0** | **3** | **0** | **3** | **none** (the recursion controls are documented escapes) |
+
+It caught no stored recursion: in 8 of 11 the first heading ("Meeting Minutes") does recur 3 to 8 times, but always
+straight before the next heading, so it never has a content line of its own. **run(6) alone ships.** One more class
+came up in this round: run(6) skipped lines that take no part, so a filler line repeated under six or more entities
+with only short lines between ("Lease F:" / "### Break option" / "None stated in the document.", six bold meetings
+with "No decisions were recorded.") counted as a run of six. With a short content line breaking the run (blank lines
+and separators still do not) the numbers stay the same (3 of 18 loops, 0 false trips, 3 of 440 notes) and none of
+those answers trips. **Final numbers: 3 of 18 loops caught (the identical-row runaways), 0 of 11 recursions, 0 false
+trips on 395 stored and 57 session answers, 3 of 440 notes tripped**, each a pure loop to its 512-token cap; the
+shipped module agrees with the evaluated rule on all 912 texts. The 3 tripped answers hold 63,923 characters as
+stored and 4,658 after the cut (7 %). Not caught, as control rows: the minutes recursion (as written, with a changed
+first line, nested one level deeper each time), two sections repeated as a block, two alternating lines, a counter
+cell, a numbered row loop, a loop with no newline; also the 9B "Article 278" runaway, rows restated up to three times
+before the cap and near-copies that differ in a word. What a stop costs: in 3 of the 4 row runaways and 3 of the
+9 recursions a fact appears only after the loop (the 31 December 2030 notice deadline; "next meeting 19 May"),
+which is why B2 (stop, then one continuation) was designed first; the GPU session below decided for B1.
+
+**#978 — no fix found; closed by comment (G-8).** Its failing 9B notes hold no exact duplicate line and 12
+digit-masked ones, which are document text (the lease repeats the clause in 28 articles); the guard never fires
+there, and stopping a note at the twelfth row would end it before the dates later in the part. Master did not
+reproduce it in wave 6 (11 and 11 of 12). The one untried lever, a 1,024-token map cap on an 8,192 window, costs
+about 25 s per capped 9B map call and is not justified by four master runs at 11, 11, 3 and 0.
+
+**#979 — open: the recursion is not stopped, the template copy stays.** 8 of 11 stored 4B minutes runs recurse (the
+9B never does); no heading rule evaluated in this wave stopped them without also stopping answers about several
+entities (above), so the recursion still ends at the output cap and the two continuations. The copying of the report
+template into every map note was measured in wave 6 (§14.10.1, W1) and kept. Dropping exact duplicate note lines of
+12 letters or more (within and across notes) cuts the notes by 6.3 % over 118 cells and keeps 3 of 12 "beginning"
+cells whole (both master-prompt 4B Contract Brief cells: 2,411 → 2,019 and 2,446 → 2,188 tokens against a 2,340
+budget). It passed its GPU gate (G-979 below) but **is left out**: the review showed it drops facts when two entities
+share a line (Lease A's and Lease B's "- Notice period: three months …" become one line under Lease A), and 240 of
+the 871 lines it drops over the stored notes sat under another heading than their first copy. A block-level design
+(a line counts as a repeat only within the same entity's section) is a follow-up.
+
+**#995 — "Part 1 of 2" under a whole badge.** A "Part N of M" label sits in 85 of 124 9B map notes (69 %; 3 of
+316 4B notes), 80 of them in the first line, because the map prompt names the part twice. All 4 master runs of
+the 9B's "List every deadline" under Deadline & Obligation Finder (waves 5 and 6) told the user the list covers
+only part of the document; that skill's own SKILL.md asks for a coverage remark on "all deadlines". A second
+family reports a cut note's last line as a gap in the document ("The provided text cuts off at 'EUR 18'"). The
+candidates measured: (i) no part numbers in the map and fold prompts ("one part of ONE document", labels
+"Section summaries:" and "Section notes:"); (iii) in the whole-document reduce only, "The notes may be labelled
+by part and may stop mid-sentence because each note has a length limit; neither is a gap in the document." (the
+beginning-only reduce keeps its own sentence).
+
+**GPU session results** (follow-ups wave 7, W2, 2026-11-22; GTX 1070 Ti, network off in the app, one app at a
+time, no other GPU process; a probe build with switches for the guard (off, stop, continue), the part labels, the
+reduce line and the notes dedup, every call dumped; qwen3-4b-instruct-q4 at 4,096 and qwen3.5-9b-ud-q4kxl at 8,192
+on b9849, plus a b12110 spot check; **59 cells, every answer read by hand**; gates set before the session).
+
+| Gate | What was run | Result | Verdict |
+|---|---|---|---|
+| G-994a loop stress | 4B "List every deadline" (DOF), guard off ×3, on ×3, b12110 on ×2 (wave 6's looping variant has no switch in this build) | no row runaway in 8 runs, 0 trips, no 6× row stored; facts off 8, 8, 9, on 9, 3, 8 (the 3 is a no-trip run, master's code path), b12110 8, 9 | not exercised (the offline corpus covers it); no harm |
+| G-994b recursion | 4B "Write the meeting minutes", guard off ×3, on ×6, dedup ×3 | off: 2 of 3 recursed (6 and 7 copies, 13–14k characters); on: every run that started a third copy tripped (3 of 3), 8 of 8 sections in all 12, facts mean 2.2 vs 2.3 off; no nested "Formal minutes version" stored | pass, but see B1 below |
+| G-994c 9B list | 9B "List every deadline", guard off ×3, on ×3 | 0 trips, 0 runaways; facts off 3, 5, 9, on 3, 7, 4 (the 9B's own spread; requests identical) | pass |
+| G-994d controls | 4B T4 ×3, 4B Contract Brief ×3, 9B indemnity chip ×2, 9B minutes ×2, guard on | 0 trips; every map request body identical call for call across off and on runs | pass |
+| G-994e decoding stops | every tripped cell | GPU 92–93 % → 0 % within 0.5–0.7 s of the final trip; llama-server CPU idle from +2 s | pass |
+| G-979 notes dedup | 4B Contract Brief ×3, 4B minutes ×3 | Contract Brief badge **whole 3 of 3** (master 0 of 3: notes 2,387–2,451 tokens cut to 2,340; deduped 1,993–2,103 fit), facts 6, 7, 6 vs 6, 5, 5; minutes facts 4, 3, 2 vs 1, 2, 2 | pass, but **left out after the review** (it merges lines of different entities, above) |
+| G-995 part labels | no part numbers + the whole-badge line vs master: 9B T4 ×3, 9B Contract Brief ×3, chip ×2, minutes ×2, 4B T4 ×2, 4B Contract Brief ×2, b12110 9B T4 ×2 | false coverage claims under a whole badge in **6 of 8** variant 9B T4/Contract Brief answers (gate ≤ 1; master 3 of 6 this session); facts not lower; the beginning-only reduce kept its own sentence | **fail: does not ship** |
+
+- **B2 → B1.** (The session ran the heading rule of its time; the shipped guard has no heading rule, so these
+  recursions now run on, and B1 applies to the row loops.) Every reduce trip of the session was the 4B minutes
+  recursion (a `heading` trip at 3,875, 4,869 and
+  5,734 characters). B2's one continuation resumed right after "8. Formal minutes version", the 4B restarted the
+  report, and the guard tripped again in **3 of 3** runs (after 1.2, 1.2 and 9.7 s). That met the fallback
+  condition set before the session (a second trip on at least 2 of 3), so **B1 ships**: the answer ends at the
+  first trip. Measured cost of B1 against B2 in those runs: no fact (two continuations added nothing; one rewrote
+  section 8's formal version without a new fact, which B1 leaves as an empty heading). The dedup had a price on
+  the minutes too: the freed notes budget raised the reduce cap from 1,227–1,290 to 1,625–1,749 tokens and 2 of 3
+  deduped minutes recursed; the guard stopped both.
+- **#995's claim is not about the part number.** Without "part N of M" the 9B's map note on the deadline list
+  still opens with a "Coverage Limitation: the provided text is a partial excerpt … ends abruptly at Article 25.1"
+  (the map window's own cut; Deadline & Obligation Finder's SKILL.md asks for coverage remarks), and the reduce
+  turns it into "this list is incomplete", "information cuts off in notes", "the notes cut off mid-sentence"
+  despite the line saying that is no gap. The part labels also leak into master's Source column ("Part 1,
+  Section 3", "Notes Part 2") in all 6 9B Contract Brief and minutes answers; dropping the numbers removed every
+  "Part N" from the 10 variant answers. Neither change ships; the claim stays a known limitation (#995 open).
+- **b12110 agrees.** The pinned engine showed the same picture: the guard never fired on a deadline list, the
+  variant still claimed partial coverage (2 of 2), and the master control made no claim. It also produced two
+  mild loops, a block of rows restated three times in two 4B deadline answers, below the guard's thresholds (the
+  documented miss class).
+- **The beginning-only line (#996, W1).** In all 5 4B "beginning" answers of the session the stored answer starts
+  with `analysis.wholeDocBeginningOnly` in the app's language (German here), and none of the 4 "whole" 4B
+  Contract Brief answers carries it; checked on screen in the light and the dark theme.
 
 ## 15. Context budgeting + conversation compaction — design record (Phases 0–2)
 

@@ -9201,7 +9201,14 @@ output ≤ n_ctx` always); **(3)** the ephemeral `'analysis'` progress notice fi
 deliverable (same fence + notes + question + a resume anchor, seam de-duplicated) across ≤ 2 bounded passes,
 stamping an honest **`Message.truncated`** (OUTPUT-cut, parity with the single-turn grounded path) — kept
 distinct from `coverage.truncated` (INPUT coverage) — only when the cap is exhausted. The §14 ceiling + the
-fence/guard bracketing are unchanged throughout.
+fence/guard bracketing are unchanged throughout. **Repetition guard (#994, follow-ups wave 7, record:
+`rag-design.md` §14.10, §14.10.2).** The core watches what the model streams (`rag/repetition-guard.ts`, pure,
+complete lines only): the same line six times in a row, compared with its numbers, stops the pass by leaving the
+token loop (the stream's `finally` cancels the request). Rows that differ only in numbers never trip it; the Meeting
+Minutes recursion is not stopped (no heading rule passed its evaluation). The answer is cut back to before
+its repeated tail and ends there, stamped `truncatedCause: 'repeat'` (B1; a trip in a continuation ends it the same
+way). A map or fold note that loops is stopped and keeps one copy. The single-turn
+grounded path passes no guard to the shared engine, and a turn that never trips sends every request as before.
 
 **2-document whole-doc compare (Follow-up B, Wave 3, 2026-06-22).** `what-changed` registers a
 **`grounded-whole-doc-compare`** handler (`analysis/whole-doc-skills.ts`) whose `applies()` matches a

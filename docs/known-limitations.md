@@ -1501,7 +1501,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   accepted misses): a cut right after an abbreviation such as "e.g.", a cut inside a table row, a short last
   item or line, and a cut in an answer written without full stops. An answer whose first pass ended cleanly is
   never judged this way, so a model that stops
-  mid-sentence on its own still carries no badge. Guarantee unchanged: `prompt + output ≤ n_ctx` at every
+  mid-sentence on its own still carries no badge. **Since #994** a whole-document pass (the first or a
+  continuation) that starts repeating itself is stopped there, cut back to before the repeats and not
+  continued; the answer carries the same badge (cause `'repeat'`, "The model started repeating itself …"). Guarantee unchanged: `prompt + output ≤ n_ctx` at every
   context size (no HTTP 400 "exceeds context size").
   **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
@@ -1833,8 +1835,29 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the notes with the repeated clause and miss the real items in some runs (Deadline & Obligation Finder's "List every deadline" over a lease: 3 and 0 of 12
   in one session, 11 and 11 in a later one on the same prompt); two rewordings of the list instruction made it
   worse, so the prompt stays as it is. A 4B model's notes on a long document copy the skill's report format
-  into every part, and its answers can loop or invent details; a shorter map prompt cut the copying but did
-  not improve the answers, so that stays too ([`rag-design.md`](rag-design.md) §14.10.1); and when the
+  into every part, and its answers can invent details; a shorter map prompt cut the copying but did
+  not improve the answers, so that stays too ([`rag-design.md`](rag-design.md) §14.10.1). **Loops (#994,
+  follow-ups wave 7):** an answer that writes the same row or line six times in a row is now stopped at that
+  line and cut back to its first copy, and it carries the "Reply cut off" badge, whose tooltip says the model
+  started repeating itself. The answer is not continued after the stop. A map note that loops is stopped and
+  keeps one copy. **Not stopped: the 4B's Meeting Minutes recursion** (the minutes written again inside their own
+  "Formal minutes version", 8 of 11 stored runs): every rule tried for it also stopped answers about several
+  leases or meetings that reuse their headings, so it still runs until the output cap and the two
+  continuations end it, as do a recursion whose first line changes and one nested a level deeper each time. Also
+  not caught; rows that differ only in a number are never treated as a loop,
+  because an instalment schedule or one clause a lease repeats in many articles looks the same, so the 9B's
+  runaway list that counts up invented article numbers (up to "Article 278") still runs on until the output
+  cap and the two continuations end it, and so does a loop of rows that count up a row number; a row
+  restated three to five times, a block of rows restated three times, near-copies that differ in a word ("the
+  Second … Tenth Agreement"), two lines that alternate, a row whose counter cell changes and a loop with no
+  line break are not caught; the live answer shows the loop until the stop and the saved answer replaces it at the
+  end of the turn; the guard watches whole-document answers only, not an ordinary document answer (no
+  loop was seen there) ([`rag-design.md`](rag-design.md) §14.10, §14.10.2). qwen3.5-9b-ud-q4kxl can
+  still write under a whole-document badge that its complete list covers only "Part 1 of 2", is
+  "incomplete", or that the text "cuts off" (#995, open): its notes say where each part's window was cut,
+  and Deadline & Obligation Finder asks for coverage remarks. Two prompt changes (no part numbers; a line
+  saying a cut note is no gap) were measured and did not stop it (6 of 8 answers still claimed it), so the
+  prompts stay as they are. And when the
   notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that
   (since #996 such an answer leads with a line saying that it covers only the beginning of the document).
   The answer still says it read the whole document, which is true of what it read, not of what the notes

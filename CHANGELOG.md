@@ -31,6 +31,9 @@ from its first public `1.0.0` release onward.
   beginning of the document. Before, only the badge said so, and a copied or exported answer read as complete.
   A long answer that HilbertRaum had to continue, and that then stopped in the middle of a sentence, now shows
   "Reply cut off" instead of looking finished (#996).
+- An answer about a whole document that starts writing the same table row or line over and over now stops at the
+  repeat. HilbertRaum keeps the answer up to its first copy and shows "Reply cut off"; the tooltip says the model
+  started repeating itself. Before, such an answer ran on for minutes and filled the screen with copies (#994).
 
 ## [0.1.66] — 2026-11-21
 
