@@ -1253,7 +1253,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   data key while the stored copy does not, and by a password change, which holds the database.
   Round 4: an entry whose containment a stat cannot answer (`lstat` on the way or either `realpath`
   failing for any reason but ENOENT) is neither acted on nor dropped: each pass keeps it in the
-  journal it settles (a rollback too) and counts it, and the next pass judges it again. A
+  journal it settles (a rollback too) and counts it, and the next pass judges it again; since
+  round 6 only while its stage may still be there (a file, or a stat that cannot tell), as for a
+  deferred entry, so a stage a pass swapped in anyway is not named afterwards. A
   `remove` entry is never used as a path: one named `app.1.log.enc` (either path separator)
   removes the rotated log at `<logsPath>/app.1.log.enc`. Every other entry is left as it is. A
   journal with a stage waiting for the unlock is kept until the unlock settles every stage it lists
@@ -1262,9 +1264,15 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   frame, and, round 4, an `lstat` of either file that fails for any reason but ENOENT) keeps it.
   Round 3: after each pass the journal is rewritten (temp + rename, the same
   format) to list only the entries still waiting (a stage still staged, an out-of-store stage on
-  an unreachable location, an outside stage waiting for the database), `remove: []`, or cleared
-  when none wait; it never goes on listing the staged database or an in-store stage it settled.
-  Round 5: a roll-forward that throws (a held file stopped a swap) settles and counts first.
+  an unreachable location, an outside stage waiting for the database), or cleared when none wait;
+  it never goes on listing the staged database or an in-store stage it settled. Its `remove` is
+  `["app.1.log.enc"]` while the journal asked for the rotated log and that log is still at
+  `<logsPath>/app.1.log.enc` (round 6: a log another program held at the commit had its flag
+  dropped, and stayed under the retired key), else `[]`. The write temp is never written through
+  a link: whatever is at `rekey-journal.json.tmp` is removed first (a link by `unlink`; a folder
+  there fails the write) and the temp is created anew (`wx`).
+  Round 5: a roll-forward that throws (a held file stopped a swap) settles and counts first, and
+  since round 6 every pass reports its count even when the settle itself throws.
   What a pass leaves as it is is counted when it has settled the journal:
   `WorkspaceController.takeJournalRefusals(): number` returns the sum since the last call, logged
   as one count-only line after the start and one after each unlock. A refused entry is counted
