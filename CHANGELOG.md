@@ -29,7 +29,7 @@ from its first public `1.0.0` release onward.
 
 - A plain question that only contains a word like "listed", "reviewer", "preview", "registration", "analyst" or
   «Briefkasten», "When is the rent review?" or "How many minutes notice must be given?" is answered from the few
-  passages that match, as for any other lookup, instead of reading the whole document.
+  passages that match, as for any other lookup, instead of reading the whole document (#997).
 
 ## [0.1.66] — 2026-11-21
 
