@@ -11,7 +11,8 @@ import {
   readSync,
   writeSync,
   closeSync,
-  fsyncSync
+  fsyncSync,
+  fdatasyncSync
 } from 'node:fs'
 import { open as openFileAsync, rename as renameAsync, rm as rmAsync, stat as statAsync } from 'node:fs/promises'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
@@ -905,7 +906,7 @@ export async function decryptFileAsync(srcPath: string, destPath: string, key: B
 /**
  * Best-effort secure delete: overwrite the file with random bytes (in bounded chunks —
  * a single `randomBytes(size)` throws past 2 GiB), then unlink. The unlink runs even if
- * the overwrite fails. On SSDs wear-levelling means
+ * the overwrite fails. On flash (SSDs and USB sticks) wear-levelling means
  * the original blocks may survive — documented in SECURITY.md and not over-promised.
  */
 export function shredFile(path: string): void {
@@ -935,6 +936,89 @@ export function shredFile(path: string): void {
   } catch {
     /* best-effort */
   }
+}
+
+/**
+ * #982 (G-12 option a2): a deadline for a lock's overwrite of the plaintext working file. Only the Linux `quit` leg
+ * passes one (`emergencyLock` with `QUIT_LOCK_BUDGET_MS`, `main/shutdown.ts`): that leg runs inside Electron's fixed
+ * 10 s session-loss watchdog, which crashes the process (status 133) when the lock is still running, with the working
+ * file left in plaintext. Lock now and the quit teardown pass none and keep {@link shredFile}.
+ */
+export interface LockBudget {
+  /** When the overwrite must have stopped, in milliseconds on {@link LockBudget.now}'s clock. */
+  deadline: number
+  /** The clock the deadline is on (`emergencyLock`'s, `performance.now`). */
+  now: () => number
+  /** Told once when the lock's overwrite stopped before the file's end (the deadline, or an overwrite error); the file
+   *  is unlinked either way. */
+  onShredCut?: () => void
+}
+
+/** What a lock may be given (#982): the overwrite's deadline, on the Linux `quit` leg only. */
+export interface LockOptions {
+  budget?: LockBudget
+}
+
+/** #982: a chunk of the budgeted overwrite starts only while this many times the last chunk's time still fits. */
+const SHRED_CHUNK_MARGIN = 1.5
+
+/**
+ * #982 (G-12 option a2): {@link shredFile} against a deadline, for the lock on Linux's `quit` leg. The same random
+ * overwrite in {@link FILE_CHUNK_BYTES} chunks, but each chunk is made durable (`fdatasync`) before the next one, so its
+ * time is the drive's real cost and not the page cache's, and a chunk starts only while `now + 1.5 × the last chunk's
+ * time` still fits the deadline. The first chunk has no time of its own yet: it is judged by `msPerByte`, the rate the
+ * lock's encrypt of the same file to the same drive just ran at (a chunk started on no estimate right before the
+ * deadline would run past it by a whole chunk, 0.8 s at 10 MB/s, measured in the WSL kit). Past that the overwrite stops
+ * and the file is unlinked: the `.enc` is complete and durable by then, so what is left of the plaintext is the freed
+ * blocks of an unlinked file, not a readable one, and the lock ends inside the watchdog instead of crashing with the
+ * whole working file on the drive. Where the whole overwrite fits, the bytes written are {@link shredFile}'s; only the
+ * syncs differ. Best-effort like it: an error stops the overwrite (reported as cut), and the unlink still runs.
+ */
+export function shredFileWithin(
+  path: string,
+  budget: LockBudget,
+  msPerByte = 0
+): { overwrittenBytes: number; cut: boolean } {
+  let overwrittenBytes = 0
+  let complete = true
+  try {
+    if (!existsSync(path)) return { overwrittenBytes, cut: false }
+    complete = false
+    const size = statSync(path).size
+    if (size > 0) {
+      const fd = openSync(path, 'r+')
+      try {
+        const chunk = randomBytes(Math.min(size, FILE_CHUNK_BYTES))
+        let lastChunkMs = msPerByte * chunk.length
+        while (overwrittenBytes < size) {
+          const startedAt = budget.now()
+          if (startedAt + SHRED_CHUNK_MARGIN * lastChunkMs > budget.deadline) break
+          const n = Math.min(chunk.length, size - overwrittenBytes)
+          // The bytes written, not the bytes asked for: a short write is written on, so `cut` stays honest.
+          let written = 0
+          while (written < n) {
+            const w = writeSync(fd, chunk, written, n - written, overwrittenBytes + written)
+            if (w <= 0) throw new Error('The overwrite wrote nothing')
+            written += w
+          }
+          fdatasyncSync(fd)
+          overwrittenBytes += written
+          lastChunkMs = budget.now() - startedAt
+        }
+      } finally {
+        closeSync(fd)
+      }
+    }
+    complete = overwrittenBytes >= size
+  } catch {
+    /* best-effort overwrite; still unlink below */
+  }
+  try {
+    rmSync(path, { force: true })
+  } catch {
+    /* best-effort */
+  }
+  return { overwrittenBytes, cut: !complete }
 }
 
 /**
@@ -2438,7 +2522,9 @@ export function lockEncryptedVault(
    *  recovery without needing a genuinely full disk. */
   encryptFileImpl: typeof encryptFile = encryptFile,
   /** Told when the probe fell back to the header (`unchecked`). */
-  onProbeFallback?: ProbeFallbackNote
+  onProbeFallback?: ProbeFallbackNote,
+  /** #982: the overwrite's deadline (the Linux `quit` leg only); without one the working file is shredded as always. */
+  budget?: LockBudget
 ): void {
   // Flush WAL into the main file so the encrypted snapshot is complete, then close.
   const checkpointT0 = performance.now()
@@ -2508,6 +2594,7 @@ export function lockEncryptedVault(
     )
   }
   const encryptT0 = performance.now()
+  const budgetEncryptT0 = budget?.now() ?? 0
   try {
     encryptFileImpl(vaultPaths.dbPath, vaultPaths.encPath, key)
   } catch (err) {
@@ -2515,17 +2602,27 @@ export function lockEncryptedVault(
   }
   const encryptMs = perfMs(encryptT0)
   const shredT0 = performance.now()
-  shredFile(vaultPaths.dbPath)
+  // #982: on the Linux `quit` leg the overwrite stops at its deadline (`shredFileWithin`) and the file is unlinked; the
+  // `.enc` above is already complete and durable. Its first chunk is judged by the rate this encrypt ran at, on the
+  // budget's clock. Every other lock overwrites the whole file, as before.
+  const msPerByte = budget && dbBytes ? (budget.now() - budgetEncryptT0) / dbBytes : 0
+  const shred = budget ? shredFileWithin(vaultPaths.dbPath, budget, msPerByte) : null
+  if (!budget) shredFile(vaultPaths.dbPath)
   cleanSidecars(vaultPaths.dbPath)
   // Covers BOTH lock paths (the explicit lock IPC and the quit teardown); the mark is an
   // appendFileSync, so it lands before app.exit(). checkpointMs includes db.close().
+  // #982: `overwrittenBytes` is the budgeted overwrite's count (null for the full `shredFile`, whose overwrite is
+  // best-effort and silent), `shredCut` whether it stopped before the file's end.
   perfMark('vault_lock_done', {
     checkpointMs,
     probeMs,
     encryptMs,
     shredMs: perfMs(shredT0),
-    dbBytes
+    dbBytes,
+    overwrittenBytes: shred?.overwrittenBytes ?? null,
+    shredCut: shred?.cut ?? false
   })
+  if (shred?.cut) budget?.onShredCut?.()
 }
 
 /** Size of a file for a perf mark, or null; a stat failure must never break lock/unlock. */
@@ -3386,12 +3483,13 @@ export class WorkspaceController {
    * A refused re-encrypt throws `VaultLockError` with the workspace open again, except when
    * the working file is gone or no longer a database (#855): the lock then finishes at the
    * last good `.enc` and returns `lockNotice: 'working_copy_lost'`, which `getState()` keeps
-   * reporting, across a restart too, until the next unlock (#875).
+   * reporting, across a restart too, until the next unlock (#875). `opts.budget` (#982): the overwrite's deadline,
+   * passed by the Linux `quit` leg only ({@link shutdown}); Lock now passes none.
    */
-  lock(): WorkspaceStateInfo {
+  lock(opts: LockOptions = {}): WorkspaceStateInfo {
     if (this._db && this.key && this.descriptor?.mode === 'encrypted') {
       try {
-        lockEncryptedVault(this.vaultPaths, this._db, this.key, this.encryptFileImpl, this.noteProbeFallback)
+        lockEncryptedVault(this.vaultPaths, this._db, this.key, this.encryptFileImpl, this.noteProbeFallback, opts.budget)
       } catch (err) {
         // full-audit 2026-07-11 CODE-1a — a failed re-encrypt (realistically ENOSPC)
         // must never strand the controller half-locked. `lockEncryptedVault` had already
@@ -3451,7 +3549,9 @@ export class WorkspaceController {
         const lost =
           workingCopy === 'gone' || (!walPending && (workingCopy === 'not-database' || workingCopy === 'damaged'))
         if (lost && existsSync(this.vaultPaths.encPath)) {
-          shredFile(dbPath)
+          // #982: under the `quit` leg's budget this overwrite stops at its deadline too (the file is unlinked either way).
+          if (!opts.budget) shredFile(dbPath)
+          else if (shredFileWithin(dbPath, opts.budget).cut) opts.budget.onShredCut?.()
           cleanSidecars(dbPath)
           // #875: recorded, not only returned: a quit, a crash or a session end has no lock screen
           // to return the notice to, so it stands (and, by the marker, survives a restart) until
@@ -3508,11 +3608,12 @@ export class WorkspaceController {
    * drive: on a non-journaling exFAT stick, at-rest WAL sidecars mean the last session
    * never closed cleanly, and they make the next hard unplug likelier to corrupt. ONLY
    * for callers that are about to exit the process — a closed plaintext DB has no reopen
-   * path short of relaunch (`requireDb` throws afterwards).
+   * path short of relaunch (`requireDb` throws afterwards). `opts` goes to {@link lock} (#982: the Linux `quit` leg's
+   * overwrite deadline; the quit teardown passes none).
    */
-  shutdown(): void {
+  shutdown(opts: LockOptions = {}): void {
     try {
-      this.lock()
+      this.lock(opts)
     } catch (err) {
       // full-audit 2026-07-11 CODE-1 — the failed lock re-opened the plaintext DB so an
       // INTERACTIVE session stays usable, but this caller is exiting the process. Close

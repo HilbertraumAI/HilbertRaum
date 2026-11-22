@@ -290,7 +290,28 @@ export interface EmergencyLockDeps {
   /** `killRegisteredSidecarChildren` — the synchronous, throw-safe-per-PID reaper. */
   killSidecarChildren?: () => void
   log?: Pick<typeof realLog, 'error' | 'info'>
+  /** The clock the lock's start, its duration and a budget's deadline are on (#982); `performance.now`. */
+  now?: () => number
 }
+
+/** What a caller may ask of `emergencyLock` (#982). */
+export interface EmergencyLockOptions {
+  /**
+   * The lock's time budget in milliseconds, counted from its own start: the overwrite of the plaintext working file
+   * stops once it would run past it, and the file is unlinked (`shredFileWithin`). Only the Linux `quit` leg passes one
+   * (`QUIT_LOCK_BUDGET_MS`); every other lock overwrites the whole file.
+   */
+  budgetMs?: number
+}
+
+/**
+ * #982 (G-12 option a2): the Linux `quit` leg's lock budget. That leg runs inside Electron's fixed session-loss
+ * watchdog: measured on WSL Electron 43.8.6 (follow-ups wave 7, 16 runs), a lock of 9.95 s still exited 0 and one of
+ * 10.05 s crashed with status 133 ("Failed to shutdown."), with the `quit` handler starting 2–11 ms after the session
+ * loss and Electron's exit taking 31–101 ms after the handler. 8.5 s leaves about 1.3 s for an overwrite chunk that ran
+ * longer than its estimate (a flash stall), the unlink, the duration line, the reap and the exit.
+ */
+export const QUIT_LOCK_BUDGET_MS = 8_500
 
 /**
  * Lock the workspace NOW, synchronously and best-effort, for a process that is about to die
@@ -310,13 +331,20 @@ export interface EmergencyLockDeps {
  * half first, the hygiene half in its OWN try so a lock throw cannot skip it). A failed lock is
  * logged and left to the next launch's recovery (`workspace.shutdown()` closes the re-opened
  * handle so the working file rests bare and newer than `.enc` — the salvage signature `init()`
- * rolls forward instead of shredding). Its duration is logged after the lock, content-free.
+ * rolls forward instead of shredding). Its duration is logged after the lock, content-free. With
+ * `options.budgetMs` (#982, the Linux `quit` leg only) the budget becomes an absolute deadline from this lock's
+ * start, and the overwrite of the working file stops at it (`shredCut` in the duration line).
  */
-export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = {}): void {
+export function emergencyLock(
+  ctx: AppContext | null,
+  deps: EmergencyLockDeps = {},
+  options: EmergencyLockOptions = {}
+): void {
   const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
   const killSidecarChildren = deps.killSidecarChildren ?? killRegisteredSidecarChildren
   const log = deps.log ?? realLog
-  const startedAt = performance.now()
+  const now = deps.now ?? (() => performance.now())
+  const startedAt = now()
   try {
     ctx?.workspace.beginLock()
   } catch {
@@ -361,18 +389,25 @@ export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = 
     /* a log line must never stop the lock */
   }
   let lockFailed = false
+  // #982: the budget as an absolute deadline on this lock's own clock; the lock reports a cut overwrite back.
+  let shredCut = false
+  const budget =
+    options.budgetMs === undefined
+      ? undefined
+      : { deadline: startedAt + options.budgetMs, now, onShredCut: () => void (shredCut = true) }
   try {
     detachVaultKey()
-    ctx?.workspace.shutdown()
+    ctx?.workspace.shutdown({ budget })
   } catch (err) {
     lockFailed = true
     log.error('emergency lock failed — the next launch recovers the working copy', failureForLog(err))
   }
   // #964 security round (F1): how long the lock took, against the 10 s Electron allows a lost session's `quit`. The
   // key is gone by now, so this line reaches the console and a `plaintext_dev` log, not the encrypted one; the
-  // lock's phases are in the perf log (`vault_lock_done`) when HILBERTRAUM_PERF_LOG=1. Content-free.
+  // lock's phases are in the perf log (`vault_lock_done`) when HILBERTRAUM_PERF_LOG=1. Content-free. #982: `shredCut`
+  // says the budget stopped the overwrite of the working file before its end (the file was unlinked all the same).
   try {
-    log.info('emergency lock: finished', { durationMs: Math.round(performance.now() - startedAt), lockFailed })
+    log.info('emergency lock: finished', { durationMs: Math.round(now() - startedAt), lockFailed, shredCut })
   } catch {
     /* best-effort */
   }
@@ -404,9 +439,10 @@ export interface AppLifecycleDeps {
   performShutdown: () => Promise<void>
   /**
    * The synchronous best-effort lock for a process that is about to be killed without a quit
-   * (#248); the real caller binds `emergencyLock(ctx)`. Never expected to throw.
+   * (#248); the real caller binds `emergencyLock(ctx, {}, options)`. Never expected to throw. #982: only the Linux
+   * `quit` leg passes `{ budgetMs: QUIT_LOCK_BUDGET_MS }`.
    */
-  emergencyLock: () => void
+  emergencyLock: (options?: EmergencyLockOptions) => void
   /** `app.exit` — the ONLY way the process leaves once a quit has begun. */
   exit: (code: number) => void
   /** `createWindow` (a macOS Dock click fires `activate` with no window open). */
@@ -476,6 +512,9 @@ export interface AppLifecycleHandlers {
    * teardown's (whose own `exit` emits this event) or a signal's. Never exits: Electron is already exiting.
    * The crash path's `process.exit(1)` emits `quit` too (measured), after its own `emergencyLock`, which this
    * closure does not see: the second run finds the workspace locked and only repeats the reap.
+   * #982: this lock runs inside Electron's fixed 10 s session-loss watchdog, so it is the one that passes a budget
+   * (`QUIT_LOCK_BUDGET_MS`): the overwrite of the working file stops at it, and the lock ends encrypted instead of
+   * crashing mid-lock on a large workspace or a slow drive.
    */
   onQuitEvent: () => void
   /** True from the first `will-quit`, session end, signal or `quit` lock on (tests + diagnostics). */
@@ -717,7 +756,8 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
         logBeforeLock(() =>
           deps.log.info('quit: the session ended before the workspace locked — locking workspace', { midTeardown })
         )
-        deps.emergencyLock()
+        // #982: the one leg under Electron's 10 s watchdog, so the one lock with a budget.
+        deps.emergencyLock({ budgetMs: QUIT_LOCK_BUDGET_MS })
       } catch (err) {
         deps.log.error('quit: lock failed', failureForLog(err))
       }

@@ -5,10 +5,11 @@ import {
   performShutdown,
   createAppLifecycleHandlers,
   emergencyLock,
+  QUIT_LOCK_BUDGET_MS,
   SHUTDOWN_OVERALL_DEADLINE_MS
 } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
-import { WorkspaceController, workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
+import { WorkspaceController, workspaceAdmitsWork, type LockOptions } from '../../src/main/services/workspace-vault'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { tempRoot } from '../helpers/db-fixtures'
@@ -754,7 +755,8 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
   )
 
   // #964 security round (F1): a lost session's `quit` gives the lock about 10 s before Electron crashes the process, so
-  // the lock's duration is logged after it, content-free, whichever way it ended.
+  // the lock's duration is logged after it, content-free, whichever way it ended. #982: with `shredCut` (changed on
+  // purpose: false here, where no budget was given; the budget row below sets it).
   it.each([false, true])('emergencyLock logs its duration after the lock (lock fails: %s)', (fails) => {
     const order: Array<string | [string, unknown]> = []
     const ctx = {
@@ -773,7 +775,45 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       killSidecarChildren: () => void order.push('reap'),
       log: { error: () => undefined, info: (message: string, meta?: unknown) => void order.push([message, meta]) }
     })
-    expect(order).toEqual(['lock', [expect.any(String), { durationMs: expect.any(Number), lockFailed: fails }], 'reap'])
+    expect(order).toEqual([
+      'lock',
+      [expect.any(String), { durationMs: expect.any(Number), lockFailed: fails, shredCut: false }],
+      'reap'
+    ])
+  })
+
+  // #982 (G-12 option a2): a budget becomes an absolute deadline counted from this lock's own start, on its own clock
+  // (the steps before the lock count against it), and a cut overwrite is reported in the duration line. Without a
+  // budget the lock gets no deadline: the whole working file is overwritten, as before.
+  it('emergencyLock turns a budget into a deadline from its own start and reports a cut overwrite (#982)', () => {
+    let t = 1_000
+    const received: Array<LockOptions | undefined> = []
+    const lines: unknown[] = []
+    const ctx = {
+      workspace: workspaceStandIn(
+        {},
+        {
+          shutdown: (opts) => {
+            received.push(opts)
+            t += 9_000 // a lock that ran past its deadline
+            opts?.budget?.onShredCut?.()
+          }
+        }
+      )
+    } as unknown as AppContext
+    const deps = {
+      now: () => t,
+      detachVaultKey: () => undefined,
+      killSidecarChildren: () => undefined,
+      log: { error: () => undefined, info: (_message: string, meta?: unknown) => void lines.push(meta) }
+    }
+    emergencyLock(ctx, deps, { budgetMs: 8_500 })
+    expect(received[0]?.budget?.deadline).toBe(9_500)
+    expect(received[0]?.budget?.now()).toBe(10_000) // the lock's own clock
+    expect(lines).toEqual([{ durationMs: 9_000, lockFailed: false, shredCut: true }])
+    emergencyLock(ctx, deps)
+    expect(received[1]?.budget).toBeUndefined()
+    expect(lines[1]).toEqual({ durationMs: 9_000, lockFailed: false, shredCut: false })
   })
 
   // #964: on Linux, Electron turns SIGTERM, SIGINT and SIGHUP into an ordinary quit with one shot (the close guard's
@@ -872,6 +912,50 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       handlers.onQuitEvent()
       handlers.onTerminationSignal('SIGTERM')
       expect(locks).toBe(1)
+    })
+
+    // #982 (G-12 option a2): the lost session's `quit` is the one lock that runs inside Electron's fixed 10 s watchdog
+    // (a longer lock crashes with status 133 and leaves the working file in plaintext), so it is the one lock with a
+    // budget. Every other leg has no measured bound and keeps the full overwrite.
+    it('the lost session’s quit locks under the watchdog budget; the signal, session-end, lock-again and will-quit locks get none (#982)', () => {
+      const calls: Array<[string, unknown[]]> = []
+      let leg = ''
+      const handlersOn = (platform: NodeJS.Platform) =>
+        createAppLifecycleHandlers({
+          performShutdown: async () => undefined,
+          emergencyLock: (...args: unknown[]) => void calls.push([leg, args]),
+          exit: () => undefined,
+          createWindow: () => undefined,
+          mainWindowCount: () => 1,
+          platform,
+          quit: () => undefined,
+          killSidecarChildren: () => undefined,
+          log: quietLog
+        })
+      const run = (name: string, act: () => void): void => {
+        leg = name
+        act()
+      }
+      const linux = handlersOn('linux')
+      run('quit', () => linux.onQuitEvent())
+      const signalled = handlersOn('linux')
+      run('signal', () => signalled.onTerminationSignal('SIGTERM'))
+      const mac = handlersOn('darwin')
+      run('session end', () => mac.onSessionEnd())
+      run('a second session end', () => mac.onSessionEnd())
+      run('a signal after a session end', () => mac.onTerminationSignal('SIGTERM'))
+      const macQuit = handlersOn('darwin')
+      run('session end', () => macQuit.onSessionEnd())
+      run('a will-quit after a session end', () => macQuit.onWillQuit(quitEvent()))
+      expect(calls).toEqual([
+        ['quit', [{ budgetMs: QUIT_LOCK_BUDGET_MS }]],
+        ['signal', []],
+        ['session end', []],
+        ['a second session end', []],
+        ['a signal after a session end', []],
+        ['session end', []],
+        ['a will-quit after a session end', []]
+      ])
     })
 
     // A lost session reaches the app as `quit` only. Whatever came before, the workspace ends locked exactly once.

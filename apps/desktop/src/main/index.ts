@@ -1138,7 +1138,8 @@ function createWindow(): void {
 // persists, mirroring the lock path). `ctx` is read at call time, not here.
 const lifecycle = createAppLifecycleHandlers({
   performShutdown: () => performShutdown(ctx),
-  emergencyLock: () => emergencyLock(ctx),
+  // #982: the closure passes a budget on the Linux `quit` leg only.
+  emergencyLock: (options) => emergencyLock(ctx, {}, options),
   exit: (code) => app.exit(code),
   createWindow,
   // #910: the main window only; the hidden helper windows do not count.
