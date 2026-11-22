@@ -5,10 +5,11 @@ import {
   performShutdown,
   createAppLifecycleHandlers,
   emergencyLock,
+  QUIT_LOCK_BUDGET_MS,
   SHUTDOWN_OVERALL_DEADLINE_MS
 } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
-import { WorkspaceController, workspaceAdmitsWork } from '../../src/main/services/workspace-vault'
+import { WorkspaceController, workspaceAdmitsWork, type LockOptions } from '../../src/main/services/workspace-vault'
 import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { tempRoot } from '../helpers/db-fixtures'
@@ -600,7 +601,9 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     // No await: the OS kills the process as soon as the handler returns, so everything that
     // matters happened by now. The local-API stop is fire-and-forget (in-process, no orphan).
     // #964 security round: the plaintext operations are aborted and their transients shredded before the lock.
-    expect(order).toEqual(['localApi.stop', 'plaintext.abort', 'plaintext.sweep', 'detach', 'lock', 'reap'])
+    // #1002 (S-5): the chat runtime is stopped through its own stop right before the reap, so its reaped server is no
+    // crash in a process that lives on.
+    expect(order).toEqual(['localApi.stop', 'plaintext.abort', 'plaintext.sweep', 'detach', 'lock', 'runtime.stop', 'reap'])
     expect(handlers.isShuttingDown()).toBe(true)
     expect(exits).toEqual([]) // the lock does not exit by itself — the OS ends the process
   })
@@ -624,9 +627,9 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
   // workspace still locked; this stand-in records every call, `relockHarness` shows the difference). After a signal's
   // or `quit`'s lock the exit is already under way: no second lock and no second exit.
   it.each<[string, NodeJS.Platform, (h: SessionHarness) => void, number, number[], string[]]>([
-    ['the session-end lock', 'win32', (h) => h.handlers.onSessionEnd(), 2, [0], ['lock', 'reap', 'exit']],
-    ['a signal lock', 'linux', (h) => h.handlers.onTerminationSignal('SIGTERM'), 1, [0], ['lock', 'reap', 'exit']],
-    ['a lost session’s quit lock', 'linux', (h) => h.handlers.onQuitEvent(), 1, [], ['lock', 'reap']]
+    ['the session-end lock', 'win32', (h) => h.handlers.onSessionEnd(), 2, [0], ['lock', 'runtime.stop', 'reap', 'exit']],
+    ['a signal lock', 'linux', (h) => h.handlers.onTerminationSignal('SIGTERM'), 1, [0], ['lock', 'runtime.stop', 'reap', 'exit']],
+    ['a lost session’s quit lock', 'linux', (h) => h.handlers.onQuitEvent(), 1, [], ['lock', 'runtime.stop', 'reap']]
   ])('a will-quit AFTER %s starts no teardown and ends with one exit at most', async (_source, platform, lock, locks, expectedExits, tail) => {
     const h = sessionHarness(platform)
     const { order, exits, handlers } = h
@@ -657,17 +660,6 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
     expect(order.filter((l) => l === 'lock')).toHaveLength(1)
     expect(order.slice(-3)).toEqual(['lock', 'reap', 'exit']) // the exit path still reaps
     expect(exits).toEqual([0])
-  })
-
-  it('no fresh window after a session-end lock (the activate guard shares the closure)', () => {
-    const { order, handlers, setWindows } = sessionHarness()
-    setWindows(0)
-    handlers.onActivate()
-    expect(order.filter((l) => l === 'createWindow')).toHaveLength(1) // a normal Dock click creates one
-    setWindows(0)
-    handlers.onSessionEnd()
-    handlers.onActivate()
-    expect(order.filter((l) => l === 'createWindow')).toHaveLength(1) // …but none against the locked vault
   })
 
   it('emergencyLock is throw-safe: a lock that throws still reaps the sidecar children', () => {
@@ -754,7 +746,8 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
   )
 
   // #964 security round (F1): a lost session's `quit` gives the lock about 10 s before Electron crashes the process, so
-  // the lock's duration is logged after it, content-free, whichever way it ended.
+  // the lock's duration is logged after it, content-free, whichever way it ended. #982: with `shredCut` (changed on
+  // purpose: false here, where no budget was given; the budget row below sets it).
   it.each([false, true])('emergencyLock logs its duration after the lock (lock fails: %s)', (fails) => {
     const order: Array<string | [string, unknown]> = []
     const ctx = {
@@ -773,7 +766,45 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       killSidecarChildren: () => void order.push('reap'),
       log: { error: () => undefined, info: (message: string, meta?: unknown) => void order.push([message, meta]) }
     })
-    expect(order).toEqual(['lock', [expect.any(String), { durationMs: expect.any(Number), lockFailed: fails }], 'reap'])
+    expect(order).toEqual([
+      'lock',
+      [expect.any(String), { durationMs: expect.any(Number), lockFailed: fails, shredCut: false }],
+      'reap'
+    ])
+  })
+
+  // #982 (G-12 option a2): a budget becomes an absolute deadline counted from this lock's own start, on its own clock
+  // (the steps before the lock count against it), and a cut overwrite is reported in the duration line. Without a
+  // budget the lock gets no deadline: the whole working file is overwritten, as before.
+  it('emergencyLock turns a budget into a deadline from its own start and reports a cut overwrite (#982)', () => {
+    let t = 1_000
+    const received: Array<LockOptions | undefined> = []
+    const lines: unknown[] = []
+    const ctx = {
+      workspace: workspaceStandIn(
+        {},
+        {
+          shutdown: (opts) => {
+            received.push(opts)
+            t += 9_000 // a lock that ran past its deadline
+            opts?.budget?.onShredCut?.()
+          }
+        }
+      )
+    } as unknown as AppContext
+    const deps = {
+      now: () => t,
+      detachVaultKey: () => undefined,
+      killSidecarChildren: () => undefined,
+      log: { error: () => undefined, info: (_message: string, meta?: unknown) => void lines.push(meta) }
+    }
+    emergencyLock(ctx, deps, { budgetMs: 8_500 })
+    expect(received[0]?.budget?.deadline).toBe(9_500)
+    expect(received[0]?.budget?.now()).toBe(10_000) // the lock's own clock
+    expect(lines).toEqual([{ durationMs: 9_000, lockFailed: false, shredCut: true }])
+    emergencyLock(ctx, deps)
+    expect(received[1]?.budget).toBeUndefined()
+    expect(lines[1]).toEqual({ durationMs: 9_000, lockFailed: false, shredCut: false })
   })
 
   // #964: on Linux, Electron turns SIGTERM, SIGINT and SIGHUP into an ordinary quit with one shot (the close guard's
@@ -786,7 +817,7 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       const { order, exits, handlers } = sessionHarness('linux')
       handlers.onTerminationSignal('SIGTERM')
       // No await: the listener replaced the default action, so this exit is the only way the process ends.
-      expect(order).toEqual(['localApi.stop', 'plaintext.abort', 'plaintext.sweep', 'detach', 'lock', 'reap', 'exit'])
+      expect(order).toEqual(['localApi.stop', 'plaintext.abort', 'plaintext.sweep', 'detach', 'lock', 'runtime.stop', 'reap', 'exit'])
       expect(exits).toEqual([0])
       expect(handlers.isShuttingDown()).toBe(true)
     })
@@ -872,6 +903,50 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       handlers.onQuitEvent()
       handlers.onTerminationSignal('SIGTERM')
       expect(locks).toBe(1)
+    })
+
+    // #982 (G-12 option a2): the lost session's `quit` is the one lock that runs inside Electron's fixed 10 s watchdog
+    // (a longer lock crashes with status 133 and leaves the working file in plaintext), so it is the one lock with a
+    // budget. Every other leg has no measured bound and keeps the full overwrite.
+    it('the lost session’s quit locks under the watchdog budget; the signal, session-end, lock-again and will-quit locks get none (#982)', () => {
+      const calls: Array<[string, unknown[]]> = []
+      let leg = ''
+      const handlersOn = (platform: NodeJS.Platform) =>
+        createAppLifecycleHandlers({
+          performShutdown: async () => undefined,
+          emergencyLock: (...args: unknown[]) => void calls.push([leg, args]),
+          exit: () => undefined,
+          createWindow: () => undefined,
+          mainWindowCount: () => 1,
+          platform,
+          quit: () => undefined,
+          killSidecarChildren: () => undefined,
+          log: quietLog
+        })
+      const run = (name: string, act: () => void): void => {
+        leg = name
+        act()
+      }
+      const linux = handlersOn('linux')
+      run('quit', () => linux.onQuitEvent())
+      const signalled = handlersOn('linux')
+      run('signal', () => signalled.onTerminationSignal('SIGTERM'))
+      const mac = handlersOn('darwin')
+      run('session end', () => mac.onSessionEnd())
+      run('a second session end', () => mac.onSessionEnd())
+      run('a signal after a session end', () => mac.onTerminationSignal('SIGTERM'))
+      const macQuit = handlersOn('darwin')
+      run('session end', () => macQuit.onSessionEnd())
+      run('a will-quit after a session end', () => macQuit.onWillQuit(quitEvent()))
+      expect(calls).toEqual([
+        ['quit', [{ budgetMs: QUIT_LOCK_BUDGET_MS }]],
+        ['signal', []],
+        ['session end', []],
+        ['a second session end', []],
+        ['a signal after a session end', []],
+        ['session end', []],
+        ['a will-quit after a session end', []]
+      ])
     })
 
     // A lost session reaches the app as `quit` only. Whatever came before, the workspace ends locked exactly once.
@@ -988,6 +1063,205 @@ describe('OS session end (#248) — a best-effort synchronous lock, exactly once
       expect(h.exits).toEqual(expectedExits)
       expect(locks()).toBe(locksBefore)
     })
+  })
+
+  // #1002: by Electron's source a macOS shutdown locks AND quits the app (the system's quit follows the `powerMonitor`
+  // lock inside the same Apple Event), so this state is not expected; these rows model it all the same, as #977's do (a
+  // notification with no `terminate:` after it; Mac walks W1–W5 owed). Before, it was a dead end: a Dock click opened no
+  // window, a window left open kept the unlocked shell with every call failing, and nothing cleared `shuttingDown`.
+  // Design R: a Dock click opens the window onto the unlock screen, and the user's unlock returns the closure to a
+  // normal session, both only while no quit began since (`before-quit`), so a shutdown that proceeds is never handed a
+  // new window or a close guard that holds.
+  describe('#1002: after a session-end lock that left the app running (macOS: a shutdown another app cancelled)', () => {
+    /** The real quit teardown (parked on a sidecar stop until released) and the real emergency lock, over one workspace
+     *  that can be unlocked again (its `shutdown` records whether it had anything to lock), on darwin. The workspace
+     *  reads `locked` whenever it is not open (an encrypted vault), unless `plaintext`: a `plaintext_dev` workspace
+     *  whose database the lock closed reads `uninitialized`. */
+    function survivedHarness(o: { plaintext?: boolean } = {}) {
+      const order: string[] = []
+      const exits: number[] = []
+      const infos: string[] = []
+      let windows = 1
+      const { ctx, release } = parkedCtx(order)
+      const workspace = workspaceStandIn()
+      const close = workspace.shutdown
+      workspace.shutdown = () => {
+        order.push(workspace.isUnlocked() ? 'lock' : 'lock(already locked)')
+        close()
+      }
+      Object.assign(ctx, { workspace })
+      const handlers = createAppLifecycleHandlers({
+        performShutdown: () =>
+          performShutdown(ctx, { inFlightStreams: new Map(), detachVaultKey: () => order.push('detach'), log: quietLog }),
+        emergencyLock: () =>
+          emergencyLock(ctx, { detachVaultKey: () => order.push('detach'), killSidecarChildren: () => order.push('reap'), log: quietLog }),
+        exit: (code) => {
+          order.push('exit')
+          exits.push(code)
+        },
+        createWindow: () => {
+          order.push('createWindow')
+          windows++
+        },
+        mainWindowCount: () => windows,
+        platform: 'darwin',
+        quit: () => order.push('quit'),
+        killSidecarChildren: () => order.push('reap'),
+        log: { error: () => undefined, info: (message: string) => void infos.push(message) },
+        workspaceLocked: () => !o.plaintext && !workspace.isUnlocked()
+      })
+      return { order, exits, infos, workspace, handlers, release, setWindows: (n: number) => void (windows = n) }
+    }
+    type SurvivedHarness = ReturnType<typeof survivedHarness>
+    /** The user unlocks again in the app the cancelled shutdown left running: the unlock IPC calls the hook on success. */
+    const unlockAgain = (h: SurvivedHarness): void => {
+      h.workspace.completeUnlock()
+      h.handlers.onWorkspaceUnlocked()
+    }
+    const resetLines = (h: SurvivedHarness): string[] => h.infos.filter((l) => l.includes('unlocked again'))
+
+    it('a Dock click with no main window opens one (the unlock screen); the closure stays in its ending state', () => {
+      const h = survivedHarness()
+      h.handlers.onSessionEnd()
+      h.setWindows(0) // the red button closed the window: its guard holds nothing once a lock has begun
+      h.handlers.onActivate() // index.ts sends a second launch with no main window here too (the pin above)
+      expect(h.order.filter((l) => l === 'createWindow')).toHaveLength(1)
+      // The workspace is still locked, so the window shows the unlock screen, and the closure is still ending: a quit
+      // from here still locks again and exits at once (#977).
+      expect(h.workspace.isUnlocked()).toBe(false)
+      expect(h.handlers.isShuttingDown()).toBe(true)
+      h.handlers.onActivate() // a window is open now: nothing more
+      expect(h.order.filter((l) => l === 'createWindow')).toHaveLength(1)
+    })
+
+    // A `plaintext_dev` workspace has no unlock screen: a window would show onboarding, whose create builds a vault
+    // beside the plaintext data. So no window there, as before #1002.
+    it('a plaintext_dev workspace (it reads uninitialized once its database closed) gets no window from a Dock click', () => {
+      const h = survivedHarness({ plaintext: true })
+      h.handlers.onSessionEnd()
+      h.setWindows(0)
+      h.handlers.onActivate()
+      expect(h.order).not.toContain('createWindow')
+    })
+
+    // Changed verdict (#1002): before, no window opened after a session-end lock at all (the row "no fresh window after
+    // a session-end lock"). Now the line is the system's quit: once its `before-quit` came, nothing opens into it.
+    it('after the system’s quit began (before-quit), a Dock click opens nothing, and the will-quit still locks again and exits once', () => {
+      const h = survivedHarness()
+      h.handlers.onSessionEnd()
+      h.handlers.onBeforeQuit() // the system's quit right after the lock, in the same Apple Event by Electron's source
+      h.setWindows(0) // that quit closed the window
+      h.handlers.onActivate()
+      expect(h.order).not.toContain('createWindow')
+      const ev = quitEvent()
+      h.handlers.onWillQuit(ev)
+      expect(ev.defaultPrevented).toBe(true)
+      expect(h.order).not.toContain('embedder.stop(parked)') // no teardown
+      expect(h.order.slice(-4)).toEqual(['lock(already locked)', 'runtime.stop', 'reap', 'exit'])
+      expect(h.exits).toEqual([0])
+    })
+
+    it('the user unlocks again: isShuttingDown() is false and ⌘Q runs the normal teardown, which locks and exits from its finally', async () => {
+      const h = survivedHarness()
+      h.handlers.onSessionEnd()
+      h.setWindows(0)
+      h.handlers.onActivate()
+      unlockAgain(h)
+      expect(h.handlers.isShuttingDown()).toBe(false) // the close guard asks the window to save again
+      expect(resetLines(h)).toHaveLength(1)
+      h.handlers.onBeforeQuit()
+      const ev = quitEvent()
+      h.handlers.onWillQuit(ev)
+      await drain()
+      expect(ev.defaultPrevented).toBe(true)
+      expect(h.order).toContain('embedder.stop(parked)') // the teardown runs (parked on a sidecar stop)
+      expect(h.exits).toEqual([])
+      h.release()
+      await drain()
+      expect(h.workspace.isUnlocked()).toBe(false)
+      expect(h.order.slice(-3)).toEqual(['lock', 'reap', 'exit'])
+      expect(h.exits).toEqual([0])
+    })
+
+    // #238: the reset must leave the closure exactly as a start does. A `sessionEndLocked` left set sends the second
+    // will-quit down the session-end branch (lock again, exit mid-teardown); a `lockRan` left set makes a signal lock
+    // beside the running teardown and exit before its lock.
+    it('after that reset a second will-quit or a signal during the parked teardown defers to it (#238, #977)', async () => {
+      const h = survivedHarness()
+      h.handlers.onSessionEnd()
+      unlockAgain(h)
+      const since = h.order.length
+      const locks = (): number => h.order.slice(since).filter((l) => l === 'lock').length
+      h.handlers.onWillQuit(quitEvent())
+      await drain()
+      const second = quitEvent()
+      h.handlers.onWillQuit(second)
+      h.handlers.onTerminationSignal('SIGTERM')
+      expect(second.defaultPrevented).toBe(true)
+      expect(h.exits).toEqual([])
+      expect(locks()).toBe(0) // the re-unlocked session is the teardown's to lock
+      h.release()
+      await drain()
+      expect(locks()).toBe(1)
+      expect(h.exits).toEqual([0])
+    })
+
+    it('after that reset a second session end locks with the first-time line', () => {
+      const h = survivedHarness()
+      h.handlers.onSessionEnd()
+      unlockAgain(h)
+      h.handlers.onSessionEnd()
+      expect(h.workspace.isUnlocked()).toBe(false)
+      expect(h.order.filter((l) => l === 'lock')).toHaveLength(2) // the first session's, then the re-unlocked one's
+      expect(h.infos.filter((l) => l === 'session-end: locking workspace')).toHaveLength(2)
+      expect(h.infos.join('\n')).not.toContain('locking workspace again')
+    })
+
+    // The reset acts only in the survived state. A quit under way keeps its one lock and its one exit; a normal session
+    // has nothing to reset (and logs nothing).
+    it.each<[string, (h: SurvivedHarness) => Promise<void> | void, boolean]>([
+      ['a quit began since the session-end lock', (h) => {
+        h.handlers.onSessionEnd()
+        h.handlers.onBeforeQuit()
+      }, true],
+      ['the lock was a signal’s (its exit is under way)', (h) => h.handlers.onTerminationSignal('SIGTERM'), true],
+      ['a quit teardown is running', async (h) => {
+        h.handlers.onWillQuit(quitEvent())
+        await drain()
+      }, true],
+      ['no session-end lock ran (a normal session)', () => undefined, false]
+    ])('no reset when %s: an unlock leaves the closure as it was', async (_state, before, shuttingDown) => {
+      const h = survivedHarness()
+      await before(h)
+      unlockAgain(h)
+      expect(h.handlers.isShuttingDown()).toBe(shuttingDown)
+      expect(resetLines(h)).toEqual([])
+    })
+
+    // A normal quit that the close guard's Keep open cancelled ends in no `will-quit`: its `before-quit` must leave
+    // nothing that would later block the Dock click after a session end.
+    it('a quit kept open before the session end leaves no trace: the Dock click after the session-end lock still opens the window', () => {
+      const h = survivedHarness()
+      h.handlers.onBeforeQuit() // ⌘Q, then Keep open in the guard's dialog
+      h.handlers.onSessionEnd()
+      h.setWindows(0)
+      h.handlers.onActivate()
+      expect(h.order.filter((l) => l === 'createWindow')).toHaveLength(1)
+    })
+  })
+
+  it('index.ts wires #1002: before-quit at module scope, once, after the closure exists, and the unlock hook to the closure', () => {
+    // Source-text pin, as the rows around it: index.ts cannot be imported under vitest.
+    const indexSrc = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const beforeQuit = "\napp.on('before-quit', lifecycle.onBeforeQuit)\n"
+    expect(indexSrc.split('lifecycle.onBeforeQuit').length - 1, 'one before-quit listener').toBe(1)
+    expect(indexSrc.indexOf(beforeQuit), 'at module scope').toBeGreaterThan(
+      indexSrc.indexOf('const lifecycle = createAppLifecycleHandlers(')
+    )
+    expect(indexSrc).toContain('registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked })')
+    // The Dock click's window only onto an encrypted workspace's unlock screen.
+    expect(indexSrc).toContain("workspaceLocked: () => ctx?.workspace.getState().state === 'locked'")
+    expect(indexSrc.split('registerWorkspaceIpc(').length - 1, 'one registration').toBe(1)
   })
 
   it('index.ts wires the handler: session-end on the main window (win32), the POSIX signals (linux, darwin), the Linux quit and the darwin powerMonitor shutdown early inside whenReady, the crash path', () => {

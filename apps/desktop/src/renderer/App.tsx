@@ -260,6 +260,44 @@ function AppShell(): JSX.Element {
     }
   }, [unlocked])
 
+  // #1002 (S-4): main locks on its own at an OS session end and tells no window (there is no lock event). A window
+  // that outlived it (a macOS shutdown another app cancelled) kept the unlocked shell, decrypted content on screen and
+  // every call failing. So while the shell shows an unlocked workspace it re-reads the state when the window gains
+  // focus, when it becomes visible again, and on a pointer press (a window that never lost focus gets no `focus`
+  // event), one read at a time (a burst of clicks makes one call), and on `locked` ends the session here as Lock now
+  // does. Only `locked`: a `plaintext_dev` workspace whose database closed reads `uninitialized` and has no gate to
+  // show; a failed read changes nothing.
+  useEffect(() => {
+    if (!unlocked) return
+    let active = true
+    let reading = false
+    const recheck = (): void => {
+      if (reading) return
+      reading = true
+      Promise.resolve()
+        .then(() => window.api.getWorkspaceState())
+        .then((s) => {
+          if (active && s.state === 'locked') showLocked(s)
+        })
+        .catch(() => {})
+        .finally(() => {
+          reading = false
+        })
+    }
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') recheck()
+    }
+    window.addEventListener('focus', recheck)
+    window.addEventListener('pointerdown', recheck, true)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      active = false
+      window.removeEventListener('focus', recheck)
+      window.removeEventListener('pointerdown', recheck, true)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [unlocked])
+
   useEffect(() => {
     if (!unlocked) return
     let active = true
@@ -359,11 +397,18 @@ function AppShell(): JSX.Element {
     // flush waits for a running bulk sweep, so it gives up after a bound (#837 review round 5).
     await flushReviewSessionBeforeLock()
     const next = await window.api.lockWorkspace()
-    // The real lock seam (TA-2 / H3): main has now aborted the jobs + re-encrypted the vault, so
-    // drop the resident source/translation/image content from the module-level session stores in
-    // lockstep. Screens can't do this themselves — lock unmounts every screen (the shell swaps to
-    // WorkspaceGate below), so a screen-effect purge would never observe the lock.
+    showLocked(next)
+  }
+
+  // The real lock seam (TA-2 / H3): main has aborted the jobs + re-encrypted the vault, so drop the resident
+  // source/translation/image content from the module-level session stores in lockstep. Screens can't do this
+  // themselves — lock unmounts every screen (the shell swaps to WorkspaceGate below), so a screen-effect purge would
+  // never observe the lock. Lock now's end, and (#1002) the focus re-read below when main locked on its own.
+  function showLocked(next: WorkspaceStateInfo): void {
     purgeSessionStores()
+    // A "could not lock" banner from an earlier Lock now must not come back after the next unlock (#1002: main may
+    // have locked on its own since).
+    setLockError(null)
     setWorkspace(next)
     setScreen('home')
     setDocumentsReturn(null)
