@@ -1494,7 +1494,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   or" after a continuation of about 700 tokens, and was stored as complete. Its tooltip offers the remedy of the
   pass that was cut. Only the last line is judged, against the answer's own style: a last line that ends in a
   word reads as cut only when most of the answer's earlier long lines end with a full stop or another
-  terminator, and one that ends with a comma, a colon or an open bracket always does. So a table row, a
+  terminator, and one that ends with a comma, a colon or an open bracket always does (a dash or a slash is
+  judged like a word, since it can end a URL or a "not stated" value such as "Renewal option: —"). So a table row, a
   heading, a code block, a short list item, a signature, a URL or a list written without full stops reads as
   complete; over 413 stored real answers the check flagged 4, all genuinely cut. Some cuts keep no badge (the
   accepted misses): a cut right after an abbreviation such as "e.g.", a cut inside a table row, a short last

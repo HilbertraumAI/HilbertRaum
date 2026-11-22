@@ -25,8 +25,13 @@ const MARKER = String.raw`\[S\d+(?:\s*[-–,;]\s*S?\d+)*\]`
 const MARKER_JOIN = String.raw`(?:[\s,;]*|\s+(?:and|und|et|y|e|en|i|и|ve|та|oraz)\s+)`
 /** A run of citation markers at the end of a line, with what joins them and what trails them. */
 const MARKERS = new RegExp(String.raw`\s*${MARKER}(?:${MARKER_JOIN}${MARKER})*[\s,;]*$`, 'u')
-/** A last character that leaves the sentence open. */
-const MID = /[,;:\-–—(/&]$/u
+/** A last character that leaves the sentence open, whatever the answer's style. */
+const MID = /[,;:(&]$/u
+/** A dash or a slash at the end: open in a sentence ("… unless the landlord /"), but also the end of a URL or
+ *  path ("https://example.com/") or a "not stated" filler, so it is judged like a word, by the answer's style. */
+const OPEN_END = /[-–—/]$/u
+/** A label whose value is only a "not stated" filler: "- **Renewal option:** —", "Deposit: n/a", "**Term** –". */
+const LABEL_FILLER = /^\s*(?:[-*+•]\s+)?\**[^:|*]{1,80}?(?:\**:|:\**|\*\*)\s*(?:[-–—]+|n\/a)\s*\**$/iu
 /** A last character that is part of a word: a letter (with its combining marks) or a digit. */
 const WORD_END = /[\p{L}\p{M}\p{N}]$/u
 /** A line (its citation markers set aside) that ends by closing a bracket or a quotation after text, then
@@ -99,15 +104,18 @@ function isMostlyGreek(line: string): boolean {
  * True when `text` (an answer as it is stored) ends mid-sentence. Only the last non-empty line is judged:
  *  - inside an open code fence, a table row, a heading, a bold-only line or a rule: complete;
  *  - with its trailing citation markers set aside (a run, joined by spaces, commas, semicolons or "and"), a line
- *    that closes a bracket or a quotation, ends in a closed inline code span, or is a label whose value was the
- *    markers ("Sources: [S1], [S2]"): complete;
+ *    that closes a bracket or a quotation, ends in a closed inline code span, is a label whose value was the
+ *    markers ("Sources: [S1], [S2]"), or a label whose value is a "not stated" filler (`—`, `–`, `-`, `n/a`):
+ *    complete;
  *  - otherwise, after stripping trailing markers, emphasis and closers: a terminator (`. ! ? … 。 ！ ？ ؟ । ॥`,
- *    the Greek question mark, or `;` on a mostly Greek line) or an emoji is complete; a trailing
- *    `, ; : - – — ( / &` is mid; any other last character but a letter or a digit (a symbol: `%`, `€`) is complete;
- *  - a last line of 4 words or more (a list item or "Label: value" line: 12) that ends in a letter or a digit is
- *    mid only in the answer's own terminated style: at least 4 earlier lines of 8 words or more (not table rows,
- *    headings or code), of which at least 70 % end with a terminator. An answer written without full stops (a
- *    list) or with too little text before its last line is complete; so is a shorter last line.
+ *    the Greek question mark, or `;` on a mostly Greek line) or an emoji is complete; a trailing `, ; : ( &` is
+ *    mid; a trailing dash or slash (a URL, a path, a filler, or an open sentence) is judged like a word, below;
+ *    any other last character but a letter or a digit (a symbol: `%`, `€`) is complete;
+ *  - a last line of 4 words or more (a list item or "Label: value" line: 12) that ends in a letter, a digit, a
+ *    dash or a slash is mid only in the answer's own terminated style: at least 4 earlier lines of 8 words or
+ *    more (not table rows, headings or code), of which at least 70 % end with a terminator. An answer written
+ *    without full stops (a list) or with too little text before its last line is complete; so is a shorter
+ *    last line.
  */
 export function endsMidSentence(text: string): boolean {
   const fences = (text.match(/^\s*(```|~~~)/gm) ?? []).length
@@ -119,6 +127,7 @@ export function endsMidSentence(text: string): boolean {
   // Set citation markers aside first, so a marker's own "]" never reads as a closing bracket.
   const unmarked = t.replace(MARKERS, '')
   if (unmarked.length < t.length && /:\**$/.test(unmarked)) return false
+  if (LABEL_FILLER.test(unmarked)) return false
   if (CLOSED_BRACKET_OR_QUOTE.test(unmarked)) return false
   if (endsInCodeSpan(unmarked)) return false
   const c = core(t)
@@ -126,7 +135,7 @@ export function endsMidSentence(text: string): boolean {
   if (TERMINAL.test(c)) return false
   if (c.endsWith(';') && isMostlyGreek(c)) return false
   if (MID.test(c)) return true
-  if (!WORD_END.test(c)) return false
+  if (!WORD_END.test(c) && !OPEN_END.test(c)) return false
   if (words(c) < (isItem(t) ? MIN_ITEM_WORDS : MIN_LAST_WORDS)) return false
   const style = styleLines(lines.slice(0, -1))
   const terminated = style.filter((l) => TERMINAL.test(l)).length

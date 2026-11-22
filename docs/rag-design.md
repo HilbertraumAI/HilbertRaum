@@ -2541,15 +2541,19 @@ where only the badge told the truth.
   - Inside an open code fence, a table row, a heading, a bold-only line or a rule is complete.
   - Trailing citation markers are set aside first: a run of `[S1]`, `[S1, S2]`, `[S1-S3]` markers joined by
     spaces, commas, semicolons or "and" (`and und et y e en i и ve та oraz`). So "… otherwise or [S1]" is
-    judged by its words, and a label whose value was the markers ("Sources: [S1], [S2]") is complete.
+    judged by its words, and a label whose value was the markers ("Sources: [S1], [S2]") is complete. So is a
+    label whose value is a "not stated" filler (`- **Renewal option:** —`, `Deposit: n/a`, `**Term** –`).
   - A line that then closes a bracket or a quote (`) ] » « ” “ " ’ ‘ › ‹`, a guillemet also after a space, as in
     French « … »), or ends in a closed inline code span, is complete.
   - After stripping trailing markers, emphasis and closers: a terminator (`. ! ? … 。 ！ ？ ؟ । ॥`, the Greek
     question mark U+037E, or `;` on a mostly Greek line) or an emoji (with its skin-tone modifier, variation
-    selector, keycap or zero-width-joiner sequence) is complete. A trailing `, ; : - – — ( / &` is **mid**,
-    whatever the answer's style. Any other last character but a letter or a digit (`%`, `€`) is complete.
-  - A last line that ends in a letter or a digit is **mid only in the answer's own terminated style**: it has at
-    least 4 words (a list item or a "Label: value" line at least 12), and the answer has at least 4 earlier
+    selector, keycap or zero-width-joiner sequence) is complete. A trailing `, ; : ( &` is **mid**, whatever the
+    answer's style. A trailing dash or slash (`- – — /`) can also end a URL, a path or a filler, so it is judged
+    like a word, by the style test below (round 4). Any other last character but a letter or a digit (`%`, `€`)
+    is complete.
+  - A last line that ends in a letter, a digit, a dash or a slash is **mid only in the answer's own terminated
+    style**: it has at least 4 words (a list item or a "Label: value" line at least 12), and the answer has at
+    least 4 earlier
     lines of 8 words or more (prose, list items and labels; not table rows, headings or code), of which at least
     70 % end with a terminator. Otherwise it is complete. This one test replaced the earlier list-item style
     rule and the list shapes it had to know: a lettered or dashed list, an emoji list, a signature, a URL, a

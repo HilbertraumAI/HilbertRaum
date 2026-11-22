@@ -124,6 +124,12 @@ describe('endsMidSentence: endings a complete answer can have read as complete',
     ['review: a URL', 'More details are available at https://example.com/docs'],
     ['review: a unit', 'Die Wohnfläche beträgt insgesamt 85 m²'],
     ['review: a date', 'The lease ends on 31 December 2027'],
+    // Round 4 (code review of the stacked W2 branch): a dash or a slash at the end is not always open.
+    ['review round 4: a dash as the not-stated value', listThen(22, '.', '- **Renewal option:** —')],
+    ['review round 4: a URL ending in a slash', 'More information is on the landlord website at https://example.com/'],
+    ['a bold term whose value is a dash', afterProse('**Option to renew the lease for five more years** —')],
+    ['a long label whose value is n/a', afterProse('Option to renew the lease once for another five years: n/a')],
+    ['a line ending in a dash outside a terminated style', 'The deposit is returned within six months –'],
     ['empty text', '']
   ])('complete: %s', (_name, text) => {
     expect(endsMidSentence(text)).toBe(false)
@@ -162,7 +168,9 @@ describe('endsMidSentence: an answer cut mid-sentence reads as mid', () => {
     ['a trailing comma', 'The tenant pays the rent,'],
     ['a trailing colon', 'The parties agree on the following:'],
     ['a trailing semicolon on a line that is not Greek', 'The tenant pays the rent;'],
-    ['a trailing dash', 'The deposit is returned within six months –'],
+    // A dash or a slash at the end is judged like a word (round 4): open in a sentence of a terminated answer.
+    ['a trailing dash in a terminated answer', afterProse('If the deposit is not paid on time, the tenant must pay the –')],
+    ['a trailing slash in a terminated answer', afterProse('The deposit is returned to the tenant unless the landlord /')],
     ['an open bracket', 'The notice period is six months ('],
     ['a trailing ampersand', 'Signed by Hafen Immobilien &'],
     // Prose ending in a word, in the answer's terminated style.
