@@ -1243,6 +1243,22 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   (an unreachable entry keeps it; an unparseable or unknown-`version` file is renamed to
   `rekey-journal.json.corrupt`, never deleted; only `staged` entries ending in `.new` are honoured;
   staged paths from the scan and the journal are de-duplicated on a folded spelling).
+  **What is honoured, and where (#1014):** a `staged` entry is acted on by a recovery before the
+  password only when it ends `.enc.new` and lies inside the workspace folder; one outside it (an
+  out-of-store copy's stage) only by the unlock, once the open database lists its stored copy
+  (`documents.stored_path`, by the resolver's out-of-store rule) and the stage opens under the
+  data key while the stored copy does not, and by a password change, which holds the database. A
+  `remove` entry is never used as a path: one named `app.1.log.enc` (either path separator)
+  removes the rotated log at `<logsPath>/app.1.log.enc`. Every other entry is left as it is and
+  counted by each recovery pass that reads the journal and refuses it (the start's; at an unlock,
+  the roll-forward of a staged database in doubt and the out-of-store step):
+  `WorkspaceController.takeJournalRefusals(): number` returns the sum since the last call, logged
+  as one count-only line after the start and one after each unlock, so entries a kept journal
+  still names are counted again at the next start. A journal with a stage waiting for the unlock
+  is kept until the unlock settles every stage it lists (swapped in, already in place, or one
+  that does not open under the data key); a stage it may not judge yet (a link, a folder, a
+  second hard link, a current stored copy, a hold, a newer build's frame) keeps it. The file
+  format is unchanged.
   `listVaultKeyCiphertexts(vaultPaths, db) → VaultKeyCiphertext[]` = `{ path, kind: 'document' |
   'image' | 'out-of-store' | 'rotated-log', action: 'rekey' | 'delete' }` is the class registry the
   stage journals. The descriptor is unchanged. **Downgrade caveat:** a build older than the #241 fix
@@ -1571,8 +1587,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
   other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing; since #973 also
-  a staged `.enc.new` in doubt that the unlock cannot read: a hold, or an I/O error such as EIO) —
-  retry once the hold clears, nothing lost;
+  a staged `.enc.new` in doubt that the unlock cannot read: a hold, or an I/O error such as EIO;
+  since #1015 also a committed password change's swap, or its temps, that the rekey recovery cannot
+  finish: `VaultRecoveryBlockedError.code` carries that file error's code for the log line, and
+  `WorkspaceController.recoveryBlockedCode()` the start's) — retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
   written by a NEWER build — nothing written, update the app; since #845 also the unlock refused
   because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages

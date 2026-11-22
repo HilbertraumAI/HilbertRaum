@@ -239,6 +239,22 @@ password recovery — are documented in
   sweep and rekey recovery run over the newer files. The same shape as the schema stamp above:
   any future vault format has to be designed so those builds fail safely (the frozen constraints
   in `data-contracts.md` "Vault format versions"), and old artifacts still belong off the drive.
+- **A password change cut short waits on what blocks it, and on the right password, for part of
+  its work (#1015, #1014).** When the start cannot put a staged file of a committed password change
+  in place (another program holds it, or a folder sits at its name), the workspace stays locked and
+  the unlock answers "try again" until the hold ends; a folder at the name blocks every unlock until
+  someone removes it, and the app does not say which file. An out-of-store stored copy outside the
+  workspace folder (issue #188's absolute paths) stays staged under its new key, beside its old
+  copy, until the first unlock with the right password, and while the unlock cannot judge it (a
+  link, a folder or a second hard link at either name, a stored copy that already opens, a newer
+  build's frame) it stays staged and the journal stays with it; a change rolled back before its
+  commit leaves such a stage, and its write temp `<stage>.tmp`, on the drive (ciphertext under a
+  key nothing holds). Journal entries the app cannot vouch for are left on the drive as they are,
+  counted in the log without their paths (each start counts a kept journal's entries again).
+- **Shredding never follows a link, so it cannot reach a file another name shares (#1014).** A
+  symbolic link, a junction or a file with more than one hard link at a name the app shreds is
+  only unlinked: a plaintext file someone hard-linked keeps its bytes under the other name. Mounts
+  that report one link for every file (some network and FUSE mounts) cannot tell a hard link.
 - **A workspace whose encrypted file went missing rests in plaintext until the next unlock (#911;
   owner decision G-3).** When a start finds `.enc` gone (something outside the app removed it) and
   the working file still there, it keeps that file, the only copy of the workspace, as
