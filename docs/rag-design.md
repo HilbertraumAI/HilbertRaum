@@ -6875,7 +6875,12 @@ load). The other eight interface languages: the detector reads German and Englis
 function word («Miete?», "IBAN?"), which read as `null`. Questions over 150 characters, which are not translated. A
 scope with a German passage among its best six, or one where English passages are not a strict majority of them. And
 the answer budget: the step lifts German questions to the English level, but the 4B at 4,096 tokens has room for 2–3
-passages, and even in English the lease's answering passage was among the top 2 for only 9 of 18 questions. And the
+passages, and even in English the lease's answering passage was among the top 2 for only 9 of 18 questions (in the
+held-out check the step lifted German questions in the top 2 from 8 to 21 of 38 on the 4B). The real-app walk shows the
+limit on the case that found the defect: the 4B's translation moved the notice clause of «Wann müssen wir kündigen?»
+from outside the candidates to 3rd place, Share-Safe Review passes the 4B at 4,096 tokens only 2 passages, so the answer
+still said the lease does not state the deadline (and invented a statutory one); at 8,192 tokens the 3rd passage
+reached the model and the answer gave 31 December 2030, as for the English question. And the
 second search can also move a passage down: the translation's words lift other passages, and one that the keyword arm
 ranks first but the vectors rank low can drop below passages that the translation's common words ("the", "is") put
 into both lists, as in an English question. In the held-out check 4 of the 60 questions had their passage one or two

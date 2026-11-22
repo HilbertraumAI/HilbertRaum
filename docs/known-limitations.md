@@ -1770,7 +1770,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the one that holds the answer: «Wann müssen wir kündigen?» over an English lease found the preamble and Art. 7, not the
   notice clause in Art. 34 (two runs, the 4B), and the answer then said the lease does not state when to give notice, while
   "When must they give notice?" found Art. 34 and the date. Since #1003 a German question over English documents is
-  translated for the search (Retrieval quality, above). An English question over German documents, a question in one of the
+  translated for the search (Retrieval quality, above), which finds the answering passage far more often, but not always
+  among the 2 passages the 4B gets at 4,096 tokens: for «Wann müssen wir kündigen?» the notice clause came 3rd, so the 4B
+  still answered that the lease does not state it, while at 8,192 tokens it gave the date. An English question over German documents, a question in one of the
   other eight languages and a short question with no function word («Miete?») are not: when an answer says something is
   not in a document written in another language, ask again in the document's language. **#997 (wave 7) made the report and list words words:** «liste» is the German noun as a word or the end of a compound
   («Liste», «Listen», «Checkliste»), no longer a piece of "listed", "listener", "blister" or «gelistet»; "review",
