@@ -749,15 +749,137 @@ describe('isSmallTalkReply: nothing but spaces after the preposition (#983 revie
   )
 })
 
-// "listed", "listener", "listening", "blister" and the German plural «Listen» hold the substring «liste», which vetoes a lookup
-// as on master (a pre-existing false veto; the German plural cannot be told from "listen"). Recorded, not fixed.
-describe('isNeedleShaped: «liste» is master\'s substring (a recorded false veto)', () => {
-  it.each(['When was the property listed?', 'Who was the listener?', 'When is the blister pack due?', 'Wann sind die Listen fällig?'])(
-    '%s → vetoed, as on master',
+// #997 (follow-ups wave 7, G-1): the report and list words are WORDS. "listed", "listener", "blister", "preview",
+// «Briefkasten», "registration", "analyst", ... held a routing word only as letters inside another word and vetoed a
+// lookup. The one residual that stays vetoed: «Listen» (German plural) is spelled like English "listen".
+describe('isNeedleShaped: report and list words are words, not pieces of other words (#997)', () => {
+  it.each([
+    // «liste» inside another word
+    'When was the property listed?', 'Who was the listener?', 'When is the listening session?', 'When is the blister pack due?',
+    'Is there a listeria warning?', 'When was the employee enlisted?', 'When does the facade glisten?',
+    'Was ist der Listenpreis?', 'Wo ist die Firma gelistet?', 'Wo ist das aufgelistet?',
+    // review: inside a word, and the lease terms "rent review" / "review period"
+    'When is the rent review?', 'How long is the review period?', 'Who is the reviewer?', 'Where is the preview of the floor plan?',
+    // brief / overall (a whole word with another meaning, and inside a word)
+    'Wann muss der Kündigungsbrief zugehen?', 'Wo ist der Briefkasten?', 'What is the overall rent?', 'What is the overall liability cap?',
+    // gist, analy, recap, the whole, in short, durchgehen
+    'What is the registration number?', 'Wo ist die Firma im Handelsregister eingetragen?', 'Who is the analyst?',
+    'What is the recapture clause?', 'What is the wholesale price?', 'What is the penalty in shortage cases?',
+    'Wann ist das Büro durchgehend besetzt?',
+    // "minutes" as a time unit (G-1, M1)
+    'How many minutes notice must be given?', 'What is the 30 minutes rule?', 'What is the notice in 10 minutes?'
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+  })
+
+  it.each([
+    'When is the rent review?', 'How long is the review period?', 'Who is the reviewer?', 'Where is the preview of the floor plan?',
+    'Wo ist der Briefkasten?', 'What is the overall rent?', 'What is the registration number?', 'Who is the analyst?',
+    'What is the recapture clause?', 'What is the wholesale price?', 'What is the penalty in shortage cases?',
+    'Wann ist das Büro durchgehend besetzt?', 'Give me a brief answer', 'How many minutes notice must be given?'
+  ])('%s → no report', (question) => {
+    expect(isReportShaped(question)).toBe(false)
+  })
+
+  // The real hits every pattern keeps: still vetoed (list words) or reports with no lookup.
+  it.each([
+    'Wann sind die Listen fällig?', 'Wann ist die Mängelliste fällig?', 'Wann sind die Aufgabenlisten fällig?',
+    'Gibt es eine Checkliste?', 'Wann ist die Übergabe der Listen?', 'Who should we listen to?'
+  ])('%s → still vetoed as a list word', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    'Review this document', 'Can you review the lease?', 'Brief this contract', 'Give me a contract brief',
+    'Prepare a briefing on this lease', 'What is the overall picture?', 'Overall, is this lease fair?', 'Give me the gist',
+    'Analyze this contract', 'Erstelle eine Vertragsanalyse', 'Recap the meeting', 'In short, what is this about?',
+    'Kannst du den Vertrag durchgehen?', 'Write the minutes of the meeting', 'Give me the whole picture'
+  ])('%s → a report, no lookup', (question) => {
+    expect(isReportShaped(question)).toBe(true)
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+})
+
+// #997 review round 1: the exceptions must not swallow real report requests, and the in-word rule must not drop real
+// list words.
+describe('isNeedleShaped / isReportShaped: the word patterns keep real requests (#997 round 1)', () => {
+  it.each([
+    'Gibt es eine Belegliste aller Rechnungen?', 'Wann ist die Zugliste fällig?', 'Gibt es die Beleglisten?'
+  ])('%s → still vetoed as a list word (a "g" inside a compound)', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    'Draft the 2024 minutes from this transcript', 'Convert the transcript in minutes form', 'Put this in minutes',
+    'Write this up in minutes', 'Can you put the call in minutes?', 'Write the 2024 minutes',
+    'Can you review clause by clause and find the risks?', 'Review clause 7', 'review notice provisions',
+    'Debrief me on this call', 'Reanalyze the contract', 'Give me the gists of the chapters'
+  ])('%s → a report, no lookup', (question) => {
+    expect(isReportShaped(question)).toBe(true)
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    'When is the rent-review?', 'When are the review dates?', 'How long is the review period?',
+    'What is the rent review mechanism?', 'Remind me in 10 minutes.', 'How many minutes notice must be given?'
+  ])('%s → a lookup, no report', (question) => {
+    expect(isReportShaped(question)).toBe(false)
+  })
+
+  it.each(['When is the rent-review?', 'When does the facade glisten?'])(
+    '%s → a lookup',
     (question) => {
+      expect(isNeedleShaped(question)).toBe(true)
+    }
+  )
+
+  // Round 2: real report / list requests the first patterns lost.
+  it.each([
+    'Wann ist was fällig? Bitte in Listenform.', 'Wann ist was fällig? Bitte im Listenformat.',
+    'What is the overall cost picture?', 'What is the overall liability picture?', 'What is the overall cost assessment?',
+    'Erstelle ein Vorstandsbriefing zu diesem Vertrag', 'Erstelle ein Kurzbriefing', 'Prepare briefings for the board',
+    'Give me a current review of the risks', 'What is the current review clause?', 'Write up the Q3 minutes',
+    'Draft the 2024-03-12 minutes', 'Give me a review clause by clause', 'Who reviewed the contract?',
+    'Who briefly reviewed it?', 'Who recapitalised the company?'
+  ])('%s → still vetoed, not a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(false)
+  })
+
+  it.each([
+    'What is the overall cost picture?', 'Erstelle ein Vorstandsbriefing zu diesem Vertrag', 'Prepare briefings for the board',
+    'Give me a current review of the risks', 'Write up the Q3 minutes', 'Draft the 2024-03-12 minutes',
+    'Give me a review clause by clause', 'Who reviewed the contract?', 'Please state the result briefly'
+  ])('%s → a report', (question) => {
+    expect(isReportShaped(question)).toBe(true)
+  })
+
+  // The word starts of gist / analy / overall (each was a lookup killer through a substring on master) and the
+  // determiners and suffixes of the lookup exceptions.
+  it.each([
+    'Who is the cardiologist?', 'What is the psychoanalysis fee?', 'When is the brief reply due?',
+    'What is the brief response?', 'When is the next review period?', 'When is this review date?',
+    'When is the recapitalisation due?'
+  ])('%s → a lookup', (question) => {
+    expect(isNeedleShaped(question)).toBe(true)
+    expect(isReportShaped(question)).toBe(false)
+  })
+
+  it('"Is a coverall required?" is no report (a word start for "overall")', () => {
+    expect(isReportShaped('Is a coverall required?')).toBe(false)
+  })
+
+  // Round 3: a bare "in minutes" is master's verdict (report-shaped, no lookup), not a duration.
+  it.each(['When is the call, in minutes?', 'How long is the break in minutes?', 'Is there a clause that applies within minutes?'])(
+    '%s → master verdict: a report, no lookup',
+    (question) => {
+      expect(isReportShaped(question)).toBe(true)
       expect(isNeedleShaped(question)).toBe(false)
     }
   )
+
+  it('"When is the debrief?" stays vetoed, as on master («de» may precede brief)', () => {
+    expect(isNeedleShaped('When is the debrief?')).toBe(false)
+  })
 })
 
 describe('isNeedleShaped: the veto reads quantifiers as words, and a frequency or a relative "which" is no list (#981)', () => {
