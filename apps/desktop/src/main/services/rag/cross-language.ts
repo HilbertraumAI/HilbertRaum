@@ -70,7 +70,7 @@ export const TRANSLATE_MAX_TOKENS = 96
  */
 export const TRANSLATE_TIMEOUT_MS = 8_000
 
-/** Longest translation kept; a longer one is dropped, never cut. */
+/** Longest translation kept, in characters (code points); a longer one is dropped, never cut. */
 const TRANSLATE_MAX_QUERY_CHARS = 300
 
 /**
@@ -135,9 +135,13 @@ function crossLanguageGateFires(question: string, candidateTexts: readonly strin
   return english * 2 > top.length
 }
 
-/** Case- and space-folded, for "the translation only repeats the question". */
+/**
+ * Folded for "the translation only repeats the question": lower case, and every run of characters
+ * that are no letter or digit (spaces, punctuation, symbols) one space, so a question handed back
+ * without its question mark ("Who was Hans Müller" for "Who was Hans Müller?") is a repeat too.
+ */
 function folded(text: string): string {
-  return text.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim()
+  return text.normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 }
 
 /** The outcome the log line names. */
@@ -215,7 +219,9 @@ function parseTranslation(text: string): string | null {
   const query = (parsed as Record<string, unknown>).query
   if (typeof query !== 'string') return null
   const collapsed = query.replace(/\s+/g, ' ').trim()
-  if (collapsed.length === 0 || collapsed.length > TRANSLATE_MAX_QUERY_CHARS) return null
+  // Characters, as the question bound counts them (code points: an astral letter is one, not two).
+  const characters = Array.from(collapsed).length
+  if (characters === 0 || characters > TRANSLATE_MAX_QUERY_CHARS) return null
   return collapsed
 }
 

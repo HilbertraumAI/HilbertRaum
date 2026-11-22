@@ -6843,16 +6843,20 @@ was 63 tokens, and a 64-token cap cut one 9B reply), a strict `{"query": string}
 string; a change needs a new measurement); the question is the user turn. A question over
 `TRANSLATE_MAX_QUESTION_CHARS` (150 characters) gets no call (`skipped`): the measured questions reach 108 characters;
 the costliest measured reply spent 64 tokens on a 108-character question full of digits (0.59 tokens per character),
-and the longest translation was 1.16 times its question, so at 150 characters the reply needs about 89 of the 96
-tokens and the translation about 174 of the 300 characters. The reply is parsed defensively: malformed JSON, a
-non-object, a missing, non-string, empty or over-300-character `query`, or more than 96 × 8 characters resolve null.
-However the call ends, its request is aborted, so a runaway reply does not run on to the cap. The call is marked
-`auxiliary` (`RuntimeChatOptions`): it streams like any call, but it does not mark the runtime warm, so the
-first-answer warm-up hint (#39) still covers the answer's own cold prefill after a model start; the request body is
-the same. Every failure (the bound, a dead runtime, a transport error) resolves null and the search stays today's,
-with no notice to the user; the ask's own abort is rethrown, never a fallback (T09). The log gets one line per fired
-gate: its outcome (`translated`, `failed`, `unchanged`, `empty`, `search-failed` or `skipped`) and the duration of
-the translation call alone, never the question, the translation or an error message.
+and the longest translation was 1.16 times its question (both caps count characters, code points), so at 150
+characters the reply needs about 89 of the 96 tokens and the translation about 174 of the 300 characters. The reply is
+parsed defensively: malformed JSON, a non-object, a missing, non-string, empty or over-300-character `query`, or more
+than 96 × 8 characters resolve null. However the call ends, its request is aborted, so a runaway reply does not run on
+to the cap. The call is marked `auxiliary` (`RuntimeChatOptions`): it streams like any call, but it does not mark the
+runtime warm, so the first-answer warm-up hint (#39) still covers the answer's own cold prefill after a model start;
+the request body is the same (`docs/data-contracts.md`). The knowledge-pack planner's call and the skill classifier's
+call are not marked and still count as the first answer for the hint (pre-existing). The 8 s bound starts with the
+call, before the one chat slot admits it: while the slot is still ending a local-API generation (its teardown is
+bounded at about 5 s, D8) or holds another queued request, the bound can run out before the model answers, and the
+search falls back silently. Every failure (the bound, a dead runtime, a transport error) resolves null and the search
+stays today's, with no notice to the user; the ask's own abort is rethrown, never a fallback (T09). The log gets one
+line per fired gate: its outcome (`translated`, `failed`, `unchanged`, `empty`, `search-failed` or `skipped`) and the
+duration of the translation call alone, never the question, the translation or an error message.
 
 **The search, as built.** Both document arms run again and fuse again. The vectors search `question + ' ' +
 translation`, as measured. The keyword pass searches `translation + ' ' + question`: `buildFtsMatchQuery` keeps the
@@ -6862,7 +6866,7 @@ English word reached the keyword pass, the arm that makes English questions work
 question fits (27 words at most over X0's 86 and X1's 60 items, 22 over the eval set's German questions with their
 twins), so the numbers above still hold. A question within 150 characters whose joined text passes 32 words loses
 its own last words from the keyword pass instead of the translation. A translation that only repeats the question
-(case and spaces folded) runs no second search (`unchanged`). A second search that finds nothing, for example a
+(case, spaces and punctuation folded) runs no second search (`unchanged`). A second search that finds nothing, for example a
 raised `ragMinSimilarity` that the joined text's vectors miss, keeps the first one (`empty`); one that throws keeps
 it too (`search-failed`); an abort during it rejects the ask. The knowledge-pack arm, the reranker, the grounded
 prompt and the stored messages keep the original question. With no translator, a closed gate or any of these
@@ -6876,19 +6880,21 @@ function word («Miete?», "IBAN?"), which read as `null`. Questions over 150 ch
 scope with a German passage among its best six, or one where English passages are not a strict majority of them. And
 the answer budget: the step lifts German questions to the English level, but the 4B at 4,096 tokens has room for 2–3
 passages, and even in English the lease's answering passage was among the top 2 for only 9 of 18 questions (in the
-held-out check the step lifted German questions in the top 2 from 8 to 21 of 38 on the 4B). The real-app walk shows the
-limit on the case that found the defect: the 4B's translation moved the notice clause of «Wann müssen wir kündigen?»
-from outside the candidates to 3rd place, Share-Safe Review passes the 4B at 4,096 tokens only 2 passages, so the answer
-still said the lease does not state the deadline (and invented a statutory one); at 8,192 tokens the 3rd passage
-reached the model and the answer gave 31 December 2030, as for the English question. And the
-second search can also move a passage down: the translation's words lift other passages, and one that the keyword arm
-ranks first but the vectors rank low can drop below passages that the translation's common words ("the", "is") put
-into both lists, as in an English question. In the held-out check 4 of the 60 questions had their passage one or two
-places lower than without the step with the 4B (2 with the 9B; for example 3rd → 5th, keyword rank 1, vector rank 11),
-while 15 more lease questions reached the top 3. The detector's German lean has a cost the other way: an English
-question with a German-looking word ("Who was Hans Müller?": "was" counts as German and the umlaut breaks the tie)
-reads as German and pays one call over English documents; when the model hands it back unchanged, the search stays as
-it was. A raised `ragMinSimilarity` (default 0) filters the joined text's vector hits too (unmeasured).
+held-out check the step lifted German questions in the top 2 from 8 to 21 of 38 on the 4B). The real-app walk shows
+the limit on the case that found the defect: the 4B's translation moved the notice clause of «Wann müssen wir
+kündigen?» from outside the candidates to 3rd place, Share-Safe Review passes the 4B at 4,096 tokens only 2 passages,
+so the answer still said the lease does not state the deadline (and invented a statutory one); at 8,192 tokens the 3rd
+passage reached the model and the answer gave 31 December 2030, as for the English question. And the second search can
+also move a passage down: the translation's words lift other passages, and one that the keyword arm ranks first but
+the vectors rank low can drop below passages that the translation's common words ("the", "is") put into both lists, as
+in an English question. In the held-out check 4 of the 60 questions had their passage one or two places lower than
+without the step with the 4B (2 with the 9B; for example 3rd → 5th, keyword rank 1, vector rank 11), while 15 more
+lease questions reached the top 3. The detector's German lean has a cost the other way: an English question with a
+German-looking word ("Who was Hans Müller?": "was" counts as German and the umlaut breaks the tie) reads as German and
+pays one call over English documents; when the model hands it back unchanged, the search stays as it was. A raised
+`ragMinSimilarity` (default 0) filters the joined text's vector hits too (unmeasured), and when it leaves the first
+search with no candidate at all, the turn ends with the fixed "not found" reply before the gate is read, so no
+translation is tried.
 
 **Not taken.** (1b) the same step on the needle downgrade only: the miss hits every top-k answer. (1c) TranslateGemma:
 see above. (2) a bilingual glossary for the keyword pass: a word list to maintain, unmeasured. (3) widening, or the
@@ -6902,21 +6908,23 @@ prompt and the stored messages get the original question; a translation that dro
 the chunk the number names (the joined search); an abort during the call rejects the ask; a 32-word German question
 still reaches the keyword pass with its translation; a second search that throws keeps the first one and logs
 `search-failed` with no text; one that finds nothing keeps it too (`empty`); a question over 150 characters gets no
-call (`skipped`); an abort during the second search still rejects; a translation that repeats the question runs no
-second search; the gate table (fires for a German question over English passages, also with one `null` passage or a
-German address line; not for the reverse, the same language, a German passage among the top six, half `null` passages
-or a `null` question); the packs-only path is byte-identical; a throwing, malformed or timed-out call leaves the
-result exactly as without a translator; no eval question opens the gate. `tests/unit/rag-cross-language.test.ts`: the
-call shape, the measured prompt and the `auxiliary` flag, every parse failure, the 8 s bound, a runaway reply
-(dropped, its request aborted), the abort, the mock runtime left cold, the two texts of the second search (the keyword
-query is the same phrases in either order for every eval pair), the log's duration (the call alone) and
-`search-failed`. `tests/unit/runtime-ladder.test.ts`: an `auxiliary` call streams but leaves the runtime cold, and the
-answer after it marks it warm. Mutations (always translate; translate English to German too; let the translation reach
-the pack arm; search the translation alone; put the question first in the keyword text; let a German passage pass; a
-simple majority; a `null` passage blocks; read passages with the umlaut tie-break; a second-search error thrown out,
-an abort swallowed, the error message logged; an empty second search kept; run the search on a repeated question;
-translate any length; time the second search too; no abort of the runaway request; mark an auxiliary call warm) each
-turn a row red. Nine existing rows that counted every model call on a German question over English fixtures count the
-answer turns and pin the translation calls instead (`tests/helpers/scripted-runtime.ts` `answerTurns`,
-`translationCalls`: one per passage search, none on a whole read). No persisted shape changes
-(`docs/data-contracts.md` unchanged).
+call (`skipped`); an abort during the second search still rejects; a translation that repeats the question, or hands
+an English question that reads as German back without its question mark, runs no second search; the gate table (fires
+for a German question over English passages, also with one `null` passage or a German address line; not for the
+reverse, the same language, a German passage among the top six, half `null` passages or a `null` question); the
+packs-only path is byte-identical; a throwing, malformed or timed-out call leaves the result exactly as without a
+translator; no eval question opens the gate. `tests/unit/rag-cross-language.test.ts`: the call shape, the measured
+prompt and the `auxiliary` flag, every parse failure, the 8 s bound, a runaway reply (dropped, its request aborted),
+the 300-character cap counting astral letters as one, the abort, the mock runtime left cold, the two texts of the
+second search (the keyword query is the same phrases in either order for every eval pair), the log's duration (the
+call alone) and `search-failed`. `tests/unit/runtime-ladder.test.ts`: an `auxiliary` call streams but leaves the
+runtime cold, and the answer after it marks it warm. Mutations (always translate; translate English to German too; let
+the translation reach the pack arm; search the translation alone; put the question first in the keyword text; let a
+German passage pass; a simple majority; a `null` passage blocks; read passages with the umlaut tie-break; a
+second-search error thrown out, an abort swallowed, the error message logged; an empty second search kept; run the
+search on a repeated question, or fold spaces only; count the translation in UTF-16 units; translate any length; time
+the second search too; no abort of the runaway request; mark an auxiliary call warm) each turn a row red. Nine
+existing rows that counted every model call on a German question over English fixtures count the answer turns and pin
+the translation calls instead (`tests/helpers/scripted-runtime.ts` `answerTurns`, `translationCalls`: one per passage
+search, none on a whole read). No persisted shape changes; `docs/data-contracts.md` records the `auxiliary` runtime
+option.

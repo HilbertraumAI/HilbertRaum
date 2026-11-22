@@ -1075,7 +1075,11 @@ password recovery — are documented in
     the umlaut breaks the tie), so over English documents it pays one call. When the model hands the question back
     unchanged, no second search runs and the answer is the same;
   - a raised `ragMinSimilarity` (default 0) filters the vector hits of the joined text too; how that plays out is not
-    measured;
+    measured. And when it leaves the first search with no passage at all, the answer is the fixed "not found" reply
+    and no translation is tried;
+  - the 8 s bound starts when the call is made, before the one chat slot takes it. While the slot is still ending a
+    local-API generation (about 5 s at most) or holds another queued request, the bound can run out first, and the
+    search falls back silently;
   - the answer budget: the step lifts German questions to the English level, not to every answer. The 4B at 4,096 tokens
     has room for 2–3 passages, and even in English the lease's answering passage was among the top 2 for only 9 of 18
     questions;
@@ -1084,7 +1088,8 @@ password recovery — are documented in
   - the second search can still move a passage down a little: in the held-out check 4 of 60 questions had theirs one or
     two places lower than before with the 4B (2 with the 9B), while 15 more lease questions reached the top 3;
   - the extra call runs in the one chat slot, so it may evict the answer's cached prompt prefix, as the knowledge-pack
-    planner's call does (not measured).
+    planner's call does (not measured). It does not count as the model's first answer for the warm-up hint; the
+    knowledge-pack planner's call and the skill classifier's call still do (as before #1003).
 - **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
   batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
   `HILBERTRAUM_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when

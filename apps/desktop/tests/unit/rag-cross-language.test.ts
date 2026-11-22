@@ -20,6 +20,8 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 // through `retrieve()` in tests/integration/rag-cross-language.test.ts.
 
 const QUESTION = 'Wann müssen wir kündigen?'
+/** One letter outside the Basic Multilingual Plane (MATHEMATICAL BOLD CAPITAL A): one character, two UTF-16 units. */
+const ASTRAL = String.fromCodePoint(0x1d400)
 
 /**
  * The system prompt measured as "prompt v2" (X0, then held out in X1), byte for byte, "a English" slip
@@ -101,10 +103,18 @@ describe('makeQueryTranslator: the one bounded translation call (#1003)', () => 
     ['no query field', '{"translation":"When must we give notice?"}'],
     ['a query that is not a string', '{"query":42}'],
     ['an empty query', '{"query":"   "}'],
-    ['a query over 300 characters', JSON.stringify({ query: 'x'.repeat(301) })]
+    ['a query over 300 characters', JSON.stringify({ query: 'x'.repeat(301) })],
+    ['a query over 300 astral characters', JSON.stringify({ query: ASTRAL.repeat(301) })]
   ])('%s resolves null (the search stays today\'s)', async (_title, reply) => {
     const translate = makeQueryTranslator(scripted([reply]))
     expect(await translate!(QUESTION)).toBeNull()
+  })
+
+  it('the 300-character cap counts characters, as the question bound does: 200 astral letters (400 UTF-16 units) are kept', async () => {
+    const query = ASTRAL.repeat(200)
+    expect(query.length).toBe(400) // premise: two UTF-16 units per letter
+    const translate = makeQueryTranslator(scripted([JSON.stringify({ query })]))
+    expect(await translate!(QUESTION)).toBe(query)
   })
 
   it('a throwing runtime resolves null', async () => {

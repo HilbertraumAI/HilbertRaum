@@ -366,6 +366,26 @@ describe('cross-language search: the second search (#1003)', () => {
     expect(withEcho).toEqual(today)
     expect(lastCrossLanguageLogLine()).toContain('"outcome":"unchanged"')
   })
+
+  it('an English question that reads as German, handed back without its question mark, runs no second search', async () => {
+    // "was" counts as German and the umlaut breaks the tie: the question side reads it as German, so the gate opens
+    // over English passages. The model returns the question minus its punctuation: a repeat, not a translation.
+    const question = 'Who was Hans Müller?'
+    const db = openFreshDb('rag-xlang')
+    const seeder = new MockEmbedder()
+    await seedEmbeddedDoc(db, seeder, 'lease.txt', EN_CLAUSES.slice(0, 6))
+    const today = await retrieve(db, seeder, question, ALL_CANDIDATES)
+    const embedder = recordingEmbedder()
+    const translate = vi.fn<QueryTranslator>(async () => 'Who was Hans Müller')
+
+    const withEcho = await retrieve(db, embedder, question, ALL_CANDIDATES, null, null, undefined, null, translate)
+
+    expect(detectQuestionLanguage(question)).toBe('de') // premise
+    expect(translate).toHaveBeenCalledTimes(1)
+    expect(embedder.texts).toEqual([question])
+    expect(withEcho).toEqual(today)
+    expect(lastCrossLanguageLogLine()).toContain('"outcome":"unchanged"')
+  })
 })
 
 
