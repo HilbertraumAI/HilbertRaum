@@ -26,7 +26,7 @@ import {
   engineFolderComplete,
   engineSwapDirs,
   failureReason,
-  flushToDevice,
+  flushToDeviceAsync,
   markerBinaryKey,
   planInFolder,
   planRuntimeDownload,
@@ -1723,12 +1723,15 @@ function netWhole(dir: string, netPlan: RuntimeDownloadPlan | undefined): boolea
   return isRealFolder(dir) && engineFolderComplete(netPlan, dir)
 }
 
-/** Flush every file under `dir` to the device (#986: the marker decides, so what it covers must be on the disk). */
+/**
+ * Flush every file under `dir` to the device (#986: the marker decides, so what it covers must be on the disk),
+ * one file at a time and off the main thread (#1000: the stage runs while the models answer).
+ */
 async function flushFolder(dir: string): Promise<void> {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name)
     if (entry.isDirectory()) await flushFolder(p)
-    else if (entry.isFile()) flushToDevice(p)
+    else if (entry.isFile()) await flushToDeviceAsync(p)
   }
 }
 
@@ -1823,7 +1826,7 @@ export async function stageEngineInstall(
     opts.log?.('Could not hash the installed files for the marker', { error: String(err) })
   }
   // #986: the marker decides which copy the start trusts, so the files it covers reach the device
-  // first (an exFAT stick has no journal), then the marker itself.
+  // first (an exFAT stick has no journal), then the marker itself. #1000: asynchronously, file by file.
   await flushFolder(stagingDir)
   writeRuntimeMarker(stagingDir, {
     version: plan.version,
@@ -1832,7 +1835,7 @@ export async function stageEngineInstall(
     arch: plan.arch,
     ...(binaries ? { binaries } : {})
   })
-  flushToDevice(runtimeMarkerPath(stagingDir))
+  await flushToDeviceAsync(runtimeMarkerPath(stagingDir))
   return staged
 }
 
