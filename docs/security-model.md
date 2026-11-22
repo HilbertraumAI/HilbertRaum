@@ -3542,7 +3542,9 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
 - **How:** first one `stat` of every recorded file, then a hash of each present file, one at a time, the
   program first, stopping at the first difference (sequential suits a stick, where the read is the
   limit). A missing program or library found by the `stat` pass ends the check before any file is
-  hashed (code review round 6): every seam refuses that copy anyway.
+  hashed (code review round 6): every seam refuses that copy anyway. For the engines, any missing file
+  does (round 7): they refuse `missing-other` too. Only the knowledge-pack tools, which start on it,
+  pass `startsOnMissingOther` and have the present files hashed.
   - Every marker key is checked first: one that leaves the copy's folder (`recordedFilePath`) is refused
     before anything is read. That includes a key under a nested net folder, such as `cpu/../../x`.
   - A marker that changed while the copy was hashed (an install put a new copy in place) gives no
@@ -3557,14 +3559,21 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
       hide a changed file anywhere in the copy. The engine is refused either way, and a reinstall
       replaces every file, but the log then records "missing", not a tamper.
   - **`missing-other`**: the same, but only for files that are neither the program nor a library: a tool
-    the app never runs, a licence text.
+    the app never runs, a licence text. For the engines it comes without a hash (round 7), so it can
+    hide a changed file as `missing` can; for the knowledge-pack tools no present file differs.
   - **`unreadable`**: a recorded file could not be read just now (an antivirus or indexer holding it, a
     denied read), or the marker changed during the check. No verdict about the copy (review R-2).
     - A marker that is there but cannot be read is `unreadable` too (round 6), not a legacy drive. A
       `cpu/` net whose own marker cannot be read never falls back to the family marker.
+    - A marker that is read but cannot be parsed (truncated, garbled) is still taken as no marker, as
+      before #1012. The walk goes on to the folder above (from a `cpu/` net, to the family marker), and
+      with no recorded hash found the copy is `skip-legacy`, cached for the session.
   - **Which verdicts are cached:** only `ok`, `mismatch` and `skip-*` are cached for the session.
     `missing`, `missing-other` and `unreadable` are re-checked on every attempt, so a file put back or a
     lock that cleared is found by the next spawn or "Check again".
+    - The exception (round 7): the knowledge-pack tools' `missing-other`. It is reached only after every
+      present file was hashed, and they start on it as on `ok`, so it is kept for the session like `ok`,
+      under its own cache key. An engine's unhashed `missing-other` never answers them.
   - **The engines** refuse `mismatch` and both missing verdicts as damaged files (below). The start is
     refused, and the #532 "Install again" offer comes up. For a missing file, a start that went ahead and
     ran would drop that verdict at once.
@@ -3613,15 +3622,18 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
   on a USB 2 stick (estimated). whisper.cpp is 10.1 MB. Measured warm on NVMe: 308 ms with the longest
   event-loop gap 1.5 ms (`sha256File` streams).
   - **When it is paid:** once per session for an intact copy, usually by the GPU probe at unlock. While a
-    file is missing or cannot be read, every attempt reads the copy again. That means each rung of a chat
-    start, each helper start and each probe call; after the first pass the OS file cache normally absorbs
-    it.
+    file cannot be read, every attempt checks the copy again, up to that file. While one is missing,
+    every attempt checks it again too, with the `stat` pass alone for the engines (below). An attempt is
+    each rung of a chat start, each helper start and each probe call; after the first pass the OS file
+    cache normally absorbs it.
   - **A missing program or library** is found by the `stat` pass, so a quarantined DLL costs one `stat`
     per file before it on each attempt, and no file is hashed (round 6).
-  - **`missing-other`** still hashes every present file on each attempt, since a changed file must not
-    hide behind it (the knowledge-pack tools start on that verdict), and it is not cached.
+  - **`missing-other`** for the engines (round 7): the `stat` pass alone, on each attempt. A quarantined
+    `llama-cli.exe` no longer re-reads the whole copy for every rung, probe and helper start (about 3 s
+    each on a USB 2 stick).
   - **kiwix-tools:** each kiwix program's verdict covers the whole kiwix copy. An intact copy is hashed
-    once per program per session; a `missing-other` copy is hashed again at every start.
+    once per program per session, and since round 7 so is a `missing-other` one. Before that it was
+    hashed again at every start, and for every pack of a library build.
   - **Timing on the probe and the speculative rung:** the hash runs before the probe's own 10 s cap
     starts. The speculative rung's wait for the probe therefore includes it once per session: about 3 s
     on a USB 2 stick (~95 MB at ~30 MB/s, estimated).
@@ -3674,7 +3686,8 @@ engines in their own folder.
    above). `ok`, `mismatch` and `skip-*` are **cached per resolved path for the session**. The GPU probe
    and the server start race for the very same path (`factory.ts` kicks the probe concurrently with the
    start), and calls that overlap share one hash and one decision. `missing`, `missing-other` and
-   `unreadable` are not cached: a later call reads the copy again. A file that cannot be read fails
+   `unreadable` are not cached: a later call reads the copy again. (Round 7: the knowledge-pack tools'
+   `missing-other`, hashed and started on, is cached like `ok`, above.) A file that cannot be read fails
    **safe** (refused), as `unreadable`, never as a tamper.
 
 3. **Non-breaking, fail-safe rollout.** `initBinaryVerification(isDev)` is called once at startup

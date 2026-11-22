@@ -2552,7 +2552,7 @@ whole renderer-visible surface.
   own; `NESTED_NET_FOLDERS` in `assets.ts` is the one list): a key whose file differs blocks the spawn, a
   key whose file is gone is `missing` (the program or a library: `.dll`, `.so`, `.so.N`, `.dylib`) or
   `missing-other` (any other file), a key whose file cannot be read is `unreadable`, and a key that
-  leaves the copy's folder (`recordedFilePath`) is refused. Only `ok`, `mismatch` and `skip-*` are
+  leaves the copy's folder (`recordedFilePath`) is refused. Only `ok`, `mismatch`, `skip-*` (and, code review round 7, the knowledge-pack tools' hashed `missing-other`) are
   cached for the session. Same shape; a marker that records the program alone checks the program alone.* `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two
   grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains

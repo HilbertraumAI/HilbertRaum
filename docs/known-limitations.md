@@ -370,10 +370,11 @@ password recovery — are documented in
   - **The knowledge-pack tools:** they have no in-app repair. A missing program or library stops them
     (with their own "file missing or could not be read" error, not the tamper one); any other missing file
     (a tool the app never runs) is only logged.
-  - **Cost:** while a file is missing or unreadable, each start attempt reads the copy again, since those
-    verdicts are not cached. A missing program or library is found by a `stat` of each file before any is
-    read, so nothing is hashed (round 6). Another missing file, or a locked one, costs the read up to the
-    end or up to the lock.
+  - **Cost:** while a file is missing or unreadable, each start attempt checks the copy again, since those
+    verdicts are not cached. A missing program or library, and for the engines any missing file (round
+    7), is found by a `stat` of each file before any is read, so nothing is hashed. A locked file
+    costs the read up to the lock. When only an unused knowledge-pack tool file is missing, the tools
+    still read their whole copy once to check the rest, then keep that verdict for the session (round 7).
 
   What a file that cannot be read just now does (an antivirus scan holding it):
   - It refuses that attempt without blaming the GPU, the model or the engine.
