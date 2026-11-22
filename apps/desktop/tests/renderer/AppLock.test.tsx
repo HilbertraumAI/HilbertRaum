@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
+import { act, render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { getVisionSession, loadSession, clearVisionSession } from '../../src/renderer/lib/visionSession'
@@ -142,6 +142,136 @@ describe('App.lockNow — purges the session stores at the real lock seam (TA-2)
     // The banner is dismissible (retry stays available).
     await user.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByText(lockFailed)).not.toBeInTheDocument()
+  })
+})
+
+// #1002 (S-4): main locks on its own at an OS session end and has no lock event to tell a window. A window that
+// outlived the lock (a macOS shutdown another app cancelled) kept the unlocked shell, with decrypted content on screen
+// and in the session stores, and every call failing. The shell now re-reads the state when the window gains focus.
+describe('a lock main made on its own shows at the next focus (#1002)', () => {
+  it('re-reads the state on focus: `locked` purges the stores and shows the gate; `uninitialized` or `unlocked` changes nothing', async () => {
+    let state: WorkspaceStateInfo = UNLOCKED_ENCRYPTED_WORKSPACE
+    const getWorkspaceState = vi.fn(async () => state)
+    stubApi(appShellStubs({ getWorkspaceState }))
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    seedVisionSession()
+    /** Focus the window and let the shell's re-read land. */
+    const focusAndSettle = async (): Promise<void> => {
+      const reads = getWorkspaceState.mock.calls.length
+      act(() => void window.dispatchEvent(new Event('focus')))
+      await waitFor(() => expect(getWorkspaceState).toHaveBeenCalledTimes(reads + 1))
+      await act(async () => {})
+    }
+
+    // A `plaintext_dev` workspace whose database closed reads `uninitialized`: it has no gate, so nothing changes.
+    state = { state: 'uninitialized', mode: null, plaintextAllowed: true, encryptionRequired: false }
+    await focusAndSettle()
+    state = UNLOCKED_ENCRYPTED_WORKSPACE
+    await focusAndSettle()
+    expect(within(nav).getByRole('button', { name: 'Lock now' })).toBeInTheDocument()
+    expect(getVisionSession().selected).not.toBeNull()
+
+    // Main locked on its own: the next focus ends the session in the window as Lock now does.
+    state = LOCKED_ENCRYPTED_WORKSPACE
+    await focusAndSettle()
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(getVisionSession().selected).toBeNull()
+    expect(getVisionSession().turns).toHaveLength(0)
+  })
+
+  // A window that kept the focus through the session end (nothing else took it) gets no `focus` event: the window
+  // coming back from hidden, or the first press in it, re-reads instead. A burst of presses makes one call.
+  it('a window that never lost focus re-reads when it becomes visible again or on a pointer press, one read per burst', async () => {
+    let answer: () => Promise<WorkspaceStateInfo> = async () => UNLOCKED_ENCRYPTED_WORKSPACE
+    const getWorkspaceState = vi.fn(() => answer())
+    stubApi(appShellStubs({ getWorkspaceState }))
+    render(<App />)
+    await screen.findByRole('navigation')
+    seedVisionSession()
+    const reads = (): number => getWorkspaceState.mock.calls.length
+    const visibility = vi.spyOn(document, 'visibilityState', 'get')
+
+    // Hidden: no read. Visible again: one read, which still says unlocked, so nothing changes.
+    const before = reads()
+    visibility.mockReturnValue('hidden')
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    await act(async () => {})
+    expect(reads()).toBe(before)
+    visibility.mockReturnValue('visible')
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    await waitFor(() => expect(getWorkspaceState).toHaveBeenCalledTimes(before + 1))
+    await act(async () => {})
+    expect(getVisionSession().selected).not.toBeNull()
+
+    // Main locked on its own; its answer is held while the user presses three times: one read, then the gate.
+    let release: (s: WorkspaceStateInfo) => void = () => {}
+    answer = () => new Promise<WorkspaceStateInfo>((resolve) => void (release = resolve))
+    const pressed = reads()
+    act(() => {
+      for (let i = 0; i < 3; i++) document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    })
+    await waitFor(() => expect(getWorkspaceState).toHaveBeenCalledTimes(pressed + 1))
+    await act(async () => {})
+    expect(reads()).toBe(pressed + 1)
+    await act(async () => release(LOCKED_ENCRYPTED_WORKSPACE))
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    expect(getVisionSession().selected).toBeNull()
+  })
+
+  // A failed Lock now leaves its banner up (CODE-26). If main then locks on its own, that banner belongs to the session
+  // the lock ended: it must not come back with the shell after the next unlock.
+  it('a lock main made on its own clears an earlier "could not lock" banner: it is gone after the next unlock', async () => {
+    const lockFailed = t('en', 'main.workspace.lockFailed')
+    let state: WorkspaceStateInfo = UNLOCKED_ENCRYPTED_WORKSPACE
+    const getWorkspaceState = vi.fn(async () => state)
+    const lockWorkspace = vi.fn(async (): Promise<WorkspaceStateInfo> => {
+      throw new Error(`Error invoking remote method 'workspace:lock': Error: ${lockFailed}`)
+    })
+    const unlockWorkspace = vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED_ENCRYPTED_WORKSPACE }))
+    stubApi(appShellStubs({ getWorkspaceState, lockWorkspace, unlockWorkspace }))
+    const user = userEvent.setup()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    await user.click(within(nav).getByRole('button', { name: 'Lock now' }))
+    expect(await screen.findByText(lockFailed)).toBeInTheDocument()
+
+    state = LOCKED_ENCRYPTED_WORKSPACE
+    act(() => void window.dispatchEvent(new Event('focus')))
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
+    state = UNLOCKED_ENCRYPTED_WORKSPACE // what main reports once the unlock below opened the workspace
+    await user.type(screen.getByPlaceholderText(t('en', 'gate.passwordPlaceholder')), 'my-passphrase')
+    await user.click(screen.getByRole('button', { name: t('en', 'gate.unlock.submit') }))
+
+    expect(await screen.findByRole('navigation')).toBeInTheDocument()
+    expect(unlockWorkspace).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(lockFailed)).not.toBeInTheDocument()
+  })
+
+  // The re-read is best effort: a read that fails (main busy, a closed channel) leaves the shell as it is, and the
+  // next one runs.
+  it('a re-read that fails changes nothing, and the next focus reads again', async () => {
+    let answer: () => Promise<WorkspaceStateInfo> = async () => UNLOCKED_ENCRYPTED_WORKSPACE
+    const getWorkspaceState = vi.fn(() => answer())
+    stubApi(appShellStubs({ getWorkspaceState }))
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    seedVisionSession()
+
+    answer = async () => {
+      throw new Error('the workspace state could not be read')
+    }
+    const before = getWorkspaceState.mock.calls.length
+    act(() => void window.dispatchEvent(new Event('focus')))
+    await waitFor(() => expect(getWorkspaceState).toHaveBeenCalledTimes(before + 1))
+    await act(async () => {})
+    expect(within(nav).getByRole('button', { name: 'Lock now' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: t('en', 'app.fatal.title') })).not.toBeInTheDocument()
+    expect(getVisionSession().selected).not.toBeNull()
+
+    answer = async () => LOCKED_ENCRYPTED_WORKSPACE
+    act(() => void window.dispatchEvent(new Event('focus')))
+    expect(await screen.findByRole('heading', { name: /unlock your workspace/i })).toBeInTheDocument()
   })
 })
 
