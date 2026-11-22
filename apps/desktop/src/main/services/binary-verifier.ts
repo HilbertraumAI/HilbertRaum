@@ -1,11 +1,14 @@
+import { readFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { log } from './logging'
 import {
   NESTED_NET_FOLDERS,
   markerBinaryKey,
+  parseRuntimeMarker,
   readRuntimeMarker,
   recordedFilePath,
+  runtimeMarkerPath,
   type RuntimeInstallMarker
 } from './assets'
 import { sha256File } from './models'
@@ -72,9 +75,14 @@ export type BinaryVerifyResult =
   | 'missing-other'
   | 'unreadable'
 
-/** #1012: a recorded file the copy lacks, whatever it is (`missing` or `missing-other`). */
-export function isMissingFilesVerdict(verdict: BinaryVerifyResult): boolean {
-  return verdict === 'missing' || verdict === 'missing-other'
+/**
+ * #1012: the copy is not what was installed — a recorded file is gone (`missing`, `missing-other`) or
+ * differs (`mismatch`; code review round 6: a copy cut short or bit-rot looks just like a tamper). The
+ * engines refuse all three as their own files damaged, with the reinstall offer; the verifier's log
+ * line still tells a changed file (a possible tamper) from a missing one.
+ */
+export function isDamagedFilesVerdict(verdict: BinaryVerifyResult): boolean {
+  return verdict === 'mismatch' || verdict === 'missing' || verdict === 'missing-other'
 }
 
 /** The verdicts no later spawn may reuse (see the cache note above). */
@@ -174,15 +182,28 @@ function isAbsent(err: unknown): boolean {
 }
 
 /**
+ * A file that could not be read just now (e.g. a transient Windows AV/indexer lock, a denied read): no
+ * verdict about the copy (review R-2: never a tamper) — refused this attempt, not cached, and the next
+ * spawn reads it again once the lock clears. Logs the code only.
+ */
+function readFailure(err: unknown): 'unreadable' {
+  log.warn('Could not read a sidecar engine file before spawn — refusing this attempt (will re-check next spawn)', {
+    code: readErrorCode(err) ?? 'read-failed'
+  })
+  return 'unreadable'
+}
+
+/**
  * The raw verification, distinguishing a transient `unreadable` from a definitive verdict.
  * Walks UP from the binary's directory to the nearest install marker (so the `cpu/`
  * safety-net binary finds the family marker one level above when its own dir has none),
- * then hashes every file of the copy that marker records (`keysToVerify`, #1012), one at a
- * time, the program first, stopping at the first difference. A file that is not there is
- * counted, not hashed: the first missing program or library ends the check as `missing`; other
- * missing files give `missing-other` once nothing present differs (a changed file still wins,
- * since the knowledge-pack tools start on `missing-other`). Never throws: a file that can't be
- * read right now resolves `unreadable` (the cache layer won't persist it).
+ * then checks every file of the copy that marker records (`keysToVerify`, #1012): first one
+ * `stat` each, where the first missing program or library ends the check as `missing` with
+ * nothing hashed; then the present files are hashed one at a time, the program first, stopping
+ * at the first difference. Other missing files give `missing-other` once nothing present differs
+ * (a changed file still wins, since the knowledge-pack tools start on `missing-other`). Never
+ * throws: a file or marker that can't be read right now resolves `unreadable` (the cache layer
+ * won't persist it).
  */
 async function computeRawVerification(binPath: string): Promise<BinaryVerifyResult> {
   const dir = dirname(binPath)
@@ -192,7 +213,20 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
   let markerDir: string | null = null
   let marker: RuntimeInstallMarker | null = null
   for (const candidate of [dir, dirname(dir)]) {
-    const found = readRuntimeMarker(candidate)
+    // Code review round 6: a marker that is there but cannot be read just now is no legacy drive (that
+    // would be cached as `skip-legacy`, or refused for good on a Kit that refuses hash-less markers), and
+    // a `cpu/` net's own marker that cannot be read must not fall back to the family's. Re-checked.
+    let text: string
+    try {
+      text = readFileSync(runtimeMarkerPath(candidate), 'utf8')
+    } catch (err) {
+      if (isAbsent(err)) continue
+      log.warn('Could not read an engine install marker before spawn — refusing this attempt (will re-check next spawn)', {
+        code: readErrorCode(err) ?? 'read-failed'
+      })
+      return 'unreadable'
+    }
+    const found = parseRuntimeMarker(text)
     if (found) {
       markerDir = candidate
       marker = found
@@ -223,43 +257,53 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
     code: key === program || LIBRARY_NAME.test(key.slice(key.lastIndexOf('/') + 1))
   }))
 
+  // Code review round 6: one `stat` of every recorded file BEFORE any is read. A copy that will be refused
+  // (a program or library gone, or a folder, pipe or device at its path — round 5: it never heals by
+  // waiting, and reading a pipe would block the check) is answered `missing` without hashing anything,
+  // so a quarantined DLL no longer costs the whole copy on every rung and spawn (not cached). Only the
+  // other missing files (`missing-other`) leave the rest to be hashed: the knowledge-pack tools start on
+  // that verdict, so a changed file must not hide behind it.
   let missing = 0
   let missingCode = false
-  let changed = false
+  const present: typeof files = []
   for (const file of files) {
-    let actual = ''
-    let absent = false
+    let isFile = false
     try {
-      // Code review round 5: a recorded path that holds no regular file (a folder, a pipe, a device) is
-      // no file of the copy and never heals by waiting — missing, like no file at all (reading a pipe
-      // would also block the check). One `stat` per file.
-      if ((await stat(file.path)).isFile()) actual = await sha256File(file.path)
-      else absent = true
+      isFile = (await stat(file.path)).isFile()
     } catch (err) {
-      if (!isAbsent(err)) {
-        // Couldn't read a file to hash it (e.g. a transient Windows AV/indexer lock, a denied read).
-        // No verdict about the copy (review R-2: never a tamper): refused this attempt, not cached,
-        // and the next spawn reads it again once the lock clears.
-        log.warn('Could not read a sidecar engine file before spawn — refusing this attempt (will re-check next spawn)', {
-          code: readErrorCode(err) ?? 'read-failed'
-        })
-        return 'unreadable'
-      }
-      absent = true
+      if (!isAbsent(err)) return readFailure(err)
     }
-    if (absent) {
-      missing++
-      // Code review round 3: a missing program or library refuses the copy at every seam, so the rest
-      // is not read (a quarantined DLL would otherwise cost the whole copy on each start attempt).
-      if (file.code) {
-        missingCode = true
-        break
-      }
+    if (isFile) {
+      present.push(file)
       continue
     }
-    if (actual.toLowerCase() !== file.expected.toLowerCase()) {
-      changed = true
+    missing++
+    if (file.code) {
+      missingCode = true
       break
+    }
+  }
+
+  let changed = false
+  if (!missingCode) {
+    for (const file of present) {
+      let actual: string
+      try {
+        actual = await sha256File(file.path)
+      } catch (err) {
+        if (!isAbsent(err)) return readFailure(err)
+        // Gone between its `stat` and its read: counted as missing, as above.
+        missing++
+        if (file.code) {
+          missingCode = true
+          break
+        }
+        continue
+      }
+      if (actual.toLowerCase() !== file.expected.toLowerCase()) {
+        changed = true
+        break
+      }
     }
   }
 

@@ -9,7 +9,7 @@ import {
   setBinaryVerificationPosture,
   REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
 } from '../../src/main/services/binary-verifier'
-import { markerBinaryKey, writeRuntimeMarker } from '../../src/main/services/assets'
+import { markerBinaryKey, runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
 import { sha256File } from '../../src/main/services/models'
 import { allowReading, denyReading, verifierInert } from '../helpers/binary-fixtures'
 
@@ -255,6 +255,47 @@ describe("every file the copy's own marker records (#1012)", () => {
     rmSync(join(dir, 'ggml-vulkan.dll'))
     mkdirSync(join(dir, 'ggml-vulkan.dll'))
     expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('missing')
+  })
+
+  // Code review round 6: a copy that will be refused is not hashed at all. Every recorded file is looked
+  // at (a `stat`) before any is read, so a missing library ends the check before the program is hashed.
+  // Observable without a seam: the program itself refuses to be read, so a hash of it would answer
+  // `unreadable`.
+  it('a missing library is missing before any file is hashed', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    writeCopy(dir, { 'llama-server.exe': 'shim', 'ggml.dll': 'ggml' })
+    rmSync(join(dir, 'ggml.dll'))
+    denyReading(join(dir, 'llama-server.exe')) // hashed first, if anything were hashed
+    try {
+      expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('missing')
+    } finally {
+      allowReading(join(dir, 'llama-server.exe'))
+    }
+  })
+
+  // Code review round 6: a marker that is there but cannot be read just now is no legacy drive. It is
+  // `unreadable` (re-checked), never `skip-legacy` (which would be cached, and refused on a Kit that
+  // refuses hash-less markers). A cpu/ net whose own marker cannot be read does not fall back to the
+  // family marker either.
+  it.each([
+    { name: "the copy's own marker", net: false },
+    { name: "a cpu/ net's own marker (no fall back to the family marker)", net: true }
+  ])('$name held unreadable: unreadable, then ok once it can be read', async ({ net }) => {
+    initBinaryVerification(false)
+    const family = tmp()
+    const dir = net ? join(family, 'cpu') : family
+    writeCopy(dir, { 'llama-server.exe': 'shim' })
+    // The family marker would answer for the net's program if the walk fell back to it.
+    if (net) writeRuntimeMarker(family, { ...MARKER, binaries: { 'cpu/llama-server.exe': sha('shim') } })
+    const markerFile = runtimeMarkerPath(dir)
+    denyReading(markerFile)
+    try {
+      expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('unreadable')
+    } finally {
+      allowReading(markerFile)
+    }
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('ok')
   })
 
   // The knowledge-pack tools start despite a missing file (owner call on #1012), so `missing` must

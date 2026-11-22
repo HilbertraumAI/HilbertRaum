@@ -384,13 +384,14 @@ export function reportEngineProblem(problem: EngineProblem, binPath: string): vo
 
 /**
  * #1012: the pre-spawn check found a file that the engine copy's own install marker records missing (an
- * antivirus quarantine, a copy cut short). No tamper and no loader refusal, but the same repair as a
- * library the loader could not find: the engine's own files are damaged. The spawn site does not start
+ * antivirus quarantine, a copy cut short) or changed (code review round 6: a cut-short copy, bit-rot — or
+ * a tamper, which the verifier's log line records). No loader refusal, but the same repair as a library
+ * the loader could not find or load: the engine's own files are damaged. The spawn site does not start
  * the program — a start that went ahead and ran would drop this verdict at once (`clearEngineProblemFor`),
  * and with it the #532 "Install again" offer — so this records the verdict and returns the typed,
  * path-free error the site throws. `exit` says the program never ran. Never throws.
  */
-export function reportMissingEngineFiles(
+export function reportDamagedEngineFiles(
   family: EngineProblemFamily,
   binPath: string,
   platform: NodeJS.Platform = process.platform

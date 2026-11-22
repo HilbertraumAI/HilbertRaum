@@ -13,10 +13,19 @@ import { tempRoot } from './db-fixtures'
 /** What an install marker records for a binary (#1012 adds the last four, each beside the binary's
  *  true hash): its true hash, a wrong hash, no hashes (a bundle placed by hand), a library that is
  *  not on the disk (`missing`), an unused program that is not on the disk (`missing-other`), a
- *  library that is there but refuses to be read (`unreadable`, see `denyReading`), or the binary
- *  itself gone from the disk (`program-gone`). The real verifier answers each by its own name;
- *  `legacy` is `skip-legacy` and `program-gone` is `missing`. */
-export type MarkerVerdict = 'ok' | 'mismatch' | 'legacy' | 'missing' | 'missing-other' | 'unreadable' | 'program-gone'
+ *  library that is there but refuses to be read (`unreadable`, see `denyReading`), the binary
+ *  itself gone from the disk (`program-gone`), or a library whose bytes differ from the recorded ones
+ *  (`library-changed`: a corrupted or replaced DLL). The real verifier answers each by its own name;
+ *  `legacy` is `skip-legacy`, `program-gone` is `missing` and `library-changed` is `mismatch`. */
+export type MarkerVerdict =
+  | 'ok'
+  | 'mismatch'
+  | 'legacy'
+  | 'missing'
+  | 'missing-other'
+  | 'unreadable'
+  | 'program-gone'
+  | 'library-changed'
 
 /** The bytes the marker records for `engine-library.dll` (#1012), so a test can put the library back. */
 const LIBRARY_NAME = 'engine-library.dll'
@@ -81,10 +90,11 @@ export async function binaryWithMarker(name: string, verdict: MarkerVerdict): Pr
   } else {
     const hash = verdict === 'mismatch' ? 'c'.repeat(64) : await sha256File(bin)
     const extra: Record<string, string> = {}
-    if (verdict === 'missing' || verdict === 'unreadable') {
+    if (verdict === 'missing' || verdict === 'unreadable' || verdict === 'library-changed') {
       extra[LIBRARY_NAME] = createHash('sha256').update(LIBRARY_BYTES).digest('hex')
     }
     if (verdict === 'missing-other') extra['unused-tool.exe'] = 'd'.repeat(64)
+    if (verdict === 'library-changed') writeFileSync(join(dir, LIBRARY_NAME), 'other library bytes') // e.g. cut short by a copy
     if (verdict === 'unreadable') {
       const library = join(dir, LIBRARY_NAME)
       writeFileSync(library, LIBRARY_BYTES)

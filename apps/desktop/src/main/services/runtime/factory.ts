@@ -601,8 +601,9 @@ class LadderRuntime implements ModelRuntime {
           continue
         }
         // Round 4: what decides between the model notice and the files-unreadable one (a bind race is
-        // no evidence, nor is the engine refusal handled above).
-        if (!isBindRaceError(reason)) sawEvidence = true
+        // no evidence, nor is the engine refusal handled above). Round 6: only a CONTROL rung (a forced-CPU
+        // one) points at the model; a GPU rung that failed says nothing about it when its control did not run.
+        if (!rung.gpuAttempt && !isBindRaceError(reason)) sawEvidence = true
         if (rung.gpuAttempt) {
           // REL-1: a port-bind race is a transient TOCTOU collision, NOT a GPU/device fault
           // (LlamaServer already retried once on a fresh port). Don't auto-disable GPU for the
@@ -791,22 +792,24 @@ class LadderRuntime implements ModelRuntime {
     // a rung that could not read its engine files proved nothing, so it never hides an earlier one.
     const decisive = lastEvidence ?? lastError
     const reason = decisive instanceof Error ? decisive.message : String(decisive)
+    // #1012 code review rounds 3–4: a rung of this walk could not read the engine's files just now, so the
+    // walk latches nothing — no model latch, no persisted GPU failure (no MTP latch either, above) — and the
+    // next start (a re-select) walks the whole ladder again. It only reports: the model notice when a
+    // CONTROL rung failed in a way that is evidence, else the files-unreadable notice (no silent demo
+    // runtime). Round 6: checked FIRST, before the engine refusal below — a copy that was only unreadable
+    // must not read as "the engine cannot run on this computer" (a refused `cpu/` net keeps its own verdict).
+    if (sawUnreadable) {
+      if (sawEvidence) this.deps.onModelLoadFailure?.(this.opts, reason)
+      else this.deps.onEngineFilesUnreadable?.(this.opts)
+      await this.fallBackToMock(`a start attempt could not read the AI engine's files just now: ${reason}`)
+      return
+    }
     // #530: every rung that failed was refused by the OS loader — the ENGINE cannot run here.
     // Nothing is persisted and nothing is latched: installing the missing library (or the
     // runtime) and choosing Check again, or restarting, must find a clean slate.
     if (engineFailure !== null && pendingGpuFailure === null && cpuSignature === null) {
       this.deps.onEngineCannotRun?.(this.opts, engineFailure.problem)
       await this.fallBackToMock(`the AI engine cannot run on this computer: ${engineFailure.message}`)
-      return
-    }
-    // #1012 code review rounds 3–4: a rung of this walk could not read the engine's files just now, so the
-    // walk latches nothing — no model latch, no persisted GPU failure (no MTP latch either, above) — and the
-    // next start (a re-select) walks the whole ladder again. It only reports: the model notice when another
-    // rung failed in a way that is evidence, else the files-unreadable notice (no silent demo runtime).
-    if (sawUnreadable) {
-      if (sawEvidence) this.deps.onModelLoadFailure?.(this.opts, reason)
-      else this.deps.onEngineFilesUnreadable?.(this.opts)
-      await this.fallBackToMock(`a start attempt could not read the AI engine's files just now: ${reason}`)
       return
     }
     if (pendingGpuFailure) {

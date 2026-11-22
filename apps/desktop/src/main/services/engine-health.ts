@@ -3,7 +3,7 @@ import { engineChildEnv } from './runtime/engine-env'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { EngineProblemFamily } from '../../shared/types'
 import type { AppContext } from './context'
-import { isMissingFilesVerdict, verifyBinaryBeforeSpawn, type BinaryVerifyResult } from './binary-verifier'
+import { isDamagedFilesVerdict, verifyBinaryBeforeSpawn, type BinaryVerifyResult } from './binary-verifier'
 import { rewriteEngineFailureRows, rewriteSearchModelFailureRows } from './ingestion/engine-failure'
 import { log } from './logging'
 import {
@@ -12,7 +12,7 @@ import {
   classifySpawnError,
   describeLoadFailure,
   reportEngineProblem,
-  reportMissingEngineFiles,
+  reportDamagedEngineFiles,
   type LoadFailure,
   type LoadFailureInput
 } from './runtime/engine-load'
@@ -104,10 +104,10 @@ const LOAD_CHECK_TIMEOUT_MS = 10_000
 /**
  * Start `binPath args` and report whether the OS loader accepted it (#530 "Check again", both
  * engines). `refused` also records the verdict — a classified exit, a Windows spawn refusal by
- * policy / security software, or (#1012) a copy still missing a file its install marker records,
- * which is never started. `loads` covers any exit the classifier does not recognise (a usage
- * error is still a program that ran) and a program still running at the bound. `unchecked`: the
- * binary failed its integrity check, or (#1012 review R-2) a file of its copy could not be read just
+ * policy / security software, or (#1012) a copy whose install marker records a file that is still
+ * missing or changed, which is never started. `loads` covers any exit the classifier does not recognise (a usage
+ * error is still a program that ran) and a program still running at the bound. `unchecked`: (#1012
+ * review R-2) a file of its copy could not be read just
  * now — retried on the next "Check again", no damage recorded — or could not be spawned for a reason
  * that says nothing about the loader, or (#790) its stderr stream failed before an exit the
  * classifier does not recognise — the verdict is left as it was. Never throws.
@@ -127,11 +127,12 @@ export async function checkProgramLoads(
     return 'unchecked'
   }
   // `unreadable` (#1012 review R-2): not checked, nothing recorded — the user can choose Check again.
-  if (verdict === 'mismatch' || verdict === 'unreadable') return 'unchecked'
-  // #1012: a file of the copy is still gone — still refused, and the verdict stands (a run of the
-  // program could start fine without it and drop the "Install again" offer).
-  if (isMissingFilesVerdict(verdict)) {
-    reportMissingEngineFiles(family, binPath, deps.platform)
+  if (verdict === 'unreadable') return 'unchecked'
+  // #1012: a file of the copy is still gone or changed (round 6: a changed one too) — still refused, and
+  // the engine-files verdict stands (a run of the program could start fine without it and drop the
+  // "Install again" offer).
+  if (isDamagedFilesVerdict(verdict)) {
+    reportDamagedEngineFiles(family, binPath, deps.platform)
     return 'refused'
   }
   const spawn = deps.spawn ?? ((cmd, a, o) => nodeSpawn(cmd, a, o))

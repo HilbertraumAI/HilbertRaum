@@ -2,7 +2,7 @@ import { waitForEngineSpawns } from './spawn-gate'
 import { engineChildEnv } from './engine-env'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
-import { isMissingFilesVerdict, verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { isDamagedFilesVerdict, verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import { log } from '../logging'
 import {
   classifyLoadFailure,
@@ -12,7 +12,7 @@ import {
   describeLoadFailure,
   pathFreeSpawnError,
   reportEngineProblem,
-  reportMissingEngineFiles,
+  reportDamagedEngineFiles,
   type LoadFailure
 } from './engine-load'
 import { guardChildStdio, type ChildProcessLike, type SpawnFn } from './sidecar'
@@ -98,11 +98,11 @@ const PROBE_STDERR_MAX = 4000
  * Spawn `<binPath> --list-devices`, parse stdout, and resolve the device list. Bounded
  * by a kill-timeout; NEVER throws/rejects. An exit 0 is the machine's answer: the devices it
  * printed, or `[]` when it printed none (b11146 and b12110 write `(none)` under the header, b9849
- * the header alone), which reads as "no usable GPU". A failed pre-spawn integrity check resolves
- * `[]` too (owner call 3, #653: the integrity paths keep `[]`). For a tampered binary that is
- * right — it will not run here, for the probe or for the server. A transient read failure (an
- * antivirus lock while hashing) is no longer reported as one: since #1012 (review R-2) it is the
- * verifier's own `unreadable`, which resolves `null` below.
+ * the header alone), which reads as "no usable GPU". A failed pre-spawn integrity check resolved
+ * `[]` too until #1012 (owner call 3, #653: the integrity paths kept `[]`). Since #1012 code review round
+ * 6 it resolves `null` and records the engine-files verdict: with the whole copy hashed, a damaged library
+ * (a copy cut short) reaches this branch, and `[]` was saved as "no graphics card". A transient read
+ * failure (an antivirus lock while hashing) is the verifier's own `unreadable` (review R-2), `null` too.
  *
  * Every other outcome is not an answer and resolves `null` — UNKNOWN. Callers must not read
  * `null` as "no GPU": the session cache drops it (the next caller re-probes),
@@ -139,11 +139,11 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
   } catch {
     return []
   }
-  if (verification === 'mismatch') return []
   // #1012: a file of the copy is gone (a quarantined `ggml-vulkan.dll` would have answered "no
-  // devices" and been persisted as "no graphics card"): no answer, and the engine-files verdict.
-  if (isMissingFilesVerdict(verification)) {
-    reportMissingEngineFiles('llama_cpp', binPath, deps.platform)
+  // devices" and been persisted as "no graphics card") or changed (code review round 6: `[]` was saved
+  // as "no graphics card" the same way): no answer, and the engine-files verdict.
+  if (isDamagedFilesVerdict(verification)) {
+    reportDamagedEngineFiles('llama_cpp', binPath, deps.platform)
     return null
   }
   // #1012 review R-2: a file could not be read just now — no answer (never "no GPU" for the session).

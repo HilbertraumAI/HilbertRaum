@@ -845,6 +845,26 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     }
   })
 
+  // Code review round 6: a kiwix-manage that the check refuses outright — a missing file of its install
+  // (`files`) or a changed one (`verify`) — fails every pack alike too. The start names the tools instead of
+  // publishing an empty library ("no packs", silently) for the revision.
+  it.each([
+    { verdict: 'missing' as const, kind: 'files' },
+    { verdict: 'mismatch' as const, kind: 'verify' }
+  ])('a kiwix-manage refused as $verdict fails the start with kind $kind, never an empty library', async ({ verdict, kind }) => {
+    const manage = await binaryWithMarker('kiwix-manage.exe', verdict)
+    const h = svcHarness({ resolveTools: () => ({ serve: '/bin/kiwix-serve', manage }) })
+    await h.addPack('alpha.zim') // registered before the check is enforced (a dev build)
+    initBinaryVerification(false)
+    try {
+      await expect(h.svc.ensureServer(h.db)).rejects.toMatchObject({ name: 'KiwixManageError', kind })
+      expect(h.serveSpawns).toHaveLength(0)
+      await h.svc.stop()
+    } finally {
+      verifierInert()
+    }
+  })
+
   // #715: the latch's third guard. A start the lock already aborted can still fail with an
   // ordinary error (here: the health probe it was parked in rejects once released); latching
   // that would make every later ask under the unchanged pack set rethrow it after the unlock.

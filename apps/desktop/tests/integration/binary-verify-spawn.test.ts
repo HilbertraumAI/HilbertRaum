@@ -12,6 +12,7 @@ import { checkProgramLoads } from '../../src/main/services/engine-health'
 import { KiwixServer } from '../../src/main/services/zim/serve'
 import { kiwixManageAdd } from '../../src/main/services/zim/tools'
 import { engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
+import { engineProblemOffersReinstall } from '../../src/shared/engine-problem'
 import { binaryWithMarker, verifierInert, type MarkerVerdict } from '../helpers/binary-fixtures'
 
 // TEST-2 (full-audit-2026-06-29, Phase 3): the binary-verifier verdict/cache matrix is well unit-
@@ -91,8 +92,14 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       healthIntervalMs: 1
       // NB: LlamaServer has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     })
-    // The exact shape `failureSignature` classifies as `integrity` (the ladder's #312 comparison).
-    await expect(server.start()).rejects.toThrow(/^llama-server failed pre-spawn integrity verification/)
+    // #1012 code review round 6: a changed file is the engine's own files damaged — the typed error the
+    // ladder walks on from (no GPU hold, no model blame) and the verdict the "Install again" offer reads.
+    // (Before, the plain integrity error matched on every rung, and the ladder blamed the model.)
+    await expect(server.start()).rejects.toMatchObject({
+      name: 'EngineCannotRunError',
+      problem: { family: 'llama_cpp', reason: 'files-damaged' }
+    })
+    expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'files-damaged' })
     expect(calls).toHaveLength(0) // the real verifier blocked the spawn before any port/child
   })
 
@@ -120,7 +127,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
 
   // ---- GPU --list-devices probe seam ------------------------------------------------
 
-  it('the GPU probe REFUSES a tampered binary (returns [], no child spawned)', async () => {
+  it('the GPU probe REFUSES a tampered binary (no answer, never "no GPU"; no child spawned)', async () => {
     initBinaryVerification(false)
     const bin = await binaryWithMarker('llama-server.exe', 'mismatch')
     const calls: string[][] = []
@@ -132,13 +139,15 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       return child
     }
     const devices = await probeGpuDevices(bin, { spawn, timeoutMs: 200 })
-    expect(devices).toEqual([]) // a tampered binary reads as "no GPU" — the probe never throws
+    // #1012 round 6: no answer (`[]` was saved as "no graphics card"), and the engine-files verdict.
+    expect(devices).toBeNull()
+    expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'files-damaged' })
     expect(calls).toHaveLength(0) // …and the real verifier blocked the probe spawn entirely
   })
 
   // ---- #530 "Check again" engine check seam (engine-health.ts checkProgramLoads) ------------
 
-  it('the engine check REFUSES to launch a tampered binary (unchecked, no child spawned)', async () => {
+  it('the engine check REFUSES to launch a tampered binary (refused: the verdict stands; no child spawned)', async () => {
     initBinaryVerification(false)
     const bin = await binaryWithMarker('llama-server.exe', 'mismatch')
     const calls: string[][] = []
@@ -150,7 +159,9 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
     }
     // NB: no `verify` → checkProgramLoads falls back to the REAL verifyBinaryBeforeSpawn, as
     // recheckEngines(ctx) calls it in production.
-    expect(await checkProgramLoads('llama_cpp', bin, ['--version'], { spawn, timeoutMs: 200 })).toBe('unchecked')
+    // #1012 round 6: as a missing file — refused, the engine-files verdict recorded (was `unchecked`).
+    expect(await checkProgramLoads('llama_cpp', bin, ['--version'], { spawn, timeoutMs: 200 })).toBe('refused')
+    expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'files-damaged' })
     expect(calls).toHaveLength(0)
   })
 
@@ -174,9 +185,12 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       }
       // NB: WhisperCliTranscriber has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     })
-    await expect(transcriber.transcribe('/audio/meeting.mp3', { workDir })).rejects.toThrow(
-      /integrity verification/
-    )
+    // #1012 round 6: the voice engine's own files damaged — the typed error and the reinstall verdict.
+    await expect(transcriber.transcribe('/audio/meeting.mp3', { workDir })).rejects.toMatchObject({
+      name: 'EngineCannotRunError',
+      problem: { family: 'whisper_cpp', reason: 'files-damaged' }
+    })
+    expect(engineProblemFor('whisper_cpp')).toMatchObject({ reason: 'files-damaged' })
     expect(spawned).toBe(false) // the real verifier blocked the whisper spawn
   })
 
@@ -220,6 +234,31 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
     await expect(
       kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
     ).rejects.toMatchObject({ name: 'KiwixManageError', kind: 'verify', childState: 'not-spawned' })
+    expect(calls).toHaveLength(0)
+  })
+})
+
+// #1012 code review round 6: a LIBRARY whose bytes differ from the recorded ones (a copy cut short, bit-rot)
+// is refused like a changed program — and offered for reinstall: on master the same damaged DLL reached
+// the OS loader and got the files-damaged verdict; with the whole copy hashed it must not lose that offer.
+describe('#1012 — a changed library through the REAL verifier', () => {
+  it('LlamaServer.start refuses it with the engine-files verdict that offers "Install again" (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('llama-server.exe', 'library-changed')
+    const { spawn, calls } = recordingLlamaSpawn()
+    const server = new LlamaServer({
+      binPath: bin,
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl: healthyFetch(),
+      findPort: async () => 51006,
+      healthIntervalMs: 1
+    })
+    await expect(server.start()).rejects.toMatchObject({ name: 'EngineCannotRunError' })
+    const problem = engineProblemFor('llama_cpp')
+    expect(problem).toMatchObject({ family: 'llama_cpp', reason: 'files-damaged' })
+    expect(problem && engineProblemOffersReinstall(problem)).toBe(true)
     expect(calls).toHaveLength(0)
   })
 })

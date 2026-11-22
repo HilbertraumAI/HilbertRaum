@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import net from 'node:net'
 import { log } from '../logging'
 import { perfMark, perfMs } from '../perf'
-import { isMissingFilesVerdict, verifyBinaryBeforeSpawn } from '../binary-verifier'
+import { isDamagedFilesVerdict, verifyBinaryBeforeSpawn } from '../binary-verifier'
 import type { HealthStatus } from './index'
 import {
   EngineCannotRunError,
@@ -19,7 +19,7 @@ import {
   describeLoadFailure,
   pathFreeSpawnError,
   reportEngineProblem,
-  reportMissingEngineFiles
+  reportDamagedEngineFiles
 } from './engine-load'
 
 // Sidecar discovery + lifecycle (spec §6, §7.5). Locates the prebuilt `llama-server`
@@ -195,8 +195,9 @@ function failureLine(message: string): string {
  * drifts between builds, and in which a VRAM allocation failure reads exactly like an
  * unsupported-architecture failure.
  *
- * Covers the four shapes this module throws — `launch` (spawn error), `exit:code N` /
- * `exit:signal S`, `timeout` (the health budget), `integrity` (pre-spawn hash mismatch) — plus
+ * Covers the shapes this module throws — `launch` (spawn error), `exit:code N` /
+ * `exit:signal S`, `timeout` (the health budget) — and `integrity`, the pre-spawn hash-mismatch
+ * message it threw until #1012 round 6 (a mismatch is now the typed engine-files error) — plus
  * the failure line of the captured `— last output:` tail (`failureLine`: the first error-level
  * line, timestamp stripped — #515). Progress lines are deliberately ignored: two loads of the same
  * broken weight print different progress before the same error. Returns null for anything else, and the
@@ -755,15 +756,14 @@ export class LlamaServer {
     await waitForEngineSpawns('llama_cpp')
     this.throwIfStartAborted()
     const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
-    if (verdict === 'mismatch') {
-      throw new Error('llama-server failed pre-spawn integrity verification')
-    }
-    if (isMissingFilesVerdict(verdict)) {
-      // #1012: a file of the copy is gone — the engine's own files are damaged, never the GPU or the
-      // model: the typed error the ladder walks on from (a Kit's `cpu/` net has files of its own),
-      // and the verdict the "Install again" offer reads. A teardown that began meanwhile records none.
+    if (isDamagedFilesVerdict(verdict)) {
+      // #1012: a file of the copy is gone or changed (code review round 6: a changed one too — a copy cut
+      // short, bit-rot, or a tamper, which the verifier's own log line records) — the engine's own files
+      // are damaged, never the GPU or the model: the typed error the ladder walks on from (a Kit's `cpu/`
+      // net has files of its own), and the verdict the "Install again" offer reads (a reinstall evicts the
+      // cached verdict). A teardown that began meanwhile records none.
       this.throwIfStartAborted()
-      throw reportMissingEngineFiles('llama_cpp', this.opts.binPath, this.opts.platform)
+      throw reportDamagedEngineFiles('llama_cpp', this.opts.binPath, this.opts.platform)
     }
     if (verdict === 'unreadable') {
       // #1012 review R-2: a file could not be read just now — no verdict, and no evidence about the GPU

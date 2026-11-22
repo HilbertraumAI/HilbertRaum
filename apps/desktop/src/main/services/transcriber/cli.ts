@@ -13,7 +13,7 @@ import {
   unregisterSidecarChild,
   type ResolveBinOptions
 } from '../runtime/sidecar'
-import { isMissingFilesVerdict, verifyBinaryBeforeSpawn } from '../binary-verifier'
+import { isDamagedFilesVerdict, verifyBinaryBeforeSpawn } from '../binary-verifier'
 import {
   EngineCannotRunError,
   EngineFilesUnreadableError,
@@ -22,7 +22,7 @@ import {
   clearEngineProblemFor,
   describeLoadFailure,
   reportEngineProblem,
-  reportMissingEngineFiles
+  reportDamagedEngineFiles
 } from '../runtime/engine-load'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
@@ -380,13 +380,10 @@ export class WhisperCliTranscriber implements Transcriber {
     // #516: an engine install replacing this folder holds spawns until its swap is over.
     await waitForEngineSpawns('whisper_cpp')
     const verdict = await verifyBinaryBeforeSpawn(this.binPath)
-    if (verdict === 'mismatch') {
-      throw new Error('whisper-cli failed pre-spawn integrity verification')
-    }
     if (cancelled()) throw new Error('Transcription was cancelled.')
-    // #1012: a file of the copy is gone — the voice engine's own files are damaged (the verdict the
-    // "Install again" offer reads); never started.
-    if (isMissingFilesVerdict(verdict)) throw reportMissingEngineFiles('whisper_cpp', this.binPath, this.platform)
+    // #1012: a file of the copy is gone or changed (round 6: a changed one too) — the voice engine's own
+    // files are damaged (the verdict the "Install again" offer reads); never started.
+    if (isDamagedFilesVerdict(verdict)) throw reportDamagedEngineFiles('whisper_cpp', this.binPath, this.platform)
     // #1012 review R-2: a file could not be read just now — not started, nothing recorded; the next call reads again.
     if (verdict === 'unreadable') throw new EngineFilesUnreadableError('whisper-cli')
     return new Promise((resolve, reject) => {

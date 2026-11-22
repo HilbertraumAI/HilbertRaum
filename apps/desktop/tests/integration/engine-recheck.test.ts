@@ -192,13 +192,15 @@ describe('recheckEngines — the chat engine (#530)', () => {
     expect(modelLoadLatchReason('m')).toBeNull()
   })
 
-  it('a binary that could not even be checked (integrity mismatch) keeps the verdict — never "runs again"', async () => {
+  // #1012 code review round 6: a changed engine file is the engine's own files damaged — the check never
+  // runs the program, and the verdict becomes the one the "Install again" offer reads.
+  it('a binary whose files do not match their marker is never run — the verdict becomes damaged files, never "runs again"', async () => {
     reportEngineProblem(LLAMA_PROBLEM, REFUSED_LLAMA)
     const f = makeCtx(driveRoot(), () => undefined)
     const spawn = vi.fn(closingSpawn(0))
     const result = await recheckEngines(f.ctx, { restartChat: f.restartChat, spawn, verify: async () => 'mismatch' })
     expect(spawn).not.toHaveBeenCalled()
-    expect(result.problems).toEqual([LLAMA_PROBLEM])
+    expect(result.problems).toEqual([expect.objectContaining({ family: 'llama_cpp', reason: 'files-damaged' })])
     expect(f.restartChat).not.toHaveBeenCalled()
   })
 

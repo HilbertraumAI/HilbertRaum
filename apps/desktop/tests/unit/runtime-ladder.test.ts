@@ -1655,4 +1655,39 @@ describe('#1012 — an engine file that could not be read is neither a GPU nor a
     expect(h.filesUnreadable).toEqual([{ modelId: 'm' }])
     expect(h.modelLoadFailures).toEqual([])
   })
+
+  // Code review round 6: only a CONTROL rung's failure (a forced-CPU one) points at the model. A GPU rung
+  // that ran out of memory says nothing about the model when its control could not read its files.
+  it('a GPU rung out of memory and an unreadable control rung (no net): the files-unreadable notice, no model notice', async () => {
+    const h = ladderHarness({
+      failFirst: 2,
+      probe: [RTX],
+      cpuBin: null,
+      failMessages: [OOM_REASON],
+      failErrors: [undefined, unreadable()],
+      latchGpuFailures: true
+    })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(2)
+    expect(h.filesUnreadable).toEqual([{ modelId: 'm' }])
+    expect(h.modelLoadFailures).toEqual([])
+    expect(h.failures).toEqual([])
+  })
+
+  // Code review round 6: an engine refusal beside an unreadable rung — say, a Kit whose main copy was
+  // briefly locked and whose cpu/ net the OS refused. The main copy is fine; telling the user the engine
+  // "can't run on this computer" would send them the wrong way. The files-unreadable notice wins.
+  it('an unreadable main copy and a refused cpu/ net: the files-unreadable notice, not "the engine cannot run"', async () => {
+    const GOMP_NET: EngineProblem = { family: 'llama_cpp', reason: 'library-missing', os: 'linux', name: 'libgomp.so.1', exit: 'exit code 127' }
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: null,
+      failErrors: [unreadable(), unreadable(), new EngineCannotRunError('llama-server', GOMP_NET)]
+    })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.filesUnreadable).toEqual([{ modelId: 'm' }])
+    expect(h.engineFailures).toEqual([])
+    expect(h.modelLoadFailures).toEqual([])
+  })
 })

@@ -1325,9 +1325,21 @@ export function markerBinaryKey(extractTo: string, binaryPath: string): string {
 
 /** Read + parse an install marker. Never throws: missing/malformed → null. */
 export function readRuntimeMarker(extractTo: string): RuntimeInstallMarker | null {
-  const path = runtimeMarkerPath(extractTo)
   try {
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    return parseRuntimeMarker(readFileSync(runtimeMarkerPath(extractTo), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parse an install marker's text (#1012 code review round 6: the pre-spawn verifier reads the file itself,
+ * to tell a marker that is not there from one that cannot be read just now). Never throws: malformed →
+ * null.
+ */
+export function parseRuntimeMarker(text: string): RuntimeInstallMarker | null {
+  try {
+    const raw = JSON.parse(text) as Record<string, unknown>
     if (
       typeof raw.version === 'string' &&
       typeof raw.backend === 'string' &&

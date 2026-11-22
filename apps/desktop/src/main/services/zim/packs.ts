@@ -835,8 +835,9 @@ function isCancellation(err: unknown): boolean {
  * But a `KiwixManageError` with `childState === 'uncertain'`, or `kind === 'abort'`, or the
  * signal already being aborted STOPS the build and RETHROWS: a shared library.xml with an
  * unconfirmed writer (the kiwix-manage child may still be appending to it) is not a
- * publishable build. So does `kind === 'filesUnreadable'` (#1012): the tool itself could not be
- * read just now, so every pack would fail alike and the next ask must try again.
+ * publishable build. So do `filesUnreadable`, `files` and `verify` (#1012): the pre-spawn check refused
+ * the tool itself (a file of its install unreadable just now, missing, or changed), so every pack would
+ * fail alike; the start failure names the tools instead of an empty library being published.
  */
 export async function writeLibraryXml(
   deps: Pick<PackDeps, 'manageAdd'>,
@@ -856,12 +857,18 @@ export async function writeLibraryXml(
       await deps.manageAdd(libraryXmlPath, book.path)
       count++
     } catch (err) {
-      // #1012 code review round 5: a kiwix-manage whose install file could not be read just now fails
-      // every pack alike — no per-pack fault. Skipping each would publish an empty library for this
-      // revision (a latch for the session); stop the build so the next ask tries again.
+      // #1012 code review rounds 5–6: a kiwix-manage the pre-spawn check refused — a file of its install
+      // that cannot be read just now, is missing (`files`) or changed (`verify`) — fails every pack alike:
+      // no per-pack fault. Skipping each would publish an empty library for this revision ("no packs",
+      // silently); stop the build so the start failure names the tools (and only the passing hold skips
+      // the service's latch).
       if (
         err instanceof KiwixManageError &&
-        (err.childState === 'uncertain' || err.kind === 'abort' || err.kind === 'filesUnreadable')
+        (err.childState === 'uncertain' ||
+          err.kind === 'abort' ||
+          err.kind === 'filesUnreadable' ||
+          err.kind === 'files' ||
+          err.kind === 'verify')
       ) {
         throw err
       }
