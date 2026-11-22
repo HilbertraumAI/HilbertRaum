@@ -397,9 +397,11 @@ export class KiwixServer {
   private async doStart(libraryXmlPath: string, signal: AbortSignal): Promise<KiwixServerStart> {
     const generation = this.allocateGeneration()
     // Same pre-spawn integrity rule as every sidecar: a packaged-build tamper refuses
-    // to spawn; dev/legacy installs resolve skip-* and proceed (binary-verifier.ts).
+    // to spawn; dev/legacy installs resolve skip-* and proceed (binary-verifier.ts). #1012: so do
+    // a missing program or library (review R-1, R-6: the loader would look for a missing library in
+    // the library folder this child starts in) and a file that cannot be read just now.
     const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
-    if (verdict === 'mismatch') {
+    if (verdict === 'mismatch' || verdict === 'missing' || verdict === 'unreadable') {
       throw new KiwixServeStartError('integrity')
     }
     // #339 P8-1: an in-app install records a hash for kiwix-serve, so `skip-legacy` now means
@@ -408,6 +410,12 @@ export class KiwixServer {
     if (verdict === 'skip-legacy' && !warnedServeSkipLegacy) {
       warnedServeSkipLegacy = true
       log.warn('hashless install marker — kiwix-serve integrity not verified (a hand-placed bundle; R-1)')
+    }
+    // #1012 (owner call): only recorded files that are neither this program nor a library are gone (a
+    // tool the app never runs), and none present differs. The knowledge-pack tools have no in-app
+    // repair, so kiwix-serve starts anyway, as before the check covered the whole copy.
+    if (verdict === 'missing-other') {
+      log.warn('kiwix-serve starts although files its install marker records are missing', { code: 'other-files-missing' })
     }
     // Recheck 1 (plan §9.15 item 1) — after the verification.
     if (signal.aborted) throw abortError('kiwix-serve start aborted after verification')

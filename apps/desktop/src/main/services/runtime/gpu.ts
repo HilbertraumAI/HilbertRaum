@@ -2,7 +2,7 @@ import { waitForEngineSpawns } from './spawn-gate'
 import { engineChildEnv } from './engine-env'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
-import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { isMissingFilesVerdict, verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import { log } from '../logging'
 import {
   classifyLoadFailure,
@@ -12,6 +12,7 @@ import {
   describeLoadFailure,
   pathFreeSpawnError,
   reportEngineProblem,
+  reportMissingEngineFiles,
   type LoadFailure
 } from './engine-load'
 import { guardChildStdio, type ChildProcessLike, type SpawnFn } from './sidecar'
@@ -99,9 +100,9 @@ const PROBE_STDERR_MAX = 4000
  * printed, or `[]` when it printed none (b11146 and b12110 write `(none)` under the header, b9849
  * the header alone), which reads as "no usable GPU". A failed pre-spawn integrity check resolves
  * `[]` too (owner call 3, #653: the integrity paths keep `[]`). For a tampered binary that is
- * right — it will not run here, for the probe or for the server. The verifier also reports a
- * transient read failure (an antivirus lock while hashing) as `mismatch`, and that one then reads
- * "no GPU" for the session although the server may start a moment later: a known residual.
+ * right — it will not run here, for the probe or for the server. A transient read failure (an
+ * antivirus lock while hashing) is no longer reported as one: since #1012 (review R-2) it is the
+ * verifier's own `unreadable`, which resolves `null` below.
  *
  * Every other outcome is not an answer and resolves `null` — UNKNOWN. Callers must not read
  * `null` as "no GPU": the session cache drops it (the next caller re-probes),
@@ -111,6 +112,9 @@ const PROBE_STDERR_MAX = 4000
  *  - a program the OS loader REFUSED (#530: a missing system library, a system too old, a
  *    missing Windows runtime, a code-integrity block) — the engine never ran, and the refusal
  *    is recorded as the session's engine verdict (`engine-load.ts`);
+ *  - #1012: a copy missing a file its install marker records — never spawned, and recorded as
+ *    the same "engine files damaged" verdict; and a recorded file that could not be read just now
+ *    (`unreadable`) — never spawned, nothing recorded;
  *  - #653: any other non-zero exit or signal (a Vulkan driver crashing during enumeration:
  *    Windows 0xC0000005, a Linux SIGSEGV) and a spawn that failed for any other reason (EMFILE,
  *    EAGAIN, ENOMEM, a POSIX ENOENT or EACCES). Before #653 these resolved `[]`, which was
@@ -128,7 +132,7 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
 
   // #516: an engine install replacing this folder holds spawns until its swap is over.
   await waitForEngineSpawns('llama_cpp')
-  // Refuse a tampered binary: no GPU (see the note above for a transient read failure). Never throws.
+  // Refuse a tampered binary: no GPU. Never throws.
   let verification: BinaryVerifyResult
   try {
     verification = await verify(binPath)
@@ -136,6 +140,14 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
     return []
   }
   if (verification === 'mismatch') return []
+  // #1012: a file of the copy is gone (a quarantined `ggml-vulkan.dll` would have answered "no
+  // devices" and been persisted as "no graphics card"): no answer, and the engine-files verdict.
+  if (isMissingFilesVerdict(verification)) {
+    reportMissingEngineFiles('llama_cpp', binPath, deps.platform)
+    return null
+  }
+  // #1012 review R-2: a file could not be read just now — no answer (never "no GPU" for the session).
+  if (verification === 'unreadable') return null
 
   return new Promise<GpuDevice[] | null>((resolve) => {
     /** #653: the probe ran into something other than an answer or a refusal. Logs only; the caller resolves `null`. */

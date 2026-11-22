@@ -12,6 +12,7 @@ import {
   classifySpawnError,
   describeLoadFailure,
   reportEngineProblem,
+  reportMissingEngineFiles,
   type LoadFailure,
   type LoadFailureInput
 } from './runtime/engine-load'
@@ -102,12 +103,14 @@ const LOAD_CHECK_TIMEOUT_MS = 10_000
 
 /**
  * Start `binPath args` and report whether the OS loader accepted it (#530 "Check again", both
- * engines). `refused` also records the verdict — a classified exit, or a Windows spawn refusal by
- * policy / security software. `loads` covers any exit the classifier does not recognise (a usage
+ * engines). `refused` also records the verdict — a classified exit, a Windows spawn refusal by
+ * policy / security software, or (#1012) a copy still missing a file its install marker records,
+ * which is never started. `loads` covers any exit the classifier does not recognise (a usage
  * error is still a program that ran) and a program still running at the bound. `unchecked`: the
- * binary failed its integrity check, or could not be spawned for a reason that says nothing about
- * the loader, or (#790) its stderr stream failed before an exit the classifier does not recognise —
- * the verdict is left as it was. Never throws.
+ * binary failed its integrity check, or (#1012 review R-2) a file of its copy could not be read just
+ * now — retried on the next "Check again", no damage recorded — or could not be spawned for a reason
+ * that says nothing about the loader, or (#790) its stderr stream failed before an exit the
+ * classifier does not recognise — the verdict is left as it was. Never throws.
  */
 export async function checkProgramLoads(
   family: EngineProblemFamily,
@@ -117,10 +120,19 @@ export async function checkProgramLoads(
 ): Promise<LoadCheck> {
   const verify = deps.verify ?? verifyBinaryBeforeSpawn
   await waitForEngineSpawns(family) // #516: never check a program an install is replacing
+  let verdict: string
   try {
-    if ((await verify(binPath)) === 'mismatch') return 'unchecked'
+    verdict = await verify(binPath)
   } catch {
     return 'unchecked'
+  }
+  // `unreadable` (#1012 review R-2): not checked, nothing recorded — the user can choose Check again.
+  if (verdict === 'mismatch' || verdict === 'unreadable') return 'unchecked'
+  // #1012: a file of the copy is still gone — still refused, and the verdict stands (a run of the
+  // program could start fine without it and drop the "Install again" offer).
+  if (verdict === 'missing' || verdict === 'missing-other') {
+    reportMissingEngineFiles(family, binPath, deps.platform)
+    return 'refused'
   }
   const spawn = deps.spawn ?? ((cmd, a, o) => nodeSpawn(cmd, a, o))
   return new Promise<LoadCheck>((resolve) => {

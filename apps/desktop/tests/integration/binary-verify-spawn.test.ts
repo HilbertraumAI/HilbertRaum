@@ -11,6 +11,7 @@ import { createWhisperCliTranscriber } from '../../src/main/services/transcriber
 import { checkProgramLoads } from '../../src/main/services/engine-health'
 import { KiwixServer } from '../../src/main/services/zim/serve'
 import { kiwixManageAdd } from '../../src/main/services/zim/tools'
+import { engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { binaryWithMarker, verifierInert, type MarkerVerdict } from '../helpers/binary-fixtures'
 
 // TEST-2 (full-audit-2026-06-29, Phase 3): the binary-verifier verdict/cache matrix is well unit-
@@ -36,7 +37,10 @@ import { binaryWithMarker, verifierInert, type MarkerVerdict } from '../helpers/
 // the refusal vanishes) → the matching test reddens. The matching-marker positive control proves the
 // refusal is genuinely the hash mismatch, not an always-refuse harness artefact.
 
-afterEach(() => verifierInert())
+afterEach(() => {
+  verifierInert()
+  resetEngineProblemsForTest()
+})
 
 // ---- LlamaServer.start seam (chat / embedder / reranker / vision all funnel here) -----
 
@@ -217,5 +221,213 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
     ).rejects.toMatchObject({ name: 'KiwixManageError', kind: 'verify', childState: 'not-spawned' })
     expect(calls).toHaveLength(0)
+  })
+})
+
+// #1012: the marker records a file that is not on the disk (an antivirus quarantine, a copy cut short).
+// That is no tamper: the two engines refuse the start and record the "engine files damaged" verdict the
+// #532 "Install again" offer reads (a start that went ahead and ran would drop that verdict at once). The
+// knowledge-pack tools have no such repair: they refuse a missing program or library like the engines
+// (review R-1, R-6) and start when only another file is missing (owner call on #1012).
+describe('#1012 — spawn seams and a copy missing a file its marker records, through the REAL verifier', () => {
+  const engineFilesDamaged = { reason: 'files-damaged' }
+
+  it('LlamaServer.start REFUSES it with the engine-files verdict (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('llama-server.exe', 'missing')
+    const { spawn, calls } = recordingLlamaSpawn()
+    const server = new LlamaServer({
+      binPath: bin,
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl: healthyFetch(),
+      findPort: async () => 51003,
+      healthIntervalMs: 1
+    })
+    // The typed refusal the start ladder walks on from (next rung), blaming neither the GPU nor the model.
+    await expect(server.start()).rejects.toMatchObject({
+      name: 'EngineCannotRunError',
+      problem: { family: 'llama_cpp', ...engineFilesDamaged }
+    })
+    expect(engineProblemFor('llama_cpp')).toMatchObject(engineFilesDamaged)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('the GPU probe answers unknown (null, never "no GPU") and records the verdict (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('llama-server.exe', 'missing')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('close', 0)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    expect(await probeGpuDevices(bin, { spawn, timeoutMs: 200 })).toBeNull()
+    expect(engineProblemFor('llama_cpp')).toMatchObject(engineFilesDamaged)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('the engine check ("Check again") still finds it refused (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('llama-server.exe', 'missing')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('close', 0, null)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    expect(await checkProgramLoads('llama_cpp', bin, ['--version'], { spawn, timeoutMs: 200 })).toBe('refused')
+    expect(engineProblemFor('llama_cpp')).toMatchObject(engineFilesDamaged)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('WhisperCliTranscriber.transcribe REFUSES it with the voice engine’s verdict (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('whisper-cli.exe', 'missing')
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-verify-spawn-work-'))
+    let spawned = false
+    const transcriber = createWhisperCliTranscriber({
+      id: 'whisper-small-multilingual',
+      binPath: bin,
+      modelPath: '/m/ggml-small.bin',
+      spawnImpl: (_cmd: string, _args: string[], _o: SpawnOptions): ChildProcess => {
+        spawned = true
+        const child = new EventEmitter() as unknown as ChildProcess
+        queueMicrotask(() => child.emit('close', 0, null)) // if (wrongly) spawned, settle fast
+        return child
+      }
+    })
+    await expect(transcriber.transcribe('/audio/meeting.mp3', { workDir })).rejects.toMatchObject({
+      name: 'EngineCannotRunError',
+      problem: { family: 'whisper_cpp', ...engineFilesDamaged }
+    })
+    expect(engineProblemFor('whisper_cpp')).toMatchObject(engineFilesDamaged)
+    expect(spawned).toBe(false)
+  })
+
+  // Review R-1: a missing LIBRARY is looked for elsewhere by the OS loader — the kiwix children start in
+  // the knowledge-pack library's folder, where a planted copy would be found — so it stops kiwix too.
+  it('KiwixServer.ensureStarted REFUSES a copy missing a recorded library (no port, no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('kiwix-serve.exe', 'missing')
+    const { spawn, calls } = recordingLlamaSpawn()
+    let ports = 0
+    const server = new KiwixServer({
+      binPath: bin,
+      spawn,
+      findPort: async () => {
+        ports++
+        return 51004
+      },
+      probe: async () => true,
+      allocateGeneration: () => 1,
+      healthIntervalMs: 1
+    })
+    await expect(server.ensureStarted({ libraryXmlPath: join(tmpdir(), 'library.1.xml') })).rejects.toThrow(
+      /^kiwix-serve failed pre-spawn integrity verification$/
+    )
+    expect(calls).toHaveLength(0)
+    expect(ports).toBe(0)
+  })
+
+  // Owner call on #1012: the knowledge-pack tools have no in-app repair, so a missing file the program
+  // never loads (a tool the app never runs, such as `kiwix-search`) is logged and the program starts.
+  it('kiwixManageAdd still runs kiwix-manage when only a program it never loads is missing', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('kiwix-manage.exe', 'missing-other')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('exit', 0, null))
+      return child
+    }
+    await expect(
+      kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
+    ).resolves.toBeUndefined()
+    expect(calls).toHaveLength(1)
+  })
+
+  // Review R-6: the spawned program itself gone (quarantined) is refused before the spawn, as before #1012.
+  it('kiwixManageAdd REFUSES when kiwix-manage itself is gone (not spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('kiwix-manage.exe', 'program-gone')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('exit', 0, null)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    await expect(
+      kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
+    ).rejects.toMatchObject({ name: 'KiwixManageError', kind: 'verify', childState: 'not-spawned' })
+    expect(calls).toHaveLength(0)
+  })
+})
+
+// #1012 review R-2: a recorded file that cannot be READ right now (an antivirus or indexer holding it, a
+// denied read) is neither a tamper nor damage. The verifier answers `unreadable` (re-checked on the next
+// attempt); no seam records a verdict, the probe gives no answer, and the start fails with a typed error
+// the ladder does not count as evidence about the GPU. The read error is real: a folder sits at the
+// library's recorded path, so the production `sha256File` read fails with EISDIR (not ENOENT), on every OS.
+describe('#1012 — spawn seams and a recorded file that cannot be read, through the REAL verifier', () => {
+  it('LlamaServer.start fails with the typed unreadable error: no verdict, no child spawned', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('llama-server.exe', 'unreadable')
+    const { spawn, calls } = recordingLlamaSpawn()
+    const server = new LlamaServer({
+      binPath: bin,
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl: healthyFetch(),
+      findPort: async () => 51005,
+      healthIntervalMs: 1
+    })
+    await expect(server.start()).rejects.toMatchObject({ name: 'EngineFilesUnreadableError' })
+    expect(engineProblemFor('llama_cpp')).toBeNull()
+    expect(calls).toHaveLength(0)
+  })
+
+  it('the GPU probe gives no answer (null, never "no GPU" for the session): no verdict, no child spawned', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('llama-server.exe', 'unreadable')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('close', 0)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    expect(await probeGpuDevices(bin, { spawn, timeoutMs: 200 })).toBeNull()
+    expect(engineProblemFor('llama_cpp')).toBeNull()
+    expect(calls).toHaveLength(0)
+  })
+
+  it('WhisperCliTranscriber.transcribe fails with the typed unreadable error: no verdict, no child spawned', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('whisper-cli.exe', 'unreadable')
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-verify-spawn-work-'))
+    let spawned = false
+    const transcriber = createWhisperCliTranscriber({
+      id: 'whisper-small-multilingual',
+      binPath: bin,
+      modelPath: '/m/ggml-small.bin',
+      spawnImpl: (_cmd: string, _args: string[], _o: SpawnOptions): ChildProcess => {
+        spawned = true
+        const child = new EventEmitter() as unknown as ChildProcess
+        queueMicrotask(() => child.emit('close', 0, null)) // if (wrongly) spawned, settle fast
+        return child
+      }
+    })
+    await expect(transcriber.transcribe('/audio/meeting.mp3', { workDir })).rejects.toMatchObject({
+      name: 'EngineFilesUnreadableError'
+    })
+    expect(engineProblemFor('whisper_cpp')).toBeNull()
+    expect(spawned).toBe(false)
   })
 })

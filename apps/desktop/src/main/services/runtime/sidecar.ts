@@ -8,16 +8,18 @@ import { join } from 'node:path'
 import net from 'node:net'
 import { log } from '../logging'
 import { perfMark, perfMs } from '../perf'
-import { verifyBinaryBeforeSpawn } from '../binary-verifier'
+import { isMissingFilesVerdict, verifyBinaryBeforeSpawn } from '../binary-verifier'
 import type { HealthStatus } from './index'
 import {
   EngineCannotRunError,
+  EngineFilesUnreadableError,
   classifyLoadFailure,
   classifySpawnError,
   clearEngineProblemFor,
   describeLoadFailure,
   pathFreeSpawnError,
-  reportEngineProblem
+  reportEngineProblem,
+  reportMissingEngineFiles
 } from './engine-load'
 
 // Sidecar discovery + lifecycle (spec §6, §7.5). Locates the prebuilt `llama-server`
@@ -743,16 +745,31 @@ export class LlamaServer {
     const startT0 = performance.now()
     // #159 (BE-1): a teardown may have begun before this start ran at all — don't even spawn.
     this.throwIfStartAborted()
-    // Re-hash the binary against its install marker BEFORE we spawn it (vuln-scan B). A
-    // packaged-build tamper (`mismatch`) throws here, before any port/child is allocated,
-    // so the ladder cleanly falls to the next rung / MockRuntime. Dev + legacy drives
-    // resolve skip-* and proceed. Covers the chat runtime, embedder, reranker, and vision
-    // — every llama-server spawn funnels through this method.
+    // Re-hash the engine copy against its install marker BEFORE we spawn it (vuln-scan B;
+    // since #1012 every file the marker records, not only the program). A packaged-build
+    // tamper (`mismatch`) throws here, before any port/child is allocated, so the ladder
+    // cleanly falls to the next rung / MockRuntime. Dev + legacy drives resolve skip-* and
+    // proceed. Covers the chat runtime, embedder, reranker, and vision — every llama-server
+    // spawn funnels through this method.
     // #516: an engine install replacing this folder holds spawns until its swap is over.
     await waitForEngineSpawns('llama_cpp')
     this.throwIfStartAborted()
-    if ((await verifyBinaryBeforeSpawn(this.opts.binPath)) === 'mismatch') {
+    const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
+    if (verdict === 'mismatch') {
       throw new Error('llama-server failed pre-spawn integrity verification')
+    }
+    if (isMissingFilesVerdict(verdict)) {
+      // #1012: a file of the copy is gone — the engine's own files are damaged, never the GPU or the
+      // model: the typed error the ladder walks on from (a Kit's `cpu/` net has files of its own),
+      // and the verdict the "Install again" offer reads. A teardown that began meanwhile records none.
+      this.throwIfStartAborted()
+      throw reportMissingEngineFiles('llama_cpp', this.opts.binPath, this.opts.platform)
+    }
+    if (verdict === 'unreadable') {
+      // #1012 review R-2: a file could not be read just now — no verdict, and no evidence about the GPU
+      // or the model for the ladder (`isEngineFilesUnreadableError`); the next attempt reads again.
+      this.throwIfStartAborted()
+      throw new EngineFilesUnreadableError('llama-server')
     }
     this.spawnError = null
     this.exited = false

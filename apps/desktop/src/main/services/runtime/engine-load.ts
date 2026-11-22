@@ -261,6 +261,25 @@ export class EngineCannotRunError extends Error {
   }
 }
 
+/**
+ * #1012 review R-2: the pre-spawn check could not read a file of the engine copy just now (an antivirus
+ * or indexer holding it, a denied read), or the copy changed while it was read. That is neither a tamper
+ * nor damage: no verdict is recorded, nothing is cached, and the next attempt reads the files again. A
+ * spawn site throws this instead of starting; the start ladder counts it as no evidence about the GPU,
+ * the model or the MTP flags (`factory.ts`). The message is path-free.
+ */
+export class EngineFilesUnreadableError extends Error {
+  constructor(program: string) {
+    super(`${program} was not started: a file of the AI engine could not be read just now`)
+    this.name = 'EngineFilesUnreadableError'
+  }
+}
+
+/** Name check as the fallback, as {@link isEngineCannotRunError}. */
+export function isEngineFilesUnreadableError(err: unknown): err is EngineFilesUnreadableError {
+  return err instanceof EngineFilesUnreadableError || (err instanceof Error && err.name === 'EngineFilesUnreadableError')
+}
+
 /** `instanceof` across module copies is not guaranteed in tests; the name check is the fallback. */
 export function isEngineCannotRunError(err: unknown): err is EngineCannotRunError {
   return (
@@ -358,6 +377,24 @@ export function reportEngineProblem(problem: EngineProblem, binPath: string): vo
   reporters.add(binPath)
   problems.set(problem.family, { problem: stored, reporters, lastReporter: binPath, freshCopyDamaged })
   if (!previous || !sameProblem(previous.problem, stored)) notifyListeners()
+}
+
+/**
+ * #1012: the pre-spawn check found a file that the engine copy's own install marker records missing (an
+ * antivirus quarantine, a copy cut short). No tamper and no loader refusal, but the same repair as a
+ * library the loader could not find: the engine's own files are damaged. The spawn site does not start
+ * the program — a start that went ahead and ran would drop this verdict at once (`clearEngineProblemFor`),
+ * and with it the #532 "Install again" offer — so this records the verdict and returns the typed,
+ * path-free error the site throws. `exit` says the program never ran. Never throws.
+ */
+export function reportMissingEngineFiles(
+  family: EngineProblemFamily,
+  binPath: string,
+  platform: NodeJS.Platform = process.platform
+): EngineCannotRunError {
+  const problem: EngineProblem = { family, reason: 'files-damaged', os: osOf(platform), exit: 'not started' }
+  reportEngineProblem(problem, binPath)
+  return new EngineCannotRunError(family === 'llama_cpp' ? 'llama-server' : 'whisper-cli', problem)
 }
 
 /**

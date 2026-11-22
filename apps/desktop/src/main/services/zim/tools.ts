@@ -186,9 +186,11 @@ export async function kiwixManageAdd(
   const signal = opts.signal
 
   // Re-hash kiwix-manage against its install marker BEFORE spawning it (vuln-scan B) —
-  // the same pre-spawn gate every llama-server spawn already runs (sidecar.ts doStart).
+  // the same pre-spawn gate every llama-server spawn already runs (sidecar.ts doStart). #1012:
+  // a missing program or library refuses too (review R-1, R-6: the loader would look for a missing
+  // library in the folder this child starts in), as does a file that cannot be read just now.
   const verdict = await verifyBinaryBeforeSpawn(managePath)
-  if (verdict === 'mismatch') {
+  if (verdict === 'mismatch' || verdict === 'missing' || verdict === 'unreadable') {
     throw new KiwixManageError(
       'kiwix-manage failed pre-spawn integrity verification',
       'verify',
@@ -198,6 +200,12 @@ export async function kiwixManageAdd(
   if (verdict === 'skip-legacy' && !warnedManageSkipLegacy) {
     warnedManageSkipLegacy = true
     log.warn('hashless install marker — kiwix-manage integrity not verified (R-1)')
+  }
+  // #1012 (owner call): only recorded files that are neither this program nor a library are gone (a
+  // tool the app never runs) and none present differs — no repair exists for the knowledge-pack
+  // tools, so kiwix-manage runs anyway.
+  if (verdict === 'missing-other') {
+    log.warn('kiwix-manage runs although files its install marker records are missing', { code: 'other-files-missing' })
   }
   // 'ok' / 'skip-dev' are silent — nothing to warn about.
 

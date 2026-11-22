@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   verifyBinaryBeforeSpawn,
   initBinaryVerification,
@@ -98,16 +99,36 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
     initBinaryVerification(false)
     const { dir, bin } = cpuBinary()
     // The cpu dir has no marker; the family dir records the cpu binary under its relative key.
-    writeRuntimeMarker(dir, { ...MARKER, binaries: { 'cpu/llama-server.exe': await sha256File(bin) } })
+    // #1012: the family's own files are not the net's to answer for — a family file that no longer
+    // matches its hash (here the main program) leaves the net's verdict alone.
+    writeFileSync(join(dir, 'llama-server.exe'), 'main-binary')
+    writeRuntimeMarker(dir, {
+      ...MARKER,
+      binaries: { 'llama-server.exe': 'f'.repeat(64), 'cpu/llama-server.exe': await sha256File(bin) }
+    })
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
   })
 
   it("a cpu/ binary with its OWN marker is checked against that one, not the family's", async () => {
     initBinaryVerification(false)
     const { dir, bin } = cpuBinary()
-    writeRuntimeMarker(dir, { ...MARKER, binaries: { 'cpu/llama-server.exe': 'e'.repeat(64) } }) // would be a mismatch
+    // #1012: the main program beside it, whose marker matches it but carries a stale `cpu/` key.
+    const main = join(dir, 'llama-server.exe')
+    writeFileSync(main, 'main-binary')
+    writeRuntimeMarker(dir, {
+      ...MARKER,
+      binaries: {
+        'llama-server.exe': await sha256File(main),
+        // Each would be a mismatch: the net's folder, and the two folders of the net's own swap (#986).
+        'cpu/llama-server.exe': 'e'.repeat(64),
+        'cpu.new/llama-server.exe': 'e'.repeat(64),
+        'cpu.old/llama-server.exe': 'e'.repeat(64)
+      }
+    })
     writeRuntimeMarker(join(dir, 'cpu'), { ...MARKER, binaries: { 'llama-server.exe': await sha256File(bin) } })
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+    // …and the main program's verdict leaves the nested net's keys to the net (#1012).
+    expect(await verifyBinaryBeforeSpawn(main)).toBe('ok')
   })
 
   it('does NOT cache a transient unreadable-binary failure — the next spawn re-hashes (Windows AV/indexer lock)', async () => {
@@ -127,7 +148,8 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
     rmSync(bin)
     mkdirSync(bin)
     await expect(sha256File(bin)).rejects.toThrow() // the premise: this cannot be hashed
-    expect(await verifyBinaryBeforeSpawn(bin)).toBe('mismatch')
+    // #1012 review R-2: its own verdict, never a tamper — the probe and the ladder treat it as no evidence.
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('unreadable')
     // The failure cleared: because it was NOT cached, the next attempt re-hashes the
     // real file and succeeds — the session is not stranded on MockRuntime.
     rmSync(bin, { recursive: true })
@@ -181,6 +203,109 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
     // Even after the file is tampered, the cached decision stands for the rest of the session.
     writeFileSync(bin, 'now-tampered-but-already-verified')
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+})
+
+// #1012: since #998 the marker records every file of an engine copy. The program a sidecar spawns can be
+// a 9.7 KB shim (llama.cpp b12110 on Windows) whose code is in the libraries beside it, so the verifier
+// checks every file the copy's own marker records, not only the program.
+describe("every file the copy's own marker records (#1012)", () => {
+  const MARKER = { version: 'b12110', backend: 'vulkan', os: 'win', arch: 'x64' } as const
+  const sha = (bytes: string): string => createHash('sha256').update(bytes).digest('hex')
+
+  /** Write `files` (key → bytes) into `dir` with a marker recording each one's true hash. Synchronous. */
+  function writeCopy(dir: string, files: Record<string, string>): void {
+    for (const [key, bytes] of Object.entries(files)) {
+      const p = join(dir, ...key.split('/'))
+      mkdirSync(dirname(p), { recursive: true })
+      writeFileSync(p, bytes)
+    }
+    writeRuntimeMarker(dir, {
+      ...MARKER,
+      binaries: Object.fromEntries(Object.entries(files).map(([key, bytes]) => [key, sha(bytes)]))
+    })
+  }
+
+  it('a changed library the marker records is refused (mismatch)', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    writeCopy(dir, { 'llama-server.exe': 'shim', 'llama-server-impl.dll': 'the server' })
+    writeFileSync(join(dir, 'llama-server-impl.dll'), 'another server')
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('mismatch')
+  })
+
+  it('a recorded library that is gone is missing, never a tamper, and is not cached', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeCopy(dir, { 'llama-server.exe': 'shim', 'ggml-vulkan.dll': 'the card backend' })
+    rmSync(join(dir, 'ggml-vulkan.dll'))
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('missing')
+    // Put back (restored from a quarantine, say): the next spawn reads the copy again.
+    writeFileSync(join(dir, 'ggml-vulkan.dll'), 'the card backend')
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  // The knowledge-pack tools start despite a missing file (owner call on #1012), so `missing` must
+  // never hide a changed one.
+  it('a changed file is refused even while another recorded file is missing', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    writeCopy(dir, { 'kiwix-serve.exe': 'serve', 'icudt74.dll': 'icu data', 'icuuc74.dll': 'icu common' })
+    rmSync(join(dir, 'icudt74.dll')) // the missing one comes first, so the changed one is reached after it
+    writeFileSync(join(dir, 'icuuc74.dll'), 'other common')
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'kiwix-serve.exe'))).toBe('mismatch')
+  })
+
+  it("a marker key outside the copy's folder is refused, even with that file's true hash", async () => {
+    initBinaryVerification(false)
+    const outside = join(tmp(), 'planted.dll')
+    writeFileSync(outside, 'planted')
+    const dir = tmp()
+    writeCopy(dir, { 'llama-server.exe': 'shim' })
+    writeRuntimeMarker(dir, {
+      ...MARKER,
+      binaries: { 'llama-server.exe': sha('shim'), [markerBinaryKey(dir, outside)]: sha('planted') }
+    })
+    expect(markerBinaryKey(dir, outside).startsWith('../')).toBe(true) // the premise: the key leaves the folder
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('mismatch')
+  })
+
+  // An engine install (#986's swap, a #532 reinstall, a script re-run) can put a new copy in place while a
+  // spawn is still hashing the old one: the hash then mixes two copies. Whatever that spawn is told, the
+  // next one must judge the new copy against its own marker — not a tamper verdict cached for the session.
+  it('an engine copy replaced while it is being hashed leaves no verdict behind', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeCopy(dir, { 'llama-server.exe': 'shim b1', 'llama.dll': 'library b1' })
+    const during = verifyBinaryBeforeSpawn(bin)
+    writeCopy(dir, { 'llama-server.exe': 'shim b2', 'llama.dll': 'library b2' })
+    // The call read the old marker before the new copy landed: its hash mixed the two copies. Not a
+    // tamper (review R-2): retried, never cached.
+    expect(await during).toBe('unreadable')
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  // Review R-1 / R-6: which missing file stops a start. The program and the libraries are what the OS
+  // loader (or llama.cpp's backend loader) would look for elsewhere — the working directory included,
+  // where a planted copy could be found — so `missing`. Any other recorded file (a tool the app never
+  // runs, a licence text) is `missing-other`: the engines refuse both, the knowledge-pack tools only
+  // the first.
+  it.each([
+    { gone: ['libggml-base.so.0'], verdict: 'missing' },
+    { gone: ['libllama.dylib'], verdict: 'missing' },
+    { gone: ['llama-server.exe'], verdict: 'missing' }, // the spawned program itself (R-6)
+    { gone: ['llama-bench.exe'], verdict: 'missing-other' },
+    { gone: ['LICENSE-LLVM-OpenMP'], verdict: 'missing-other' },
+    { gone: ['ggml.dll', 'llama-bench.exe'], verdict: 'missing' } // a library among them decides
+  ])('recorded files gone: $gone → $verdict', async ({ gone, verdict }) => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const names = ['llama-server.exe', 'ggml.dll', 'libggml-base.so.0', 'libllama.dylib', 'llama-bench.exe', 'LICENSE-LLVM-OpenMP']
+    writeCopy(dir, Object.fromEntries(names.map((name) => [name, `bytes of ${name}`])))
+    for (const name of gone) rmSync(join(dir, name))
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe(verdict)
   })
 })
 

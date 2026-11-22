@@ -17,7 +17,7 @@ import { createPlacementParser, recordModelPlacement } from './placement'
 import { probeGpuDevices } from './gpu'
 import { displayDevice, primaryUsefulDevice } from '../../../shared/gpu-rules'
 import { startModelPrefetch, type ModelPrefetch } from './prefetch'
-import { isEngineCannotRunError, type EngineCannotRunError } from './engine-load'
+import { isEngineCannotRunError, isEngineFilesUnreadableError, type EngineCannotRunError } from './engine-load'
 import { isNextModelLoadSuppressed, recordModelLoadRead } from '../read-speed'
 import {
   failureSignature,
@@ -468,8 +468,10 @@ class LadderRuntime implements ModelRuntime {
       // llama.cpp answers a VRAM shortfall by silently offloading fewer layers rather than
       // failing. So this await is deliberate, and deliberately narrow: it happens only for
       // a manifest that opted in, the probe is the session-cached one (sub-second after the
-      // first call, hard-capped at 10 s, never rejects), and the very next rung reuses the
-      // same cached answer. Every other model keeps the concurrent probe below untouched.
+      // first call; its child is capped at 10 s, after the pre-spawn check of the engine's files,
+      // which since #1012 reads the whole copy: up to a few seconds on a USB 2 stick on the
+      // session's first call; never rejects), and the very next rung reuses the same cached
+      // answer. Every other model keeps the concurrent probe below untouched.
       if (rung.speculative) {
         const verdict = await this.speculativeVerdict(probe, rung.binPath)
         // CODE-2: an await inside the walk is a cancellation point like any other.
@@ -552,6 +554,10 @@ class LadderRuntime implements ModelRuntime {
           engineFailure = err
           continue
         }
+        // #1012 review R-2: the pre-spawn check could not read an engine file just now (an antivirus
+        // holding it). No evidence about the GPU, the model or the MTP flags — nothing is held, persisted
+        // or latched; the next rung (or the next start) reads the files again.
+        if (isEngineFilesUnreadableError(err)) continue
         const reason = err instanceof Error ? err.message : String(err)
         // #182: rung 1a failing says nothing about the GPU — the plain GPU rung is next in
         // the walk and IS the device verdict. Never persist `gpuAutoDisabled` here (an
@@ -754,7 +760,8 @@ class LadderRuntime implements ModelRuntime {
       if (modelFault) this.blameModel(pendingGpuFailure.reason)
       else this.deps.gpu.onGpuFailure?.(pendingGpuFailure.reason)
       pendingGpuFailure = null
-    } else if (lastError !== null) {
+    } else if (lastError !== null && !isEngineFilesUnreadableError(lastError)) {
+      // (#1012 review R-2: an engine file that could not be read is not the model's fault either.)
       // #372: no GPU verdict was held — acceleration is off, `gpuAutoDisabled` is already
       // persisted (no GPU rung ran), or the GPU rung's failure was a bind race (REL-1, never
       // held). There is no device comparison to make and nothing to persist; the model is
