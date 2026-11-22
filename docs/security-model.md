@@ -3523,22 +3523,77 @@ Each sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe) was
 **download/install** time but **not re-hashed immediately before `spawn`**. On a portable offline drive a
 local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install and the next launch gets
 code-exec at the app's privileges — a TOCTOU deviation from the stated re-hash-before-exec policy. The
-spawns are arg-array (no shell), so the only residual was the missing pre-spawn re-verification, now
-closed for the executable itself; the libraries it loads are not re-verified (corrected 2026-11-22, see
-"The gap" below). (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the
-same item.)
+spawns are arg-array (no shell), so the only residual was the missing pre-spawn re-verification. Since
+#1012 it is closed for **every file the engine copy's own install marker records**: the program and the
+libraries beside it. What it still does not cover is under "What the check does not cover" below. (The
+long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the same item.)
 
-**The gap: only the executable is re-hashed (corrected 2026-11-22, follow-ups wave 7).** The verifier
-re-hashes the one file it spawns. Since llama.cpp b12110 that file, `llama-server.exe`, is a 9.7 KB stub:
-the server's code is in `llama-server-impl.dll` and six more libraries the Windows loader loads beside it
+**#1012: every recorded file, not only the program (2026-11-22).** Until #1012 the verifier re-hashed
+the one file it spawns. Since llama.cpp b12110 that file, `llama-server.exe`, is a 9.7 KB stub: the
+server's code is in `llama-server-impl.dll` and six more libraries the Windows loader loads beside it
 (26.5 MB with the stub), and the processor and graphics-card backends (`ggml-cpu-*.dll`,
-`ggml-vulkan.dll`) are loaded at run time. None of them is re-hashed before a spawn, so a replaced
-`llama-server-impl.dll` runs without a `mismatch`. The same holds for the shared libraries of the macOS and
-Linux builds and for whisper.cpp's DLLs. Since #998 the install marker records the hash of every file of an
-engine copy, which a hardening can build on (for example, hash the loaded libraries on the first spawn of a
-session); that is a follow-up issue, and its cost is an owner call. Until then this control covers the
-executable only. The sell gate checks every file a marker records, so a Kit ships with its libraries as
-installed; an attacker who can write the runtime folder after that is the residual above.
+`ggml-vulkan.dll`) are loaded at run time, so a replaced `llama-server-impl.dll` ran without a `mismatch`.
+Since #998 the install marker records the hash of every file of an engine copy, and the verifier now
+re-hashes all of them before the first spawn of a session (owner decision 2026-11-22):
+- **Which files:** every key of the marker found for the program, except those under a nested `cpu/`,
+  `cpu.new` or `cpu.old` folder (another copy with a marker of its own, `NESTED_NET_FOLDERS`). A `cpu/`
+  net without its own marker is checked against the family marker's `cpu/` keys only. A marker written
+  before #998 records the program alone, so that is all it checks (today's Kits keep working as before).
+- **How:** one file at a time, the program first, stopping at the first difference (sequential suits a
+  stick, where the read is the limit). A marker key that leaves the copy's folder (`recordedFilePath`)
+  is refused before anything is read. A marker that changed while the copy was hashed (an install put a
+  new copy in place) gives no verdict, so a mixed hash never sticks as a tamper.
+- **Verdicts:**
+  - **`mismatch`**: a changed file. A tamper.
+  - **`missing`**: a recorded file is not there, and no present file differs. The missing file is the
+    program itself or a library (`.dll`, `.so`, `.so.N`, `.dylib`). Not a tamper.
+  - **`missing-other`**: the same, but only for files that are neither the program nor a library: a tool
+    the app never runs, a licence text.
+  - **`unreadable`**: a recorded file could not be read just now (an antivirus or indexer holding it, a
+    denied read), or the marker changed during the check. No verdict about the copy (review R-2).
+  - **Which verdicts are cached:** only `ok`, `mismatch` and `skip-*` are cached for the session.
+    `missing`, `missing-other` and `unreadable` are re-checked on every attempt, so a file put back or a
+    lock that cleared is found by the next spawn or "Check again".
+  - **The engines** refuse both missing verdicts as damaged files (below). That keeps the #532 "Install
+    again" offer up, since a start that went ahead and ran would drop that verdict at once.
+  - **The knowledge-pack tools** have no in-app repair. kiwix-serve and kiwix-manage still refuse a missing
+    program or library (review R-1, R-6): the OS loader would look for a missing library elsewhere,
+    including the knowledge-pack library folder these children start in, where a planted copy would be
+    loaded. They start on `missing-other`, with a code-only log line (owner decision). A changed file is
+    always refused.
+  - **`unreadable`** refuses this attempt without blaming anything: no "engine files damaged" verdict, the
+    probe gives no answer, and the start ladder counts it as no evidence about the GPU or the model.
+- **Cost:** the b12110 Windows copy is 52 files, 94.5 MB: 0.28 s on a USB 3 stick (measured), about 3 s
+  on a USB 2 stick (estimated). whisper.cpp is 10.1 MB. Measured warm on NVMe: 308 ms with the longest
+  event-loop gap 1.5 ms (`sha256File` streams).
+  - **When it is paid:** once per session for an intact copy, usually by the GPU probe at unlock. While a
+    file is missing or cannot be read, every attempt reads the copy again. That means each rung of a chat
+    start, each helper start and each probe call; after the first pass the OS file cache normally absorbs
+    it.
+
+**What the check does not cover (#1012).** It verifies the files a marker records; it does not notice a
+file **added** to the engine folder. That matters for llama.cpp: its backend loader (`ggml.dll`,
+`ggml_backend_load_best`) enumerates folders for `ggml-<backend>-*` libraries and loads each candidate to
+ask for its score, so an added `ggml-cpu-<anything>.dll` beside the program can run code without changing
+a recorded file. The b12110 `ggml.dll` carries the enumeration, current-directory and `ggml_backend_score`
+strings. That the current directory is one of the searched folders is read from llama.cpp's source as
+remembered, not re-read at b12110. The llama-server spawns pass no working directory, so the app's own is
+the child's.
+
+The kiwix children start in the knowledge-pack library's folder (#787). A RECORDED library missing there
+is refused (review R-1). An unrecorded library the loader searches for in that folder is the same
+added-file gap.
+
+Also not covered:
+- a marker written before #998 (the program alone);
+- a tamper that lands after the first spawn of a session (SEC-4 below);
+- a library that stays unreadable, for example behind a security product's access refusal. It is
+  `unreadable` at every start: no verdict and no "Install again" offer, and the chat runs on the demo
+  runtime (`known-limitations.md`).
+
+An attacker who can write the engine folder can usually also replace the app itself. A follow-up proposes
+refusing an unrecorded library in a copy whose marker records more than the program, and starting the
+engines in their own folder.
 
 **The fix rests on three facts the deferral called out, each now addressed:**
 
@@ -3550,20 +3605,22 @@ installed; an attacker who can write the runtime folder after that is the residu
    unchanged. The hash is recorded by **all three** marker writers: the in-app installer
    (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
    still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #998 all
-   three record every file of the copy, the libraries included (the verifier still looks up the
-   executable's key alone; the sell gate and the app's "complete" checks read every key). Since #986
+   three record every file of the copy, the libraries included, and since #1012 the verifier re-hashes
+   every key, as the sell gate and the app's "complete" checks read every key. Since #986
    the in-app installer hashes and marks the copy in its staging folder `<os>.new/` and swaps the
    folder in by rename; the keys are relative to the folder, so they are the install folder's after
    the swap, and the bytes the marker covers are flushed to the device before it is written.
 
 2. **One shared, session-cached verifier.** `binary-verifier.ts` exposes
-   `verifyBinaryBeforeSpawn(binPath)` → `ok | skip-legacy | skip-dev | mismatch`. It walks **up** from the
-   binary's directory to the nearest install marker (so the `cpu/` safety-net binary finds the family
-   marker one level above when its own dir has none), looks up the recorded hash for that binary, and
-   re-hashes the on-disk bytes. The result is **cached per resolved path for the session** — the GPU probe
+   `verifyBinaryBeforeSpawn(binPath)` → `ok | skip-legacy | skip-dev | mismatch | missing |
+   missing-other | unreadable` (the last three since #1012). It walks **up** from the binary's directory
+   to the nearest install marker (so the `cpu/` safety-net binary finds the family marker one level above
+   when its own dir has none) and re-hashes every file that marker records for the binary's copy (#1012,
+   above). `ok`, `mismatch` and `skip-*` are **cached per resolved path for the session**. The GPU probe
    and the server start race for the very same path (`factory.ts` kicks the probe concurrently with the
-   start), so both read one consistent decision off a single hash. An unreadable binary fails **safe**
-   (`mismatch`).
+   start), and calls that overlap share one hash and one decision. `missing`, `missing-other` and
+   `unreadable` are not cached: a later call reads the copy again. A file that cannot be read fails
+   **safe** (refused), as `unreadable`, never as a tamper.
 
 3. **Non-breaking, fail-safe rollout.** `initBinaryVerification(isDev)` is called once at startup
    (`index.ts`): packaged builds **enforce**, dev builds **skip** (`skip-dev`) — the on-drive binary may
@@ -3582,25 +3639,41 @@ installed; an attacker who can write the runtime folder after that is the residu
    (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES`) until the owner rules on kits sold before this
    change; a DIY drive keeps the `skip-legacy` tolerance either way (`known-limitations.md`).
 
-**Behaviour at each spawn seam (a `mismatch` only ever fires in a packaged build):**
+**Behaviour at each spawn seam (these verdicts only ever fire in a packaged build; "missing" below means
+`missing` or `missing-other`):**
 - **`LlamaServer.start()` (`sidecar.ts`)** — throws before allocating a port/child, so the start **ladder
   falls to the next rung / MockRuntime** with a content-free tamper warning to the local log. This one
   method funnels **every** llama-server spawn (chat runtime, embedder, reranker, vision), so all are
   covered by the single check.
+  - Missing: the typed `EngineCannotRunError` with a `files-damaged` verdict (`reportMissingEngineFiles`,
+    `exit: 'not started'`), so the ladder walks on without blaming the GPU or the model, and the "Install
+    again" offer appears.
+  - `unreadable`: the typed `EngineFilesUnreadableError`. No verdict is recorded, and the ladder holds,
+    persists and latches nothing for that rung: no GPU failure, no model blame, no MTP latch.
 - **`probeGpuDevices()` (`gpu.ts`)** — resolves **`[]`** (reads as "no GPU"); the probe's contract is that
   it never throws, so a tampered binary is simply never executed for enumeration.
+  - Missing: **`null`** (no answer, never persisted as "no graphics card") and the same verdict.
+  - `unreadable`: `null`, no verdict.
 - **`WhisperCliTranscriber.run()` (`transcriber/cli.ts`)** — refuses before spawn; the audio import fails
   per-file with the generic failure copy (raw reason to the local log only).
+  - Missing: the typed error and the voice engine's `files-damaged` verdict.
+  - `unreadable`: `EngineFilesUnreadableError`, no verdict.
 - **`checkProgramLoads()` (`engine-health.ts`)** — the #530 "Check again" launch resolves `unchecked`
   and never spawns a tampered binary.
+  - Missing: `refused` (the verdict stands), never spawned.
+  - `unreadable`: `unchecked` (the verdict is left as it was, no damage recorded; choosing Check again
+    re-reads the copy).
+- **`KiwixServer` (`zim/serve.ts`) and `kiwixManageAdd` (`zim/tools.ts`)** — `mismatch`, `missing` (the
+  program or a library) and `unreadable` refuse before spawn. `missing-other` is logged with its code
+  only and the program starts (no in-app repair exists for the knowledge-pack tools).
 
 **Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
 carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that
 predates this field, or whose binary was modified after install, **fails the gate** (forcing a rebuild),
 so a sold drive always ships re-verifiable executables. Since #998 it also checks every further file a
 marker records (present, inside its folder, the recorded bytes); a marker that records only the
-executable passes as before. That covers the libraries when the Kit is built, not before each spawn
-(the gap above).
+executable passes as before. That covers the libraries when the Kit is built; since #1012 the pre-spawn
+check covers them again before the first spawn of each session.
 
 Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
 predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there

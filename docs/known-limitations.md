@@ -337,6 +337,34 @@ password recovery — are documented in
   switched **off** (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` in `binary-verifier.ts`) until the
   owner rules on kits sold before this change (#234). Trust there still rests on drive provisioning +
   filesystem integrity, the same residual already accepted for on-drive sidecars and app skills.
+- **The pre-spawn check covers the files an engine's marker records, nothing more (#1012 — accept +
+  document).** Since #1012 the verifier re-hashes every file the engine copy's own install marker records
+  (the libraries beside the program included) before the first spawn of a session. Three things stay
+  outside it or work less well than one would hope ([`security-model.md`](security-model.md) "What the
+  check does not cover"):
+  1. **Markers written before #998** record the program alone. A Kit or drive built before then keeps a
+     program-only check until the engine is installed again (in-app or with `fetch-runtime`).
+  2. **A file added to the engine folder is not noticed.** llama.cpp's backend loader loads every
+     `ggml-<backend>-*` library it finds to ask for its score, so an added library beside the program can
+     run. Each llama-server spawn also inherits the app's working directory, which is among the folders
+     the loader searches (from llama.cpp's source as remembered; not re-read at b12110). The kiwix
+     children start in the knowledge-pack library's folder. A recorded library missing from their copy
+     is refused (the loader would look for it there), but an unrecorded one is not checked.
+  3. **A library that stays unreadable gets no repair offer** (review R-4). Examples: a security product
+     that denies access and leaves the file, or a wrong file permission. Every start is refused as
+     `unreadable`. That records no "engine files damaged" verdict (it is not damage), so there is no
+     "Install again" offer, and the chat runs on the demo runtime until the access is fixed.
+
+  A follow-up proposes refusing an unrecorded library and starting the engines in their own folder.
+
+  What a missing recorded file does:
+  - **The engines:** any missing file is refused as damaged engine files, with the "Install again" offer.
+    That holds even for a file the engine never loads on this computer (owner decision). Helpers without a
+    `cpu/` rung (search, reranking, images, translation) stop with the chat engine.
+  - **The knowledge-pack tools:** they have no in-app repair. A missing program or library stops them; any
+    other missing file (a tool the app never runs) is only logged.
+  - **Cost:** while a file is missing or unreadable, each start attempt reads the whole copy again, since
+    those verdicts are not cached.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time

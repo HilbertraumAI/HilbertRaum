@@ -72,6 +72,23 @@ from its first public `1.0.0` release onward.
   the two passages it reads (that question's clause now comes third). The translation adds about half a second to a second on a graphics card, and a few seconds on
   the processor alone, to these questions only. English questions about German documents work as before (#1003).
 
+### Security
+
+- **Before it starts the AI engine or the voice engine, HilbertRaum now checks every file the engine
+  was installed with, not only its program file.** The AI engine's program is now a small launcher, and
+  its code is in the libraries beside it, which were never checked. If one of those files changed, the
+  engine is not started, just as when the program itself was changed. If one is missing (an antivirus
+  can quarantine one, for example), the engine is not started either, and the AI Model screen offers
+  to install it again. Before, the engine started without it: without the graphics-card file, models
+  ran slowly on the processor alone and the app reported no graphics card. If a file cannot be read
+  just then (an antivirus checking it, for example), the engine is not started this time and the next
+  start tries again; that is no longer taken as a fault of the graphics card or the model. An intact
+  engine is checked once per session, at the first start: about a third of a second on a USB 3 stick,
+  about three seconds on a USB 2 stick. While a file is missing or cannot be read, every start checks
+  again. The knowledge-pack tools cannot be installed again from the app. They are not started without
+  their own program or a library either. A missing file they never use is noted in the app's log, and
+  they start as before (#1012).
+
 ## [0.1.66] — 2026-11-21
 
 ### Added

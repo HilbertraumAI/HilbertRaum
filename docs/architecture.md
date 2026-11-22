@@ -5824,6 +5824,35 @@ launch: spawn ENOENT`), `gpu.test.ts` (both streams: `null`; an exit 0 after a s
 `unchecked`), `transcriber.test.ts` (both streams: the spawn error), `zim-serve.test.ts` (#787's
 row, now through the guard); `repo-hygiene.test.ts` "#790" (the two rules). Mutations: 21/21 red.
 
+### §13 #1012 amendment — a recorded file missing before the spawn is the same verdict (2026-11-22)
+
+The pre-spawn check re-hashes every file the engine copy's install marker records (`security-model.md`
+"Re-hash sidecar binaries before spawn", #1012). A recorded file that is gone gives the verifier's
+`missing` (the program or a library) or `missing-other` (any other file). That is no tamper, and the
+engines' spawn sites treat both as this record's `files-damaged`, without starting the program
+(`reportMissingEngineFiles`, `runtime/engine-load.ts`). The verdict's `exit` is `'not started'` and it
+carries no `name`. A recorded file that cannot be read just now is `unreadable` (review R-2): no verdict,
+not cached, and the typed `EngineFilesUnreadableError`, which the ladder counts as no evidence about the
+GPU, the model or the MTP flags (it holds, persists and latches nothing, and names no model when every
+rung ended so).
+- **Why not start anyway.** A start that went ahead and ran would drop the verdict at once (§9, a healthy
+  start clears its reporter), and the #532 offer with it. A missing `ggml-vulkan.dll` runs silently on the
+  processor, and the probe's empty list was persisted as "no graphics card" (#1013).
+- **What each site does.**
+  - `LlamaServer` throws the typed error, so the ladder walks on to the `cpu/` net (§4).
+  - The probe resolves `null`.
+  - `checkProgramLoads` returns `refused`, so "Check again" keeps the verdict while the file is gone.
+  - whisper-cli throws the typed error.
+  - The knowledge-pack tools (no verdict family, no repair) refuse `missing` (a missing library would be
+    looked for in the library folder they start in, review R-1), and log the code and start on
+    `missing-other`.
+  - On `unreadable`: the probe resolves `null`, `checkProgramLoads` returns `unchecked`, and `LlamaServer`
+    and whisper-cli throw `EngineFilesUnreadableError`.
+- **Tests:**
+  - `binary-verify-spawn.test.ts`: the two "#1012" describes, one row per site and verdict.
+  - `binary-verifier.test.ts` "(#1012)": includes which missing file counts.
+  - `runtime-ladder.test.ts` "#1012": an unreadable rung is no evidence.
+
 ## In-app engine updates — design record (#516, 2026-10-05)
 
 _A drive set up before a pin bump keeps its engines: after #514 (llama.cpp b9849 → b11146) every
@@ -6273,7 +6302,8 @@ update result):
 gate verifies what a marker records and never requires a full list (no Kit is re-provisioned); #999
 option A; #1000 option R with the async flush, and `beforeReplace` keeps refusing work that started
 during the unpack rather than waiting for it. The pre-spawn re-hash's gap is documented now
-(`security-model.md`), its hardening is a follow-up.
+(`security-model.md`), its hardening is a follow-up. _(Done in #1012, 2026-11-22: the verifier re-hashes
+every key of the copy's own marker before the first spawn of a session; "Engine load failures" §13.)_
 
 **As built** (`runtime-download.ts`, `archive-size.ts`, `assets.ts`, `commercial-drive.ts`,
 `runtime/engine-load.ts`, `fetch-runtime.{ps1,sh}`):
