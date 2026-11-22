@@ -218,7 +218,15 @@ function logStageOutcome(ctx: AppContext): void {
   }
 }
 
-export function registerWorkspaceIpc(ctx: AppContext): void {
+/** What the app passes beside the context (#1002), so the shared `AppContext` type stays as it is. */
+export interface WorkspaceIpcHooks {
+  /** Called once at the end of each unlock or first-run create that opened the workspace and ran its post-unlock steps;
+   *  never for one that failed or was refused (a step after the open included), nor for an unlock that found it already
+   *  open. `index.ts` binds the quit closure's `onWorkspaceUnlocked`. */
+  onUnlocked?: () => void
+}
+
+export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks = {}): void {
   const ipcHandle = guardedHandleFor(ctx)
   ipcHandle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
 
@@ -305,6 +313,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // unlock's critical path (a 30 s manager spawn must not sit between the password and
       // the workspace).
       startKnowledgePackSession(ctx)
+      // #1002: last, once every post-unlock step went through: after a session-end lock that left the app running, the
+      // quit closure returns to a normal session (it changes nothing in any other state). Never on the early return
+      // above, nor when the unlock or a step after it failed (the catch below): the closure then stays as it was, and a
+      // quit locks again and exits.
+      hooks.onUnlocked?.()
       return { ok: true, state }
     } catch (err) {
       logStageOutcome(ctx) // #973 (review round 2 F4): a staged copy removed before a later step failed
@@ -512,6 +525,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // …and the third knowledge-pack session seam (#301, D3): a re-created vault may sit on
         // a drive that already holds archives, so this session reconciles them too.
         startKnowledgePackSession(ctx)
+        // #1002: a first-run create opened the workspace too, so the quit closure hears of it as of an unlock, last
+        // (it changes nothing unless a session-end lock left the app running). Never for a refused or failed create.
+        hooks.onUnlocked?.()
         return { ok: true, state }
       } catch (err) {
         // #247: the database already on disk (a plaintext workspace, or the file a create

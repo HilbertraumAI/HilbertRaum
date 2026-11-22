@@ -240,6 +240,85 @@ describe('registerWorkspaceIpc', () => {
     }
   })
 
+  // #1002: the hook tells the quit closure that the user is back, which leaves the state a session-end lock left behind
+  // when the app ran on (`shutdown.ts`). Only an unlock that opened the workspace may: a wrong password, a refusal (here a
+  // key file a newer build wrote) and the early return over a workspace already open verify nothing.
+  it('a successful unlock calls the unlocked hook once; a wrong password, a refused unlock and an unlock of an open workspace do not (#1002)', async () => {
+    const onUnlocked = vi.fn()
+    const newer = startedOn(
+      editDescriptor(lockedVault('wsipc', PW), (d) => {
+        d.version = 3
+      })
+    )
+    registerWorkspaceIpc(workspaceIpcCtx(newer), { onUnlocked })
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'workspace_newer' })
+    } finally {
+      newer.shutdown()
+    }
+    ipcState.handlers.clear()
+    const ctrl = startedOn(lockedVault('wsipc', PW))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl), { onUnlocked })
+    try {
+      const wrong = await invoke(handlers, IPC.unlockWorkspace, 'not-the-password')
+      expect(wrong.result).toMatchObject({ ok: false, reason: 'wrong_password' })
+      expect(onUnlocked).not.toHaveBeenCalled()
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(onUnlocked).toHaveBeenCalledTimes(1)
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toEqual({ ok: true, state: ctrl.getState() })
+      expect(onUnlocked).toHaveBeenCalledTimes(1) // the early return over an open workspace calls nothing
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // #1002: the hook comes last. When a step after the open throws (here the release of a stale quit hold), the handler
+  // answers a failure, and the closure must stay as it was: a quit then still locks again and exits.
+  it('an unlock or a create whose post-open step throws does not call the unlocked hook (#1002)', async () => {
+    const onUnlocked = vi.fn()
+    const failingStep = {
+      releaseQueueHold: () => {
+        throw new Error('a post-unlock step failed')
+      }
+    }
+    const locked = startedOn(lockedVault('wsipc', PW))
+    registerWorkspaceIpc(workspaceIpcCtx(locked, { extra: { docTasks: failingStep } }), { onUnlocked })
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false })
+      expect(onUnlocked).not.toHaveBeenCalled()
+    } finally {
+      locked.lock()
+    }
+    ipcState.handlers.clear()
+    const fresh = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(fresh, { extra: { docTasks: failingStep } }), { onUnlocked })
+    try {
+      const created = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH), 'encrypted')
+      expect(created.result).toMatchObject({ ok: false })
+      expect(onUnlocked).not.toHaveBeenCalled()
+    } finally {
+      fresh.lock()
+    }
+  })
+
+  // #1002: a first-run create opens the workspace as an unlock does, so it tells the closure too; a refused create
+  // (a password one short of the floor) opened nothing.
+  it('a successful create calls the unlocked hook once; a refused create does not (#1002)', async () => {
+    const onUnlocked = vi.fn()
+    const ctrl = startedOn(freshVaultPaths('wsipc'))
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl), { onUnlocked })
+    try {
+      const short = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH - 1), 'encrypted')
+      expect(short.result).toMatchObject({ ok: false, reason: 'refused' })
+      expect(onUnlocked).not.toHaveBeenCalled()
+      const created = await invoke(handlers, IPC.createWorkspace, 'a'.repeat(MIN_PASSWORD_LENGTH), 'encrypted')
+      expect(created.result).toMatchObject({ ok: true, state: { state: 'unlocked', mode: 'encrypted' } })
+      expect(onUnlocked).toHaveBeenCalledTimes(1)
+    } finally {
+      ctrl.lock()
+    }
+  })
+
   // #936 review SF-2: the quit hold has one more release, an unlock. No quit is under way while someone unlocks, so a
   // hold still set then (a quit called off outside the close guard) would otherwise block every document task, and
   // the chat busy guard with it, for the rest of the session.

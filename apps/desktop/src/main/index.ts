@@ -909,7 +909,9 @@ function initBackend(): void {
   // registry is opt-in per skill; an unregistered skill keeps the relevance path verbatim (R5).
   registerBuiltinSkillAnalysisHandlers()
   registerCoreIpc(ctx)
-  registerWorkspaceIpc(ctx)
+  // #1002: a successful unlock tells the quit closure, which leaves the state a session-end lock left behind when the
+  // app ran on (`shutdown.ts`).
+  registerWorkspaceIpc(ctx, { onUnlocked: lifecycle.onWorkspaceUnlocked })
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
@@ -1147,7 +1149,9 @@ const lifecycle = createAppLifecycleHandlers({
   platform: process.platform,
   quit: () => app.quit(),
   killSidecarChildren: killRegisteredSidecarChildren,
-  log
+  log,
+  // #1002: a Dock click after a session-end lock opens the window only onto an encrypted workspace's unlock screen.
+  workspaceLocked: () => ctx?.workspace.getState().state === 'locked'
 })
 
 app.whenReady().then(() => {
@@ -1226,6 +1230,9 @@ const quitRequests = trackQuitRequests(app)
 // holds closes the OCR window while the main window saves). A guard's Keep open releases it.
 holdQueueOnQuit(app, () => ctx?.docTasks?.holdQueueForQuit())
 
+// #1002: the closure notes a quit that began after a session-end lock (a Dock click or an unlock then changes
+// nothing). At module scope beside `will-quit`, so it is in place for every quit.
+app.on('before-quit', lifecycle.onBeforeQuit)
 app.on('will-quit', lifecycle.onWillQuit)
 
 // Last-resort crash safety: a hard `uncaughtException` skips `will-quit`, so lock the vault

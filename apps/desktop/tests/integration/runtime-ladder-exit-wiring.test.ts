@@ -8,7 +8,10 @@ import {
 } from '../../src/main/services/runtime/factory'
 import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
-import type { RuntimeStartOptions } from '../../src/main/services/runtime'
+import { RuntimeManager, type RuntimeStartOptions } from '../../src/main/services/runtime'
+import { emergencyLock } from '../../src/main/shutdown'
+import type { AppContext } from '../../src/main/services/context'
+import { workspaceStandIn } from '../helpers/workspace-stand-in'
 import type { GpuDevice } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { sseBody } from '../helpers/fake-sidecar'
@@ -258,5 +261,46 @@ describe('the CPU crash handler counts one crash once, and never during a lock (
     resolveProbe([RTX])
     await starting
     await runtime.stop()
+  })
+})
+
+// #1002 (S-5): the emergency lock reaps every registered sidecar with SIGKILL. In a process that lives on (a macOS
+// shutdown another app cancelled), a chat runtime nobody told took its reaped server for a crash: on the GPU the §5.3
+// fallback (a false compatibility-mode notice and audit events), on the processor the #599 route; and the dead runtime
+// stayed active, so the next unlock's auto-start ("something is already running") kept it. The lock now stops the
+// runtime through its own stop before the reap: the reap is an expected exit, and no model is active afterwards.
+describe('an emergency lock stops the chat runtime before its reap (#1002)', () => {
+  it.each([
+    ['GPU', [RTX]],
+    ['CPU', []]
+  ] as const)('a reaped %s chat server is no crash, and no model is active after the lock', async (_backend, devices) => {
+    const { spawn, children } = fakeSpawn()
+    const crashes: string[] = []
+    const manager = new RuntimeManager(
+      realLadder(spawn, healthOkFetch, {
+        getGpuMode: () => 'auto',
+        probeDevices: async () => [...devices],
+        onGpuCrash: () => void crashes.push('gpu'),
+        onCpuCrash: () => void crashes.push('cpu')
+      })
+    )
+    await manager.start(opts)
+    expect(manager.activeModelId()).toBe('m')
+    const ctx = { runtime: manager, workspace: workspaceStandIn() } as unknown as AppContext
+    // The reap's SIGKILL; the child's exit event comes from the OS in a later turn of the event loop.
+    await new Promise<void>((reaped) =>
+      emergencyLock(ctx, {
+        detachVaultKey: () => undefined,
+        killSidecarChildren: () =>
+          setImmediate(() => {
+            children[0].emit('exit', null, 'SIGKILL')
+            reaped()
+          }),
+        log: { error: () => undefined, info: () => undefined }
+      })
+    )
+    await Promise.resolve()
+    expect(crashes).toEqual([])
+    expect(manager.activeModelId()).toBeNull()
   })
 })
