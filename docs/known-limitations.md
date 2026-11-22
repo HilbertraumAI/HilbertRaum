@@ -247,7 +247,8 @@ password recovery — are documented in
   (the next start then puts the new copy in place); the app does not say which file. A folder at
   the encrypted workspace file's own name still blocks every unlock until it is removed. A folder at
   one of the change's write temps is left on the drive as it is. An out-of-store stored copy outside the
-  workspace folder (issue #188's absolute paths) stays staged under its new key, beside its old
+  workspace folder (issue #188's absolute paths), or in a folder inside it reached through a link,
+  stays staged under its new key, beside its old
   copy, until the first unlock with the right password, and while the unlock cannot judge it (a
   link, a folder or a second hard link at either name, a stored copy that already opens, a newer
   build's frame) it stays staged and the journal stays with it; a change rolled back before its

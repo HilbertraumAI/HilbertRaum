@@ -2082,7 +2082,7 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   unlock when it or its stored copy cannot be read, or it cannot be swapped in. A stage the journal lists rolls
   forward at the start, as before; "lists" means an entry the containment below admits (#1014 round 4). With
   `documents/` itself a junction elsewhere, the scan still finds the stages behind it, but the entries through
-  the link are refused, so those stages are doubts: the start leaves them, and the unlock swaps in only one
+  the link are not admitted, so those stages are doubts: the start leaves them, and the unlock swaps in only one
   that authenticates. The scan does not skip a linked store, so a user's own junctioned store loses nothing.
   **What a journal entry may name (#1014).** The journal is plain JSON in the workspace folder,
   read at every start before any password, and its entries are absolute paths: nothing proves
@@ -2092,8 +2092,11 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   no folder between the workspace folder and the entry may be a link (`lstat`; a Windows junction
   reads as one), and the entry's folder, resolved, must still lie in the resolved workspace
   folder (an entry under `documents/J/`, `J` a junction elsewhere, had the start shred and
-  replace the file behind it). A stat that fails for any reason but ENOENT (a hold, a permission)
-  proves nothing: such an entry is neither acted on nor dropped, and the next pass judges it again
+  replace the file behind it). An entry inside the folder by its text but through a link is handled
+  as an out-of-store copy's stage (below): acted on only when the open database lists its stored copy
+  (round 5; refused, it left a stored copy in a workspace folder reached through a junction, which a
+  change stages, under the retired key for good). A stat that fails for any reason but ENOENT (a
+  hold, a permission) proves nothing: such an entry is neither acted on nor dropped, and the next pass judges it again
   (round 4; read as "outside", it was dropped, and an out-of-store copy inside the workspace folder,
   which no scan finds, stayed under the retired key for good). The `remove` list is read as a
   flag for the rotated log (above), never as paths. A stage outside the workspace folder is an
@@ -2106,7 +2109,8 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   than with ENOENT) is left, and so is the journal, the only
   record of that stage, until an unlock settles it. A kept journal vouches only for what still
   waits: once a pass has settled what it can, the journal is rewritten (temp + rename, as it is
-  written) to list only the stages still waiting, or cleared when none wait. Kept as written, it
+  written) to list only the stages still waiting, or cleared when none wait; also, since round 5, by
+  a pass that then fails because a held file stopped one swap. Kept as written, it
   went on listing the staged database and the in-store stages already swapped in, so a stray
   `.enc.new` that turned up later was "listed" and rolled over `.enc` without the #973 key check.
   A password change, which holds the database,
@@ -2115,7 +2119,8 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   entry once, by the pass that drops it from the journal; a folder left in place (above) and an
   entry a stat could not judge by each pass that meets them. The unlock's recovery before the
   password and a password change's passes count too (round 4; a change's count goes with the next
-  unlock's line). An entry
+  unlock's line), and so does the unlock's out-of-store pass for a listed stage it leaves (round 5):
+  one that does not open under the data key once, one it may not judge yet at each unlock. An entry
   written under another drive root fails the containment too and loses nothing: the in-store
   stages it named are found by the scan and judged at the unlock as #973 and #1001 doubts (an
   entry is never rebased onto this root, which would let a journal vouch by relative name). A
