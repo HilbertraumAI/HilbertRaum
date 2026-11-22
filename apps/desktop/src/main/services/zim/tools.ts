@@ -114,7 +114,7 @@ export type KiwixManageChildState = 'not-spawned' | 'exited' | 'uncertain'
  *  character because no ASCII spelling of the archive existed (`planKiwixManageAdd`) — what an
  *  `exit` most likely means then, since the pinned build mis-reads it; false otherwise. */
 export class KiwixManageError extends Error {
-  readonly kind: 'verify' | 'files' | 'spawn' | 'exit' | 'timeout' | 'abort'
+  readonly kind: 'verify' | 'files' | 'filesUnreadable' | 'spawn' | 'exit' | 'timeout' | 'abort'
   readonly childState: KiwixManageChildState
   readonly settled: Promise<void> | null
   readonly nonAsciiArgv: boolean
@@ -197,11 +197,15 @@ export async function kiwixManageAdd(
       'not-spawned'
     )
   }
-  // (Code review round 3: its own kind — a missing or locked file is no tamper.)
-  if (verdict === 'missing' || verdict === 'unreadable') {
+  // (Code review round 3: its own kinds — a missing or locked file is no tamper. Round 5: a file that
+  // cannot be read JUST NOW is a kind of its own, which the library build and the service never latch.)
+  if (verdict === 'missing') {
+    throw new KiwixManageError('kiwix-manage was not started: a file of its install is missing', 'files', 'not-spawned')
+  }
+  if (verdict === 'unreadable') {
     throw new KiwixManageError(
-      'kiwix-manage was not started: a file of its install is missing or could not be read',
-      'files',
+      'kiwix-manage was not started: a file of its install could not be read just now',
+      'filesUnreadable',
       'not-spawned'
     )
   }

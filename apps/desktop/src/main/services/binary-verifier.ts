@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { log } from './logging'
 import {
@@ -161,7 +162,12 @@ function readErrorCode(err: unknown): string | null {
   return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : null
 }
 
-/** A read error that says the file is not there (no file, or no folder on its path). */
+/**
+ * A read error that says the file is not there (no file, or no folder on its path). A folder or another
+ * non-regular file AT the path is caught before the read (round 5: the `stat` in the hashing loop). A
+ * lasting deny-read ACL (EACCES / EPERM) cannot be told from an antivirus hold (Windows reports EPERM or
+ * EBUSY for both), so it stays `unreadable`.
+ */
 function isAbsent(err: unknown): boolean {
   const code = readErrorCode(err)
   return code === 'ENOENT' || code === 'ENOTDIR'
@@ -221,27 +227,35 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
   let missingCode = false
   let changed = false
   for (const file of files) {
-    let actual: string
+    let actual = ''
+    let absent = false
     try {
-      actual = await sha256File(file.path)
+      // Code review round 5: a recorded path that holds no regular file (a folder, a pipe, a device) is
+      // no file of the copy and never heals by waiting — missing, like no file at all (reading a pipe
+      // would also block the check). One `stat` per file.
+      if ((await stat(file.path)).isFile()) actual = await sha256File(file.path)
+      else absent = true
     } catch (err) {
-      if (isAbsent(err)) {
-        missing++
-        // Code review round 3: a missing program or library refuses the copy at every seam, so the rest
-        // is not read (a quarantined DLL would otherwise cost the whole copy on each start attempt).
-        if (file.code) {
-          missingCode = true
-          break
-        }
-        continue
+      if (!isAbsent(err)) {
+        // Couldn't read a file to hash it (e.g. a transient Windows AV/indexer lock, a denied read).
+        // No verdict about the copy (review R-2: never a tamper): refused this attempt, not cached,
+        // and the next spawn reads it again once the lock clears.
+        log.warn('Could not read a sidecar engine file before spawn — refusing this attempt (will re-check next spawn)', {
+          code: readErrorCode(err) ?? 'read-failed'
+        })
+        return 'unreadable'
       }
-      // Couldn't read a file to hash it (e.g. a transient Windows AV/indexer lock, a denied read).
-      // No verdict about the copy (review R-2: never a tamper): refused this attempt, not cached,
-      // and the next spawn reads it again once the lock clears.
-      log.warn('Could not read a sidecar engine file before spawn — refusing this attempt (will re-check next spawn)', {
-        code: readErrorCode(err) ?? 'read-failed'
-      })
-      return 'unreadable'
+      absent = true
+    }
+    if (absent) {
+      missing++
+      // Code review round 3: a missing program or library refuses the copy at every seam, so the rest
+      // is not read (a quarantined DLL would otherwise cost the whole copy on each start attempt).
+      if (file.code) {
+        missingCode = true
+        break
+      }
+      continue
     }
     if (actual.toLowerCase() !== file.expected.toLowerCase()) {
       changed = true

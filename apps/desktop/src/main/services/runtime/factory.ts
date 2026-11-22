@@ -739,7 +739,11 @@ class LadderRuntime implements ModelRuntime {
         this.gpuName = null
       }
       this.labelled = true
-      this.deps.onSelect?.('llama', this.opts, `started via ${rung.label} (backend: ${this.backend}${labelNote})`)
+      // #1012 code review round 5: a higher rung of this walk could not read the engine's files, so this
+      // start may run lower (on the processor) than the machine allows, for this session and without a
+      // notice. Nothing was latched; the next start walks again. Said once, in the selection's log line.
+      const unreadableNote = sawUnreadable ? '; a higher rung could not read the engine files just now' : ''
+      this.deps.onSelect?.('llama', this.opts, `started via ${rung.label} (backend: ${this.backend}${labelNote}${unreadableNote})`)
       // benchmark.md "Your model": what this start's log said about where the model landed.
       // Recorded after the backend label so the observation carries the same verdict the UI
       // shows; the observer (IPC layer) persists it. Never throws into the start.

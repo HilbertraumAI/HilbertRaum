@@ -1193,6 +1193,8 @@ export type VisionErrorCode =
   | 'cancelled'
   | 'busy'
   | 'modelDamaged'
+  /** #1012: an engine file could not be read just now (an antivirus scan holding it) — try again in a minute. */
+  | 'filesUnreadable'
 
 export interface ImageJob {
   jobId: string

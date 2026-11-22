@@ -558,7 +558,9 @@ function initBackend(): void {
       onEngineFilesUnreadable: (opts) => {
         perfMark('runtime_engine_files_unreadable', { modelId: opts.modelId })
         log.warn('The AI engine could not start: one of its files could not be read just now', { modelId: opts.modelId })
-        notifyRenderer(tMain('main.engine.filesUnreadable'))
+        // Code review round 5: the button opens the AI Model screen, where "Stop runtime" and then "Use this
+        // model" start the model again (choosing the same model alone keeps the running demo runtime).
+        notifyRenderer(tMain('main.engine.filesUnreadable'), 'models')
       },
       onPrefetch: (opts, event, detail) => {
         perfMark('model_prefetch', { modelId: opts.modelId, event })

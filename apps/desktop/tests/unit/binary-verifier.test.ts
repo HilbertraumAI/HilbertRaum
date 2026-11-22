@@ -11,7 +11,7 @@ import {
 } from '../../src/main/services/binary-verifier'
 import { markerBinaryKey, writeRuntimeMarker } from '../../src/main/services/assets'
 import { sha256File } from '../../src/main/services/models'
-import { verifierInert } from '../helpers/binary-fixtures'
+import { allowReading, denyReading, verifierInert } from '../helpers/binary-fixtures'
 
 // vuln-scan 2026-06-21 item B — re-hash sidecar binaries before spawn.
 
@@ -144,16 +144,16 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
       arch: 'x64',
       binaries: { [markerBinaryKey(dir, bin)]: good }
     })
-    // A real read failure, on every OS: a directory where the binary should be (EISDIR from the hash's read stream).
-    rmSync(bin)
-    mkdirSync(bin)
+    // A real read refusal, on every OS: the file is there but denies reading (EPERM / EACCES from the
+    // hash's read stream — what an antivirus hold gives). (#1012 round 5: a folder at the path is no
+    // longer this case; the verifier reads that as a missing file.)
+    denyReading(bin)
     await expect(sha256File(bin)).rejects.toThrow() // the premise: this cannot be hashed
     // #1012 review R-2: its own verdict, never a tamper — the probe and the ladder treat it as no evidence.
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('unreadable')
     // The failure cleared: because it was NOT cached, the next attempt re-hashes the
     // real file and succeeds — the session is not stranded on MockRuntime.
-    rmSync(bin, { recursive: true })
-    writeFileSync(bin, 'real')
+    allowReading(bin)
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
     // And THAT definitive verdict now sticks (cached), even if the bytes later change.
     writeFileSync(bin, 'tampered-after-verify')
@@ -244,6 +244,17 @@ describe("every file the copy's own marker records (#1012)", () => {
     // Put back (restored from a quarantine, say): the next spawn reads the copy again.
     writeFileSync(join(dir, 'ggml-vulkan.dll'), 'the card backend')
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  // Code review round 5: a folder where a recorded file should be never heals by waiting (EISDIR). It is
+  // no file of the copy: `missing`, so the user gets the reinstall offer — not "try again in a minute".
+  it('a folder at a recorded library path is missing, not unreadable', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    writeCopy(dir, { 'llama-server.exe': 'shim', 'ggml-vulkan.dll': 'the card backend' })
+    rmSync(join(dir, 'ggml-vulkan.dll'))
+    mkdirSync(join(dir, 'ggml-vulkan.dll'))
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('missing')
   })
 
   // The knowledge-pack tools start despite a missing file (owner call on #1012), so `missing` must

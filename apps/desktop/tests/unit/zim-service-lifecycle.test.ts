@@ -24,7 +24,7 @@ import {
   type ServeChildMode,
   type ServeGate
 } from '../helpers/zim-fakes'
-import { binaryWithMarker, verifierInert } from '../helpers/binary-fixtures'
+import { binaryWithMarker, restoreEngineLibrary, verifierInert } from '../helpers/binary-fixtures'
 import { manageAddFromHeader } from '../helpers/zim-library'
 import { until, within } from '../helpers/hang-budget'
 
@@ -431,6 +431,8 @@ function svcHarness(
     admission?: ZimAdmission
     killGraceMs?: number
     forceKillWaitMs?: number
+    /** Real tool paths (default: the fake `/bin/kiwix-*`), for the rows that drive the real verifier. */
+    resolveTools?: () => { serve: string; manage: string }
   } = {}
 ): SvcHarness {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zim-svc-'))
@@ -513,7 +515,8 @@ function svcHarness(
       probe: (port) => hooks.probe(port),
       healthTimeoutMs: opts.healthTimeoutMs,
       killGraceMs: opts.killGraceMs,
-      forceKillWaitMs: opts.forceKillWaitMs
+      forceKillWaitMs: opts.forceKillWaitMs,
+      resolveTools: opts.resolveTools
     })
   })
   return harness
@@ -793,6 +796,53 @@ describe('ZimService + KiwixServer — generations, publication and cancellation
     expect(h2.serveSpawns).toHaveLength(2)
     expect(h2.svc.serverState()).toMatchObject({ port, alive: true })
     await h2.svc.stop()
+  })
+
+  // #1012 code review round 5: a file of the kiwix-tools install that cannot be READ just now (an
+  // antivirus holding an ICU DLL) is no lasting start failure. It must not latch under the revision —
+  // the verifier's promise is that the next attempt reads the files again. (A MISSING file still
+  // latches: there is no in-app repair for the tools, and a pack change clears it.) Real verifier, a
+  // real deny-read refusal on the recorded library.
+  it('a kiwix-serve whose install file could not be read does not latch: the next ask starts the server (#1012)', async () => {
+    initBinaryVerification(false) // a packaged build: the install marker decides
+    try {
+      const serve = await binaryWithMarker('kiwix-serve.exe', 'unreadable')
+      const h = svcHarness({ resolveTools: () => ({ serve, manage: '/bin/kiwix-manage' }) })
+      await h.addPack('alpha.zim')
+      await expect(h.svc.ensureServer(h.db)).rejects.toMatchObject({
+        name: 'KiwixServeStartError',
+        kind: 'filesUnreadable'
+      })
+      expect(h.serveSpawns).toHaveLength(0)
+      restoreEngineLibrary(serve) // the hold released
+      expect(await svcPort(h.svc.ensureServer(h.db))).not.toBeNull()
+      expect(h.serveSpawns).toHaveLength(1)
+      await h.svc.stop()
+    } finally {
+      verifierInert()
+    }
+  })
+
+  // …and kiwix-manage, which builds the served library: every pack would fail alike, so the build stops
+  // instead of skipping each pack — an empty library published for the revision was a latch too.
+  it('a kiwix-manage whose install file could not be read fails the build without latching: the next ask builds and starts (#1012)', async () => {
+    const manage = await binaryWithMarker('kiwix-manage.exe', 'unreadable')
+    const h = svcHarness({ resolveTools: () => ({ serve: '/bin/kiwix-serve', manage }) })
+    await h.addPack('alpha.zim') // registered before the hold (unenforced: a dev build)
+    initBinaryVerification(false) // a packaged build from here on
+    try {
+      await expect(h.svc.ensureServer(h.db)).rejects.toMatchObject({
+        name: 'KiwixManageError',
+        kind: 'filesUnreadable'
+      })
+      expect(h.serveSpawns).toHaveLength(0)
+      restoreEngineLibrary(manage)
+      expect(await svcPort(h.svc.ensureServer(h.db))).not.toBeNull()
+      expect(h.serveSpawns).toHaveLength(1)
+      await h.svc.stop()
+    } finally {
+      verifierInert()
+    }
   })
 
   // #715: the latch's third guard. A start the lock already aborted can still fail with an

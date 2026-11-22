@@ -835,7 +835,8 @@ function isCancellation(err: unknown): boolean {
  * But a `KiwixManageError` with `childState === 'uncertain'`, or `kind === 'abort'`, or the
  * signal already being aborted STOPS the build and RETHROWS: a shared library.xml with an
  * unconfirmed writer (the kiwix-manage child may still be appending to it) is not a
- * publishable build.
+ * publishable build. So does `kind === 'filesUnreadable'` (#1012): the tool itself could not be
+ * read just now, so every pack would fail alike and the next ask must try again.
  */
 export async function writeLibraryXml(
   deps: Pick<PackDeps, 'manageAdd'>,
@@ -855,7 +856,13 @@ export async function writeLibraryXml(
       await deps.manageAdd(libraryXmlPath, book.path)
       count++
     } catch (err) {
-      if (err instanceof KiwixManageError && (err.childState === 'uncertain' || err.kind === 'abort')) {
+      // #1012 code review round 5: a kiwix-manage whose install file could not be read just now fails
+      // every pack alike — no per-pack fault. Skipping each would publish an empty library for this
+      // revision (a latch for the session); stop the build so the next ask tries again.
+      if (
+        err instanceof KiwixManageError &&
+        (err.childState === 'uncertain' || err.kind === 'abort' || err.kind === 'filesUnreadable')
+      ) {
         throw err
       }
       // Ids + the error class only: the manager's message can carry the absolute path.

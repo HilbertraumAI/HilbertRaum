@@ -603,6 +603,32 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     await service.stop()
   })
 
+  // #1012 code review round 5: an engine file the pre-spawn check could not read just now is neither the
+  // model's fault ("try again, or pick another model" was wrong) nor a failed start the #117 cooldown repeats.
+  // The job gets its own code; the next analyze starts at once. Real verifier, a real deny-read refusal.
+  it('a start whose engine files could not be read fails the job with filesUnreadable; the next analyze starts at once (#1012)', async () => {
+    initBinaryVerification(false) // as packaged: the real pre-spawn verifier runs
+    try {
+      const binPath = await binaryWithMarker('llama-server.exe', 'unreadable')
+      const { spawn, calls } = fakeSpawn()
+      const { fetchImpl } = visionFetch()
+      const service = new VisionService({
+        isWorkspaceLocking: () => false,
+        checkModel: async () => 'ok',
+        getStatus: async () => VLM_AVAILABLE,
+        createRuntime: () => new VisionRuntime({ ...base, binPath, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+      })
+      expect((await runToTerminal(service, serviceReq())).error).toBe('filesUnreadable')
+      expect(calls.length).toBe(0)
+      restoreEngineLibrary(binPath) // the hold released — no cooldown to wait out
+      expect((await runToTerminal(service, serviceReq())).state).toBe('done')
+      expect(calls.length).toBe(1)
+      await service.stop()
+    } finally {
+      verifierInert()
+    }
+  })
+
   it('fails FAST inside the 5 s start-failure cooldown — no re-spawn per retry (corrupt-GGUF case, #117)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const t0 = Date.now()
