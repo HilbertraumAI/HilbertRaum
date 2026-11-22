@@ -685,6 +685,35 @@ describe('the staged swap in an engine job (#986)', () => {
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
   })
 
+  // #998: the check right before the swap reads the staged copy's own marker, so a DLL a scanner takes from
+  // the fresh copy while the model pauses stops the step too, not only a missing program.
+  it('a file the staged marker records that is gone at the swap fails the step and keeps the installed engine (#998)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    const before = fingerprintTree(liveDir(rootPath))
+    const withDll: ExtractFn = async (archive, destDir, signal) => {
+      await newEngine(archive, destDir, signal)
+      await writeFile(join(destDir, 'ggml.dll'), 'ggml b200')
+    }
+    const mgr = manager({ extract: withDll })
+    const ends: EngineJobEnd[] = []
+    mgr.onSettled((_job, end) => ends.push(end))
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      ...update,
+      beforeReplace: async () => {
+        rmSync(join(`${liveDir(rootPath)}.new`, 'ggml.dll'))
+      }
+    })
+    const job = await settle(mgr, started.jobId)
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.binaryMissing') })
+    expect(ends.map((e) => e.reason)).toEqual(['incomplete'])
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
+  })
+
   it('a stale .new and .old an earlier session left go before the swap, which then goes through', async () => {
     const { rootPath, manifestsDir } = makeDrive()
     copy(liveDir(rootPath), 'b150')

@@ -1619,8 +1619,17 @@ export class EngineDownloadManager {
       if (at >= 0) unswapped.splice(at, 1)
     }
     try {
-      // The stage's own test, `existsSync`, again.
-      if (!requiredInstallFiles(planInFolder(plan, dirs.staging)).every((p) => existsSync(p))) {
+      // #998: judged by the staged copy's own marker (`engineFolderComplete`): every file it records, so a
+      // DLL a scanner took during the pause is caught too, not only the program. A marker with no map (a
+      // hashing failure) falls back to the stage's own test, `existsSync` of the required files; a copy
+      // whose marker went is not the copy the stage made.
+      const marker = readRuntimeMarker(dirs.staging)
+      const whole =
+        marker !== null &&
+        (marker.binaries
+          ? engineFolderComplete(plan, dirs.staging)
+          : requiredInstallFiles(planInFolder(plan, dirs.staging)).every((p) => existsSync(p)))
+      if (!whole) {
         throw new EngineStepError('incomplete', tMain('main.engine.binaryMissing'))
       }
       try {

@@ -210,6 +210,33 @@ describe('TS ↔ shell-script drift (fetch-runtime family allow-list, #339 P8-3)
     expect(Object.fromEntries(sh.map((m) => [m[1], m[2].trim().split(/\s+/)]))).toEqual(expected)
   })
 
+  // #998: both twins record every file an install holds in its marker, as the app's stage does
+  // (runtime-download.ts `installedFileKeys`), and leave out the same names: the marker itself, the cpu/
+  // safety net and a net swap the app left inside (cpu.new, cpu.old), which carry markers of their own.
+  // script-fetch-runtime.test.ts runs each twin on its own OS; this row holds them to one list everywhere.
+  it('both fetch-runtime twins record every installed file and leave out the same nested net folders (#998)', () => {
+    const skipped = ['.hilbertraum-runtime.json', 'cpu', 'cpu.new', 'cpu.old']
+    const ps = repoText('scripts/fetch-runtime.ps1')
+    const psList = /function Get-InstalledFileNames[\s\S]*?@\(([^)]*)\) -ccontains \$e\.Name/.exec(ps)
+    expect(psList, 'Get-InstalledFileNames skip list not found').not.toBeNull()
+    expect(psList![1].split(',').map((s) => s.trim().replace(/^'|'$/g, ''))).toEqual(skipped)
+    const sh = repoText('scripts/fetch-runtime.sh')
+    const shFind = /installed_file_names\(\) \{[\s\S]*?\\\( (-path \.\/\S+(?: -o -path \.\/\S+)*) \\\) -prune/.exec(sh)
+    expect(shFind, 'installed_file_names prune list not found').not.toBeNull()
+    expect([...shFind![1].matchAll(/-path \.\/(\S+)/g)].map((m) => m[1]).sort()).toEqual([...skipped].sort())
+    // …and each twin's marker write hashes that whole list, not the required files alone.
+    expect(ps).toMatch(/foreach \(\$f in \$recordNames\) \{\s*try \{\s*\$h = \(Get-FileHash/)
+    expect(sh).toMatch(/for f in "\$\{RECORD_NAMES\[@\]\}"; do\s*if h="\$\(sha256_of/)
+    // Round 1: both leave out the same macOS metadata (archive-size.ts `isMacMetadataName`), record a link only
+    // when it resolves to a file, and sort the names by code unit, as the app does.
+    expect(ps).toContain("if (@('__MACOSX', '.DS_Store') -ccontains $e.Name -or $e.Name.StartsWith('._', [StringComparison]::Ordinal)) { continue }")
+    expect(sh).toContain('case "/$name" in */__MACOSX/*|*/._*|*/.DS_Store) continue ;; esac')
+    expect(ps).toContain('if (Test-Path -LiteralPath $e.FullName -PathType Leaf) { $rel }')
+    expect(sh).toContain('if [[ -L "$1/$name" && ! -f "$1/$name" ]]; then')
+    expect(ps).toContain('[Array]::Sort($installedNames, [System.StringComparer]::Ordinal)')
+    expect(sh).toContain("sed 's|^\\./||' | LC_ALL=C sort | while IFS= read -r name; do")
+  })
+
   it('fetch-runtime.sh --family case allow-list matches the yaml build families + ocr', () => {
     const src = repoText('scripts/fetch-runtime.sh')
     const m = src.match(/case "\$FAMILY" in\n\s*([A-Za-z0-9_|]+)\)/)
