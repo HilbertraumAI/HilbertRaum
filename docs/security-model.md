@@ -3540,9 +3540,12 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
   net without its own marker is checked against the family marker's `cpu/` keys only. A marker written
   before #998 records the program alone, so that is all it checks (today's Kits keep working as before).
 - **How:** one file at a time, the program first, stopping at the first difference (sequential suits a
-  stick, where the read is the limit). A marker key that leaves the copy's folder (`recordedFilePath`)
-  is refused before anything is read. A marker that changed while the copy was hashed (an install put a
-  new copy in place) gives no verdict, so a mixed hash never sticks as a tamper.
+  stick, where the read is the limit), or at the first missing program or library (every seam refuses
+  that copy anyway, so the rest is not read).
+  - Every marker key is checked first: one that leaves the copy's folder (`recordedFilePath`) is refused
+    before anything is read. That includes a key under a nested net folder, such as `cpu/../../x`.
+  - A marker that changed while the copy was hashed (an install put a new copy in place) gives no
+    verdict, so a mixed hash never sticks as a tamper.
 - **Verdicts:**
   - **`mismatch`**: a changed file. A tamper.
   - **`missing`**: a recorded file is not there, and no present file differs. The missing file is the
@@ -3561,8 +3564,13 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     including the knowledge-pack library folder these children start in, where a planted copy would be
     loaded. They start on `missing-other`, with a code-only log line (owner decision). A changed file is
     always refused.
-  - **`unreadable`** refuses this attempt without blaming anything: no "engine files damaged" verdict, the
-    probe gives no answer, and the start ladder counts it as no evidence about the GPU or the model.
+  - **`unreadable`** refuses this attempt without blaming anything (code review round 3):
+    - no "engine files damaged" verdict, and the probe gives no answer;
+    - the start ladder counts it as no evidence about the GPU or the model;
+    - the embedder, reranker, translation and vision sidecars treat it like a bind race: rethrown,
+      nothing latched or demoted, and the next call starts normally;
+    - a chat start whose every rung ended so shows the notice `main.engine.filesUnreadable` ("try again
+      in a minute") on the demo runtime, and nothing is latched, so the next start walks the ladder again.
 - **Cost:** the b12110 Windows copy is 52 files, 94.5 MB: 0.28 s on a USB 3 stick (measured), about 3 s
   on a USB 2 stick (estimated). whisper.cpp is 10.1 MB. Measured warm on NVMe: 308 ms with the longest
   event-loop gap 1.5 ms (`sha256File` streams).
@@ -3570,6 +3578,11 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     file is missing or cannot be read, every attempt reads the copy again. That means each rung of a chat
     start, each helper start and each probe call; after the first pass the OS file cache normally absorbs
     it.
+  - **A missing program or library** stops the read at that file. A quarantined DLL costs at most the
+    files before it in the check's order, not the whole copy, on each attempt.
+  - **Timing on the probe and the speculative rung:** the hash runs before the probe's own 10 s cap
+    starts. The speculative rung's wait for the probe therefore includes it once per session: about 3 s
+    on a USB 2 stick (~95 MB at ~30 MB/s, estimated).
 
 **What the check does not cover (#1012).** It verifies the files a marker records; it does not notice a
 file **added** to the engine folder. That matters for llama.cpp: its backend loader (`ggml.dll`,
@@ -3649,7 +3662,13 @@ engines in their own folder.
     `exit: 'not started'`), so the ladder walks on without blaming the GPU or the model, and the "Install
     again" offer appears.
   - `unreadable`: the typed `EngineFilesUnreadableError`. No verdict is recorded, and the ladder holds,
-    persists and latches nothing for that rung: no GPU failure, no model blame, no MTP latch.
+    persists and latches nothing for that rung: no GPU failure, no model blame, no MTP latch. On the
+    processor control rung it also drops a held GPU failure, since there is no control evidence for it.
+  - The reason and the blame come from the last failure that is evidence, so an earlier rung's model
+    failure is still reported.
+  - A walk where every rung ended so shows the files-unreadable notice.
+  - Every other user of `LlamaServer` rethrows the error without a latch or a demotion (code review
+    round 3).
 - **`probeGpuDevices()` (`gpu.ts`)** — resolves **`[]`** (reads as "no GPU"); the probe's contract is that
   it never throws, so a tampered binary is simply never executed for enumeration.
   - Missing: **`null`** (no answer, never persisted as "no graphics card") and the same verdict.
@@ -3664,8 +3683,12 @@ engines in their own folder.
   - `unreadable`: `unchecked` (the verdict is left as it was, no damage recorded; choosing Check again
     re-reads the copy).
 - **`KiwixServer` (`zim/serve.ts`) and `kiwixManageAdd` (`zim/tools.ts`)** — `mismatch`, `missing` (the
-  program or a library) and `unreadable` refuse before spawn. `missing-other` is logged with its code
-  only and the program starts (no in-app repair exists for the knowledge-pack tools).
+  program or a library) and `unreadable` refuse before spawn.
+  - A changed file keeps the integrity error.
+  - A missing or locked file gets its own kind, `files` ("a file of its install is missing or could not
+    be read"), never the tamper wording.
+  - `missing-other` is logged with its code only and the program starts (no in-app repair exists for the
+    knowledge-pack tools).
 
 **Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
 carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that

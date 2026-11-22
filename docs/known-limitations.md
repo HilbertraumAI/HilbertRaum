@@ -361,10 +361,19 @@ password recovery — are documented in
   - **The engines:** any missing file is refused as damaged engine files, with the "Install again" offer.
     That holds even for a file the engine never loads on this computer (owner decision). Helpers without a
     `cpu/` rung (search, reranking, images, translation) stop with the chat engine.
-  - **The knowledge-pack tools:** they have no in-app repair. A missing program or library stops them; any
-    other missing file (a tool the app never runs) is only logged.
-  - **Cost:** while a file is missing or unreadable, each start attempt reads the whole copy again, since
-    those verdicts are not cached.
+  - **The knowledge-pack tools:** they have no in-app repair. A missing program or library stops them
+    (with their own "file missing or could not be read" error, not the tamper one); any other missing file
+    (a tool the app never runs) is only logged.
+  - **Cost:** while a file is missing or unreadable, each start attempt reads the copy again, since those
+    verdicts are not cached. A missing program or library ends the read at that file; another missing
+    file, or a locked one, costs the read up to the end or up to the lock.
+
+  What a file that cannot be read just now does (an antivirus scan holding it):
+  - It refuses that attempt without blaming the GPU, the model or the engine.
+  - The search, reranking, translation and image helpers try again on their next call, with nothing
+    latched.
+  - A chat start whose every attempt ended so runs on the demo runtime and shows "try again in a minute".
+    The next start of the model (select it again, or the next unlock) walks the start ladder again.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time

@@ -5848,10 +5848,24 @@ rung ended so).
     `missing-other`.
   - On `unreadable`: the probe resolves `null`, `checkProgramLoads` returns `unchecked`, and `LlamaServer`
     and whisper-cli throw `EngineFilesUnreadableError`.
+- **What `unreadable` does elsewhere (code review round 3).**
+  - Every other `LlamaServer` user (the embedder, the reranker, translation, vision) rethrows it like a
+    bind race: no `startFailed` latch, no GPU → CPU demotion, no #117 cooldown.
+  - In the ladder:
+    - the reason and the blame come from the last failure that is evidence (an unreadable last rung never
+      hides an earlier model failure);
+    - an unreadable processor control rung drops a held GPU failure, since there is no control evidence
+      for it (#312);
+    - a walk where every rung ended unreadable calls `onEngineFilesUnreadable`, which shows
+      `main.engine.filesUnreadable` on the demo runtime and latches nothing, so the next start re-walks.
+  - The knowledge-pack tools report a missing or locked file with their own `files` kind.
 - **Tests:**
   - `binary-verify-spawn.test.ts`: the two "#1012" describes, one row per site and verdict.
-  - `binary-verifier.test.ts` "(#1012)": includes which missing file counts.
-  - `runtime-ladder.test.ts` "#1012": an unreadable rung is no evidence.
+  - `binary-verifier.test.ts` "(#1012)": includes which missing file counts, the early stop and the
+    containment of every key.
+  - `runtime-ladder.test.ts` "#1012": an unreadable rung is no evidence; the notice; the evidence rule; the
+    control rung.
+  - One row each in `e5-embedder`, `reranker`, `translation-runtime` and `vision-runtime`.
 
 ## In-app engine updates — design record (#516, 2026-10-05)
 
