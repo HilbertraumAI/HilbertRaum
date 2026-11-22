@@ -694,6 +694,9 @@ async function makeMultiHarness(opts: {
   /** Make the mock model yield NOTHING (a Stop-before-first-token / think-only turn) — for the W2
    *  "an empty model turn on a narrowed whole-doc persists nothing" regression. */
   emptyModel?: boolean
+  /** #996 A: every model call's reply (default 'Model answer.') and the launched window it reports. */
+  reply?: string
+  contextWindow?: number
 }): Promise<MultiHarness> {
   const w = makeSkillsWorld('ragskill-w2', {
     seedApp: (d) => {
@@ -716,7 +719,7 @@ async function makeMultiHarness(opts: {
   }
 
   // An empty model turn (opts.emptyModel) yields no tokens.
-  const runtime = recordingRuntime('Model answer.', { emitNothing: opts.emptyModel })
+  const runtime = recordingRuntime(opts.reply ?? 'Model answer.', { emitNothing: opts.emptyModel, contextWindow: opts.contextWindow })
 
   const { ctx } = makeRagAskContext(w, runtime)
 
@@ -895,6 +898,35 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
     // The user turn persisted; NO assistant row was written (a notice-only stamped message never lands).
     const assistantRows = listMessages(h.db, h.conversationId).filter((m) => m.role === 'assistant')
     expect(assistantRows).toHaveLength(0)
+  })
+
+  // #996 A (follow-ups wave 7): over a contract too long to read in one call, the chunk map-reduce takes notes per
+  // part; when those notes had to be cut to fit, the answer covers only the beginning and the stored text now says
+  // so, in the app's line after the scope notice. Notes that fit keep the answer as before.
+  it.each([
+    { name: 'notes cut to fit', reply: `${'Detailpunkt '.repeat(1000)}`.trim(), cut: true },
+    { name: 'notes that fit', reply: 'Model answer.', cut: false }
+  ])('a narrowed whole-doc turn over a long contract, $name: the beginning-only line follows the scope notice only when cut', async ({ reply, cut }) => {
+    const clause = 'the landlord and the tenant agree that the rent is paid monthly and the deposit is held in trust.'
+    const h = await makeMultiHarness({
+      docs: [
+        { file: 'contract.txt', text: Array.from({ length: 400 }, (_, i) => `Clause ${i + 1}: ${clause}`).join('\n') },
+        { file: 'a.txt', text: 'a,b\n1,2', mime: 'text/csv' },
+        { file: 'b.txt', text: 'c,d\n3,4', mime: 'text/csv' }
+      ],
+      installContractBrief: true,
+      reply,
+      contextWindow: 4096
+    })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'summarize this contract', 'app:contract-brief')
+    const msg = result as Message
+
+    expect(h.runtime.calls).toBeGreaterThan(1) // the chunk map-reduce ran (map steps + the reduce)
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.truncated).toBe(cut)
+    const notice = t('en', 'skills.analysis.scopeNarrowed', { title: 'contract.txt', count: 2 })
+    const line = t('en', 'analysis.wholeDocBeginningOnly')
+    expect(msg.content).toBe(cut ? `${notice}\n\n${line}\n\n${reply}` : `${notice}\n\n${reply}`)
   })
 
   // #582: the English request that used to fall through to a top-k answer under the compare fence.

@@ -836,6 +836,10 @@ export const nl: UiCatalog<'nl'> = {
   'analysis.wholeReadSumHint':
     '**Let op:** het model berekent totalen zelf en kan daarbij items missen of verkeerd tellen. ' +
     'Controleer elk totaal aan de hand van de bronnen.',
+  'analysis.wholeDocBeginningOnly':
+    '**Let op:** dit document was te lang om helemaal te lezen, dus dit antwoord gaat alleen over ' +
+    'het begin ervan. Wil je iets controleren dat verderop in het document staat, vraag dan direct ' +
+    'naar dat detail.',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Gelezen transacties in het hele afschrift: **{count}**.',
   'skills.bankAnalysis.countPartial':

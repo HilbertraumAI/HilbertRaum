@@ -906,6 +906,9 @@ export const en = {
   'analysis.wholeReadSumHint':
     '**Heads-up:** the model works out totals itself and can miss or miscount items. Check any total ' +
     'against the sources.',
+  'analysis.wholeDocBeginningOnly':
+    '**Heads-up:** this document was too long to read in full, so this answer covers only its ' +
+    'beginning. To check something later in the document, ask about that detail directly.',
 
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   // The deterministic, whole-document answer the bank-statement analysis handler synthesises

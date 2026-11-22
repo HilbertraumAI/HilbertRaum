@@ -871,6 +871,10 @@ export const es: UiCatalog<'es'> = {
   'analysis.wholeReadSumHint':
     '**Aviso:** el modelo calcula los totales por sí mismo y puede omitir o contar mal algunos ' +
     'elementos. Comprueba cada total con las fuentes.',
+  'analysis.wholeDocBeginningOnly':
+    '**Aviso:** este documento era demasiado largo para leerlo entero, así que esta respuesta solo ' +
+    'abarca su comienzo. Para comprobar algo de más adelante en el documento, pregunta directamente ' +
+    'por ese detalle.',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Movimientos leídos en todo el extracto: **{count}**.',
   'skills.bankAnalysis.countPartial':

@@ -787,6 +787,8 @@ export interface WholeDocChunksDeps {
   /** Phase 3 (§5) — the ephemeral 'analysis' progress notice, threaded to the shared map-reduce core. */
   onCompactionStart?: (kind: 'analysis') => void
   answerPrefix?: string
+  /** #996 A: the line that leads an answer covering only the document's beginning (threaded to the core). */
+  beginningNotice?: string
   /** Share-safe (or other app-authored) block for the reduce USER turn — never the system prompt. */
   extraReduceBlock?: string
   /** Knowledge packs (#301 P4, plan §9.21 (e)5): the `skipped / mode` outcomes persisted with the
@@ -847,6 +849,7 @@ export async function answerWholeDocFromChunks(deps: WholeDocChunksDeps): Promis
     onToken: deps.onToken,
     onCompactionStart: deps.onCompactionStart,
     answerPrefix: deps.answerPrefix,
+    beginningNotice: deps.beginningNotice,
     packOutcomes: deps.packOutcomes,
     sourceTexts,
     citations,
@@ -1651,6 +1654,14 @@ export interface GroundedAnswerOptions {
    */
   answerPrefix?: string
   /**
+   * #996 A (design-guidelines §11.25): the localized "this answer covers only its beginning" line. The
+   * whole-document map-reduce rescues lead an answer with it, after `answerPrefix`, ONLY when the document
+   * did not fit in full (`coverage.truncated`), riding the first reduce token. Set by `registerRagIpc` for
+   * every turn that can read a document whole; the core stays i18n-free. Absent ⇒ no line. The capped
+   * floor (both rescues declined) and the compare do not use it.
+   */
+  beginningNotice?: string
+  /**
    * #641: an app-authored notice that leads the answer, after `answerPrefix`, ONLY when the
    * relevance retrieval left part of the scope out — fewer distinct sections of `scopeDocumentIds`
    * reached the prompt than `scopeChunkTotal`, their section count (Infinity when one of them was
@@ -1897,6 +1908,8 @@ export async function generateGroundedAnswer(
         onCompactionStart: opts.onCompactionStart,
         // W2 (§2.1): carry the auto-narrow scope notice into the tree rescue path too.
         answerPrefix: opts.answerPrefix,
+        // #996 A: the beginning-only line, used by the core only when the notes had to be cut.
+        beginningNotice: opts.beginningNotice,
         // #301 P4: the rescue persists its own message, so the `skipped / mode` outcomes ride with it.
         packOutcomes
       })
@@ -1916,6 +1929,7 @@ export async function generateGroundedAnswer(
         // Phase 3 (§5): same 'analysis' progress notice for the no-tree chunk map-reduce path.
         onCompactionStart: opts.onCompactionStart,
         answerPrefix: opts.answerPrefix,
+        beginningNotice: opts.beginningNotice,
         // #301 P4: same disclosure on the no-tree chunk rescue — it too reads only the document.
         packOutcomes,
         // Share-safe parity: the chunk map-reduce covers the WHOLE document, so the verdict gate is NOT
