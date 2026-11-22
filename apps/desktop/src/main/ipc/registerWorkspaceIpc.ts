@@ -216,6 +216,17 @@ function logProbeFallbacks(ctx: AppContext): void {
  * finishes. Counts only. Nothing when it removed, left and set aside none.
  */
 function logStageOutcome(ctx: AppContext): void {
+  // #1014: the rekey journal entries the recoveries left as they were (outside the workspace, and not a stored copy the
+  // database lists, or not a stage at all; round 3: and the folders left in place; round 4: and the entries a stat that
+  // proves nothing left unchecked, which wait; a password change's count waits for this line), once, as a count: no
+  // path, no name.
+  const refused = ctx.workspace.takeJournalRefusals?.() ?? 0
+  if (refused > 0) {
+    log.warn(
+      "Workspace unlock: left as they are the password-change journal's entries it cannot vouch for or act on yet (#1014)",
+      { refused }
+    )
+  }
   const outcome = ctx.workspace.takeStageOutcome?.()
   if (outcome === 'removed') {
     log.info("Workspace unlock: removed a staged copy that does not open under this workspace's key (#973)")
@@ -462,10 +473,13 @@ export function registerWorkspaceIpc(ctx: AppContext, hooks: WorkspaceIpcHooks =
         (err instanceof Error && err.name === 'VaultRecoveryBlockedError')
       ) {
         // #911 widened what blocks: also a stat of `.enc` that fails other than ENOENT, and a `-wal` the start's replay
-        // could not empty while `.enc` is missing (a full drive, another program reading the file).
+        // could not empty while `.enc` is missing (a full drive, another program reading the file). #1015: and a
+        // password change's staged file the recovery could not put in place, with that file error's code (no path).
+        const code = (err as VaultRecoveryBlockedError).code ?? null
         log.warn(
-          'Workspace unlock refused: the startup recovery is blocked (a held recovery file, or a workspace file it ' +
-            'could not read or replay)'
+          'Workspace unlock refused: the startup recovery is blocked (a held recovery file, a workspace file it ' +
+            "could not read or replay, or a password change's staged file it could not put in place)",
+          code === null ? undefined : { code }
         )
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock refused (recovery blocked)')
         return {

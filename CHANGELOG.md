@@ -39,6 +39,27 @@ from its first public `1.0.0` release onward.
   as long as your document, and your document itself does not open with that key (it is still under the
   key of a password change that was cut short). Otherwise it removes the file and keeps your document.
   A file it cannot read or move stays where it is and is checked again at the next unlock (#1001).
+- **A password change that was cut short no longer leaves the app unusable when a file is in the way.**
+  If the app was stopped in the middle of changing your password and, at the next start, another
+  program was holding one of the workspace's files (an antivirus scan, for example) or a folder sat
+  where a file belonged, the app opened a window that could do nothing until you restarted it. When
+  another program holds a file, the app now shows the lock screen and says "try again" until the file
+  is free, then finishes the change; nothing is lost. When a folder sits where one of your stored
+  documents or images belongs, the app now opens your workspace anyway: only that document stays
+  unreadable until you remove the folder, and the next start then finishes it. A folder in place of a
+  temporary file is simply left alone (#1015).
+- **Leftover password-change records no longer touch files outside your workspace, and shredding
+  never reaches through a link.** The note the app keeps while it changes your password is read at
+  every start, before you type your password. A copy of it restored from a backup, or one from the
+  same stick under another drive letter, could make the app delete or overwrite files with the same
+  names elsewhere. The app now acts only on files inside your workspace folder, removes its own old
+  diagnostics log by the path it knows, and finishes stored copies kept elsewhere only after you
+  unlock, when your workspace confirms them. Anything else in that note is left alone. When the app
+  securely deletes a file that turns out to be a shortcut-like link, it now removes only the link and
+  leaves the file it points to unchanged; a file that also exists under a second name (a hard link)
+  is no longer overwritten either: only the app's own name for it is removed, and the other name
+  keeps its contents. A rare case where a folder in the wrong place made the next
+  start replace your encrypted workspace with that folder is fixed too (#1014).
 - **An engine update no longer stops your model while it unpacks, and never puts an incomplete
   engine in place.** The update now downloads, checks and unpacks the new AI engine beside the old
   one while your model keeps answering, and pauses the models only for the few seconds it takes to

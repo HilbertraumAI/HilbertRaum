@@ -1255,8 +1255,47 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   remove: string[] }`, absolute paths; written atomically by `stageRekey` BEFORE any `<file>.new` is
   staged, cleared by `applyPendingRekey`/`discardPendingRekey` once every entry is accounted for
   (an unreachable entry keeps it; an unparseable or unknown-`version` file is renamed to
-  `rekey-journal.json.corrupt`, never deleted; only `staged` entries ending in `.new` are honoured;
-  staged paths from the scan and the journal are de-duplicated on a folded spelling).
+  `rekey-journal.json.corrupt`, never deleted; only `staged` entries ending in `.enc.new` are honoured,
+  and since #1014 round 4 every string entry is read, so any other is refused and counted, never dropped
+  unseen; staged paths from the scan and the journal are de-duplicated on a folded spelling).
+  **What is honoured, and where (#1014):** a `staged` entry is acted on by a recovery before the
+  password only when it ends `.enc.new` and lies inside the workspace folder on the disk (no folder
+  between the workspace folder and the entry is a link, and the entry's folder, resolved, lies in
+  the resolved workspace folder; round 3); one outside it, or (round 5) inside it by its text but
+  through a link (an out-of-store copy's stage) only by the unlock, once the open database lists its stored copy
+  (`documents.stored_path`, by the resolver's out-of-store rule) and the stage opens under the
+  data key while the stored copy does not, and by a password change, which holds the database.
+  Round 4: an entry whose containment a stat cannot answer (`lstat` on the way or either `realpath`
+  failing for any reason but ENOENT) is neither acted on nor dropped: each pass keeps it in the
+  journal it settles (a rollback too) and counts it, and the next pass judges it again; since
+  round 6 only while its stage may still be there (a file, or a stat that cannot tell), as for a
+  deferred entry, so a stage a pass swapped in anyway is not named afterwards. A
+  `remove` entry is never used as a path: one named `app.1.log.enc` (either path separator)
+  removes the rotated log at `<logsPath>/app.1.log.enc`. Every other entry is left as it is. A
+  journal with a stage waiting for the unlock is kept until the unlock settles every stage it lists
+  (swapped in, already in place, or one that does not open under the data key); a stage it may not
+  judge yet (a link, a folder, a second hard link, a current stored copy, a hold, a newer build's
+  frame, and, round 4, an `lstat` of either file that fails for any reason but ENOENT) keeps it.
+  Round 3: after each pass the journal is rewritten (temp + rename, the same
+  format) to list only the entries still waiting (a stage still staged, an out-of-store stage on
+  an unreachable location, an outside stage waiting for the database), or cleared when none wait;
+  it never goes on listing the staged database or an in-store stage it settled. Its `remove` is
+  `["app.1.log.enc"]` while the journal asked for the rotated log and that log is still at
+  `<logsPath>/app.1.log.enc` (round 6: a log another program held at the commit had its flag
+  dropped, and stayed under the retired key), else `[]`. The write temp is never written through
+  a link: whatever is at `rekey-journal.json.tmp` is removed first (a link by `unlink`; a folder
+  there fails the write) and the temp is created anew (`wx`).
+  Round 5: a roll-forward that throws (a held file stopped a swap) settles and counts first, and
+  since round 6 every pass reports its count even when the settle itself throws.
+  What a pass leaves as it is is counted when it has settled the journal:
+  `WorkspaceController.takeJournalRefusals(): number` returns the sum since the last call, logged
+  as one count-only line after the start and one after each unlock. A refused entry is counted
+  once, by the pass that drops it; a folder left in place (at a write temp's name, at a stored
+  copy's name) and an unjudged entry (round 4) by each pass that meets them. Round 4: the unlock's
+  recovery before the password and a password change's passes add to the same sum (nothing logs
+  right after a change: its count goes with the next unlock's line). Round 5: so does the unlock's
+  out-of-store pass for a listed stage it leaves: one that does not open under the data key (once:
+  it is dropped) and one it keeps unsettled (at each unlock). The file format is unchanged.
   `listVaultKeyCiphertexts(vaultPaths, db) → VaultKeyCiphertext[]` = `{ path, kind: 'document' |
   'image' | 'out-of-store' | 'rotated-log', action: 'rekey' | 'delete' }` is the class registry the
   stage journals. The descriptor is unchanged. **Downgrade caveat:** a build older than the #241 fix
@@ -1270,6 +1309,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   its full path, folded as `pathKey` folds it (review round 3: a match by the folder and file names,
   which every workspace shares, let a stale journal vouch for a foreign stage), so an entry written
   under another drive letter or mount point leaves the stage in doubt, for the unlock to authenticate.
+  #1014 round 4: and only an entry the journal's containment admits lists a stage, here and for the
+  #1001 stages below; one it does not admit (through a link) or cannot judge vouches for nothing.
   `unlockEncryptedVault(…, onStageInDoubt?)` resolves it
   after the data key is unwrapped: the module-private `authenticatesUnder(path, key) → boolean` (one
   GCM pass, nothing written; false when the tag fails or the file is no `HRAUMEN1` frame, cut short
@@ -1278,7 +1319,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   the staged set (`removed`); a read that fails with ENOENT is no stage, with EISDIR or ENOTDIR (a
   folder at the name), like a delete that fails, leaves the file as it is and opens `.enc` (`left`),
   and with any other code (EBUSY, EPERM, EACCES, EIO, …) throws `VaultRecoveryBlockedError`
-  (→ `vault_recovery_blocked`, nothing changed, before the `.recovery` roll-forward).
+  (→ `vault_recovery_blocked`, nothing changed, before the `.recovery` roll-forward; since #1014
+  round 5 with that code in its `code`, for the log line).
   `onStageInDoubt(outcome: StageInDoubtOutcome)` hears the outcome as soon as it is true, also when a
   later step of the unlock fails; the pass is timed as the perf mark `vault_stage_check` (`checkMs`,
   `stageBytes`). While a stage is in doubt at `init()`, a loss the start judged (#875 `startup`, #892
@@ -1585,8 +1627,12 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `vault_recovery_blocked` (#242) is the unlock refused because a held
   `.recovery` file blocks the failed-lock salvage (since #911 also a stat of `.enc` that fails
   other than ENOENT, or a `-wal` the start could not replay while `.enc` is missing; since #973 also
-  a staged `.enc.new` in doubt that the unlock cannot read: a hold, or an I/O error such as EIO) —
-  retry once the hold clears, nothing lost;
+  a staged `.enc.new` in doubt that the unlock cannot read: a hold, or an I/O error such as EIO;
+  since #1015 also a committed password change's swap, or its temps, that the rekey recovery cannot
+  finish for a file error (a hold; never a folder at a temp's or a stored copy's name, which is
+  left and counted, round 3; a folder at `.enc` still blocks): `VaultRecoveryBlockedError.code`
+  carries that file error's code for the log line, and `WorkspaceController.recoveryBlockedCode()`
+  the start's) — retry once the hold clears, nothing lost;
   `workspace_newer` (#247, PR #289) is the unlock or create refused because the database was
   written by a NEWER build — nothing written, update the app; since #845 also the unlock refused
   because the vault format itself is a newer build's, see "Vault format versions"). Since the 2026-11 UI languages

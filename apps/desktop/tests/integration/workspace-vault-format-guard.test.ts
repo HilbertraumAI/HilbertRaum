@@ -9,10 +9,11 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
-import { dirname, join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { decrypt, deriveKey, generateDataKey, verifyKey } from '../../src/main/services/security/crypto'
@@ -1156,6 +1157,31 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
     }
   })
 
+  // #1014 (folded in): the same directory, with a rekey journal that lists the staged name, as every journal a password
+  // change writes does. The start counted the staged database by the name's existence, so it shredded `.enc` and renamed
+  // the directory into its place: the workspace was gone. A staged name counts only when it is a file (the #1001 review
+  // round 2 rule for journal entries), so `.enc` and the directory stay as they are, and the unlock opens the workspace.
+  it('a directory at the staged name that the journal lists: the start and the unlock leave .enc and the directory as they are', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    mkdirSync(stagedOf(vp))
+    writeFileSync(join(stagedOf(vp), 'held'), 'x')
+    rekeyJournal(vp, 1, [stagedOf(vp)])
+    const enc = sha(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(statSync(vp.encPath).isFile(), '.enc is still a file').toBe(true)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(readdirSync(stagedOf(vp))).toEqual(['held'])
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(readdirSync(stagedOf(vp))).toEqual(['held'])
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
   // Review round 2 R5: once the unlock has removed a foreign staged database, the rest of the staged set gets what the
   // start's recovery would have given it with that file gone (master's start rolled all of it forward together with the
   // leftover): the document twin is swapped in, the journal cleared or, unreadable, quarantined. While the database
@@ -1518,6 +1544,54 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
       expect(sha(copies.documents)).toBe(stored)
       expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
       expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // #1014 round 4: a journal entry the start refuses vouches for nothing. Here `documents/` itself is a junction (no
+  // privilege needed on Windows) to a folder elsewhere, and the journal lists the stage by its path through it. The
+  // containment refuses that entry, but the scan, whose `readdir` follows the link, still finds the stage; listed by the
+  // journal as written, it was no doubt, and the start shredded the stored copy behind the link and renamed the stage
+  // over it. Now the stage is a #1001 doubt: the start leaves both files, and the unlock judges the stage under the data
+  // key. A stage under another key fails its tag and is removed; one that opens under the data key (a store the user
+  // keeps behind a link of their own) still rolls forward, which is why the scan does not skip a linked folder.
+  // Round 5: the entry through the link waits for the unlock (as an out-of-store copy's does), whose pass acts only on a
+  // stored copy the database lists outside `documents/`, which this one is not: the unlock counts it and drops it, so
+  // the count moved from the start to the unlock.
+  it.each<[string, (vp: FreshVaultPaths, target: string, text: string) => Promise<string>, 'removed' | 'rolledForward']>([
+    ['a stage under another key', async (vp, target, text) => retiredCopy(vp, 'documents', `${basename(target)}${REKEY_SUFFIX}`, text), 'removed'],
+    [
+      'a stage that opens under the data key',
+      async (vp, target, text) => whileUnlocked(vp, (ctl) => storeCopy(ctl, vp.root, `${target}${REKEY_SUFFIX}`, text)),
+      'rolledForward'
+    ]
+  ])('`documents/` a junction to a folder elsewhere, the journal listing %s through it: the start leaves both files, the unlock judges the stage', async (_case, plantStage, verdict) => {
+    const vp = lockedVault('fmtguard-1001', PW)
+    const elsewhere = join(vp.root, 'store-elsewhere')
+    mkdirSync(elsewhere)
+    const docs = join(dirname(vp.dbPath), 'documents')
+    rmSync(docs, { recursive: true, force: true })
+    symlinkSync(elsewhere, docs, 'junction')
+    const text = 'the copy behind the link'
+    const target = retiredCopy(vp, 'documents', 'x.pdf.enc', text) // the stored copy, still under a retired key
+    const staged = await plantStage(vp, target, text)
+    const journal = rekeyJournal(vp, 1, [staged])
+    const behind = join(elsewhere, 'x.pdf.enc') // the same file, by its own path
+    const before = { stored: sha(behind), stage: sha(staged) }
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(sha(behind), 'the stored copy behind the link, after the start').toBe(before.stored)
+      expect(sha(staged), 'its stage, after the start').toBe(before.stage)
+      expect(ctl.takeJournalRefusals(), 'the start: the entry waits for the database').toBe(0)
+      ctl.unlock(PW)
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 0, setAside: 0, [verdict]: 1 })
+      expect(ctl.takeJournalRefusals()).toBe(1) // the entry through the link, dropped once counted
+      expect(existsSync(journal)).toBe(false)
+      expect(existsSync(staged)).toBe(false)
+      if (verdict === 'removed') expect(sha(behind)).toBe(before.stored)
+      else expect(await readStoredCopy(ctl, vp.root, behind)).toBe(text)
     } finally {
       ctl.shutdown()
     }
