@@ -361,16 +361,19 @@ password recovery — are documented in
 
   A follow-up proposes refusing an unrecorded library and starting the engines in their own folder.
 
-  What a missing recorded file does:
+  What a missing or changed recorded file does:
   - **The engines:** any missing file is refused as damaged engine files, with the "Install again" offer.
     That holds even for a file the engine never loads on this computer (owner decision). Helpers without a
-    `cpu/` rung (search, reranking, images, translation) stop with the chat engine.
+    `cpu/` rung (search, reranking, images, translation) stop with the chat engine. A changed file gets
+    the same verdict and offer since code review round 6, and its log line still records a possible
+    tamper.
   - **The knowledge-pack tools:** they have no in-app repair. A missing program or library stops them
     (with their own "file missing or could not be read" error, not the tamper one); any other missing file
     (a tool the app never runs) is only logged.
   - **Cost:** while a file is missing or unreadable, each start attempt reads the copy again, since those
-    verdicts are not cached. A missing program or library ends the read at that file; another missing
-    file, or a locked one, costs the read up to the end or up to the lock.
+    verdicts are not cached. A missing program or library is found by a `stat` of each file before any is
+    read, so nothing is hashed (round 6). Another missing file, or a locked one, costs the read up to the
+    end or up to the lock.
 
   What a file that cannot be read just now does (an antivirus scan holding it):
   - It refuses that attempt without blaming the GPU, the model or the engine.
@@ -379,8 +382,9 @@ password recovery — are documented in
   - A translation (on screen or as a document task), an audio import and dictation stop at once and say
     "try again in a minute".
   - A chat start in which an attempt ended so latches nothing, not even what its other attempts showed.
-    It runs on the demo runtime: with "try again in a minute" when nothing else went wrong, else with the
-    usual "this model could not be loaded" notice.
+    It runs on the demo runtime, with the usual "this model could not be loaded" notice when an attempt
+    on the processor failed to load the model, else with "try again in a minute" (round 6: also when
+    the card attempt failed, or another copy of the engine was refused).
   - **Starting the model again:** resending a question is not enough. It gets another simulated answer,
     because nothing restarts the model, and choosing the same model again keeps the demo runtime running.
     The notice's button opens the AI Model screen: choose "Stop runtime", then "Use this model". That

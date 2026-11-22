@@ -3539,9 +3539,10 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
   `cpu.new` or `cpu.old` folder (another copy with a marker of its own, `NESTED_NET_FOLDERS`). A `cpu/`
   net without its own marker is checked against the family marker's `cpu/` keys only. A marker written
   before #998 records the program alone, so that is all it checks (today's Kits keep working as before).
-- **How:** one file at a time, the program first, stopping at the first difference (sequential suits a
-  stick, where the read is the limit), or at the first missing program or library (every seam refuses
-  that copy anyway, so the rest is not read).
+- **How:** first one `stat` of every recorded file, then a hash of each present file, one at a time, the
+  program first, stopping at the first difference (sequential suits a stick, where the read is the
+  limit). A missing program or library found by the `stat` pass ends the check before any file is
+  hashed (code review round 6): every seam refuses that copy anyway.
   - Every marker key is checked first: one that leaves the copy's folder (`recordedFilePath`) is refused
     before anything is read. That includes a key under a nested net folder, such as `cpu/../../x`.
   - A marker that changed while the copy was hashed (an install put a new copy in place) gives no
@@ -3552,18 +3553,24 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     program itself or a library (`.dll`, `.so`, `.so.N`, `.dylib`). Not a tamper. A folder or another
     non-regular file at a recorded path counts as missing (code review round 5: it never heals by
     waiting, and reading a pipe would block the check; one `stat` per file).
-    - Because the check stops at the first missing program or library, `missing` can hide a changed
-      file later in the order. The engine is refused either way, and a reinstall replaces every file,
-      but the log then records "missing", not a tamper.
+    - Because a missing program or library ends the check before anything is hashed, `missing` can
+      hide a changed file anywhere in the copy. The engine is refused either way, and a reinstall
+      replaces every file, but the log then records "missing", not a tamper.
   - **`missing-other`**: the same, but only for files that are neither the program nor a library: a tool
     the app never runs, a licence text.
   - **`unreadable`**: a recorded file could not be read just now (an antivirus or indexer holding it, a
     denied read), or the marker changed during the check. No verdict about the copy (review R-2).
+    - A marker that is there but cannot be read is `unreadable` too (round 6), not a legacy drive. A
+      `cpu/` net whose own marker cannot be read never falls back to the family marker.
   - **Which verdicts are cached:** only `ok`, `mismatch` and `skip-*` are cached for the session.
     `missing`, `missing-other` and `unreadable` are re-checked on every attempt, so a file put back or a
     lock that cleared is found by the next spawn or "Check again".
-  - **The engines** refuse both missing verdicts as damaged files (below). That keeps the #532 "Install
-    again" offer up, since a start that went ahead and ran would drop that verdict at once.
+  - **The engines** refuse `mismatch` and both missing verdicts as damaged files (below). The start is
+    refused, and the #532 "Install again" offer comes up. For a missing file, a start that went ahead and
+    ran would drop that verdict at once.
+    - `mismatch` joined in code review round 6. With the whole copy hashed, a damaged library (a copy
+      cut short, a disk error) gives `mismatch` just as a tamper does, and a reinstall replaces it.
+    - The log line still records the mismatch as a possible tamper.
   - **The knowledge-pack tools** have no in-app repair. kiwix-serve and kiwix-manage still refuse a missing
     program or library (review R-1, R-6): the OS loader would look for a missing library elsewhere,
     including the knowledge-pack library folder these children start in, where a planted copy would be
@@ -3573,17 +3580,23 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     - An `unreadable` one does not: kiwix-serve and kiwix-manage report it with their own
       `filesUnreadable` kind. The service never latches that kind, and the library build stops on it
       rather than publishing an empty library for the revision, so the next ask tries again.
+    - A kiwix-manage refused for a missing or changed file (`files`, `verify`) stops the library build
+      the same way (round 6): the start fails with that kind, and no empty library is published.
   - **`unreadable`** refuses this attempt without blaming anything (code review round 3):
     - no "engine files damaged" verdict, and the probe gives no answer;
     - the start ladder counts it as no evidence about the GPU or the model;
     - the embedder, reranker, translation and vision sidecars treat it like a bind race: rethrown,
       nothing latched or demoted, and the next call starts normally;
     - a chat start in which any rung ended so latches nothing (code review round 4): no model latch, no
-      persisted GPU failure, no MTP latch. It only reports. When no other rung failed in a way that is
-      evidence (a failed MTP rung 1a, a bind race and an engine refusal are none), it shows the notice
-      `main.engine.filesUnreadable` ("try again in a minute") beside the demo runtime's simulated
-      answers; otherwise it shows the model notice, without the latch. The next start walks the ladder
-      again;
+      persisted GPU failure, no MTP latch. It only reports. When no forced-CPU (control) rung failed in
+      a way that is evidence, it shows the notice `main.engine.filesUnreadable` ("try again in a
+      minute") beside the demo runtime's simulated answers; otherwise it shows the model notice, without
+      the latch. The next start walks the ladder again;
+      - no evidence: a failed MTP rung 1a, a bind race, an engine refusal, and (round 6) a GPU rung's
+        failure, since its control rung never ran;
+      - round 6: this check comes before the "engine cannot run" one. A main copy that was only
+        unreadable beside a refused `cpu/` net gives the files-unreadable notice; the net keeps its own
+        verdict;
     - the notice's button opens the AI Model screen (round 5). There, "Stop runtime" and then "Use this
       model" start the model again; choosing the same model alone keeps the demo runtime;
     - when a lower rung starts after a higher one could not read its files, the chat runs lower (on the
@@ -3603,11 +3616,12 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     file is missing or cannot be read, every attempt reads the copy again. That means each rung of a chat
     start, each helper start and each probe call; after the first pass the OS file cache normally absorbs
     it.
-  - **A missing program or library** stops the read at that file. A quarantined DLL costs at most the
-    files before it in the check's order, not the whole copy, on each attempt.
+  - **A missing program or library** is found by the `stat` pass, so a quarantined DLL costs one `stat`
+    per file before it on each attempt, and no file is hashed (round 6).
+  - **`missing-other`** still hashes every present file on each attempt, since a changed file must not
+    hide behind it (the knowledge-pack tools start on that verdict), and it is not cached.
   - **kiwix-tools:** each kiwix program's verdict covers the whole kiwix copy. An intact copy is hashed
-    once per program per session; a `missing-other` copy is hashed again at every start, since that
-    verdict is not cached.
+    once per program per session; a `missing-other` copy is hashed again at every start.
   - **Timing on the probe and the speculative rung:** the hash runs before the probe's own 10 s cap
     starts. The speculative rung's wait for the probe therefore includes it once per session: about 3 s
     on a USB 2 stick (~95 MB at ~30 MB/s, estimated).
@@ -3686,28 +3700,37 @@ engines in their own folder.
   falls to the next rung / MockRuntime** with a content-free tamper warning to the local log. This one
   method funnels **every** llama-server spawn (chat runtime, embedder, reranker, vision), so all are
   covered by the single check.
-  - Missing: the typed `EngineCannotRunError` with a `files-damaged` verdict (`reportMissingEngineFiles`,
-    `exit: 'not started'`), so the ladder walks on without blaming the GPU or the model, and the "Install
-    again" offer appears.
+  - Missing or changed (`mismatch` since round 6): the typed `EngineCannotRunError` with a
+    `files-damaged` verdict (`reportDamagedEngineFiles`, `exit: 'not started'`), so the ladder walks on
+    without blaming the GPU or the model, latches no MTP, and the "Install again" offer appears. Every
+    other user of `LlamaServer` takes its #530 "engine cannot run" path.
   - `unreadable`: the typed `EngineFilesUnreadableError`. No verdict is recorded, and the ladder holds,
     persists and latches nothing: a walk with such a rung keeps no model latch, no GPU failure and no MTP
     latch, not even one set earlier in that walk (round 4).
   - The reason comes from the last other failure, so an earlier rung's model failure is still reported.
-  - With no evidence-class failure beside it (a failed MTP rung 1a, a bind race and an engine refusal are
-    none), the walk shows the files-unreadable notice.
+  - With no failed forced-CPU rung beside it that is evidence (round 6: a GPU rung's failure is none, nor
+    are a failed MTP rung 1a, a bind race and an engine refusal), the walk shows the files-unreadable
+    notice, also when another rung was refused as damaged.
   - Every other user of `LlamaServer` rethrows the error without a latch or a demotion (code review
     round 3).
-- **`probeGpuDevices()` (`gpu.ts`)** — resolves **`[]`** (reads as "no GPU"); the probe's contract is that
-  it never throws, so a tampered binary is simply never executed for enumeration.
-  - Missing: **`null`** (no answer, never persisted as "no graphics card") and the same verdict.
+- **`probeGpuDevices()` (`gpu.ts`)** — never throws, and never runs a copy that fails the check for
+  enumeration.
+  - Missing or changed: **`null`** (no answer, never persisted as "no graphics card") and the same
+    verdict. A changed file resolved `[]` until round 6 (owner call 3 of #653 kept `[]` for the
+    integrity paths); with the whole copy hashed, a damaged library reaches this branch, and `[]` was
+    saved as "no graphics card".
   - `unreadable`: `null`, no verdict.
-- **`WhisperCliTranscriber.run()` (`transcriber/cli.ts`)** — refuses before spawn; the audio import fails
-  per-file with the generic failure copy (raw reason to the local log only).
-  - Missing: the typed error and the voice engine's `files-damaged` verdict.
+- **`WhisperCliTranscriber.run()` (`transcriber/cli.ts`)** — refuses before spawn.
+  - Missing or changed (round 6): the typed error and the voice engine's `files-damaged` verdict; the
+    audio import and dictation show their "voice engine cannot run" copy (before round 6 a changed
+    file gave the generic failure copy).
   - `unreadable`: `EngineFilesUnreadableError`, no verdict.
-- **`checkProgramLoads()` (`engine-health.ts`)** — the #530 "Check again" launch resolves `unchecked`
-  and never spawns a tampered binary.
-  - Missing: `refused` (the verdict stands), never spawned.
+- **`checkProgramLoads()` (`engine-health.ts`)** — the #530 "Check again" launch never spawns a copy that
+  fails the check.
+  - Missing or changed (round 6; a changed file resolved `unchecked` before): `refused`, and the
+    `files-damaged` verdict is recorded again, so the "Install again" offer stays. Every install and
+    folder swap clears the verifier's cache (`invalidateBinaryVerification`), so the next check after a
+    reinstall reads the new copy.
   - `unreadable`: `unchecked` (the verdict is left as it was, no damage recorded; choosing Check again
     re-reads the copy).
 - **`KiwixServer` (`zim/serve.ts`) and `kiwixManageAdd` (`zim/tools.ts`)** — `mismatch`, `missing` (the

@@ -130,8 +130,8 @@ net the reinstall replaced is a fresh copy too. The shape is unchanged.
 The engine-downloader additions are listed under the downloader below. No new channel, no schema
 change.
 #1012 (`security-model.md` "Re-hash sidecar binaries before spawn"): a `'files-damaged'` verdict can
-also come from the pre-spawn check — a file the engine copy's install marker records is missing, and
-the program was never started. Its `exit` is then `'not started'` and it carries no `name`. Same shape,
+also come from the pre-spawn check — a file the engine copy's install marker records is missing, or
+(code review round 6) changed, and the program was never started. Its `exit` is then `'not started'` and it carries no `name`. Same shape,
 same channels, same "Install again" offer. An engine file the check could not read just now
 (`EngineFilesUnreadableError`, no verdict) is reported with the new key `main.engine.filesUnreadable`:
 - `TranslateErrorCode` gained `'filesUnreadable'`;
