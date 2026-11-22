@@ -12,7 +12,8 @@ import type { EngineProblem, EngineProblemFamily, EngineProblemReason } from '..
 //
 // This module holds the three pieces every spawn site shares:
 //   1. `classifyLoadFailure` — pure: exit code + signal + stderr → a reason, or null for every
-//      failure that is not the loader's (those keep their old handling, byte for byte);
+//      failure that is not the loader's (those keep their old handling, byte for byte), but for
+//      one engine-files message the program prints itself (#998: `no CPU backend found`);
 //   2. `EngineCannotRunError` — the typed, path-free error a spawn site throws instead;
 //   3. the session verdict store — in memory only, NEVER persisted (a restart after the fix starts
 //      clean), read by `getAppStatus` and cleared by "Check again".
@@ -79,6 +80,8 @@ const DYLD_NOT_LOADED_RE = /Library not loaded:\s*(\S+)/
 const DYLD_SYMBOL_RE = /Symbol not found:\s*(\S+)/
 const DYLD_EXPECTED_IN_RE = /Expected in:?\s*(\S+)/
 const DYLD_OS_TOO_OLD_RE = /which is newer than running OS/i
+/** #998: llama.cpp's own line when no `ggml-cpu-*` backend library could be loaded. */
+const NO_CPU_BACKEND_RE = /\bno CPU backend found\b/
 
 const ANSI_RE = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g')
 
@@ -156,6 +159,13 @@ export function classifyLoadFailure(input: LoadFailureInput): LoadFailure | null
     return failure(engineOwn ? 'files-damaged' : 'system-too-old', dyldSymbol[1])
   }
   if (DYLD_OS_TOO_OLD_RE.test(text)) return failure('system-too-old')
+
+  // #998: the program started but found none of its CPU backend libraries to load (every
+  // `ggml-cpu-*` file gone: an antivirus quarantine, a copy cut short). It is no loader refusal,
+  // but it is the engine's own files, never the model: both main rungs failed alike, so without
+  // this the ladder blamed the model. Measured on b12110 Windows (exit 1); llama.cpp prints the
+  // same line on every system.
+  if (NO_CPU_BACKEND_RE.test(text)) return failure('files-damaged')
 
   // Windows: no text at all — the NTSTATUS exit code is the whole story.
   if (input.exitCode != null) {
