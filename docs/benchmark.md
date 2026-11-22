@@ -1288,7 +1288,9 @@ example a launcher stamp file); the monotonic column gives clean intra-process d
 Events: `app_ready`, `backend_init_done`, `window_ready_to_show`, `gate_visible` (the
 one renderer mark, allowlisted at the IPC boundary), `vault_unlocked` (kdf / decrypt
 split + DB bytes), `unlock_done`, `vault_lock_done` (checkpoint / probe / encrypt / shred
-split + DB bytes; `probeMs` is the #876 structural check of the working file before it is
+split + DB bytes; #982: `overwrittenBytes`, the budgeted overwrite's count on Linux's lost-session
+`quit` leg, null for every other lock's full overwrite, and `shredCut`, true when that overwrite
+stopped short; `probeMs` is the #876 structural check of the working file before it is
 encrypted, about 4 ms on a warm cache for a 365 MiB or a 1.4 GiB workspace, 6 ms under Electron 43),
 `vault_stage_check` (#973: `checkMs` and `stageBytes` of the unlock's one authenticate pass over a staged
 `.enc.new` that no rekey journal lists; only in that state),

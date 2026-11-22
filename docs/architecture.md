@@ -12785,8 +12785,10 @@ the owner's machine setting, never altered by a session). The item rides once th
 a machine where the runtime executes; #228 carries the change set, the gate and both probe records.
 
 **Owner-only, for no PR:** the macOS live check of the session-end lock (#226 — the ordering
-against `will-quit`, the grace, a Dock-menu Quit, a cancelled shutdown; Linux registers nothing,
-not ruled); the exFAT crash-cut
+against `will-quit`, the grace, a Dock-menu Quit, a cancelled shutdown: since #1002 the survived
+state reopens onto the unlock screen and an unlock resets it, Mac walks W1–W5 owed,
+`security-model.md` "After a cancelled shutdown"; Linux registers nothing, not ruled); the
+exFAT crash-cut
 session (`packaging.md` pre-ship checklist item 9, #223); the spawn-time refusal of hashless runtime
 markers on sold kits (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES = false`, `binary-verifier.ts`);
 the nine manual smokes listed under "Residuals" plus the macOS/Linux packaged-OCR and update-walk

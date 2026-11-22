@@ -290,7 +290,28 @@ export interface EmergencyLockDeps {
   /** `killRegisteredSidecarChildren` — the synchronous, throw-safe-per-PID reaper. */
   killSidecarChildren?: () => void
   log?: Pick<typeof realLog, 'error' | 'info'>
+  /** The clock the lock's start, its duration and a budget's deadline are on (#982); `performance.now`. */
+  now?: () => number
 }
+
+/** What a caller may ask of `emergencyLock` (#982). */
+export interface EmergencyLockOptions {
+  /**
+   * The lock's time budget in milliseconds, counted from its own start: the overwrite of the plaintext working file
+   * stops once it would run past it, and the file is unlinked (`shredFileWithin`). Only the Linux `quit` leg passes one
+   * (`QUIT_LOCK_BUDGET_MS`); every other lock overwrites the whole file.
+   */
+  budgetMs?: number
+}
+
+/**
+ * #982 (G-12 option a2): the Linux `quit` leg's lock budget. That leg runs inside Electron's fixed session-loss
+ * watchdog: measured on WSL Electron 43.8.6 (follow-ups wave 7, 16 runs), a lock of 9.95 s still exited 0 and one of
+ * 10.05 s crashed with status 133 ("Failed to shutdown."), with the `quit` handler starting 2–11 ms after the session
+ * loss and Electron's exit taking 31–101 ms after the handler. 8.5 s leaves about 1.3 s for an overwrite chunk that ran
+ * longer than its estimate (a flash stall), the unlink, the duration line, the reap and the exit.
+ */
+export const QUIT_LOCK_BUDGET_MS = 8_500
 
 /**
  * Lock the workspace NOW, synchronously and best-effort, for a process that is about to die
@@ -310,13 +331,20 @@ export interface EmergencyLockDeps {
  * half first, the hygiene half in its OWN try so a lock throw cannot skip it). A failed lock is
  * logged and left to the next launch's recovery (`workspace.shutdown()` closes the re-opened
  * handle so the working file rests bare and newer than `.enc` — the salvage signature `init()`
- * rolls forward instead of shredding). Its duration is logged after the lock, content-free.
+ * rolls forward instead of shredding). Its duration is logged after the lock, content-free. With
+ * `options.budgetMs` (#982, the Linux `quit` leg only) the budget becomes an absolute deadline from this lock's
+ * start, and the overwrite of the working file stops at it (`shredCut` in the duration line).
  */
-export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = {}): void {
+export function emergencyLock(
+  ctx: AppContext | null,
+  deps: EmergencyLockDeps = {},
+  options: EmergencyLockOptions = {}
+): void {
   const detachVaultKey = deps.detachVaultKey ?? realDetachVaultKey
   const killSidecarChildren = deps.killSidecarChildren ?? killRegisteredSidecarChildren
   const log = deps.log ?? realLog
-  const startedAt = performance.now()
+  const now = deps.now ?? (() => performance.now())
+  const startedAt = now()
   try {
     ctx?.workspace.beginLock()
   } catch {
@@ -361,18 +389,35 @@ export function emergencyLock(ctx: AppContext | null, deps: EmergencyLockDeps = 
     /* a log line must never stop the lock */
   }
   let lockFailed = false
+  // #982: the budget as an absolute deadline on this lock's own clock; the lock reports a cut overwrite back.
+  let shredCut = false
+  const budget =
+    options.budgetMs === undefined
+      ? undefined
+      : { deadline: startedAt + options.budgetMs, now, onShredCut: () => void (shredCut = true) }
   try {
     detachVaultKey()
-    ctx?.workspace.shutdown()
+    ctx?.workspace.shutdown({ budget })
   } catch (err) {
     lockFailed = true
     log.error('emergency lock failed — the next launch recovers the working copy', failureForLog(err))
   }
   // #964 security round (F1): how long the lock took, against the 10 s Electron allows a lost session's `quit`. The
   // key is gone by now, so this line reaches the console and a `plaintext_dev` log, not the encrypted one; the
-  // lock's phases are in the perf log (`vault_lock_done`) when HILBERTRAUM_PERF_LOG=1. Content-free.
+  // lock's phases are in the perf log (`vault_lock_done`) when HILBERTRAUM_PERF_LOG=1. Content-free. #982: `shredCut`
+  // says the budget stopped the overwrite of the working file before its end (the file was unlinked all the same).
   try {
-    log.info('emergency lock: finished', { durationMs: Math.round(performance.now() - startedAt), lockFailed })
+    log.info('emergency lock: finished', { durationMs: Math.round(now() - startedAt), lockFailed, shredCut })
+  } catch {
+    /* best-effort */
+  }
+  // #1002 (S-5): the chat runtime is told first, through its own (non-latching) stop, so the reap below is an expected
+  // exit for it. Untold, its server dies "on its own", and in a process that lives on (a session end the app outlived)
+  // the crash handling ran: a false compatibility-mode notice and audit events, the speed-up latched off for the
+  // session, and a dead runtime the next unlock's auto-start took for a running one. The stop marks the server as
+  // stopping in its first microtasks, before the reaped child's exit event can be delivered, and drops the runtime.
+  try {
+    void ctx?.runtime?.stop().catch(() => {})
   } catch {
     /* best-effort */
   }
@@ -404,9 +449,10 @@ export interface AppLifecycleDeps {
   performShutdown: () => Promise<void>
   /**
    * The synchronous best-effort lock for a process that is about to be killed without a quit
-   * (#248); the real caller binds `emergencyLock(ctx)`. Never expected to throw.
+   * (#248); the real caller binds `emergencyLock(ctx, {}, options)`. Never expected to throw. #982: only the Linux
+   * `quit` leg passes `{ budgetMs: QUIT_LOCK_BUDGET_MS }`.
    */
-  emergencyLock: () => void
+  emergencyLock: (options?: EmergencyLockOptions) => void
   /** `app.exit` — the ONLY way the process leaves once a quit has begun. */
   exit: (code: number) => void
   /** `createWindow` (a macOS Dock click fires `activate` with no window open). */
@@ -429,11 +475,39 @@ export interface AppLifecycleDeps {
    */
   killSidecarChildren: () => void
   log: Pick<typeof realLog, 'error' | 'info'>
+  /**
+   * #1002: the workspace reads `locked` (an encrypted vault waiting for its password). Only then does a Dock click
+   * after a session-end lock open a window: a `plaintext_dev` workspace whose database the lock closed reads
+   * `uninitialized`, and the window would offer onboarding, whose create builds a vault beside the plaintext data.
+   * Absent (or throwing): not locked, so no window, as before #1002.
+   */
+  workspaceLocked?: () => boolean
 }
 
 export interface AppLifecycleHandlers {
   onWillQuit: (event: WillQuitEventLike) => void
+  /**
+   * #1002: Electron's `before-quit`, the first event of every quit (⌘Q, the menu, the Dock, the system's own quit at a
+   * shutdown). Records only that a quit began after a session-end lock that left the app running; from then on a Dock
+   * click opens no window and an unlock resets nothing, so a quit already under way is never handed a fresh window or
+   * a close guard that holds. Any other quit leaves no trace here (a quit the guard's Keep open cancels stays harmless).
+   */
+  onBeforeQuit: () => void
+  /**
+   * A Dock click (`activate`), and a second launch with no main window (`index.ts` routes `second-instance` here). No
+   * window opens once a quit has begun (#238, #910). #1002: except after a session-end lock that left the app running
+   * (a shutdown another app cancelled, by Electron's source not expected to happen): then the window opens, onto the
+   * unlock screen, unless the system's quit began since (`onBeforeQuit`).
+   */
   onActivate: () => void
+  /**
+   * #1002: the user unlocked the workspace again (the unlock IPC, on success only). After a session-end lock that left
+   * the app running, and only if no quit began since, the closure returns to a normal session: the close guard saves
+   * again, ⌘Q runs the quit teardown, a later session end locks as the first one did. In every other state it does
+   * nothing: a running quit teardown, a lock whose exit is under way (a signal's, Electron's `quit`), or no session-end
+   * lock at all.
+   */
+  onWorkspaceUnlocked: () => void
   /**
    * The main window is gone (its `closed` event, after the close guard let the close through,
    * #888). On Windows and Linux that quits the app (#910): Electron's own quit
@@ -453,7 +527,9 @@ export interface AppLifecycleHandlers {
    * restart or log-off — cannot be prevented; the process is killed once the handler returns),
    * or macOS `powerMonitor` `shutdown` (unverified on a Mac — #226). Runs `emergencyLock` once. It does not exit: the
    * OS ends the process, or, after a shutdown another app cancelled (macOS), a later quit or signal does. A later
-   * session end, quit or signal locks again first (#977): the user may have unlocked since.
+   * session end, quit or signal locks again first (#977): the user may have unlocked since. #1002: in that state a Dock
+   * click opens the window onto the unlock screen (`onActivate`), and an unlock returns the closure to a normal session
+   * (`onWorkspaceUnlocked`), unless the system's quit began since (`onBeforeQuit`).
    */
   onSessionEnd: (event?: SessionEndEventLike) => void
   /**
@@ -476,9 +552,13 @@ export interface AppLifecycleHandlers {
    * teardown's (whose own `exit` emits this event) or a signal's. Never exits: Electron is already exiting.
    * The crash path's `process.exit(1)` emits `quit` too (measured), after its own `emergencyLock`, which this
    * closure does not see: the second run finds the workspace locked and only repeats the reap.
+   * #982: this lock runs inside Electron's fixed 10 s session-loss watchdog, so it is the one that passes a budget
+   * (`QUIT_LOCK_BUDGET_MS`): the overwrite of the working file stops at it, and the lock ends encrypted instead of
+   * crashing mid-lock on a large workspace or a slow drive.
    */
   onQuitEvent: () => void
-  /** True from the first `will-quit`, session end, signal or `quit` lock on (tests + diagnostics). */
+  /** True from the first `will-quit`, session end, signal or `quit` lock on (the close guard reads it); #1002: false
+   *  again after an unlock that followed a session-end lock which left the app running (`onWorkspaceUnlocked`). */
   isShuttingDown: () => boolean
 }
 
@@ -519,6 +599,13 @@ export interface AppLifecycleHandlers {
  * still lock (the user may have unlocked again) and, for a quit or signal, exit; `appEnding` tells that
  * case from a lock whose exit is already under way (`docs/security-model.md` "OS session end locks the
  * workspace").
+ *
+ * #1002 — and that survived state is not a dead end: a Dock click opens the window onto the unlock screen, and the
+ * user's successful unlock clears `shuttingDown`, `sessionEndLocked` and `lockRan`, so the session after it is an
+ * ordinary one (the close guard saves, ⌘Q runs the teardown). Both are gated on "no `before-quit` since the
+ * session-end lock" (`quitBegunAfterSessionEnd`): by Electron's source a shutdown that proceeds fires `before-quit` in
+ * the same Apple Event as the lock, so no window and no reset can reach the quit that follows. Neither acts on Windows
+ * (the process ends with `session-end`) or Linux (its signal and `quit` locks set `appEnding` at once).
  */
 /**
  * The line a lock handler writes right before `emergencyLock`, in its own guard (#964 security round, F4): the
@@ -582,6 +669,24 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
    * during a print), and a second launch or a Dock click then must not open a window into it.
    */
   let quitAfterLastClose = false
+  /**
+   * #1002: a quit began (`before-quit`) after a session-end lock that left the app running. By Electron's source the
+   * system's quit follows the macOS `powerMonitor` lock inside the same Apple Event, so in a shutdown that proceeds this
+   * is set before any Dock click or unlock can be dispatched; from then on neither opens a window nor resets the
+   * closure into that quit. Nothing clears it: that quit ends at its `will-quit`, which exits.
+   */
+  let quitBegunAfterSessionEnd = false
+  /** #1002: the session-end lock ran, and no exit is under way (the OS ends the process, or, after a shutdown another
+   *  app cancelled, the app runs on locked). */
+  const sessionEndSurvived = (): boolean => sessionEndLocked && !appEnding
+  /** #1002: an encrypted workspace waits for its password (`AppLifecycleDeps.workspaceLocked`); false on any doubt. */
+  const workspaceLocked = (): boolean => {
+    try {
+      return deps.workspaceLocked?.() === true
+    } catch {
+      return false
+    }
+  }
   return {
     onWillQuit: (event) => {
       // #238: EVERY will-quit is prevented — the first one starts the teardown, any later one
@@ -616,11 +721,34 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
           deps.exit(0)
         })
     },
+    onBeforeQuit: () => {
+      // #1002: scoped to the session-end state, so a quit the close guard's Keep open cancels leaves no flag behind (in
+      // that state the guard holds no close: `isShuttingDown()` is true, and the quit runs on to its `will-quit`).
+      if (sessionEndSurvived()) quitBegunAfterSessionEnd = true
+    },
     onActivate: () => {
-      // #238: no fresh window once a quit has begun (#910: also the quit the last close started).
-      if (shuttingDown || quitAfterLastClose) return
+      // #238: no fresh window once a quit has begun (#910: also the quit the last close started; #1002: also the
+      // system's quit after a session-end lock).
+      if (quitAfterLastClose || quitBegunAfterSessionEnd) return
+      // #1002: a session-end lock that left the app running is no quit: the window opens onto the unlock screen, and
+      // only onto that (a `plaintext_dev` workspace reads `uninitialized` once its database closed: no window).
+      if (shuttingDown && !(sessionEndSurvived() && workspaceLocked())) return
       // #910: main windows only — a hidden helper window is not a window the user can use.
       if (deps.mainWindowCount() === 0) deps.createWindow()
+    },
+    onWorkspaceUnlocked: () => {
+      // #1002: only after a session-end lock that left the app running, with no quit begun since. A running quit
+      // teardown (`lockRan` false, `sessionEndLocked` false), a lock whose exit is under way (`appEnding`) and a normal
+      // session (`sessionEndLocked` false) are left as they are.
+      if (!sessionEndSurvived() || quitBegunAfterSessionEnd) return
+      shuttingDown = false
+      sessionEndLocked = false
+      lockRan = false
+      try {
+        deps.log.info('session-end: the workspace was unlocked again — the app runs on as after a start')
+      } catch {
+        /* a log line must never fail the unlock that called this */
+      }
     },
     onMainWindowClosed: (closedForQuit) => {
       // #910: Windows and Linux quit when the main window closes, whatever helper windows are
@@ -717,7 +845,8 @@ export function createAppLifecycleHandlers(deps: AppLifecycleDeps): AppLifecycle
         logBeforeLock(() =>
           deps.log.info('quit: the session ended before the workspace locked — locking workspace', { midTeardown })
         )
-        deps.emergencyLock()
+        // #982: the one leg under Electron's 10 s watchdog, so the one lock with a budget.
+        deps.emergencyLock({ budgetMs: QUIT_LOCK_BUDGET_MS })
       } catch (err) {
         deps.log.error('quit: lock failed', failureForLog(err))
       }
