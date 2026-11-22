@@ -754,6 +754,21 @@ describe('generateGroundedAnswer', () => {
     expect(msg.truncatedCause).toBe('context')
   })
 
+  // #994, owner call G-5: the repetition guard watches whole-document answers only. The single-turn grounded path
+  // passes none to the shared engine, so its continuation is stored as the model wrote it, repeats and all.
+  it('#994: a grounded continuation is not watched by the repetition guard (whole-document answers only)', async () => {
+    const row = '| 14 days of the request | Party requesting consent must be told about reasonable conditions |\n'
+    const runtime = finishScriptedRuntime([
+      { reply: 'Deadlines:\n', finish: 'length' },
+      { reply: row.repeat(8), finish: 'stop' }
+    ])
+    const msg = await askGrounded(runtime)
+
+    expect(runtime.calls).toBe(2)
+    expect(msg.content).toBe(`Deadlines:\n${row.repeat(8)}`)
+    expect(msg.truncated).toBeUndefined()
+  })
+
   it('#498: a grounded answer that finishes cleanly carries neither the flag nor a cause', async () => {
     const msg = await askGrounded(finishScriptedRuntime([{ reply: 'A complete answer.', finish: 'stop' }]))
     expect(msg.truncated).toBeUndefined()

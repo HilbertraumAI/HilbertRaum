@@ -52,6 +52,19 @@ export function noFenceMapPrompt(fold: boolean, request: string, part: number | 
   return `${head}\nUser request:\n${request}\n\nPart ${part} of ${total} ${label}:\n${text}\n\n${fold ? 'Condensed notes:' : 'Notes:'}`
 }
 
+/** #994: a continuation's user turn as master's `withContinuation` builds it from the pass's user turn and the
+ *  anchor (the answer's last characters), frozen, so a row can prove a turn the repetition guard never tripped sends
+ *  master's continuation byte for byte. */
+export function masterContinuationTurn(user: string, anchor: string): string {
+  return (
+    `${user}\n\n` +
+    'You already produced the answer up to the passage below, but were cut off before finishing. Continue ' +
+    'the answer exactly from where it stops — do NOT repeat anything already written, do NOT restart, and ' +
+    'do NOT add any preamble or heading.\n\n' +
+    `Already written (your answer ends with this — continue immediately after it):\n${anchor}\n\nContinuation:`
+  )
+}
+
 /** A map or fold user turn split into its step kind, part numbers and window text, or null when it is neither. */
 function mapStepOf(user: string): { fold: boolean; part: string; total: string; text: string } | null {
   const m = user.match(/^You are (processing|condensing the notes from) part (\d+) of (\d+) /)

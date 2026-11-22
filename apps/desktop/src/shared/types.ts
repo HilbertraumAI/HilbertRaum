@@ -1365,8 +1365,10 @@ export interface Citation {
  * Which ceiling cut a reply short (#498). llama-server reports the same `finish_reason: 'length'`
  * for both, but the honest remedy differs: only `'context'` is fixed by raising the context size,
  * while `'cap'` is the app's own fixed per-reply token budget (grounded answers pin one per pass).
+ * `'repeat'` (#994) is no ceiling: the app stopped a whole-document answer that started repeating
+ * itself (rag-design.md §14.10), and the remedy is to ask again or narrow the question.
  */
-export type TruncationCause = 'context' | 'cap'
+export type TruncationCause = 'context' | 'cap' | 'repeat'
 
 /**
  * #600 — what ended a turn before it was finished. Not a truncation (`truncated` means the model
@@ -1440,7 +1442,8 @@ export interface Message {
    * Which ceiling ended a `truncated` reply (#498), so the transcript offers the remedy that
    * actually applies instead of always blaming the context window:
    *  - `'context'` — the model ran out of context room ("raise the context size" is the fix);
-   *  - `'cap'` — the app's own fixed per-reply token cap ended it (the window may be nearly empty).
+   *  - `'cap'` — the app's own fixed per-reply token cap ended it (the window may be nearly empty);
+   *  - `'repeat'` — #994: the app stopped a whole-document answer that kept repeating itself.
    * Set whenever `truncated` is true; undefined otherwise. Persisted as `messages.truncated_cause`
    * (TEXT/NULL) — a pre-#498 truncated row has NULL and reads back as `'context'`, the flag's
    * historical meaning.
