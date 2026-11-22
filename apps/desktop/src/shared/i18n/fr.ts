@@ -920,6 +920,10 @@ export const fr: UiCatalog<'fr'> = {
   'analysis.wholeReadSumHint':
     '**À noter\u00A0:** le modèle calcule lui-même les totaux et peut oublier ou mal compter des ' +
     'éléments. Vérifiez chaque total à l’aide des sources.',
+  'analysis.wholeDocBeginningOnly':
+    '**À noter\u00A0:** ce document était trop long pour être lu en entier, cette réponse n’en ' +
+    'couvre donc que le début. Pour vérifier un point situé plus loin dans le document, posez ' +
+    'directement la question sur ce détail.',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'J’ai lu le relevé en entier. Transactions\u00A0: **{count}**.',
   'skills.bankAnalysis.countPartial':

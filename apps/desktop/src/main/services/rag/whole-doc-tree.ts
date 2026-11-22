@@ -39,6 +39,7 @@ import {
   SUMMARY_TOKENS_PER_WORD
 } from '../doctasks/summary'
 import { truncateToApproxTokens } from '../ingestion/chunker'
+import { endsMidSentence } from './answer-end'
 
 // Skill-aware WHOLE-DOCUMENT answer over a DEEP-INDEX TREE (skill-whole-doc engine, Follow-up A —
 // architecture.md §20). Wave 2 read an over-budget document from the BEGINNING and stamped the honest
@@ -271,13 +272,22 @@ export interface ContinueGenerationInput {
   sentCap?: number | null
   /** #498 — that pass's runtime timings, when the runtime reported any (absent on the mock). */
   timings?: RuntimeTimings | null
+  /** #996 A: app text that still has to lead the answer because the pass before produced no text (a reasoning
+   *  model can spend a whole cut pass thinking). It is put before the first continuation text, in `acc.content`
+   *  and in the same `onToken` call, so it never streams or persists alone, and the first continuation's anchor
+   *  (built from the text before it) is the same as without it. */
+  leadOnFirstText?: string
 }
 
 /** What `continueUntilComplete` reports back about the LAST pass it saw (#498). */
 export interface ContinuationOutcome {
   /** The final finish reason: 'length' = still cut after the bounded re-prompts; null on a user Stop. */
   finishReason: string | null
-  /** Which ceiling ended it — undefined unless `finishReason === 'length'`. */
+  /** #996 B: a continuation pass ran and the last one ended 'stop', but the answer still ends mid-sentence
+   *  (`endsMidSentence`), so the cut was never finished. The caller stamps it as cut, like 'length'. */
+  unfinished?: boolean
+  /** Which ceiling ended it — undefined unless `finishReason === 'length'` or `unfinished`, where it is the
+   *  ceiling of the last pass that was cut. */
   cause?: TruncationCause
 }
 
@@ -318,6 +328,9 @@ export function truncationCause(
  * propagates. Returns the FINAL finish reason together with its #498 CAUSE: the caller stamps an honest
  * OUTPUT-truncation when the reason is still 'length' (the cap was exhausted) and uses the cause to pick the
  * remedy the badge offers; `finishReason: null` on a user Stop (intentional, not an overflow).
+ * #996 B: a continuation that ends 'stop' can still leave the answer mid-sentence; then the outcome says
+ * `unfinished` with the cause of the last pass that was cut, and the caller stamps it too. A first pass that
+ * ended 'stop' (no continuation ran) and a user Stop are never judged.
  */
 export async function continueUntilComplete(input: ContinueGenerationInput): Promise<ContinuationOutcome> {
   const { runtime, signal, onToken, baseMessages, contextTokens, outputCap, temperature, acc } = input
@@ -332,6 +345,22 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
   let capShrunkByWindow = false
   // True when the loop stopped because no room was left to continue at all — the window again.
   let stoppedForRoom = false
+  // #996 B: a continuation pass actually ran (the room guard can stop the loop before the first one), and
+  // the ceiling of the last pass that ended 'length', starting with the caller's own pass.
+  let ranContinuation = false
+  let cutCause = truncationCause(finishReason, lastSentCap, lastTimings)
+  // #996 A: app text the caller still owes the answer; it leads the first continuation text.
+  let lead = input.leadOnFirstText ?? ''
+  /** Append continuation text to the answer and stream it, led by any app text still owed. */
+  const emitText = (text: string): void => {
+    let piece = text
+    if (lead !== '' && text !== '') {
+      piece = lead + text
+      lead = ''
+    }
+    acc.content += piece
+    onToken?.(piece)
+  }
   try {
     while (finishReason === 'length' && continuations < MAX_REDUCE_CONTINUATIONS) {
       continuations++
@@ -346,6 +375,7 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
       lastSentCap = continueCap
       lastTimings = null
       capShrunkByWindow = continueCap < outputCap
+      ranContinuation = true
       finishReason = null
       // Hold back the continuation's opening until enough is buffered to resolve the seam overlap against
       // the anchor, then stream the DE-DUPLICATED remainder live.
@@ -353,10 +383,7 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
       let seamResolved = false
       const flushSeam = (): void => {
         const emit = seam.slice(seamOverlap(acc.content, seam, anchor.length))
-        if (emit.length > 0) {
-          acc.content += emit
-          onToken?.(emit)
-        }
+        if (emit.length > 0) emitText(emit)
         seam = ''
         seamResolved = true
       }
@@ -368,11 +395,12 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
           onFinish: (reason, tm) => {
             finishReason = reason
             lastTimings = tm ?? null
+            // #996 B: the same attribution as the final one below, for this pass alone.
+            if (reason === 'length') cutCause = capShrunkByWindow ? 'context' : truncationCause(reason, continueCap, lastTimings)
           }
         })) {
           if (seamResolved) {
-            acc.content += token
-            onToken?.(token)
+            emitText(token)
           } else {
             seam += token
             if (seam.length >= anchor.length) flushSeam()
@@ -393,7 +421,14 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
   // #498 — attribute the final cut. The window wins over the cap whenever the window is what actually
   // bound the last pass: it left no room to continue at all (`stoppedForRoom`), or it shrank that pass's
   // ceiling below the app's own cap (`capShrunkByWindow`). Otherwise the per-pass helper decides.
-  if (finishReason !== 'length') return { finishReason }
+  if (finishReason !== 'length') {
+    // #996 B: a continuation ended 'stop' but the answer, as it will be stored, still ends mid-sentence
+    // ("… unless the lease provides otherwise or"): the cut was not finished, so report the cut pass's cause.
+    if (ranContinuation && finishReason === 'stop' && endsMidSentence(stripSkillFenceEcho(stripThinkBlocks(acc.content)))) {
+      return { finishReason, unfinished: true, cause: cutCause }
+    }
+    return { finishReason }
+  }
   if (stoppedForRoom || capShrunkByWindow) return { finishReason, cause: 'context' }
   return { finishReason, cause: truncationCause(finishReason, lastSentCap, lastTimings) }
 }
@@ -502,6 +537,8 @@ export interface WholeDocTreeDeps {
   /** W2 scope notice (§2.1): prepended to the streamed + persisted answer when the scope was auto-
    *  narrowed to this document. App-authored, content-free. Absent ⇒ no prefix. */
   answerPrefix?: string
+  /** #996 A: the line that leads an answer covering only the document's beginning (threaded to the core). */
+  beginningNotice?: string
   /** Knowledge packs (#301 P4, plan §9.21 (e)5): the `skipped / mode` outcomes for the packs this
    *  chat selected — a whole-document rescue reads the DOCUMENT, so it must say the packs took no
    *  part rather than stay silent. Absent ⇒ no outcomes (a chat with no pack selected). */
@@ -548,6 +585,10 @@ export interface WholeDocMapReduceInput {
   onCompactionStart?: (kind: 'analysis') => void
   /** W2 scope notice (§2.1): prepended to the streamed + persisted answer. Absent ⇒ no prefix. */
   answerPrefix?: string
+  /** #996 A (design-guidelines §11.25): the localized line "this answer covers only its beginning", passed in
+   *  like `answerPrefix` so the core stays i18n-free. Used only when `truncated` is final, after `answerPrefix`;
+   *  it rides the first reduce token, so it never streams or persists without model text. Absent ⇒ none. */
+  beginningNotice?: string
   /** Knowledge packs (#301 P4, plan §9.21 (e)5): the `skipped / mode` outcomes persisted with the
    *  answer — this path read the document, so the ticked packs took no part in it. */
   packOutcomes?: KnowledgePackOutcome[]
@@ -578,6 +619,7 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     onToken,
     onCompactionStart,
     answerPrefix,
+    beginningNotice,
     packOutcomes,
     sourceTexts,
     citations,
@@ -646,6 +688,8 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // #498: which ceiling cut it — set together with `outputTruncated`, so the badge offers the remedy
   // that applies ("raise the context size" only when the window really is the reason).
   let outputCause: TruncationCause | undefined
+  // #996 A: the beginning-only line with its blank line, set once `truncated` is final (before the reduce).
+  let beginningLead = ''
   if (answerPrefix) onToken?.(answerPrefix)
   // Phase 3 — progress affordance (wholedoc-truncation-fix-plan §5): a MULTI-window source runs SILENT
   // map calls before the first streamed reduce token; that gap otherwise reads as a hang. Fire the SAME
@@ -741,6 +785,13 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     // #498: the reduce's own timings ride the same final chunk — the cause attribution needs to know
     // whether the server actually reached `reduceOutputCap` or stopped short of it (⇒ the window).
     let reduceTimings: RuntimeTimings | null = null
+    // #996 A (design-guidelines §11.25): a 4B model ignores the prompt's "say it covers only the beginning", so
+    // an answer whose input was cut leads with the app's own line, after the scope notice and the sum hint
+    // (`answerPrefix`). It rides the FIRST text token (the reduce's, or the continuation's when the reduce wrote
+    // none): it never streams without model text, and a Stop before that token persists nothing (the guard
+    // below). The prompt above is the same with or without it.
+    beginningLead = truncated && beginningNotice ? `${beginningNotice}\n\n` : ''
+    let leadPending = beginningLead !== ''
     for await (const token of runtime.chatStream(messages, {
       signal,
       maxTokens: reduceOutputCap,
@@ -750,8 +801,13 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
         reduceTimings = tm ?? null
       }
     })) {
-      content += token
-      onToken?.(token)
+      let piece = token
+      if (leadPending && token !== '') {
+        piece = beginningLead + token
+        leadPending = false
+      }
+      content += piece
+      onToken?.(piece)
     }
 
     // CONTINUE-GENERATION (Phase 4 — §6): the reduce was cut at the output ceiling, not stopped by the user.
@@ -776,10 +832,14 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
       // #498: the reduce pass's own ceiling + timings, so the engine can attribute a cut that the
       // room guard ends before any continuation pass runs.
       sentCap: reduceOutputCap,
-      timings: reduceTimings
+      timings: reduceTimings,
+      // #996 A: a reduce that wrote no text (a thinking model's reasoning filled its cap) still owes the
+      // beginning-only line, so it leads the first continuation text instead.
+      leadOnFirstText: leadPending ? beginningLead : undefined
     })
     content = acc.content
-    outputTruncated = outcome.finishReason === 'length'
+    // #996 B: a continuation that ended 'stop' mid-sentence is cut too (`unfinished`).
+    outputTruncated = outcome.finishReason === 'length' || outcome.unfinished === true
     outputCause = outcome.cause
   } catch (err) {
     // A user Stop aborts mid-map (no partial) or mid-reduce (keep the partial); any other error is a
@@ -793,7 +853,10 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // before the first reduce token, or a think-only reply): the notice is not an answer, and must never be
   // persisted alone stamped with coverage (W2 review). `content === seeded` catches the prefix-only case;
   // `content === ''` the no-prefix case — byte-identical to the pre-W2 guard when there is no prefix.
+  // #996 A: the beginning-only line is app text too. It rides a model token, so a reply that strips to nothing
+  // (think-only; `stripThinkBlocks` trims) leaves only app text: that is no answer either.
   if (content === '' || content === seeded) return emptyAssistantMessage(conversationId)
+  if (beginningLead !== '' && content.trim() === `${seeded}${beginningLead}`.trim()) return emptyAssistantMessage(conversationId)
   // `truncated` is now final (ceiling cut and/or notes truncation): a truncated answer is stamped as
   // covering only the beginning, never as whole-document coverage (audit §2.2). The renderer badge reads
   // this flag first, before the leaf-fraction 100% claim.
@@ -816,7 +879,8 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     autoFired: skill?.autoFired === true,
     // Phase 4 (§6): honest OUTPUT-truncation stamp when continue-generation was exhausted and the
     // deliverable is still cut at the ceiling — the "Answer truncated" badge, distinct from the coverage
-    // (INPUT) truncation above. False on a clean finish and on a user Stop.
+    // (INPUT) truncation above — or (#996 B) a continuation ended cleanly mid-sentence. False on a clean
+    // finish and on a user Stop.
     truncated: outputTruncated,
     // #498: the badge names no cause any more — this picks which remedy it offers.
     truncatedCause: outputCause
@@ -869,6 +933,7 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     onToken,
     onCompactionStart,
     answerPrefix,
+    beginningNotice,
     packOutcomes
   } = deps
 
@@ -898,6 +963,7 @@ export async function answerWholeDocFromTree(deps: WholeDocTreeDeps): Promise<Me
     onToken,
     onCompactionStart,
     answerPrefix,
+    beginningNotice,
     packOutcomes,
     sourceTexts: nodeTexts,
     citations,

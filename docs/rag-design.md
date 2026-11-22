@@ -2513,10 +2513,78 @@ takes the request), `rag-whole-doc-mapreduce.test.ts` (the flag on, and no skill
 (`isReportShaped`). Residuals, the 9B's list clause over a document whose clauses repeat among them:
 [`known-limitations.md`](known-limitations.md) ("A whole-document read's notes and the question").
 
+**The beginning-only line and the unfinished stamp (#996, follow-ups wave 7, owner call G-7).** Two places
+where only the badge told the truth.
+- **(A) The beginning-only line.** When the notes are cut to fit the reduce (or the hard ceiling drops the
+  tail), the reduce prompt asks the model to "state plainly that your answer covers only the beginning".
+  qwen3-4b-instruct-q4 did so in 0 of 8 such answers in wave 6, so the answer's text, its copy and its export
+  read as complete. Now the core leads such an answer with an app line, `beginningNotice`
+  (`analysis.wholeDocBeginningOnly`, [design-guidelines §11.25](design-guidelines.md)). It is threaded like
+  `answerPrefix` (`GroundedAnswerOptions` → `WholeDocTreeDeps` / `WholeDocChunksDeps` →
+  `WholeDocMapReduceInput`), so the core stays i18n-free; `registerRagIpc` sets it on every turn that can read
+  a document whole. The core uses it only when `truncated` is final, and prepends it to the **first text
+  token** (one `onToken(line + token)`), after `answerPrefix`: the scope notice, the sum hint, this line, the
+  answer. That is the reduce's first token or, when the reduce wrote no text (a thinking model's reasoning
+  filled its cap), the continuation's (`leadOnFirstText` on `continueUntilComplete`; that continuation's
+  anchor stays as it was). It never streams or persists without model text: `content === seeded` still covers
+  a Stop before that token, and a reply that strips to nothing beyond the app text persists nothing either.
+  Every prompt is byte for byte unchanged (a row compares each call with and without the line). The capped
+  floor (both rescues declined) and the compare do not use it.
+- **(B) The unfinished stamp.** `continueUntilComplete` reported only the LAST pass's finish reason. Of the 86
+  wave-6 reduces, 9 went `length` → `stop`, and one of them (4B Contract Brief) ended "… unless the lease
+  provides otherwise or" after a continuation of about 700 tokens, stored without a stamp. Now, when at least
+  one continuation pass ran, the last one ended `stop`, and the text as it will be stored ends mid-sentence
+  (`endsMidSentence`, [`rag/answer-end.ts`](../apps/desktop/src/main/services/rag/answer-end.ts)), the engine
+  reports `unfinished` with the cause of the last pass that ended `length`. Both callers (the reduce and the
+  single-turn grounded path) stamp `Message.truncated`; no new `truncatedCause` value. A first pass that
+  ended `stop`, a user Stop and a caller-capped grounded turn are never judged.
+- **The mid-sentence rule (its basis since review round 3: the answer's own style).** Only the last non-empty
+  line counts, and the rule is language-free apart from its punctuation.
+  - Inside an open code fence, a table row, a heading, a bold-only line or a rule is complete.
+  - Trailing citation markers are set aside first: a run of `[S1]`, `[S1, S2]`, `[S1-S3]` markers joined by
+    spaces, commas, semicolons or "and" (`and und et y e en i и ve та oraz`). So "… otherwise or [S1]" is
+    judged by its words, and a label whose value was the markers ("Sources: [S1], [S2]") is complete. So is a
+    label whose value is a "not stated" filler (`- **Renewal option:** —`, `Deposit: n/a`, `**Term** –`).
+  - A line that then closes a bracket or a quote (`) ] » « ” “ " ’ ‘ › ‹`, a guillemet also after a space, as in
+    French « … »), or ends in a closed inline code span, is complete.
+  - After stripping trailing markers, emphasis and closers: a terminator (`. ! ? … 。 ！ ？ ؟ । ॥`, the Greek
+    question mark U+037E, or `;` on a mostly Greek line) or an emoji (with its skin-tone modifier, variation
+    selector, keycap or zero-width-joiner sequence) is complete. A trailing `, ; : ( &` is **mid**, whatever the
+    answer's style. A trailing dash or slash (`- – — /`) can also end a URL, a path or a filler, so it is judged
+    like a word, by the style test below (round 4). Any other last character but a letter or a digit (`%`, `€`)
+    is complete.
+  - A last line that ends in a letter, a digit, a dash or a slash is **mid only in the answer's own terminated
+    style**: it has at least 4 words (a list item or a "Label: value" line at least 12), and the answer has at
+    least 4 earlier
+    lines of 8 words or more (prose, list items and labels; not table rows, headings or code), of which at least
+    70 % end with a terminator. Otherwise it is complete. This one test replaced the earlier list-item style
+    rule and the list shapes it had to know: a lettered or dashed list, an emoji list, a signature, a URL, a
+    date or a unit at the end of an answer written without full stops all read as complete.
+  - **Accepted misses** (a cut answer that keeps no stamp): a cut right after an abbreviation that ends in a
+    full stop ("e.g."); a cut inside a table row; a short last list item or line; and a cut in an answer
+    written without full stops (a list-style answer), or with fewer than 4 long lines before its last.
+    Another script's sentence that ends without a mark (Thai), or a terminator missing from the list in the
+    earlier lines, can still stamp a complete answer, but only after a cut pass whose continuation ended
+    cleanly, and only as the "Reply cut off" badge, never as lost text.
+- **Measured.** Over the 413 stored real answers of waves 4–6, the rule flags 4, all genuinely cut (3 already
+  stamped by `length`), and no complete answer; it agrees with lane G's evaluator on all 413. With the style
+  basis alone (table rows counted, no 12-word floor for an item or label) it lost the real case, whose 22 items
+  sit among long table rows (under 70 % of its long lines then end with a terminator), and stamped three
+  complete minutes answers ending "**Next Meeting:** Tuesday, 19 May" and "**Teilnehmer:** … Omar Haddad
+  [S1]"; that is why both stay. The issue's alternative ("a stop within a few tokens of the continuation's
+  start") would have missed the one real case.
+
+Tests: `tests/unit/answer-end.test.ts` (every complete ending, the review's inputs, prose in eight languages
+and scripts, the style rows and the accepted list-style miss), the #996 rows of `rag-whole-doc-mapreduce.test.ts` (both parts), `rag-whole-doc-tree.test.ts`,
+`rag.test.ts` (the grounded continuation, the last cut pass's cause), `rag-skill-analysis.test.ts` and
+`rag-whole-read.test.ts` (the line through `askDocuments`).
+
 **Residuals** (see `known-limitations.md`): a document beyond the **hard** ceiling (~100 pages) is still
-beginning-only (INPUT, tree territory); a deliverable long enough to still be cut after the 2-cap keeps the
-honest OUTPUT-truncated badge; 2–24 map calls (+ fold) of latency on a large analysis (with the Phase 3
-affordance). Tests: `rag-whole-doc-mapreduce.test.ts` (Phase 1 reach + Phase 2 `maxTokens` + Phase 3 notice +
+beginning-only (INPUT, tree territory; since #996 its answer says so in its first line); a deliverable long
+enough to still be cut after the 2-cap keeps the honest OUTPUT-truncated badge, and so does one whose
+continuation ended cleanly mid-sentence (#996); 2–24 map calls (+ fold) of latency on a large analysis (with
+the Phase 3 affordance).
+Tests: `rag-whole-doc-mapreduce.test.ts` (Phase 1 reach + Phase 2 `maxTokens` + Phase 3 notice +
 Phase 4 continuation/cap/abort + #2 fold-coverage/hard-ceiling), `rag-whole-doc-tree.test.ts` (the hard
 ceiling on the tree path), `rag.test.ts` (#1 grounded-path continuation, and the shared engine's seam de-dup), and
 `tests/unit/wholedoc-reduce-budget.test.ts` (pure budget math).

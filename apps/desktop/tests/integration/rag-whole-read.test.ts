@@ -67,6 +67,8 @@ async function makeHarness(o: {
   otherTreeDoc?: IngestionStatus
   /** #963: the knowledge-pack arm the chat's `packIds` get (the ZIM service's `makeArm`); absent ⇒ no ZIM service. */
   arm?: ExternalRetrievalArm
+  /** #996 A: every model call's reply (default 'Model answer.'). */
+  reply?: string
 }): Promise<Harness> {
   const w = makeSkillsWorld('wholeread')
   const docId = await ingestTextFile(w, o.fileName ?? 'abrechnung.txt', o.text)
@@ -77,7 +79,7 @@ async function makeHarness(o: {
     w.db.prepare('UPDATE documents SET status = ? WHERE id = ?').run(o.otherTreeDoc, other)
     documentIds.push(other)
   }
-  const runtime = recordingRuntime('Model answer.', { contextWindow: o.contextWindow })
+  const runtime = recordingRuntime(o.reply ?? 'Model answer.', { contextWindow: o.contextWindow })
   const { ctx } = makeRagAskContext(w, runtime)
   const arm = o.arm
   const zim = arm ? { makeArm: (_db: Db, packIds: readonly string[] | null | undefined) => (packIds?.length ? arm : null) } : undefined
@@ -241,6 +243,24 @@ describe('askDocuments — a summary ask with a ready deep index reads the tree 
       const prompt = h.runtime.lastMessages[h.runtime.lastMessages.length - 1].content
       expect(prompt).toContain('monthly rent payments of 800 EUR')
     }
+  })
+
+  // #996 A (follow-ups wave 7): a deep index read in parts whose notes had to be cut to fit covers only the
+  // document's beginning, and the answer now says so in the app's line before the model's text. The same tree with
+  // notes that fit reads whole and gets no line.
+  it.each([
+    { name: 'notes cut to fit', reply: `${'Detailpunkt '.repeat(1000)}`.trim(), cut: true },
+    { name: 'notes that fit', reply: 'Model answer.', cut: false }
+  ])('a summary over a deep index read in parts, $name: the beginning-only line leads only a cut answer', async ({ reply, cut }) => {
+    const h = await makeHarness({ text: EIGHT_SECTIONS, contextWindow: 4096, reply })
+    const section = (n: number): string => `Section ${n}: ${'monthly rent payment of 800 EUR recorded '.repeat(130)}`.trim()
+    seedReadyTree(h.db, h.docId, h.chunkIds, { sections: [1, 2, 3, 4, 5].map(section) })
+
+    const msg = await ask(h, 'Fasse die Abrechnung zusammen')
+    expect(h.runtime.calls).toBeGreaterThan(1) // map steps over the sections + the reduce
+    expect(msg.coverage).toMatchObject({ mode: 'tree', truncated: cut })
+    const line = t('en', 'analysis.wholeDocBeginningOnly')
+    expect(msg.content).toBe(cut ? `${line}\n\n${reply}` : reply)
   })
 })
 

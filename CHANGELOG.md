@@ -48,6 +48,10 @@ from its first public `1.0.0` release onward.
   had. Before, such an engine was put in place and could quietly run without your graphics card. An
   engine whose processor libraries are missing is now reported as damaged engine files, with the
   offer to install it again, instead of as a model that cannot be loaded (#998, #999, #1000).
+- An answer about a document too long to read in full now says in its first line that it covers only the
+  beginning of the document. Before, only the badge said so, and a copied or exported answer read as complete.
+  A long answer that HilbertRaum had to continue, and that then stopped in the middle of a sentence, now shows
+  "Reply cut off" instead of looking finished (#996).
 
 ## [0.1.66] — 2026-11-21
 

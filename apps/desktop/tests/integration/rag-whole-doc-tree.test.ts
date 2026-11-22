@@ -36,6 +36,9 @@ const SKILL: TurnSkill = {
   body: 'Produce structured minutes: decisions, action items, open questions. Work only from the source.'
 }
 
+/** #996 A: the line the core leads an answer with when the tree's notes covered only the beginning. */
+const BEGINNING_LINE = '**Heads-up:** this answer covers only the beginning.'
+
 // A multi-paragraph doc so ingestion yields several chunks to hang the tree leaves on.
 const DOC = Array.from({ length: 8 }, (_, i) =>
   `Paragraph ${i + 1}. Topic ${i + 1} was discussed at length with concrete points and follow-ups.`
@@ -162,13 +165,15 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
       documentId: h.docId,
       question: 'write the meeting minutes',
       skill: SKILL,
-      contextTokens: 8192
+      contextTokens: 8192,
+      beginningNotice: BEGINNING_LINE
     })
 
     expect(msg).not.toBeNull()
     // One window of node summaries ⇒ no map step, a single (fenced) reduce.
     expect(rt.calls).toBe(1)
-    expect(msg!.content).toContain('Minutes body')
+    // #996 A: the whole tree was read, so the beginning-only line passed in stays out.
+    expect(msg!.content).toBe('Minutes body with decisions and actions.')
     // Honest whole-document coverage from the ready tree (never capped/"beginning").
     expect(msg!.coverage?.mode).toBe('tree')
     expect(msg!.coverage?.treeStatus).toBe('ready')
@@ -477,7 +482,8 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
       documentId: h.docId,
       question: 'write the meeting minutes',
       skill: SKILL,
-      contextTokens: 900 // tiny window → each section is its own window → >ceiling windows
+      contextTokens: 900, // tiny window → each section is its own window → >ceiling windows
+      beginningNotice: BEGINNING_LINE
     })
 
     expect(msg).not.toBeNull()
@@ -492,6 +498,8 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     const reduceUser = rt.turns[rt.turns.length - 1].find((t) => t.startsWith('user:')) ?? ''
     expect(reduceUser).toContain('BEGINNING of the document')
     expect(reduceUser).not.toContain('cover the WHOLE document')
+    // #996 A: and the answer itself says so, in the app's line before the model's text.
+    expect(msg!.content).toBe(`${BEGINNING_LINE}\n\nMinutes body with decisions and actions.`)
     // The fence still shaped every step (the ceiling does not drop the skill).
     for (const turn of rt.turns) {
       expect(turn.find((t) => t.startsWith('user:'))).toContain('structured minutes')
@@ -522,7 +530,8 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
       documentId: h.docId,
       question: 'write the meeting minutes',
       skill: SKILL,
-      contextTokens: 900
+      contextTokens: 900,
+      beginningNotice: BEGINNING_LINE
     })
 
     expect(msg).not.toBeNull()
@@ -534,5 +543,7 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     expect(msg!.coverage?.truncated).toBe(true)
     const reduceUser = rt.turns[rt.turns.length - 1].find((t) => t.startsWith('user:')) ?? ''
     expect(reduceUser).toContain('BEGINNING of the document')
+    // #996 A: the app's beginning-only line leads the answer.
+    expect(msg!.content.startsWith(`${BEGINNING_LINE}\n\nBeschluss `)).toBe(true)
   })
 })

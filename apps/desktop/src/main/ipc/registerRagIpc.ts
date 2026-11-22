@@ -563,6 +563,9 @@ export function registerRagIpc(ctx: AppContext): void {
         const lead = lines.filter((line): line is string => line != null).join('\n\n')
         return lead ? `${lead}\n\n` : undefined
       }
+      // #996 A (design-guidelines §11.25): the line that follows that lead when a whole-document map-reduce had
+      // to cut the document's notes, so the answer covers only its beginning. The core adds it only then.
+      const beginningNotice = tMain('analysis.wholeDocBeginningOnly')
 
       // A4 (SKA-7 structural, audit §3.2/§8.2): does the turn skill's engine ENGAGE this (possibly
       // W2-narrowed) scope? TWO ways in:
@@ -721,7 +724,9 @@ export function registerRagIpc(ctx: AppContext): void {
                     // W2 (§2.1): when the scope was auto-narrowed to this doc, lead the streamed + persisted
                     // answer with the honest scope notice (undefined ⇒ byte-unchanged). #649: a total leads with
                     // the arithmetic heads-up too — this is a whole read.
-                    answerPrefix: groundedPrefix(true)
+                    answerPrefix: groundedPrefix(true),
+                    // #996 A: and a document too long to read in full says so after them.
+                    beginningNotice
                   })),
                 (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
               )
@@ -829,6 +834,7 @@ export function registerRagIpc(ctx: AppContext): void {
                     skill: turnSkill,
                     wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,
                     answerPrefix: groundedPrefix(wholeReadId != null),
+                    beginningNotice,
                     onToken: sendToken
                   })
                 }
@@ -1073,6 +1079,8 @@ export function registerRagIpc(ctx: AppContext): void {
           // every ordinary route into this path (byte-unchanged). #649: a whole read of a total
           // leads with its own heads-up after the scope notice.
           answerPrefix: groundedPrefix(wholeReadId != null),
+          // #996 A: a deep-index read (#642) whose notes had to be cut covers only the beginning and says so.
+          beginningNotice,
           partialCoverageNotice: partialCoverageNoticeFor(wholeReadId != null, routed),
           onToken: sendToken
         })
