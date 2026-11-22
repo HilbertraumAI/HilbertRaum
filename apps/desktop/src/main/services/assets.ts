@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { closeSync, createWriteStream, existsSync, fsyncSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, type Dirent } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, open } from 'node:fs/promises'
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type ModelRole } from '../../shared/manifest'
@@ -1163,6 +1163,26 @@ export function flushToDevice(path: string): void {
     }
   } catch {
     /* durability best-effort — the SHA verify still guards correctness on this run */
+  }
+}
+
+/**
+ * {@link flushToDevice} off the main thread (#1000): `FileHandle.sync()` runs on the thread pool, so the
+ * event loop keeps serving IPC and a chat stream meanwhile. The engine stage flushes a whole engine copy
+ * (52 files, 94.5 MB at b12110) while the models keep running: synchronously that blocked the event loop
+ * for 64–105 ms on NVMe and, by estimate, seconds on a stick with dirty data. Same rules: open r+ (a read
+ * handle's FlushFileBuffers fails on Windows), best-effort, never throws.
+ */
+export async function flushToDeviceAsync(path: string): Promise<void> {
+  try {
+    const handle = await open(path, 'r+')
+    try {
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    /* durability best-effort, as flushToDevice */
   }
 }
 

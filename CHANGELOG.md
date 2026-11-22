@@ -27,6 +27,27 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- A plain question that only contains a word like "listed", "reviewer", "preview", "registration", "analyst" or
+  «Briefkasten», "When is the rent review?" or "How many minutes notice must be given?" is answered from the few
+  passages that match, as for any other lookup, instead of reading the whole document (#997).
+- **A stray file in your workspace folder no longer replaces one of your stored documents or images.**
+  If a file from another workspace (for example from a copied or restored folder), another stray file
+  or a folder sat next to a stored document or image under the name the app gives its new copy during
+  a password change, the next start put it in place of your document, and that document or image could
+  no longer be opened. The app now leaves a folder at that name alone, and checks such a file when you
+  unlock: it puts it in place of your document only when the file opens with your workspace's key, is
+  as long as your document, and your document itself does not open with that key (it is still under the
+  key of a password change that was cut short). Otherwise it removes the file and keeps your document.
+  A file it cannot read or move stays where it is and is checked again at the next unlock (#1001).
+- **An engine update no longer stops your model while it unpacks, and never puts an incomplete
+  engine in place.** The update now downloads, checks and unpacks the new AI engine beside the old
+  one while your model keeps answering, and pauses the models only for the few seconds it takes to
+  swap it in; an unpack that fails or that you cancel leaves your model running. Before it swaps,
+  the app checks every file of the new engine against the download's own list, so if an antivirus
+  program took one of them, the update stops with "could not be unpacked" and keeps the engine you
+  had. Before, such an engine was put in place and could quietly run without your graphics card. An
+  engine whose processor libraries are missing is now reported as damaged engine files, with the
+  offer to install it again, instead of as a model that cannot be loaded (#998, #999, #1000).
 - An answer about a document too long to read in full now says in its first line that it covers only the
   beginning of the document. Before, only the badge said so, and a copied or exported answer read as complete.
   A long answer that HilbertRaum had to continue, and that then stopped in the middle of a sentence, now shows

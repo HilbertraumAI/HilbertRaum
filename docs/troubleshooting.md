@@ -175,11 +175,16 @@ and tested with. It still works; the update brings it to the version the app exp
 **Settings → Diagnostics** shows both versions under *Engine versions*.
 
 - **To update:** choose **Update** in the notice on the **AI Model** screen. The new version
-  downloads and is checked against its pinned checksum first, while your model keeps answering.
-  Then the models pause for a few seconds while the new version is unpacked beside the old one and
-  swapped in, and the selected model starts again. If the download fails, you cancel it before the
-  swap, or the new version cannot be unpacked or swapped in, the engine on the drive stays as it
-  was and keeps working (#986).
+  downloads, is checked against its pinned checksum and is unpacked beside the old one while your
+  model keeps answering. Then the models pause for a few seconds while the new version is swapped
+  in, and the selected model starts again. If the download fails, you cancel it before the swap, or
+  the new version cannot be unpacked or swapped in, the engine on the drive stays as it was and keeps
+  working (#986); a download or unpack that fails or that you cancel never stops your model (#1000).
+- **"The AI engine downloaded but could not be unpacked":** a file the new version's archive holds
+  was missing once it was unpacked, often because an antivirus program took it as soon as it was
+  written. The app checks every file against the archive's own list before it swaps anything, so the
+  engine on the drive is unchanged (#998). Try again; if it keeps happening, see whether your
+  antivirus program reports the engine's files. The same check runs for an install or a reinstall.
 - **"There is not enough free space on this drive: the engine needs … once unpacked":** the app
   checks this before it touches anything, so the engine on the drive is unchanged. Free up at least
   the space it names (the old version is removed only after the new one is in place, so both fit at

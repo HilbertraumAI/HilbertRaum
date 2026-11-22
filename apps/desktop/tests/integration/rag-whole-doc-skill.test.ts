@@ -243,12 +243,16 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
   )
 
   // #981: "When must …?" and the German verb-second «Wann endet …?» are lookups; "each" / «jede» make it a list.
-  it.each(['When must they give notice?', 'Who is the tenant?', 'Wann endet der Vertrag?', 'Wann müssen wir kündigen?'])(
+  // #997: "Who is the reviewer?" holds "review" only inside a longer word: a lookup, no longer the whole report.
+  it.each([
+    'When must they give notice?', 'Who is the tenant?', 'Wann endet der Vertrag?', 'Wann müssen wir kündigen?',
+    'Who is the reviewer?'
+  ])(
     'a NEEDLE ask "%s" keeps top-k over the over-budget doc (one call, not capped, stamped)',
     async (question) => {
       // The passage search needs a passage that holds the question's words, or it answers with the fixed no-context reply.
       const text = `${bigTranscript(400)}
-The tenant, Max Huber, must give notice three months before the contract ends.`
+The tenant, Max Huber, must give notice three months before the contract ends. The reviewer is Anna Keller.`
       const h = await makeHarness({ fullyChunked: true, text, contextWindow: 4096 })
       const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, MEETING_INSTALL_ID)
       const msg = result as Message

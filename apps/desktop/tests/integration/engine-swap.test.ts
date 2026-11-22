@@ -9,6 +9,7 @@ const seams = vi.hoisted(() => ({
   renameRefuses: null as ((from: string, to: string) => string | null) | null,
   renameSyncRefuses: null as ((from: string, to: string) => string | null) | null,
   rmRefuses: null as ((path: string) => boolean) | null,
+  rmWaits: null as ((path: string) => Promise<void> | null) | null,
   onRename: null as ((from: string, to: string) => void) | null
 }))
 const errno = (code: string): NodeJS.ErrnoException =>
@@ -25,6 +26,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     },
     rm: async (...args: Parameters<typeof orig.rm>) => {
       if (seams.rmRefuses?.(String(args[0]))) throw errno('EBUSY')
+      const wait = seams.rmWaits?.(String(args[0]))
+      if (wait) await wait
       return orig.rm(...args)
     }
   }
@@ -49,7 +52,7 @@ vi.mock('node:timers/promises', async (importOriginal) => {
 })
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -58,6 +61,7 @@ import {
   EngineDownloadManager,
   engineFolderDeletesSettled,
   engineStatus,
+  extractWithTar,
   hostRuntimeArch,
   hostRuntimeOs,
   recoverEngineSwaps,
@@ -75,11 +79,13 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 import { fingerprintTree } from '../helpers/read-only-witness'
 import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
 import { verifierInert } from '../helpers/binary-fixtures'
+import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
 afterEach(() => {
   seams.renameRefuses = null
   seams.renameSyncRefuses = null
   seams.rmRefuses = null
+  seams.rmWaits = null
   seams.onRename = null
 })
 
@@ -531,6 +537,181 @@ describe('the staged swap in an engine job (#986)', () => {
     expect((await settle(mgr, started.jobId)).status).toBe('done')
     expect(atFirstRename).toEqual(['engine b200|b200'])
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  // #1000: the spawn gate covers exactly what it protects, the renames. It used to be held from before the
+  // unpack, so a wedged tar or a slow stick held every spawn of the family for as long.
+  it('the gate is held from the pause to the last swap only: open while the copies unpack, closed at every rename', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    net(netDir(rootPath), 'b150')
+    const seen: string[] = []
+    const held = (): string => (engineSpawnsHeld('llama_cpp') ? 'held' : 'open')
+    const extract: ExtractFn = async (archive, destDir, signal) => {
+      seen.push(`unpack ${held()}`)
+      await newEngine(archive, destDir, signal)
+    }
+    seams.onRename = (from) => {
+      // The swaps' renames and the carry, never the archives' moves into the staging folders.
+      if (!from.endsWith('.zip')) seen.push(`rename ${held()}`)
+    }
+    const mgr = manager({ extract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      ...update,
+      beforeReplace: async () => {
+        seen.push(`pause ${held()}`)
+      }
+    })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    seen.push(`after ${held()}`)
+    // Two unpacks, the pause, the net's two renames, the main build's two renames and its carry.
+    expect(seen).toEqual([
+      'unpack open',
+      'unpack open',
+      'pause held',
+      'rename held',
+      'rename held',
+      'rename held',
+      'rename held',
+      'rename held',
+      'after open'
+    ])
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  // #998 round 1: a job whose main build cannot be unpacked leaves its family as it was, and the net it already
+  // staged (`<os>/cpu.new`, whole and marked) is deleted in the background. Before round 1 the next job's
+  // recovery ran before those deletes: over a broken net it moved that copy in, without the gate or the
+  // pause, while its delete still waited in the queue. Now a job waits for the queued deletes first, and a
+  // copy that is not swapped in loses its marker at once.
+  const reinstallBoth = {
+    families: ['llama_cpp' as const],
+    reinstall: true as const,
+    reinstallBuilds: { llama_cpp: { main: true, cpuNet: true } }
+  }
+  /** A manager whose main-build unpack fails while `failMain.on`, logging to `logs`. */
+  function failingMainManager(failMain: { on: boolean }, logs: string[], root: string): EngineDownloadManager {
+    const fetchImpl = (async () =>
+      new Response(new Uint8Array(BODY), { status: 200, headers: { 'content-length': String(BODY.length) } })) as unknown as FetchFn
+    return new EngineDownloadManager({
+      fetchImpl,
+      log: (m) => logs.push(m),
+      extractImpl: async (archive, destDir, signal) => {
+        if (failMain.on && destDir === `${liveDir(root)}.new`) throw new Error('tar exited with code 1')
+        await newEngine(archive, destDir, signal)
+      }
+    })
+  }
+
+  it('a job waits for the deletes an earlier job queued before its own recovery runs (#998 round 1)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    net(netDir(rootPath), 'b150', { exe: false }) // a broken net: the reason for the reinstall
+    const stagedNet = join(liveDir(rootPath), 'cpu.new')
+    let release: () => void = () => undefined
+    const held = new Promise<void>((r) => (release = r))
+    seams.rmWaits = (p) => (p === stagedNet ? held : null)
+    const failMain = { on: true }
+    const logs: string[] = []
+    const mgr = failingMainManager(failMain, logs, rootPath)
+    const first = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...reinstallBoth })
+    expect((await runToEnd(mgr, first.jobId)).status).toBe('failed')
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    // The staged net's delete is still in the queue; the retry starts now.
+    failMain.on = false
+    const second = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...reinstallBoth })
+    expect(logs.filter((m) => m.startsWith('Engine swap recovery'))).toEqual([])
+    release()
+    expect((await settle(mgr, second.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  it('a staged copy that is not swapped in is un-marked at once: a refused delete leaves no copy to roll in (#998 round 1)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    net(netDir(rootPath), 'b150', { exe: false })
+    const stagedNet = join(liveDir(rootPath), 'cpu.new')
+    seams.rmRefuses = (p) => p === stagedNet || p === runtimeMarkerPath(stagedNet)
+    const mgr = failingMainManager({ on: true }, [], rootPath)
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...reinstallBoth })
+    expect((await settle(mgr, started.jobId)).status).toBe('failed')
+    // The delete was refused: the copy is still there, but no longer marked.
+    expect(summary(stagedNet)).toBe('net b200|-')
+    seams.rmRefuses = null
+    await recover(rootPath, manifestsDir)
+    // So nothing completes the swap the job decided against: the broken net stays for the next repair.
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: '-|b150', ...NOTHING_LEFT })
+  })
+
+  // #1000: every step's leftovers are judged before any step stages. A reinstall of both builds over a net
+  // whose program is gone (#678's "re-fetched all the same") stages its new net in `<os>/cpu.new` first; judged
+  // after that, the main build's guard took the job's own staged net for a leftover and stopped the job.
+  it('a reinstall of both builds over an incomplete cpu/ net: the net the job staged is never taken for a leftover (#1000)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    net(netDir(rootPath), 'b150', { exe: false })
+    const mgr = manager()
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      reinstall: true,
+      reinstallBuilds: { llama_cpp: { main: true, cpuNet: true } }
+    })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  // #998: the cpu/ net, and a net swap left inside an install, carry markers of their own. A main build's
+  // marker never records them, even when its archive brings a folder of that name: the carry replaces it.
+  it('a main copy whose archive brings its own cpu/ folder records none of it in its marker (#998)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    net(netDir(rootPath), 'b200')
+    const withCpu: ExtractFn = async (archive, destDir, signal) => {
+      await newEngine(archive, destDir, signal)
+      mkdirSync(join(destDir, 'cpu'))
+      await writeFile(join(destDir, 'cpu', 'stray.dll'), 'from the archive')
+    }
+    const mgr = manager({ extract: withCpu })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    const marker = JSON.parse(readFileSync(runtimeMarkerPath(liveDir(rootPath)), 'utf8')) as { binaries: Record<string, string> }
+    expect(Object.keys(marker.binaries)).toEqual([BIN])
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  // #998: the check right before the swap reads the staged copy's own marker, so a DLL a scanner takes from
+  // the fresh copy while the model pauses stops the step too, not only a missing program.
+  it('a file the staged marker records that is gone at the swap fails the step and keeps the installed engine (#998)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    const before = fingerprintTree(liveDir(rootPath))
+    const withDll: ExtractFn = async (archive, destDir, signal) => {
+      await newEngine(archive, destDir, signal)
+      await writeFile(join(destDir, 'ggml.dll'), 'ggml b200')
+    }
+    const mgr = manager({ extract: withDll })
+    const ends: EngineJobEnd[] = []
+    mgr.onSettled((_job, end) => ends.push(end))
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      ...update,
+      beforeReplace: async () => {
+        rmSync(join(`${liveDir(rootPath)}.new`, 'ggml.dll'))
+      }
+    })
+    const job = await settle(mgr, started.jobId)
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.binaryMissing') })
+    expect(ends.map((e) => e.reason)).toEqual(['incomplete'])
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
   })
 
   it('a stale .new and .old an earlier session left go before the swap, which then goes through', async () => {
@@ -1034,5 +1215,68 @@ describe.skipIf(!isAbsolute(OS_TAR))('the staged swap with the OS tar (#856, #98
     expect(readdirSync(liveDir(rootPath)).filter((n) => n.endsWith('.zip') || n.endsWith('.tar.gz'))).toEqual([])
     expect(layout(rootPath)).toMatchObject({ live: 'engine b200 from tar|b200', ...NOTHING_LEFT })
     expect(engineStatus(rootPath, manifestsDir).engineVersions?.[0]).toMatchObject({ installed: 'b200', relation: 'current' })
+  })
+
+  /** The platform's release format holding `files` (name → content); a tar.gz lists each folder too. */
+  function osArchive(files: Array<[string, string]>): Buffer {
+    const entries = files.map(([name, data]) => ({ name, data: Buffer.from(data) }))
+    if (process.platform === 'win32') return makeZip(entries)
+    const folders = [...new Set(files.flatMap(([name]) => name.split('/').slice(0, -1).map((_, i, all) => `${all.slice(0, i + 1).join('/')}/`)))]
+    return makeTarGz([...folders.map((name) => ({ name, dir: true as const })), ...entries])
+  }
+
+  // #998: tar's exit code is not a completeness signal. A scanner that takes a file tar just wrote, before
+  // the copy is marked, went unseen: the copy was swapped in without it (a missing `ggml-vulkan.dll` then
+  // runs on the CPU, missing CPU variants are blamed on the model). The archive's own list now decides.
+  it('a member the archive lists that is gone after the extraction fails the step and keeps the installed engine (#998)', async () => {
+    const archive = osArchive([
+      [BIN, 'engine b200 from tar'],
+      ['ggml.dll', 'ggml']
+    ])
+    const { rootPath, manifestsDir } = makeDrive(archive)
+    copy(liveDir(rootPath), 'b150')
+    const before = fingerprintTree(liveDir(rootPath))
+    const scanned: ExtractFn = async (archivePath, destDir, signal, log) => {
+      await extractWithTar(archivePath, destDir, signal, log)
+      rmSync(join(destDir, 'ggml.dll'))
+    }
+    const mgr = manager({ archive, extract: scanned })
+    const ends: EngineJobEnd[] = []
+    mgr.onSettled((_job, end) => ends.push(end))
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    const job = await settle(mgr, started.jobId)
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.extractFailed') })
+    expect(ends.map((e) => e.reason)).toEqual(['incomplete'])
+    expect(fingerprintTree(liveDir(rootPath))).toEqual(before)
+    expect(layout(rootPath)).toEqual({ live: 'engine b150|b150', net: 'absent', ...NOTHING_LEFT })
+  })
+
+  // …and the same check reads each member where the flatten put it, never expects a file the family leaves
+  // out, and the marker records every file the copy holds.
+  it('every member is checked where the flatten put it, and the marker records each file but the left-out llama-connect (#998, #729)', async () => {
+    const connect = process.platform === 'win32' ? 'llama-connect.exe' : 'llama-connect'
+    const release = 'llama-b200-bin'
+    const files: Array<[string, string]> = [
+      [`${release}/${BIN}`, 'engine b200 from tar'],
+      [`${release}/ggml.dll`, 'ggml'],
+      [`${release}/backends/ggml-cpu.dll`, 'cpu variant'],
+      [`${release}/${connect}`, 'tunnel'],
+      ['LICENSE', 'licence']
+    ]
+    const archive = osArchive(files)
+    const { rootPath, manifestsDir } = makeDrive(archive)
+    copy(liveDir(rootPath), 'b150')
+    const mgr = manager({ archive, extract: 'os-tar' })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    expect(existsSync(join(liveDir(rootPath), connect))).toBe(false)
+    const marker = JSON.parse(readFileSync(runtimeMarkerPath(liveDir(rootPath)), 'utf8')) as { binaries: Record<string, string> }
+    expect(marker.binaries).toEqual({
+      [BIN]: sha256(Buffer.from('engine b200 from tar')),
+      'ggml.dll': sha256(Buffer.from('ggml')),
+      'backends/ggml-cpu.dll': sha256(Buffer.from('cpu variant')),
+      LICENSE: sha256(Buffer.from('licence'))
+    })
+    expect(layout(rootPath)).toMatchObject({ live: 'engine b200 from tar|b200', ...NOTHING_LEFT })
   })
 })

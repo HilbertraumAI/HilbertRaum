@@ -6,8 +6,10 @@
 # archive (.zip or .tar.gz), and extracts it into the build's extract_to dir. Archives
 # that nest their binaries in a subfolder (the macOS/Linux tarballs) are flattened so
 # llama-server lands at the extract_to root. After extraction a `.hilbertraum-runtime.json`
-# install marker ({ version, backend, os, arch }) is written next to the binary so
+# install marker ({ version, backend, os, arch, binaries }) is written next to the binary so
 # re-runs can skip idempotently — and so a version/backend change actually re-fetches.
+# `binaries` holds the SHA-256 of every file the archive put there (#998), so each copy is
+# judged complete by its own list, never by this file's.
 #
 # DEFAULT BACKEND = VULKAN-FIRST (Phase 14, docs/architecture.md GPU record). The win/linux
 # Vulkan release archives are STANDALONE FULL BUILDS: they ship llama-server + every
