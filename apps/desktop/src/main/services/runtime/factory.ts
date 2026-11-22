@@ -317,6 +317,13 @@ export interface RuntimeSelectionDeps {
    * damaged main folder, lands without `gpuAutoDisabled`.)
    */
   onEngineCannotRun?: (opts: RuntimeStartOptions, problem: EngineProblem) => void
+  /**
+   * #1012 code review round 3: fired once when every rung that ran ended because the pre-spawn check
+   * could not read one of the engine's files just now (`EngineFilesUnreadableError` — an antivirus scan
+   * holding it, say). Nothing is blamed, persisted or latched; the walk ends on the rung-4 mock, and the
+   * caller tells the user to try again in a minute. The next start walks the whole ladder again.
+   */
+  onEngineFilesUnreadable?: (opts: RuntimeStartOptions) => void
   /** Test seam: override the prefetch reader (default {@link startModelPrefetch}). */
   makePrefetch?: (paths: string[]) => ModelPrefetch
   /** GPU ladder hooks. Omitted → defaults (gpuMode 'auto', no persistence). */
@@ -405,6 +412,7 @@ class LadderRuntime implements ModelRuntime {
       onSpeculative?: RuntimeSelectionDeps['onSpeculative']
       onModelLoadFailure?: RuntimeSelectionDeps['onModelLoadFailure']
       onEngineCannotRun?: RuntimeSelectionDeps['onEngineCannotRun']
+      onEngineFilesUnreadable?: RuntimeSelectionDeps['onEngineFilesUnreadable']
       warmupTimeoutMs: number
       onPrefetch?: RuntimeSelectionDeps['onPrefetch']
       makePrefetch: NonNullable<RuntimeSelectionDeps['makePrefetch']>
@@ -416,6 +424,11 @@ class LadderRuntime implements ModelRuntime {
 
   async start(): Promise<void> {
     let lastError: unknown = null
+    // #1012 code review round 3: the last failure that IS evidence — a rung that could not read its
+    // engine files proved nothing, so a real failure on an earlier rung still decides the reason and the
+    // blame. `sawUnreadable`: some rung ended that way.
+    let lastEvidence: unknown = null
+    let sawUnreadable = false
     // #312: a rung-1 failure is only a DEVICE verdict once the forced-CPU rungs have had
     // their say, so it is held here instead of persisted on the spot. The forced-CPU rungs
     // are the control probe: one of them starting proves the model loads on this machine
@@ -538,6 +551,7 @@ class LadderRuntime implements ModelRuntime {
         this.abortPrefetch()
         this.startingInner = null
         lastError = err
+        if (!isEngineFilesUnreadableError(err)) lastEvidence = err
         try {
           await runtime.stop()
         } catch {
@@ -557,7 +571,13 @@ class LadderRuntime implements ModelRuntime {
         // #1012 review R-2: the pre-spawn check could not read an engine file just now (an antivirus
         // holding it). No evidence about the GPU, the model or the MTP flags — nothing is held, persisted
         // or latched; the next rung (or the next start) reads the files again.
-        if (isEngineFilesUnreadableError(err)) continue
+        if (isEngineFilesUnreadableError(err)) {
+          sawUnreadable = true
+          // Code review round 3: on the processor control rung this leaves a held GPU failure with no
+          // control evidence (#312), so it is dropped, never persisted as the device's on that basis.
+          if (!rung.gpuAttempt && pendingGpuFailure !== null && cpuSignature === null) pendingGpuFailure = null
+          continue
+        }
         const reason = err instanceof Error ? err.message : String(err)
         // #182: rung 1a failing says nothing about the GPU — the plain GPU rung is next in
         // the walk and IS the device verdict. Never persist `gpuAutoDisabled` here (an
@@ -746,7 +766,10 @@ class LadderRuntime implements ModelRuntime {
     // classes, or a shape `failureSignature` does not recognise on either side — stays a
     // device verdict, exactly as before: unknown evidence must never un-blame a real GPU
     // fault and reinstate a multi-minute health timeout on every later start.
-    const reason = lastError instanceof Error ? lastError.message : String(lastError)
+    // #1012 code review round 3: the reason and the blame come from the last failure that is evidence —
+    // a rung that could not read its engine files proved nothing, so it never hides an earlier one.
+    const decisive = lastEvidence ?? lastError
+    const reason = decisive instanceof Error ? decisive.message : String(decisive)
     // #530: every rung that failed was refused by the OS loader — the ENGINE cannot run here.
     // Nothing is persisted and nothing is latched: installing the missing library (or the
     // runtime) and choosing Check again, or restarting, must find a clean slate.
@@ -755,13 +778,20 @@ class LadderRuntime implements ModelRuntime {
       await this.fallBackToMock(`the AI engine cannot run on this computer: ${engineFailure.message}`)
       return
     }
+    // #1012 code review round 3: every rung that ran could not read the engine's files just now — nothing
+    // is known about the GPU, the model or the engine. The user is told (no silent demo runtime), and as
+    // nothing is latched, the next start (a re-select) walks the whole ladder again.
+    if (sawUnreadable && lastEvidence === null) {
+      this.deps.onEngineFilesUnreadable?.(this.opts)
+      await this.fallBackToMock(`the AI engine's files could not be read just now: ${reason}`)
+      return
+    }
     if (pendingGpuFailure) {
       const modelFault = cpuSignature !== null && cpuSignature === pendingGpuFailure.signature
       if (modelFault) this.blameModel(pendingGpuFailure.reason)
       else this.deps.gpu.onGpuFailure?.(pendingGpuFailure.reason)
       pendingGpuFailure = null
-    } else if (lastError !== null && !isEngineFilesUnreadableError(lastError)) {
-      // (#1012 review R-2: an engine file that could not be read is not the model's fault either.)
+    } else if (lastEvidence !== null) {
       // #372: no GPU verdict was held — acceleration is off, `gpuAutoDisabled` is already
       // persisted (no GPU rung ran), or the GPU rung's failure was a bind race (REL-1, never
       // held). There is no device comparison to make and nothing to persist; the model is
@@ -1040,6 +1070,7 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       onSpeculative: deps.onSpeculative,
       onModelLoadFailure: deps.onModelLoadFailure,
       onEngineCannotRun: deps.onEngineCannotRun,
+      onEngineFilesUnreadable: deps.onEngineFilesUnreadable,
       warmupTimeoutMs: deps.warmupTimeoutMs ?? WARMUP_TIMEOUT_MS,
       onPrefetch: deps.onPrefetch,
       makePrefetch: deps.makePrefetch ?? startModelPrefetch,

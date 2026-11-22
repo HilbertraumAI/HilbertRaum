@@ -173,9 +173,10 @@ function isAbsent(err: unknown): boolean {
  * safety-net binary finds the family marker one level above when its own dir has none),
  * then hashes every file of the copy that marker records (`keysToVerify`, #1012), one at a
  * time, the program first, stopping at the first difference. A file that is not there is
- * counted, not hashed: `missing` (the program or a library among them) or `missing-other`,
- * once nothing present differs. Never throws: a file that can't be read right now resolves
- * `unreadable` (the cache layer won't persist it).
+ * counted, not hashed: the first missing program or library ends the check as `missing`; other
+ * missing files give `missing-other` once nothing present differs (a changed file still wins,
+ * since the knowledge-pack tools start on `missing-other`). Never throws: a file that can't be
+ * read right now resolves `unreadable` (the cache layer won't persist it).
  */
 async function computeRawVerification(binPath: string): Promise<BinaryVerifyResult> {
   const dir = dirname(binPath)
@@ -202,19 +203,19 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
   }
 
   // The marker is a file on the drive: a key that leaves the copy's folder is no file of this copy, and
-  // no writer records one — refused, before anything is read.
-  const program = markerBinaryKey(markerDir, binPath)
-  const files: Array<{ path: string; expected: string; code: boolean }> = []
-  for (const key of keysToVerify(binaries, markerDir, binPath)) {
-    const path = recordedFilePath(markerDir, key)
-    if (path === null) {
-      log.warn('An engine install marker records a file outside its folder — refusing to spawn', { code: 'marker-key-outside' })
-      return 'mismatch'
-    }
-    // Review R-1 / R-6: the program and the libraries are what a loader would go looking for elsewhere.
-    const code = key === program || LIBRARY_NAME.test(key.slice(key.lastIndexOf('/') + 1))
-    files.push({ path, expected: binaries[key], code })
+  // no writer records one — refused, before anything is read. EVERY key, before a nested net's keys are
+  // set aside (code review round 3): `cpu/../../x` names no file of the net.
+  if (Object.keys(binaries).some((key) => recordedFilePath(markerDir, key) === null)) {
+    log.warn('An engine install marker records a file outside its folder — refusing to spawn', { code: 'marker-key-outside' })
+    return 'mismatch'
   }
+  const program = markerBinaryKey(markerDir, binPath)
+  const files = keysToVerify(binaries, markerDir, binPath).map((key) => ({
+    path: recordedFilePath(markerDir, key) as string, // contained: checked above
+    expected: binaries[key],
+    // Review R-1 / R-6: the program and the libraries are what a loader would go looking for elsewhere.
+    code: key === program || LIBRARY_NAME.test(key.slice(key.lastIndexOf('/') + 1))
+  }))
 
   let missing = 0
   let missingCode = false
@@ -226,7 +227,12 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
     } catch (err) {
       if (isAbsent(err)) {
         missing++
-        if (file.code) missingCode = true
+        // Code review round 3: a missing program or library refuses the copy at every seam, so the rest
+        // is not read (a quarantined DLL would otherwise cost the whole copy on each start attempt).
+        if (file.code) {
+          missingCode = true
+          break
+        }
         continue
       }
       // Couldn't read a file to hash it (e.g. a transient Windows AV/indexer lock, a denied read).

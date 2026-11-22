@@ -78,9 +78,10 @@ const abortError = (message: string): DOMException => new DOMException(message, 
  */
 export type KiwixServeOutput = 'none' | 'port-unavailable' | 'library-unreadable' | 'unrecognised'
 
-/** How a start failed: the pre-spawn hash, the spawn itself, an exit before health, the
- *  health window. */
-export type KiwixServeStartFailureKind = 'integrity' | 'launch' | 'exit' | 'timeout'
+/** How a start failed: the pre-spawn hash (`integrity`: a changed file), a file of the install that
+ *  is missing or cannot be read just now (`files`, #1012 — no tamper), the spawn itself, an exit
+ *  before health, the health window. */
+export type KiwixServeStartFailureKind = 'integrity' | 'files' | 'launch' | 'exit' | 'timeout'
 
 /** `Unable to instantiate the HTTP daemon. The port N is maybe already occupied or need more
  *  permissions to be open. …` — then exit 1. The shared `isBindRaceError` wording is
@@ -144,6 +145,9 @@ export class KiwixServeStartError extends Error {
     switch (kind) {
       case 'integrity':
         message = 'kiwix-serve failed pre-spawn integrity verification'
+        break
+      case 'files':
+        message = 'kiwix-serve was not started: a file of its install is missing or could not be read'
         break
       case 'launch':
         message = `kiwix-serve failed to launch${launchCode ? ` (${launchCode})` : ''}`
@@ -401,9 +405,9 @@ export class KiwixServer {
     // a missing program or library (review R-1, R-6: the loader would look for a missing library in
     // the library folder this child starts in) and a file that cannot be read just now.
     const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
-    if (verdict === 'mismatch' || verdict === 'missing' || verdict === 'unreadable') {
-      throw new KiwixServeStartError('integrity')
-    }
+    if (verdict === 'mismatch') throw new KiwixServeStartError('integrity')
+    // (Code review round 3: its own kind — a missing or locked file is no tamper.)
+    if (verdict === 'missing' || verdict === 'unreadable') throw new KiwixServeStartError('files')
     // #339 P8-1: an in-app install records a hash for kiwix-serve, so `skip-legacy` now means
     // exactly one thing — a bundle placed by hand with no marker. Say so once per process, the
     // way `tools.ts` does for kiwix-manage, so the R-1 closure is auditable for BOTH binaries.

@@ -326,9 +326,12 @@ describe('#1012 — spawn seams and a copy missing a file its marker records, th
       allocateGeneration: () => 1,
       healthIntervalMs: 1
     })
-    await expect(server.ensureStarted({ libraryXmlPath: join(tmpdir(), 'library.1.xml') })).rejects.toThrow(
-      /^kiwix-serve failed pre-spawn integrity verification$/
-    )
+    // Code review round 3: its own kind and message — a missing file is no tamper.
+    await expect(server.ensureStarted({ libraryXmlPath: join(tmpdir(), 'library.1.xml') })).rejects.toMatchObject({
+      name: 'KiwixServeStartError',
+      kind: 'files',
+      message: 'kiwix-serve was not started: a file of its install is missing or could not be read'
+    })
     expect(calls).toHaveLength(0)
     expect(ports).toBe(0)
   })
@@ -364,7 +367,7 @@ describe('#1012 — spawn seams and a copy missing a file its marker records, th
     }
     await expect(
       kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
-    ).rejects.toMatchObject({ name: 'KiwixManageError', kind: 'verify', childState: 'not-spawned' })
+    ).rejects.toMatchObject({ name: 'KiwixManageError', kind: 'files', childState: 'not-spawned' }) // no tamper
     expect(calls).toHaveLength(0)
   })
 })

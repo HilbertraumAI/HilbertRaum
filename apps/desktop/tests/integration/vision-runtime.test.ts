@@ -21,6 +21,8 @@ import {
   sseBody
 } from '../helpers/fake-sidecar'
 import { pngHeader } from '../helpers/image-fixtures'
+import { initBinaryVerification } from '../../src/main/services/binary-verifier'
+import { binaryWithMarker, restoreEngineLibrary, verifierInert } from '../helpers/binary-fixtures'
 
 // V4 hardening tests for the real VisionRuntime (image-understanding plan §16 V4 / §17): lazy
 // single-flight start, the failed-start latch, cancellation, NO orphan on a racing stop, and —
@@ -641,6 +643,28 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     await expect(dying.analyze(analyzeOpts)).rejects.toThrow() // carried from the retired "latches a failed start" row
     expect(dyingSpawn.calls.length).toBe(1) // the latch refused without a second spawn + health wait
     await dying.stop()
+  })
+
+  // #1012 code review: an engine file the pre-spawn check could not read just now (a folder at the
+  // library's recorded path, so the real read fails with EISDIR) is transient: the runtime is not
+  // latched (so the service neither discards it nor starts the #117 cooldown), and the next analyze starts.
+  it('a start whose engine files could not be read is not latched; the next analyze starts (#1012)', async () => {
+    initBinaryVerification(false) // as packaged: the real pre-spawn verifier runs
+    try {
+      const binPath = await binaryWithMarker('llama-server.exe', 'unreadable')
+      const { spawn, calls } = fakeSpawn()
+      const { fetchImpl } = visionFetch()
+      const rt = new VisionRuntime({ ...base, binPath, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+      await expect(rt.analyze(analyzeOpts)).rejects.toMatchObject({ name: 'EngineFilesUnreadableError' })
+      expect(rt.isStartFailed()).toBe(false)
+      expect(calls.length).toBe(0)
+      restoreEngineLibrary(binPath)
+      expect(await rt.analyze(analyzeOpts)).toBe(FIXTURE_ANSWER)
+      expect(calls.length).toBe(1)
+      await rt.stop()
+    } finally {
+      verifierInert()
+    }
   })
 
   // #656: Node can report one death twice — an 'error' (the process is gone) and later its 'exit' — and

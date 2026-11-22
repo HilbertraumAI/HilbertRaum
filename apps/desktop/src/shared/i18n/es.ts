@@ -2723,6 +2723,8 @@ export const es: UiCatalog<'es'> = {
   'main.engine.cannotRun':
     'El motor de IA no puede funcionar en este equipo. En la pantalla Modelo de IA se indica qué ' +
     'falta.',
+  'main.engine.filesUnreadable':
+    'El motor de IA no pudo iniciarse porque otro programa está usando uno de sus archivos (por ejemplo, un análisis antivirus). Vuelve a intentarlo dentro de un minuto.',
   'main.noModelRunning':
     'No hay ningún modelo de IA en ejecución. Abre la pantalla Modelo de IA e inicia uno primero.',
   'main.modelStarting': 'El modelo de IA se está iniciando. Vuelve a intentarlo en unos instantes.',

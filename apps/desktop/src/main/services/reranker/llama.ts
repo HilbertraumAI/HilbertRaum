@@ -11,7 +11,7 @@ import {
 import { maxInputApproxTokens } from '../runtime/context-budget'
 import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
 import { GPU_RERANK_SCOPE, type RerankerDevice } from '../rag/rerank-profile'
-import { isEngineCannotRunError } from '../runtime/engine-load'
+import { isEngineCannotRunError, isEngineFilesUnreadableError } from '../runtime/engine-load'
 import { log } from '../logging'
 import type { BoundModelStartCheck } from '../models'
 
@@ -610,6 +610,9 @@ export class LlamaReranker implements Reranker {
       // fix as the embedder, F4) — it is not a device fault, and the caller's own retry re-resolves
       // the SAME posture. Leave every latch untouched so the next rerank() re-attempts.
       if (isBindRaceError(error.message)) throw error
+      // #1012 code review: an engine file the pre-spawn check could not read just now is as transient
+      // as a bind race — no latch, no demotion; the next rerank() reads the files again on this posture.
+      if (isEngineFilesUnreadableError(error)) throw error
       // #530: the OS refused to start the program — not a device fault, so no GPU-fallback latch
       // and no CPU retry (the same program would be refused again). It latches like any load
       // fault, until "Check again" or an engine install re-arms it (`resetStartFailure`).
@@ -630,7 +633,7 @@ export class LlamaReranker implements Reranker {
         } catch (cpuErr) {
           const cpuError = cpuErr instanceof Error ? cpuErr : new Error(String(cpuErr))
           if (isStartAbortError(cpuErr) || abort.signal.aborted) throw cpuError
-          if (isBindRaceError(cpuError.message)) throw cpuError
+          if (isBindRaceError(cpuError.message) || isEngineFilesUnreadableError(cpuError)) throw cpuError
           // Only the CPU rung's OWN failure arms the permanent latch (matching translation's
           // ladder: "only a failure of the FINAL (CPU) attempt arms the permanent … latch").
           this.startFailed = cpuError

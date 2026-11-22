@@ -1514,18 +1514,73 @@ describe('#1012 — an engine file that could not be read is neither a GPU nor a
     expect(h.failures).toEqual([])
     expect(h.modelLoadFailures).toEqual([])
     expect(h.engineFailures).toEqual([])
+    expect(h.filesUnreadable).toEqual([]) // the chat runs: nothing to tell
   })
 
-  it('every rung unable to read its files: the demo runtime, with nothing blamed or latched', async () => {
+  // Code review round 3: the demo runtime with no word was a silent failure. The user is told — once,
+  // with the files-unreadable notice — and the next start (a re-select) walks the whole ladder again.
+  it('every rung unable to read its files: the demo runtime, one notice, nothing blamed or latched; the next start re-walks', async () => {
     const h = ladderHarness({ failFirst: 4, probe: [RTX], failErrors: Array.from({ length: 4 }, unreadable) })
-    const runtime = h.factory({ ...opts, speculativeDecoding: 'mtp', weightBytes: 1024 * 1024 * 1024 })
+    const mtp: RuntimeStartOptions = { ...opts, speculativeDecoding: 'mtp', weightBytes: 1024 * 1024 * 1024 }
+    const runtime = h.factory(mtp)
     await runtime.start()
     expect(h.calls).toHaveLength(4) // the speculative rung too
     expect(runtime.backend).toBe('mock')
+    expect(h.filesUnreadable).toEqual([{ modelId: 'm' }])
     expect(h.failures).toEqual([])
     expect(h.modelLoadFailures).toEqual([])
     expect(h.engineFailures).toEqual([])
     expect(isSpeculativeSuppressed('m')).toBe(false)
     expect(modelLoadLatchReason('m')).toBeNull()
+    // The lock released: the next start spawns again from the first rung and lands on the card.
+    const next = h.factory(mtp)
+    await next.start()
+    expect(h.calls).toHaveLength(5)
+    expect(next.backend).toBe('gpu')
+    expect(h.filesUnreadable).toHaveLength(1)
+  })
+
+  it('a walk that also met a real failure gives no files-unreadable notice (the model is blamed as before)', async () => {
+    const h = ladderHarness({ failFirst: 3, probe: null, failErrors: [unreadable()], failMessage: MODEL_LOAD_REASON })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.filesUnreadable).toEqual([])
+    expect(h.modelLoadFailures).toHaveLength(1)
+  })
+
+  // Code review round 3: an unreadable LAST rung must not hide what an earlier rung proved.
+  it('a model failure on an earlier rung is still reported when the last rung could not read its files', async () => {
+    const h = ladderHarness({
+      gpuMode: 'off',
+      failFirst: 2,
+      failMessages: [MODEL_LOAD_REASON],
+      failErrors: [undefined, unreadable()]
+    })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(2)
+    expect(runtime.backend).toBe('mock')
+    expect(h.modelLoadFailures).toEqual([{ modelId: 'm', reason: MODEL_LOAD_REASON }])
+    expect(modelLoadLatchReason('m')).toBe(MODEL_LOAD_REASON)
+    expect(h.filesUnreadable).toEqual([])
+  })
+
+  // Code review round 3 (pre-existing): the forced-CPU rung is the control for a held GPU failure (#312).
+  // When it could not read its files there is no control evidence, so the GPU is not convicted on it.
+  it('a GPU failure whose processor control rung could not read its files is dropped, never persisted', async () => {
+    const h = ladderHarness({
+      failFirst: 2,
+      probe: [RTX],
+      failMessages: [DEVICE_LOST_REASON],
+      failErrors: [undefined, unreadable()],
+      latchGpuFailures: true
+    })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.calls[2].binPath).toBe('/bin/cpu/llama-server') // rung 3, the cpu/ net, runs
+    expect(runtime.backend).toBe('cpu')
+    expect(h.failures).toEqual([]) // no `gpuAutoDisabled`
+    expect(h.modelLoadFailures).toEqual([])
   })
 })

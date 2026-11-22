@@ -114,7 +114,7 @@ export type KiwixManageChildState = 'not-spawned' | 'exited' | 'uncertain'
  *  character because no ASCII spelling of the archive existed (`planKiwixManageAdd`) — what an
  *  `exit` most likely means then, since the pinned build mis-reads it; false otherwise. */
 export class KiwixManageError extends Error {
-  readonly kind: 'verify' | 'spawn' | 'exit' | 'timeout' | 'abort'
+  readonly kind: 'verify' | 'files' | 'spawn' | 'exit' | 'timeout' | 'abort'
   readonly childState: KiwixManageChildState
   readonly settled: Promise<void> | null
   readonly nonAsciiArgv: boolean
@@ -190,10 +190,18 @@ export async function kiwixManageAdd(
   // a missing program or library refuses too (review R-1, R-6: the loader would look for a missing
   // library in the folder this child starts in), as does a file that cannot be read just now.
   const verdict = await verifyBinaryBeforeSpawn(managePath)
-  if (verdict === 'mismatch' || verdict === 'missing' || verdict === 'unreadable') {
+  if (verdict === 'mismatch') {
     throw new KiwixManageError(
       'kiwix-manage failed pre-spawn integrity verification',
       'verify',
+      'not-spawned'
+    )
+  }
+  // (Code review round 3: its own kind — a missing or locked file is no tamper.)
+  if (verdict === 'missing' || verdict === 'unreadable') {
+    throw new KiwixManageError(
+      'kiwix-manage was not started: a file of its install is missing or could not be read',
+      'files',
       'not-spawned'
     )
   }

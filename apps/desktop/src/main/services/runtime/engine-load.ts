@@ -275,8 +275,11 @@ export class EngineFilesUnreadableError extends Error {
   }
 }
 
-/** Name check as the fallback, as {@link isEngineCannotRunError}. */
-export function isEngineFilesUnreadableError(err: unknown): err is EngineFilesUnreadableError {
+/**
+ * Name check as the fallback, as {@link isEngineCannotRunError}. A plain boolean, not a type guard: the
+ * class adds no member of its own, so a guard would narrow every other `Error` after it to `never`.
+ */
+export function isEngineFilesUnreadableError(err: unknown): boolean {
   return err instanceof EngineFilesUnreadableError || (err instanceof Error && err.name === 'EngineFilesUnreadableError')
 }
 

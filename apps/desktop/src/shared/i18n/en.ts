@@ -2818,6 +2818,8 @@ export const en = {
   // #530: the OS refused to start the engine program — neither the GPU nor the model is blamed.
   'main.runtime.engineCannotRun': "The AI engine can't run on this computer, so replies are simulated. The AI Model screen says what is missing.",
   'main.engine.cannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
+  'main.engine.filesUnreadable':
+    'The AI engine could not start because another program is using one of its files (an antivirus scan, for example). Please try again in a minute.',
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
   // #599: the same refusal while a start is requested or loading — "start one first" would be wrong.
   'main.modelStarting': 'The AI model is starting. Try again in a moment.',

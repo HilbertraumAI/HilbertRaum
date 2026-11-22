@@ -553,6 +553,13 @@ function initBackend(): void {
         })
         notifyRenderer(tMain('main.runtime.engineCannotRun'), 'models')
       },
+      // #1012 code review round 3: every rung could not read an engine file just now (an antivirus scan
+      // holding it). Nothing is blamed or latched; the user is told to try again in a minute.
+      onEngineFilesUnreadable: (opts) => {
+        perfMark('runtime_engine_files_unreadable', { modelId: opts.modelId })
+        log.warn('The AI engine could not start: one of its files could not be read just now', { modelId: opts.modelId })
+        notifyRenderer(tMain('main.engine.filesUnreadable'))
+      },
       onPrefetch: (opts, event, detail) => {
         perfMark('model_prefetch', { modelId: opts.modelId, event })
         if (event === 'failed') {

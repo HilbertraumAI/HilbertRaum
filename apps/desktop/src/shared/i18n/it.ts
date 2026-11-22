@@ -2767,6 +2767,8 @@ export const it: UiCatalog<'it'> = {
   'main.engine.cannotRun':
     'Il motore IA non può funzionare su questo computer. La schermata Modello IA indica cosa ' +
     'manca.',
+  'main.engine.filesUnreadable':
+    'Il motore IA non è riuscito ad avviarsi perché un altro programma sta usando uno dei suoi file (ad esempio una scansione antivirus). Riprova tra un minuto.',
   'main.noModelRunning':
     'Nessun modello IA è in esecuzione. Apri la schermata Modello IA e avviane prima uno.',
   'main.modelStarting': 'Il modello IA si sta avviando. Riprova tra un momento.',

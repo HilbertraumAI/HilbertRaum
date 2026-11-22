@@ -248,13 +248,41 @@ describe("every file the copy's own marker records (#1012)", () => {
 
   // The knowledge-pack tools start despite a missing file (owner call on #1012), so `missing` must
   // never hide a changed one.
+  // (Code review round 3: the missing file is one the tools start without — `missing-other` — which is
+  // the only verdict a changed file could hide behind; a missing library stops every seam anyway.)
   it('a changed file is refused even while another recorded file is missing', async () => {
     initBinaryVerification(false)
     const dir = tmp()
-    writeCopy(dir, { 'kiwix-serve.exe': 'serve', 'icudt74.dll': 'icu data', 'icuuc74.dll': 'icu common' })
-    rmSync(join(dir, 'icudt74.dll')) // the missing one comes first, so the changed one is reached after it
+    writeCopy(dir, { 'kiwix-serve.exe': 'serve', 'LICENSE': 'licence text', 'icuuc74.dll': 'icu common' })
+    rmSync(join(dir, 'LICENSE')) // a file no loader looks for; it sorts first, so the change is reached after it
     writeFileSync(join(dir, 'icuuc74.dll'), 'other common')
     expect(await verifyBinaryBeforeSpawn(join(dir, 'kiwix-serve.exe'))).toBe('mismatch')
+  })
+
+  // Code review round 3: a missing program or library refuses the copy at every seam, so the check stops
+  // there instead of reading the rest (a quarantined DLL no longer costs the whole copy on each start
+  // attempt). Observable: a file changed AFTER it in the check's order is not reached.
+  it('the check stops at the first missing program or library', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    writeCopy(dir, { 'llama-server.exe': 'shim', 'ggml.dll': 'ggml', 'llama-bench.exe': 'bench' })
+    rmSync(join(dir, 'ggml.dll'))
+    writeFileSync(join(dir, 'llama-bench.exe'), 'another bench') // sorts after ggml.dll
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('missing')
+  })
+
+  // Code review round 3: every key is checked for containment, BEFORE a nested net's keys are set aside —
+  // `cpu/../../x` names no file of the net.
+  it('a key that leaves the folder through a nested net folder is refused, not set aside', async () => {
+    initBinaryVerification(false)
+    const outside = join(tmp(), 'planted.dll')
+    writeFileSync(outside, 'planted')
+    const dir = tmp()
+    writeCopy(dir, { 'llama-server.exe': 'shim' })
+    const escaping = `cpu/../${markerBinaryKey(dir, outside)}`
+    writeRuntimeMarker(dir, { ...MARKER, binaries: { 'llama-server.exe': sha('shim'), [escaping]: sha('planted') } })
+    expect(escaping.startsWith('cpu/../../')).toBe(true) // the premise: a nested-net prefix, then out of the folder
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'llama-server.exe'))).toBe('mismatch')
   })
 
   it("a marker key outside the copy's folder is refused, even with that file's true hash", async () => {
@@ -298,7 +326,8 @@ describe("every file the copy's own marker records (#1012)", () => {
     { gone: ['llama-server.exe'], verdict: 'missing' }, // the spawned program itself (R-6)
     { gone: ['llama-bench.exe'], verdict: 'missing-other' },
     { gone: ['LICENSE-LLVM-OpenMP'], verdict: 'missing-other' },
-    { gone: ['ggml.dll', 'llama-bench.exe'], verdict: 'missing' } // a library among them decides
+    { gone: ['ggml.dll', 'llama-bench.exe'], verdict: 'missing' }, // a library among them decides
+    { gone: ['LICENSE-LLVM-OpenMP', 'ggml.dll'], verdict: 'missing' } // …also when another missing file comes first
   ])('recorded files gone: $gone → $verdict', async ({ gone, verdict }) => {
     initBinaryVerification(false)
     const dir = tmp()
