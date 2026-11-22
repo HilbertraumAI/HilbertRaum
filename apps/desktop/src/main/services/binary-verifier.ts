@@ -29,10 +29,12 @@ import { sha256File } from './models'
 // marker records every file of the copy, so the verdict covers EVERY key of the copy's own marker
 // (a nested `cpu/` net's keys are that net's, `NESTED_NET_FOLDERS`): a changed one is `mismatch`,
 // a missing one `missing` (the program or a library) or `missing-other` (any other file) — no
-// tamper, but the copy is not what was installed, and the engines' spawn sites refuse both with the
-// "engine files damaged" verdict the reinstall offer reads. A marker written before #998 records the
-// program alone, which is then all that is checked. Files are hashed one at a time, the program
-// first, stopping at the first difference. A file that cannot be read is `unreadable` (review R-2).
+// tamper, but the copy is not what was installed, and the engines' spawn sites refuse all three with
+// the "engine files damaged" verdict the reinstall offer reads. A marker written before #998 records
+// the program alone, which is then all that is checked. Every recorded file is first looked at with one
+// `stat`: a copy its caller refuses for a missing file (a program or library gone; for the engines, any
+// file) is not hashed at all. Otherwise files are hashed one at a time, the program first, stopping at
+// the first difference. A file that cannot be read is `unreadable` (review R-2).
 //
 // ROLLOUT (non-breaking — the gate must never spuriously drop a real drive to MockRuntime):
 //   - DEV / un-initialised → NOT enforced ⇒ `skip-dev` (no hashing, no FS). The on-drive
@@ -51,7 +53,10 @@ import { sha256File } from './models'
 // that couldn't be read — e.g. a Windows AV/indexer lock holding it for a moment — or a copy that
 // changed while it was read), `missing` and `missing-other` are NEVER cached: each later attempt
 // reads the copy again, so a self-healing lock or a file put back (from an antivirus quarantine)
-// does not strand the whole session, and "Check again" sees the copy as it is now.
+// does not strand the whole session, and "Check again" sees the copy as it is now. The one
+// exception (code review round 7): the `missing-other` of a caller that starts on it (the
+// knowledge-pack tools, `startsOnMissingOther`), reached after every present file was hashed and
+// started on like `ok`, is kept like `ok` — under its own cache key.
 
 /**
  * The verification outcomes (#1012 adds the last three; all of them refuse at the engines' seams):
@@ -60,8 +65,10 @@ import { sha256File } from './models'
  *    nothing present differs. The OS loader would look for it elsewhere (the working directory
  *    too), so every seam refuses; the engines with the "engine files damaged" verdict.
  *  - `missing-other`: only other recorded files are gone (a tool the app never runs, a licence
- *    text). The engines refuse it as damaged files too (owner decision Q1); the knowledge-pack
- *    tools, which have no in-app repair, start anyway (owner decision Q2).
+ *    text). The engines refuse it as damaged files too (owner decision Q1), so for them it comes
+ *    without hashing and may hide a changed file (code review round 7); the knowledge-pack tools,
+ *    which have no in-app repair, start anyway (owner decision Q2), and for them nothing present
+ *    differs (`startsOnMissingOther`).
  *  - `unreadable`: a recorded file could not be read just now, or the copy changed during the
  *    check: no verdict about the copy. Seams refuse this attempt without blaming anything (the
  *    probe gives no answer, the start ladder sees no GPU evidence), and the next attempt reads again.
@@ -144,10 +151,11 @@ export function setBinaryVerificationPosture(opts: {
  * a pre-install verdict — the `mismatch` that made the user repair in the first place, or an
  * `ok` hashed from the OLD bytes — would otherwise stick to the NEW copy until app restart (a
  * repair-after-tamper stayed refused: silent MockRuntime on a fixed drive). The next spawn
- * re-hashes fresh.
+ * re-hashes fresh. Both of the program's entries go (round 7: `cacheKey`).
  */
 export function invalidateBinaryVerification(binPath: string): void {
-  cache.delete(binPath)
+  cache.delete(cacheKey(binPath, false))
+  cache.delete(cacheKey(binPath, true))
 }
 
 /**
@@ -200,12 +208,13 @@ function readFailure(err: unknown): 'unreadable' {
  * then checks every file of the copy that marker records (`keysToVerify`, #1012): first one
  * `stat` each, where the first missing program or library ends the check as `missing` with
  * nothing hashed; then the present files are hashed one at a time, the program first, stopping
- * at the first difference. Other missing files give `missing-other` once nothing present differs
- * (a changed file still wins, since the knowledge-pack tools start on `missing-other`). Never
- * throws: a file or marker that can't be read right now resolves `unreadable` (the cache layer
- * won't persist it).
+ * at the first difference. Other missing files give `missing-other`: at once, with nothing hashed,
+ * for a caller that refuses it anyway (the engines, code review round 7); only once nothing present
+ * differs for one that starts on it (`startsOnMissingOther`, the knowledge-pack tools — a changed
+ * file must still win). Never throws: a file or marker that can't be read right now resolves
+ * `unreadable` (the cache layer won't persist it).
  */
-async function computeRawVerification(binPath: string): Promise<BinaryVerifyResult> {
+async function computeRawVerification(binPath: string, startsOnMissingOther: boolean): Promise<BinaryVerifyResult> {
   const dir = dirname(binPath)
   // The marker lives at the family/extract-dir root. The main binary sits there; the
   // cpu safety-net sits one level down (and may carry its own marker). Check the binary's
@@ -213,9 +222,12 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
   let markerDir: string | null = null
   let marker: RuntimeInstallMarker | null = null
   for (const candidate of [dir, dirname(dir)]) {
-    // Code review round 6: a marker that is there but cannot be read just now is no legacy drive (that
+    // Code review round 6: a marker that is there but cannot be READ just now is no legacy drive (that
     // would be cached as `skip-legacy`, or refused for good on a Kit that refuses hash-less markers), and
-    // a `cpu/` net's own marker that cannot be read must not fall back to the family's. Re-checked.
+    // a `cpu/` net's own marker that cannot be read must not fall back to the family's: `unreadable`,
+    // re-checked. A marker that is read but does not PARSE (truncated, garbled) is still taken as no
+    // marker, as before #1012: the walk goes on to the folder above (a `cpu/` net's to the family's), and
+    // with no recorded hash found the copy is `skip-legacy`, cached for the session (round 7: known).
     let text: string
     try {
       text = readFileSync(runtimeMarkerPath(candidate), 'utf8')
@@ -261,8 +273,10 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
   // (a program or library gone, or a folder, pipe or device at its path — round 5: it never heals by
   // waiting, and reading a pipe would block the check) is answered `missing` without hashing anything,
   // so a quarantined DLL no longer costs the whole copy on every rung and spawn (not cached). Only the
-  // other missing files (`missing-other`) leave the rest to be hashed: the knowledge-pack tools start on
-  // that verdict, so a changed file must not hide behind it.
+  // other missing files (`missing-other`) leave the rest to be hashed, and only for a caller that starts
+  // on that verdict (the knowledge-pack tools: a changed file must not hide behind it). Round 7: the
+  // engines refuse it as damaged files whatever the hash says, so they are not made to pay for one — a
+  // quarantined `llama-cli.exe` no longer re-reads the whole copy on every rung, probe and helper spawn.
   let missing = 0
   let missingCode = false
   const present: typeof files = []
@@ -285,7 +299,7 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
   }
 
   let changed = false
-  if (!missingCode) {
+  if (!missingCode && (missing === 0 || startsOnMissingOther)) {
     for (const file of present) {
       let actual: string
       try {
@@ -319,14 +333,33 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
     return 'mismatch'
   }
   if (missing > 0) {
-    // #1012: no tamper — the copy lost a file (an antivirus quarantine, a copy cut short).
+    // #1012: no tamper — the copy lost a file (an antivirus quarantine, a copy cut short). Round 7:
+    // `missingSeen` counts the missing files seen before the check stopped — the first missing program or
+    // library ends it, so with `files-missing` more may be gone.
     log.warn('Files the engine install marker records are missing (not a tamper)', {
       code: missingCode ? 'files-missing' : 'other-files-missing',
-      count: missing
+      missingSeen: missing
     })
     return missingCode ? 'missing' : 'missing-other'
   }
   return 'ok'
+}
+
+/** How the caller treats `missing-other` (#1012 code review round 7). */
+export interface VerifyBinaryOptions {
+  /**
+   * The caller STARTS its program on `missing-other` (the knowledge-pack tools: no in-app repair, owner
+   * decision Q2). The present files are then still hashed, so a changed one is `mismatch`, and the
+   * `missing-other` it starts on is kept for the session like `ok`, at the same trust. Without it (the
+   * engines, which refuse `missing-other` as damaged files) that verdict comes right after the `stat`
+   * pass, with nothing hashed, and is re-checked on every attempt.
+   */
+  startsOnMissingOther?: boolean
+}
+
+/** The session-cache key: a verdict reached without the hash never answers a caller that starts on `missing-other`. */
+function cacheKey(binPath: string, startsOnMissingOther: boolean): string {
+  return startsOnMissingOther ? `${binPath}\0starts-on-missing-other` : binPath
 }
 
 /**
@@ -335,17 +368,19 @@ async function computeRawVerification(binPath: string): Promise<BinaryVerifyResu
  * filesystem. Never rejects. `unreadable`, `missing` and `missing-other` are returned as they
  * are but EVICTED from the cache, so the next spawn reads the copy again (a self-healing AV /
  * indexer lock won't strand the session on MockRuntime; a file put back is found by the next
- * spawn or "Check again").
+ * spawn or "Check again") — except, round 7, the `missing-other` of a caller that starts on it.
  */
-export function verifyBinaryBeforeSpawn(binPath: string): Promise<BinaryVerifyResult> {
+export function verifyBinaryBeforeSpawn(binPath: string, opts: VerifyBinaryOptions = {}): Promise<BinaryVerifyResult> {
   if (!enforced) return Promise.resolve('skip-dev')
-  const cached = cache.get(binPath)
+  const startsOnMissingOther = opts.startsOnMissingOther === true
+  const key = cacheKey(binPath, startsOnMissingOther)
+  const cached = cache.get(key)
   if (cached) return cached
-  const pending: Promise<BinaryVerifyResult> = computeRawVerification(binPath).then((raw) => {
-    if (RECHECKED.has(raw)) {
+  const pending: Promise<BinaryVerifyResult> = computeRawVerification(binPath, startsOnMissingOther).then((raw) => {
+    if (RECHECKED.has(raw) && !(raw === 'missing-other' && startsOnMissingOther)) {
       // Don't let a transient read failure or a missing file stick for the whole session — drop
       // it so the next spawn re-hashes. Identity-guard the delete so we never evict a newer entry.
-      if (cache.get(binPath) === pending) cache.delete(binPath)
+      if (cache.get(key) === pending) cache.delete(key)
       return raw
     }
     if (raw === 'skip-legacy' && commercialPosture) {
@@ -357,6 +392,6 @@ export function verifyBinaryBeforeSpawn(binPath: string): Promise<BinaryVerifyRe
     }
     return raw
   })
-  cache.set(binPath, pending)
+  cache.set(key, pending)
   return pending
 }

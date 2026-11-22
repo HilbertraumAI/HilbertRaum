@@ -393,6 +393,43 @@ describe('#1012 — spawn seams and a copy missing a file its marker records, th
     expect(calls).toHaveLength(1)
   })
 
+  // Code review round 7: the engines are told `missing-other` with nothing hashed (they refuse it anyway).
+  // The kiwix seams start on it, so they ask for the hash: a changed library must not hide behind an
+  // unused file that is gone.
+  it('KiwixServer.ensureStarted REFUSES a changed library even while an unused file is missing (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('kiwix-serve.exe', 'missing-other-library-changed')
+    const { spawn, calls } = recordingLlamaSpawn()
+    const server = new KiwixServer({
+      binPath: bin,
+      spawn,
+      findPort: async () => 51005,
+      probe: async () => true,
+      allocateGeneration: () => 1,
+      healthIntervalMs: 1
+    })
+    await expect(server.ensureStarted({ libraryXmlPath: join(tmpdir(), 'library.1.xml') })).rejects.toThrow(
+      /^kiwix-serve failed pre-spawn integrity verification$/
+    )
+    expect(calls).toHaveLength(0)
+  })
+
+  it('kiwixManageAdd REFUSES a changed library even while an unused file is missing (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('kiwix-manage.exe', 'missing-other-library-changed')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('exit', 0, null)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    await expect(
+      kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
+    ).rejects.toMatchObject({ name: 'KiwixManageError', kind: 'verify', childState: 'not-spawned' })
+    expect(calls).toHaveLength(0)
+  })
+
   // Review R-6: the spawned program itself gone (quarantined) is refused before the spawn, as before #1012.
   it('kiwixManageAdd REFUSES when kiwix-manage itself is gone (not spawned)', async () => {
     initBinaryVerification(false)

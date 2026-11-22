@@ -188,8 +188,10 @@ export async function kiwixManageAdd(
   // Re-hash kiwix-manage against its install marker BEFORE spawning it (vuln-scan B) —
   // the same pre-spawn gate every llama-server spawn already runs (sidecar.ts doStart). #1012:
   // a missing program or library refuses too (review R-1, R-6: the loader would look for a missing
-  // library in the folder this child starts in), as does a file that cannot be read just now.
-  const verdict = await verifyBinaryBeforeSpawn(managePath)
+  // library in the folder this child starts in), as does a file that cannot be read just now. Code review
+  // round 7: it runs on `missing-other` (below), so it asks for every present file to be hashed; that
+  // verdict is then kept for the session, so a library build no longer re-hashes the copy for each pack.
+  const verdict = await verifyBinaryBeforeSpawn(managePath, { startsOnMissingOther: true })
   if (verdict === 'mismatch') {
     throw new KiwixManageError(
       'kiwix-manage failed pre-spawn integrity verification',

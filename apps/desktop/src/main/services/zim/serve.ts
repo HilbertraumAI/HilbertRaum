@@ -407,8 +407,9 @@ export class KiwixServer {
     // Same pre-spawn integrity rule as every sidecar: a packaged-build tamper refuses
     // to spawn; dev/legacy installs resolve skip-* and proceed (binary-verifier.ts). #1012: so do
     // a missing program or library (review R-1, R-6: the loader would look for a missing library in
-    // the library folder this child starts in) and a file that cannot be read just now.
-    const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
+    // the library folder this child starts in) and a file that cannot be read just now. Code review
+    // round 7: it starts on `missing-other` (below), so it asks for every present file to be hashed.
+    const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath, { startsOnMissingOther: true })
     if (verdict === 'mismatch') throw new KiwixServeStartError('integrity')
     // (Code review round 3: its own kinds — a missing or locked file is no tamper. Round 5: a file that
     // cannot be read JUST NOW is a kind of its own, which the service never latches.)

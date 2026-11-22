@@ -81,8 +81,10 @@ export interface GpuProbeDeps {
   timeoutMs?: number
   /**
    * Re-hash the binary before the probe spawns it (vuln-scan B). Defaults to the shared
-   * `verifyBinaryBeforeSpawn`. A `mismatch` resolves `[]` (no GPU) — the probe's contract
-   * is that it NEVER throws — so a tampered binary is simply never executed for the probe.
+   * `verifyBinaryBeforeSpawn`. A copy that fails it is never executed for the probe, which NEVER
+   * throws: a changed or missing file resolves `null` (no answer) and records the "engine files
+   * damaged" verdict (#1012 code review round 6; a `mismatch` resolved `[]` before), and a file that
+   * cannot be read just now resolves `null` with no verdict.
    */
   verify?: (binPath: string) => Promise<BinaryVerifyResult>
   /** #530: the OS the load-failure classifier reports (default `process.platform`). */

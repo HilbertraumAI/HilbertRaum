@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import {
   verifyBinaryBeforeSpawn,
   initBinaryVerification,
+  invalidateBinaryVerification,
   setBinaryVerificationPosture,
   REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES
 } from '../../src/main/services/binary-verifier'
@@ -302,13 +303,72 @@ describe("every file the copy's own marker records (#1012)", () => {
   // never hide a changed one.
   // (Code review round 3: the missing file is one the tools start without — `missing-other` — which is
   // the only verdict a changed file could hide behind; a missing library stops every seam anyway.)
+  // (Code review round 7: the tools say so — `startsOnMissingOther` — and only they hash past it.)
   it('a changed file is refused even while another recorded file is missing', async () => {
     initBinaryVerification(false)
     const dir = tmp()
     writeCopy(dir, { 'kiwix-serve.exe': 'serve', 'LICENSE': 'licence text', 'icuuc74.dll': 'icu common' })
     rmSync(join(dir, 'LICENSE')) // a file no loader looks for; it sorts first, so the change is reached after it
     writeFileSync(join(dir, 'icuuc74.dll'), 'other common')
-    expect(await verifyBinaryBeforeSpawn(join(dir, 'kiwix-serve.exe'))).toBe('mismatch')
+    expect(await verifyBinaryBeforeSpawn(join(dir, 'kiwix-serve.exe'), { startsOnMissingOther: true })).toBe('mismatch')
+  })
+
+  // Code review round 7: the engines refuse `missing-other` as damaged files whatever the hash says, so
+  // they are told right after the `stat` pass. Observable without a seam: the program refuses to be read,
+  // so a hash of it would answer `unreadable`. Still re-checked: the file put back is found.
+  it('an engine caller gets missing-other with nothing hashed, and it is not cached', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeCopy(dir, { 'llama-server.exe': 'shim', 'ggml.dll': 'ggml', 'llama-cli.exe': 'cli' })
+    rmSync(join(dir, 'llama-cli.exe')) // quarantined, say: a program the app never runs
+    denyReading(bin) // hashed first, if anything were hashed
+    try {
+      expect(await verifyBinaryBeforeSpawn(bin)).toBe('missing-other')
+    } finally {
+      allowReading(bin)
+    }
+    writeFileSync(join(dir, 'llama-cli.exe'), 'cli') // restored from the quarantine
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  // Code review round 7: a caller that starts on `missing-other` (the knowledge-pack tools) still hashes
+  // every present file, and the verdict it then starts on is kept for the session like `ok`.
+  it('a caller that starts on missing-other: every present file is hashed, and the verdict is cached like ok', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'kiwix-manage.exe')
+    const starts = { startsOnMissingOther: true }
+    writeCopy(dir, { 'kiwix-manage.exe': 'manage', 'icuuc74.dll': 'icu common', 'kiwix-search.exe': 'search' })
+    rmSync(join(dir, 'kiwix-search.exe'))
+    // Hashed: a present library that refuses to be read makes the answer `unreadable` (not cached).
+    denyReading(join(dir, 'icuuc74.dll'))
+    try {
+      expect(await verifyBinaryBeforeSpawn(bin, starts)).toBe('unreadable')
+    } finally {
+      allowReading(join(dir, 'icuuc74.dll'))
+    }
+    expect(await verifyBinaryBeforeSpawn(bin, starts)).toBe('missing-other')
+    // Served from the session cache: a re-hash would now find the changed library.
+    writeFileSync(join(dir, 'icuuc74.dll'), 'other common')
+    expect(await verifyBinaryBeforeSpawn(bin, starts)).toBe('missing-other')
+    // …as an in-app install's eviction shows.
+    invalidateBinaryVerification(bin)
+    expect(await verifyBinaryBeforeSpawn(bin, starts)).toBe('mismatch')
+  })
+
+  // Code review round 7: an engine's unhashed `missing-other` must never answer a caller that starts on it,
+  // not even a call that overlaps it on the same path (a shared pending hash, as the probe and the start).
+  it('a verdict reached without the hash never answers a caller that starts on missing-other', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'kiwix-serve.exe')
+    writeCopy(dir, { 'kiwix-serve.exe': 'serve', 'icuuc74.dll': 'icu common', 'kiwix-search.exe': 'search' })
+    rmSync(join(dir, 'kiwix-search.exe'))
+    writeFileSync(join(dir, 'icuuc74.dll'), 'other common')
+    expect(
+      await Promise.all([verifyBinaryBeforeSpawn(bin), verifyBinaryBeforeSpawn(bin, { startsOnMissingOther: true })])
+    ).toEqual(['missing-other', 'mismatch'])
   })
 
   // Code review round 3: a missing program or library refuses the copy at every seam, so the check stops
