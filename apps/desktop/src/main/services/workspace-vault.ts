@@ -3312,8 +3312,9 @@ export class WorkspaceController {
     return outcome
   }
 
-  /** #1001: how many staged document and image copies no journal vouched for the last unlock swapped in, removed (they
-   *  do not open under this workspace's key) and left (they could be neither read nor swapped in or removed); null when
+  /** #1001: how many staged document and image copies no journal vouched for the last unlock swapped in, removed (no
+   *  newer copy of their stored document: another key or file, or the stored copy is already current) and left (they
+   *  could be neither read nor swapped in or removed); null when
    *  it found none. Returns it once, for the IPC's one content-free log line, on the unlock's success and failure paths
    *  alike, as {@link takeStageOutcome}. */
   takeSidecarStageOutcome(): SidecarStageOutcome | null {
