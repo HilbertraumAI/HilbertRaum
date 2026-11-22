@@ -5851,13 +5851,20 @@ rung ended so).
 - **What `unreadable` does elsewhere (code review round 3).**
   - Every other `LlamaServer` user (the embedder, the reranker, translation, vision) rethrows it like a
     bind race: no `startFailed` latch, no GPU → CPU demotion, no #117 cooldown.
-  - In the ladder:
-    - the reason and the blame come from the last failure that is evidence (an unreadable last rung never
-      hides an earlier model failure);
-    - an unreadable processor control rung drops a held GPU failure, since there is no control evidence
-      for it (#312);
-    - a walk where every rung ended unreadable calls `onEngineFilesUnreadable`, which shows
-      `main.engine.filesUnreadable` on the demo runtime and latches nothing, so the next start re-walks.
+  - In the ladder, round 4 sets one rule: a walk in which any rung ended `unreadable` latches nothing.
+    That means no `blameModel`, no persisted GPU failure (at a later rung's success or at the end) and no
+    MTP latch (one its rung 1a set is taken back). It only reports:
+    - the model notice (`onModelLoadFailure`, no latch) when a non-speculative rung failed in a way that
+      is evidence (not a bind race, not an engine refusal);
+    - else `onEngineFilesUnreadable`, which shows `main.engine.filesUnreadable` beside the demo runtime.
+
+    The reason comes from the last failure that is not `unreadable`. The next start re-walks.
+  - The consumers that report a start failure to the user stop at once with `main.engine.filesUnreadable`
+    (round 4):
+    - the translate view (`TranslateErrorCode` `filesUnreadable`);
+    - a document translation task (a friendly task error);
+    - an audio import (a persist-canonical row text, display-mapped);
+    - dictation.
   - The knowledge-pack tools report a missing or locked file with their own `files` kind.
 - **Tests:**
   - `binary-verify-spawn.test.ts`: the two "#1012" describes, one row per site and verdict.

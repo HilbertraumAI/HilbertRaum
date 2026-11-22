@@ -81,10 +81,12 @@ from its first public `1.0.0` release onward.
   can quarantine one, for example), the engine is not started either, and the AI Model screen offers
   to install it again. Before, the engine started without it: without the graphics-card file, models
   ran slowly on the processor alone and the app reported no graphics card. If a file cannot be read
-  just then (an antivirus checking it, for example), the engine is not started this time, and you see
-  "please try again in a minute" instead of simulated answers without a word. The next start tries again,
-  and so do the search, reranking, translation and image helpers on their next use. None of this is
-  taken as a fault of the graphics card or the model any more. An intact
+  just then (an antivirus checking it, for example), the engine is not started this time. The chat's
+  answers are then simulated, as whenever the engine cannot start, but a notice now says why: please try
+  again in a minute. A translation, an audio import or a dictation stops with the same message instead
+  of a general error. The next start tries again, and so do the search, reranking, translation and image
+  helpers on their next use. None of this is taken as a fault of the graphics card or the model any
+  more. An intact
   engine is checked once per session, at the first start: about a third of a second on a USB 3 stick,
   about three seconds on a USB 2 stick. While a file is missing or cannot be read, every start checks
   again. The knowledge-pack tools cannot be installed again from the app. They are not started without

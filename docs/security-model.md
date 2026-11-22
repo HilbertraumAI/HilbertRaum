@@ -3569,8 +3569,16 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     - the start ladder counts it as no evidence about the GPU or the model;
     - the embedder, reranker, translation and vision sidecars treat it like a bind race: rethrown,
       nothing latched or demoted, and the next call starts normally;
-    - a chat start whose every rung ended so shows the notice `main.engine.filesUnreadable` ("try again
-      in a minute") on the demo runtime, and nothing is latched, so the next start walks the ladder again.
+    - a chat start in which any rung ended so latches nothing (code review round 4): no model latch, no
+      persisted GPU failure, no MTP latch. It only reports. When no other rung failed in a way that is
+      evidence (a failed MTP rung 1a, a bind race and an engine refusal are none), it shows the notice
+      `main.engine.filesUnreadable` ("try again in a minute") beside the demo runtime's simulated
+      answers; otherwise it shows the model notice, without the latch. The next start walks the ladder
+      again;
+    - the translate view, a document translation task, an audio import and dictation stop at once with
+      that same message (round 4): a `filesUnreadable` job code, the friendly task error, the persisted
+      row text (display-mapped) and the dictation error. There is no per-window retry and no generic
+      failure copy.
 - **Cost:** the b12110 Windows copy is 52 files, 94.5 MB: 0.28 s on a USB 3 stick (measured), about 3 s
   on a USB 2 stick (estimated). whisper.cpp is 10.1 MB. Measured warm on NVMe: 308 ms with the longest
   event-loop gap 1.5 ms (`sha256File` streams).
@@ -3662,11 +3670,11 @@ engines in their own folder.
     `exit: 'not started'`), so the ladder walks on without blaming the GPU or the model, and the "Install
     again" offer appears.
   - `unreadable`: the typed `EngineFilesUnreadableError`. No verdict is recorded, and the ladder holds,
-    persists and latches nothing for that rung: no GPU failure, no model blame, no MTP latch. On the
-    processor control rung it also drops a held GPU failure, since there is no control evidence for it.
-  - The reason and the blame come from the last failure that is evidence, so an earlier rung's model
-    failure is still reported.
-  - A walk where every rung ended so shows the files-unreadable notice.
+    persists and latches nothing: a walk with such a rung keeps no model latch, no GPU failure and no MTP
+    latch, not even one set earlier in that walk (round 4).
+  - The reason comes from the last other failure, so an earlier rung's model failure is still reported.
+  - With no evidence-class failure beside it (a failed MTP rung 1a, a bind race and an engine refusal are
+    none), the walk shows the files-unreadable notice.
   - Every other user of `LlamaServer` rethrows the error without a latch or a demotion (code review
     round 3).
 - **`probeGpuDevices()` (`gpu.ts`)** — resolves **`[]`** (reads as "no GPU"); the probe's contract is that

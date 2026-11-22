@@ -132,7 +132,14 @@ change.
 #1012 (`security-model.md` "Re-hash sidecar binaries before spawn"): a `'files-damaged'` verdict can
 also come from the pre-spawn check — a file the engine copy's install marker records is missing, and
 the program was never started. Its `exit` is then `'not started'` and it carries no `name`. Same shape,
-same channels, same "Install again" offer.
+same channels, same "Install again" offer. An engine file the check could not read just now
+(`EngineFilesUnreadableError`, no verdict) is reported with the new key `main.engine.filesUnreadable`:
+- `TranslateErrorCode` gained `'filesUnreadable'`;
+- a document translation task fails with that key's text, which is now a friendly task error;
+- `documents.error_message` gained the key's English text as a persist-canonical, exact-match value (an
+  audio import; display-mapped), so that English value is frozen like the other row texts;
+- dictation rejects with it;
+- a chat start shows it as a `runtime:notice`.
 #634 (`rag-design.md` §12.4 "#634 amendment"): `documents.error_message` gained three
 persist-canonical English values for a search-model failure — `main.ingest.searchModelTimeout`,
 `…searchModelCannotStart`, `…searchModelFailed` (exact match, display-map translated) — and a lock

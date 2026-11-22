@@ -372,8 +372,12 @@ password recovery — are documented in
   - It refuses that attempt without blaming the GPU, the model or the engine.
   - The search, reranking, translation and image helpers try again on their next call, with nothing
     latched.
-  - A chat start whose every attempt ended so runs on the demo runtime and shows "try again in a minute".
-    The next start of the model (select it again, or the next unlock) walks the start ladder again.
+  - A translation (on screen or as a document task), an audio import and dictation stop at once and say
+    "try again in a minute".
+  - A chat start in which an attempt ended so latches nothing, not even what its other attempts showed.
+    It runs on the demo runtime: with "try again in a minute" when nothing else went wrong, else with the
+    usual "this model could not be loaded" notice. The next start of the model (select it again, or the
+    next unlock) walks the start ladder again.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time
