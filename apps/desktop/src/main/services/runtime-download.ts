@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { lstat, mkdir, readdir, readlink, rm, stat, statfs } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { parse as parseYaml } from 'yaml'
@@ -348,9 +348,15 @@ export function engineStatus(
  * other, #856). Injected so the install-flow tests never shell out. The optional
  * `signal` (F-33) lets a job cancel reach the child: without it `extractWithTar` was the only
  * unbounded child in the repo — a wedged tar pinned the job in 'extracting' with no way to stop
- * it, and a cancel merely flipped the status while tar kept writing.
+ * it, and a cancel merely flipped the status while tar kept writing. A stopped extraction settles
+ * only once its child has exited (#999), or after a bound, which `log` reports.
  */
-export type ExtractFn = (archivePath: string, destDir: string, signal?: AbortSignal) => Promise<void>
+export type ExtractFn = (
+  archivePath: string,
+  destDir: string,
+  signal?: AbortSignal,
+  log?: (msg: string, meta?: unknown) => void
+) => Promise<void>
 
 /**
  * Hard ceiling on ONE archive extraction (F-33). tar is short-lived + local, but a child wedged
@@ -363,6 +369,12 @@ export const DEFAULT_EXTRACT_DEADLINE_MS = 5 * 60 * 1000
 /** Grace after SIGTERM before escalating to SIGKILL on a wedged/cancelled tar (F-33; the whisper
  *  REL-2 killWithEscalation grace — native decode/IO code can ignore the polite signal). */
 const EXTRACT_KILL_GRACE_MS = 2_000
+/**
+ * #999: how long a stopped extraction waits for its tar to exit after the SIGKILL, before it settles
+ * anyway. Measured on Windows: TerminateProcess ends tar 2–5 ms after the kill. A tar wedged in kernel
+ * I/O on a failing stick can outlive even SIGKILL, and must not pin the job (F-33's reason).
+ */
+const EXTRACT_GONE_BOUND_MS = 10_000
 
 function extractDeadlineMs(): number {
   const raw = Number(process.env.HILBERTRAUM_EXTRACT_DEADLINE_MS)
@@ -418,82 +430,111 @@ function tarExtractArgs(archivePath: string, destDir: string): string[] {
   return ['-xf', `./${basename(archivePath)}`]
 }
 
-/**
- * Default extractor: the OS's pinned `tar` (see `resolveTarBinary`), `-xf ./<archive>` from
- * inside `destDir` (`tarExtractArgs`). One command covers every host because each platform's
- * archive is one its `tar` understands — Windows 10+ ships bsdtar (handles the .zip release
- * assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the same
- * native tools (unzip/ditto/tar); this is the in-app equivalent.
- */
-export const extractWithTar: ExtractFn = (archivePath, destDir, signal) =>
-  new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(resolveTarBinary(), tarExtractArgs(archivePath, destDir), {
-      stdio: 'ignore',
-      // The target: the archive's `./` name resolves against it and the files land in it, and
-      // the child never inherits a possibly attacker-influenced cwd.
-      cwd: destDir,
-      windowsHide: true
-    })
-    let settled = false
-    let deadline: ReturnType<typeof setTimeout> | undefined
-    const onAbort = (): void => stopChild(new Error('tar extraction cancelled'))
+/** What starts the extractor's child: `child_process.spawn`'s shape (a seam for the #999 rows). */
+export type ExtractSpawn = (command: string, args: string[], options: SpawnOptions) => ChildProcess
 
-    // SIGTERM then SIGKILL if the child ignores it (whisper REL-2), then settle: a tar wedged in
-    // native I/O on a failing USB can ignore the polite signal and never emit 'close', so the
-    // deadline/abort path rejects rather than waiting on a 'close' that may never come. The child
-    // is still killed (best-effort) so no orphan tar keeps writing into the extract dir.
-    const stopChild = (err: Error): void => {
-      if (settled) return
-      settled = true
-      if (deadline) clearTimeout(deadline)
-      signal?.removeEventListener('abort', onAbort)
-      let gone = false
-      const escalate = setTimeout(() => {
-        if (!gone) {
+export interface TarExtractorOptions {
+  /** Default `child_process.spawn`. */
+  spawn?: ExtractSpawn
+  /** After the polite kill, how long before SIGKILL (default 2 s). */
+  graceMs?: number
+  /** After the SIGKILL, how long the extraction waits for the child to exit before it settles anyway (default 10 s). */
+  goneBoundMs?: number
+}
+
+/**
+ * The default extractor's factory (#999): the OS's pinned `tar` (see `resolveTarBinary`),
+ * `-xf ./<archive>` from inside `destDir` (`tarExtractArgs`). One command covers every host because
+ * each platform's archive is one its `tar` understands — Windows 10+ ships bsdtar (handles the .zip
+ * release assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the
+ * same native tools (unzip/ditto/tar); this is the in-app equivalent.
+ *
+ * A cancel or the deadline kills the child: SIGTERM, then SIGKILL after `graceMs` (whisper REL-2; on
+ * Windows both are TerminateProcess). The extraction rejects only once the child has exited, so the
+ * job (`activeJob()`, the F-33 latch) stays busy while tar may still write, and the job's cleanup of
+ * the staging folder never races it. A child that has not exited `goneBoundMs` after the SIGKILL (a
+ * tar wedged in kernel I/O on a failing stick) is given up on with a log line, so it cannot pin the
+ * job either.
+ */
+export function makeTarExtractor(options: TarExtractorOptions = {}): ExtractFn {
+  const spawnChild = options.spawn ?? spawn
+  const graceMs = options.graceMs ?? EXTRACT_KILL_GRACE_MS
+  const goneBoundMs = options.goneBoundMs ?? EXTRACT_GONE_BOUND_MS
+  return (archivePath, destDir, signal, log) =>
+    new Promise<void>((resolvePromise, reject) => {
+      const child = spawnChild(resolveTarBinary(), tarExtractArgs(archivePath, destDir), {
+        stdio: 'ignore',
+        // The target: the archive's `./` name resolves against it and the files land in it, and
+        // the child never inherits a possibly attacker-influenced cwd.
+        cwd: destDir,
+        windowsHide: true
+      })
+      let settled = false
+      /** Set once a cancel or the deadline asked the child to stop: the extraction then rejects with it. */
+      let stopError: Error | null = null
+      const timers: Array<ReturnType<typeof setTimeout>> = []
+      const later = (ms: number, fn: () => void): void => {
+        const timer = setTimeout(fn, ms)
+        // Never let a timer keep Electron alive by itself (mirrors the whisper grace unref).
+        timer.unref?.()
+        timers.push(timer)
+      }
+      const onAbort = (): void => stopChild(new Error('tar extraction cancelled'))
+      const settle = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        for (const timer of timers) clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        fn()
+      }
+      const stopChild = (err: Error): void => {
+        if (settled || stopError) return
+        stopError = err
+        signal?.removeEventListener('abort', onAbort)
+        later(graceMs, () => {
           try {
             child.kill('SIGKILL')
           } catch {
             /* already gone */
           }
+          later(goneBoundMs, () => {
+            log?.('tar did not exit after it was killed: the extraction is given up on', { graceMs, goneBoundMs })
+            settle(() => reject(err))
+          })
+        })
+        try {
+          child.kill()
+        } catch {
+          /* already gone */
         }
-      }, EXTRACT_KILL_GRACE_MS)
-      escalate.unref?.()
+      }
       const onGone = (): void => {
-        gone = true
-        clearTimeout(escalate)
+        if (stopError) {
+          const err = stopError
+          settle(() => reject(err))
+        }
       }
-      child.once('exit', onGone)
-      child.once('close', onGone)
-      child.once('error', onGone)
-      try {
-        child.kill()
-      } catch {
-        /* already gone */
-      }
-      reject(err)
-    }
-    const settle = (fn: () => void): void => {
-      if (settled) return
-      settled = true
-      if (deadline) clearTimeout(deadline)
-      signal?.removeEventListener('abort', onAbort)
-      fn()
-    }
 
-    deadline = setTimeout(
-      () => stopChild(new Error(`tar extraction exceeded ${extractDeadlineMs()} ms; aborted`)),
-      extractDeadlineMs()
-    )
-    // Never let the deadline timer keep Electron alive by itself (mirrors the whisper grace unref).
-    deadline.unref?.()
-    if (signal?.aborted) onAbort()
-    else signal?.addEventListener('abort', onAbort, { once: true })
+      later(extractDeadlineMs(), () => stopChild(new Error(`tar extraction exceeded ${extractDeadlineMs()} ms; aborted`)))
+      if (signal?.aborted) onAbort()
+      else signal?.addEventListener('abort', onAbort, { once: true })
 
-    child.on('error', (err) => settle(() => reject(err)))
-    child.on('close', (code) =>
-      settle(() => (code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))))
-    )
-  })
+      child.on('exit', onGone)
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        if (!stopError) return settle(() => reject(err))
+        // A kill that could not be delivered says nothing about whether tar is gone: the SIGKILL and the
+        // bound settle it. A spawn that failed means there never was a child.
+        if (typeof err.syscall === 'string' && err.syscall.startsWith('spawn')) onGone()
+      })
+      child.on('close', (code: number | null) => {
+        if (stopError) return onGone()
+        settle(() => (code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))))
+      })
+    })
+}
+
+/** The default extractor (`makeTarExtractor` with the real `spawn`). */
+export const extractWithTar: ExtractFn = makeTarExtractor()
 
 export interface EngineDownloadDeps {
   fetchImpl?: FetchFn
@@ -1723,7 +1764,7 @@ export async function stageEngineInstall(
   await mkdir(stagingDir, { recursive: true })
   const staged = planInFolder(plan, stagingDir)
   await renameWithRetry(plan.zipDest, staged.zipDest)
-  await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal)
+  await (opts.extract ?? extractWithTar)(staged.zipDest, stagingDir, opts.signal, opts.log)
   if (opts.signal?.aborted) throw new Error('engine install cancelled after the extraction')
   await flattenNestedBinary(staged)
   // #729: what the family never keeps (`llama-connect`, the `--connect` tunnel) goes before

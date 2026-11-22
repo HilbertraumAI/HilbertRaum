@@ -19,6 +19,16 @@ vi.mock('../../src/main/services/assets', async (importOriginal) => {
     }
   }
 })
+// #999: one row runs the DEFAULT extractor (`extractWithTar`) over a fake tar child, to see the job stay
+// busy until that child has exited. Every other spawn (the OS-tar rows) goes to the real function.
+const tarSpawn = vi.hoisted(() => ({ fake: null as null | (() => unknown) }))
+vi.mock('node:child_process', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('node:child_process')>()
+  const realSpawn = orig.spawn as (...args: unknown[]) => unknown
+  const mocked = { ...orig, spawn: (...args: unknown[]) => (tarSpawn.fake ? tarSpawn.fake() : realSpawn(...args)) }
+  return { ...mocked, default: mocked }
+})
+import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
@@ -800,6 +810,47 @@ describe('extraction bounds + concurrency (F-33)', () => {
     releaseExtract()
     expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
     expect(mgr.activeJob()).toBeNull()
+  })
+
+  // #999: the latch above holds only as long as the extractor's promise. `extractWithTar` used to reject the
+  // moment it killed tar, so the job read idle (and deleted its staging folder) while tar could still write.
+  // Here the default extractor runs over a fake tar that exits only when it gets SIGKILL (after the 2 s
+  // grace), or when the job settles before that, which is the defect.
+  it('a cancelled job stays busy until its tar has exited (#999)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    const child = Object.assign(new EventEmitter(), { exited: false, kill: vi.fn((_signal?: NodeJS.Signals) => true) })
+    const exit = (): void => {
+      if (child.exited) return
+      child.exited = true
+      child.emit('exit', null, 'SIGKILL')
+      child.emit('close', null, 'SIGKILL')
+    }
+    child.kill.mockImplementation((signal?: NodeJS.Signals) => {
+      if (signal === 'SIGKILL') queueMicrotask(exit)
+      return true
+    })
+    tarSpawn.fake = () => child
+    try {
+      const mgr = new EngineDownloadManager({ fetchImpl: okFetch })
+      const settledWith: boolean[] = []
+      mgr.onSettled(() => {
+        settledWith.push(child.exited)
+        exit()
+      })
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+      await until(() => child.listenerCount('close') > 0, 'tar running')
+      mgr.cancel(started.jobId)
+      expect(mgr.get(started.jobId).status).toBe('cancelled')
+      expect(mgr.activeJob()).toBe(started.jobId)
+      await vi.waitFor(() => expect(settledWith).toHaveLength(1), { timeout: hangBudgetMs(5000) })
+      // The job settled only after its tar had exited.
+      expect(settledWith).toEqual([true])
+      expect(child.kill.mock.calls).toEqual([[], ['SIGKILL']])
+      expect(mgr.activeJob()).toBeNull()
+      expect(mgr.get(started.jobId).status).toBe('cancelled')
+    } finally {
+      tarSpawn.fake = null
+    }
   })
 })
 
