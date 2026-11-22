@@ -28,6 +28,21 @@ vi.mock('node:child_process', async (importOriginal) => {
   const mocked = { ...orig, spawn: (...args: unknown[]) => (tarSpawn.fake ? tarSpawn.fake() : realSpawn(...args)) }
   return { ...mocked, default: mocked }
 })
+// #1000: the part-way rows refuse one swap rename (a drive that cannot be written there): every other call
+// goes to the real function.
+const renameSeam = vi.hoisted(() => ({ refuses: null as null | ((from: string, to: string) => string | null) }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('node:fs/promises')>()
+  const mocked = {
+    ...orig,
+    rename: async (from: Parameters<typeof orig.rename>[0], to: Parameters<typeof orig.rename>[1]) => {
+      const code = renameSeam.refuses?.(String(from), String(to))
+      if (code) throw Object.assign(new Error(`${code}: the drive refused the rename`), { code })
+      return orig.rename(from, to)
+    }
+  }
+  return { ...mocked, default: mocked }
+})
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -402,6 +417,36 @@ describe('EngineDownloadManager install flow', () => {
     const status = engineStatus(rootPath, manifestsDir)
     expect(status.installed).toBe(true)
     expect(status.missingFamilies).toEqual([])
+  })
+
+  // #1000 round 1: each family is all or nothing, never the whole job. With every copy staged before the first
+  // swap, a voice engine that could not be unpacked used to keep the chat engine from installing too (before
+  // #1000 the chat engine was swapped first). The family that failed is reported, as for a job part-way.
+  it.each([
+    { failing: 'whisper_cpp', installedFamily: 'llama_cpp' },
+    { failing: 'llama_cpp', installedFamily: 'whisper_cpp' }
+  ] as const)('an install whose $failing cannot be unpacked still installs $installedFamily, and reports the failure', async ({ failing, installedFamily }) => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const failingDir = failing === 'whisper_cpp' ? 'whisper.cpp' : 'llama.cpp'
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async (archive, destDir, signal) => {
+        if (destDir === `${join(rootPath, 'runtime', failingDir, HOST_OS)}.new`) throw new Error('tar exited with code 1')
+        await familyExtract(archive, destDir, signal)
+      }
+    })
+    const told: string[][] = []
+    mgr.onInstalled((families) => told.push(families))
+    const ends: Array<string | null> = []
+    mgr.onSettled((_job, end) => ends.push(end.reason))
+    const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+    await vi.waitFor(() => expect(ends).toHaveLength(1), { timeout: hangBudgetMs(5000) })
+    await engineFolderDeletesSettled()
+    expect(job).toMatchObject({ status: 'failed', error: tMain('main.engine.extractFailed') })
+    expect(ends).toEqual(['install'])
+    expect(told).toEqual([[installedFamily]])
+    expect(engineStatus(rootPath, manifestsDir).missingFamilies).toEqual([failing])
+    expect(existsSync(`${join(rootPath, 'runtime', failingDir, HOST_OS)}.new`)).toBe(false)
   })
 
   it('can install just one requested family (voice engine only)', async () => {
@@ -1473,12 +1518,15 @@ describe('engine updates (#516)', () => {
     expect(urls).toEqual([])
   })
 
-  it('two phases: every archive is verified before anything installed is touched, and a refusing pause replaces nothing', async () => {
+  // #1000 flipped this row by design: it pinned the old order (archives still zipped at the pause). The
+  // archives are now unpacked, checked and marked in their staging folders BEFORE the pause, and a pause
+  // that refuses deletes them again.
+  it('three phases: every archive is staged before the pause, and a refusing pause replaces nothing and leaves no staged copy (#1000)', async () => {
     const { rootPath, manifestsDir } = makeUpdateDrive()
     await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
     await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
     const { fetchImpl } = fetchingUrls()
-    let seenAtPause: { archives: number; mainMarker?: string; cpuMarker?: string; held: boolean } | null = null
+    let seenAtPause: Record<string, unknown> | null = null
     const zips = (d: string): string[] => readdirSync(d).filter((f) => f.endsWith('.zip'))
     const mgr = new EngineDownloadManager({ fetchImpl, extractImpl: familyExtract })
     const started = await mgr.start({
@@ -1492,7 +1540,10 @@ describe('engine updates (#516)', () => {
           archives: zips(llamaDir(rootPath)).length + zips(cpuDir(rootPath)).length,
           mainMarker: markerVersion(llamaDir(rootPath)),
           cpuMarker: markerVersion(cpuDir(rootPath)),
-          // From the pause to the last marker no llama program may start (spawn-gate.ts).
+          // Both new copies are whole and marked before anything stops.
+          staged: markerVersion(`${llamaDir(rootPath)}.new`),
+          stagedNet: markerVersion(join(llamaDir(rootPath), 'cpu.new')),
+          // From the pause to the last swap no llama program may start (spawn-gate.ts).
           held: engineSpawnsHeld('llama_cpp')
         }
         throw new Error('A document task is running.')
@@ -1501,26 +1552,67 @@ describe('engine updates (#516)', () => {
     const job = await runToEnd(mgr, started.jobId)
     // The terminal status lands before the cleanup; the manager stays busy until both are done (F-33).
     await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
-    // At the pause both archives were downloaded and verified, and both old installs untouched.
-    expect(seenAtPause).toEqual({ archives: 2, mainMarker: 'b150', cpuMarker: 'b150', held: true })
+    await engineFolderDeletesSettled()
+    expect(seenAtPause).toEqual({ archives: 0, mainMarker: 'b150', cpuMarker: 'b150', staged: 'b200', stagedNet: 'b200', held: true })
     // …and a refused pause releases the gate like every other outcome.
     expect(engineSpawnsHeld('llama_cpp')).toBe(false)
-    // The pause refused: the job fails with its reason, the old engine stays, the archives go.
+    // The pause refused: the job fails with its reason, the old engine stays, the staged copies go.
     expect(job).toMatchObject({ status: 'failed', error: 'A document task is running.' })
     expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+    expect(markerVersion(cpuDir(rootPath))).toBe('b150')
     expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
+    expect(existsSync(`${llamaDir(rootPath)}.new`)).toBe(false)
+    expect(existsSync(join(llamaDir(rootPath), 'cpu.new'))).toBe(false)
     expect([...zips(llamaDir(rootPath)), ...zips(cpuDir(rootPath))]).toEqual([])
   })
 
-  // #986 review: phase 2 installs a family's cpu/ net before its main build (its archive sits inside the
-  // main folder, which the main build's swap moves), so here the net is swapped and the main build fails.
-  it('a job that stops part-way still reports what it replaced: the cpu/ net swapped, the main build failed', async () => {
+  // #1000: nothing the unpack does reads or writes an install folder, so the models keep running through
+  // it: the gate stays open for spawns, and the pause comes only once every copy is staged.
+  it('the models keep running while the archives unpack: no pause and no held gate until every copy is staged (#1000)', async () => {
     const { rootPath, manifestsDir } = makeUpdateDrive()
     await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
     await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
+    let pauses = 0
+    const atUnpack: Array<{ held: boolean; pauses: number }> = []
     const mgr = new EngineDownloadManager({
       fetchImpl: okFetch,
       extractImpl: async (archive, destDir, signal) => {
+        atUnpack.push({ held: engineSpawnsHeld('llama_cpp'), pauses })
+        await familyExtract(archive, destDir, signal)
+      }
+    })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      update: true,
+      beforeReplace: async () => {
+        pauses++
+      }
+    })
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
+    expect(atUnpack).toEqual([
+      { held: false, pauses: 0 },
+      { held: false, pauses: 0 }
+    ])
+    expect(pauses).toBe(1)
+    expect(markerVersion(llamaDir(rootPath))).toBe('b200')
+    expect(markerVersion(cpuDir(rootPath))).toBe('b200')
+  })
+
+  // #1000 flipped the part-way row by design: the main build's failing extraction now comes before any
+  // swap, so the net staged before it is not swapped either, and nothing stopped.
+  it('a failed main stage swaps nothing and never pauses: both builds stay b150, the gate is never held, nothing is told (#1000)', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
+    let pauses = 0
+    const heldAtUnpack: boolean[] = []
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async (archive, destDir, signal) => {
+        heldAtUnpack.push(engineSpawnsHeld('llama_cpp'))
         // #986: each archive unpacks into its staging folder beside the install.
         if (destDir === `${llamaDir(rootPath)}.new`) throw new Error('tar exited with code 1')
         await familyExtract(archive, destDir, signal)
@@ -1528,44 +1620,123 @@ describe('engine updates (#516)', () => {
     })
     const installed_: Array<[string[], Partial<Record<string, string[]>>]> = []
     mgr.onInstalled((families, programs) => installed_.push([families, programs]))
-    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
-    await runToEnd(mgr, started.jobId)
-    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
-    expect(mgr.get(started.jobId).status).toBe('failed')
-    // The failed main build left the installed one as it was; the new net sits inside it.
-    expect(markerVersion(llamaDir(rootPath))).toBe('b150')
-    expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
-    expect(markerVersion(cpuDir(rootPath))).toBe('b200')
-    // The new net is on the drive, so its consumers hear of it (its old verdict goes, #678).
-    expect(installed_).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
-    expect(engineSpawnsHeld('llama_cpp')).toBe(false)
-  })
-
-  // #678: a reinstall can replace a family's cpu/ net alone. A job that stops after that swap (here the
-  // voice engine's extraction fails) still reports it: the net's old verdict goes, its fresh copy is known.
-  it('a job that stops part-way still reports a cpu/ net it replaced alone (#678)', async () => {
-    const { rootPath, manifestsDir } = makeUpdateDrive()
-    const mgr = new EngineDownloadManager({
-      fetchImpl: okFetch,
-      extractImpl: async (archive, destDir, signal) => {
-        if (destDir === `${whisperDir(rootPath)}.new`) throw new Error('tar exited with code 1')
-        await familyExtract(archive, destDir, signal)
-      }
-    })
-    const installed: Array<[string[], Partial<Record<string, string[]>>]> = []
-    mgr.onInstalled((families, programs) => installed.push([families, programs]))
     const started = await mgr.start({
       rootPath,
       manifestsDir,
       gates: ALLOW,
-      families: ['llama_cpp', 'whisper_cpp'],
-      reinstall: true,
-      reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
+      families: ['llama_cpp'],
+      update: true,
+      beforeReplace: async () => {
+        pauses++
+      }
     })
     await runToEnd(mgr, started.jobId)
     await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
-    expect(mgr.get(started.jobId).status).toBe('failed')
-    expect(installed).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
+    await engineFolderDeletesSettled()
+    expect(mgr.get(started.jobId)).toMatchObject({ status: 'failed', error: tMain('main.engine.extractFailed') })
+    expect({ pauses, heldAtUnpack }).toEqual({ pauses: 0, heldAtUnpack: [false, false] })
+    expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+    expect(markerVersion(cpuDir(rootPath))).toBe('b150')
+    expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
+    expect(existsSync(join(llamaDir(rootPath), 'cpu.new'))).toBe(false)
+    expect(existsSync(`${llamaDir(rootPath)}.new`)).toBe(false)
+    expect(installed_).toEqual([])
+    expect(engineSpawnsHeld('llama_cpp')).toBe(false)
+  })
+
+  // #1000: a cancel during the unpack ends the job before the pause, so the model never stops for it.
+  it('a cancel during an update unpack never pauses the model: no pause, no staged copy, the engine as it was (#1000)', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    const before = readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')
+    let pauses = 0
+    const reached = deferred()
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: (_archive, destDir, signal) =>
+        new Promise((_resolve, reject) => {
+          void writeFile(join(destDir, BIN_NAME), 'half').then(() => {
+            signal?.addEventListener('abort', () => reject(new Error('tar extraction cancelled')))
+            reached.resolve()
+          })
+        })
+    })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      update: true,
+      beforeReplace: async () => {
+        pauses++
+      }
+    })
+    await within(reached.promise, 'the unpack writing its first file')
+    mgr.cancel(started.jobId)
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('cancelled')
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    await engineFolderDeletesSettled()
+    expect(pauses).toBe(0)
+    expect(existsSync(`${llamaDir(rootPath)}.new`)).toBe(false)
+    expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe(before)
+    expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+  })
+
+  // #986 review: phase 3 swaps a family's cpu/ net before its main build (the net sits inside the main
+  // folder, which the main build's swap moves). #1000: a job can stop part-way only in its swaps, since
+  // every copy is staged before the first one; here the main build's swap is refused after the net's.
+  it('a job that stops part-way still reports what it replaced: the cpu/ net swapped, the main build swap refused', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
+    renameSeam.refuses = (from) => (from === `${llamaDir(rootPath)}.new` ? 'EROFS' : null)
+    try {
+      const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+      const installed_: Array<[string[], Partial<Record<string, string[]>>]> = []
+      mgr.onInstalled((families, programs) => installed_.push([families, programs]))
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
+      await runToEnd(mgr, started.jobId)
+      await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+      await engineFolderDeletesSettled()
+      expect(mgr.get(started.jobId).status).toBe('failed')
+      // The refused main build was put back as it was; the new net sits inside it.
+      expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+      expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
+      expect(markerVersion(cpuDir(rootPath))).toBe('b200')
+      expect(existsSync(`${llamaDir(rootPath)}.new`)).toBe(false)
+      // The new net is on the drive, so its consumers hear of it (its old verdict goes, #678).
+      expect(installed_).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
+      expect(engineSpawnsHeld('llama_cpp')).toBe(false)
+    } finally {
+      renameSeam.refuses = null
+    }
+  })
+
+  // #678: a reinstall can replace a family's cpu/ net alone. A job that stops after that swap still reports
+  // it: the net's old verdict goes, its fresh copy is known. #1000 flipped this row's cause by design: the
+  // voice engine's failing EXTRACTION now ends the job before any swap; its refused SWAP is what comes after.
+  it('a job that stops part-way still reports a cpu/ net it replaced alone (#678)', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    renameSeam.refuses = (from) => (from === `${whisperDir(rootPath)}.new` ? 'EROFS' : null)
+    try {
+      const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+      const installed: Array<[string[], Partial<Record<string, string[]>>]> = []
+      mgr.onInstalled((families, programs) => installed.push([families, programs]))
+      const started = await mgr.start({
+        rootPath,
+        manifestsDir,
+        gates: ALLOW,
+        families: ['llama_cpp', 'whisper_cpp'],
+        reinstall: true,
+        reinstallBuilds: { llama_cpp: { main: false, cpuNet: true } }
+      })
+      await runToEnd(mgr, started.jobId)
+      await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+      expect(mgr.get(started.jobId).status).toBe('failed')
+      expect(installed).toEqual([[['llama_cpp'], { llama_cpp: [join(cpuDir(rootPath), BIN_NAME)] }]])
+    } finally {
+      renameSeam.refuses = null
+    }
   })
 
   it('onSettled reports every outcome once — a done job and a failed one', async () => {

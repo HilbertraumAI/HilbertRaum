@@ -7,21 +7,23 @@
 // hold a file in the folder the swap is about to move. The gate covers every install, not only updates: a first
 // install or a #532 reinstall replaces the same folder.
 //
-// Module-level and session-scoped, like the verdict store (engine-load.ts). The installer holds it for
-// its swap phase (`holdEngineSpawns`); every spawn site of the family awaits `waitForEngineSpawns`
-// before it verifies and spawns. The wait is bounded by `ENGINE_SPAWN_MAX_WAIT_MS` so a wedged swap can
-// delay a spawn but never hang it. The bound is NOT the job's worst case (#986 review): one step can take
-// the extractor's 5-minute deadline plus several 12 s rename-retry budgets (the archive's move, the
-// flatten, the swap's renames, a move back, the `cpu/` carry), the hashing and the flush, and a job has up
-// to two steps per family. It does not need to be: since #986 the install folder changes only in the
-// swap's renames, so a spawn that stops waiting meets a complete copy, old or new, with two gaps (#986
-// review 3): between the swap's two renames the install folder does not exist, for up to one 12 s
-// rename-retry budget (the spawn finds no program and reports the engine missing, as with no engine); and
-// between the main build's swap and its carry the new copy has no `cpu/` net for a moment. What a spawn let through
-// early can do is run the old copy, which the swap then moves to `.old`, where Windows cannot delete it
-// while it runs; the next swap or start deletes it.
+// Module-level and session-scoped, like the verdict store (engine-load.ts). The installer holds it from
+// the pause to its last swap (`holdEngineSpawns`); every spawn site of the family awaits
+// `waitForEngineSpawns` before it verifies and spawns. The wait is bounded by `ENGINE_SPAWN_MAX_WAIT_MS`
+// so a wedged swap can delay a spawn but never hang it. Since #1000 the bound is a real one: every copy
+// is unpacked, checked, hashed and flushed in its staging folder BEFORE the gate is taken, so what runs
+// under the gate is the pause (`beforeReplace`) and, per step, a stale `.old`'s delete, the swap's two
+// renames, a move back and the `cpu/` carry: a few 12 s retry budgets per step at the very worst, and a
+// job has up to two steps per family. (It used to hold the gate through the extraction too, up to the
+// extractor's 5-minute deadline per step, so a job could outlast the bound.) A spawn that stops waiting
+// still meets a complete copy, old or new, with two gaps (#986 review 3): between the swap's two renames
+// the install folder does not exist, for up to one 12 s rename-retry budget (the spawn finds no program
+// and reports the engine missing, as with no engine); and between the main build's swap and its carry the
+// new copy has no `cpu/` net for a moment. What a spawn let through early can do is run the old copy,
+// which the swap then moves to `.old`, where Windows cannot delete it while it runs; the next swap or start
+// deletes it.
 
-/** Longest a spawn waits for a swap: the extractor's 5-minute deadline plus a margin (enough: see above). */
+/** Longest a spawn waits for a swap: 6 minutes, far above the gate's worst case since #1000 (see above). */
 export const ENGINE_SPAWN_MAX_WAIT_MS = 6 * 60 * 1000
 
 const held = new Map<string, { done: Promise<void>; release: () => void }>()

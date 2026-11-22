@@ -9,6 +9,7 @@ const seams = vi.hoisted(() => ({
   renameRefuses: null as ((from: string, to: string) => string | null) | null,
   renameSyncRefuses: null as ((from: string, to: string) => string | null) | null,
   rmRefuses: null as ((path: string) => boolean) | null,
+  rmWaits: null as ((path: string) => Promise<void> | null) | null,
   onRename: null as ((from: string, to: string) => void) | null
 }))
 const errno = (code: string): NodeJS.ErrnoException =>
@@ -25,6 +26,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     },
     rm: async (...args: Parameters<typeof orig.rm>) => {
       if (seams.rmRefuses?.(String(args[0]))) throw errno('EBUSY')
+      const wait = seams.rmWaits?.(String(args[0]))
+      if (wait) await wait
       return orig.rm(...args)
     }
   }
@@ -75,11 +78,13 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 import { fingerprintTree } from '../helpers/read-only-witness'
 import { initBinaryVerification, verifyBinaryBeforeSpawn } from '../../src/main/services/binary-verifier'
 import { verifierInert } from '../helpers/binary-fixtures'
+import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
 afterEach(() => {
   seams.renameRefuses = null
   seams.renameSyncRefuses = null
   seams.rmRefuses = null
+  seams.rmWaits = null
   seams.onRename = null
 })
 
@@ -530,6 +535,133 @@ describe('the staged swap in an engine job (#986)', () => {
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...update })
     expect((await settle(mgr, started.jobId)).status).toBe('done')
     expect(atFirstRename).toEqual(['engine b200|b200'])
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  // #1000: the spawn gate covers exactly what it protects, the renames. It used to be held from before the
+  // unpack, so a wedged tar or a slow stick held every spawn of the family for as long.
+  it('the gate is held from the pause to the last swap only: open while the copies unpack, closed at every rename', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b150')
+    net(netDir(rootPath), 'b150')
+    const seen: string[] = []
+    const held = (): string => (engineSpawnsHeld('llama_cpp') ? 'held' : 'open')
+    const extract: ExtractFn = async (archive, destDir, signal) => {
+      seen.push(`unpack ${held()}`)
+      await newEngine(archive, destDir, signal)
+    }
+    seams.onRename = (from) => {
+      // The swaps' renames and the carry, never the archives' moves into the staging folders.
+      if (!from.endsWith('.zip')) seen.push(`rename ${held()}`)
+    }
+    const mgr = manager({ extract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      ...update,
+      beforeReplace: async () => {
+        seen.push(`pause ${held()}`)
+      }
+    })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
+    seen.push(`after ${held()}`)
+    // Two unpacks, the pause, the net's two renames, the main build's two renames and its carry.
+    expect(seen).toEqual([
+      'unpack open',
+      'unpack open',
+      'pause held',
+      'rename held',
+      'rename held',
+      'rename held',
+      'rename held',
+      'rename held',
+      'after open'
+    ])
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  // #998 round 1: a job whose main build cannot be unpacked leaves its family as it was, and the net it already
+  // staged (`<os>/cpu.new`, whole and marked) is deleted in the background. Before round 1 the next job's
+  // recovery ran before those deletes: over a broken net it moved that copy in, without the gate or the
+  // pause, while its delete still waited in the queue. Now a job waits for the queued deletes first, and a
+  // copy that is not swapped in loses its marker at once.
+  const reinstallBoth = {
+    families: ['llama_cpp' as const],
+    reinstall: true as const,
+    reinstallBuilds: { llama_cpp: { main: true, cpuNet: true } }
+  }
+  /** A manager whose main-build unpack fails while `failMain.on`, logging to `logs`. */
+  function failingMainManager(failMain: { on: boolean }, logs: string[], root: string): EngineDownloadManager {
+    const fetchImpl = (async () =>
+      new Response(new Uint8Array(BODY), { status: 200, headers: { 'content-length': String(BODY.length) } })) as unknown as FetchFn
+    return new EngineDownloadManager({
+      fetchImpl,
+      log: (m) => logs.push(m),
+      extractImpl: async (archive, destDir, signal) => {
+        if (failMain.on && destDir === `${liveDir(root)}.new`) throw new Error('tar exited with code 1')
+        await newEngine(archive, destDir, signal)
+      }
+    })
+  }
+
+  it('a job waits for the deletes an earlier job queued before its own recovery runs (#998 round 1)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    net(netDir(rootPath), 'b150', { exe: false }) // a broken net: the reason for the reinstall
+    const stagedNet = join(liveDir(rootPath), 'cpu.new')
+    let release: () => void = () => undefined
+    const held = new Promise<void>((r) => (release = r))
+    seams.rmWaits = (p) => (p === stagedNet ? held : null)
+    const failMain = { on: true }
+    const logs: string[] = []
+    const mgr = failingMainManager(failMain, logs, rootPath)
+    const first = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...reinstallBoth })
+    expect((await runToEnd(mgr, first.jobId)).status).toBe('failed')
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    // The staged net's delete is still in the queue; the retry starts now.
+    failMain.on = false
+    const second = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...reinstallBoth })
+    expect(logs.filter((m) => m.startsWith('Engine swap recovery'))).toEqual([])
+    release()
+    expect((await settle(mgr, second.jobId)).status).toBe('done')
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
+  })
+
+  it('a staged copy that is not swapped in is un-marked at once: a refused delete leaves no copy to roll in (#998 round 1)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    net(netDir(rootPath), 'b150', { exe: false })
+    const stagedNet = join(liveDir(rootPath), 'cpu.new')
+    seams.rmRefuses = (p) => p === stagedNet || p === runtimeMarkerPath(stagedNet)
+    const mgr = failingMainManager({ on: true }, [], rootPath)
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, ...reinstallBoth })
+    expect((await settle(mgr, started.jobId)).status).toBe('failed')
+    // The delete was refused: the copy is still there, but no longer marked.
+    expect(summary(stagedNet)).toBe('net b200|-')
+    seams.rmRefuses = null
+    await recover(rootPath, manifestsDir)
+    // So nothing completes the swap the job decided against: the broken net stays for the next repair.
+    expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: '-|b150', ...NOTHING_LEFT })
+  })
+
+  // #1000: every step's leftovers are judged before any step stages. A reinstall of both builds over a net
+  // whose program is gone (#678's "re-fetched all the same") stages its new net in `<os>/cpu.new` first; judged
+  // after that, the main build's guard took the job's own staged net for a leftover and stopped the job.
+  it('a reinstall of both builds over an incomplete cpu/ net: the net the job staged is never taken for a leftover (#1000)', async () => {
+    const { rootPath, manifestsDir } = makeDrive()
+    copy(liveDir(rootPath), 'b200')
+    net(netDir(rootPath), 'b150', { exe: false })
+    const mgr = manager()
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      reinstall: true,
+      reinstallBuilds: { llama_cpp: { main: true, cpuNet: true } }
+    })
+    expect((await settle(mgr, started.jobId)).status).toBe('done')
     expect(layout(rootPath)).toEqual({ live: 'engine b200|b200', net: 'net b200|b200', ...NOTHING_LEFT })
   })
 
