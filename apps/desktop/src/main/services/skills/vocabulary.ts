@@ -1180,42 +1180,104 @@ export function isSmallTalkReply(question: string): boolean {
   return tokens.every((t) => SMALL_TALK_WORDS.has(t)) && tokens.some((t) => SMALL_TALK_SOCIAL_WORDS.has(t))
 }
 
+/**
+ * #997 (follow-ups wave 7, G-1): a routing word as a WORD, not as letters inside another word. A bare substring
+ * entry vetoed a lookup for "preview", "reviewer", "listed", "blister", "registration", "analyst", «Briefkasten»,
+ * «gelistet» and «durchgehend», and for the plain words "rent review", "brief answer", "overall rent". Each pattern
+ * keeps every real hit the substring had (review/reviews/reviewed/reviewing, «Checkliste», «Vertragsanalyse» through
+ * the separate 'analyse' entry, ...).
+ *
+ * `isNeedleShaped` stays MONOTONE: a pattern only narrows a VETO entry, so a question can gain the lookup route and
+ * never lose one (the needle substrings `when is`, `where is`, ... are untouched). `isReportShaped` narrows ON
+ * PURPOSE, for exactly the questions that became lookups: the in-word hits above, "rent review" and "review
+ * period/date/clause/...", "brief answer", "overall rent/cost/...", "debrief" without «de» as a verb (see `brief`) and
+ * "minutes" as a duration. Real report requests keep their verdict. Linear: no nested quantifier.
+ * The patterns are built by `routingWord` and collected in `RW`; `shapeMatches` reads them next to the plain strings.
+ */
+type ShapeEntry = string | RegExp
+const shapeMatches = (q: string, s: ShapeEntry): boolean => (typeof s === 'string' ? q.includes(s) : s.test(q))
+const WORD_START = '(?<![\\p{L}\\p{N}])'
+const WORD_END = '(?![\\p{L}\\p{N}])'
+const routingWord = (pattern: string): RegExp => new RegExp(pattern, 'u')
+const RW = {
+  // «Liste»/«Listen» at a word end (also «Checkliste», «Belegliste», «Fristenlisten»). Not "listed", "listener",
+  // "blister", «gelistet», «Listenpreis», and not "glisten": a "g" blocks only when it STARTS the word, so
+  // «Belegliste» and «Zugliste» (a "g" inside a compound) stay list words. English "listen" stays too: it is also the
+  // German plural.
+  // «Listenform»/«Listenformat» ("Bitte in Listenform") is a list ask too.
+  liste: routingWord(`(?<!(?:^|[^\\p{L}\\p{N}])g)listen?(?:form(?:at)?)?${WORD_END}`),
+  // review(s/ed/ing) as a word. The lease terms are lookups, not a request to review the document: "rent review"
+  // ("rent-review"), and the NOUN "the/a/next/... review period/date/clause/mechanism/notice" (plural too). The verb
+  // keeps its verdict: "Review clause 7", "review notice provisions" (no determiner before it) stay report words.
+  review: routingWord(
+    `${WORD_START}(?<!(?<![\\p{L}\\p{N}])rent[\\s-]+)(?:(?<!(?:the|a|an|next|this|that|each|any|annual|first|second) )|` +
+      `(?!reviews? (?:dates?|periods?|clauses?(?! by)|mechanisms?|notices?)${WORD_END}))review(?:s|ed|ing)?${WORD_END}`
+  ),
+  // brief(s/ed/ing/ly) as a word; «de» may precede it ("Debrief me on this call" is a report; "When is the debrief?"
+  // stays vetoed as on master). Not «Kündigungsbrief» / «Briefkasten»; not "brief answer/reply/response" (#997).
+  // "briefing(s)" also as the END of a compound («Vorstandsbriefing», «Kurzbriefing»). German «briefen» (a verb, and
+  // the plural of «Brief») stays unmatched: not covered.
+  brief: routingWord(
+    `(?:${WORD_START}(?:de)?brief(?:s|ed|ly)?|briefings?)${WORD_END}(?! (?:answer|reply|response)${WORD_END})`
+  ),
+  // "overall picture/assessment" stays; "overall rent/cost/liability cap/..." is an amount lookup (#997), unless a
+  // synthesis noun follows ("overall cost picture/assessment/structure" is a report).
+  overall: routingWord(
+    `${WORD_START}overall${WORD_END}(?! (?:rent|cost|costs|price|amount|liability|cap|total|sum|fee|fees|budget|limit)${WORD_END}` +
+      `(?! (?:picture|assessment|situation|structure|position|profile|impact|exposure)))`
+  ),
+  gist: routingWord(`${WORD_START}gists?${WORD_END}`), // not "register", "logistics"
+  analy: routingWord(`${WORD_START}(?:re)?analy(?!st)`), // analyse/analysis/analyze/reanalyze, not "analyst"
+  recap: routingWord(`${WORD_START}recap(?!t|ital)`), // recap(s/ped), recapitulate; not "recapture"
+  theWhole: routingWord(`${WORD_START}the whole${WORD_END}`), // not "the wholesale"
+  inShort: routingWord(`${WORD_START}in short${WORD_END}`), // not "in shortage"
+  durchgehen: routingWord(`durchgehen${WORD_END}`), // not «durchgehend» ("continuously")
+  // "minutes" of a meeting, not a DURATION: not after a 1-3 digit number not preceded by a digit ("30 minutes"; a
+  // 4-digit year, a quarter ("Q3 minutes") or a date ("2024-03-12 minutes") stays a report word), or "how many"
+  // ("in 10 minutes" is a duration through the digits). A bare "in minutes" stays a report word: "Put this in
+  // minutes" is a Meeting Minutes request (#939's guard); "When is the call, in minutes?" keeps master's verdict (#997).
+  minutes: routingWord(
+    `${WORD_START}(?<!(?<![\\p{L}\\p{N}./-])\\d{1,3}\\s?)(?<!how many )minutes${WORD_END}`
+  )
+} as const
+
 /** Whole-document REPORT verbs/phrases (EN+DE): a "process the whole document into the skill's report" ask
  *  (summary, minutes, brief, compare, review, synthesis). With the list-all shapes below they VETO the needle
  *  classification — a deliverable is never downgraded to top-k. #939: alone they also keep a report request
  *  that carries a list word ("Summarize all the decisions", «Erstelle das Protokoll mit allen Beschlüssen»)
- *  on the map prompt as it was (`isReportShaped`). Substring-matched (German compounds included). */
-const REPORT_SHAPES: string[] = [
-  'summar', 'brief', 'overview', 'recap', 'minutes', 'walk me through', 'key point', 'main point',
+ *  on the map prompt as it was (`isReportShaped`). Substring-matched (German compounds included), except the
+ *  entries that are `RW` word patterns (#997, above): those must not match inside another word. */
+const REPORT_SHAPES: ShapeEntry[] = [
+  'summar', RW.brief, 'overview', RW.recap, RW.minutes, 'walk me through', 'key point', 'main point',
   'what changed', 'what has changed', 'compare',
-  'review', 'gist', 'rundown', 'breakdown', 'analy', 'tl;dr', 'the whole', 'entire document',
+  RW.review, RW.gist, 'rundown', 'breakdown', RW.analy, 'tl;dr', RW.theWhole, 'entire document',
   // Whole-document SYNTHESIS nouns that commonly head a "what is the …" ask (which would otherwise trip
   // the `what is the` needle stem). Vetoing them keeps a summary/gist ask on the whole-doc engine — a
   // FALSE deliverable (a truncated whole read, honest via W1's notice) is safer than a false needle (a
   // summary answered from ~5 top-k passages, the exact incident the A3 inversion exists to kill).
   'takeaway', 'bottom line', 'conclusion', 'upshot', 'big picture', 'main idea', 'in a nutshell',
-  'in short', 'purpose of', 'point of the', 'point of this', 'message of', 'about this document',
+  RW.inShort, 'purpose of', 'point of the', 'point of this', 'message of', 'about this document',
   'what is it about', 'what is this about',
   // SKA-19 (W7, audit §3.3) — more whole-document SYNTHESIS heads that trip the `what is the …` needle stem:
   // "what is the most important point?", "what is the verdict?", "what is the overall picture?" (EN) +
   // "was ist das Wichtigste/die Schlussfolgerung?" (DE). Vetoing them keeps a synthesis ask on the whole-doc
   // engine (a false deliverable is safer than a false needle — the module's own rule).
-  'important point', 'key insight', 'verdict', 'overall',
+  'important point', 'key insight', 'verdict', RW.overall,
   'zusammenfass', 'überblick', 'protokoll',
-  'was hat sich geändert', 'vergleich', 'überprüf', 'durchgehen', 'wesentlich', 'analyse', 'ganze dokument',
+  'was hat sich geändert', 'vergleich', 'überprüf', RW.durchgehen, 'wesentlich', 'analyse', 'ganze dokument',
   'fazit', 'kernaussage', 'kernpunkt', 'quintessenz', 'gesamteindruck', 'inhalt', 'worum geht',
   'wichtigste', 'schlussfolgerung', 'erkenntnis', 'gesamtbild'
 ]
 
 /** Whole-document LIST-ALL deliverables (EN+DE): "list every …", "all the …", «sämtliche …», «Liste …». A
  *  deliverable for the needle veto (a list is never a single fact), but no report: #939 takes list notes for them.
- *  «liste» is a bare substring as on master: it also matches inside "listen", "listed", "blister" and the German
- *  plural «Listen», which cannot be told apart from it (a pre-existing false veto, recorded in known-limitations).
+ *  «liste» is `RW.liste` (#997): the German noun «Liste(n)» as a word or the END of a compound, not "listed",
+ *  "blister" or «gelistet». English "listen" stays a list word: it is spelled like the German plural.
  *  "all the" is the word-bounded `DELIVERABLE_SHAPE_RES` entry below (master matched it inside "shall the"). */
-const LIST_ALL_SHAPES: string[] = ['list all', 'list every', 'everything', 'sämtliche', 'liste', 'auflisten']
+const LIST_ALL_SHAPES: ShapeEntry[] = ['list all', 'list every', 'everything', 'sämtliche', RW.liste, 'auflisten']
 
 /** Every deliverable shape the needle veto reads: the report shapes and the list-all shapes. */
-const DELIVERABLE_SHAPES: readonly string[] = [...REPORT_SHAPES, ...LIST_ALL_SHAPES]
+const DELIVERABLE_SHAPES: readonly ShapeEntry[] = [...REPORT_SHAPES, ...LIST_ALL_SHAPES]
 
 // SKA-45 (W7, audit §3.4) — the deliverable shapes that must be WORD-anchored, not the old dead
 // trailing-space substrings. 'alle ' could never veto a needle when 'alle' ended the question ("sind das
@@ -1308,7 +1370,7 @@ const NEW_NEEDLE_SHAPE_RES: readonly RegExp[] = [
 export function isNeedleShaped(question: string): boolean {
   const q = question.toLowerCase()
   if (isMentionChip(question)) return false
-  if (DELIVERABLE_SHAPES.some((s) => q.includes(s)) || DELIVERABLE_SHAPE_RES.some((re) => re.test(q)))
+  if (DELIVERABLE_SHAPES.some((s) => shapeMatches(q, s)) || DELIVERABLE_SHAPE_RES.some((re) => re.test(q)))
     return false
   if (NEEDLE_SHAPES.some((s) => q.includes(s)) || NEEDLE_SHAPE_RES.some((re) => re.test(q))) return true
   return NEW_NEEDLE_SHAPE_RES.some((re) => re.test(q)) && !NEW_NEEDLE_VETO_RES.some((re) => re.test(q))
@@ -1323,5 +1385,5 @@ export function isNeedleShaped(question: string): boolean {
  */
 export function isReportShaped(question: string): boolean {
   const q = question.toLowerCase()
-  return REPORT_SHAPES.some((s) => q.includes(s)) || isSummarizeChip(question)
+  return REPORT_SHAPES.some((s) => shapeMatches(q, s)) || isSummarizeChip(question)
 }
