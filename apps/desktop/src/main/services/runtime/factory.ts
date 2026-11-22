@@ -318,10 +318,11 @@ export interface RuntimeSelectionDeps {
    */
   onEngineCannotRun?: (opts: RuntimeStartOptions, problem: EngineProblem) => void
   /**
-   * #1012 code review round 3: fired once when every rung that ran ended because the pre-spawn check
-   * could not read one of the engine's files just now (`EngineFilesUnreadableError` — an antivirus scan
-   * holding it, say). Nothing is blamed, persisted or latched; the walk ends on the rung-4 mock, and the
-   * caller tells the user to try again in a minute. The next start walks the whole ladder again.
+   * #1012 code review rounds 3–4: fired once when the pre-spawn check could not read one of the engine's
+   * files just now (`EngineFilesUnreadableError` — an antivirus scan holding it, say) on a rung, and no
+   * other rung failed in a way that is evidence (a failed MTP rung 1a, a bind race or an engine refusal
+   * is none). Nothing is blamed, persisted or latched; the walk ends on the rung-4 mock, and the caller
+   * tells the user to try again in a minute. The next start walks the whole ladder again.
    */
   onEngineFilesUnreadable?: (opts: RuntimeStartOptions) => void
   /** Test seam: override the prefetch reader (default {@link startModelPrefetch}). */
@@ -424,11 +425,17 @@ class LadderRuntime implements ModelRuntime {
 
   async start(): Promise<void> {
     let lastError: unknown = null
-    // #1012 code review round 3: the last failure that IS evidence — a rung that could not read its
-    // engine files proved nothing, so a real failure on an earlier rung still decides the reason and the
-    // blame. `sawUnreadable`: some rung ended that way.
+    // #1012 code review round 3: the last failure that is not `unreadable` — a rung that could not read its
+    // engine files proved nothing, so it never decides the reason.
     let lastEvidence: unknown = null
+    // #1012 code review round 4 — one rule: a walk in which ANY rung was skipped as `unreadable` latches
+    // nothing (no model latch, no persisted GPU failure, no MTP latch) and only reports. `sawEvidence`: a
+    // non-speculative rung failed in a way that says something about the model or the device (not a bind
+    // race, not an engine refusal) — it picks the model notice over the files-unreadable one.
     let sawUnreadable = false
+    let sawEvidence = false
+    /** This walk's rung 1a latched MTP off — taken back if a later rung turns out unreadable. */
+    let speculativeLatched = false
     // #312: a rung-1 failure is only a DEVICE verdict once the forced-CPU rungs have had
     // their say, so it is held here instead of persisted on the spot. The forced-CPU rungs
     // are the control probe: one of them starting proves the model loads on this machine
@@ -573,9 +580,11 @@ class LadderRuntime implements ModelRuntime {
         // or latched; the next rung (or the next start) reads the files again.
         if (isEngineFilesUnreadableError(err)) {
           sawUnreadable = true
-          // Code review round 3: on the processor control rung this leaves a held GPU failure with no
-          // control evidence (#312), so it is dropped, never persisted as the device's on that basis.
-          if (!rung.gpuAttempt && pendingGpuFailure !== null && cpuSignature === null) pendingGpuFailure = null
+          // Round 4: this walk latches nothing, so an MTP latch its rung 1a set is taken back.
+          if (speculativeLatched) {
+            speculativeSuppressed.delete(this.opts.modelId)
+            speculativeLatched = false
+          }
           continue
         }
         const reason = err instanceof Error ? err.message : String(err)
@@ -584,10 +593,16 @@ class LadderRuntime implements ModelRuntime {
         // unsupported flag on an older runtime would otherwise exile the machine to CPU),
         // but do latch the model off so later starts skip the doomed multi-GB load attempt.
         if (rung.speculative) {
-          suppressSpeculative(this.opts.modelId)
+          if (!sawUnreadable) {
+            suppressSpeculative(this.opts.modelId)
+            speculativeLatched = true
+          }
           this.deps.onSpeculative?.(this.opts, 'failed', reason)
           continue
         }
+        // Round 4: what decides between the model notice and the files-unreadable one (a bind race is
+        // no evidence, nor is the engine refusal handled above).
+        if (!isBindRaceError(reason)) sawEvidence = true
         if (rung.gpuAttempt) {
           // REL-1: a port-bind race is a transient TOCTOU collision, NOT a GPU/device fault
           // (LlamaServer already retried once on a fresh port). Don't auto-disable GPU for the
@@ -643,11 +658,13 @@ class LadderRuntime implements ModelRuntime {
       // #312: this rung is accepted, and it is a forced-CPU one — the control probe says the
       // model loads on this machine, so the held rung-1 failure WAS the device's. Persist it
       // now (today's behaviour, one rung later) so later starts skip the GPU health timeout.
-      // After the CODE-2 check above on purpose: a cancelled walk still blames nothing.
-      if (!rung.gpuAttempt && pendingGpuFailure) {
+      // After the CODE-2 check above on purpose: a cancelled walk still blames nothing. #1012 round 4:
+      // nor does a walk with a rung skipped as `unreadable` (a control rung that could not read its
+      // files proved nothing about the card).
+      if (!rung.gpuAttempt && pendingGpuFailure && !sawUnreadable) {
         this.deps.gpu.onGpuFailure?.(pendingGpuFailure.reason)
-        pendingGpuFailure = null
       }
+      pendingGpuFailure = null
 
       this.inner = runtime
       /** #653: why a GPU label came from this start's own log rather than the probe (onSelect). */
@@ -778,12 +795,14 @@ class LadderRuntime implements ModelRuntime {
       await this.fallBackToMock(`the AI engine cannot run on this computer: ${engineFailure.message}`)
       return
     }
-    // #1012 code review round 3: every rung that ran could not read the engine's files just now — nothing
-    // is known about the GPU, the model or the engine. The user is told (no silent demo runtime), and as
-    // nothing is latched, the next start (a re-select) walks the whole ladder again.
-    if (sawUnreadable && lastEvidence === null) {
-      this.deps.onEngineFilesUnreadable?.(this.opts)
-      await this.fallBackToMock(`the AI engine's files could not be read just now: ${reason}`)
+    // #1012 code review rounds 3–4: a rung of this walk could not read the engine's files just now, so the
+    // walk latches nothing — no model latch, no persisted GPU failure (no MTP latch either, above) — and the
+    // next start (a re-select) walks the whole ladder again. It only reports: the model notice when another
+    // rung failed in a way that is evidence, else the files-unreadable notice (no silent demo runtime).
+    if (sawUnreadable) {
+      if (sawEvidence) this.deps.onModelLoadFailure?.(this.opts, reason)
+      else this.deps.onEngineFilesUnreadable?.(this.opts)
+      await this.fallBackToMock(`a start attempt could not read the AI engine's files just now: ${reason}`)
       return
     }
     if (pendingGpuFailure) {

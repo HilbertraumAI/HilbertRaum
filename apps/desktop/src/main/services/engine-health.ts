@@ -3,7 +3,7 @@ import { engineChildEnv } from './runtime/engine-env'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { EngineProblemFamily } from '../../shared/types'
 import type { AppContext } from './context'
-import { verifyBinaryBeforeSpawn } from './binary-verifier'
+import { isMissingFilesVerdict, verifyBinaryBeforeSpawn, type BinaryVerifyResult } from './binary-verifier'
 import { rewriteEngineFailureRows, rewriteSearchModelFailureRows } from './ingestion/engine-failure'
 import { log } from './logging'
 import {
@@ -93,7 +93,7 @@ export type LoadCheck = 'loads' | 'refused' | 'unchecked'
 
 export interface LoadCheckDeps {
   spawn?: SpawnFn
-  verify?: (binPath: string) => Promise<'verified' | 'mismatch' | string>
+  verify?: (binPath: string) => Promise<BinaryVerifyResult>
   timeoutMs?: number
   platform?: NodeJS.Platform
   systemDllExists?: (dll: string) => boolean
@@ -120,7 +120,7 @@ export async function checkProgramLoads(
 ): Promise<LoadCheck> {
   const verify = deps.verify ?? verifyBinaryBeforeSpawn
   await waitForEngineSpawns(family) // #516: never check a program an install is replacing
-  let verdict: string
+  let verdict: BinaryVerifyResult
   try {
     verdict = await verify(binPath)
   } catch {
@@ -130,7 +130,7 @@ export async function checkProgramLoads(
   if (verdict === 'mismatch' || verdict === 'unreadable') return 'unchecked'
   // #1012: a file of the copy is still gone — still refused, and the verdict stands (a run of the
   // program could start fine without it and drop the "Install again" offer).
-  if (verdict === 'missing' || verdict === 'missing-other') {
+  if (isMissingFilesVerdict(verdict)) {
     reportMissingEngineFiles(family, binPath, deps.platform)
     return 'refused'
   }

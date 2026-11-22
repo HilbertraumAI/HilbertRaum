@@ -117,6 +117,8 @@ describe('localizeServerCopy (D-L4)', () => {
       'main.ingest.voiceEngineCannotRun',
       // #869: the speech model's file name cannot be read by the voice engine on Windows — path-free.
       'main.ingest.voiceModelPathUnsupported',
+      // #1012: an engine file could not be read just now (an audio import's row) — the notice's own text.
+      'main.engine.filesUnreadable',
       // #634: the search model timed out, could not start, or failed — canonical, path-free.
       'main.ingest.searchModelTimeout',
       'main.ingest.searchModelCannotStart',

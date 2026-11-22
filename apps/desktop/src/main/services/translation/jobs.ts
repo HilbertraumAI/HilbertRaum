@@ -12,6 +12,7 @@ import { log } from '../logging'
 import { isCleanStop } from './completion'
 import type { CompletionFinal } from './completion'
 import { isRequestTimeoutError, isTranslationStartError } from './runtime'
+import { isEngineFilesUnreadableError } from '../runtime/engine-load'
 import type { Translator } from './index'
 
 // Translate-view job orchestration (TG wave, plan §2 D6). The Translate screen's live TEXT
@@ -215,10 +216,12 @@ export class TranslateJobService {
         let engineCannotRun = false
         /** #913: the latched start failure was the start check finding the model's file damaged. */
         let modelDamaged = false
+        /** #1012: the engine's files could not be read just now — the job stops, no retry. */
+        let filesUnreadable = false
         let timedOutSlow = false
         for (
           let attempt = 1;
-          attempt <= 2 && !clean && !limitStop && !startFailed && !timedOutSlow;
+          attempt <= 2 && !clean && !limitStop && !startFailed && !timedOutSlow && !filesUnreadable;
           attempt++
         ) {
           // Roll back a prior failed attempt's streamed deltas. patch-level, so the cancelled
@@ -271,6 +274,14 @@ export class TranslateJobService {
               modelDamaged = err.modelDamaged
               break
             }
+            // #1012 code review round 4: an engine file could not be read just now (the runtime latches
+            // nothing, so it rethrows it raw). Every window would fail alike until the lock clears: stop the
+            // job with its own "try again in a minute" code — no retry, no generic runtime failure.
+            if (isEngineFilesUnreadableError(err)) {
+              log.warn('Translate view start failed: an engine file could not be read', { jobId, window: i + 1 })
+              filesUnreadable = true
+              break
+            }
             // #160 (BE-2): a per-request TIMEOUT during a LIVE decode (tokens flowed) is as
             // deterministic as a limit stop — temperature-0 on the same hardware reproduces the
             // same too-slow decode, so a retry burns another full timeout for the same outcome.
@@ -294,6 +305,10 @@ export class TranslateJobService {
         }
         if (startFailed) {
           this.fail(jobId, engineCannotRun ? 'engineCannotRun' : modelDamaged ? 'modelDamaged' : 'startFailed', emit)
+          return
+        }
+        if (filesUnreadable) {
+          this.fail(jobId, 'filesUnreadable', emit)
           return
         }
         if (!clean) {

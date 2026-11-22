@@ -10,6 +10,7 @@ import { getDocument } from '../../ingestion'
 import { isAbortError } from '../../chat'
 import { log } from '../../logging'
 import { isCleanStop, isRequestTimeoutError, isTranslationStartError } from '../../translation'
+import { isEngineFilesUnreadableError } from '../../runtime/engine-load'
 import type { CompletionFinal, Translator } from '../../translation'
 import type { TranslationSourceLang, TranslationTargetLang } from '../../../../shared/types'
 import {
@@ -115,6 +116,13 @@ async function translateWithRetry(
                 : 'main.translation.startFailed'
           )
         )
+      }
+      // #1012 code review round 4: an engine file could not be read just now (the runtime latches nothing
+      // and rethrows it raw). Every window would fail alike until the lock clears, so the WHOLE task stops
+      // with the friendly "try again in a minute" copy — no retry, no marked windows, no generic failure.
+      if (isEngineFilesUnreadableError(err)) {
+        log.warn('Translation sidecar start failed: an engine file could not be read')
+        throw new Error(tMain('main.engine.filesUnreadable'))
       }
       // #160 (BE-2): a per-request TIMEOUT during a LIVE decode (tokens flowed) is as
       // deterministic as a limit stop — temperature-0 on the same hardware reproduces the same

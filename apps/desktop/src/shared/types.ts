@@ -1683,6 +1683,8 @@ export type TranslateErrorCode =
   | 'cancelled'
   | 'tooLong'
   | 'modelDamaged'
+  /** #1012: an engine file could not be read just now (an antivirus scan holding it) — try again in a minute. */
+  | 'filesUnreadable'
 
 /**
  * #160 (BE-3): upper bound on the view-translate paste, in characters. Planning (regex split +

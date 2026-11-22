@@ -2572,7 +2572,7 @@ export const tr: UiCatalog<'tr'> = {
     'Yapay zekâ motoru bu bilgisayarda çalışamıyor. Neyin eksik olduğu Yapay zekâ modeli ' +
     'ekranında gösteriliyor.',
   'main.engine.filesUnreadable':
-    'Yapay zekâ motoru başlatılamadı, çünkü başka bir program dosyalarından birini kullanıyor (örneğin bir virüs taraması). Bir dakika sonra yeniden deneyin.',
+    'Yapay zekâ motoru şu anda dosyalarından birini okuyamadı. Başka bir program onu kullanıyor olabilir (örneğin bir virüs taraması). Bir dakika sonra yeniden deneyin.',
   'main.noModelRunning':
     'Çalışan bir yapay zekâ modeli yok. Yapay zekâ modeli ekranını açıp önce bir model başlatın.',
   'main.modelStarting': 'Yapay zekâ modeli başlatılıyor. Birazdan yeniden deneyin.',

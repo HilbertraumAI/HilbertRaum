@@ -2,7 +2,7 @@ import { t } from '../../../../shared/i18n'
 import type { TranscriberMissing } from '../../../../shared/types'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../transcriber/cli'
-import { isEngineCannotRunError } from '../../runtime/engine-load'
+import { isEngineCannotRunError, isEngineFilesUnreadableError } from '../../runtime/engine-load'
 import { isWhisperPathError } from '../../transcriber/argv'
 import { log } from '../../logging'
 import { approxTokenCount, windowByTokens, CHUNK_DEFAULTS } from '../chunker'
@@ -84,6 +84,10 @@ export const AUDIO_ENGINE_CANNOT_RUN_MESSAGE = t('en', 'main.ingest.voiceEngineC
 /** #869: the speech model's path has no spelling the voice engine reads on this Windows command
  *  line — a folder or file name below `models/` outside ASCII (persist-canonical, display-mapped). */
 export const AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE = t('en', 'main.ingest.voiceModelPathUnsupported')
+
+/** #1012: a file of the voice engine could not be read just now — the engines' own notice text
+ *  (persist-canonical, display-mapped). */
+export const AUDIO_ENGINE_FILES_UNREADABLE_MESSAGE = t('en', 'main.engine.filesUnreadable')
 
 /** Packing target per ExtractedSegment in APPROX-TOKENS (~a paragraph / ~70 s of speech — the
  * citation granularity). For ordinary space-separated prose a token ≈ a word (every word ≤ 16
@@ -221,6 +225,8 @@ export const AudioParser: DocumentParser = {
       }
       // #530: the OS refused to start the voice engine — "re-index to try again" would not help.
       if (isEngineCannotRunError(err)) throw new Error(AUDIO_ENGINE_CANNOT_RUN_MESSAGE)
+      // #1012 code review round 4: a file of the voice engine could not be read just now — "try again in a minute".
+      if (isEngineFilesUnreadableError(err)) throw new Error(AUDIO_ENGINE_FILES_UNREADABLE_MESSAGE)
       // #869: refused before it started — moving the model to an ASCII path fixes it, a re-index alone would not.
       if (isWhisperPathError(err)) throw new Error(AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE)
       throw new Error(AUDIO_TRANSCRIPTION_FAILED_MESSAGE)

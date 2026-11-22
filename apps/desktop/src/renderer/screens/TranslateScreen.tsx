@@ -65,6 +65,8 @@ const ERR_KEY: Partial<Record<ClientTranslateError, MessageKey>> = {
   engineCannotRun: 'translate.err.engineCannotRun',
   // #913: a check found the model's file damaged — download it again, not a memory problem either.
   modelDamaged: 'translate.err.modelDamaged',
+  // #1012: an engine file could not be read just now — try again in a minute (the engines' own notice).
+  filesUnreadable: 'main.engine.filesUnreadable',
   empty: 'translate.err.empty',
   sameLang: 'translate.err.sameLang',
   tooLong: 'translate.err.tooLong'

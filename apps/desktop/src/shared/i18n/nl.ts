@@ -2680,7 +2680,7 @@ export const nl: UiCatalog<'nl'> = {
     'De AI-engine kan op deze computer niet draaien. Op het scherm AI-model staat wat er ' +
     'ontbreekt.',
   'main.engine.filesUnreadable':
-    'De AI-engine kon niet starten omdat een ander programma een van zijn bestanden gebruikt (bijvoorbeeld een virusscan). Probeer het over een minuut opnieuw.',
+    'De AI-engine kon een van zijn bestanden op dit moment niet lezen. Misschien gebruikt een ander programma het (bijvoorbeeld een virusscan). Probeer het over een minuut opnieuw.',
   'main.noModelRunning':
     'Er draait geen AI-model. Ga naar het scherm AI-model en start eerst een model.',
   'main.modelStarting': 'Het AI-model wordt gestart. Probeer het zo meteen opnieuw.',

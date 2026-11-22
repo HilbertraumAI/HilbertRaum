@@ -19,7 +19,7 @@ import { registerTranslateIpc } from '../../src/main/ipc/registerTranslateIpc'
 import { TranslateJobService } from '../../src/main/services/translation/jobs'
 import type { Translator } from '../../src/main/services/translation'
 import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
-import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { EngineCannotRunError, EngineFilesUnreadableError } from '../../src/main/services/runtime/engine-load'
 import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { planTranslationWindows } from '../../src/main/services/doctasks/translation'
 import { IPC, STREAM } from '../../src/shared/ipc'
@@ -249,6 +249,23 @@ describe('registerTranslateIpc — translate job contract', () => {
     const terminal = await waitForTerminal(event, initial.jobId)
     expect(terminal.state).toBe('failed')
     expect(terminal.error).toBe('engineCannotRun')
+    expect(calls).toBe(1)
+  })
+
+  // #1012 code review round 4: the engine's files could not be read just now (an antivirus scan holding one).
+  // The job stops at once with its own code — no per-window retry, no generic runtime failure.
+  it('#1012: a start whose engine files could not be read stops the job with the filesUnreadable code, no retry', async () => {
+    let calls = 0
+    const translator = translatorWith(async () => {
+      calls += 1
+      throw new EngineFilesUnreadableError('llama-server')
+    })
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('filesUnreadable')
     expect(calls).toBe(1)
   })
 

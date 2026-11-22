@@ -2768,7 +2768,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.runtime.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb sind die Antworten simuliert. Im Bereich „KI-Modell“ steht, was fehlt.',
   'main.engine.cannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
   'main.engine.filesUnreadable':
-    'Die KI-Engine konnte nicht starten, weil ein anderes Programm gerade eine ihrer Dateien verwendet (zum Beispiel ein Virenscan). Bitte versuche es in einer Minute erneut.',
+    'Die KI-Engine konnte gerade eine ihrer Dateien nicht lesen. Vielleicht verwendet sie ein anderes Programm (zum Beispiel ein Virenscan). Bitte versuche es in einer Minute erneut.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
   'main.modelStarting': 'Das KI-Modell startet gerade. Versuch es gleich noch einmal.',

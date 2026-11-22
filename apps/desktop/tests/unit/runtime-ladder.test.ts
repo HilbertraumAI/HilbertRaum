@@ -1561,7 +1561,8 @@ describe('#1012 — an engine file that could not be read is neither a GPU nor a
     expect(h.calls).toHaveLength(2)
     expect(runtime.backend).toBe('mock')
     expect(h.modelLoadFailures).toEqual([{ modelId: 'm', reason: MODEL_LOAD_REASON }])
-    expect(modelLoadLatchReason('m')).toBe(MODEL_LOAD_REASON)
+    // Code review round 4: reported, but not latched — a rung of this walk proved nothing.
+    expect(modelLoadLatchReason('m')).toBeNull()
     expect(h.filesUnreadable).toEqual([])
   })
 
@@ -1581,6 +1582,77 @@ describe('#1012 — an engine file that could not be read is neither a GPU nor a
     expect(h.calls[2].binPath).toBe('/bin/cpu/llama-server') // rung 3, the cpu/ net, runs
     expect(runtime.backend).toBe('cpu')
     expect(h.failures).toEqual([]) // no `gpuAutoDisabled`
+    expect(h.modelLoadFailures).toEqual([])
+  })
+
+  // Code review round 4: a walk in which any rung was skipped as unreadable latches nothing — that rung
+  // gave no evidence, so what the others did cannot convict the model (#372) or the card (#312). It only
+  // reports, and the next start walks the whole ladder again.
+  const OOM_REASON =
+    'llama-server exited before becoming healthy (code 1) — last output: ' +
+    'ggml_backend_cpu_buffer_type_alloc_buffer: failed to allocate buffer: out of memory'
+  it.each([
+    {
+      name: 'the GPU rungs could not read their files and the cpu/ net ran out of memory',
+      failErrors: [unreadable(), unreadable()],
+      failMessages: [undefined, undefined, OOM_REASON]
+    },
+    {
+      name: 'a GPU fault and a CPU model fault, then the cpu/ net could not read its files',
+      failErrors: [undefined, undefined, unreadable()],
+      failMessages: [DEVICE_LOST_REASON, MODEL_LOAD_REASON]
+    }
+  ])('$name: reported, nothing latched or persisted, and the next start walks again', async ({ failErrors, failMessages }) => {
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: [RTX],
+      failErrors,
+      failMessages: failMessages as string[],
+      latchGpuFailures: true
+    })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.modelLoadFailures).toHaveLength(1) // told, once
+    expect(h.filesUnreadable).toEqual([]) // a real failure was seen: not the files-unreadable notice
+    expect(modelLoadLatchReason('m')).toBeNull()
+    expect(h.failures).toEqual([]) // no `gpuAutoDisabled`
+    const next = h.factory(opts)
+    await next.start()
+    expect(h.calls).toHaveLength(4) // walked again from rung 1
+    expect(next.backend).toBe('gpu')
+  })
+
+  // Code review round 4: the notice is chosen by the evidence only. A failed MTP rung (1a) says nothing
+  // about the engine's files or the model; when every other rung that ran could not read its files, the
+  // user sees the files-unreadable notice — and the MTP latch that rung set is not kept either.
+  it('MTP rung 1a failed and every other rung could not read its files: the files-unreadable notice, no MTP latch', async () => {
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: [RTX],
+      cpuBin: null,
+      failMessages: [MODEL_LOAD_REASON],
+      failErrors: [undefined, unreadable(), unreadable()]
+    })
+    const runtime = h.factory({ ...opts, speculativeDecoding: 'mtp', weightBytes: 1024 * 1024 * 1024 })
+    await runtime.start()
+    expect(h.calls).toHaveLength(3) // rung 1a, rung 1, rung 2
+    expect(runtime.backend).toBe('mock')
+    expect(h.filesUnreadable).toEqual([{ modelId: 'm' }])
+    expect(h.modelLoadFailures).toEqual([])
+    expect(isSpeculativeSuppressed('m')).toBe(false)
+    expect(modelLoadLatchReason('m')).toBeNull()
+  })
+
+  it('a bind race is no evidence either: with the other rungs unreadable, the files-unreadable notice', async () => {
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: null,
+      failMessages: [BIND_RACE_REASON],
+      failErrors: [undefined, unreadable(), unreadable()]
+    })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.filesUnreadable).toEqual([{ modelId: 'm' }])
     expect(h.modelLoadFailures).toEqual([])
   })
 })
