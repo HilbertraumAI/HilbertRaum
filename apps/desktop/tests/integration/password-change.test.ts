@@ -959,7 +959,9 @@ describe('rekey journal — entries outside the workspace (#1014)', () => {
   // Round 3: the containment is judged on the disk, not only on the text. An entry under `documents/J/`, where `J` is a
   // junction (a folder link; no privilege needed on Windows) to a folder outside the workspace, reads as inside the
   // workspace, and the start shredded and replaced the file behind the link. A link anywhere between the workspace folder
-  // and the entry now refuses it.
+  // and the entry now keeps the start off it. Round 5: such an entry waits for the unlock, which acts on it only as an
+  // out-of-store copy the open database lists; none lists this one, so the unlock counts it and drops it (the count moved
+  // from the start to the unlock).
   it('a journal entry whose path runs through a junction inside the workspace: the files behind it stay byte for byte', () => {
     const vp = lockedVault('rekey-junction', 'pw')
     const away = tempRoot('rekey-junction-target')
@@ -976,9 +978,12 @@ describe('rekey journal — entries outside the workspace (#1014)', () => {
     ctl.init()
     expect(readFileSync(victim, 'utf8')).toBe('outside: letter')
     expect(readFileSync(`${victim}${REKEY_SUFFIX}`, 'utf8')).toBe('outside: stage')
+    expect(ctl.takeJournalRefusals(), 'the start: the entry waits for the database').toBe(0)
+    expect(ctl.unlock('pw').state).toBe('unlocked')
+    expect(readFileSync(victim, 'utf8')).toBe('outside: letter')
+    expect(readFileSync(`${victim}${REKEY_SUFFIX}`, 'utf8')).toBe('outside: stage')
     expect(ctl.takeJournalRefusals()).toBe(1)
     expect(existsSync(journalPath)).toBe(false)
-    expect(ctl.unlock('pw').state).toBe('unlocked')
     ctl.lock()
   })
 
@@ -1119,6 +1124,92 @@ describe('rekey journal — entries outside the workspace (#1014)', () => {
     ctl.unlock('pw')
     expect(readEncryptedDoc(ctl, doc)).toBe('DOCUMENT-SURVIVES')
     expect(ctl.takeJournalRefusals()).toBe(0)
+    ctl.lock()
+  })
+
+  // Round 5: an out-of-store copy in a folder inside the workspace that is reached through a junction (here `legacy/J`,
+  // `J` a junction to a folder elsewhere). The change stages it (it reads the copy through the link), but its journal
+  // entry runs through a link, and round 3 refused such an entry: nothing ever swapped that stage in, and the document
+  // stayed under the retired key for good. Such an entry now waits as an out-of-store copy's does: the change swaps it in
+  // itself, and after a change cut short the unlock does, once the open database lists its stored copy.
+  const throughJunction: LegacyDirOf = (root) => {
+    const elsewhere = join(root, 'legacy-elsewhere')
+    mkdirSync(elsewhere)
+    mkdirSync(join(root, 'workspace', 'legacy'))
+    symlinkSync(elsewhere, join(root, 'workspace', 'legacy', 'J'), 'junction')
+    return join(root, 'workspace', 'legacy', 'J')
+  }
+
+  it.each<[string, () => Promise<{ f: ClassFixture; ctl: WorkspaceController }>]>([
+    [
+      'the change itself',
+      async () => {
+        const f = await v1VaultWithEveryClass(throughJunction)
+        expect(f.ctl.changePassword('old-password', 'new-password', FAST_ARGON).state).toBe('unlocked')
+        f.ctl.lock()
+        return { f, ctl: unlockedController(f.vp, 'new-password') }
+      }
+    ],
+    [
+      'the unlock after a change cut short after its commit',
+      async () => {
+        const f = await committedStage(throughJunction)
+        const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        ctl.unlock('new-password')
+        return { f, ctl }
+      }
+    ]
+  ])('an out-of-store copy inside the workspace reached through a junction, swapped in by %s: every class opens under the new password', async (_by, run) => {
+    const { f, ctl } = await run()
+    await expectEveryClassReadable(f, ctl)
+    expect(existsSync(`${f.outside}${REKEY_SUFFIX}`)).toBe(false)
+    ctl.lock()
+  })
+
+  // The deferral gives a stage through the link no more than any out-of-store stage gets: one that does not open under the
+  // data key is never swapped in, and the stored copy behind the link keeps its bytes.
+  it('a stage that does not open under the data key, through the same junction: the start and the unlock leave it and the stored copy byte for byte', async () => {
+    const f = await committedStage(throughJunction)
+    const stagedOutside = `${f.outside}${REKEY_SUFFIX}`
+    const src = join(f.root, 'foreign-src.txt')
+    writeFileSync(src, 'OUTSIDE-SURVIVES')
+    encryptFile(src, stagedOutside, generateDataKey()) // the same length, under a key nothing here holds
+    rmSync(src)
+    const before = [readFileSync(f.outside), readFileSync(stagedOutside)]
+    const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(readFileSync(f.outside).equals(before[0]), 'the stored copy, after the start').toBe(true)
+    ctl.unlock('new-password')
+    expect(readFileSync(f.outside).equals(before[0]), 'the stored copy').toBe(true)
+    expect(readFileSync(stagedOutside).equals(before[1]), 'the foreign stage').toBe(true)
+    expect(readEncryptedDoc(ctl, f.doc)).toBe('DOCUMENT-SURVIVES') // the rest rolled forward
+    ctl.lock()
+  })
+
+  // Round 5: the unlock's pass counts what it leaves as it is, as the start's does: a stage that does not open under the
+  // data key (left on the drive, and dropped from the journal), and one it may not judge yet (kept, with the journal).
+  it.each<[string, (staged: string, root: string) => void, boolean]>([
+    [
+      'a stage that does not open under the data key',
+      (staged, root) => {
+        const src = join(root, 'foreign-src.txt')
+        writeFileSync(src, 'OUTSIDE-SURVIVES')
+        encryptFile(src, staged, generateDataKey())
+        rmSync(src)
+      },
+      false
+    ],
+    ['a stage with a second hard link', (staged, root) => linkSync(staged, join(root, 'backup-of-stage.bin')), true]
+  ])('an outside stage the unlock leaves as it is, %s: that unlock counts it', async (_case, plant, kept) => {
+    const f = await committedStage((root) => join(root, 'legacy-store'))
+    plant(`${f.outside}${REKEY_SUFFIX}`, f.root)
+    const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(ctl.takeJournalRefusals(), 'the start: it waits for the database').toBe(0)
+    ctl.unlock('new-password')
+    expect(ctl.takeJournalRefusals()).toBe(1)
+    expect(existsSync(f.journalPath), 'the journal').toBe(kept)
     ctl.lock()
   })
 })

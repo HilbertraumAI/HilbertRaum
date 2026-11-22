@@ -1556,6 +1556,9 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
   // over it. Now the stage is a #1001 doubt: the start leaves both files, and the unlock judges the stage under the data
   // key. A stage under another key fails its tag and is removed; one that opens under the data key (a store the user
   // keeps behind a link of their own) still rolls forward, which is why the scan does not skip a linked folder.
+  // Round 5: the entry through the link waits for the unlock (as an out-of-store copy's does), whose pass acts only on a
+  // stored copy the database lists outside `documents/`, which this one is not: the unlock counts it and drops it, so
+  // the count moved from the start to the unlock.
   it.each<[string, (vp: FreshVaultPaths, target: string, text: string) => Promise<string>, 'removed' | 'rolledForward']>([
     ['a stage under another key', async (vp, target, text) => retiredCopy(vp, 'documents', `${basename(target)}${REKEY_SUFFIX}`, text), 'removed'],
     [
@@ -1581,10 +1584,11 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
     try {
       expect(sha(behind), 'the stored copy behind the link, after the start').toBe(before.stored)
       expect(sha(staged), 'its stage, after the start').toBe(before.stage)
-      expect(ctl.takeJournalRefusals()).toBe(1) // the entry through the link, dropped once counted
-      expect(existsSync(journal)).toBe(false)
+      expect(ctl.takeJournalRefusals(), 'the start: the entry waits for the database').toBe(0)
       ctl.unlock(PW)
       expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 0, setAside: 0, [verdict]: 1 })
+      expect(ctl.takeJournalRefusals()).toBe(1) // the entry through the link, dropped once counted
+      expect(existsSync(journal)).toBe(false)
       expect(existsSync(staged)).toBe(false)
       if (verdict === 'removed') expect(sha(behind)).toBe(before.stored)
       else expect(await readStoredCopy(ctl, vp.root, behind)).toBe(text)

@@ -983,7 +983,14 @@ describe('the start over an encrypted file that is missing or cannot be read (#9
     ctl.init()
     failures.encDeletePending = true
     try {
-      expect(() => ctl.unlock('pw')).toThrow(VaultRecoveryBlockedError)
+      let blocked: unknown = null
+      try {
+        ctl.unlock('pw')
+      } catch (err) {
+        blocked = err
+      }
+      expect(blocked).toBeInstanceOf(VaultRecoveryBlockedError)
+      expect((blocked as VaultRecoveryBlockedError).code, 'the stat\'s code, round 5').toBe('EPERM')
       expect(failures.hits.encStat).toBeGreaterThan(0)
       expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
       expect(readFileSync(recoveryPath).equals(recoveryBefore)).toBe(true)
@@ -1182,13 +1189,22 @@ describe('a staged database the unlock cannot read (#973)', () => {
     registerWorkspaceIpc(workspaceIpcCtx(ctl))
     failures.openThrowOnStagedEnc = 'EIO'
     let result: unknown
+    let logged: string[] = []
     try {
+      const linesBefore = readLogTail(100_000).length
       result = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+      logged = readLogTail(100_000)
+        .slice(linesBefore)
+        .filter((line) => line.includes('the startup recovery is blocked'))
     } finally {
       failures.openThrowOnStagedEnc = null
     }
     expect(failures.hits.openSyncStaged).toBeGreaterThan(0)
     expect(result).toEqual({ ok: false, reason: 'vault_recovery_blocked', message: tMain('main.workspace.recoveryBlocked') })
+    // Round 5: the refusal's one log line carries the read's code, as the other blocked answers' do (no path).
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain('EIO')
+    expect(logged[0]).not.toContain(basename(vp.root))
     files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
     expect(existsSync(vp.dbPath)).toBe(false)
     ctl.unlock('pw') // the read works again: the leftover is removed, then the failed lock's session rolls forward
@@ -1607,6 +1623,38 @@ describe("a staged copy the journal lists that the start cannot swap in (#1015)"
     expect(existsSync(join(docsDir, `c.enc.new`))).toBe(false)
     // The stuck file stays staged for recoverPendingRekey on the next unlock (old-or-new, never mixed).
     expect(existsSync(join(docsDir, `bad.enc.new`))).toBe(true)
+  })
+
+  // Round 5: a pass that throws (one held stage) still settles the journal first. It used to throw before the settle, so
+  // the journal went on listing the staged database it had just swapped in, and a stray `.enc.new` that turned up later
+  // (here another workspace's) was "listed": the next start rolled it over `.enc` with no #973 key check. Now the journal
+  // lists only the held stage, and the stray is a doubt the unlock removes.
+  it('a swap that throws for one held stage after the staged database went in: the journal lists only that stage, and a stray staged database later is a doubt', async () => {
+    const { vp, target, staged } = await retiredCopyBesideStage()
+    const stagedDb = `${vp.encPath}${REKEY_SUFFIX}`
+    copyFileSync(vp.encPath, stagedDb) // the database, staged under this workspace's own key
+    const journal = journalListing(vp, [stagedDb, staged])
+    const first = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.renameThrowForStage = staged
+    try {
+      expect(() => first.init()).not.toThrow()
+    } finally {
+      failures.renameThrowForStage = null
+    }
+    expect(failures.hits.renameStagedSidecar).toBe(2) // the swap and its one retry
+    expect(first.isRecoveryBlocked()).toBe(true)
+    expect(existsSync(stagedDb), 'the staged database, swapped in').toBe(false)
+    expect(journalStaged(journal), 'the journal lists only the stage still waiting').toEqual([staged])
+    writeFileSync(stagedDb, readFileSync(lockedVault('recovery-guards-stray', 'other-password').encPath))
+    const enc = readFileSync(vp.encPath)
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(readFileSync(vp.encPath).equals(enc), '.enc after the next start').toBe(true)
+    next.unlock('pw')
+    expect(next.takeStageOutcome()).toBe('removed')
+    expect(existsSync(stagedDb)).toBe(false)
+    expect(await readStoredCopy(next, vp.root, target)).toBe('the new copy')
+    next.shutdown()
   })
 
   // Review V F-2 (probe P1, on the unlock path), moved here from workspace-vault.test.ts: the start's steps judge the
