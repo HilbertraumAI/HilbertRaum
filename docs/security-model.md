@@ -1318,6 +1318,20 @@ explicitly:
   whole workspace when `.enc` is missing (next bullet): the kept copy is then the entire workspace
   in plaintext, and a user who has forgotten the password keeps it on the drive, where the next
   start used to shred it.
+- **A failed exit lock in an app that keeps running (S-1, follow-ups wave 7, with #1002).** The
+  locks that end the app (the quit teardown's, and the emergency lock of a session end, a signal
+  or a crash, all through `WorkspaceController.shutdown()`) leave a failed lock to the next
+  launch's salvage above. A macOS shutdown that another app cancels can leave the process
+  running, locked, and since #1002 the app offers the unlock again in it. That unlock skipped the
+  start's steps (they had run once) and decrypted `.enc`, the last good lock, over the newer
+  working file: the session since that lock was lost (measured on the real controller: the same
+  controller read the last good lock, 3333, instead of the session's 4444), and the key stayed in
+  memory while the workspace reported locked. Now `shutdown()`'s failure path marks the start's
+  steps as not done and zeroes and drops the key, so the next unlock in that process runs the
+  salvage first (the working file moves to `<db>.recovery` and is rolled forward, as at the next
+  launch), and `documentCipher()` is null until then. Pinned by
+  `tests/integration/vault-recovery-guards.test.ts` "a failed exit lock in a process that lives
+  on (S-1)".
 - **Encrypted file missing (#911).** The app never removes `.enc` on its own (a lock, a create
   and a password change replace it by rename), but something outside it can: a person tidying the
   drive, a sync tool, a disk check that moves the file to `FOUND.000`. The working file is then the
@@ -2015,7 +2029,8 @@ re-encrypts (the bullet below).
   during a parked sidecar stop exited with the DB unencrypted on the drive, and the next launch
   found a live WAL and shredded it — the accepted session loss (#262),
   produced by the app's own quit path. A Dock click (`activate`) during the teardown opens no
-  window. *Overall deadline:* the teardown's
+  window, nor once the system's quit has begun after a session-end lock (#1002, below). *Overall
+  deadline:* the teardown's
   awaited middle — the local-API stop (≤ 0.5 s), the sidecar stops (≤ 10 s, the transcriber's
   suspend timeout), the stream settle (≤ 5 s) and the doc-task settle (≤ 5 s) — is raced as one
   section against `SHUTDOWN_OVERALL_DEADLINE_MS` (30 s; owner decision 13's default, #230). When
@@ -2053,7 +2068,8 @@ re-encrypts (the bullet below).
   before `will-quit`, and `will-quit` is where the lock starts (`beginLock` first), so a save the
   guard waited for always lands before the lock; a write the bound gave up on that reaches main
   after `beginLock` is refused by `workspaceAdmitsWork`, so nothing half-lands. Once a lock has
-  begun (`isShuttingDown()`: a quit teardown or a session end) a close is not held. The answer is an
+  begun (`isShuttingDown()`: a quit teardown or a session end) a close is not held, until the user
+  unlocks again after a session-end lock that left the app running (#1002, below). The answer is an
   `ipcMain.on` listener per request that checks the sender (the window's own `webContents`, the
   rasterizer's identity check) and the request id itself, not a `guardedHandle`: it must answer
   while locked too, when there is nothing to save. The session-end, macOS `shutdown` and
@@ -2153,7 +2169,9 @@ re-encrypts (the bullet below).
   that cannot cancel has its file shredded under it, as at the lock's bound), flush the encrypted
   log, `workspace.shutdown()` (re-encrypt + shred; a `plaintext_dev` DB is checkpointed +
   closed), log the lock's duration (content-free; after the flush it reaches the console and a
-  `plaintext_dev` log only), then reap the registered sidecar children in its own try. The
+  `plaintext_dev` log only), stop the chat runtime through its own (non-latching) stop, so the reap
+  below is an expected exit for it (#1002: before, a process that lived on took the reaped server
+  for a crash), then reap the registered sidecar children in its own try. The
   knowledge-pack service's `zim-transient/` cleanup is left to the next session start (kiwix-serve
   runs until the reap). It runs exactly once, over the SAME closure as `will-quit`/`activate`: a
   session end
@@ -2169,9 +2187,9 @@ re-encrypts (the bullet below).
   `shutdown` (usable after `ready`); it is registered (darwin) to the same handler but
   UNVERIFIED on a Mac — whether it fires before or after `will-quit` and how much time the app
   gets (Electron's own docs say the handler may delay the shutdown and should then quit, which
-  reads as `shutdown` first), whether a Dock-menu Quit also reaches it, and what a shutdown the
-  system then CANCELS leaves behind (the app alive with the workspace locked and no window
-  recreated on a Dock click — quit and relaunch) — owner live check pending (#226); until then
+  reads as `shutdown` first), whether a Dock-menu Quit also reaches it, and whether a shutdown the
+  system then CANCELS can leave the app running at all (by Electron's source the app quits; if it
+  ever runs on, see "After a cancelled shutdown" below) — owner live check pending (#226); until then
   quit before shutting down. Since #977 the leg is registered first in `app.whenReady`, with the
   signal leg, before the code that can throw (it sat after `createWindow()`, where a throw in the
   protocol, the menu or the window skipped it: the #964 security round's F3, which Linux got
@@ -2207,12 +2225,59 @@ re-encrypts (the bullet below).
   registries are empty. What is left is the lock latch, the local API's stop, one log line
   (`… after a session-end lock — locking workspace again`) and the reap of any child started
   since. Measured on Linux Electron with the stand-in app: after a session-end lock, a signal left
-  the old closure alive until SIGKILL; the new one exited 0. **Still open (pre-existing, not
-  changed; needs a Mac):** after a cancelled shutdown the closure never leaves its ending state
-  (`shuttingDown` stays set). A Dock click then opens no window, the close guard skips its save,
-  and ⌘Q takes the emergency lock instead of the normal teardown, so a review edit not saved yet,
-  a reply still being written or a scan still being read is lost. Quit and start the app again
-  after a cancelled shutdown.
+  the old closure alive until SIGKILL; the new one exited 0. **After a cancelled shutdown (#1002;
+  owner gate G-11 "R", 2026-11-22):** by Electron's source the app does not run on after a macOS
+  shutdown at all: AppKit posts the power-off notification and then calls `terminate:` for the
+  same quit Apple Event that loginwindow sends the app (Electron PR #24111), and the app's one
+  `shutdown` listener never prevents it, so the app locks and **quits**, whether or not another
+  app then cancels the shutdown (the apps that already quit stay quit). If it ever runs on (a
+  notification with no `terminate:` after it), the state is no longer a dead end (before, a Dock
+  click opened no window, a window left open kept the unlocked shell with every call failing, and
+  nothing cleared `shuttingDown`): (a) a Dock click, or a second launch with no window, opens the
+  window, which shows the unlock screen, and only when the workspace reads `locked` (an encrypted
+  vault; a `plaintext_dev` workspace whose database the lock closed reads `uninitialized`, and a
+  window there would offer onboarding, whose create builds a vault beside the plaintext data, so it
+  gets none, as before); (b) a window left open re-reads the workspace state when
+  it gains focus, when it becomes visible again and on a pointer press (a window that never lost
+  focus gets no `focus` event; one read at a time, so a burst of clicks makes one call) and, when
+  main reports `locked`, shows the unlock screen and drops the session's decrypted content from its
+  memory as Lock now does (no lock event exists; `uninitialized`, a closed `plaintext_dev`
+  workspace, and a read that fails change nothing); (c) the user's successful unlock, or a
+  first-run create (the IPC's hook, `onWorkspaceUnlocked`, called last, once every post-unlock step
+  went through: a step that fails leaves the closure as it was), clears `shuttingDown`,
+  `sessionEndLocked` and `lockRan` and logs one line, so the close guard saves again, ⌘Q runs the
+  quit teardown and a later session end locks as the first one did. (a) and (c) act only while no
+  quit began since the session-end lock: `before-quit` (registered at module scope) marks the
+  system's quit, which by the same source
+  fires inside the same Apple Event as the lock, so a shutdown that proceeds is never handed a new
+  window or a close guard that holds; a quit that the guard's Keep open cancelled before the
+  session end leaves no mark. The reset relies on S-1 ("Lock failure & durability"): an unlock
+  after a failed exit lock rolls the session forward, not back. The repeat lock above stays the
+  belt while the app is still locked, and the #238 re-entry rule and the one exit hold after a
+  reset too. Windows and Linux are unchanged: the process ends with `session-end` there, and the
+  signal and `quit` locks mark the exit at once. Pinned by `tests/unit/shutdown.test.ts` "#1002"
+  (the Dock click, none for `plaintext_dev`, the `before-quit` line, the reset and the teardown
+  after it, the re-entry and a signal during it, a second session end, the states that must not
+  reset, the `index.ts` wiring), `tests/integration/workspace-ipc.test.ts` (the hook on a successful
+  unlock or create only, and not when a step after the open throws),
+  `tests/renderer/AppLock.test.tsx` (the re-read on focus, visibility and a press, one read per
+  burst, a failed read, an earlier lock banner cleared) and
+  `tests/integration/runtime-ladder-exit-wiring.test.ts` (the reaped chat server is no crash).
+  **Owed on a Mac (walks W1–W5, as #977's):** W1, does the app survive a cancelled Shut Down,
+  Restart or Log Out at all (expected by source: it quits each time); W2, in a survived app (or a
+  dev build with `powerMonitor.emit('shutdown')`), the Dock click, the unlock, a review edit and ⌘Q
+  (saved, the teardown's line); W3, a click into a window left open (the unlock screen); W4, a
+  shutdown that proceeds with an edit pending (no app dialog, no "cancelled shutdown" notice, the
+  workspace unlocks after the restart); W5, the times of the session-end lock, `before-quit` and
+  `will-quit`, and Dock clicks during the shutdown opening nothing once `before-quit` is logged.
+  **Also unverified in a process that runs on after an emergency lock:** the work that outlives
+  it (the lock does not abort chat streams or document tasks, and does not close the OCR window;
+  their model sidecars are reaped, so they fail on the closed workspace), and the other sidecars'
+  own handling of the reap (by source: the search model and the image model start again on their
+  next use; the reranker counts the reap as one of the two exits it allows a session; a translation
+  sidecar that ran on the GPU latches its processor fallback for the rest of the session). The chat
+  model is stopped through its own stop before the reap (above), so its exit is no crash and the
+  next unlock's auto-start starts it again; the Windows dev-app walk checks where it then runs.
   **Linux (#964; owner gate G-4 "A + `quit` leg", 2026-11-20):** two legs, registered inside
   `app.whenReady` (the signal leg on Linux and macOS, the `quit` leg on Linux only), first in it
   after the second-instance return (before the code that can throw), over the same closure. (1) A
@@ -2233,7 +2298,10 @@ re-encrypts (the bullet below).
   returns, and the teardown never reaches its own lock (measured: one lock, exit 0). This leg runs
   under Electron's fixed 10 s shutdown watchdog (`Browser::ExitWithCode`), whatever the session
   manager allows: a lock that takes longer ends in a crash (`Failed to shutdown.`, status 133;
-  measured with a stand-in lock that blocks: 8 s finished, 12 s and 15 s crashed). The workspace
+  measured with a stand-in lock that blocks: 9.95 s still exits 0 and 10.05 s crashes, the `quit`
+  handler starts 2–11 ms after the session loss and Electron's exit takes 31–101 ms after it, so
+  about 9.85 s are the lock's; follow-ups wave 7, 16 runs on WSL Electron 43.8.6). Since #982.4
+  this leg's lock has a budget and stops overwriting the working file in time (below). The workspace
   is then left unencrypted on the drive until the next start, which recovers it as after any cut
   lock (the working file is checkpointed and closed before the re-encrypt). That crash is a kernel
   core dump: Electron starts no crash reporter in the main process until JS asks for one, and the
@@ -2265,10 +2333,38 @@ re-encrypts (the bullet below).
   is not verified). systemd-coredump's journal
   entry still records the command line, the environment and the open-file paths, without memory contents (not checked
   on such a host). The lock writes about twice the database's size (checkpoint, re-encrypt with an
-  fsync, shred with an fsync), so with about 9 of the 10 s usable a workspace above roughly 75 to
-  100 MB may not fit on a stick that writes 20 MB/s, and above roughly 20 to 45 MB at 5 to 10 MB/s
-  (a model of the lock's writes; no lock time above 0.5 MB is measured yet, #982); the lock's
-  duration is logged after it. The signal leg has no such bound: its lock runs before `app.exit`
+  fsync, overwrite with an fsync). Measured on a USB 3 stick that writes about 41 MB/s (Windows,
+  exFAT, the real lock code; follow-ups wave 6): 3.3 s for 58 MB, 5.5 s for 107 MB and 15.5 s for
+  304 MB (0.26 s + 50 ms per MB), and 0.42 s + 24 ms per MB without the overwrite: the encrypt
+  runs at the write rate and the overwrite takes about as long again. **Budgeted overwrite
+  (#982.4; owner gate G-12 (a2), 2026-11-22):** that is why this leg is the one lock with a budget.
+  `onQuitEvent` passes `QUIT_LOCK_BUDGET_MS` (8.5 s, counted from the lock's start), and the lock's
+  overwrite of the working file (`shredFileWithin`) goes in 8 MiB chunks with an `fdatasync` after
+  each, so a chunk's time is the drive's: a chunk starts only while now + 1.5 × the last chunk's
+  time fits the deadline (the first is judged by the rate the encrypt just ran at), and past that
+  the overwrite stops and the file is unlinked. `.enc` is complete and durable by then, so the lock
+  ends encrypted, with the rest of the plaintext left as freed blocks of an unlinked file instead
+  of the whole working file under its name after a crash. Where the whole overwrite fits, the
+  bytes are those of every other lock (only the syncs differ); Lock now, the quit teardown and the
+  other emergency locks keep the full overwrite (no measured bound there). The working file's
+  overwrite is the one budgeted, the #855 branch's included (a working file gone or no longer a
+  database, the lock finished at the last snapshot); the sweep of the operations' `.parse*`
+  transients before the lock keeps the full overwrite on this leg too. With that, by wave 6's fits
+  (0.26 s + 50 ms per MB,
+  0.42 s + 24 ms per MB without the overwrite, at 41 MB/s, scaled to the write rate), the whole
+  overwrite fits within the 8.5 s deadline up to about 165 MB at 41 MB/s, 80 MB at 20 MB/s and
+  40 MB at 10 MB/s, and the lock completes, encrypted, within about 9 of the 10 s up to about
+  356 MB at 41 MB/s, 174 MB at 20 MB/s and 87 MB at 10 MB/s (before, the full lock: about 175, 85
+  and 43 MB); above that the encrypt alone runs past
+  the watchdog and the lock crashes as before. The lock's duration is logged after it, with
+  `shredCut` (the overwrite stopped short), and `vault_lock_done` carries the overwritten bytes.
+  Measured on WSL Electron 43.8.6 with the real closure, emergency lock and controller on a 40 MB
+  vault, the re-encrypt slowed to 7.5 s and the working file's writes held to 10 MB/s: status 0
+  and `shredCut: true` in 8.2–8.9 s from the bus loss to the exit (three runs), where master's
+  code crashed with status 133 and left 5,798 plaintext pages of the working file on the drive; with
+  the re-encrypt at 4 s, the overwrite stopped after three of five chunks (7.4–7.6 s, master: the
+  whole overwrite, 9.3 s). The per-chunk sync's cost on a real stick, and a real desktop log-out,
+  are not measured yet. The signal leg has no such bound: its lock runs before `app.exit`
   (a 5 s lock with three more signals during it finished, status 0; re-run with the #977 closure,
   the same). Owner call (2026-11-21): keep this leg and document the
   bound. A lost bus also brought a SIGTERM a few milliseconds after the `quit` lock in two of four
@@ -2282,7 +2378,9 @@ re-encrypts (the bullet below).
   checked: a real desktop log-out (GNOME, KDE), a lost display (needs Xvfb), the packaged AppImage
   (`AppRun` is believed to `exec` Electron). The Linux `powerMonitor` leg (logind's
   `PrepareForShutdown`, which would lock before the session goes, outside that watchdog) is not
-  registered: a poweroff reaches the two legs above, the lost session's under its 10 s bound.
+  registered: a poweroff reaches the two legs above, the lost session's under its 10 s bound
+  (declined for #982, owner gate G-12: it covers a poweroff or a reboot, never a log-out, and needs
+  two visible delay inhibitors).
   Pinned by `tests/unit/shutdown.test.ts`: exactly one lock, the second emission, both orderings
   against `will-quit`, the reap on the exit path, throw-safety (a throwing log line before the lock
   included), the transient sweep, the duration line, the signal and `quit` legs (one lock
@@ -2290,7 +2388,12 @@ re-encrypts (the bullet below).
   workspace unlocked again and on one still locked), and the `index.ts` wiring (source
   text, including that the signal legs are gated to Linux and macOS, the `quit` leg to Linux and
   the `powerMonitor` leg to macOS, all inside `app.whenReady`, before the protocol, the menu and
-  the window); the filter by `tests/unit/core-dump-filter.test.ts` (Linux writes `0`, other
+  the window), and the budget on the `quit` leg only (#982.4); the budgeted overwrite by
+  `tests/integration/vault-lock-budget.test.ts` (the real chain on a real vault, a hard link to the
+  working file as the witness of what was overwritten: a deadline already past, a cut after two
+  chunks, the first chunk judged by the encrypt's rate, short writes, the #855 branch past the
+  deadline, a far deadline, and no budget for Lock now and the other locks); the filter by
+  `tests/unit/core-dump-filter.test.ts` (Linux writes `0`, other
   platforms touch nothing, a refusal keeps only an errno-shaped code, the call sits at module scope
   before the single-instance lock and `app.whenReady`, and its outcome is logged in `initBackend`
   after `initLogging`).
@@ -2464,8 +2567,10 @@ sidecar's KV cache dies with the child, and the CPU replacement starts empty.
   text, but may contain file names/paths and model ids — which is why it is sealed. The narrow
   residual: lines logged *before unlock* are buffered in memory only (never persisted), so they are
   lost on a kill while still locked. See "Logs are local-only AND encrypted at rest" above.
-- **Secure erase is best-effort.** Shredding overwrites then unlinks, but on SSDs wear-levelling may
-  leave original blocks recoverable. We do not over-promise this.
+- **Secure erase is best-effort.** Shredding overwrites then unlinks, but on flash (SSDs and USB
+  sticks) wear-levelling may leave original blocks recoverable. On Linux's lost-session `quit` leg
+  the lock's overwrite of the working file also stops at the lock's budget and the rest is only
+  unlinked (#982.4, above). We do not over-promise this.
 - **No password recovery.** The password is never stored and the key is unrecoverable without it —
   losing the password means losing the workspace. Onboarding copy says so.
 

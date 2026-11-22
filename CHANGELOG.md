@@ -25,7 +25,18 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- **A Linux log-out with a larger workspace now ends with the workspace locked, and a cancelled
+  Mac shutdown no longer leaves the app stuck.** When a Linux log-out ends the app, the app has
+  about 10 seconds to lock the workspace. On a slow USB stick a larger workspace ran out of time:
+  the app crashed and left the workspace unencrypted on the drive until the next start. The lock
+  now stops overwriting the old unencrypted copy when time runs short and deletes it instead, so
+  workspaces about twice as large as before still end locked. On a Mac, if the app is ever still
+  open after another app cancelled a shutdown, a click on its Dock icon or into its window now
+  shows the unlock screen, and after you unlock it works as usual. If the app could not lock the
+  workspace at that moment (for example on a full drive), unlocking again no longer goes back to
+  the last locked state and loses your changes since (#982, #1002).
 
 ## [0.1.66] — 2026-11-21
 

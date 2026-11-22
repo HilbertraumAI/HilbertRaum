@@ -80,11 +80,18 @@ password recovery — are documented in
   made in the last second, a reply still being written or a scan still being read is not kept, so
   quitting first is still the sure way. On Linux a log-out usually arrives as a lost session, and
   then Electron gives the lock a fixed 10 seconds: a lock that takes longer ends in a crash
-  (status 133). The lock writes about twice the workspace's size, so on a stick that writes
-  20 MB/s a workspace above roughly 75 to 100 MB may not fit, and on one that writes 5 to 10 MB/s
-  one above roughly 20 to 45 MB (worked out from the lock's writes, not yet measured on a stick,
-  #982). The workspace is then left unencrypted on the drive until the next start, which recovers
-  its data as after any lock that was cut short. Where the system keeps crash dumps
+  (status 133). The lock writes about twice the workspace's size (measured on a USB 3 stick that
+  writes about 41 MB/s: 3.3 s for 58 MB, 15.5 s for 304 MB). So on that leg the lock now stops
+  overwriting the unencrypted working copy when its time runs short (8.5 s) and deletes it
+  instead (#982): the workspace still ends encrypted up to about 9 seconds' worth of writes (about
+  356 MB at 41 MB/s, 174 MB at 20 MB/s, 87 MB at 10 MB/s; before, about 175, 85 and 43 MB), and
+  the copy is overwritten in full up to about half that (about 165, 80 and 40 MB). The part not
+  overwritten stays on the stick as deleted data that recovery tools may read (on flash an
+  overwrite may not reach every block anyway). A larger workspace
+  still crashes there and is left unencrypted on the
+  drive until the next start, which recovers its data as after any lock that was cut short. The
+  app does not use logind's shutdown signal, which would lock before a poweroff or a reboot but
+  never before a log-out (#982). Where the system keeps crash dumps
   (systemd-coredump, apport, WSL), such a crash could store a memory image of the app, vault key
   included, on the computer's disk. The app's main process, which holds that key, now tells Linux
   to leave its memory out of a crash dump, and the helper programs it starts (the model engine,
@@ -105,12 +112,11 @@ password recovery — are documented in
   since the last **Lock now** or normal quit: nothing runs before the process ends. On macOS the
   `shutdown` leg is registered but not yet verified on a Mac (owner live check,
   #226), so quit first there (user-guide §13; `security-model.md` "OS session end locks the
-  workspace"). If another app cancels a macOS shutdown after the app has locked, the app stays
-  open but treats every later quit as an emergency: a Dock click opens no window, and quitting
-  locks at once without saving a review change still being made, a reply still being written or a
-  scan still being read (a second shutdown, a quit or a `kill` still locks the workspace first,
-  also after you unlocked it again, #977). Quit and start the app again after a cancelled
-  shutdown. Wait for the window to close before you eject.
+  workspace"). By Electron's source the app locks and quits at a macOS shutdown even when another
+  app then cancels it (not yet checked on a Mac). If the app ever stays open after a cancelled
+  shutdown, a click on its Dock icon or into its window shows the unlock screen, and after you
+  unlock it works as after a start (#1002); until then a quit, a second shutdown or a `kill` locks
+  the workspace at once (#977). Wait for the window to close before you eject.
 - **On Linux, the AppImage can run without Chromium's sandbox.** The app's windows are configured
   `sandbox: true` (`window-security.ts`), but the operating-system sandbox behind that setting
   needs unprivileged user namespaces, which Ubuntu 24.04 and later restrict by default (as do some

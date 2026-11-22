@@ -123,8 +123,10 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   program from another; the access key is the boundary, and any program that can read your workspace
   could read the key. This is why the feature is off by default, asks for explicit consent, and
   keeps the key requirement on unless you turn it off.
-- **Secure erase is best-effort.** Shredding overwrites then deletes the plaintext copy, but on SSDs
-  wear-levelling may leave the original blocks recoverable.
+- **Secure erase is best-effort.** Shredding overwrites then deletes the plaintext copy, but on
+  flash (SSDs and USB sticks) wear-levelling may leave the original blocks recoverable. When a Linux
+  log-out ends the app, the lock overwrites only as much as its time allows and then deletes the
+  rest.
 - **No password recovery.** The workspace password is never stored; if it is lost, the encrypted
   workspace cannot be opened.
 - Local-model answers can be wrong or incomplete (hallucination risk); the app is honest about this.
