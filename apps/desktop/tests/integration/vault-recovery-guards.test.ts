@@ -560,6 +560,56 @@ describe('a full drive at the lock write, in the same session (full-audit 2026-0
   })
 })
 
+// S-1 (follow-ups wave 7, with #1002): the exit-bound lock (`shutdown()`: the quit teardown's, and the emergency lock of
+// a session end or a signal) used to be followed by the process's end, so a failed one was left to the next launch's
+// salvage. A macOS shutdown another app cancels leaves the process running, locked, and #1002 offers the unlock again in
+// it. That unlock skipped the start's steps and decrypted `.enc`, the last good lock, over the newer working file: the
+// session since that lock was gone, and the controller kept the key in memory while it reported "locked".
+describe('a failed exit lock in a process that lives on (S-1)', () => {
+  /** A good lock (`.enc` holds 3333), a session delta since (4444), then the emergency lock's two steps (the latch,
+   *  `shutdown()`) on a full drive at the lock write; `.enc` backdated for a deterministic mtime order. */
+  function failedExitLock(): { vp: VaultPaths; ctl: WorkspaceController; key: Buffer } {
+    const vp = lockedVault('recovery-guards', 'pw')
+    const ctl = unlockedController(vp, 'pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 3333 })
+    ctl.lock()
+    ctl.unlock('pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 4444 })
+    const key = ctl.encryptionKey()
+    if (!key) throw new Error('an unlocked encrypted workspace has a key')
+    ctl.beginLock()
+    failures.enospcOnEncTmpWrite = true
+    try {
+      expect(() => ctl.shutdown()).toThrow(VaultLockError)
+      expect(failures.hits.writeSync).toBeGreaterThan(0)
+    } finally {
+      failures.enospcOnEncTmpWrite = false
+      failures.encTmpFds.clear()
+    }
+    expect(ctl.getState().state).toBe('locked')
+    backdate(vp.encPath)
+    return { vp, ctl, key }
+  }
+
+  it('the next unlock in the same controller rolls the working file forward: the session since the last good lock is kept', () => {
+    const { vp, ctl } = failedExitLock()
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(4444)
+    expect(existsSync(`${vp.dbPath}${RECOVERY_SUFFIX}`)).toBe(false) // salvaged and rolled forward, as a start does
+    ctl.lock()
+  })
+
+  it('and until then the controller holds no key: the key is zeroed, documentCipher() and encryptionKey() are null', () => {
+    const { ctl, key } = failedExitLock()
+    expect(key.every((b) => b === 0)).toBe(true)
+    expect(ctl.documentCipher()).toBeNull()
+    expect(ctl.encryptionKey()).toBeNull()
+    ctl.unlock('pw') // the password derives it again
+    expect(ctl.documentCipher()).not.toBeNull()
+    ctl.lock()
+  })
+})
+
 // #876 review round 2 — the lock refuses while the `-wal` still holds commits, and a `-wal` with frames that its check
 // cannot open (an antivirus hold) counts as holding them (refusing is the safe answer there). So the lock retries once:
 // it re-opens the database, SQLite's own WAL recovery decides what the WAL holds, and a checkpoint copies it in. Here the

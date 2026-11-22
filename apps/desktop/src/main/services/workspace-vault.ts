@@ -2715,7 +2715,8 @@ export class WorkspaceController {
    *  written nothing, the workspace reports locked, and every unlock refuses with `VaultNewerError`. */
   private _vaultNewer: { what: VaultNewerWhat; found: string | number } | null = null
   /** Review V F-2: the last {@link init} ran its steps to their end (false before the first, after one that threw
-   *  part-way, and, security review V S-1, after one that stopped at a newer-format verdict or a blocked salvage).
+   *  part-way, and, security review V S-1, after one that stopped at a newer-format verdict or a blocked salvage; and,
+   *  follow-ups wave 7 S-1, after a {@link shutdown} whose lock failed, which leaves a working file newer than `.enc`).
    *  Read by {@link vaultAppearedSinceStart} only. */
   private _startStepsDone = false
   /** Review V F-2: a loss {@link init} judged (it then shredded that session) and has not recorded yet: an `init()` that
@@ -3635,6 +3636,15 @@ export class WorkspaceController {
         }
         this._db = null
       }
+      // S-1 (follow-ups wave 7, #1002): the process does not always end after this. A macOS shutdown another app
+      // cancelled leaves it running, locked, and offers the unlock again; that unlock skipped `init()` (the start's
+      // steps had run) and decrypted `.enc`, the last good lock, over the newer working file: the session since then
+      // was lost, and the key stayed in memory on a "locked" controller. So mark the start's steps as not done (the
+      // next unlock runs them first: the salvage moves the working file aside and the unlock rolls it forward, as the
+      // next launch would) and zero and drop the key (`documentCipher()` is null until then).
+      this._startStepsDone = false
+      this.key?.fill(0)
+      this.key = null
       throw err
     }
     if (this._db) {
