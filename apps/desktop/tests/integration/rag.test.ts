@@ -815,6 +815,19 @@ describe('generateGroundedAnswer', () => {
     expect(listMessages(db, conv.id).at(-1)?.content).not.toContain('<think>')
   })
 
+  // W1 surprise 2 (folded into #994's PR): `stripThinkBlocks` trims what it keeps, so a think-only reply after the
+  // scope notice left the notice without its blank line, which `content === seededPrefix` missed: the notice alone
+  // was persisted as the answer.
+  it('a think-only reply after the scope notice persists nothing: the notice alone is no answer', async () => {
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* () {
+      yield '<think>retrieval reasoning</think>'
+    })
+    const msg = await askGrounded(rt, { answerPrefix: 'This chat now asks about one document only.\n\n' })
+    expect(msg.content).toBe('')
+    expect(msg.coverage).toBeUndefined()
+  })
+
   // F-02 (audit 2026-07-16) consumer semantics, grounded relevance path: a mid-stream in-band
   // error frame (the fixed readChatSSE throws ChatStreamError after tokens). Pre-fix the stream
   // ended cleanly and the partial persisted as a complete, CITED answer. Decided semantics:

@@ -916,8 +916,11 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // persisted alone stamped with coverage (W2 review). `content === seeded` catches the prefix-only case;
   // `content === ''` the no-prefix case — byte-identical to the pre-W2 guard when there is no prefix.
   // #996 A: the beginning-only line is app text too. It rides a model token, so a reply that strips to nothing
-  // (think-only; `stripThinkBlocks` trims) leaves only app text: that is no answer either.
+  // (think-only; `stripThinkBlocks` trims) leaves only app text: that is no answer either. The same holds for the
+  // prefix alone (follow-ups wave 7): `stripThinkBlocks` trims what it keeps, so a think-only reply after the
+  // scope notice leaves the notice without its blank line, which `content === seeded` misses.
   if (content === '' || content === seeded) return emptyAssistantMessage(conversationId)
+  if (seeded !== '' && content.trim() === seeded.trim()) return emptyAssistantMessage(conversationId)
   if (beginningLead !== '' && content.trim() === `${seeded}${beginningLead}`.trim()) return emptyAssistantMessage(conversationId)
   // `truncated` is now final (ceiling cut and/or notes truncation): a truncated answer is stamped as
   // covering only the beginning, never as whole-document coverage (audit §2.2). The renderer badge reads

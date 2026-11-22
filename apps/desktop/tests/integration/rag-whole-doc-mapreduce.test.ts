@@ -297,6 +297,18 @@ describe('whole-document chunk map-reduce — the beginning-only line (#996 A)',
     expect(assistantRows).toHaveLength(0)
   })
 
+  // W1 surprise 2 (folded into #994's PR): `stripThinkBlocks` trims what it keeps, so a think-only reply after the
+  // scope notice left the notice without its blank line, which `content === seeded` missed: the notice alone was
+  // persisted as the answer, stamped with whole-document coverage.
+  it('a think-only reduce reply after the scope notice persists nothing, on a whole document too', async () => {
+    const runtime = reduceScriptRuntime('Notiz zum Abschnitt.', '<think>weighing the notes</think>')
+    const { msg, assistantRows } = await run(runtime, { answerPrefix: PREFIX })
+    expect(runtime.reduceCalls).toBe(1)
+    expect(msg.content).toBe('')
+    expect(msg.coverage).toBeUndefined()
+    expect(assistantRows).toHaveLength(0)
+  })
+
   /** Map and fold calls yield `note`; the reduce and its continuations (user turns ending "Answer:" or
    *  "Continuation:") take `steps` in order. Each yields its reply (nothing when empty: a pass a thinking model
    *  spent reasoning) and fires its finish reason; `stepTurns` records their user turns. */
