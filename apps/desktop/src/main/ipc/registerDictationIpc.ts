@@ -8,7 +8,7 @@ import { documentsDir } from '../services/ingestion'
 import { shredFile, workspaceAdmitsWork } from '../services/workspace-vault'
 import { t } from '../../shared/i18n'
 import { tMain } from '../services/i18n'
-import { isEngineCannotRunError } from '../services/runtime/engine-load'
+import { isEngineCannotRunError, isEngineFilesUnreadableError } from '../services/runtime/engine-load'
 import { isWhisperPathError } from '../services/transcriber/argv'
 import { log } from '../services/logging'
 import {
@@ -140,7 +140,10 @@ export function registerDictationIpc(ctx: AppContext): void {
       // #869: a voice model whose path the voice engine cannot read here — moving it fixes that.
       if (isWhisperPathError(err)) throw new Error(tMain('main.dictation.voiceModelPathUnsupported'))
       // #530: the OS refused to start the voice engine — say so; a retry would not help.
-      throw new Error(tMain(isEngineCannotRunError(err) ? 'main.dictation.engineCannotRun' : 'main.dictation.failed'))
+      if (isEngineCannotRunError(err)) throw new Error(tMain('main.dictation.engineCannotRun'))
+      // #1012 code review round 4: a file of the voice engine could not be read just now — try again in a minute.
+      if (isEngineFilesUnreadableError(err)) throw new Error(tMain('main.engine.filesUnreadable'))
+      throw new Error(tMain('main.dictation.failed'))
     } finally {
       clearTimeout(timer)
       shredFile(tempPath)

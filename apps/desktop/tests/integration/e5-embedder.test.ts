@@ -15,6 +15,8 @@ import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/r
 import { checkModelBeforeStart, checksumCacheStats, type ModelStartVerdict } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
 import { tempRoot } from '../helpers/db-fixtures'
+import { initBinaryVerification } from '../../src/main/services/binary-verifier'
+import { binaryWithMarker, restoreEngineLibrary, verifierInert } from '../helpers/binary-fixtures'
 import { sha256, validManifest, writeDriveFile } from '../helpers/manifest-fixtures'
 
 const base = {
@@ -518,6 +520,27 @@ describe('E5Embedder', () => {
     expect(Array.from(v)).toEqual([1, 0])
     expect(calls.length).toBe(3) // re-spawned a fresh start, rather than fast-failing on the latch
     await embedder.stop()
+  })
+
+  // #1012 code review: an engine file the pre-spawn check could not read just now (an antivirus holding
+  // it; here a folder at the library's recorded path, so the real read fails with EISDIR) is transient
+  // like the bind race above — never latched, and it reads `failed` (try again), not "check the files".
+  it('does NOT latch a start whose engine files could not be read; the next embed starts (#1012)', async () => {
+    initBinaryVerification(false) // as packaged: the real pre-spawn verifier runs
+    try {
+      const binPath = await binaryWithMarker('llama-server.exe', 'unreadable')
+      const { spawn, calls } = fakeSpawn()
+      const embedder = new E5Embedder({ ...base, binPath, spawn, fetchImpl: embedFetch([[1, 0]]) })
+      await expect(embedder.embed(['a'])).rejects.toMatchObject({ name: 'EmbedderError', kind: 'failed' })
+      expect(calls.length).toBe(0) // never spawned
+      restoreEngineLibrary(binPath) // the lock released
+      const [v] = await embedder.embed(['b'])
+      expect(Array.from(v)).toEqual([1, 0])
+      expect(calls.length).toBe(1) // a fresh start, not the latched error
+      await embedder.stop()
+    } finally {
+      verifierInert()
+    }
   })
 
   // #244 + #634: a lock during a cold start aborts the start; the embed waiting on it ends as

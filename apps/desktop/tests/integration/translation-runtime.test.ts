@@ -14,6 +14,8 @@ import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import { isRuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import { initBinaryVerification } from '../../src/main/services/binary-verifier'
+import { binaryWithMarker, restoreEngineLibrary, verifierInert } from '../helpers/binary-fixtures'
 import { until, within } from '../helpers/hang-budget'
 import {
   FakeChild,
@@ -661,6 +663,40 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
     // #163 (T-9): the spawn COUNT is LlamaServer's own bind-retry policy; pin only the posture.
     expect(calls.every((c) => deviceOf(c.args) === 'auto')).toBe(true)
     await rt.stop()
+  })
+
+  // #1012 code review: an engine file the pre-spawn check could not read just now (a folder at the
+  // library's recorded path, so the real read fails with EISDIR) is transient like the bind race: rethrown
+  // raw, no CPU fallback, no latch. The next translate starts on the GPU.
+  it('a start whose engine files could not be read neither falls back nor latches; the next translate starts on the GPU (#1012)', async () => {
+    initBinaryVerification(false) // as packaged: the real pre-spawn verifier runs
+    try {
+      const binPath = await binaryWithMarker('llama-server.exe', 'unreadable')
+      const { spawn, calls } = fakeSpawn()
+      const { fetchImpl } = translationFetch()
+      const fallbacks: string[] = []
+      const rt = new TranslationRuntime({
+        ...base,
+        binPath,
+        spawn,
+        fetchImpl,
+        onDeviceFallback: (reason) => fallbacks.push(reason)
+      })
+      const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+      expect(err).toMatchObject({ name: 'EngineFilesUnreadableError' })
+      expect(isTranslationStartError(err)).toBe(false)
+      expect(rt.isStartFailed()).toBe(false)
+      expect(calls.length).toBe(0)
+      expect(fallbacks).toEqual([])
+      restoreEngineLibrary(binPath)
+      expect(await rt.translate(translateOpts)).toBe(COMPLETION_TEXT)
+      expect(calls.length).toBe(1)
+      expect(deviceOf(calls[0].args)).toBe('auto') // the GPU rung: never demoted
+      expect(fallbacks).toEqual([])
+      await rt.stop()
+    } finally {
+      verifierInert()
+    }
   })
 
   it('a GPU-composed sidecar dying MID-SESSION latches the session to CPU (chat §5.3, session-scoped)', async () => {

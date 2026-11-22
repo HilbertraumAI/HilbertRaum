@@ -79,6 +79,8 @@ export function ladderHarness(config: {
   const modelLoadFailures: Array<{ modelId: string; reason: string }> = []
   /** #530: every `onEngineCannotRun` the ladder raised (the engine named, neither GPU nor model). */
   const engineFailures: Array<{ modelId: string; problem: EngineProblem }> = []
+  /** #1012 review round 3: every `onEngineFilesUnreadable` the ladder raised (each rung that ran could not read its files). */
+  const filesUnreadable: Array<{ modelId: string }> = []
   const selected: Array<{ kind: string; reason: string }> = []
   const crashes: Array<{ opts: RuntimeStartOptions; info: UnexpectedExitInfo }> = []
   const warmups: Array<{ event: string; detail?: string }> = []
@@ -182,6 +184,7 @@ export function ladderHarness(config: {
     onSpeculative: (_o, event, detail) => speculative.push({ event, detail }),
     onModelLoadFailure: (o, reason) => modelLoadFailures.push({ modelId: o.modelId, reason }),
     onEngineCannotRun: (o, problem) => engineFailures.push({ modelId: o.modelId, problem }),
+    onEngineFilesUnreadable: (o) => filesUnreadable.push({ modelId: o.modelId }),
     makePrefetch,
     gpu: {
       getGpuMode: () => config.gpuMode ?? 'auto',
@@ -204,6 +207,7 @@ export function ladderHarness(config: {
     failures,
     modelLoadFailures,
     engineFailures,
+    filesUnreadable,
     selected,
     crashes,
     warmups,

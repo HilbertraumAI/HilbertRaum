@@ -4,6 +4,7 @@ import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
   createCpuCrashAutoRestart,
+  modelLoadLatchReason,
   type GpuLadderDeps
 } from '../../src/main/services/runtime/factory'
 import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
@@ -12,7 +13,10 @@ import { RuntimeManager, type RuntimeStartOptions } from '../../src/main/service
 import { emergencyLock } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 import { workspaceStandIn } from '../helpers/workspace-stand-in'
-import type { GpuDevice } from '../../src/shared/types'
+import type { EngineProblem, GpuDevice } from '../../src/shared/types'
+import { initBinaryVerification } from '../../src/main/services/binary-verifier'
+import { resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
+import { binaryWithMarker, verifierInert } from '../helpers/binary-fixtures'
 import { t } from '../../src/shared/i18n'
 import { sseBody } from '../helpers/fake-sidecar'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -302,5 +306,58 @@ describe('an emergency lock stops the chat runtime before its reap (#1002)', () 
     await Promise.resolve()
     expect(crashes).toEqual([])
     expect(manager.activeModelId()).toBeNull()
+  })
+})
+
+// #1012 code review round 6: a library whose bytes differ from its marker (a copy cut short, bit-rot) is
+// refused on EVERY rung of the walk — the rungs share one engine copy, and the verdict is cached. Before,
+// each rung threw the plain integrity error, the GPU rung and the CPU control matched (`integrity`), and
+// the ladder blamed the MODEL and latched it for the session. Now each rung is an engine refusal: the
+// engine is named (the "Install again" verdict), neither the GPU nor the model. The REAL LlamaServer runs
+// the REAL verifier on a real copy; only the spawn / fetch / port seams are injected.
+describe('#1012 — a walk whose engine copy has a changed library blames neither the model nor the GPU', () => {
+  it('every rung refused as damaged engine files: the engine is named, no GPU failure, no model latch', async () => {
+    initBinaryVerification(false) // as packaged: the real pre-spawn verifier runs
+    try {
+      const bin = await binaryWithMarker('llama-server.exe', 'library-changed')
+      const { spawn, children } = fakeSpawn()
+      const gpuFailures: string[] = []
+      const modelFailures: string[] = []
+      const engineProblems: EngineProblem[] = []
+      const factory = createSelectingRuntimeFactory({
+        rootPath: '/root',
+        resolveBin: () => bin,
+        modelExists: () => true,
+        makeLlama: (o, binPath, rung) =>
+          createLlamaRuntime(o, {
+            binPath,
+            extraArgs: rung?.extraArgs,
+            onUnexpectedExit: rung?.onUnexpectedExit,
+            spawn,
+            fetchImpl: healthOkFetch,
+            findPort: async () => 50_000,
+            healthIntervalMs: 1
+          }),
+        onModelLoadFailure: (_o, reason) => modelFailures.push(reason),
+        onEngineCannotRun: (_o, problem) => engineProblems.push(problem),
+        gpu: {
+          getGpuMode: () => 'auto',
+          probeDevices: async () => [RTX],
+          resolveCpuBin: () => null,
+          onGpuFailure: (reason) => gpuFailures.push(reason)
+        }
+      })
+      const runtime = factory(opts)
+      await runtime.start()
+      expect(children).toHaveLength(0) // no rung spawned the changed copy
+      expect(runtime.backend).toBe('mock')
+      expect(engineProblems).toEqual([expect.objectContaining({ family: 'llama_cpp', reason: 'files-damaged' })])
+      expect(modelFailures).toEqual([])
+      expect(gpuFailures).toEqual([])
+      expect(modelLoadLatchReason('m')).toBeNull()
+    } finally {
+      verifierInert()
+      resetEngineProblemsForTest()
+    }
   })
 })

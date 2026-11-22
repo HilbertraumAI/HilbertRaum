@@ -114,7 +114,7 @@ export type KiwixManageChildState = 'not-spawned' | 'exited' | 'uncertain'
  *  character because no ASCII spelling of the archive existed (`planKiwixManageAdd`) — what an
  *  `exit` most likely means then, since the pinned build mis-reads it; false otherwise. */
 export class KiwixManageError extends Error {
-  readonly kind: 'verify' | 'spawn' | 'exit' | 'timeout' | 'abort'
+  readonly kind: 'verify' | 'files' | 'filesUnreadable' | 'spawn' | 'exit' | 'timeout' | 'abort'
   readonly childState: KiwixManageChildState
   readonly settled: Promise<void> | null
   readonly nonAsciiArgv: boolean
@@ -186,8 +186,12 @@ export async function kiwixManageAdd(
   const signal = opts.signal
 
   // Re-hash kiwix-manage against its install marker BEFORE spawning it (vuln-scan B) —
-  // the same pre-spawn gate every llama-server spawn already runs (sidecar.ts doStart).
-  const verdict = await verifyBinaryBeforeSpawn(managePath)
+  // the same pre-spawn gate every llama-server spawn already runs (sidecar.ts doStart). #1012:
+  // a missing program or library refuses too (review R-1, R-6: the loader would look for a missing
+  // library in the folder this child starts in), as does a file that cannot be read just now. Code review
+  // round 7: it runs on `missing-other` (below), so it asks for every present file to be hashed; that
+  // verdict is then kept for the session, so a library build no longer re-hashes the copy for each pack.
+  const verdict = await verifyBinaryBeforeSpawn(managePath, { startsOnMissingOther: true })
   if (verdict === 'mismatch') {
     throw new KiwixManageError(
       'kiwix-manage failed pre-spawn integrity verification',
@@ -195,9 +199,27 @@ export async function kiwixManageAdd(
       'not-spawned'
     )
   }
+  // (Code review round 3: its own kinds — a missing or locked file is no tamper. Round 5: a file that
+  // cannot be read JUST NOW is a kind of its own, which the library build and the service never latch.)
+  if (verdict === 'missing') {
+    throw new KiwixManageError('kiwix-manage was not started: a file of its install is missing', 'files', 'not-spawned')
+  }
+  if (verdict === 'unreadable') {
+    throw new KiwixManageError(
+      'kiwix-manage was not started: a file of its install could not be read just now',
+      'filesUnreadable',
+      'not-spawned'
+    )
+  }
   if (verdict === 'skip-legacy' && !warnedManageSkipLegacy) {
     warnedManageSkipLegacy = true
     log.warn('hashless install marker — kiwix-manage integrity not verified (R-1)')
+  }
+  // #1012 (owner call): only recorded files that are neither this program nor a library are gone (a
+  // tool the app never runs) and none present differs — no repair exists for the knowledge-pack
+  // tools, so kiwix-manage runs anyway.
+  if (verdict === 'missing-other') {
+    log.warn('kiwix-manage runs although files its install marker records are missing', { code: 'other-files-missing' })
   }
   // 'ok' / 'skip-dev' are silent — nothing to warn about.
 

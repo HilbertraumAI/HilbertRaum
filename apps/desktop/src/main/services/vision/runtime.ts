@@ -6,6 +6,7 @@ import {
   type LlamaServerOptions
 } from '../runtime/sidecar'
 import { readChatSSE } from '../runtime/llama'
+import { isEngineFilesUnreadableError } from '../runtime/engine-load'
 import type { VisionErrorCode } from '../../../shared/types'
 
 // The lazily-started vision sidecar (image-understanding plan §7 Option A, §10 `runtime.ts`).
@@ -310,6 +311,9 @@ export class VisionRuntime {
           // `startFailed` (permanently sticky here; `stop()` has already latched `stopped`, and
           // `isStartFailed()` must keep reporting the truth to the orchestrator).
           if (isStartAbortError(err) || abort.signal.aborted) throw err
+          // #1012 code review: an engine file the pre-spawn check could not read just now is transient —
+          // never latched, so the service neither discards this instance nor starts the #117 cooldown.
+          if (isEngineFilesUnreadableError(err)) throw err
           this.startFailed = err instanceof Error ? err : new Error(String(err))
           throw this.startFailed
         })
