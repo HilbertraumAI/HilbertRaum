@@ -27,6 +27,9 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- A plain question that only contains a word like "listed", "reviewer", "preview", "registration", "analyst" or
+  «Briefkasten», "When is the rent review?" or "How many minutes notice must be given?" is answered from the few
+  passages that match, as for any other lookup, instead of reading the whole document (#997).
 - **A stray file in your workspace folder no longer replaces one of your stored documents or images.**
   If a file from another workspace (for example from a copied or restored folder), another stray file
   or a folder sat next to a stored document or image under the name the app gives its new copy during
