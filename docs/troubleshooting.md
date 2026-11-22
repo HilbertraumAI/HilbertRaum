@@ -813,6 +813,33 @@ other programs to free memory, or pick a smaller model.
 
 ---
 
+## "The AI engine could not read one of its files just now"
+
+Before it starts the AI engine (or the voice engine, or the knowledge-pack tools), HilbertRaum checks
+every file the engine was installed with. This message means one of them could not be read at that
+moment. Most often another program is holding it, such as an antivirus scan that is checking the
+file. Nothing is blamed and nothing is remembered: the graphics card and the model are not marked as
+faulty.
+
+**Fix:**
+1. Wait a minute.
+2. Start the model again. Sending the question again is not enough: the answers stay simulated until the
+   model starts again. On the **AI Model** screen (the notice's button opens it), choose **Stop
+   runtime**, then **Use this model**. Locking and unlocking the workspace works too.
+
+A translation, an audio import, a dictation or an image question can simply be tried again.
+
+If the message keeps coming back, the file is not just busy:
+- Something keeps refusing it, such as a security product that blocks the file without removing it, or
+  a changed file permission. Allow the engine folder (`runtime/` on the drive) in that program, or
+  restore the file's permission.
+- The app cannot repair this on its own: the engine's files are not damaged, only unreadable.
+
+If a file is missing instead, the AI Model screen offers **Install again** — see "The AI engine can't run
+on this computer" above.
+
+---
+
 ## The AI Model screen says "Not responding"
 
 The model is running but has stopped answering: it failed a quick check, or an answer on it waited

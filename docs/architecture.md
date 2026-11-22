@@ -5864,8 +5864,17 @@ rung ended so).
     - the translate view (`TranslateErrorCode` `filesUnreadable`);
     - a document translation task (a friendly task error);
     - an audio import (a persist-canonical row text, display-mapped);
-    - dictation.
-  - The knowledge-pack tools report a missing or locked file with their own `files` kind.
+    - dictation;
+    - an image question (`VisionErrorCode` `filesUnreadable`, round 5; no #117 cooldown).
+  - The chat's files-unreadable notice carries the `models` target (round 5), so its button opens the AI
+    Model screen. There, "Stop runtime" then "Use this model" restart the model: `RuntimeManager.start` is
+    idempotent for the same model, so choosing it alone keeps the demo runtime.
+  - The knowledge-pack tools report a missing file with their own `files` kind and an unreadable one
+    with `filesUnreadable` (round 5). `ZimService` latches only `files` until the pack set changes.
+    `writeLibraryXml` stops on a `filesUnreadable` kiwix-manage instead of skipping each pack, which
+    would publish an empty library for the revision.
+  - A folder or another non-regular file at a recorded path is `missing`, not `unreadable` (round 5;
+    one `stat` per file before the read).
 - **Tests:**
   - `binary-verify-spawn.test.ts`: the two "#1012" describes, one row per site and verdict.
   - `binary-verifier.test.ts` "(#1012)": includes which missing file counts, the early stop and the

@@ -3549,7 +3549,12 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
 - **Verdicts:**
   - **`mismatch`**: a changed file. A tamper.
   - **`missing`**: a recorded file is not there, and no present file differs. The missing file is the
-    program itself or a library (`.dll`, `.so`, `.so.N`, `.dylib`). Not a tamper.
+    program itself or a library (`.dll`, `.so`, `.so.N`, `.dylib`). Not a tamper. A folder or another
+    non-regular file at a recorded path counts as missing (code review round 5: it never heals by
+    waiting, and reading a pipe would block the check; one `stat` per file).
+    - Because the check stops at the first missing program or library, `missing` can hide a changed
+      file later in the order. The engine is refused either way, and a reinstall replaces every file,
+      but the log then records "missing", not a tamper.
   - **`missing-other`**: the same, but only for files that are neither the program nor a library: a tool
     the app never runs, a licence text.
   - **`unreadable`**: a recorded file could not be read just now (an antivirus or indexer holding it, a
@@ -3564,6 +3569,10 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     including the knowledge-pack library folder these children start in, where a planted copy would be
     loaded. They start on `missing-other`, with a code-only log line (owner decision). A changed file is
     always refused.
+    - A `missing` file latches the pack service's start failure until the pack set changes (round 5).
+    - An `unreadable` one does not: kiwix-serve and kiwix-manage report it with their own
+      `filesUnreadable` kind. The service never latches that kind, and the library build stops on it
+      rather than publishing an empty library for the revision, so the next ask tries again.
   - **`unreadable`** refuses this attempt without blaming anything (code review round 3):
     - no "engine files damaged" verdict, and the probe gives no answer;
     - the start ladder counts it as no evidence about the GPU or the model;
@@ -3575,6 +3584,14 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
       `main.engine.filesUnreadable` ("try again in a minute") beside the demo runtime's simulated
       answers; otherwise it shows the model notice, without the latch. The next start walks the ladder
       again;
+    - the notice's button opens the AI Model screen (round 5). There, "Stop runtime" and then "Use this
+      model" start the model again; choosing the same model alone keeps the demo runtime;
+    - when a lower rung starts after a higher one could not read its files, the chat runs lower (on the
+      processor, say) for the session without a notice (round 5). The selection's log line says so,
+      nothing is latched, and the next start walks the ladder again. (Before #1012 the GPU failure was
+      persisted instead);
+    - an image question fails with its own `filesUnreadable` code (round 5), not "try again, or pick
+      another model", and starts no #117 cooldown;
     - the translate view, a document translation task, an audio import and dictation stop at once with
       that same message (round 4): a `filesUnreadable` job code, the friendly task error, the persisted
       row text (display-mapped) and the dictation error. There is no per-window retry and no generic
@@ -3588,6 +3605,9 @@ re-hashes all of them before the first spawn of a session (owner decision 2026-1
     it.
   - **A missing program or library** stops the read at that file. A quarantined DLL costs at most the
     files before it in the check's order, not the whole copy, on each attempt.
+  - **kiwix-tools:** each kiwix program's verdict covers the whole kiwix copy. An intact copy is hashed
+    once per program per session; a `missing-other` copy is hashed again at every start, since that
+    verdict is not cached.
   - **Timing on the probe and the speculative rung:** the hash runs before the probe's own 10 s cap
     starts. The speculative rung's wait for the probe therefore includes it once per session: about 3 s
     on a USB 2 stick (~95 MB at ~30 MB/s, estimated).
@@ -3693,8 +3713,9 @@ engines in their own folder.
 - **`KiwixServer` (`zim/serve.ts`) and `kiwixManageAdd` (`zim/tools.ts`)** — `mismatch`, `missing` (the
   program or a library) and `unreadable` refuse before spawn.
   - A changed file keeps the integrity error.
-  - A missing or locked file gets its own kind, `files` ("a file of its install is missing or could not
-    be read"), never the tamper wording.
+  - A missing file gets its own kind, `files` ("a file of its install is missing"), and one that cannot
+    be read just now gets `filesUnreadable` (round 5). Neither uses the tamper wording, and only
+    `files` latches.
   - `missing-other` is logged with its code only and the program starts (no in-app repair exists for the
     knowledge-pack tools).
 

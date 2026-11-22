@@ -352,8 +352,12 @@ password recovery — are documented in
      is refused (the loader would look for it there), but an unrecorded one is not checked.
   3. **A library that stays unreadable gets no repair offer** (review R-4). Examples: a security product
      that denies access and leaves the file, or a wrong file permission. Every start is refused as
-     `unreadable`. That records no "engine files damaged" verdict (it is not damage), so there is no
-     "Install again" offer, and the chat runs on the demo runtime until the access is fixed.
+     `unreadable`, and "try again in a minute" keeps coming back, because on Windows a lasting deny-read
+     cannot be told from a passing hold (both read as EPERM or EBUSY). That records no "engine files
+     damaged" verdict (it is not damage), so the in-app reinstall is refused ("nothing to repair") and the
+     chat runs on the demo runtime. The fix is outside the app: allow the file in the security product, or
+     restore its permission. (A folder or another non-regular file at a recorded path is different: it
+     counts as missing, so it gets the "Install again" offer — code review round 5.)
 
   A follow-up proposes refusing an unrecorded library and starting the engines in their own folder.
 
@@ -376,8 +380,18 @@ password recovery — are documented in
     "try again in a minute".
   - A chat start in which an attempt ended so latches nothing, not even what its other attempts showed.
     It runs on the demo runtime: with "try again in a minute" when nothing else went wrong, else with the
-    usual "this model could not be loaded" notice. The next start of the model (select it again, or the
-    next unlock) walks the start ladder again.
+    usual "this model could not be loaded" notice.
+  - **Starting the model again:** resending a question is not enough. It gets another simulated answer,
+    because nothing restarts the model, and choosing the same model again keeps the demo runtime running.
+    The notice's button opens the AI Model screen: choose "Stop runtime", then "Use this model". That
+    start walks the ladder again, and so does the next unlock.
+  - When a higher attempt could not read its files but a lower one started, the chat runs lower (on the
+    processor, say) for the session without a notice. Only the log says so; the next start of the model
+    tries the card again.
+  - An image question fails with "try again in a minute" and can be asked again at once (no cooldown).
+  - A knowledge-pack tool file that cannot be read just now does not keep the packs down for the
+    session: the next question that uses a pack tries again. A missing one does, until the pack set
+    changes.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time

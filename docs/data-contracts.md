@@ -139,7 +139,10 @@ same channels, same "Install again" offer. An engine file the check could not re
 - `documents.error_message` gained the key's English text as a persist-canonical, exact-match value (an
   audio import; display-mapped), so that English value is frozen like the other row texts;
 - dictation rejects with it;
-- a chat start shows it as a `runtime:notice`.
+- a chat start shows it as a `runtime:notice` with the `'models'` target (code review round 5: its button
+  opens the AI Model screen, where the model can be started again);
+- `VisionErrorCode` gained `'filesUnreadable'` (round 5; the renderer maps it to the same key, and an
+  unknown code still falls back to `runtimeFailed`).
 #634 (`rag-design.md` §12.4 "#634 amendment"): `documents.error_message` gained three
 persist-canonical English values for a search-model failure — `main.ingest.searchModelTimeout`,
 `…searchModelCannotStart`, `…searchModelFailed` (exact match, display-map translated) — and a lock
