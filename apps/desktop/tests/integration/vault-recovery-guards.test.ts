@@ -9,6 +9,7 @@ import {
   encryptFile,
   WorkspaceController,
   RECOVERY_SUFFIX,
+  REKEY_JOURNAL_NAME,
   VaultLockError,
   VaultRecoveryBlockedError,
   type VaultPaths
@@ -106,6 +107,9 @@ const failures = vi.hoisted(() => ({
   /** #1001 review round 1: renameSync throws this error code for a staged document or image copy renamed onto its stored
    *  copy's name while set: a stage an antivirus or indexer holds without delete sharing (it reads, it cannot move). */
   renameThrowOnStagedSidecar: null as string | null,
+  /** #1015 review R4: renameSync throws a plain `TypeError` (no `code`, no `syscall`: no file error) for a staged document
+   *  or image copy renamed onto its stored copy's name while set: the stand-in for a programming error in the swap. */
+  renameThrowsPlainErrorOnStagedSidecar: false,
   /** #1001 review round 2: renameSync throws this error code for a stored copy the unlock moved aside (`….enc.tmp` under
    *  `documents/` or `images/`) moved back onto its own name while set: the move back after a failed swap fails too. */
   renameThrowOnAsideRestore: null as string | null,
@@ -182,6 +186,10 @@ vi.mock('node:fs', async (importOriginal) => {
       if (heldStage !== null && isStagedSidecar(from) && String(to) === String(from).slice(0, -'.new'.length)) {
         failures.hits.renameStagedSidecar += 1
         throw errnoError(heldStage, `${heldStage}: rename (a held staged document copy)`)
+      }
+      if (failures.renameThrowsPlainErrorOnStagedSidecar && isStagedSidecar(from)) {
+        failures.hits.renameStagedSidecar += 1
+        throw new TypeError('a programming error in the swap')
       }
       const heldAside = failures.renameThrowOnAsideRestore
       if (heldAside !== null && isAsideCopy(from) && String(to) === String(from).slice(0, -'.tmp'.length)) {
@@ -337,6 +345,7 @@ beforeEach(() => {
   failures.openThrowOnStagedSidecar = null
   failures.sidecarTargetDeletePending = null
   failures.renameThrowOnStagedSidecar = null
+  failures.renameThrowsPlainErrorOnStagedSidecar = false
   failures.renameThrowOnAsideRestore = null
   failures.statReportsNoInode = false
   failures.openThrowOnSidecarTarget = null
@@ -1252,23 +1261,7 @@ describe('a staged document copy the unlock cannot read (#1001)', () => {
   // the data key but cannot be moved (a hold that lets it be read and refuses a delete) used to cost the stored copy,
   // shredded first; the stage then counted as the only copy left, and every later start and unlock threw the raw rename
   // error. Now the stored copy goes back to its name, the workspace opens, and later starts and unlocks leave the stage
-  // for an unlock that can move it.
-  /** A locked workspace under `pw` whose stored copy `documents/d2.pdf.enc` is still under a retired key, with its new
-   *  copy ('the new copy') staged beside it under the data key: a v1 → v2 password change cut short after its commit.
-   *  With the bytes of both. */
-  async function retiredCopyBesideStage(): Promise<{ vp: FreshVaultPaths; target: string; staged: string; before: Buffer[] }> {
-    const vp = lockedVault('recovery-guards-1001', 'pw')
-    const target = join(dirname(vp.dbPath), 'documents', 'd2.pdf.enc')
-    const seed = unlockedController(vp, 'pw')
-    const staged = await storeCopy(seed, vp.root, `${target}.new`, 'the new copy') // under the data key
-    seed.lock()
-    const src = join(vp.root, 'retired-src.txt')
-    writeFileSync(src, 'the new copy')
-    encryptFile(src, target, randomBytes(32)) // the stored copy, still under the retired key
-    rmSync(src)
-    return { vp, target, staged, before: [readFileSync(target), readFileSync(staged)] }
-  }
-
+  // for an unlock that can move it. (`retiredCopyBesideStage` is below the describes: #1015 uses it too.)
   it('a stage that opens under the data key but cannot be renamed into place: the stored copy stays, nothing throws later, and the retry swaps it in', async () => {
     const { vp, target, staged, before } = await retiredCopyBesideStage()
     const unchanged = (): void => {
@@ -1459,5 +1452,80 @@ describe('a staged document copy the unlock cannot read (#1001)', () => {
     expect(await readStoredCopy(ctl, vp.root, target)).toBe('the copy under pw')
     expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
     ctl.shutdown()
+  })
+})
+
+/** A locked workspace under `pw` whose stored copy `documents/d2.pdf.enc` is still under a retired key, with its new
+ *  copy ('the new copy') staged beside it under the data key: a v1 → v2 password change cut short after its commit.
+ *  With the bytes of both. (Function declarations are hoisted: the #1001 rows above use it too.) */
+async function retiredCopyBesideStage(): Promise<{ vp: FreshVaultPaths; target: string; staged: string; before: Buffer[] }> {
+  const vp = lockedVault('recovery-guards-1001', 'pw')
+  const target = join(dirname(vp.dbPath), 'documents', 'd2.pdf.enc')
+  const seed = unlockedController(vp, 'pw')
+  const staged = await storeCopy(seed, vp.root, `${target}.new`, 'the new copy') // under the data key
+  seed.lock()
+  const src = join(vp.root, 'retired-src.txt')
+  writeFileSync(src, 'the new copy')
+  encryptFile(src, target, randomBytes(32)) // the stored copy, still under the retired key
+  rmSync(src)
+  return { vp, target, staged, before: [readFileSync(target), readFileSync(staged)] }
+}
+
+// #1015: a stage the rekey journal lists is swapped in by the start, with no key at hand. A swap the start cannot make
+// (here a held stage: an antivirus or indexer that lets it be read and refuses a delete) threw out of `init()`, and in the
+// app out of the backend start, before any IPC was registered; in a process that lives on, each unlock answered the raw
+// error as "Could not open". Now the start reports its recovery as blocked, the unlock answers "try again" (the #242
+// answer) with the error code in its log line and no path, and the retry finishes the swap once the hold is gone.
+describe("a staged copy the journal lists that the start cannot swap in (#1015)", () => {
+  it('a held stage: the start is blocked, the unlock answers vault_recovery_blocked with the code and no path, and the retry swaps it in', async () => {
+    const { vp, target, staged, before } = await retiredCopyBesideStage()
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+    writeFileSync(journal, JSON.stringify({ version: 1, staged: [staged], remove: [] }))
+    const journalBytes = readFileSync(journal)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    let result: unknown
+    let logged: string[] = []
+    failures.renameThrowOnStagedSidecar = 'EBUSY'
+    try {
+      expect(() => ctl.init()).not.toThrow()
+      expect(ctl.isRecoveryBlocked()).toBe(true)
+      expect(ctl.getState().state).toBe('locked')
+      const linesBefore = readLogTail(100_000).length
+      result = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+      logged = readLogTail(100_000)
+        .slice(linesBefore)
+        .filter((line) => line.includes('the startup recovery is blocked'))
+    } finally {
+      failures.renameThrowOnStagedSidecar = null
+    }
+    expect(failures.hits.renameStagedSidecar).toBeGreaterThan(0)
+    expect(result).toEqual({ ok: false, reason: 'vault_recovery_blocked', message: tMain('main.workspace.recoveryBlocked') })
+    expect(readFileSync(staged).equals(before[1]), 'the stage').toBe(true)
+    expect(readFileSync(journal).equals(journalBytes), 'the journal').toBe(true)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain('EBUSY')
+    expect(logged[0]).not.toContain(basename(vp.root))
+    expect(ctl.unlock('pw').state).toBe('unlocked') // the hold is gone: the unlock finishes the swap first
+    expect(existsSync(staged)).toBe(false)
+    expect(existsSync(journal)).toBe(false)
+    expect(await readStoredCopy(ctl, vp.root, target)).toBe('the new copy')
+    ctl.shutdown()
+  })
+
+  // Review R4: only a file error (a hold, a folder at the name, an I/O error) is the "try again" answer. Any other throw
+  // in the recovery is a fault of the app, and it surfaces as it did, never as a permanent "try again" with no trace.
+  it('an error that is no file error is not turned into "try again": it surfaces from the start as before', async () => {
+    const { vp, staged } = await retiredCopyBesideStage()
+    writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL_NAME), JSON.stringify({ version: 1, staged: [staged], remove: [] }))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.renameThrowsPlainErrorOnStagedSidecar = true
+    try {
+      expect(() => ctl.init()).toThrow(TypeError)
+    } finally {
+      failures.renameThrowsPlainErrorOnStagedSidecar = false
+    }
+    expect(failures.hits.renameStagedSidecar).toBeGreaterThan(0)
+    expect(ctl.isRecoveryBlocked()).toBe(false)
   })
 })

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { closeSync, existsSync, linkSync, openSync, readFileSync, statSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, statSync, writeSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
 import { emergencyLock } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 import { FILE_CHUNK_BYTES, WorkspaceController, encryptFile, type VaultPaths } from '../../src/main/services/workspace-vault'
@@ -16,8 +15,9 @@ import { ENCRYPTION_REQUIRED, lockedVault, unlockedController } from '../helpers
 // by then. These rows run the real chain (`emergencyLock` → `WorkspaceController.shutdown` → `lockEncryptedVault` → the
 // budgeted overwrite) on a real vault, with a budget of their own (8.5 s), so their arithmetic is theirs.
 //
-// The witness is a hard link to the working file: it shares the file's blocks, so it shows what the overwrite wrote in
-// place, and it keeps them readable after the lock unlinked the working file's name. The drive's time is modelled where
+// The witness is a descriptor held open on the working file: it reads the file's blocks, so it shows what the overwrite
+// wrote in place, and it keeps them readable after the lock unlinked the working file's name. (#1014: it was a hard link
+// before; a name another name shares is now only unlinked, never overwritten.) The drive's time is modelled where
 // a stick spends it: each `fdatasync` of the budgeted overwrite moves the test clock on by `drive.syncMs` (everything
 // else in `node:fs` is the real module); the re-encrypt seam sets the clock to the moment the encrypt ended.
 //
@@ -79,8 +79,8 @@ const PAGE = 4096
 interface Session {
   vp: VaultPaths
   ctl: WorkspaceController
-  /** The hard link to the working file. */
-  witness: string
+  /** The working file's bytes as the witness descriptor reads them now; the descriptor is closed after this one read. */
+  witness: () => Buffer
   /** The working file as the lock had it when it encrypted it (the bytes the overwrite then meets). */
   encrypted: () => Buffer
 }
@@ -107,12 +107,19 @@ function session(bytes: number, clockAfterEncrypt = 0): Session {
   db.exec('CREATE TABLE hr982 (b BLOB)')
   db.prepare('INSERT INTO hr982 (b) VALUES (?)').run(Buffer.alloc(bytes, MARKER))
   updateSettings(db, { contextTokens: 4242 })
-  const witness = join(vp.root, 'witness')
-  linkSync(vp.dbPath, witness)
+  const fd = openSync(vp.dbPath, 'r')
   return {
     vp,
     ctl,
-    witness,
+    witness: () => {
+      try {
+        const out = Buffer.alloc(fstatSync(fd).size)
+        readSync(fd, out, 0, out.length, 0)
+        return out
+      } finally {
+        closeSync(fd)
+      }
+    },
     encrypted: () => {
       if (!seen.file) throw new Error('the lock never encrypted the working file')
       return seen.file
@@ -159,7 +166,7 @@ describe('the Linux quit leg’s lock overwrites the working file only as far as
     expect(quitLegLock(s.ctl)).toEqual({ durationMs: BUDGET_MS + 500, lockFailed: false, shredCut: true })
     expect(existsSync(s.vp.dbPath)).toBe(false)
     expect(drive.datasyncs).toBe(0)
-    expect(readFileSync(s.witness).equals(s.encrypted())).toBe(true) // not one byte written over
+    expect(s.witness().equals(s.encrypted())).toBe(true) // not one byte written over
     const next = unlockedController(s.vp, PW)
     expect(getSettings(next.requireDb()).contextTokens).toBe(4242)
     next.lock()
@@ -174,7 +181,7 @@ describe('the Linux quit leg’s lock overwrites the working file only as far as
     expect(drive.datasyncs).toBe(2)
     expect(existsSync(s.vp.dbPath)).toBe(false)
     const before = s.encrypted()
-    const after = readFileSync(s.witness)
+    const after = s.witness()
     expect(pagesLeft(before.subarray(0, 2 * CHUNK), after.subarray(0, 2 * CHUNK))).toBe(0)
     expect(after.subarray(0, 2 * CHUNK).includes(MARKER)).toBe(false)
     // The rest held the session's plaintext and was left as it was: freed blocks of an unlinked file, not a readable one.
@@ -192,7 +199,7 @@ describe('the Linux quit leg’s lock overwrites the working file only as far as
     expect(quitLegLock(s.ctl)).toMatchObject({ lockFailed: false, shredCut: true })
     expect(drive.datasyncs).toBe(0)
     expect(existsSync(s.vp.dbPath)).toBe(false)
-    expect(readFileSync(s.witness).equals(s.encrypted())).toBe(true)
+    expect(s.witness().equals(s.encrypted())).toBe(true)
   })
 
   // A write may write less than it was asked to (a full page cache, a signal): the overwrite writes on from where it
@@ -202,7 +209,7 @@ describe('the Linux quit leg’s lock overwrites the working file only as far as
     const s = session(THREE_CHUNKS)
     expect(quitLegLock(s.ctl)).toMatchObject({ lockFailed: false, shredCut: false })
     expect(drive.datasyncs).toBe(3) // still one sync per whole chunk
-    expect(pagesLeft(s.encrypted(), readFileSync(s.witness))).toBe(0)
+    expect(pagesLeft(s.encrypted(), s.witness())).toBe(0)
     expect(existsSync(s.vp.dbPath)).toBe(false)
   })
 
@@ -218,7 +225,7 @@ describe('the Linux quit leg’s lock overwrites the working file only as far as
     const finished = quitLegLock(s.ctl, () => (reads++ === 0 ? 0 : BUDGET_MS + 500))
     expect(finished).toMatchObject({ lockFailed: false, shredCut: true })
     expect(existsSync(s.vp.dbPath)).toBe(false)
-    expect(readFileSync(s.witness).equals(noise)).toBe(true) // not one byte written over
+    expect(s.witness().equals(noise)).toBe(true) // not one byte written over
     expect(s.ctl.getState()).toMatchObject({ state: 'locked', lockNotice: 'working_copy_lost' })
   })
 
@@ -228,7 +235,7 @@ describe('the Linux quit leg’s lock overwrites the working file only as far as
     expect(quitLegLock(s.ctl)).toMatchObject({ lockFailed: false, shredCut: false })
     expect(drive.datasyncs).toBe(3)
     const before = s.encrypted()
-    const after = readFileSync(s.witness)
+    const after = s.witness()
     expect(after.length).toBe(before.length)
     expect(pagesLeft(before, after)).toBe(0)
     expect(after.includes(MARKER)).toBe(false)
@@ -252,7 +259,7 @@ describe('the Linux quit leg’s lock overwrites the working file only as far as
     const s = session(1024 * 1024, BUDGET_MS + 500) // a clock past any deadline: none may apply here
     lock(s.ctl)
     expect(existsSync(s.vp.dbPath)).toBe(false)
-    expect(pagesLeft(s.encrypted(), readFileSync(s.witness))).toBe(0)
+    expect(pagesLeft(s.encrypted(), s.witness())).toBe(0)
     expect(drive.datasyncs).toBe(0)
   })
 })

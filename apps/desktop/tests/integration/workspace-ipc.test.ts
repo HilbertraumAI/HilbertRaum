@@ -1512,6 +1512,32 @@ describe('a workspace failure line names no path (#956)', () => {
     }
   })
 
+  // #1014: the start reads a password change's journal before any password and acts only on what lies inside the
+  // workspace folder (and, at the unlock, on the out-of-store copies the open database lists). An entry it refuses is
+  // left as it is and counted, and the count reaches the log once, in fixed words: no path, no file name.
+  it('a journal entry outside the workspace is left as it is and counted in one line that names no path (#1014)', async () => {
+    const vp = lockedVault('wsipc', PW)
+    const outside = join(vp.root, 'notes.txt') // on the drive, outside `workspace/`
+    writeFileSync(outside, 'keep me')
+    writeFileSync(
+      join(dirname(vp.dbPath), 'rekey-journal.json'),
+      JSON.stringify({ version: 1, staged: [], remove: [outside] })
+    )
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      expect(readFileSync(outside, 'utf8')).toBe('keep me')
+      const lines = linesAfter(marker, '(#1014)')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('"refused":1')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+    } finally {
+      ctrl.lock()
+    }
+  })
+
   // #973: an unlock that removes a staged copy of the database which does not open under the workspace's key (a create's
   // leftover beside a workspace put back) says so once, on the success path, in fixed words: no path, no file name.
   it('an unlock that removes a staged copy from another key logs one line that names no path (#973)', async () => {

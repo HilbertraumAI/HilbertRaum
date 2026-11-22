@@ -298,7 +298,22 @@ function initBackend(): void {
     // file; the crash sweep was skipped and the unlock IPC refuses until a retry lands it.
     // #911: also a stat of `.enc` that failed other than ENOENT, or, with `.enc` missing, a `-wal` the replay could
     // not empty (a full drive, another program reading the file): nothing was moved or shredded.
-    log.warn('Workspace recovery blocked: a recovery file is held, or a workspace file could not be read or replayed')
+    // #1015: or a password change's staged file the rekey recovery could not put in place (a held file, a folder at the
+    // name); the journal stays, and the next start or unlock finishes it. Its file error's code only, never a path.
+    const code = workspace.recoveryBlockedCode()
+    log.warn(
+      'Workspace recovery blocked: a recovery file is held, a workspace file could not be read or replayed, or a ' +
+        "password change's staged file could not be put in place",
+      code === null ? undefined : { code }
+    )
+  }
+  // #1014: the rekey journal entries the start left as they were (outside the workspace folder and not the rotated log,
+  // or not a stage at all). A count only: no path, no file name.
+  const journalRefusals = workspace.takeJournalRefusals()
+  if (journalRefusals > 0) {
+    log.warn("Workspace start: left the password-change journal's entries it cannot vouch for as they are (#1014)", {
+      refused: journalRefusals
+    })
   }
   if (workspace.discardedOnlyCopy()) {
     // #911 (owner decision D3): `.enc` was missing and the working copy, the only one, was damaged, so the start swept

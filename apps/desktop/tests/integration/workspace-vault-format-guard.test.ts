@@ -1156,6 +1156,31 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
     }
   })
 
+  // #1014 (folded in): the same directory, with a rekey journal that lists the staged name, as every journal a password
+  // change writes does. The start counted the staged database by the name's existence, so it shredded `.enc` and renamed
+  // the directory into its place: the workspace was gone. A staged name counts only when it is a file (the #1001 review
+  // round 2 rule for journal entries), so `.enc` and the directory stay as they are, and the unlock opens the workspace.
+  it('a directory at the staged name that the journal lists: the start and the unlock leave .enc and the directory as they are', () => {
+    const vp = workspaceWithMarker('fmtguard-973')
+    mkdirSync(stagedOf(vp))
+    writeFileSync(join(stagedOf(vp), 'held'), 'x')
+    rekeyJournal(vp, 1, [stagedOf(vp)])
+    const enc = sha(vp.encPath)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(statSync(vp.encPath).isFile(), '.enc is still a file').toBe(true)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(readdirSync(stagedOf(vp))).toEqual(['held'])
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
+      expect(sha(vp.encPath)).toBe(enc)
+      expect(readdirSync(stagedOf(vp))).toEqual(['held'])
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
   // Review round 2 R5: once the unlock has removed a foreign staged database, the rest of the staged set gets what the
   // start's recovery would have given it with that file gone (master's start rolled all of it forward together with the
   // leftover): the document twin is swapped in, the journal cleared or, unreadable, quarantined. While the database

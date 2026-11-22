@@ -1,15 +1,20 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
+  closeSync,
   copyFileSync,
   mkdirSync,
   existsSync,
   linkSync,
+  lstatSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   writeFileSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync
 } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -34,6 +39,7 @@ import {
   FILE_CHUNK_BYTES,
   shredFile,
   shredFileAsync,
+  shredFileWithin,
   applyPendingRekey,
   rewrapVaultKey,
   stageRekey,
@@ -435,8 +441,9 @@ describe('streaming file crypto (M5)', () => {
 })
 
 // #860 V6: the secure delete overwrites in FILE_CHUNK_BYTES chunks, and every other row shreds a file smaller than one
-// chunk, so a loop that stopped after the first chunk passed. A hard link keeps the overwritten bytes readable after
-// the unlink: every chunk, the last partial one included, must differ from the plaintext.
+// chunk, so a loop that stopped after the first chunk passed. A descriptor held open across the shred keeps the
+// overwritten bytes readable after the unlink: every chunk, the last partial one included, must differ from the
+// plaintext. (#1014: the row watched through a hard link before; a name another name shares is now only unlinked.)
 describe('secure delete past one chunk (shredFile / shredFileAsync)', () => {
   it.each([
     ['shredFile', async (p: string) => shredFile(p)],
@@ -446,16 +453,86 @@ describe('secure delete past one chunk (shredFile / shredFileAsync)', () => {
     const path = join(dir, 'plain.bin')
     const plain = Buffer.alloc(2 * FILE_CHUNK_BYTES + 1024 * 1024, 0xa5)
     writeFileSync(path, plain)
-    linkSync(path, join(dir, 'view.bin'))
-    await shred(path)
-    expect(existsSync(path)).toBe(false)
-    const after = readFileSync(join(dir, 'view.bin'))
-    expect(after.length).toBe(plain.length)
-    for (const start of [0, FILE_CHUNK_BYTES, 2 * FILE_CHUNK_BYTES]) {
-      const end = Math.min(start + FILE_CHUNK_BYTES, plain.length)
-      expect(after.subarray(start, end).equals(plain.subarray(start, end))).toBe(false)
+    const view = openSync(path, 'r')
+    try {
+      await shred(path)
+      expect(existsSync(path)).toBe(false)
+      const after = Buffer.alloc(plain.length + 1)
+      expect(readSync(view, after, 0, after.length, 0)).toBe(plain.length)
+      for (const start of [0, FILE_CHUNK_BYTES, 2 * FILE_CHUNK_BYTES]) {
+        const end = Math.min(start + FILE_CHUNK_BYTES, plain.length)
+        expect(after.subarray(start, end).equals(plain.subarray(start, end))).toBe(false)
+      }
+    } finally {
+      closeSync(view)
     }
   })
+})
+
+/** Can this account make a symbolic link? (A Windows account without the privilege, and without developer mode,
+ *  cannot; there the hard-link rows below stand for it.) */
+const canSymlink = ((): boolean => {
+  const dir = tempRoot('shred-symlink-probe')
+  writeFileSync(join(dir, 'target'), 'x')
+  try {
+    symlinkSync(join(dir, 'target'), join(dir, 'link'), 'file')
+    return true
+  } catch {
+    return false
+  }
+})()
+
+// #1014: the secure delete judges the NAME by `lstat`, which never follows a link, and overwrites only a regular file
+// that no other name shares. A symbolic link or a hard link at a name the app shreds was written THROUGH before: the
+// random bytes landed in the file the link reaches, which may lie anywhere (the rekey journal's swap shreds the names it
+// lists, and a deleted document's out-of-store copy is an absolute path). Such a name is now only unlinked.
+describe('secure delete never writes through a link (#1014)', () => {
+  const twins: Array<[string, (path: string) => Promise<unknown>]> = [
+    ['shredFile', async (path) => shredFile(path)],
+    ['shredFileAsync', shredFileAsync],
+    ['shredFileWithin', async (path) => shredFileWithin(path, { deadline: Number.MAX_SAFE_INTEGER, now: () => 0 })]
+  ]
+
+  it.each(twins)('%s on a hard link removes that name only: the other name keeps every byte', async (_name, shred) => {
+    const dir = tempRoot('shred-hardlink')
+    const other = join(dir, 'outside.bin')
+    const bytes = randomBytes(64 * 1024)
+    writeFileSync(other, bytes)
+    const name = join(dir, 'name.bin')
+    linkSync(other, name)
+    await shred(name)
+    expect(existsSync(name)).toBe(false)
+    expect(readFileSync(other).equals(bytes)).toBe(true)
+  })
+
+  // A junction (on Windows; a link to a folder elsewhere) needs no privilege, so this row runs for every account. `rm`
+  // refuses one as a folder, so it stayed before, and a password change's swap onto that name then blocked every start.
+  it.each(twins)('%s on a junction removes the link only: the folder it reaches keeps its file', async (_name, shred) => {
+    const dir = tempRoot('shred-junction')
+    const target = join(dir, 'outside')
+    mkdirSync(target)
+    writeFileSync(join(target, 'kept.txt'), 'kept')
+    const name = join(dir, 'name.enc')
+    symlinkSync(target, name, 'junction')
+    await shred(name)
+    expect(() => lstatSync(name)).toThrow()
+    expect(readFileSync(join(target, 'kept.txt'), 'utf8')).toBe('kept')
+  })
+
+  it.runIf(canSymlink).each(twins)(
+    '%s on a symbolic link removes the link only: the file it reaches keeps every byte',
+    async (_name, shred) => {
+      const dir = tempRoot('shred-symlink')
+      const other = join(dir, 'outside.bin')
+      const bytes = randomBytes(64 * 1024)
+      writeFileSync(other, bytes)
+      const name = join(dir, 'name.bin')
+      symlinkSync(other, name, 'file')
+      await shred(name)
+      expect(() => lstatSync(name)).toThrow()
+      expect(readFileSync(other).equals(bytes)).toBe(true)
+    }
+  )
 })
 
 // ---- PERF-1: async vault crypto — byte-identical frame + yields to the event loop ----
