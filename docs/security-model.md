@@ -1302,13 +1302,21 @@ explicitly:
   `vault_recovery_blocked`; the retry is simply the next unlock, and it clears once the hold
   is gone — nothing is lost. Only a `.recovery` demonstrably OLDER than `.enc` (a spent
   leftover) is treated as safe to ignore. **A third cause (#1015):** the start's rekey recovery
-  cannot finish a committed password change's swap (a staged file or its target held by another
-  program, a folder at the target's name) or remove its write temps. It used to throw out of
-  `init()`, and in the app out of the backend start before any IPC was registered, so that run
-  had no working back end. Now the start reports blocked recovery and keeps its IPC; the unlock
+  cannot finish a committed password change's swap, or remove its write temps, because another
+  program holds a file (an antivirus, an indexer; an I/O error counts the same). It used to throw
+  out of `init()`, and in the app out of the backend start before any IPC was registered, so that
+  run had no working back end. Now the start reports blocked recovery and keeps its IPC; the unlock
   answers `vault_recovery_blocked` with the same copy, the log line carries the file error's code
   only (no path), and the journal stays, so the next start or unlock finishes the swap once the
-  hold ends. A swap the unlock itself cannot finish answers the same. While a startup salvage is blocked the crash sweep
+  hold ends. A swap the unlock itself cannot finish answers the same. Only a file error does: any
+  other failure surfaces as it did. A FOLDER holds no data and does not go away by waiting, so it
+  never blocks (decided by `lstat`, not by the error code: Windows answers EPERM for a held file
+  and for a folder alike): a folder at a write temp's name (`.enc.new.tmp`, the journal's, a
+  stage's) is left as it is, and a folder at a document's or an image's stored-copy name leaves
+  that one stage staged and listed, while the rest of the change finishes and the workspace opens
+  (that document stays unreadable until the folder is removed; the next start then swaps it in).
+  A folder at the database's `.enc` itself still blocks. Both are counted in the log line below.
+  While a startup salvage is blocked the crash sweep
   does not run, so the ordinary transient plaintext it clears (`<db>.tmp`, `documents/*.parse*`,
   `images/*.tmp`) can linger until the retry succeeds.
   **Part of this decision is a confidentiality trade:** after a failed lock + quit, the
@@ -2077,7 +2085,11 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   read at every start before any password, and its entries are absolute paths: nothing proves
   this app wrote them, or wrote them for this folder (a journal copied or restored onto another
   disk, or the same Kit under another drive letter). So the start acts on a `staged` entry only
-  when it ends `.enc.new` and lies inside the workspace folder; the `remove` list is read as a
+  when it ends `.enc.new` and lies inside the workspace folder on the disk, not only by its text:
+  no folder between the workspace folder and the entry may be a link (`lstat`; a Windows junction
+  reads as one), and the entry's folder, resolved, must still lie in the resolved workspace
+  folder (an entry under `documents/J/`, `J` a junction elsewhere, had the start shred and
+  replace the file behind it). The `remove` list is read as a
   flag for the rotated log (above), never as paths. A stage outside the workspace folder is an
   out-of-store copy's (issue #188's absolute `stored_path`: elsewhere on the drive, or on another
   drive), which nothing at the start can tell from any other path: it waits for the unlock, which
@@ -2085,15 +2097,22 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   opens under the data key, and the stored copy does not (a current copy is never swapped over).
   A stage it may not judge yet (a link, a folder or a second hard link at either name, a stored
   copy that already opens, a hold, a newer build's frame) is left, and so is the journal, the only
-  record of that stage, until an unlock settles it. A password change, which holds the database,
+  record of that stage, until an unlock settles it. A kept journal vouches only for what still
+  waits: once a pass has settled what it can, the journal is rewritten (temp + rename, as it is
+  written) to list only the stages still waiting, or cleared when none wait. Kept as written, it
+  went on listing the staged database and the in-store stages already swapped in, so a stray
+  `.enc.new` that turned up later was "listed" and rolled over `.enc` without the #973 key check.
+  A password change, which holds the database,
   still finishes its own out-of-store swaps in one go. Every other entry is left as it is and
-  counted, per recovery pass, in a count-only log line after the start and after each unlock (no
-  path; a kept journal's entries are counted again at the next start). An entry
+  counted in a count-only log line after the start and after each unlock (no path): a refused
+  entry once, by the pass that drops it from the journal; a folder left in place (above) by each
+  pass that meets it. An entry
   written under another drive root fails the containment too and loses nothing: the in-store
   stages it named are found by the scan and judged at the unlock as #973 and #1001 doubts (an
   entry is never rebased onto this root, which would let a journal vouch by relative name). A
   folder at `hilbertraum.sqlite.enc.new` is no staged database either: every journal lists that
-  name, and the start used to shred `.enc` and rename the folder into its place.
+  name, and the start used to shred `.enc` and rename the folder into its place; nor, with `.enc`
+  missing, a snapshot that lets the sweep shred the working file, the only copy left (#911).
   **Downgrade caveat (on-disk format, #241):** the journal file and the staged `images/` and
   out-of-store twins are new on-disk shapes. A build older than the #241 fix that starts on a
   vault with a *pending* migration rolls the DB and `documents/` forward but never reads the
@@ -2710,7 +2729,9 @@ sidecar's KV cache dies with the child, and the CPU replacement starts empty.
   the workspace. The app makes no links of its own, so every file it writes is shredded as
   before; the cost is that a plaintext file someone else hard-linked keeps its bytes under the
   other name. Where a mount reports one link for every file (some network and FUSE mounts),
-  a hard link is not told apart.
+  a hard link is not told apart. A link count of 0 counts as one (some drivers report 0 for
+  every regular file; refusing the overwrite there would leave the plaintext whole), so only a
+  count above one says another name shares the file.
 - **No password recovery.** The password is never stored and the key is unrecoverable without it —
   losing the password means losing the workspace. Onboarding copy says so.
 

@@ -42,9 +42,12 @@ from its first public `1.0.0` release onward.
 - **A password change that was cut short no longer leaves the app unusable when a file is in the way.**
   If the app was stopped in the middle of changing your password and, at the next start, another
   program was holding one of the workspace's files (an antivirus scan, for example) or a folder sat
-  where a file belonged, the app opened a window that could do nothing until you restarted it. It now
-  shows the lock screen and says "try again" until the file is free, then finishes the change; nothing
-  is lost (#1015).
+  where a file belonged, the app opened a window that could do nothing until you restarted it. When
+  another program holds a file, the app now shows the lock screen and says "try again" until the file
+  is free, then finishes the change; nothing is lost. When a folder sits where one of your stored
+  documents or images belongs, the app now opens your workspace anyway: only that document stays
+  unreadable until you remove the folder, and the next start then finishes it. A folder in place of a
+  temporary file is simply left alone (#1015).
 - **Leftover password-change records no longer touch files outside your workspace, and shredding
   never reaches through a link.** The note the app keeps while it changes your password is read at
   every start, before you type your password. A copy of it restored from a backup, or one from the
