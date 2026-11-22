@@ -455,9 +455,10 @@ function serializePackOutcomes(outcomes: KnowledgePackOutcome[] | null | undefin
 
 /** Read `messages.truncated_cause` (#498) for a row already known to be truncated. NULL (pre-#498)
  *  or an unrecognized value ⇒ 'context', the flag's historical meaning — so a legacy cut-off reply
- *  keeps exactly the advice it used to show. Only ever called when `truncated === 1`. */
+ *  keeps exactly the advice it used to show. Only ever called when `truncated === 1`. #994 adds
+ *  'repeat' (an answer the app stopped because it repeated itself). */
 function parseTruncationCause(raw: string | null | undefined): TruncationCause {
-  return raw === 'cap' ? 'cap' : 'context'
+  return raw === 'cap' || raw === 'repeat' ? raw : 'context'
 }
 
 function rowToMessage(r: MessageRow): Message {

@@ -493,6 +493,9 @@ export const it: UiCatalog<'it'> = {
   'chat.truncated.hint.cap':
     'Questa risposta basata sui documenti ha raggiunto la lunghezza massima che l’app consente ' +
     'per una singola risposta. Chiedi al modello di continuare da dove si è fermato.',
+  'chat.truncated.hint.repeat':
+    'Il modello ha iniziato a ripetersi, quindi l’app ha interrotto questa risposta. Chiedi di nuovo ' +
+    'o restringi la domanda.',
   'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s al primo token · {tokens} token',
   'chat.speed.hint':
     'Quanto velocemente è stata generata questa risposta: velocità di decodifica del motore IA, ' +

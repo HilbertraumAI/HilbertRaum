@@ -465,6 +465,9 @@ export const nl: UiCatalog<'nl'> = {
   'chat.truncated.hint.cap':
     'Dit antwoord op basis van je documenten heeft de vaste lengte bereikt die de app voor één ' +
     'antwoord toestaat. Vraag het model om verder te gaan waar het is gestopt.',
+  'chat.truncated.hint.repeat':
+    'Het model begon zichzelf te herhalen, dus de app heeft dit antwoord gestopt. Vraag het opnieuw ' +
+    'of maak je vraag specifieker.',
   'chat.speed.line': '{tps}\u00A0tok/s · {ttft}\u00A0s tot het eerste token · tokens: {tokens}',
   'chat.speed.hint':
     'Hoe snel dit antwoord is gegenereerd: de decodeersnelheid van de AI-engine, de wachttijd ' +
