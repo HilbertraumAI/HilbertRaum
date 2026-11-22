@@ -14,7 +14,8 @@ ever leaves the device.
 
 ```
 import → extract text → chunk → embed → store vectors → on question: embed query →
-cosine top-k ⊕ FTS5 keyword top-k (RRF fusion, §11) → optional rerank (§11) →
+cosine top-k ⊕ FTS5 keyword top-k (RRF fusion, §11) → [German question, English passages: translate, search again, §20] →
+optional rerank (§11) →
 grounded prompt with [S1]… labels → local LLM → cited answer → snippets
 ```
 
@@ -754,6 +755,7 @@ grounding guard is untouched: empty retrieval still never calls the model.
 3. FTS5 keyword search topKInitial          (scoped: documentIds + visibility join)
 4. RRF fusion (k = 60)                      (rank-based; scales never mix; ties → best rank, then chunkId)
 5. join → chunks rows
+5b. cross-language step (#1003, §20)        (German question; top 6: no German, most English ⇒ one model call, steps 1–5 again)
 6. rerank when a reranker is active         (reorder by relevance_score; failure ⇒ fused order)
 7. dedup by (document_id, page)             (unchanged)
 8. topKFinal + maxContextTokens             (unchanged)
@@ -764,6 +766,18 @@ grounding guard is untouched: empty retrieval still never calls the model.
 pre-Phase-21 result (ordering and scores). `RetrievedChunk.score` is stage-dependent:
 cosine for vector candidates, RRF score for keyword-only candidates, the reranker's
 relevance logit after a rerank. Citations never persist scores (locked).
+
+**Cross-language step (#1003, §20).** When the question reads as German, none of the top 6 fused document candidates
+reads as German and a strict majority of all six reads as English (a passage is read without the question's umlaut
+tie-break; a chunk whose language reads as unknown, such as a table, a letterhead or an address, does not block, but
+it counts against the majority), `retrieve` asks the turn's chat model for an English translation of the question
+(one call: thinking off, temperature 0, a `{"query": …}` JSON schema, at most 96 tokens and 8 s; none for a question
+over 150 characters) and runs steps 1–5 again: the vectors on the question and its translation joined by a space,
+the keyword pass on the translation and then the question (its query keeps the first 32 words, so a long question
+cannot push the English words out). The pack arm, the reranker, the grounded prompt and the stored messages keep the
+original question. With no translator (only `generateGroundedAnswer` passes one), a packs-only ask, a closed gate, a
+question too long to translate, a failed call, a translation that only repeats the question, or a second search that
+finds nothing or fails, the result is exactly the one without the step. Code: `rag/cross-language.ts`.
 
 `rrfFuse` is deterministic: equal RRF scores break on the chunk's best individual rank
 `min(vectorRank, keywordRank)`, then on `chunkId` (M-C4). The `min` (rather than vector rank
@@ -940,7 +954,7 @@ or a second unexpected exit demotes the session to `cpu` (#474). The binary is t
 
 ### Known retrieval-quality ceilings (DOC-N6, full audit 2026-06-28)
 
-Two properties of the current stack bound retrieval quality and explain WHY the reranker is the
+Three properties of the current stack bound retrieval quality; the first two explain WHY the reranker is the
 load-bearing relevance separator — recorded here so future work invests in the right lever:
 
 1. **E5 runs PREFIX-LESS → compressed cosines.** The embedder sends raw chunk/query text with no
@@ -969,6 +983,15 @@ load-bearing relevance separator — recorded here so future work invests in the
    (`usable − queryCap`) would silently re-introduce this ceiling — keep N ≥ `chunkSizeTokens` or
    re-document. CI pins this: `reranker.test.ts` [RAG-N3] (the whole chunk, incl. its tail, is sent)
    and `rag.test.ts` [RAG-N3] (the dedup-by-page winner now rests on the whole-chunk score).
+
+3. **Across languages the search finds little (#1003, §20).** A question gets no keyword hit in a document written in
+   another language, and prefix-less e5 ranks the answering passage low: over an English lease, 3 of 18 German questions
+   had it in the top 3, against 11 of 18 English twins. On the bilingual eval set @1 is 6 of 34 for German questions over
+   English documents and 4 of 34 for the reverse, against 24 and 15 in the documents' own language. The e5 prefixes are
+   not the lever: with both, German @3 on the lease rose only from 3 to 4, and the eval set got worse (German over English
+   @3 14 → 10). §20's translation step brings German questions over English documents up to the English level. English
+   questions over German documents, the other eight interface languages and short questions with no function word keep
+   this ceiling.
 
 ### Tested behaviour (Phase 21)
 
@@ -6717,3 +6740,178 @@ thanks!"), `rag-whole-doc-compare.test.ts` (#983 describe: "Thanks for the summa
 a lease too long to read whole is one call on `SMALL_TALK_SYSTEM_PROMPT`; "Thanks, now write the minutes" runs
 the map-reduce), `ChatReviewChipBatch.test.tsx` and `ReviewEntryPoints.test.tsx` (#976). The eval set stays at
 0 of 100 small-talk questions with the new shape.
+
+---
+
+## 20. Cross-language search — design record (#1003, follow-ups wave 7, owner call G-2, 2026-11-22)
+
+**Decision.** A German question over English documents is translated by the loaded chat model, and the passage search
+runs again on the question and its translation (G-2 option 1, every top-k answer). The owner set two conditions before
+anything was built: the real 4B and 9B translations reach at least 80 % of the gain a reference translation gives, and
+the call adds at most 1.5 s at p90 on a GPU and 8 s with the 4B on the CPU alone. The first measurement (X0) passed both
+for German questions over English documents and missed for the reverse direction, so the owner narrowed the scope to
+German questions over English documents and asked for a held-out check of the prompt (X1), which passed. English
+questions over German documents stay as they were. No knowledge-pack acceptance read (§17 shipping rule): the pack arm
+and the reranker keep the original question, and a test pins the packs-only path.
+
+**The facts it rests on.** The app sends e5 no `query:`/`passage:` prefixes: re-embedding the 19 stored chunks of a
+long English lease gave vectors with cosine 1.000000 against the stored ones. The English twin of a question works
+because of the FTS5 pass, not the vectors: "When must they give notice?" ranks the notice clause 5th by vector, 1st by
+keyword, so 1st after fusion. «Wann müssen wir kündigen?» ranks it 6th by vector and gets no keyword hit at all (no German
+word occurs in the English lease), and `retrieve()` returned exactly the two wrong passages of the wave-6 real-app walk.
+Rank of the best answering chunk, retrieval only (the app's own `retrieve`, `keywordSearchChunks` and `rrfFuse` over a
+copy of the walk's database; 18 German questions with English twins over the lease, 19 chunks):
+
+| Variant | @1 | @2 | @3 | @6 | MRR |
+|---|---|---|---|---|---|
+| English twin, today | 5 | 9 | 11 | 13 | 0.482 |
+| German, today (no keyword hit, so fused = vector) | 1 | 2 | 3 | 6 | 0.185 |
+| German, both e5 prefixes (re-embedded) | 2 | 3 | 4 | 7 | 0.260 |
+| German + a reference English translation, RRF of four lists | 4 | 6 | 10 | 12 | 0.413 |
+| German + the reference translation, one search on the two joined | 5 | 8 | 11 | 14 | 0.479 |
+
+The bilingual eval set (`eval/corpus_de_en.jsonl`, `eval/rag_de_en.jsonl`), each answerable question asked against only
+the other language's documents (34 per direction; the reference is the twin question):
+
+| Variant | German over English @1/@2/@3/@6 (MRR) | English over German @1/@2/@3/@6 (MRR) |
+|---|---|---|
+| today | 6/12/14/22 (0.348) | 4/8/8/12 (0.230) |
+| both e5 prefixes | 6/10/10/15 (0.296) | 4/4/5/10 (0.175) |
+| the reference translation alone | 24/27/30/32 (0.800) | 15/20/22/29 (0.590) |
+| RRF of four lists | 20/23/26/30 | 12/17/18/24 |
+| question + translation joined, one search | 24/28/29/31 (0.802) | 17/19/21/29 (0.609) |
+
+So the joined search is the best merge on both corpora, and within one language it is neutral (German 15/20/22/29 →
+16/20/20/27, English 24/27/30/32 → 25/28/28/32). The prefixes are no cross-language lever and need a full re-embed;
+widening alone does not help (German @6 = 6 of 18); a reranker cannot reach a passage outside the fused pool (the gold
+is in it for 14 of 18 lease questions). TranslateGemma (7.3 GB, 13 GB RAM, its own sidecar, an explicit source
+language) is no per-question step. The knowledge-pack planner (#486, §17 D-Z24) already plans across languages with the
+loaded chat model; the document arms had no such step.
+
+**The measurement (X0, then held out in X1).** i7-8700, GTX 1070 Ti 8 GB, Vulkan, llama.cpp b12110 with the app's chat
+argv; the 4B (`qwen3-4b-instruct-q4`) at 4,096 tokens and the 9B (`qwen3.5-9b-ud-q4kxl`) at 8,192. Share of the
+reference translation's gain, (model − today) / (reference − today), for the gate metric of each set:
+
+| X0, prompt v2 (written after v1's misses, scored on the same questions) | lease @3 | German over English @1 | English over German @1 |
+|---|---|---|---|
+| 4B, GPU | 113 % | 89 % | **77 %** |
+| 9B, GPU | 100 % | 89 % | 92 % |
+| 4B, CPU only | 100 % | 83 % | 85 % |
+
+X0's call p90: 4B GPU 0.80 s; 9B GPU 1.40 s with the machine 48 % busy, 5.3 s at 99 %; 4B CPU only 9.0 s with the
+machine 91–93 % busy (German to English 6.1 s, English to German 12.8 s). X1 froze 60 fresh German questions (38 over
+the lease, 22 over the English half of the eval corpus; none covers a fact of X0's items or the notice topic v2 was
+tuned on) before any model ran, with prompt v2 verbatim and the cap at 96:
+
+| X1, held out | lease @3 (today 10, reference 27) | eval @1 (today 4, reference 8) | added p90 (call + second search) |
+|---|---|---|---|
+| 4B, GPU | 25 (88 %) | 9 (125 %) | 0.51 s |
+| 9B, GPU | 25 (88 %) | 11 (175 %) | 1.21 s |
+| 4B, CPU only (quiet machine) | 25 (88 %) | 9 (125 %) | 3.27 s |
+
+In 180 X1 calls: 0 malformed replies, 0 cut at the cap (the longest was 27 tokens), 0 answers instead of a translation,
+0 dropped names or numbers. The eval shares above 100 % come from a literal reference: the models often pick the
+document's own term ("warranty" for «Garantie», "indemnify" for «freistellen»). The lease share is the stricter
+number, with one question of margin. Wrong senses do occur (the 4B: "terminate" for «abschließen», "distance" for
+«Entfernung»); because the question's own words stay in the search, none ranked a passage below today's. The second
+search alone costs p50 20 ms, p90 24 ms.
+
+**The gate, as built (`rag/cross-language.ts`).** After the first fusion, `retrieve` reads the text of the top
+`CROSS_LANGUAGE_GATE_CANDIDATES` (6) fused document candidates. It translates only when documents are in scope (never
+a packs-only ask, `noDocuments`), there is at least one candidate, the question reads as German
+(`zim/question-language.ts` `detectQuestionLanguage`, now with a second caller), none of those candidates reads as
+German and a strict majority of all of them reads as English (`detectPassageLanguage`). A candidate whose language
+reads as `null` does not block, but it is not English, so it counts against the majority: the measured rule. The
+first build closed the gate on any `null` candidate. With `ragMinSimilarity` 0 every chunk of a short document is a
+candidate, so one table, letterhead or signature chunk closed it for every question over that document (review
+round 1). Passages are read by `detectPassageLanguage`, the same count without the question's umlaut tie-break: a tie
+reads `null`, and a passage is German only when it holds more German than English function words. With the
+tie-break, a German address or letterhead in an English lease («Müller Bau GmbH, Königstraße 5, 70173 Stuttgart»)
+read as German and closed the gate for that lease, an English lease between German parties, the case this is for
+(review round 2). A translator exists only where `generateGroundedAnswer` builds one from the turn's runtime
+(`makeQueryTranslator(runtime)`), so every top-k answer path has it: plain documents chat, a skill's fall-through, the
+needle downgrade (#981), the plausibility fallback, Send again and regenerate. A direct `retrieve` caller (the manual
+quality suites) passes none. With the whole bilingual corpus in scope the gate fires on 0 of the eval set's 100
+questions (real e5, K's gate check re-run on this rule: 0 under the earlier rules too; no corpus chunk reads
+differently as a passage than as a question, and no German question had fewer than two German passages among its
+top six), so `tests/manual/model-eval.test.ts` stays comparable; a CI row checks the same with the mock embedder.
+
+**The translator, as built.** One call to the already-loaded chat runtime, the `zim/expand.ts` `makeQueryExpander`
+pattern: thinking off (`mode: 'fast'`), temperature 0, `TRANSLATE_MAX_TOKENS` = 96 output tokens (X0's longest reply
+was 63 tokens, and a 64-token cap cut one 9B reply), a strict `{"query": string}` JSON schema, and
+`TRANSLATE_TIMEOUT_MS` = 8 s of its own. The system prompt is X0's v2 byte for byte, "a English" included (a measured
+string; a change needs a new measurement); the question is the user turn. A question over
+`TRANSLATE_MAX_QUESTION_CHARS` (150 characters) gets no call (`skipped`): the measured questions reach 108 characters;
+the costliest measured reply spent 64 tokens on a 108-character question full of digits (0.59 tokens per character),
+and the longest translation was 1.16 times its question, so at 150 characters the reply needs about 89 of the 96
+tokens and the translation about 174 of the 300 characters. The reply is parsed defensively: malformed JSON, a
+non-object, a missing, non-string, empty or over-300-character `query`, or more than 96 × 8 characters resolve null.
+However the call ends, its request is aborted, so a runaway reply does not run on to the cap. The call is marked
+`auxiliary` (`RuntimeChatOptions`): it streams like any call, but it does not mark the runtime warm, so the
+first-answer warm-up hint (#39) still covers the answer's own cold prefill after a model start; the request body is
+the same. Every failure (the bound, a dead runtime, a transport error) resolves null and the search stays today's,
+with no notice to the user; the ask's own abort is rethrown, never a fallback (T09). The log gets one line per fired
+gate: its outcome (`translated`, `failed`, `unchanged`, `empty`, `search-failed` or `skipped`) and the duration of
+the translation call alone, never the question, the translation or an error message.
+
+**The search, as built.** Both document arms run again and fuse again. The vectors search `question + ' ' +
+translation`, as measured. The keyword pass searches `translation + ' ' + question`: `buildFtsMatchQuery` keeps the
+first 32 words (`fts.ts` `MAX_QUERY_TOKENS`), so with the question first a long German question filled all 32 and no
+English word reached the keyword pass, the arm that makes English questions work, while the log said `translated`
+(review round 1). A joined text of at most 32 words gives the same query phrases in either order; every measured
+question fits (27 words at most over X0's 86 and X1's 60 items, 22 over the eval set's German questions with their
+twins), so the numbers above still hold. A question within 150 characters whose joined text passes 32 words loses
+its own last words from the keyword pass instead of the translation. A translation that only repeats the question
+(case and spaces folded) runs no second search (`unchanged`). A second search that finds nothing, for example a
+raised `ragMinSimilarity` that the joined text's vectors miss, keeps the first one (`empty`); one that throws keeps
+it too (`search-failed`); an abort during it rejects the ask. The knowledge-pack arm, the reranker, the grounded
+prompt and the stored messages keep the original question. With no translator, a closed gate or any of these
+outcomes the result is exactly the one without the step (the L6 pass-through fixture and the hybrid rows hold). The
+extra call runs inside the chat slot, like the pack planner's, so it may evict the answer's cached prompt prefix
+there (not measured; the real-app walk checks it).
+
+**What stays.** English questions over German documents (X0: the 4B's German at 77 %, and a CPU p90 of 12.8 s under
+load). The other eight interface languages: the detector reads German and English only (#809). Short questions with no
+function word («Miete?», "IBAN?"), which read as `null`. Questions over 150 characters, which are not translated. A
+scope with a German passage among its best six, or one where English passages are not a strict majority of them. And
+the answer budget: the step lifts German questions to the English level, but the 4B at 4,096 tokens has room for 2–3
+passages, and even in English the lease's answering passage was among the top 2 for only 9 of 18 questions. And the
+second search can also move a passage down: the translation's words lift other passages, and one that the keyword arm
+ranks first but the vectors rank low can drop below passages that the translation's common words ("the", "is") put
+into both lists, as in an English question. In the held-out check 4 of the 60 questions had their passage one or two
+places lower than without the step with the 4B (2 with the 9B; for example 3rd → 5th, keyword rank 1, vector rank 11),
+while 15 more lease questions reached the top 3. The detector's German lean has a cost the other way: an English
+question with a German-looking word ("Who was Hans Müller?": "was" counts as German and the umlaut breaks the tie)
+reads as German and pays one call over English documents; when the model hands it back unchanged, the search stays as
+it was. A raised `ragMinSimilarity` (default 0) filters the joined text's vector hits too (unmeasured).
+
+**Not taken.** (1b) the same step on the needle downgrade only: the miss hits every top-k answer. (1c) TranslateGemma:
+see above. (2) a bilingual glossary for the keyword pass: a word list to maintain, unmeasured. (3) widening, or the
+whole read before "not stated": no gain at @6, and the whole read gave the report without the date (34.3 s). (4) the e5
+prefixes: no cross-language gain, a full re-embed (a separate TODO, §11 ceilings). (5) a multilingual reranker: capped
+by the candidate pool, ~25 s on CPU. (6b) a notice when the call fails: the owner chose a silent fallback.
+
+**Proof.** `tests/integration/rag-cross-language.test.ts`: a translation whose English word only the keyword arm
+matches brings the notice clause into the citations (red without the step); the pack arm, the reranker, the grounded
+prompt and the stored messages get the original question; a translation that drops the question's number still finds
+the chunk the number names (the joined search); an abort during the call rejects the ask; a 32-word German question
+still reaches the keyword pass with its translation; a second search that throws keeps the first one and logs
+`search-failed` with no text; one that finds nothing keeps it too (`empty`); a question over 150 characters gets no
+call (`skipped`); an abort during the second search still rejects; a translation that repeats the question runs no
+second search; the gate table (fires for a German question over English passages, also with one `null` passage or a
+German address line; not for the reverse, the same language, a German passage among the top six, half `null` passages
+or a `null` question); the packs-only path is byte-identical; a throwing, malformed or timed-out call leaves the
+result exactly as without a translator; no eval question opens the gate. `tests/unit/rag-cross-language.test.ts`: the
+call shape, the measured prompt and the `auxiliary` flag, every parse failure, the 8 s bound, a runaway reply
+(dropped, its request aborted), the abort, the mock runtime left cold, the two texts of the second search (the keyword
+query is the same phrases in either order for every eval pair), the log's duration (the call alone) and
+`search-failed`. `tests/unit/runtime-ladder.test.ts`: an `auxiliary` call streams but leaves the runtime cold, and the
+answer after it marks it warm. Mutations (always translate; translate English to German too; let the translation reach
+the pack arm; search the translation alone; put the question first in the keyword text; let a German passage pass; a
+simple majority; a `null` passage blocks; read passages with the umlaut tie-break; a second-search error thrown out,
+an abort swallowed, the error message logged; an empty second search kept; run the search on a repeated question;
+translate any length; time the second search too; no abort of the runaway request; mark an auxiliary call warm) each
+turn a row red. Nine existing rows that counted every model call on a German question over English fixtures count the
+answer turns and pin the translation calls instead (`tests/helpers/scripted-runtime.ts` `answerTurns`,
+`translationCalls`: one per passage search, none on a whole read). No persisted shape changes
+(`docs/data-contracts.md` unchanged).

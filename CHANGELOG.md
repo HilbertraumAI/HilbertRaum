@@ -65,6 +65,11 @@ from its first public `1.0.0` release onward.
 - An answer about a whole document that starts writing the same table row or line over and over now stops at the
   repeat. HilbertRaum keeps the answer up to its first copy and shows "Reply cut off"; the tooltip says the model
   started repeating itself. Before, such an answer ran on for minutes and filled the screen with copies (#994).
+- A question asked in German about an English document now finds the passage that answers it far more often.
+  HilbertRaum asks the loaded model for an English translation of the question and searches with both. Before,
+  «Wann müssen wir kündigen?» over an English lease found other clauses, and the answer said the lease does not say
+  when to give notice. The translation adds about half a second to a second on a graphics card, and a few seconds on
+  the processor alone, to these questions only. English questions about German documents work as before (#1003).
 
 ## [0.1.66] — 2026-11-21
 
