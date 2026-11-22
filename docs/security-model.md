@@ -1347,8 +1347,11 @@ explicitly:
   launch), and `documentCipher()` is null until then. Pinned by
   `tests/integration/vault-recovery-guards.test.ts` "a failed exit lock in a process that lives
   on (S-1)".
-- **Encrypted file missing (#911).** The app never removes `.enc` on its own (a lock, a create
-  and a password change replace it by rename), but something outside it can: a person tidying the
+- **Encrypted file missing (#911).** The app never leaves `.enc` missing on its own: a lock and a
+  create replace it by rename, and the one-time v1 → v2 password change shreds the old `.enc` right
+  before it renames its staged copy into place. Until that rename lands, the staged copy is the
+  snapshot (below), and since #1027 a change whose rename fails writes `.enc` again from the open
+  workspace ("Password change" below). Something outside the app can remove it: a person tidying the
   drive, a sync tool, a disk check that moves the file to `FOUND.000`. The working file is then the
   only copy of the workspace, and the startup sweep used to shred it as derived data, after which
   every correct unlock failed with "Could not open the workspace." Now, **only when no encrypted
@@ -1441,7 +1444,21 @@ explicitly:
   unwrapped, the unlock streams the staged file through the AES-256-GCM decipher with no output
   (`authenticatesUnder`; a vault frame is one GCM stream with one tag, so one pass proves the whole
   file). If it authenticates, it is this workspace's (a v1 password change by a build before
-  0.1.60, cut short after its commit), and the staged set rolls forward as before. If its tag fails,
+  0.1.60, cut short after its commit), and the staged set rolls forward as before, unless `.enc`
+  authenticates under that key too (#1027; owner, 2026-11-22: G-1 refined). No build writes `.enc`
+  under a data key before the stage made under that key: a password change stages under a key it
+  has just generated, before the commit that wraps it, and a create writes `.enc` only by renaming
+  its stage after its own commit. So a stage still waiting for its swap always sits beside an `.enc`
+  under the retired key, and one beside an `.enc` that opens is stale: a lock of the session whose
+  password change could not move its stage into place wrote that `.enc`, after the stage, from
+  newer data. Such a stage is deleted (`superseded`), `.enc` opens as it is (a loss the start held is
+  then recorded), and the rest of the staged set gets what the start's recovery would have given
+  it. One another program holds is left (`left`), the rest goes in without it, and the lock of that
+  session deletes it once it can (it does the same for a stage the unlock could not delete because
+  that stage does not open under the key). This takes one more read, of `.enc`, only when the stage
+  authenticates;
+  a read of `.enc` that fails splits as the stage's does: gone or a folder is no `.enc` that opens
+  (the stage rolls forward as before), anything else refuses as "try again". If its tag fails,
   it is ciphertext under another key: it is deleted, the unlock opens `.enc` as it is, and the rest
   of the staged set (document and image twins, the journal's deletions) gets what the start's
   recovery would have given it without that file. Either way, the document and image stages no
@@ -2065,6 +2082,33 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
      be parsed is quarantined as `rekey-journal.json.corrupt`, never deleted, and the in-store
      classes still resolve by scan). Staged paths are de-duplicated on a folded spelling so a
      file the scan and the journal name differently is never swapped twice.
+     **A database swap that fails leaves the open session in charge (#1027).** The swap shreds
+     `.enc` and then renames the staged database onto it, with one retry. Another program that
+     holds the fresh stage without delete sharing (an antivirus, an indexer) refuses both
+     renames. A document's or an image's stage is written once, so one left staged rolls
+     forward exactly at the next start, but the database is not: the session goes on changing
+     it under the new key. The change used to swallow the failure, so `.enc` stayed missing and
+     the journal went on listing the stage; the next lock wrote a newer `.enc`, and the next
+     start (or the next unlock in the same run) shredded it and renamed the stale stage over it,
+     losing everything since the change with no notice. Now the change, still holding the
+     database and the new key, drops the stage from the journal, writes `.enc` from the open
+     database under the new key (with the stage's own checkpoint and database checks; nothing
+     has written to the database since the stage, so `.enc` then holds what the stage holds),
+     and deletes the stage. Each step is best-effort, and none fails the change: it has
+     committed, and an error answer would say the current password still works. What is left
+     (the hold that refused two renames usually outlasts these milliseconds) every lock of the
+     session retries, on every lock path (Lock now, the quit, the crash and session-end locks,
+     the budgeted Linux quit lock): before it writes `.enc` it drops the journal entry, and it
+     deletes the stage once `.enc` is the session's own, never while `.enc` may still be
+     missing. A stage still there at the next unlock is removed there (below). One content-free
+     log line after the change names the swap error's code and whether `.enc` was saved.
+     `.enc` is replaced by an atomic rename, never shredded first; where a pass threw before it
+     reached the database, the old v1 `.enc`'s blocks are therefore freed, not overwritten, as
+     every lock frees the previous `.enc`.
+     A change that fails before its commit rolls back by deleting what it staged; a delete that
+     fails (a held stage or journal) no longer replaces the change's own error or skips zeroing
+     the new data key (#1027): nothing committed, so every recovery under the v1 key file
+     discards the rest again.
   **Crash recovery** (`recoverPendingRekey`, run at startup and before every unlock decrypt):
   staged `.new` files (or a journal) with a **v1** descriptor mean the crash was pre-commit →
   discard them and the journal, the old password + old files win; with a **v2** descriptor the
@@ -2075,6 +2119,8 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   0.1.60 wrote none, and a create stages with none either), beside an `.enc` that is there, waits
   for the unlock, which rolls the staged set forward only when that file authenticates under the
   unwrapped data key, and deletes the file when it does not (see "Crash-safe creation" above).
+  Since #1027 (owner, 2026-11-22: G-1 refined) the unlock also deletes it when `.enc` itself
+  authenticates under that key: `.enc` then holds the newer data (`superseded`).
   The same holds for each `documents/` and `images/` stage the journal does not list, beside a
   stored copy that is there (#1001): the start and a wrong password leave it, and the unlock swaps
   it in when it authenticates under the data key while its stored copy does not (the stored copy of a
@@ -2138,7 +2184,17 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   after the app-update plan's "Go back" to an older version. After an unlock by this build, only
   a stage it could neither read nor swap in or remove is still in doubt. Likewise an out-of-store
   stage outside the workspace that this build's start left for the unlock (#1014) is acted on,
-  with every other journal entry, by the next start of a build older than that fix.
+  with every other journal entry, by the next start of a build older than that fix. A staged
+  database a failed swap left (#1027) that another program held through the session's lock stays
+  on the drive, unlisted, beside the newer `.enc`, until this build's next unlock removes it. A build
+  older than that fix that opens the workspace first rolls it over the newer `.enc` once the file is
+  free, losing the session's work since the change, as before the fix: a build before #973 (0.1.65
+  and earlier) at its start, as it rolls every `.enc.new` under a v2 key file, listed or not; 0.1.66
+  and the builds after it until this fix at the unlock, where the stage, unlisted beside an `.enc`
+  that is there, is a #973 doubt that authenticates under the data key (they roll a listed one at
+  the start). This build's start rolls it over the newer `.enc` only when the journal also stayed
+  listing it, held so that it could not be rewritten (or even read) at the change and at every lock
+  of that session (`known-limitations.md`).
 - **Race guard:** an import/re-index job writes `.enc` sidecars, so `changePassword` refuses
   to start while document work holds a lease (`beginDocumentWork`), and document work refuses
   to start mid-change — both with friendly copy (`VaultBusyError`), never corruption. Image

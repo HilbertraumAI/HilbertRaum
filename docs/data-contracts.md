@@ -1265,6 +1265,15 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   through a link (an out-of-store copy's stage) only by the unlock, once the open database lists its stored copy
   (`documents.stored_path`, by the resolver's out-of-store rule) and the stage opens under the
   data key while the stored copy does not, and by a password change, which holds the database.
+  **#1027:** after a password change whose staged database could not be moved into place, the change
+  and then each lock of that session (until it lands) rewrite the journal to drop the staged
+  database's entries (`pathKey` match), every other entry and `remove` as written (temp + rename,
+  the same format and `version` 1; cleared when nothing is left). No journal (ENOENT) lists nothing,
+  and neither does one that does not parse or names another version, which is left as it is. One that
+  cannot be read just now (a hold with no read sharing, a permission, an I/O error) is not judged: the
+  step counts as not done, and the next lock tries again (review F1). An unlock that leaves a staged
+  database in doubt it decided to delete has the lock try this step too: an entry a failed stat left
+  unjudged may still name it (review F2).
   Round 4: an entry whose containment a stat cannot answer (`lstat` on the way or either `realpath`
   failing for any reason but ENOENT) is neither acted on nor dropped: each pass keeps it in the
   journal it settles (a rollback too) and counts it, and the next pass judges it again; since
@@ -1316,7 +1325,15 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   GCM pass, nothing written; false when the tag fails or the file is no `HRAUMEN1` frame, cut short
   or another magic; a newer frame throws `VaultNewerError`) true → `applyPendingRekey` (outcome
   `rolled-forward`), false → the file is deleted, then `recoverPendingRekey` runs again for the rest of
-  the staged set (`removed`); a read that fails with ENOENT is no stage, with EISDIR or ENOTDIR (a
+  the staged set (`removed`). **#1027 (owner, 2026-11-22: G-1 refined):** true while `.enc` authenticates
+  under the same key too (one more read) → the stage is deleted and `recoverPendingRekey` runs again
+  (`superseded`; `StageInDoubtOutcome = 'rolled-forward' | 'removed' | 'superseded' | 'left'`); a delete that
+  fails → `left`, and `applyPendingRekey` swaps in the rest with that stage in its `skip` set; a read of `.enc`
+  that fails with ENOENT, EISDIR or ENOTDIR counts as "does not open" (the stage rolls forward as before), any
+  other read failure throws `VaultRecoveryBlockedError` with its code, nothing written. The invariant behind it
+  is the frozen constraint below (no `.enc` under a data key before the stage made under it). After a
+  successful unlock whose outcome was `left` with a file still at the name, every lock of that session
+  deletes it (no new state on disk; in memory only). A read that fails with ENOENT is no stage, with EISDIR or ENOTDIR (a
   folder at the name), like a delete that fails, leaves the file as it is and opens `.enc` (`left`),
   and with any other code (EBUSY, EPERM, EACCES, EIO, …) throws `VaultRecoveryBlockedError`
   (→ `vault_recovery_blocked`, nothing changed, before the `.recovery` roll-forward; since #1014
@@ -1325,7 +1342,7 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   later step of the unlock fails; the pass is timed as the perf mark `vault_stage_check` (`checkMs`,
   `stageBytes`). While a stage is in doubt at `init()`, a loss the start judged (#875 `startup`, #892
   `unclean`) is held in memory instead of marked; the controller marks it when the outcome is
-  `removed` or `left`, drops it on `rolled-forward`, and settles a hold no outcome reached at the
+  `removed`, `superseded` (#1027) or `left`, drops it on `rolled-forward`, and settles a hold no outcome reached at the
   next successful unlock (recorded while `.enc`'s frame IV is still the one it was judged against,
   dropped otherwise); it is never carried past that unlock, and a create clears it.
   **Staged sidecars in doubt (#1001):** the same rule per stored copy. A `documents/` or `images/`
@@ -1473,7 +1490,10 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   and from #1001 on the same holds for a journal-less `documents/` or `images/` `*.enc.new` beside
   its stored copy, but the builds before them remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
   unrecognised header), and a later frame version is one ASCII digit `2`–`9` after `HRAUMEN` (any other byte
-  there reads as damage from #845 on).
+  there reads as damage from #845 on); **never write `.enc` under a data key before the staged database made
+  under that key** (#1027): from #1027 on, an unlock deletes a staged database that authenticates when `.enc`
+  authenticates under the same key too, reading `.enc` as the newer copy, so a future rekey that wrote `.enc`
+  under the new key first and staged after would have its pending stage deleted.
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
   first, then plaintext opens immediately, encrypted stays locked, else uninitialized),
   `newerVaultFormat()` (what the last verdict found newer, or null; `main/index.ts` logs it at startup),
@@ -1486,12 +1506,17 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   AUD-02 latch), `unlockEpoch()` (AUD-03), `encryptionKey()` and `documentCipher()` (null while
   locked or in plaintext), `takeWorkingCopyLost()` (#875, below), `discardedOnlyCopy()` (#911),
   `takeRestoredMissingEnc()` (#911,
-  below), `takeStageOutcome() → 'removed' | 'left' | null` (#973: the last unlock removed a staged
-  `.enc.new` that does not open under the data key, or left one it could neither judge nor remove;
+  below), `takeStageOutcome() → 'removed' | 'superseded' | 'left' | null` (#973: the last unlock removed a staged
+  `.enc.new` that does not open under the data key, or, #1027, one beside an `.enc` that opens under it
+  too, or left one it could neither judge nor remove;
   returned once, for the unlock IPC's one content-free log line on its success and failure paths, no
   audit type), `takeSidecarStageOutcome() → { rolledForward, removed, left, setAside } | null` (#1001: what the
   last unlock did with the staged document and image copies in doubt, counts only, null when it found
-  none; returned once, for the same IPC's one line, logged only when it removed or left any).
+  none; returned once, for the same IPC's one line, logged only when it removed or left any),
+  `takeDatabaseSwapFailure() → { code: string | null; saved: boolean } | null` (#1027: the last password
+  change committed but could not move its staged database into place; `code` is the swap error's code only,
+  `saved` whether the change wrote `.enc` from the open database itself, else the next lock does; returned
+  once, for the change IPC's one content-free warning line).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
   what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
