@@ -27,7 +27,7 @@ import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
-import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
+import { answerTurns, recordingRuntime, translationCalls, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { t, UI_LANGUAGE_CODES } from '../../src/shared/i18n'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
@@ -244,19 +244,22 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
 
   // #981: "When must …?" and the German verb-second «Wann endet …?» are lookups; "each" / «jede» make it a list.
   // #997: "Who is the reviewer?" holds "review" only inside a longer word: a lookup, no longer the whole report.
+  // #1003: a German question over this English transcript makes one translation call (the passage search), an
+  // English one none.
   it.each([
-    'When must they give notice?', 'Who is the tenant?', 'Wann endet der Vertrag?', 'Wann müssen wir kündigen?',
-    'Who is the reviewer?'
-  ])(
+    ['When must they give notice?', 0], ['Who is the tenant?', 0], ['Wann endet der Vertrag?', 1],
+    ['Wann müssen wir kündigen?', 1], ['Who is the reviewer?', 0]
+  ] as const)(
     'a NEEDLE ask "%s" keeps top-k over the over-budget doc (one call, not capped, stamped)',
-    async (question) => {
+    async (question, translations) => {
       // The passage search needs a passage that holds the question's words, or it answers with the fixed no-context reply.
       const text = `${bigTranscript(400)}
 The tenant, Max Huber, must give notice three months before the contract ends. The reviewer is Anna Keller.`
       const h = await makeHarness({ fullyChunked: true, text, contextWindow: 4096 })
       const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, MEETING_INSTALL_ID)
       const msg = result as Message
-      expect(h.runtime.calls).toBe(1)
+      expect(answerTurns(h.runtime)).toHaveLength(1)
+      expect(translationCalls(h.runtime)).toBe(translations)
       expect(msg.coverage?.mode).not.toBe('capped')
       expect(msg.skillId).toBe(MEETING_INSTALL_ID)
     }

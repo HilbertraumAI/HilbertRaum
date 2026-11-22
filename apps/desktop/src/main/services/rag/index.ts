@@ -5,7 +5,8 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } fr
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
 import { buildScopeFilter } from '../retrieval-scope'
-import { keywordSearchChunks, rrfFuse } from './hybrid'
+import { keywordSearchChunks, rrfFuse, type FusedCandidate } from './hybrid'
+import { crossLanguageSearch, makeQueryTranslator, type QueryTranslator } from './cross-language'
 export { detectFilenameScope, type DetectedScope, type ScopeableDoc } from './scope'
 // Re-exported so callers can `import { retrieve, type RetrievalScope } from '../services/rag'`
 // (plan §10.2). The canonical definition lives in shared/types.ts (no cycle with embeddings).
@@ -303,6 +304,47 @@ interface ChunkRow {
 }
 
 /**
+ * Join fused candidates → chunk rows in ONE `IN (…)` query (placeholders only), then reassemble
+ * in the fused order (best first). A vector candidate keeps its cosine as `score` (pass-through
+ * guarantee); a keyword-only candidate carries its RRF score (no cosine exists for it). A fused id
+ * with no row is skipped.
+ *
+ * RAG-7 (perf audit 2026-06-18): `tokenCounts` holds the persisted `chunks.token_count` per chunk id,
+ * which is exactly `approxTokenCount(text)` (chunker.ts), so `retrieve`'s budget loop reads it instead
+ * of re-scanning each candidate's text. It is a side-map so it never rides the returned
+ * `RetrievedChunk` shape. A legacy NULL falls back to a recompute (identical value).
+ */
+function joinFusedCandidates(
+  db: Db,
+  fused: FusedCandidate[]
+): { candidates: Array<Omit<RetrievedChunk, 'label'>>; tokenCounts: Map<string, number | null> } {
+  const candidates: Array<Omit<RetrievedChunk, 'label'>> = []
+  if (fused.length === 0) return { candidates, tokenCounts: new Map() }
+  const rows = db
+    .prepare(
+      'SELECT id, document_id, text, source_label, page_number, section_label, token_count ' +
+        `FROM chunks WHERE id IN (${fused.map(() => '?').join(', ')})`
+    )
+    .all(...fused.map((c) => c.chunkId)) as unknown as ChunkRow[]
+  const rowById = new Map(rows.map((r) => [r.id, r]))
+  const tokenCounts = new Map(rows.map((r) => [r.id, r.token_count]))
+  for (const cand of fused) {
+    const row = rowById.get(cand.chunkId)
+    if (!row) continue
+    candidates.push({
+      chunkId: row.id,
+      documentId: row.document_id,
+      text: row.text,
+      sourceTitle: row.source_label ?? 'Untitled',
+      pageNumber: row.page_number,
+      sectionLabel: row.section_label,
+      score: cand.cosine ?? cand.rrfScore
+    })
+  }
+  return { candidates, tokenCounts }
+}
+
+/**
  * Retrieve grounded context for `question` (pipeline per rag-design §11):
  *  1. embed the question and cosine-search the vector index (`topKInitial`),
  *  2. drop vector hits below `minSimilarity` (the cosine floor applies PRE-fusion/
@@ -310,6 +352,11 @@ interface ChunkRow {
  *  3. FTS5 keyword-search the corpus (`topKInitial`, embedder-visibility-scoped),
  *  4. fuse the two ranked lists by reciprocal rank (RRF, hybrid.ts),
  *  5. join candidates back to `chunks` for text + source label + page/section,
+ *  5b. cross-language search (#1003, rag-design §20): when `translateQuery` is given, the question
+ *     reads as German and the top fused candidates read as English (none German, most English),
+ *     translate the question once and run steps 1-5 again, the vectors on the question plus its
+ *     translation and the keywords on the translation plus the question (`rag/cross-language.ts`);
+ *     the pack arm, the reranker and the caller's prompt keep the original question,
  *  6. rerank the candidates when a reranker is available (reorder by relevance; a rerank
  *     failure falls back to the fused order — never breaks asking — and, with an archive
  *     arm, to the same round-robin interleave the reranker-absent path uses, M3),
@@ -319,7 +366,7 @@ interface ChunkRow {
  *
  * Labels are assigned here, per query, and are never stored.
  *
- * Pass-through guarantee: with no reranker and no keyword hits, steps 3/4/6 are
+ * Pass-through guarantee: with no reranker, no keyword hits and no translation (5b), steps 3/4/6 are
  * inert and the result — ordering AND scores — is byte-identical to the vector-only
  * pipeline (RRF over a single list is monotone in rank; vector candidates keep their
  * cosine as `score` until a reranker actually rescores them).
@@ -335,7 +382,8 @@ export async function retrieve(
   scope?: RetrievalScope | null,
   reranker?: Reranker | null,
   signal?: AbortSignal,
-  externalArm?: ExternalRetrievalArm | null
+  externalArm?: ExternalRetrievalArm | null,
+  translateQuery?: QueryTranslator | null
 ): Promise<RetrievalResult> {
   const s = normalizeScope(scope)
   // Knowledge packs (#301 P4, finding M10, ruling D4): the EXPLICIT deny-all document scope —
@@ -362,57 +410,49 @@ export async function retrieve(
     // Deny-all also inside the index (the resident fast path bypasses the SQL builder).
     ...(noDocuments ? { noDocuments: true as const } : {})
   })
-  const vectorHits = noDocuments
-    ? []
-    : (await index.searchText(question, settings.topKInitial, signal)).filter(
-        (hit) => hit.score >= settings.minSimilarity
-      )
-  // Hybrid keyword path: the exact terms embeddings miss.
-  // Scoped to chunks VISIBLE to the active embedder so the keyword path can
-  // never surface a document vector search couldn't — the re-index honesty story
-  // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
-  const keywordHits = noDocuments
-    ? []
-    : keywordSearchChunks(db, question, settings.topKInitial, {
-        embeddingModelId: embedder.id,
-        documentIds: s.documentIds ?? null,
-        collectionIds: s.collectionIds ?? null,
-        includeArchived: s.includeArchived
-      })
-  const fused = rrfFuse(vectorHits, keywordHits)
+  // The two document arms, fused: run on the question, and once more when the cross-language gate
+  // below fires (#1003), then with a vector text and a keyword text of their own.
+  const searchDocumentArms = async (vectorText: string, keywordText: string): Promise<FusedCandidate[]> => {
+    if (noDocuments) return []
+    const vectorHits = (await index.searchText(vectorText, settings.topKInitial, signal)).filter(
+      (hit) => hit.score >= settings.minSimilarity
+    )
+    // Hybrid keyword path: the exact terms embeddings miss.
+    // Scoped to chunks VISIBLE to the active embedder so the keyword path can
+    // never surface a document vector search couldn't — the re-index honesty
+    // story (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
+    const keywordHits = keywordSearchChunks(db, keywordText, settings.topKInitial, {
+      embeddingModelId: embedder.id,
+      documentIds: s.documentIds ?? null,
+      collectionIds: s.collectionIds ?? null,
+      includeArchived: s.includeArchived
+    })
+    return rrfFuse(vectorHits, keywordHits)
+  }
 
-  // Join fused candidates → chunk rows in ONE `IN (…)` query (placeholders only),
-  // then reassemble in the fused order (best first). A vector candidate keeps its
-  // cosine as `score` (pass-through guarantee); a keyword-only candidate carries its
-  // RRF score (no cosine exists for it).
-  let candidates: Array<Omit<RetrievedChunk, 'label'>> = []
-  // RAG-7: persisted per-chunk token counts (chunkId → token_count), filled with the candidate rows.
-  let tokenCounts = new Map<string, number | null>()
-  if (fused.length > 0) {
-    const rows = db
-      .prepare(
-        'SELECT id, document_id, text, source_label, page_number, section_label, token_count ' +
-          `FROM chunks WHERE id IN (${fused.map(() => '?').join(', ')})`
-      )
-      .all(...fused.map((c) => c.chunkId)) as unknown as ChunkRow[]
-    const rowById = new Map(rows.map((r) => [r.id, r]))
-    // RAG-7 (perf audit 2026-06-18): the persisted `chunks.token_count` is exactly
-    // `approxTokenCount(text)` (chunker.ts), so the budget loop below reads it instead of
-    // re-scanning each candidate's text. Keyed by chunkId in a side-map so it never rides the
-    // returned `RetrievedChunk` shape. A legacy NULL falls back to a recompute (identical value).
-    tokenCounts = new Map(rows.map((r) => [r.id, r.token_count]))
-    for (const cand of fused) {
-      const row = rowById.get(cand.chunkId)
-      if (!row) continue
-      candidates.push({
-        chunkId: row.id,
-        documentId: row.document_id,
-        text: row.text,
-        sourceTitle: row.source_label ?? 'Untitled',
-        pageNumber: row.page_number,
-        sectionLabel: row.section_label,
-        score: cand.cosine ?? cand.rrfScore
-      })
+  let { candidates, tokenCounts } = joinFusedCandidates(db, await searchDocumentArms(question, question))
+
+  // Cross-language search (#1003, rag-design §20): a German question whose top fused document
+  // candidates read as English is translated by the turn's chat model, and both arms run again on
+  // the question and its translation. Everything below (the pack arm, the rerank, the prompt) keeps
+  // the ORIGINAL question. No translator, a packs-only ask, a closed gate, a question too long to
+  // translate, a failed call, a translation that only repeats the question, or a second search that
+  // finds nothing or throws all keep the first search, so the result is then exactly the one without
+  // this step (an abort still rejects).
+  if (translateQuery && !noDocuments) {
+    const again = await crossLanguageSearch(
+      question,
+      candidates.map((c) => c.text),
+      translateQuery,
+      async ({ vectorText, keywordText }) => {
+        const second = joinFusedCandidates(db, await searchDocumentArms(vectorText, keywordText))
+        return second.candidates.length > 0 ? second : null // nothing found: keep the first search
+      },
+      signal
+    )
+    if (again !== null) {
+      candidates = again.candidates
+      tokenCounts = again.tokenCounts
     }
   }
 
@@ -2009,6 +2049,8 @@ export async function generateGroundedAnswer(
       excerptBudget < settings.maxContextTokens
         ? { ...settings, maxContextTokens: excerptBudget }
         : settings
+    // #1003: the turn's own runtime translates a German question over English documents for the
+    // passage search (gated and bounded inside `retrieve`; every top-k answer path comes through here).
     const r = await retrieve(
       db,
       embedder,
@@ -2017,7 +2059,8 @@ export async function generateGroundedAnswer(
       scopeArg,
       opts.reranker,
       opts.signal,
-      opts.externalArm
+      opts.externalArm,
+      makeQueryTranslator(runtime)
     )
     chunks = r.chunks
     citations = r.citations

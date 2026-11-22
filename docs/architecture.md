@@ -1247,6 +1247,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   and stream instantly, so they neither mark the runtime warm nor show the hint; an absent field
   fails safe. Design record: design-guidelines §11.11. Tests: `ChatWarmupHint.test.tsx` + the
   `warm-up tracking (#39)` block in `runtime-ladder.test.ts`.
+  **#1003 amendment (follow-ups wave 7, 2026-11-22):** a call with `RuntimeChatOptions.auxiliary` no longer flips
+  `warmedUp()`. The cross-language translation (`rag/cross-language.ts`), the one call a German question over English
+  documents makes before its answer, passes it, so the hint still covers the answer's own cold prefill after a
+  model start. The knowledge-pack planner's call and the skill classifier's call are not marked and still flip it, as
+  before. Test: the `auxiliary` row in the same `runtime-ladder.test.ts` block.
 - **Hidden warm-up generation (#109, 2026-08-08) — "ready means ready".** The #39 hint explained
   the first-prompt stall; #109 removes most of it: `/health` resolving says nothing about the
   one-time prefill/graph warm-up, which measured **6–8× the settled TTFT** (10–30 s CPU-only,

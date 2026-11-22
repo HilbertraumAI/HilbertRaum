@@ -82,7 +82,7 @@ export class MockRuntime implements ModelRuntime {
     const signal = options?.signal
     for (const token of this.mockTokens(messages)) {
       if (signal?.aborted) return
-      this.served = true
+      if (!options?.auxiliary) this.served = true // a helper call is no first answer (#1003)
       yield token
       await delay(TOKEN_DELAY_MS, signal)
     }

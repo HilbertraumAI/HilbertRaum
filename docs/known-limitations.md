@@ -1048,6 +1048,48 @@ password recovery — are documented in
   reranker GGUF provisioned keeps the raw, less-separated ordering. Latent improvement: a prefix
   migration would spread the distribution and make a floor meaningful (and lift the ceiling), but
   forces re-embedding every corpus — revisit only as a deliberate migration.
+- **Cross-language search covers German questions over English documents only (#1003, follow-ups wave 7;
+  [`rag-design.md`](rag-design.md) §20).** When none of a German question's best six passages reads as German and most
+  of them read as English, the app asks the loaded chat model for an English translation of the question and searches
+  again with the question and its translation together. A passage whose language the detector cannot read (a table, a
+  letterhead, a signature block, an address line) does not block this, but it counts against the English majority;
+  passages are read without the question's umlaut rule, so a German address in an English lease is no German passage.
+  Measured on the search alone over an English lease, the answering passage reached the top 3 for 25 of 38 fresh
+  German questions (today 10, a reference translation 27). It costs one short model call on such turns only: measured
+  p90 0.5 s with the 4B and 1.2 s with the 9B on a GPU, and 3.3 s with the 4B on the CPU alone on a quiet machine
+  (about 9 s on a busy one). What it does not cover:
+  - an English question over German documents: the 4B's translations into German measured below the bar (77 % of a
+    reference translation's gain), so that direction stays as it was;
+  - the other eight interface languages, and a short question with no function word («Miete?», "IBAN?"), whose language
+    the detector cannot read;
+  - a scope with a German passage among its best six, or one where English passages are not a strict majority of them:
+    the search stays as it was;
+  - a question longer than 150 characters: it is not translated (past the measured range the reply cap could cut the
+    translation), so the search stays as it was;
+  - a failed call: past 8 s, on a malformed reply, on an error, or when the second search finds nothing or fails, the
+    search falls back to today's silently, with no notice;
+  - the keyword search reads only the first 32 words of its query, so it gets the translation first and the question
+    after it. A question (up to 150 characters) whose words and its translation's together pass 32 loses its own last
+    words from the keyword search (the vectors still read all of it). Every measured question fitted;
+  - an English question with a German-looking word reads as German ("Who was Hans Müller?": "was" counts as German and
+    the umlaut breaks the tie), so over English documents it pays one call. When the model hands the question back
+    unchanged, no second search runs and the answer is the same;
+  - a raised `ragMinSimilarity` (default 0) filters the vector hits of the joined text too; how that plays out is not
+    measured. And when it leaves the first search with no passage at all, the answer is the fixed "not found" reply
+    and no translation is tried;
+  - the 8 s bound starts when the call is made, before the one chat slot takes it. While the slot is still ending a
+    local-API generation (about 5 s at most) or holds another queued request, the bound can run out first, and the
+    search falls back silently;
+  - the answer budget: the step lifts German questions to the English level, not to every answer. The 4B at 4,096 tokens
+    has room for 2–3 passages, and even in English the lease's answering passage was among the top 2 for only 9 of 18
+    questions;
+  - a wrong translation (the 4B once gave "terminate" for «abschließen») adds wrong words to the search; the question's
+    own words stay in it, and none of the wrong translations in the held-out check ranked a passage below today's;
+  - the second search can still move a passage down a little: in the held-out check 4 of 60 questions had theirs one or
+    two places lower than before with the 4B (2 with the 9B), while 15 more lease questions reached the top 3;
+  - the extra call runs in the one chat slot, so it may evict the answer's cached prompt prefix, as the knowledge-pack
+    planner's call does (not measured). It does not count as the model's first answer for the warm-up hint; the
+    knowledge-pack planner's call and the skill classifier's call still do (as before #1003).
 - **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
   batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
   `HILBERTRAUM_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when
@@ -1729,11 +1771,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   "which" / «welche» right after a comma. The only veto that got narrower is "all the", a substring on master: it now needs a
   letter-free left edge, so "shall the", "call the", "install the" no longer veto a lookup ("When shall the tenant pay?"), while
   "all these" and "all their" still do. The other eight interface languages have no lookup list, so «¿Cuándo hay que avisar?»
-  still gets the whole read (#809). **A lookup answers from the passages the search finds**, and across languages the
-  search can miss the one that holds the answer: «Wann müssen wir kündigen?» over an English lease found the preamble and
-  Art. 7, not the notice clause in Art. 34 (two runs, the 4B), and the answer then said the lease does not state when to give
-  notice, while "When must they give notice?" found Art. 34 and the date. When an answer says something is not in a document
-  written in another language, ask again in the document's language. **#997 (wave 7) made the report and list words words:** «liste» is the German noun as a word or the end of a compound
+  still gets the whole read (#809). **A lookup answers from the passages the search finds.** Across languages the search used to miss
+  the one that holds the answer: «Wann müssen wir kündigen?» over an English lease found the preamble and Art. 7, not the
+  notice clause in Art. 34 (two runs, the 4B), and the answer then said the lease does not state when to give notice, while
+  "When must they give notice?" found Art. 34 and the date. Since #1003 a German question over English documents is
+  translated for the search (Retrieval quality, above), which finds the answering passage far more often, but not always
+  among the 2 passages the 4B gets at 4,096 tokens: for «Wann müssen wir kündigen?» the notice clause came 3rd, so the 4B
+  still answered that the lease does not state it, while at 8,192 tokens it gave the date. An English question over German documents, a question in one of the
+  other eight languages and a short question with no function word («Miete?») are not: when an answer says something is
+  not in a document written in another language, ask again in the document's language. **#997 (wave 7) made the report and list words words:** «liste» is the German noun as a word or the end of a compound
   («Liste», «Listen», «Checkliste»), no longer a piece of "listed", "listener", "blister" or «gelistet»; "review",
   "brief", "overall", "gist", "analy", "recap", "the whole", "in short" and «durchgehen» no longer match inside
   "preview", «Briefkasten», "registration", "analyst", "recapture", "wholesale", "in shortage" or «durchgehend». Three

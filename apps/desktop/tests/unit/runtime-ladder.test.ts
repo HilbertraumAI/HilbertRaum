@@ -529,6 +529,20 @@ describe('warm-up tracking (#39)', () => {
     expect(runtime.warmedUp?.()).toBe(true)
   })
 
+  it('an auxiliary call (#1003: the cross-language translation) streams but leaves the runtime cold; the answer marks it warm', async () => {
+    const h = ladderHarness({ probe: [RTX], tokens: ['Hello', ' world'] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+
+    const helper: string[] = []
+    for await (const tok of runtime.chatStream(chat, { auxiliary: true })) helper.push(tok)
+    expect(helper.join('')).toBe('Hello world')
+    expect(runtime.warmedUp?.()).toBe(false)
+
+    for await (const _tok of runtime.chatStream(chat)) break
+    expect(runtime.warmedUp?.()).toBe(true)
+  })
+
   it('the wrapped stream still forwards reasoning deltas to the caller unchanged', async () => {
     const h = ladderHarness({ probe: [RTX], tokens: ['a', 'b'], reasoningDelta: 'r1' })
     const runtime = h.factory(opts)

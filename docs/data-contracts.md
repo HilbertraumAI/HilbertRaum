@@ -385,6 +385,10 @@ restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 
 **Local-api wave P1 (additive):** `RuntimeChatOptions.lane?: 'in-app' | 'external'` (omitted =
 `'in-app'`) marks the admission lane; the manager wraps the factory-returned runtime in a
 generation-gate decorator (`active()` hands out the decorated instance).
+**#1003 (follow-ups wave 7, additive):** `RuntimeChatOptions.auxiliary?: boolean` marks a helper call inside a turn
+(today only the cross-language translation, `rag/cross-language.ts`). It streams as any call and sends the same
+request body, but `LadderRuntime` and `MockRuntime` do not mark the runtime warm for it, so `RuntimeStatus.warmedUp`
+stays false until the turn's answer streams (the #39 hint). Omitted = `false`, the behaviour before.
 **`RuntimeManager.isExternallyBusy()` is the external-admission predicate** (any in-flight
 generation OR no active runtime — fail closed, covers the start window + #109 warm-up);
 `isGenerating()` is the narrower any-lane read. `RuntimeManager.setExternalPreemption(hook)`
