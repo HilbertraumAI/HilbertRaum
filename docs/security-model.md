@@ -3321,7 +3321,21 @@ Each sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe) was
 local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install and the next launch gets
 code-exec at the app's privileges — a TOCTOU deviation from the stated re-hash-before-exec policy. The
 spawns are arg-array (no shell), so the only residual was the missing pre-spawn re-verification, now
-closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the same item.)
+closed for the executable itself; the libraries it loads are not re-verified (corrected 2026-11-22, see
+"The gap" below). (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the
+same item.)
+
+**The gap: only the executable is re-hashed (corrected 2026-11-22, follow-ups wave 7).** The verifier
+re-hashes the one file it spawns. Since llama.cpp b12110 that file, `llama-server.exe`, is a 9.7 KB stub:
+the server's code is in `llama-server-impl.dll` and six more libraries the Windows loader loads beside it
+(26.5 MB with the stub), and the processor and graphics-card backends (`ggml-cpu-*.dll`,
+`ggml-vulkan.dll`) are loaded at run time. None of them is re-hashed before a spawn, so a replaced
+`llama-server-impl.dll` runs without a `mismatch`. The same holds for the shared libraries of the macOS and
+Linux builds and for whisper.cpp's DLLs. Since #998 the install marker records the hash of every file of an
+engine copy, which a hardening can build on (for example, hash the loaded libraries on the first spawn of a
+session); that is a follow-up issue, and its cost is an owner call. Until then this control covers the
+executable only. The sell gate checks every file a marker records, so a Kit ships with its libraries as
+installed; an attacker who can write the runtime folder after that is the residual above.
 
 **The fix rests on three facts the deferral called out, each now addressed:**
 
@@ -3332,7 +3346,9 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
    marker with no valid entry deep-equals the historical `{version,backend,os,arch}` so legacy reads are
    unchanged. The hash is recorded by **all three** marker writers: the in-app installer
    (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
-   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #986
+   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #998 all
+   three record every file of the copy, the libraries included (the verifier still looks up the
+   executable's key alone; the sell gate and the app's "complete" checks read every key). Since #986
    the in-app installer hashes and marks the copy in its staging folder `<os>.new/` and swaps the
    folder in by rename; the keys are relative to the folder, so they are the install folder's after
    the swap, and the bytes the marker covers are flushed to the device before it is written.
@@ -3378,7 +3394,10 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
 **Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
 carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that
 predates this field, or whose binary was modified after install, **fails the gate** (forcing a rebuild),
-so a sold drive always ships re-verifiable binaries.
+so a sold drive always ships re-verifiable executables. Since #998 it also checks every further file a
+marker records (present, inside its folder, the recorded bytes); a marker that records only the
+executable passes as before. That covers the libraries when the Kit is built, not before each spawn
+(the gap above).
 
 Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
 predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there

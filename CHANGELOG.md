@@ -25,7 +25,17 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- **An engine update no longer stops your model while it unpacks, and never puts an incomplete
+  engine in place.** The update now downloads, checks and unpacks the new AI engine beside the old
+  one while your model keeps answering, and pauses the models only for the few seconds it takes to
+  swap it in; an unpack that fails or that you cancel leaves your model running. Before it swaps,
+  the app checks every file of the new engine against the download's own list, so if an antivirus
+  program took one of them, the update stops with "could not be unpacked" and keeps the engine you
+  had. Before, such an engine was put in place and could quietly run without your graphics card. An
+  engine whose processor libraries are missing is now reported as damaged engine files, with the
+  offer to install it again, instead of as a model that cannot be loaded.
 
 ## [0.1.66] — 2026-11-21
 
