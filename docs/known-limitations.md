@@ -83,9 +83,10 @@ password recovery — are documented in
   (status 133). The lock writes about twice the workspace's size (measured on a USB 3 stick that
   writes about 41 MB/s: 3.3 s for 58 MB, 15.5 s for 304 MB). So on that leg the lock now stops
   overwriting the unencrypted working copy when its time runs short (8.5 s) and deletes it
-  instead (#982): the workspace still ends encrypted up to about 9 seconds' worth of writes (about
-  356 MB at 41 MB/s, 174 MB at 20 MB/s, 87 MB at 10 MB/s; before, about 175, 85 and 43 MB), and
-  the copy is overwritten in full up to about half that (about 165, 80 and 40 MB). The part not
+  instead (#982): the workspace still ends encrypted up to about 9 seconds' worth of writes
+  (measured on that stick: up to about 320 MB at 41 MB/s, which scales to about 155 MB at 20 MB/s
+  and 78 MB at 10 MB/s; before, about 175, 85 and 43 MB), and the copy is overwritten in full up
+  to about half that (measured: about 170 MB at 41 MB/s; about 83 and 41 MB). The part not
   overwritten stays on the stick as deleted data that recovery tools may read (on flash an
   overwrite may not reach every block anyway). A larger workspace
   still crashes there and is left unencrypted on the

@@ -1422,7 +1422,7 @@ shut down, or when the app is stopped with `kill` or Ctrl+C in a terminal: it lo
 and closes at once, without asking. This is checked with those signals and a lost session, not yet
 with a real desktop log-out. On Linux, a log-out gives the lock about 10 seconds. When time runs
 short, the lock stops overwriting the unencrypted copy of your workspace and deletes it instead, so
-the workspace still ends locked up to about 174 MB on a USB stick that writes 20 MB/s. A larger
+the workspace still ends locked up to about 155 MB on a USB stick that writes 20 MB/s. A larger
 workspace on a slow stick may not finish: lock first, or quit before you log out. If the app crashes
 on Linux, its main process, which holds the key to your workspace, keeps its memory out of the
 crash file the system may save, and so do the helper programs it starts, such as the model

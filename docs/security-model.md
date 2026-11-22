@@ -2352,10 +2352,17 @@ re-encrypts (the bullet below).
   transients before the lock keeps the full overwrite on this leg too. With that, by wave 6's fits
   (0.26 s + 50 ms per MB,
   0.42 s + 24 ms per MB without the overwrite, at 41 MB/s, scaled to the write rate), the whole
-  overwrite fits within the 8.5 s deadline up to about 165 MB at 41 MB/s, 80 MB at 20 MB/s and
-  40 MB at 10 MB/s, and the lock completes, encrypted, within about 9 of the 10 s up to about
-  356 MB at 41 MB/s, 174 MB at 20 MB/s and 87 MB at 10 MB/s (before, the full lock: about 175, 85
-  and 43 MB); above that the encrypt alone runs past
+  overwrite was modelled to fit within the 8.5 s deadline up to about 165 MB at 41 MB/s and the
+  lock to complete up to about 356 MB. **Measured with this code** (follow-ups wave 7, the real
+  lock on the same exFAT USB 3 stick, ~41 MB/s, two runs per size; on Windows a removable stick
+  writes through, so the per-chunk sync cost 0–4 ms there, and its cost under the Linux page cache
+  is not measured): full lock T = 2.06 s + 44.95 ms per MB; the budgeted overwrite with a far
+  deadline 0.87 s + 45.50 ms per MB; with the 8.5 s deadline, 58 and 107 MB were overwritten in
+  full and 304 MB was cut (25.2 MB, then 0 MB overwritten), the locks ending encrypted in 8.37 and
+  8.98 s where the full lock takes 15 to 17 s. So the whole overwrite fits within the deadline up
+  to about 170 MB at 41 MB/s (about 83 MB at 20 MB/s, 41 MB at 10 MB/s, scaled), and the lock
+  completes, encrypted, up to about 320 MB at 41 MB/s (about 155 and 78 MB; before, the full lock:
+  about 175, 85 and 43 MB); above that the encrypt alone runs past
   the watchdog and the lock crashes as before. The lock's duration is logged after it, with
   `shredCut` (the overwrite stopped short), and `vault_lock_done` carries the overwritten bytes.
   Measured on WSL Electron 43.8.6 with the real closure, emergency lock and controller on a 40 MB
