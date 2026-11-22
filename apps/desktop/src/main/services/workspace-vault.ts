@@ -944,6 +944,18 @@ function lstatOrNull(path: string): BigIntStats | null {
   }
 }
 
+/** #1014 round 4: `lstat` where only ENOENT proves a name is not there (the #911 rule, as {@link statSaysAbsent} reads
+ *  it): `null` then, and any other failure (a hold, a permission, an I/O error) throws, so the caller leaves what it was
+ *  judging as it is. The secure delete keeps {@link lstatOrNull}, for which a name it cannot stat is nothing to shred. */
+function lstatOrAbsent(path: string): BigIntStats | null {
+  try {
+    return lstatSync(path, { bigint: true })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return null
+    throw err
+  }
+}
+
 /** #1014: the file a descriptor opened on a `file` name is still the file `lstat` saw (the same device and file id, a
  *  regular file, no second link): the name was not swapped for a link between the two calls. */
 function sameShreddableFile(named: BigIntStats, opened: BigIntStats): boolean {
@@ -1731,8 +1743,10 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
     }
     return {
       version: REKEY_JOURNAL_VERSION,
-      // Only `<file>.new` entries can be swapped; anything else would be shredded by name.
-      staged: strings(parsed.staged).filter((s) => s.endsWith(REKEY_SUFFIX)),
+      // Every entry as written: what a recovery may act on is {@link planRekeyJournal}'s to judge. #1014 round 4: an
+      // entry that names no stage (no `.new`) was dropped here, before anything could count it; the plan refuses it
+      // and counts it, as it does every other entry it cannot vouch for.
+      staged: strings(parsed.staged),
       remove: strings(parsed.remove),
       corrupt: false
     }
@@ -1814,16 +1828,24 @@ function removeTempName(path: string): boolean {
   return false
 }
 
+/** #1014 round 4: where {@link insideWorkspace} finds a journal entry: inside the workspace folder on the disk; not
+ *  inside (outside it by its text, or inside by its text but through a link); or not known, because a stat on the way
+ *  failed for a reason that proves nothing (a hold, a permission, an I/O error: anything but ENOENT, the #911 rule). */
+type Containment = 'inside' | 'outside' | 'unknown'
+
 /**
  * #1014 round 3: does `entry` lie inside the workspace folder on the disk, not only by its text? Its text must, no folder
  * between the workspace folder and the entry may be a link (`lstat`, which never follows one; a Windows junction reads as
  * a link), and the entry's folder, resolved, must still be the workspace folder or inside it. An entry under
  * `documents/J/`, `J` a junction to a folder elsewhere, passed the text test, and the start's swap shredded and replaced
  * the file behind the link. A folder that is not there ends the walk: nothing below it exists to act on.
+ * Round 4: a stat that fails otherwise (`lstat` on the way, or either `realpath`) answers `unknown`, never "not inside".
+ * Read as "not inside", the entry was refused and dropped from the rewritten journal, and a transient hold at the start
+ * left an out-of-store copy under the workspace folder (which no scan finds) under the retired key for good.
  */
-function insideWorkspace(ws: string, entry: string): boolean {
+function insideWorkspace(ws: string, entry: string): Containment {
   const full = resolve(entry)
-  if (!isInsideDir(ws, full)) return false
+  if (!isInsideDir(ws, full)) return 'outside'
   const rel = relative(ws, dirname(full))
   let dir = ws
   for (const part of rel === '' ? [] : rel.split(sep)) {
@@ -1832,16 +1854,16 @@ function insideWorkspace(ws: string, entry: string): boolean {
     try {
       named = lstatSync(dir)
     } catch (err) {
-      return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' // any other failure proves nothing: refused
+      return (err as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'inside' : 'unknown'
     }
-    if (!named.isDirectory()) return false // a link (a junction too), or a file at a folder's name
+    if (!named.isDirectory()) return 'outside' // a link (a junction too), or a file at a folder's name
   }
   try {
     const realWs = realpathSync(ws)
     const realDir = realpathSync(dirname(full))
-    return pathKey(realDir) === pathKey(realWs) || isInsideDir(realWs, realDir)
+    return pathKey(realDir) === pathKey(realWs) || isInsideDir(realWs, realDir) ? 'inside' : 'outside'
   } catch {
-    return false
+    return 'unknown'
   }
 }
 
@@ -1883,6 +1905,9 @@ function stillWaiting(vaultPaths: VaultPaths, staged: string): boolean {
  * Every other entry (another suffix, any other `remove` path) is left as it is and counted (`refused`), for the log.
  * Round 3: "inside" is judged on the disk ({@link insideWorkspace}): an entry inside the folder by its text whose path runs
  * through a link (a junction to a folder elsewhere) is refused, never deferred.
+ * Round 4: `unknown` holds the entries inside the folder by their text whose containment a failed stat left open. One is
+ * neither acted on nor dropped: every pass leaves it as it is, counts it, and keeps it in the journal it settles, so the
+ * next pass judges it again.
  * An entry under another drive root of this workspace fails the containment too. That loses nothing: the scan still finds
  * the in-store stages, and, listed by their full path no more, they are the doubts the unlock judges under the data key
  * (#973, #1001); rebasing the entry instead would let a journal vouch for a stage by its relative name, which review
@@ -1891,16 +1916,22 @@ function stillWaiting(vaultPaths: VaultPaths, staged: string): boolean {
 interface JournalPlan {
   staged: string[]
   deferred: string[]
+  unknown: string[]
   removeRotatedLog: boolean
   refused: number
 }
 
 function planRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | null): JournalPlan {
-  const plan: JournalPlan = { staged: [], deferred: [], removeRotatedLog: false, refused: 0 }
+  const plan: JournalPlan = { staged: [], deferred: [], unknown: [], removeRotatedLog: false, refused: 0 }
   const ws = workspaceDirOf(vaultPaths)
   for (const entry of journal?.staged ?? []) {
-    if (!entry.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) plan.refused += 1
-    else if (insideWorkspace(ws, entry)) plan.staged.push(entry)
+    if (!entry.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) {
+      plan.refused += 1
+      continue
+    }
+    const where = insideWorkspace(ws, entry)
+    if (where === 'inside') plan.staged.push(entry)
+    else if (where === 'unknown') plan.unknown.push(entry) // round 4: judged again by the next pass
     // Round 3: inside by its text, but through a link on the disk: refused, never deferred to the unlock.
     else if (isInsideDir(ws, resolve(entry))) plan.refused += 1
     else plan.deferred.push(entry)
@@ -2076,7 +2107,8 @@ export function stageRekey(
  * workspace folder whose stored copy it lists are swapped too, and the others refused. Without it (the recoveries before
  * the password) such a stage waits, and the journal with it, for the unlock ({@link finishOutOfStoreStages}).
  * `onRefused` hears what this pass left as it is (a count, for the log), once it has settled the journal: the entries it
- * refused (each dropped from the journal, so no later pass counts it again), and round 3's folders.
+ * refused (each dropped from the journal, so no later pass counts it again), round 3's folders, and round 4's entries a
+ * failed stat left unjudged (kept in the journal, and counted by each pass that meets them, as a folder is).
  *
  * Round 3: a folder at a write temp's name is left ({@link removeTempName}), and so is a stage whose stored copy's name a
  * FOLDER holds (a document's or an image's, judged by `lstat`): that one stage stays, listed, and the rest of the change
@@ -2093,7 +2125,7 @@ export function applyPendingRekey(
   const journal = readRekeyJournal(vaultPaths)
   const plan = planRekeyJournal(vaultPaths, journal)
   const listed = outOfStore ? listedOutOfStoreStages(plan, outOfStore) : []
-  let left = plan.refused + (outOfStore ? plan.deferred.length - listed.length : 0)
+  let left = plan.refused + plan.unknown.length + (outOfStore ? plan.deferred.length - listed.length : 0)
   // Committed, so the files the migration retires go first (idempotent, best-effort): a
   // later crash can then never skip them. Today that is the rotated log (#241), at its own path (#1014).
   if (plan.removeRotatedLog) removeRotatedLog(vaultPaths)
@@ -2140,8 +2172,13 @@ export function applyPendingRekey(
   // is unreachable right now (a detached legacy drive) — keep the journal so a later
   // recovery can still finish that swap; clear it once every entry is accounted for.
   // #1014: the entries this pass admitted; a stage still waiting for the database keeps it too. Round 3: and the journal
-  // is rewritten to list only those ({@link stillWaiting}), so it vouches for nothing this pass settled.
-  const waiting = [...accepted.filter((staged) => stillWaiting(vaultPaths, staged)), ...(outOfStore ? [] : plan.deferred)]
+  // is rewritten to list only those ({@link stillWaiting}), so it vouches for nothing this pass settled. Round 4: and the
+  // entries a failed stat left unjudged, for the next pass.
+  const waiting = [
+    ...accepted.filter((staged) => stillWaiting(vaultPaths, staged)),
+    ...plan.unknown,
+    ...(outOfStore ? [] : plan.deferred)
+  ]
   settleRekeyJournal(vaultPaths, journal, waiting)
   onRefused?.(left)
 }
@@ -2150,7 +2187,9 @@ export function applyPendingRekey(
  *  is enough — they are ciphertext under a data key that was never persisted anywhere.
  *  #1014: only what {@link planRekeyJournal} admits, and outside the workspace folder only the stages whose stored copy
  *  `outOfStore` (the open database, from a password change) lists. A stage the start cannot judge is left: ciphertext
- *  under a key nothing holds, which no build reads again once the journal is gone. `onRefused` hears the count. */
+ *  under a key nothing holds, which no build reads again once the journal is gone. `onRefused` hears the count.
+ *  #1014 round 4: an entry a failed stat left unjudged is left too, and the journal is kept to list only those, so the
+ *  next pass judges them again and removes the stage; with none, the journal is cleared as before. */
 export function discardPendingRekey(
   vaultPaths: VaultPaths,
   outOfStore?: ReadonlySet<string>,
@@ -2159,7 +2198,7 @@ export function discardPendingRekey(
   const journal = readRekeyJournal(vaultPaths)
   const plan = planRekeyJournal(vaultPaths, journal)
   const listed = outOfStore ? listedOutOfStoreStages(plan, outOfStore) : []
-  let left = plan.refused + plan.deferred.length - listed.length
+  let left = plan.refused + plan.unknown.length + plan.deferred.length - listed.length
   for (const staged of stagedRekeyFiles(vaultPaths, journal, listed)) {
     rmSync(staged, { force: true })
   }
@@ -2168,7 +2207,7 @@ export function discardPendingRekey(
   for (const staged of [...plan.staged, ...listed]) {
     if (pathKey(staged) !== stagedDb && removeTempName(`${staged}.tmp`)) left += 1
   }
-  clearRekeyJournal(vaultPaths, journal)
+  settleRekeyJournal(vaultPaths, journal, plan.unknown)
   onRefused?.(left)
 }
 
@@ -2253,8 +2292,9 @@ function blockedOnFailure(step: () => void): void {
  * (the stage gone, its stored copy there), or proven foreign (it does not open under the data key: left as it is). Any
  * other stage is left as it is AND keeps the journal for the next unlock: one that is no plain file of one link, or
  * beside a stored copy that is none (a link, a folder, a second hard link) or that already opens; one that cannot be read
- * or swapped in now (a hold, an I/O error); one in a frame a newer build wrote (review R2: that build's to finish); one
- * whose location is unreachable (neither file there). Best-effort: it never fails the unlock.
+ * or swapped in now (a hold, an I/O error), or, round 4, one where an `lstat` of the stage or of its stored copy fails for
+ * any reason but ENOENT; one in a frame a newer build wrote (review R2: that build's to finish); one whose location is unreachable
+ * (neither file there). Best-effort: it never fails the unlock.
  */
 function finishOutOfStoreStages(
   vaultPaths: VaultPaths,
@@ -2274,9 +2314,12 @@ function finishOutOfStoreStages(
     const target = staged.slice(0, -REKEY_SUFFIX.length)
     try {
       if (removeTempName(`${staged}.tmp`)) left += 1 // round 3: a folder at the temp's name is left
-      const stage = shredNameOf(lstatOrNull(staged))
+      // Round 4: only ENOENT proves either file is not there ({@link lstatOrAbsent}). Any other failed `lstat` throws to
+      // the catch below: a stage it could not stat counted as already in place, and the journal was cleared; a stored
+      // copy it could not stat counted as gone, and the stage was renamed over it.
+      const stage = shredNameOf(lstatOrAbsent(staged))
       if (stage.kind === 'absent') {
-        if (lstatOrNull(target) === null) unsettled.push(staged) // neither file there: an unreachable location
+        if (lstatOrNull(target) === null) unsettled.push(staged) // neither file there (or not known): kept
         continue
       }
       if (stage.kind !== 'file') {
@@ -2284,7 +2327,7 @@ function finishOutOfStoreStages(
         continue
       }
       if (!authenticatesUnder(staged, dataKey)) continue // foreign: left as it is, and settled
-      const stored = shredNameOf(lstatOrNull(target))
+      const stored = shredNameOf(lstatOrAbsent(target))
       if (stored.kind === 'absent') {
         renameSync(staged, target)
         continue
@@ -2300,8 +2343,13 @@ function finishOutOfStoreStages(
     }
   }
   // Round 3: rewritten to what still waits (an in-workspace entry still staged or unreachable, an outside stage not
-  // settled), or cleared; the refused outside stages are dropped, so no later pass counts them again.
-  settleRekeyJournal(vaultPaths, journal, [...plan.staged.filter((staged) => stillWaiting(vaultPaths, staged)), ...unsettled])
+  // settled), or cleared; the refused outside stages are dropped, so no later pass counts them again. Round 4: an
+  // in-workspace entry a failed stat left unjudged stays too, for the next pass.
+  settleRekeyJournal(vaultPaths, journal, [
+    ...plan.staged.filter((staged) => stillWaiting(vaultPaths, staged)),
+    ...plan.unknown,
+    ...unsettled
+  ])
   onRefused?.(left)
 }
 
@@ -2320,13 +2368,15 @@ function finishOutOfStoreStages(
  * same outcome, one read slower.
  * The database stage only: its answer decides which snapshot opens, and the loss hold reads it. The `documents/` and
  * `images/` stages are judged one by one, by the same rule ({@link sidecarStagesInDoubt}, #1001).
+ * #1014 round 4: only an entry {@link planRekeyJournal} admits lists it, never the journal as written: an entry the plan
+ * refuses or cannot judge vouches for nothing (see {@link sidecarStagesInDoubt}).
  */
 function stageInDoubt(vaultPaths: VaultPaths): boolean {
   const staged = `${vaultPaths.encPath}${REKEY_SUFFIX}`
   if (!existsSync(staged)) return false
   if (encryptedFileState(vaultPaths) === 'missing') return false
-  const listed = (readRekeyJournal(vaultPaths)?.staged ?? []).some((entry) => pathKey(entry) === pathKey(staged))
-  return !listed
+  const admitted = planRekeyJournal(vaultPaths, readRekeyJournal(vaultPaths)).staged
+  return !admitted.some((entry) => pathKey(entry) === pathKey(staged))
 }
 
 /** #973: what the unlock did with a staged database in doubt ({@link resolveStageInDoubt}): rolled it forward (it
@@ -2416,9 +2466,17 @@ function statSaysAbsent(path: string): boolean {
  * #241 or later that cannot be read or names the files under another drive root. With the stored copy gone the stage
  * is no doubt: it is the only copy left (a swap cut short between its shred and its rename), and the start renames it
  * into place as before, the mirror of #973's "`.enc` gone".
+ * #1014 round 4: "lists" means an entry {@link planRekeyJournal} admits, never the journal as written. With `documents/`
+ * itself a junction to a folder elsewhere, the plan refuses an entry through it, but the scan still finds the stage there
+ * (`readdir` follows the link); vouched for by the journal as written, it was no doubt, and the start shredded the stored
+ * copy behind the link and renamed the stage over it. Now it is a doubt: the start leaves it, and the unlock judges it
+ * under the data key, where a planted stage fails its tag and never reaches a shred. The scan does not skip a linked
+ * `documents/` or `images/` folder on purpose: a user may keep the store behind a link of their own, and the stages of a
+ * change cut short there would be lost; judged at the unlock, a legitimate one still rolls forward. An entry the plan
+ * cannot judge (a failed stat) vouches for nothing either.
  */
 function sidecarStagesInDoubt(vaultPaths: VaultPaths): string[] {
-  const listed = new Set((readRekeyJournal(vaultPaths)?.staged ?? []).map(pathKey))
+  const listed = new Set(planRekeyJournal(vaultPaths, readRekeyJournal(vaultPaths)).staged.map(pathKey))
   return scannedSidecarStages(vaultPaths).filter(
     (staged) => !listed.has(pathKey(staged)) && !statSaysAbsent(staged.slice(0, -REKEY_SUFFIX.length))
   )
@@ -2840,8 +2898,9 @@ export function unlockEncryptedVault(
   /** #1001: hears what this unlock did with the `documents/` and `images/` stages in doubt, once it judged them (also
    *  when a later step fails). */
   onSidecarStages?: (outcome: SidecarStageOutcome) => void,
-  /** #1014: hears what this unlock's passes left as they are, once it holds the data key (the recovery before the
-   *  password counts nothing: the start counted what it meets). */
+  /** #1014: hears what this unlock's passes left as they are. Round 4: the recovery before the password too (it counted
+   *  nothing, so an entry it refused in a journal that turned up after the start was dropped with no trace), and the
+   *  passes once it holds the data key. */
   onJournalRefusals?: (refused: number) => void
 ): UnlockedVault {
   // #845: FIRST, before the rekey recovery, the `.recovery` roll-forward, the sidecar clean or the decrypt can write
@@ -2864,8 +2923,8 @@ export function unlockEncryptedVault(
   // A crash during a password change must be resolved BEFORE any decrypt: the descriptor
   // decides whether staged `.new` files roll forward (committed) or are discarded. #973: a staged
   // database it cannot vouch for waits for the data key below, so a wrong password leaves it as it is;
-  // #1001: so does a staged document or image copy it cannot vouch for.
-  recoverPendingRekey(vaultPaths, descriptor)
+  // #1001: so does a staged document or image copy it cannot vouch for. #1014 round 4: what it leaves is counted.
+  recoverPendingRekey(vaultPaths, descriptor, onJournalRefusals)
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const kdfT0 = performance.now()
   const key = deriveKey(password, salt, descriptor.kdf)
@@ -3496,8 +3555,10 @@ export class WorkspaceController {
    *  (outside the workspace and not listed by the open database, through a link, or not a stage or the rotated log) and,
    *  round 3, the folders they left in place (at a write temp's name, at a stored copy's name). A pass counts once it has
    *  settled the journal, and a refused entry is dropped from it then, so it is counted once (review R5, round 3); a
-   *  folder is counted by each pass that meets it. Returns the sum once, for one content-free log line (no path, no file
-   *  name). */
+   *  folder is counted by each pass that meets it, and so, round 4, is an entry a failed stat left unjudged (the journal
+   *  keeps it). Round 4: the unlock's recovery before the password and a password change's passes count too; nothing
+   *  logs right after a change, so its count goes with the next unlock's line. Returns the sum once, for one
+   *  content-free log line (no path, no file name). */
   takeJournalRefusals(): number {
     const refused = this._journalRefusals
     this._journalRefusals = 0
@@ -4093,9 +4154,11 @@ export class WorkspaceController {
       } else {
         // v1: the one-time journaled migration to the envelope format.
         // #1014: the database is open, so the journal's stages outside the workspace folder are acted on when it lists
-        // their stored copy (the out-of-store copies this change stages itself), in one call as before.
+        // their stored copy (the out-of-store copies this change stages itself), in one call as before. Round 4: what
+        // each pass leaves is counted into the sum `takeJournalRefusals` hands out (logged with the next unlock's line).
         const outOfStore = outOfStoreTargets(this.vaultPaths, this._db)
-        discardPendingRekey(this.vaultPaths, outOfStore) // defensive: drop strays from an old abort
+        // Defensive: drop strays from an old abort.
+        discardPendingRekey(this.vaultPaths, outOfStore, this.noteJournalRefusals)
         const dataKey = generateDataKey()
         try {
           stageRekey(this.vaultPaths, this._db, this.key, dataKey, this.noteProbeFallback)
@@ -4103,7 +4166,7 @@ export class WorkspaceController {
           // old files win; from here on the new ones do.
           this.descriptor = rewrapVaultKey(this.vaultPaths, dataKey, nextPassword, kdf)
         } catch (err) {
-          discardPendingRekey(this.vaultPaths, outOfStore)
+          discardPendingRekey(this.vaultPaths, outOfStore, this.noteJournalRefusals)
           dataKey.fill(0)
           throw err
         }
@@ -4113,7 +4176,7 @@ export class WorkspaceController {
         this.key.fill(0)
         this.key = dataKey
         try {
-          applyPendingRekey(this.vaultPaths, undefined, outOfStore)
+          applyPendingRekey(this.vaultPaths, undefined, outOfStore, this.noteJournalRefusals)
         } catch {
           // Not fatal post-commit: applyPendingRekey is now best-effort + retry, so it throws
           // only when a file stays persistently locked (e.g. on Windows) AFTER swapping every

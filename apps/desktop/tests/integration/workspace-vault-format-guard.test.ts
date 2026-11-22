@@ -9,10 +9,11 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
-import { dirname, join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { SCHEMA_VERSION, openDatabase } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { decrypt, deriveKey, generateDataKey, verifyKey } from '../../src/main/services/security/crypto'
@@ -1543,6 +1544,50 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
       expect(sha(copies.documents)).toBe(stored)
       expect(await readStoredCopy(ctl, vp.root, copies.documents)).toBe(textOf('documents', 'fmtguard-1001'))
       expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
+  // #1014 round 4: a journal entry the start refuses vouches for nothing. Here `documents/` itself is a junction (no
+  // privilege needed on Windows) to a folder elsewhere, and the journal lists the stage by its path through it. The
+  // containment refuses that entry, but the scan, whose `readdir` follows the link, still finds the stage; listed by the
+  // journal as written, it was no doubt, and the start shredded the stored copy behind the link and renamed the stage
+  // over it. Now the stage is a #1001 doubt: the start leaves both files, and the unlock judges the stage under the data
+  // key. A stage under another key fails its tag and is removed; one that opens under the data key (a store the user
+  // keeps behind a link of their own) still rolls forward, which is why the scan does not skip a linked folder.
+  it.each<[string, (vp: FreshVaultPaths, target: string, text: string) => Promise<string>, 'removed' | 'rolledForward']>([
+    ['a stage under another key', async (vp, target, text) => retiredCopy(vp, 'documents', `${basename(target)}${REKEY_SUFFIX}`, text), 'removed'],
+    [
+      'a stage that opens under the data key',
+      async (vp, target, text) => whileUnlocked(vp, (ctl) => storeCopy(ctl, vp.root, `${target}${REKEY_SUFFIX}`, text)),
+      'rolledForward'
+    ]
+  ])('`documents/` a junction to a folder elsewhere, the journal listing %s through it: the start leaves both files, the unlock judges the stage', async (_case, plantStage, verdict) => {
+    const vp = lockedVault('fmtguard-1001', PW)
+    const elsewhere = join(vp.root, 'store-elsewhere')
+    mkdirSync(elsewhere)
+    const docs = join(dirname(vp.dbPath), 'documents')
+    rmSync(docs, { recursive: true, force: true })
+    symlinkSync(elsewhere, docs, 'junction')
+    const text = 'the copy behind the link'
+    const target = retiredCopy(vp, 'documents', 'x.pdf.enc', text) // the stored copy, still under a retired key
+    const staged = await plantStage(vp, target, text)
+    const journal = rekeyJournal(vp, 1, [staged])
+    const behind = join(elsewhere, 'x.pdf.enc') // the same file, by its own path
+    const before = { stored: sha(behind), stage: sha(staged) }
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(sha(behind), 'the stored copy behind the link, after the start').toBe(before.stored)
+      expect(sha(staged), 'its stage, after the start').toBe(before.stage)
+      expect(ctl.takeJournalRefusals()).toBe(1) // the entry through the link, dropped once counted
+      expect(existsSync(journal)).toBe(false)
+      ctl.unlock(PW)
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 0, setAside: 0, [verdict]: 1 })
+      expect(existsSync(staged)).toBe(false)
+      if (verdict === 'removed') expect(sha(behind)).toBe(before.stored)
+      else expect(await readStoredCopy(ctl, vp.root, behind)).toBe(text)
     } finally {
       ctl.shutdown()
     }

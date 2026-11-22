@@ -10,11 +10,13 @@ import {
   WorkspaceController,
   RECOVERY_SUFFIX,
   REKEY_JOURNAL_NAME,
+  REKEY_SUFFIX,
   VaultLockError,
   VaultRecoveryBlockedError,
   applyPendingRekey,
   shredFile,
   shredFileWithin,
+  stageRekey,
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
@@ -26,6 +28,7 @@ import { readLogTail } from '../../src/main/services/logging'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   ENCRYPTION_REQUIRED,
+  FAST_ARGON,
   backdate,
   endedUnlocked,
   failedLockState,
@@ -128,6 +131,11 @@ const failures = vi.hoisted(() => ({
   /** #1014 round 3: lstatSync reports a link count of 0 for exactly this path while set, as some drivers do for a
    *  regular file (the file itself and its other stats as they are). */
   lstatReportsNoLinkCount: null as string | null,
+  /** #1014 round 4: lstatSync throws this error code for exactly this path while set: a hold, a permission or an I/O
+   *  error on a folder the journal's containment walks, or on a file the unlock judges, that proves nothing. */
+  lstatThrow: null as { path: string; code: string } | null,
+  /** #1014 round 4: realpathSync throws this error code for exactly this path while set. */
+  realpathThrow: null as { path: string; code: string } | null,
   /** #1001 review round 3: the descriptors opened on a staged document or image copy, and the bytes read through them:
    *  what the unlock's pass actually reads of a stage. */
   stagedSidecarFds: new Set<number>(),
@@ -154,7 +162,8 @@ const failures = vi.hoisted(() => ({
     renameStagedSidecar: 0,
     renameAsideRestore: 0,
     statNoInode: 0,
-    openSyncSidecarTarget: 0
+    openSyncSidecarTarget: 0,
+    statThrow: 0
   }
 }))
 
@@ -283,6 +292,10 @@ vi.mock('node:fs', async (importOriginal) => {
       return read
     }),
     lstatSync: vi.fn((...args: unknown[]) => {
+      if (failures.lstatThrow !== null && String(args[0]) === failures.lstatThrow.path) {
+        failures.hits.statThrow += 1
+        throw errnoError(failures.lstatThrow.code, `${failures.lstatThrow.code}: lstat (a stat that proves nothing)`)
+      }
       const stats = (actual.lstatSync as unknown as (...a: unknown[]) => unknown)(...args)
       if (stats === undefined) return stats
       if (failures.lstatReportsNoLinkCount !== null && String(args[0]) === failures.lstatReportsNoLinkCount) {
@@ -325,7 +338,17 @@ vi.mock('node:fs', async (importOriginal) => {
         return Object.assign(Object.create(Object.getPrototypeOf(stats) as object) as object, stats, blank)
       }
       return stats
-    })
+    }),
+    realpathSync: Object.assign(
+      vi.fn((...args: unknown[]) => {
+        if (failures.realpathThrow !== null && String(args[0]) === failures.realpathThrow.path) {
+          failures.hits.statThrow += 1
+          throw errnoError(failures.realpathThrow.code, `${failures.realpathThrow.code}: realpath (a stat that proves nothing)`)
+        }
+        return (actual.realpathSync as unknown as (...a: unknown[]) => unknown)(...args)
+      }),
+      { native: actual.realpathSync.native }
+    )
   }
   return { ...mocked, default: mocked }
 })
@@ -369,6 +392,8 @@ beforeEach(() => {
   failures.openThrowOnSidecarTarget = null
   failures.lstatReportsSymlink = null
   failures.lstatReportsNoLinkCount = null
+  failures.lstatThrow = null
+  failures.realpathThrow = null
   failures.stagedSidecarFds.clear()
   failures.stageBytesRead = 0
   failures.hits = {
@@ -388,7 +413,8 @@ beforeEach(() => {
     renameStagedSidecar: 0,
     renameAsideRestore: 0,
     statNoInode: 0,
-    openSyncSidecarTarget: 0
+    openSyncSidecarTarget: 0,
+    statThrow: 0
   }
   ipcState.handlers.clear()
 })
@@ -612,7 +638,8 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       renameStagedSidecar: 0,
       renameAsideRestore: 0,
       statNoInode: 0,
-      openSyncSidecarTarget: 0
+      openSyncSidecarTarget: 0,
+      statThrow: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -1619,6 +1646,221 @@ describe("a staged copy the journal lists that the start cannot swap in (#1015)"
     ctl.unlock('pw')
     expect(['unclean', 'unclean-full']).toContain(ctl.takeWorkingCopyLost()?.cause)
     ctl.lock()
+  })
+})
+
+const OUT_OF_STORE_TEXT = 'the out-of-store copy'
+
+/** A document row whose `stored_path` names `target`, outside `documents/` (issue #188's absolute paths). */
+function outOfStoreRow(ctl: WorkspaceController, target: string): void {
+  const now = new Date().toISOString()
+  ctl
+    .requireDb()
+    .prepare(
+      `INSERT INTO documents (id, title, stored_path, status, mime_type, created_at, updated_at)
+       VALUES (?, ?, ?, 'indexed', 'text/plain', ?, ?)`
+    )
+    .run(`doc-${basename(target)}`, basename(target), target, now, now)
+}
+
+/** By the unlocked `seed` of `vp`: an out-of-store stored copy at `<dir>/<name>` (a row names it) still under a retired
+ *  key, and its new copy (`OUT_OF_STORE_TEXT`) staged beside it under the data key: what a v1 → v2 password change cut
+ *  short after its commit leaves. */
+async function retiredOutOfStoreCopy(
+  seed: WorkspaceController,
+  vp: FreshVaultPaths,
+  dir: string,
+  name: string
+): Promise<{ target: string; staged: string }> {
+  const target = join(dir, name)
+  const staged = await storeCopy(seed, vp.root, `${target}${REKEY_SUFFIX}`, OUT_OF_STORE_TEXT) // under the data key
+  outOfStoreRow(seed, target)
+  const src = join(vp.root, 'retired-src.txt')
+  writeFileSync(src, OUT_OF_STORE_TEXT)
+  encryptFile(src, target, randomBytes(32)) // the stored copy, still under the retired key
+  rmSync(src)
+  return { target, staged }
+}
+
+/** A rekey journal of `vp` that lists `staged`; returns its path. */
+function journalListing(vp: FreshVaultPaths, staged: string[]): string {
+  const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+  writeFileSync(journal, JSON.stringify({ version: 1, staged, remove: [] }))
+  return journal
+}
+
+/** A locked workspace under `pw` with one {@link retiredOutOfStoreCopy} at `<dirOf>/outside.txt.enc` and a rekey journal
+ *  that lists its stage. With the bytes of both files. */
+async function outOfStoreCopyBesideStage(
+  dirOf: (vp: FreshVaultPaths) => string
+): Promise<{ vp: FreshVaultPaths; target: string; staged: string; journal: string; before: Buffer[] }> {
+  const vp = lockedVault('recovery-guards-1014', 'pw')
+  const seed = unlockedController(vp, 'pw')
+  const { target, staged } = await retiredOutOfStoreCopy(seed, vp, dirOf(vp), 'outside.txt.enc')
+  seed.lock()
+  const journal = journalListing(vp, [staged])
+  return { vp, target, staged, journal, before: [readFileSync(target), readFileSync(staged)] }
+}
+
+/** The `staged` list of the rekey journal at `journal`. */
+const journalStaged = (journal: string): unknown => (JSON.parse(readFileSync(journal, 'utf8')) as { staged: unknown }).staged
+
+// #1014 round 4: a stat that fails for a reason that proves nothing (a hold, a permission, an I/O error: anything but
+// ENOENT, the #911 rule) read as "not inside the workspace folder" or as "not there". An out-of-store copy's journal
+// entry was then refused and dropped from the rewritten journal, and that copy, which no scan finds, stayed under the
+// retired key for good; at the unlock a stage it could not stat counted as already in place. Now such an entry is
+// neither acted on nor dropped: the journal keeps it, and the next pass judges it again.
+describe('a rekey journal entry a failed stat cannot judge (#1014 round 4)', () => {
+  const inWorkspace = (vp: FreshVaultPaths): string => join(dirname(vp.dbPath), 'legacy-store')
+
+  it.each<[string, (dir: string) => void]>([
+    ['an lstat of its folder fails with EPERM', (dir) => void (failures.lstatThrow = { path: dir, code: 'EPERM' })],
+    ['the realpath of its folder fails with EBUSY', (dir) => void (failures.realpathThrow = { path: dir, code: 'EBUSY' })]
+  ])('an out-of-store copy inside the workspace folder where %s at the start: both files stay, the journal keeps the stage, the start counts it, and the unlock swaps it in', async (_case, arm) => {
+    const { vp, target, staged, journal, before } = await outOfStoreCopyBesideStage(inWorkspace)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    arm(inWorkspace(vp))
+    try {
+      ctl.init()
+    } finally {
+      failures.lstatThrow = null
+      failures.realpathThrow = null
+    }
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    expect(ctl.isRecoveryBlocked()).toBe(false)
+    expect(readFileSync(target).equals(before[0]), 'the stored copy').toBe(true)
+    expect(readFileSync(staged).equals(before[1]), 'its stage').toBe(true)
+    expect(journalStaged(journal), 'the journal keeps the stage').toEqual([staged])
+    expect(ctl.takeJournalRefusals()).toBe(1)
+    ctl.unlock('pw') // the recovery before the password judges it again
+    expect(existsSync(staged)).toBe(false)
+    expect(existsSync(journal)).toBe(false)
+    expect(await readStoredCopy(ctl, vp.root, target)).toBe(OUT_OF_STORE_TEXT)
+    ctl.shutdown()
+  })
+
+  // A change rolled back before its commit (the descriptor still v1): the stage is neither removed nor dropped, and the
+  // next start, which can judge it, removes it. The old password opens the copy as it was.
+  it('a stage of a change rolled back before its commit, inside the workspace folder, where an lstat of its folder fails at the start: it stays, the journal keeps it, and the next start removes it', async () => {
+    const vp = lockedVault('recovery-guards-1014', 'pw', { legacyV1: true })
+    const seed = unlockedController(vp, 'pw')
+    const target = await storeCopy(seed, vp.root, join(inWorkspace(vp), 'outside.txt.enc'), OUT_OF_STORE_TEXT) // the v1 key
+    outOfStoreRow(seed, target)
+    seed.lock()
+    const { db, key } = unlockEncryptedVault(vp, 'pw')
+    stageRekey(vp, db, key, randomBytes(32)) // staged, never committed
+    db.close()
+    const staged = `${target}${REKEY_SUFFIX}`
+    const stage = readFileSync(staged)
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.lstatThrow = { path: inWorkspace(vp), code: 'EPERM' }
+    try {
+      ctl.init()
+    } finally {
+      failures.lstatThrow = null
+    }
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    expect(readFileSync(staged).equals(stage), 'the stage').toBe(true)
+    expect(existsSync(`${vp.encPath}${REKEY_SUFFIX}`), 'the staged database').toBe(false)
+    expect(journalStaged(journal), 'the journal keeps the stage').toEqual([staged])
+    expect(ctl.takeJournalRefusals()).toBe(1)
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(existsSync(staged)).toBe(false)
+    expect(existsSync(journal)).toBe(false)
+    next.unlock('pw')
+    expect(await readStoredCopy(next, vp.root, target)).toBe(OUT_OF_STORE_TEXT)
+    next.shutdown()
+  })
+
+  // At the unlock, only ENOENT proves a stage or its stored copy is not there. A stage it could not stat counted as
+  // already in place, and the journal, its only record, was cleared; a stored copy it could not stat counted as gone, and
+  // the stage was renamed over it with no shred and no check that the copy is not current.
+  it.each<[string, (f: { target: string; staged: string }) => void]>([
+    ["its stage's lstat fails with EPERM", (f) => void (failures.lstatThrow = { path: f.staged, code: 'EPERM' })],
+    ["its stored copy's lstat fails with EACCES", (f) => void (failures.lstatThrow = { path: f.target, code: 'EACCES' })]
+  ])('an out-of-store copy outside the workspace folder where %s at the unlock: both files stay, the journal keeps the stage, and the next unlock swaps it in', async (_case, arm) => {
+    const f = await outOfStoreCopyBesideStage((vp) => join(vp.root, 'legacy-store'))
+    const ctl = new WorkspaceController(f.vp, ENCRYPTION_REQUIRED, false)
+    ctl.init() // the stage outside the workspace folder waits for the database
+    arm(f)
+    try {
+      ctl.unlock('pw')
+    } finally {
+      failures.lstatThrow = null
+    }
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    expect(readFileSync(f.target).equals(f.before[0]), 'the stored copy').toBe(true)
+    expect(readFileSync(f.staged).equals(f.before[1]), 'its stage').toBe(true)
+    expect(journalStaged(f.journal), 'the journal keeps the stage').toEqual([f.staged])
+    ctl.lock()
+    ctl.unlock('pw')
+    expect(existsSync(f.staged)).toBe(false)
+    expect(existsSync(f.journal)).toBe(false)
+    expect(await readStoredCopy(ctl, f.vp.root, f.target)).toBe(OUT_OF_STORE_TEXT)
+    ctl.shutdown()
+  })
+
+  // A failure that lasts through a start and an unlock: the unlock's own pass, which settles the stages outside the
+  // workspace folder and rewrites the journal, keeps the unjudged entry inside it too, and the next start swaps it in.
+  it('an out-of-store copy inside the workspace folder left unjudged through a start and an unlock: the unlock swaps in the copy outside it and keeps this one, and the next start swaps it in', async () => {
+    const vp = lockedVault('recovery-guards-1014', 'pw')
+    const seed = unlockedController(vp, 'pw')
+    const inside = await retiredOutOfStoreCopy(seed, vp, inWorkspace(vp), 'inside.txt.enc')
+    const outside = await retiredOutOfStoreCopy(seed, vp, join(vp.root, 'legacy-store'), 'outside.txt.enc')
+    seed.lock()
+    const journal = journalListing(vp, [inside.staged, outside.staged])
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.lstatThrow = { path: inWorkspace(vp), code: 'EPERM' }
+    try {
+      ctl.init()
+      ctl.unlock('pw')
+    } finally {
+      failures.lstatThrow = null
+    }
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    expect(existsSync(outside.staged), 'the stage outside the workspace folder').toBe(false)
+    expect(await readStoredCopy(ctl, vp.root, outside.target)).toBe(OUT_OF_STORE_TEXT)
+    expect(existsSync(inside.staged), 'the stage it could not judge').toBe(true)
+    expect(journalStaged(journal), 'the journal keeps that stage only').toEqual([inside.staged])
+    ctl.shutdown()
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(existsSync(inside.staged)).toBe(false)
+    expect(existsSync(journal)).toBe(false)
+    next.unlock('pw')
+    expect(await readStoredCopy(next, vp.root, inside.target)).toBe(OUT_OF_STORE_TEXT)
+    next.shutdown()
+  })
+
+  // A password change's own swap meets the same: the stage and its journal entry stay, the change counts it into the sum
+  // the next unlock logs, and the next start, which can judge it, swaps it in.
+  it('a password change whose swap cannot judge an out-of-store copy inside the workspace folder: the stage and the journal stay, the change counts it, and the next start swaps it in', async () => {
+    const vp = lockedVault('recovery-guards-1014', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    const target = await storeCopy(ctl, vp.root, join(inWorkspace(vp), 'outside.txt.enc'), OUT_OF_STORE_TEXT) // the v1 key
+    outOfStoreRow(ctl, target)
+    const staged = `${target}${REKEY_SUFFIX}`
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+    failures.lstatThrow = { path: inWorkspace(vp), code: 'EBUSY' }
+    try {
+      expect(ctl.changePassword('pw', 'next-password', FAST_ARGON).state).toBe('unlocked')
+    } finally {
+      failures.lstatThrow = null
+    }
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    expect(existsSync(staged), 'the stage').toBe(true)
+    expect(journalStaged(journal), 'the journal keeps the stage').toEqual([staged])
+    expect(ctl.takeJournalRefusals()).toBe(1)
+    ctl.shutdown()
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(existsSync(staged)).toBe(false)
+    expect(existsSync(journal)).toBe(false)
+    next.unlock('next-password')
+    expect(await readStoredCopy(next, vp.root, target)).toBe(OUT_OF_STORE_TEXT)
+    next.shutdown()
   })
 })
 

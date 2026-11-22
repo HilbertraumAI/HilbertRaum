@@ -1041,4 +1041,84 @@ describe('rekey journal — entries outside the workspace (#1014)', () => {
     expect(existsSync(f.rotated)).toBe(false)
     ctl.lock()
   })
+
+  // Round 4: every pass adds what it left as it is to the one sum the controller hands to the log. The unlock's recovery
+  // before the password and a password change's passes counted nothing: an entry they refused was dropped from the
+  // journal with no trace. (Nothing logs the sum right after a password change: it waits for the next unlock's line.)
+  it.each<[string, () => { ctl: WorkspaceController; act: () => void }]>([
+    [
+      "the unlock's recovery before the password, over a journal that turned up after the start",
+      () => {
+        const vp = lockedVault('rekey-count', 'pw')
+        const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+        ctl.init()
+        const outside = join(vp.root, 'notes.txt')
+        writeFileSync(outside, 'keep me')
+        writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL), JSON.stringify({ version: 1, staged: [], remove: [outside] }))
+        return {
+          ctl,
+          act: () => {
+            ctl.unlock('pw')
+            expect(readFileSync(outside, 'utf8')).toBe('keep me')
+          }
+        }
+      }
+    ],
+    [
+      "a password change's first discard, over a journal an earlier change left",
+      () => {
+        const { vp, ctl } = unlockedVault('pw', { legacyV1: true })
+        const outside = join(vp.root, 'notes.txt')
+        writeFileSync(outside, 'keep me')
+        writeFileSync(join(dirname(vp.dbPath), REKEY_JOURNAL), JSON.stringify({ version: 1, staged: [], remove: [outside] }))
+        return {
+          ctl,
+          act: () => {
+            expect(ctl.changePassword('pw', 'next-password', FAST_ARGON).state).toBe('unlocked')
+            expect(readFileSync(outside, 'utf8')).toBe('keep me')
+          }
+        }
+      }
+    ],
+    [
+      "a password change's discard after a stage it could not write (a folder at the stage's write temp)",
+      () => {
+        const { vp, ctl } = unlockedVault('pw', { legacyV1: true })
+        const temp = `${addEncryptedDoc(ctl, vp, 'doc-count', 'DOCUMENT-SURVIVES')}${REKEY_SUFFIX}.tmp`
+        mkdirSync(temp)
+        return {
+          ctl,
+          act: () => {
+            expect(() => ctl.changePassword('pw', 'next-password', FAST_ARGON)).toThrow()
+            expect(readdirSync(temp)).toEqual([])
+          }
+        }
+      }
+    ]
+  ])('%s: what it left as it is reaches the count', (_pass, arrange) => {
+    const { ctl, act } = arrange()
+    act()
+    expect(ctl.takeJournalRefusals()).toBe(1)
+    ctl.lock()
+  })
+
+  // Round 4: an entry that names no stage at all (no `.new`: here a stored copy itself) is left as it is and counted, as
+  // every other entry the start refuses. The reader dropped it before anything could count it.
+  it('a journal entry that is no stage (no `.new`): the start leaves the file as it is, counts it once and drops it', () => {
+    const { vp, ctl: seed } = unlockedVault('pw')
+    const doc = addEncryptedDoc(seed, vp, 'doc-no-stage', 'DOCUMENT-SURVIVES')
+    seed.lock()
+    const bytes = readFileSync(doc)
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL)
+    writeFileSync(journal, JSON.stringify({ version: 1, staged: [doc], remove: [] }))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    expect(readFileSync(doc).equals(bytes), 'the file it names').toBe(true)
+    expect(ctl.takeJournalRefusals()).toBe(1)
+    expect(existsSync(journal)).toBe(false)
+    ctl.unlock('pw')
+    expect(readEncryptedDoc(ctl, doc)).toBe('DOCUMENT-SURVIVES')
+    expect(ctl.takeJournalRefusals()).toBe(0)
+    ctl.lock()
+  })
 })
