@@ -21,7 +21,7 @@ import {
   writeSync
 } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { SCHEMA_VERSION } from '../../src/main/services/db'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { updateSettings } from '../../src/main/services/settings'
@@ -344,6 +344,35 @@ export function setFrameMagic(path: string, magic: string): void {
   const bytes = readFileSync(path)
   Buffer.from(magic, 'latin1').copy(bytes, 0, 0, 8)
   writeFileSync(path, bytes)
+}
+
+/**
+ * #1001: `text` stored at `dest` (its folder created) as the import stores a document or image copy: written by the
+ * unlocked `ctl`'s own writer (`documentCipher().encryptFileAsync`), so under the workspace's data key. The plaintext
+ * source lies in `root`, outside `config/` and `workspace/`, and is removed. Returns `dest`.
+ */
+export async function storeCopy(ctl: WorkspaceController, root: string, dest: string, text: string): Promise<string> {
+  const src = join(root, `copy-src-${randomBytes(6).toString('hex')}.txt`)
+  writeFileSync(src, text, 'utf8')
+  mkdirSync(dirname(dest), { recursive: true })
+  try {
+    await ctl.documentCipher()!.encryptFileAsync(src, dest)
+  } finally {
+    rmSync(src, { force: true })
+  }
+  return dest
+}
+
+/** #1001: the text of the stored copy at `path`, read by the unlocked `ctl`'s own reader (`decryptFileAsync`) into a
+ *  file in `root` that is removed again. Rejects when the copy does not open under the workspace's key. */
+export async function readStoredCopy(ctl: WorkspaceController, root: string, path: string): Promise<string> {
+  const out = join(root, `copy-out-${randomBytes(6).toString('hex')}.txt`)
+  try {
+    await ctl.documentCipher()!.decryptFileAsync(path, out)
+    return readFileSync(out, 'utf8')
+  } finally {
+    rmSync(out, { force: true })
+  }
 }
 
 /**

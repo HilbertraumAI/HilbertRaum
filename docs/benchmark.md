@@ -1292,6 +1292,9 @@ split + DB bytes; `probeMs` is the #876 structural check of the working file bef
 encrypted, about 4 ms on a warm cache for a 365 MiB or a 1.4 GiB workspace, 6 ms under Electron 43),
 `vault_stage_check` (#973: `checkMs` and `stageBytes` of the unlock's one authenticate pass over a staged
 `.enc.new` that no rekey journal lists; only in that state),
+`vault_sidecar_stage_check` (#1001: `files`, `stageBytes` and `checkMs` of the unlock's pass over the
+staged `documents/` and `images/` copies that no rekey journal lists, beside a stored copy that is there;
+one authenticate read per file; only in that state),
 `install_state_done` (with `cacheHit`, separating a real multi-GB hash from a
 size+mtime cache hit), `checksum_start` / `checksum_done` (issue #106: one pair per
 REAL full-file hash wherever it runs — the cached model-weight path and the download
