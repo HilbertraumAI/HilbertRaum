@@ -1264,6 +1264,33 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `removed` or `left`, drops it on `rolled-forward`, and settles a hold no outcome reached at the
   next successful unlock (recorded while `.enc`'s frame IV is still the one it was judged against,
   dropped otherwise); it is never carried past that unlock, and a create clears it.
+  **Staged sidecars in doubt (#1001):** the same rule per stored copy. A `documents/` or `images/`
+  `*.enc.new` file (found by scan; a folder at such a name is no stage, for any recovery or the format
+  verdict; a journal entry counts only when it names a file, too) that no journal lists by its folded full path, beside a stored copy
+  that is there (any stat answer but ENOENT), is in doubt. `applyPendingRekey(vaultPaths, skip?)`
+  takes an optional set of folded paths it leaves as they are (default: none, so `changePassword`
+  and the direct callers are unchanged); `recoverPendingRekey` (the start, the unlock before the
+  password, #973's R5 re-run) and #973's `rolled-forward` branch pass the sidecars in doubt, and the
+  rest of the set rolls as before. After the data key is unwrapped and the staged database is
+  decided, `unlockEncryptedVault(…, onStageInDoubt?, onSidecarStages?)` judges each one, cheapest first.
+  Before any read, two `lstatSync` calls (a link is never followed): either file no regular file (a
+  symbolic link, a junction, a folder) → `left`; the stage with `nlink > 1` or of another size than the
+  stored copy → only the staged name deleted (`removed`), the stage never read. Then
+  `authenticatesUnder`: true, and the stored copy itself NOT authenticating under the data key
+  (a pending stage's stored copy is under the retired key; one more read), with `nlink` 1 → the stored copy renamed
+  to `<stored>.tmp`, the stage renamed into place, then `<stored>.tmp` shredded (`rolledForward`; a
+  failed rename of the stage renames the stored copy back, `left`; when that fails too, the stored copy
+  stays at `<stored>.tmp` for the session, `setAside`, and the next start shreds it and renames the
+  stage into place); true but the stored copy authenticates (it is current) → only the staged name
+  deleted (`removed`); a stored copy that cannot be read, or that another name shares (`nlink > 1`) →
+  `left`; false (tag fails, or no `HRAUMEN1` frame) → the stage deleted
+  (`removed`); a read that fails with ENOENT → nothing; any other read failure, or a delete or swap
+  that fails → the stage left as it is (`left`), never `VaultRecoveryBlockedError`, judged again at
+  the next unlock. `<stored>.tmp` is a name the start's sweep shreds. `onSidecarStages(outcome: SidecarStageOutcome)` hears
+  `{ rolledForward, removed, left, setAside }` (counts only) once the pass ends, also when a later step of the
+  unlock fails; the pass is timed as the perf mark `vault_sidecar_stage_check` (`files`,
+  `stageBytes`, `checkMs`). A stage whose stored copy is gone (ENOENT) is no doubt and is renamed
+  into place at the start, as before. The loss hold reads the staged database only.
   `WorkspaceController.init()` removes a stray `.enc.new`
   and `.enc.new.tmp` when there is no descriptor file, no `.enc` and no journal (each ENOENT); the
   state stays `uninitialized`. No on-disk shape changes.
@@ -1379,7 +1406,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   quarantines a journal it cannot read, so a newer build's uncommitted stage would end up under a key
   that exists nowhere (from #973 on, a journal-less `.enc.new` beside an existing `.enc` is rolled
   forward only once it authenticates under the unwrapped data key, and deleted when its tag fails,
-  but the builds before it remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
+  and from #1001 on the same holds for a journal-less `documents/` or `images/` `*.enc.new` beside
+  its stored copy, but the builds before them remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
   unrecognised header), and a later frame version is one ASCII digit `2`–`9` after `HRAUMEN` (any other byte
   there reads as damage from #845 on).
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
@@ -1397,7 +1425,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   below), `takeStageOutcome() → 'removed' | 'left' | null` (#973: the last unlock removed a staged
   `.enc.new` that does not open under the data key, or left one it could neither judge nor remove;
   returned once, for the unlock IPC's one content-free log line on its success and failure paths, no
-  audit type).
+  audit type), `takeSidecarStageOutcome() → { rolledForward, removed, left, setAside } | null` (#1001: what the
+  last unlock did with the staged document and image copies in doubt, counts only, null when it found
+  none; returned once, for the same IPC's one line, logged only when it removed or left any).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
   what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
