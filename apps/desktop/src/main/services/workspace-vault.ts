@@ -1375,7 +1375,9 @@ function encryptedFileState(vaultPaths: VaultPaths): EncryptedFileStat['state'] 
 
 /**
  * #911: the start's salvage when `.enc` is missing (a stat says ENOENT) and the working file is there. The app never
- * removes `.enc` itself (a lock, a create and a password change replace it by rename), so something outside it did: a
+ * leaves `.enc` missing itself (a lock and a create replace it by rename; the v1 → v2 password change shreds it right
+ * before it renames its staged copy into place, and since #1027 saves it again when that rename fails; until then the
+ * staged copy is a snapshot, below), so with no staged copy beside it something outside the app removed it: a
  * person tidying the drive, a sync tool, a disk check. The working file is then the only copy of the workspace, and the
  * sweep, which assumes `.enc` is the source of truth, would shred all of it. So:
  *   - a staged `.enc.new` is a snapshot too (a create or a v1 to v2 password change cut short after its commit), which
@@ -1739,10 +1741,21 @@ type RekeyJournalRead = RekeyJournal & { corrupt: boolean }
 function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
   const path = rekeyJournalPath(vaultPaths)
   if (!existsSync(path)) return null
+  try {
+    return parseRekeyJournal(readFileSync(path, 'utf8'))
+  } catch {
+    // Unreadable: the directory scans still resolve the in-store classes; the file itself is
+    // quarantined (never deleted) by clearRekeyJournal so its out-of-store entries are not lost.
+    return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
+  }
+}
+
+/** The rekey journal's text, judged: `corrupt` when it does not parse or names another version. */
+function parseRekeyJournal(text: string): RekeyJournalRead {
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   try {
-    const parsed = parseJsonText(readFileSync(path, 'utf8')) as Partial<RekeyJournal>
+    const parsed = parseJsonText(text) as Partial<RekeyJournal>
     if (parsed.version !== REKEY_JOURNAL_VERSION) {
       return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
     }
@@ -1756,8 +1769,6 @@ function readRekeyJournal(vaultPaths: VaultPaths): RekeyJournalRead | null {
       corrupt: false
     }
   } catch {
-    // Unreadable: the directory scans still resolve the in-store classes; the file itself is
-    // quarantined (never deleted) by clearRekeyJournal so its out-of-store entries are not lost.
     return { version: REKEY_JOURNAL_VERSION, staged: [], remove: [], corrupt: true }
   }
 }
@@ -2085,6 +2096,89 @@ function scannedSidecarStages(vaultPaths: VaultPaths): string[] {
 }
 
 /**
+ * Checkpoint the open working database so that the main file alone holds the session, and judge it, before the password
+ * change encrypts that file with the connection still open: its stage ({@link stageRekey}) and, #1027, its `.enc` after a
+ * database swap that failed ({@link saveOpenDatabase}). `refusal` opens the message of a refusal; nothing is encrypted.
+ */
+function checkpointOpenDatabase(vaultPaths: VaultPaths, db: Db, refusal: string, onProbeFallback?: ProbeFallbackNote): void {
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+  // #876 review round 2 — the lock's WAL guard: a checkpoint that could not finish (it does not
+  // throw; it answers "busy") leaves the main file stale while the session's commits sit in the
+  // `-wal`, and the staged copy of that stale file would replace `.enc` at the commit. The
+  // connection is open, so a TRUNCATE that finished left the `-wal` empty. Refused; nothing is
+  // staged, and the user tries the change again.
+  if (walAwaitsCheckpoint(vaultPaths.dbPath)) {
+    throw new Error(
+      `${refusal}: the checkpoint did not finish, so the working ` +
+        'database file lacks commits the -wal still holds.'
+    )
+  }
+  // #208 — same guard as the lock path: the staged file replaces `.enc` right after the
+  // descriptor commit, so encrypting a shred-survivor (or anything else that is not the
+  // checkpointed database) here would destroy the vault through the rekey journal instead.
+  // #876: the structure, not only the header; an unreadable working file is refused too. The
+  // probe reads the main file the checkpoint above completed, beside the open connection.
+  if (!readsAsDatabase(probeDatabaseFile(vaultPaths.dbPath), 'rekey', onProbeFallback)) {
+    throw new Error(
+      `${refusal}: the working database file is not a SQLite ` +
+        'database (it may have been overwritten).'
+    )
+  }
+}
+
+/**
+ * #1027 (B): a password change whose staged database could not be moved into place writes `.enc` from the open database
+ * under the new data key, with the stage's own guards ({@link checkpointOpenDatabase}). Nothing has written to the
+ * database since the stage, so `.enc` then holds what the stage holds, and the session ends as any other does from here
+ * on: a failed lock's working file is kept (CODE-1b), a kill is reported (#892). `encryptFile` replaces whatever is at the
+ * name by its atomic rename: nothing (the swap shredded it), noise (the shred overwrote a held file it could not unlink),
+ * or the old v1 file (a pass that threw before it reached the database), whose blocks are then freed, not overwritten, as
+ * every lock frees the previous `.enc`. It never shreds first: a save that then failed would leave `.enc` missing.
+ */
+function saveOpenDatabase(vaultPaths: VaultPaths, db: Db, key: Buffer, onProbeFallback?: ProbeFallbackNote): void {
+  checkpointOpenDatabase(vaultPaths, db, 'Refusing to save the workspace after the password change', onProbeFallback)
+  encryptFile(vaultPaths.dbPath, vaultPaths.encPath, key)
+}
+
+/**
+ * #1027 (J): drop the staged database from the rekey journal, the rest as written (atomically, as `stageRekey` writes it;
+ * cleared when nothing is left). The open session holds the workspace from now on, and a journal that listed the stage
+ * had every start roll it over the newer `.enc` with no key check. Unlisted, a stage beside a missing `.enc` still rolls
+ * forward at a start (it is the only snapshot), and one beside an `.enc` is a #973 doubt the unlock judges under the data
+ * key ({@link resolveStageInDoubt}). No journal (ENOENT) lists nothing, nor does one that does not parse or names
+ * another version, which is left as it is. Review F1: a journal that cannot be read just now (another program holds it
+ * with no read sharing, a permission, an I/O error) is not judged: this throws, as it does when the journal cannot be
+ * rewritten, and the caller retries at the lock. ({@link readRekeyJournal} reads such a journal as one that does not
+ * parse, which here read as "the stage is unlisted", so the lock never tried again and the next start rolled the stage.)
+ */
+function unlistStagedDatabase(vaultPaths: VaultPaths): void {
+  let text: string
+  try {
+    text = readFileSync(rekeyJournalPath(vaultPaths), 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') return
+    throw err
+  }
+  const journal = parseRekeyJournal(text)
+  if (journal.corrupt) return
+  const stagedDb = pathKey(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
+  const staged = journal.staged.filter((entry) => pathKey(entry) !== stagedDb)
+  if (staged.length === journal.staged.length) return
+  if (staged.length === 0 && journal.remove.length === 0) clearRekeyJournal(vaultPaths, journal)
+  else writeRekeyJournal(vaultPaths, { version: REKEY_JOURNAL_VERSION, staged, remove: journal.remove })
+}
+
+/** #1027: run a best-effort step; true when it finished. */
+function bestEffort(step: () => void): boolean {
+  try {
+    step()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Phase 1 of the v1→v2 migration: re-encrypt the database + every vault-key ciphertext
  * (`listVaultKeyCiphertexts`) under `dataKey`, STAGED next to the originals as `<file>.new`,
  * fsynced. Nothing the current password unlocks is touched. The DB snapshot comes from the
@@ -2101,29 +2195,7 @@ export function stageRekey(
   dataKey: Buffer,
   onProbeFallback?: ProbeFallbackNote
 ): void {
-  db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
-  // #876 review round 2 — the lock's WAL guard: a checkpoint that could not finish (it does not
-  // throw; it answers "busy") leaves the main file stale while the session's commits sit in the
-  // `-wal`, and the staged copy of that stale file would replace `.enc` at the commit. The
-  // connection is open, so a TRUNCATE that finished left the `-wal` empty. Refused; nothing is
-  // staged, and the user tries the change again.
-  if (walAwaitsCheckpoint(vaultPaths.dbPath)) {
-    throw new Error(
-      'Refusing to stage the password change: the checkpoint did not finish, so the working ' +
-        'database file lacks commits the -wal still holds.'
-    )
-  }
-  // #208 — same guard as the lock path: the staged file replaces `.enc` right after the
-  // descriptor commit, so encrypting a shred-survivor (or anything else that is not the
-  // checkpointed database) here would destroy the vault through the rekey journal instead.
-  // #876: the structure, not only the header; an unreadable working file is refused too. The
-  // probe reads the main file the checkpoint above completed, beside the open connection.
-  if (!readsAsDatabase(probeDatabaseFile(vaultPaths.dbPath), 'rekey', onProbeFallback)) {
-    throw new Error(
-      'Refusing to stage the password change: the working database file is not a SQLite ' +
-        'database (it may have been overwritten).'
-    )
-  }
+  checkpointOpenDatabase(vaultPaths, db, 'Refusing to stage the password change', onProbeFallback)
   const targets = listVaultKeyCiphertexts(vaultPaths, db)
   const stagedDb = `${vaultPaths.encPath}${REKEY_SUFFIX}`
   writeRekeyJournal(vaultPaths, {
@@ -2480,8 +2552,9 @@ function stageInDoubt(vaultPaths: VaultPaths): boolean {
 
 /** #973: what the unlock did with a staged database in doubt ({@link resolveStageInDoubt}): rolled it forward (it
  *  authenticates), removed it (it does not, or is no frame of this build's), or left it (it could not be judged or
- *  removed; the unlock opens `.enc` as it is). */
-export type StageInDoubtOutcome = 'rolled-forward' | 'removed' | 'left'
+ *  removed; the unlock opens `.enc` as it is). #1027: `superseded`, removed because `.enc` opens under the data key too,
+ *  so `.enc` holds the newer data (the unlock opens it as it is). */
+export type StageInDoubtOutcome = 'rolled-forward' | 'removed' | 'superseded' | 'left'
 
 /**
  * #973: the unlock's answer to {@link stageInDoubt}, once the password verified and the v2 data key is unwrapped. A
@@ -2501,6 +2574,19 @@ export type StageInDoubtOutcome = 'rolled-forward' | 'removed' | 'left'
  * block can roll anything over `.enc`. A delete that fails leaves the file too: it stays a doubt, which no start rolls
  * forward and the next unlock checks again. `note` hears the outcome as soon as it is true (before a later step of the unlock can fail), for the
  * held loss (R2) and the IPC's one log line (F4). The pass is timed as `vault_stage_check` (R9).
+ * #1027 (owner, 2026-11-22: G-1 refined): a stage that authenticates rolls forward only while `.enc` does not authenticate
+ * under the same key ({@link encOpensUnder}). The invariant this rests on: no build writes `.enc` under a data key before
+ * the stage made under that key. A password change stages under a data key it has just generated, before the commit
+ * that wraps it (`stageRekey`, then `rewrapVaultKey`), and a create writes `.enc` only by renaming its stage after its
+ * own commit; every other writer of `.enc` (a lock, the `.recovery` roll-forward, a change's {@link saveOpenDatabase})
+ * runs after that commit, from data at least as new as the stage. So a stage pending a swap always sits beside an
+ * `.enc` under the retired key, which does not open, and one beside an `.enc` that opens is stale: a lock of the session
+ * whose password change could not move it into place wrote that `.enc`, and rolling the stage over it lost the session's
+ * work since the change. Such a stage is deleted (`superseded`) and the unlock opens `.enc`; the rest of the staged set
+ * gets what the start would have given it. A delete that fails (another program holds the stage) leaves it (`left`) and
+ * swaps in the rest with the stage skipped; the lock of that session deletes it once it can. A read of `.enc` that fails
+ * splits as the stage's does: gone (ENOENT) or a folder (EISDIR, ENOTDIR) is no `.enc` that opens, so the stage rolls
+ * forward as before (a folder at `.enc` blocks the swap, as it did); any other failure refuses as "try again".
  */
 function resolveStageInDoubt(
   vaultPaths: VaultPaths,
@@ -2527,6 +2613,20 @@ function resolveStageInDoubt(
   } finally {
     perfMark('vault_stage_check', { checkMs: perfMs(checkT0), stageBytes: fileSizeOrNull(staged) })
   }
+  if (authentic && encOpensUnder(vaultPaths, dataKey)) {
+    // #1027: `.enc` is the newer copy (see above). The stage goes; one another program holds stays, skipped.
+    try {
+      rmSync(staged, { force: true })
+    } catch {
+      note?.('left')
+      const skip = new Set([...sidecarDoubtKeys(vaultPaths), pathKey(staged)])
+      blockedOnFailure(() => applyPendingRekey(vaultPaths, skip, undefined, onRefused))
+      return
+    }
+    note?.('superseded')
+    recoverPendingRekey(vaultPaths, descriptor, onRefused) // no longer in doubt: what the start would have done
+    return
+  }
   if (authentic) {
     // #1001: the sidecars in doubt are judged next. #1015: a swap this cannot finish answers "try again".
     blockedOnFailure(() => applyPendingRekey(vaultPaths, sidecarDoubtKeys(vaultPaths), undefined, onRefused))
@@ -2542,6 +2642,24 @@ function resolveStageInDoubt(
   }
   note?.('removed')
   recoverPendingRekey(vaultPaths, descriptor, onRefused) // R5: no longer in doubt, so what the start would have done
+}
+
+/**
+ * #1027: does `.enc` authenticate under `dataKey` ({@link authenticatesUnder}, one more read, only for a staged database
+ * in doubt that authenticates)? Gone (ENOENT) or a folder (EISDIR, ENOTDIR): no. A newer build's frame throws its
+ * `VaultNewerError` (the unlock's format verdict refuses one first). Any other failure (a hold, an I/O error) proves
+ * nothing either way, and `.enc` may be the newer copy: `VaultRecoveryBlockedError`, the #242 "try again", with nothing
+ * written.
+ */
+function encOpensUnder(vaultPaths: VaultPaths, dataKey: Buffer): boolean {
+  try {
+    return authenticatesUnder(vaultPaths.encPath, dataKey)
+  } catch (err) {
+    if (isVaultNewerError(err)) throw err
+    const code = (err as NodeJS.ErrnoException | null)?.code
+    if (code === 'ENOENT' || code === 'EISDIR' || code === 'ENOTDIR') return false
+    throw new VaultRecoveryBlockedError(causeFailure(err).code)
+  }
 }
 
 /** Is `path` proven gone? Only a stat that says ENOENT proves it (the #911 rule): `existsSync` reads any failure (a
@@ -3557,10 +3675,24 @@ export class WorkspaceController {
   private readonly noteStageInDoubt = (outcome: StageInDoubtOutcome): void => {
     const held = this._heldStageLoss
     this._heldStageLoss = null
+    this._stageLeftByUnlock = outcome === 'left'
     if (outcome === 'rolled-forward') return
     this._stageOutcome = outcome
     if (held !== null) this.markWorkingCopyLost(held.cause, held.enc)
   }
+  /** #1027: the unlock under way left the staged database in doubt where it was (`left`), for {@link unlock}. */
+  private _stageLeftByUnlock = false
+  /**
+   * #1027: a staged database that a password change of this session decided to retire and has not yet: `unlisted`, the
+   * rekey journal no longer lists it; `encCurrent`, `.enc` is this session's, written under the current key after the
+   * stage, so the stage may be deleted. Set by {@link supersedeDatabaseStage}, and by an unlock that decided to delete a
+   * staged database and could not ({@link unlock}). Every lock retries ({@link retireStaleDatabaseStage}). In memory only:
+   * what is left after the process ends is judged by the next unlock under the data key (#973, #1027).
+   */
+  private _staleDatabaseStage: { unlisted: boolean; encCurrent: boolean } | null = null
+  /** #1027: the last password change could not move its staged database into place: the error's code, and whether the
+   *  change saved `.enc` itself, for the IPC's one log line ({@link takeDatabaseSwapFailure}). */
+  private _databaseSwapFailure: { code: string | null; saved: boolean } | null = null
   /** #973 (review round 3 F2): a successful unlock settles a loss still held, because this unlock did not judge the stage
    *  (it was gone by then, or a journal now lists it). Recorded while `.enc` is still the snapshot it was judged against
    *  (the same frame IV), dropped otherwise (a roll-forward replaced `.enc`); never carried past this unlock, so a later
@@ -4020,6 +4152,15 @@ export class WorkspaceController {
     return outcome
   }
 
+  /** #1027: whether the last password change could not move its staged database into place (the swap error's code, no
+   *  path; `saved`: the change wrote `.enc` from the open database itself, else the next lock does). Returns it once, for
+   *  the IPC's one content-free log line after the change; null otherwise. */
+  takeDatabaseSwapFailure(): { code: string | null; saved: boolean } | null {
+    const failure = this._databaseSwapFailure
+    this._databaseSwapFailure = null
+    return failure
+  }
+
   /** #1001: how many staged document and image copies no journal vouched for the last unlock swapped in, removed (no
    *  newer copy of their stored document: another key or file, or the stored copy is already current) and left (they
    *  could be neither read nor swapped in or removed); null when
@@ -4094,6 +4235,7 @@ export class WorkspaceController {
       if (this._recoveryBlocked) throw new VaultRecoveryBlockedError(this._recoveryBlockedCode) // #1015: and its code
     }
     let unlocked: UnlockedVault
+    this._stageLeftByUnlock = false
     try {
       unlocked = unlockEncryptedVault(
         this.vaultPaths,
@@ -4121,6 +4263,15 @@ export class WorkspaceController {
     this._newerRecoveryLeft = newerRecoveryLeft
     // #875: a loss this unlock made itself (a broken `.recovery` shredded) is recorded the same way.
     if (recoveryDiscarded && this._lostAtPreviousLock === null) this._lostAtPreviousLock = { cause: 'recovery', lostAt: null }
+    // #1027: a staged database this unlock decided to delete (it does not open under the data key, #973, or `.enc` holds
+    // the newer data) and could not, because another program holds it: the lock of this session deletes it once it can,
+    // so no later start meets it (a build before #973 rolls any such file forward). `.enc` is what this unlock opened.
+    // (A folder at the name is left too, and no file to delete.) Review F2: not marked unlisted. A stage in doubt is one
+    // no admitted entry names, but the journal may still name it in an entry a failed stat left unjudged; the lock drops
+    // that too (J finds nothing to do when nothing names it), or a later start that can judge the entry rolls the stage.
+    if (this._stageLeftByUnlock && isFileAt(`${this.vaultPaths.encPath}${REKEY_SUFFIX}`)) {
+      this._staleDatabaseStage = { unlisted: false, encCurrent: true }
+    }
     // (#858: `unlockEncryptedVault` re-stamped `workspaceMode`, inside its failure guard.)
     // A new session: disarm any latch a completed lock left behind, and bump the epoch so a
     // model start still hashing weights from the PREVIOUS session refuses instead of spawning
@@ -4167,6 +4318,8 @@ export class WorkspaceController {
     this._workingCopyLost = null
     this._lostAtPreviousLock = null
     this._heldStageLoss = null // #973: nor a loss a start held for a stage beside the wiped one
+    this._staleDatabaseStage = null // #1027: nor a stage the wiped one's session meant to delete
+    this._databaseSwapFailure = null
     if (mode === 'plaintext_dev') {
       if (!this.allowPlaintext()) throw new PlaintextNotAllowedError()
       this.openPlaintext()
@@ -4272,23 +4425,40 @@ export class WorkspaceController {
           // old files win; from here on the new ones do.
           this.descriptor = rewrapVaultKey(this.vaultPaths, dataKey, nextPassword, kdf)
         } catch (err) {
-          discardPendingRekey(this.vaultPaths, outOfStore, this.noteJournalRefusals)
-          dataKey.fill(0)
+          // #1027: the rollback is best-effort, the new key is zeroed and the change's own error surfaces, whatever the
+          // rollback does. A stage or a journal it cannot remove (another program holds it) lists a change that never
+          // committed: every recovery under this (v1) key file discards it again, and the next change's own discard
+          // (above) runs first. The rollback's error used to replace this one and skip the zeroing.
+          try {
+            discardPendingRekey(this.vaultPaths, outOfStore, this.noteJournalRefusals)
+          } catch {
+            /* see above */
+          } finally {
+            dataKey.fill(0)
+          }
           throw err
         }
         // Committed: the new password + data key are authoritative from here on, so the
         // in-memory key is swapped BEFORE the file swap — lock()/documentCipher() must
         // never use the retired key once the descriptor wraps the new one.
+        // #1027: and nothing below may throw: an error would tell the user the current password still works.
         this.key.fill(0)
         this.key = dataKey
         try {
           applyPendingRekey(this.vaultPaths, undefined, outOfStore, this.noteJournalRefusals)
-        } catch {
+        } catch (err) {
           // Not fatal post-commit: applyPendingRekey is now best-effort + retry, so it throws
           // only when a file stays persistently locked (e.g. on Windows) AFTER swapping every
-          // other sidecar. That lone file rolls forward via recoverPendingRekey on the next
-          // startup/unlock (#1014: one outside the workspace folder, at the next unlock) — the
-          // journal guarantees old-or-new per file, never mixed.
+          // other sidecar. A document's or an image's stage is written once, so that lone file
+          // rolls forward exactly via recoverPendingRekey on the next startup/unlock (#1014: one
+          // outside the workspace folder, at the next unlock) — the journal guarantees old-or-new
+          // per file, never mixed.
+          // #1027: the staged database is not written once: the open session goes on changing the database, so the
+          // session, not the stage, holds the workspace from here on. Whatever made the pass throw (a held stage; a held
+          // `.enc` the shred could neither overwrite nor remove, which leaves the old v1 file in place; a temp the pass
+          // could not remove before it reached the database), a staged database still there means the database's swap
+          // did not happen, so the trigger is the stage alone, never "`.enc` is missing" (review F4).
+          if (isFileAt(`${this.vaultPaths.encPath}${REKEY_SUFFIX}`)) this.supersedeDatabaseStage(err)
         }
       }
       return this.getState()
@@ -4349,6 +4519,13 @@ export class WorkspaceController {
    */
   lock(opts: LockOptions = {}): WorkspaceStateInfo {
     if (this._db && this.key && this.descriptor?.mode === 'encrypted') {
+      // #1027: a staged database a password change of this session could not retire leaves the journal before `.enc`
+      // is written below, so no start finds it listed beside a newer `.enc`. Before, never after (review F4): the lock
+      // shreds the working file after its encrypt (seconds on a USB stick), and a crash between the encrypt's rename and
+      // an entry dropped only then would leave the stale stage listed beside the newer `.enc`, and the next start would
+      // shred that `.enc` and roll the stage over it. Dropped first, the stage either rolls forward at a start because `.enc` is still missing
+      // (it is then the newest snapshot on the drive) or is judged under the key at the unlock.
+      this.retireStaleDatabaseStage(false)
       try {
         lockEncryptedVault(this.vaultPaths, this._db, this.key, this.encryptFileImpl, this.noteProbeFallback, opts.budget)
       } catch (err) {
@@ -4438,6 +4615,7 @@ export class WorkspaceController {
         }
         throw new VaultLockError(err) // #956 (S-5): what failed, content-free, for the log
       }
+      this.retireStaleDatabaseStage(true) // #1027: `.enc` is this session's now
       this.dropKeyAndHandle()
     }
     // AUD-02: the branch above is skipped for a `plaintext_dev` workspace — there is no vault to
@@ -4459,6 +4637,50 @@ export class WorkspaceController {
     this.key?.fill(0)
     this._db = null
     this.key = null
+  }
+
+  /**
+   * #1027: the post-commit swap of a v1 → v2 password change could not move the staged database into place (another
+   * program holds the fresh stage, and both renames failed). The swap shreds `.enc` before its rename, so `.enc` is gone,
+   * and the stage holds the database as staged; but the open session goes on under the new key and changes it. Left as
+   * it was, the stage stayed listed in the journal, the next lock wrote a newer `.enc`, and the next start (or the next
+   * unlock of the same run) shredded it and renamed the stale stage over it: the session's work since the change was lost,
+   * with no notice. So the session wins, each step best-effort and none thrown (the change has committed):
+   *   1. the stage leaves the journal ({@link unlistStagedDatabase});
+   *   2. `.enc` is written from the open database under the new key ({@link saveOpenDatabase});
+   *   3. the stage is deleted, once `.enc` is back.
+   * What is left (the hold that refused two renames usually outlasts these milliseconds) every lock of the session
+   * retries ({@link retireStaleDatabaseStage}), and a stage still there at the next unlock is removed there: it opens
+   * under the data key beside an `.enc` that opens too (`superseded`, {@link resolveStageInDoubt}).
+   */
+  private supersedeDatabaseStage(swapError: unknown): void {
+    const db = this._db
+    const key = this.key
+    const pending = { unlisted: false, encCurrent: false }
+    this._staleDatabaseStage = pending
+    pending.unlisted = bestEffort(() => unlistStagedDatabase(this.vaultPaths))
+    pending.encCurrent =
+      db !== null && key !== null && bestEffort(() => saveOpenDatabase(this.vaultPaths, db, key, this.noteProbeFallback))
+    this._databaseSwapFailure = { code: causeFailure(swapError).code, saved: pending.encCurrent }
+    this.retireStaleDatabaseStage(false)
+  }
+
+  /**
+   * #1027: retry what {@link supersedeDatabaseStage} (or an unlock that could not delete a staged database) left: the
+   * journal entry, then the stage itself, once `.enc` is this session's (`encWritten`: a lock has just written it). Never
+   * deletes the stage while `.enc` may still be missing (a change that could not save it, a lock that failed): the stage
+   * is then the only snapshot. Clears the record once the stage is gone (ENOENT) and unlisted. Never throws: the lock legs
+   * that call it include the crash and session-end locks.
+   */
+  private retireStaleDatabaseStage(encWritten: boolean): void {
+    const pending = this._staleDatabaseStage
+    if (pending === null) return
+    if (encWritten) pending.encCurrent = true
+    if (!pending.unlisted) pending.unlisted = bestEffort(() => unlistStagedDatabase(this.vaultPaths))
+    const staged = `${this.vaultPaths.encPath}${REKEY_SUFFIX}`
+    // Never while `.enc` may be missing (review F3: pinned by the full-drive row).
+    if (pending.encCurrent && isFileAt(staged)) bestEffort(() => rmSync(staged, { force: true }))
+    if (pending.unlisted && statSaysAbsent(staged)) this._staleDatabaseStage = null
   }
 
   /**

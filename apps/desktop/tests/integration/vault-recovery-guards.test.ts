@@ -33,8 +33,10 @@ import {
   endedUnlocked,
   failedLockState,
   freshVaultPaths,
+  leaveAsKilled,
   lockedVault,
   readStoredCopy,
+  staleDatabaseStage,
   storeCopy,
   unlockedController,
   workspaceIpcCtx,
@@ -146,6 +148,14 @@ const failures = vi.hoisted(() => ({
   /** #1001 review round 2: openSync throws EBUSY for exactly this stored copy while set: a hold on the stored copy the
    *  unlock reads before it swaps a stage in. */
   openThrowOnSidecarTarget: null as string | null,
+  /** #1027: openSync throws this error code for exactly this path while set: a hold on `.enc` the unlock must read, or
+   *  a key file temp the password change's commit cannot open. */
+  openThrowFor: null as { path: string; code: string } | null,
+  /** #1027: once the staged database's rename was refused (`renameThrowOnStagedEnc`), the rekey journal beside it is held
+   *  too, while set: a program that holds the fresh stage holds the journal written with it. `write`: a rename onto the
+   *  journal and its removal throw EBUSY (it still reads); `exclusive` (review F1): its read throws EBUSY as well (a hold
+   *  with no read sharing). */
+  holdJournalAfterStagedEnc: false as false | 'write' | 'exclusive',
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
   hits: {
@@ -166,9 +176,27 @@ const failures = vi.hoisted(() => ({
     renameAsideRestore: 0,
     statNoInode: 0,
     openSyncSidecarTarget: 0,
-    statThrow: 0
+    statThrow: 0,
+    openThrowFor: 0,
+    journalHeld: 0
   }
 }))
+
+/** #1027: every data key `generateDataKey()` handed out, in order (a pass-through recorder): the rollback row reads the
+ *  key a failed password change generated, to see that it was zeroed. */
+const dataKeys = vi.hoisted(() => ({ generated: [] as Buffer[] }))
+
+vi.mock('../../src/main/services/security/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/main/services/security/crypto')>()
+  return {
+    ...actual,
+    generateDataKey: (): Buffer => {
+      const key = actual.generateDataKey()
+      dataKeys.generated.push(key)
+      return key
+    }
+  }
+})
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -228,6 +256,10 @@ vi.mock('node:fs', async (importOriginal) => {
           { errno: -4048, syscall: 'rename', path: String(from), dest: String(to) }
         )
       }
+      if (failures.holdJournalAfterStagedEnc && failures.hits.renameStagedEnc > 0 && String(to).endsWith('rekey-journal.json')) {
+        failures.hits.journalHeld += 1
+        throw errnoError('EBUSY', 'EBUSY: rename (the held rekey journal)')
+      }
       const putBack = failures.putBackDescriptorOnStage
       if (putBack && String(from).endsWith('.enc.new.tmp') && String(to).endsWith('.enc.new')) {
         actual.renameSync(from, to)
@@ -238,6 +270,11 @@ vi.mock('node:fs', async (importOriginal) => {
       return actual.renameSync(from, to)
     }),
     openSync: vi.fn((path: Parameters<typeof actual.openSync>[0], flags: Parameters<typeof actual.openSync>[1], mode?: Parameters<typeof actual.openSync>[2]) => {
+      const openFor = failures.openThrowFor
+      if (openFor !== null && String(path) === openFor.path) {
+        failures.hits.openThrowFor += 1
+        throw errnoError(openFor.code, `${openFor.code}: open (a held or refused file)`)
+      }
       if (failures.openThrowOnRecoveryPath && isRecovery(path)) {
         failures.hits.openSync += 1
         throw errnoError('EBUSY', 'EBUSY: resource busy or locked, open (held .recovery)')
@@ -279,7 +316,22 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.rmSync += 1
         throw errnoError(failures.rmThrowFor.code, `${failures.rmThrowFor.code}: unlink (a held file)`)
       }
+      if (failures.holdJournalAfterStagedEnc && failures.hits.renameStagedEnc > 0 && String(path).endsWith('rekey-journal.json')) {
+        failures.hits.journalHeld += 1
+        throw errnoError('EBUSY', 'EBUSY: unlink (the held rekey journal)')
+      }
       return actual.rmSync(path, options)
+    }),
+    readFileSync: vi.fn((path: Parameters<typeof actual.readFileSync>[0], ...rest: unknown[]) => {
+      if (
+        failures.holdJournalAfterStagedEnc === 'exclusive' &&
+        failures.hits.renameStagedEnc > 0 &&
+        String(path).endsWith('rekey-journal.json')
+      ) {
+        failures.hits.journalHeld += 1
+        throw errnoError('EBUSY', 'EBUSY: open (the rekey journal, held with no read sharing)')
+      }
+      return (actual.readFileSync as unknown as (...a: unknown[]) => unknown)(path, ...rest)
     }),
     writeSync: vi.fn((fd: number, ...rest: unknown[]) => {
       if (failures.encTmpFds.has(fd)) {
@@ -402,6 +454,9 @@ beforeEach(() => {
   failures.lstatThrow = null
   failures.realpathThrow = null
   failures.rmThrowFor = null
+  failures.openThrowFor = null
+  failures.holdJournalAfterStagedEnc = false
+  dataKeys.generated = []
   failures.stagedSidecarFds.clear()
   failures.stageBytesRead = 0
   failures.hits = {
@@ -422,7 +477,9 @@ beforeEach(() => {
     renameAsideRestore: 0,
     statNoInode: 0,
     openSyncSidecarTarget: 0,
-    statThrow: 0
+    statThrow: 0,
+    openThrowFor: 0,
+    journalHeld: 0
   }
   ipcState.handlers.clear()
 })
@@ -647,7 +704,9 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       renameAsideRestore: 0,
       statNoInode: 0,
       openSyncSidecarTarget: 0,
-      statThrow: 0
+      statThrow: 0,
+      openThrowFor: 0,
+      journalHeld: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -1238,6 +1297,90 @@ describe('a staged database the unlock cannot read (#973)', () => {
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
     expect(existsSync(staged)).toBe(false)
     ctl.shutdown()
+  })
+
+  // #1027: a staged copy that opens under the data key rolls forward only while `.enc` does not open under that key too.
+  // One that does is current: nothing writes `.enc` under a data key before the stage made under it, so here a lock wrote
+  // it after the stage (a password change that could not move its stage into place, then a lock). Judging that takes a
+  // read of `.enc`, and one a hold keeps from being made may hide exactly that: the unlock refuses as "try again" before
+  // anything is written (it used to shred `.enc` and rename the stale stage over it), and the retry removes the stage.
+  it('a stale staged copy beside an .enc a hold keeps from being read answers vault_recovery_blocked, every file byte for byte; the retry removes the stage (#1027)', async () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw')
+    const staged = staleDatabaseStage(vp, 'pw', { staged: 3131, current: 6262 })
+    const files = [vp.descriptorPath, vp.encPath, staged]
+    const before = files.map((path) => readFileSync(path))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    failures.openThrowFor = { path: vp.encPath, code: 'EBUSY' }
+    let result: unknown
+    try {
+      result = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+    } finally {
+      failures.openThrowFor = null
+    }
+    files.forEach((path, i) => expect(readFileSync(path).equals(before[i]), path).toBe(true))
+    expect(result).toEqual({ ok: false, reason: 'vault_recovery_blocked', message: tMain('main.workspace.recoveryBlocked') })
+    expect(failures.hits.openThrowFor).toBeGreaterThan(0)
+    expect(existsSync(vp.dbPath)).toBe(false)
+    ctl.unlock('pw')
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(6262)
+    expect(existsSync(staged)).toBe(false)
+    expect(ctl.takeStageOutcome()).toBe('superseded')
+    ctl.shutdown()
+  })
+
+  // #1027: a stale stage another program holds cannot be deleted: the unlock leaves it, opens `.enc` (never the stage),
+  // and the lock that ends the session deletes it once the hold is gone, so no later start (of an older build either)
+  // meets it.
+  it('a stale staged copy the unlock cannot delete: the workspace opens at .enc, and the lock of that session deletes the stage (#1027)', () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw')
+    const staged = staleDatabaseStage(vp, 'pw', { staged: 3131, current: 6262 })
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    failures.rmThrowFor = { path: staged, code: 'EBUSY' }
+    try {
+      ctl.unlock('pw')
+    } finally {
+      failures.rmThrowFor = null
+    }
+    expect(getSettings(ctl.requireDb()).contextTokens).toBe(6262)
+    expect(ctl.takeStageOutcome()).toBe('left')
+    expect(existsSync(staged), 'the stage the unlock could not delete').toBe(true)
+    expect(failures.hits.rmSync).toBeGreaterThan(0)
+    ctl.lock()
+    expect(existsSync(staged), 'the stage after the lock').toBe(false)
+  })
+
+  // Review F2: a stage the unlock judged in doubt may still be named by the journal, as an entry a failed stat left
+  // unjudged (here the workspace folder's realpath). The stage the unlock could not delete is then still held at the
+  // lock, so the lock must drop that entry too: left in, the next start (whose stat works) admitted it and rolled the
+  // stale stage over the `.enc` the lock had just written.
+  it('a stale staged copy the unlock cannot delete, named by a journal entry a failed stat left unjudged: the lock drops the entry, and the next start leaves .enc (#1027)', () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw')
+    const staged = staleDatabaseStage(vp, 'pw', { staged: 3131, current: 6262 })
+    const journal = journalListing(vp, [staged])
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.realpathThrow = { path: dirname(vp.dbPath), code: 'EBUSY' } // the entry: neither admitted nor dropped
+    failures.rmThrowFor = { path: staged, code: 'EBUSY' } // the stage: held through the unlock and the lock
+    try {
+      ctl.init()
+      ctl.unlock('pw')
+      expect(ctl.takeStageOutcome()).toBe('left')
+      expect(journalStaged(journal), 'the journal after the unlock').toEqual([staged])
+      failures.realpathThrow = null
+      updateSettings(ctl.requireDb(), { contextTokens: 7373 })
+      ctl.lock()
+    } finally {
+      failures.realpathThrow = null
+      failures.rmThrowFor = null
+    }
+    expect(existsSync(staged), 'the stage, still held at the lock').toBe(true)
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    const next = unlockedController(vp, 'pw')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7373)
+    expect(existsSync(staged)).toBe(false)
+    next.shutdown()
   })
 })
 
@@ -1981,6 +2124,12 @@ describe('a rekey journal entry a failed stat cannot judge (#1014 round 4)', () 
     const vp = lockedVault('recovery-guards-1014', 'pw')
     const stagedDb = `${vp.encPath}${REKEY_SUFFIX}`
     copyFileSync(vp.encPath, stagedDb) // the database, staged under this workspace's own key
+    // #1027: beside the old `.enc` under a retired key, as a change cut short before its swap leaves it (a copy of `.enc`
+    // beside an `.enc` that opens under the same key is a stale stage, which the unlock now removes instead).
+    const retiredSrc = join(vp.root, 'retired-db.bin')
+    writeFileSync(retiredSrc, 'the database under the retired key')
+    encryptFile(retiredSrc, vp.encPath, randomBytes(32))
+    rmSync(retiredSrc)
     const journal = journalListing(vp, [stagedDb])
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     failures.realpathThrow = { path: dirname(vp.dbPath), code: 'EBUSY' }
@@ -2040,6 +2189,275 @@ describe('a rekey journal entry a failed stat cannot judge (#1014 round 4)', () 
     next.unlock('pw')
     expect(next.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
     expect(await readStoredCopy(next, vp.root, target)).toBe('the new copy')
+    next.shutdown()
+  })
+})
+
+// #1027: the one-time v1 → v2 password change swaps its staged database `.enc.new` in after its commit: it shreds `.enc`
+// and renames the stage onto it, with one retry. Another program that holds the fresh stage without delete sharing (an
+// antivirus, an indexer) refuses both renames, and the change swallowed that: `.enc` was gone, the journal still listed
+// the stage, and the session went on under the new key. Its next lock wrote a newer `.enc`, and the next start (or the
+// next unlock of the same run) shredded it and renamed the stage, stale by then, over it: the work since the change was
+// lost, with no notice. Now the open session wins: the change drops the stage from the journal, writes `.enc` from the
+// open database and deletes the stage; a lock of that session retries what is left; and an unlock removes a stage that
+// opens under the data key beside an `.enc` that opens too (`superseded`, the #973 rows above).
+describe('a password change whose staged database cannot be moved into place (#1027)', () => {
+  /** A hold on the staged database: its rename onto `.enc` fails (EPERM, as Node reports it), and with `deleteToo` its
+   *  removal (EBUSY) as well, as a hold without delete sharing refuses both. */
+  function holdStage(staged: string, deleteToo: boolean): void {
+    failures.renameThrowOnStagedEnc = true
+    if (deleteToo) failures.rmThrowFor = { path: staged, code: 'EBUSY' }
+  }
+  function releaseHolds(): void {
+    failures.renameThrowOnStagedEnc = false
+    failures.rmThrowFor = null
+    failures.holdJournalAfterStagedEnc = false
+  }
+
+  /** A v1 workspace under `pw` holding `contextTokens: 4100`, unlocked, whose password change to `next-password` could not
+   *  rename its staged database onto `.enc` on either try (`hold.delete`: nor delete it; `hold.journal`: and the journal
+   *  written beside it is held too, in that mode; `hold.fullDrive`: and the drive is too full for `.enc`, which stays so
+   *  until the row says otherwise). The holds end when the change returns, unless `keep` (the row releases them). */
+  function changeWithHeldStage(
+    hold: { delete?: boolean; journal?: 'write' | 'exclusive'; fullDrive?: boolean } = {},
+    keep = false
+  ): { vp: FreshVaultPaths; ctl: WorkspaceController; staged: string; journal: string } {
+    const vp = lockedVault('recovery-guards-1027', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 4100 }) // before the change
+    const staged = `${vp.encPath}${REKEY_SUFFIX}`
+    holdStage(staged, hold.delete === true)
+    failures.holdJournalAfterStagedEnc = hold.journal ?? false
+    if (hold.fullDrive === true) failures.enospcOnEncTmpWrite = true
+    try {
+      expect(ctl.changePassword('pw', 'next-password', FAST_ARGON).state).toBe('unlocked')
+    } finally {
+      if (!keep) releaseHolds()
+    }
+    expect(failures.hits.renameStagedEnc).toBe(2) // the swap and its one retry
+    return { vp, ctl, staged, journal: join(dirname(vp.dbPath), REKEY_JOURNAL_NAME) }
+  }
+
+  // The hold ends after the change (the usual case: an antivirus scan of the fresh file). The change could not delete the
+  // stage, so the lock does, and no later start, of this build or of an older one, finds it.
+  it.each<[string, (vp: FreshVaultPaths, ctl: WorkspaceController) => WorkspaceController]>([
+    ['the next start', (vp) => unlockedController(vp, 'next-password')],
+    [
+      'an unlock in the same run',
+      (_vp, ctl) => {
+        ctl.unlock('next-password')
+        return ctl
+      }
+    ]
+  ])('the work after the change survives the lock and %s, and the lock leaves no staged database behind', (_when, reopen) => {
+    const { vp, ctl, staged, journal } = changeWithHeldStage({ delete: true })
+    updateSettings(ctl.requireDb(), { contextTokens: 7777 }) // the session's work since the change
+    ctl.lock()
+    expect(existsSync(staged), 'the staged database after the lock').toBe(false)
+    expect(existsSync(journal) ? readFileSync(journal, 'utf8') : '', 'the journal after the lock').not.toContain('sqlite.enc.new')
+    const opened = reopen(vp, ctl)
+    expect(getSettings(opened.requireDb()).contextTokens).toBe(7777)
+    opened.shutdown()
+  })
+
+  // A hold that lasts through the lock: the lock cannot delete the stage either, but the journal no longer lists it, so the
+  // next start leaves `.enc` as the lock wrote it, and the unlock removes the stage: it opens under the data key beside an
+  // `.enc` that opens too.
+  it('a stage still held at the lock: the next start leaves .enc as the lock wrote it, and the unlock removes the stage and opens the work', () => {
+    const { vp, ctl, staged } = changeWithHeldStage({ delete: true }, true)
+    try {
+      updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+      ctl.lock()
+    } finally {
+      releaseHolds()
+    }
+    expect(existsSync(staged), 'the stage, still held at the lock').toBe(true)
+    const enc = readFileSync(vp.encPath)
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(readFileSync(vp.encPath).equals(enc), '.enc after the next start').toBe(true)
+    next.unlock('next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    expect(existsSync(staged)).toBe(false)
+    expect(next.takeStageOutcome()).toBe('superseded')
+    next.shutdown()
+  })
+
+  // The program that holds the fresh stage holds the journal written with it too, so the change cannot drop the stage's
+  // entry. The lock does, before it writes `.enc`; the stage, still held then, is removed by the next unlock. Review F1: a
+  // hold with no read sharing kept the change from even reading the journal, and that read as "nothing lists the stage",
+  // so the lock never tried again and the next start rolled the stale stage over the newer `.enc`.
+  it.each<[string, 'write' | 'exclusive']>([
+    ['refuses its rewrite', 'write'],
+    ['refuses even a read (no read sharing, review F1)', 'exclusive']
+  ])('the journal held at the change too, in a hold that %s: the lock drops the stage from it before it writes .enc, and the work survives the next start', (_mode, journalHold) => {
+    const { vp, ctl } = changeWithHeldStage({ delete: true, journal: journalHold }, true)
+    failures.holdJournalAfterStagedEnc = false // the journal's hold ends; the stage's lasts through the lock
+    try {
+      updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+      ctl.lock()
+    } finally {
+      releaseHolds()
+    }
+    const next = unlockedController(vp, 'next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    next.shutdown()
+    expect(failures.hits.journalHeld, 'the journal hold was reached at the change').toBeGreaterThan(0)
+  })
+
+  // The change saves the open database as `.enc` at once, so the session after it ends as any other does: a quit whose
+  // lock fails keeps the working file for the next unlock (CODE-1b), and a kill is reported at the next start (#892).
+  // Before, `.enc` stayed missing beside the stage until the next lock, and a start swept the working file without a word
+  // (the stage is a snapshot, #911).
+  it('a quit whose lock fails on a full drive after the change: the next unlock rolls the session forward', () => {
+    const { vp, ctl } = changeWithHeldStage()
+    expect(existsSync(vp.encPath), '.enc after the change').toBe(true)
+    backdate(vp.encPath) // a deterministic mtime order: the working file is the newer copy
+    updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+    failures.enospcOnEncTmpWrite = true
+    try {
+      expect(() => ctl.shutdown()).toThrow(VaultLockError)
+    } finally {
+      failures.enospcOnEncTmpWrite = false
+    }
+    expect(failures.hits.writeSync).toBeGreaterThan(0)
+    const next = unlockedController(vp, 'next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    next.shutdown()
+  })
+
+  it('a kill after the change: the next start says the workspace was not locked', () => {
+    const { vp, ctl } = changeWithHeldStage()
+    expect(existsSync(vp.encPath), '.enc after the change').toBe(true)
+    backdate(vp.encPath)
+    updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+    leaveAsKilled(vp, ctl.requireDb())
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(['session_not_closed', 'session_not_closed_full']).toContain(next.getState().lockNotice)
+    next.unlock('next-password')
+    expect(['unclean', 'unclean-full']).toContain(next.takeWorkingCopyLost()?.cause)
+    next.lock()
+  })
+
+  // Review F3: while the change could not save `.enc` (here a full drive), the stage is the only snapshot on the drive, so
+  // nothing may delete it: not the change, and not a lock that fails too, even where nothing holds the stage. The first
+  // lock that writes `.enc` deletes it.
+  it('a change that cannot save .enc on a full drive keeps the stage, through a lock that fails too; the next lock saves the work and deletes it', () => {
+    const { vp, ctl, staged } = changeWithHeldStage({ fullDrive: true }) // the drive stays full after the change
+    expect(failures.hits.writeSync, 'the full drive was reached at the change').toBeGreaterThan(0)
+    try {
+      expect(existsSync(vp.encPath), '.enc after the change').toBe(false)
+      expect(existsSync(staged), 'the stage after the change').toBe(true)
+      updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+      expect(() => ctl.lock()).toThrow(VaultLockError)
+      expect(existsSync(staged), 'the stage after a lock that failed').toBe(true)
+    } finally {
+      failures.enospcOnEncTmpWrite = false
+    }
+    ctl.lock()
+    expect(existsSync(staged), 'the stage after a lock that wrote .enc').toBe(false)
+    const next = unlockedController(vp, 'next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    next.shutdown()
+  })
+
+  // Review F4: whatever made the swap fail, a staged database still there means the session holds the workspace. Here
+  // `.enc` itself is held with no write or delete sharing: the swap's shred can neither overwrite nor remove it and the
+  // rename onto it is refused, so the old v1 `.enc` stays in place. The change saves `.enc` over it, and the work after
+  // the change survives the next start (it used to roll the stale stage over the lock's `.enc`).
+  it('a change whose swap leaves the old v1 .enc in place (held): the change saves .enc over it, and the work survives the next start', () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 4100 })
+    const v1Enc = readFileSync(vp.encPath)
+    holdStage(`${vp.encPath}${REKEY_SUFFIX}`, false)
+    failures.openThrowFor = { path: vp.encPath, code: 'EBUSY' } // the shred cannot open `.enc` to overwrite it
+    failures.rmThrowFor = { path: vp.encPath, code: 'EBUSY' } // nor remove it
+    try {
+      expect(ctl.changePassword('pw', 'next-password', FAST_ARGON).state).toBe('unlocked')
+    } finally {
+      releaseHolds()
+      failures.openThrowFor = null
+    }
+    expect(failures.hits.openThrowFor, 'the hold on .enc was reached').toBeGreaterThan(0)
+    expect(readFileSync(vp.encPath).equals(v1Enc), '.enc after the change: saved over the old v1 file').toBe(false)
+    expect(ctl.takeDatabaseSwapFailure()).toMatchObject({ saved: true })
+    updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+    ctl.lock()
+    const next = unlockedController(vp, 'next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    next.shutdown()
+  })
+
+  // The change has committed when its database cannot be saved at once either (here a full drive): the new password is
+  // the workspace's from then on, so the change still answers "changed" (an error answer says the current password still
+  // works), logs what happened with the error's code and no path, and the next lock saves the session and deletes the
+  // stage.
+  it('a change whose database cannot be saved at once still answers ok, logs it with no path, and the next lock keeps the work', async () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 4100 })
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    holdStage(`${vp.encPath}${REKEY_SUFFIX}`, true)
+    failures.enospcOnEncTmpWrite = true
+    let result: unknown
+    let logged: string[] = []
+    try {
+      const linesBefore = readLogTail(100_000).length
+      result = (await invoke(handlers, IPC.changeWorkspacePassword, 'pw', 'next-password')).result
+      logged = readLogTail(100_000)
+        .slice(linesBefore)
+        .filter((line) => line.includes('#1027'))
+    } finally {
+      failures.enospcOnEncTmpWrite = false
+      releaseHolds()
+    }
+    expect(result).toMatchObject({ ok: true })
+    const encAfterChange = existsSync(vp.encPath)
+    updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+    ctl.lock()
+    const stageAfterLock = existsSync(`${vp.encPath}${REKEY_SUFFIX}`)
+    const next = unlockedController(vp, 'next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    next.shutdown()
+    expect(failures.hits.writeSync, 'the full drive was reached').toBeGreaterThan(0)
+    expect(encAfterChange, '.enc after the change (its save failed)').toBe(false)
+    expect(stageAfterLock, 'the stage after the lock that wrote .enc').toBe(false)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain('EPERM') // the held rename's code, nothing of its message (which names both paths)
+    expect(logged[0]).toContain('the next lock saves it') // review F5: the words follow `saved`
+    expect(logged[0]).not.toContain(basename(vp.root))
+  })
+
+  // The rollback of a change that fails before its commit deletes what it staged. With the stage held, that delete threw
+  // too: its error replaced the change's own, and the new data key was never zeroed. Now the key is zeroed and the first
+  // error surfaces, whatever the rollback does; the key file is still v1, so the next start discards the stage.
+  it('a change that fails before its commit, whose rollback cannot delete the stage: the first error surfaces and the new data key is zeroed', () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    const staged = `${vp.encPath}${REKEY_SUFFIX}`
+    failures.openThrowFor = { path: `${vp.descriptorPath}.tmp`, code: 'EACCES' } // the commit cannot write its temp
+    failures.rmThrowFor = { path: staged, code: 'EBUSY' } // and the rollback cannot delete the stage
+    dataKeys.generated = []
+    let thrown: unknown = null
+    try {
+      ctl.changePassword('pw', 'next-password', FAST_ARGON)
+    } catch (err) {
+      thrown = err
+    } finally {
+      failures.openThrowFor = null
+      failures.rmThrowFor = null
+    }
+    expect((thrown as NodeJS.ErrnoException | null)?.code).toBe('EACCES')
+    expect(dataKeys.generated).toHaveLength(1)
+    expect(dataKeys.generated[0].every((byte) => byte === 0), 'the new data key').toBe(true)
+    expect(failures.hits.openThrowFor).toBeGreaterThan(0)
+    expect(failures.hits.rmSync).toBeGreaterThan(0)
+    expect(existsSync(staged), 'the stage the rollback could not delete').toBe(true)
+    ctl.lock()
+    const next = unlockedController(vp, 'pw') // the key file is still v1: the start discards the stage
+    expect(existsSync(staged)).toBe(false)
     next.shutdown()
   })
 })

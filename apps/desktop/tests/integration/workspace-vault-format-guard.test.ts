@@ -44,6 +44,7 @@ import {
   lockedVault,
   readStoredCopy,
   setFrameMagic,
+  staleDatabaseStage,
   storeCopy,
   thrownBy,
   unlockedController,
@@ -892,6 +893,32 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
     }
   })
 
+  // #1027 (owner, 2026-11-22: G-1 refined): a stage that opens under the data key rolls forward only while `.enc` does not
+  // open under that key too. Nothing writes `.enc` under a data key before the stage made under it, so an `.enc` that opens
+  // was written after the stage (here a lock, as after a password change that could not move its stage into place) and
+  // holds the newer data: the unlock removes the stage and opens `.enc`. So it is for a journal that names the stage under
+  // another drive root (a Kit back under another letter), which vouches for nothing (review round 3 F1).
+  it.each<[string, (vp: FreshVaultPaths, staged: string) => void]>([
+    ['no journal', () => {}],
+    ['a journal that names it under another drive root', (vp, staged) => void rekeyJournal(vp, 1, [underOtherRoot(vp, staged)])]
+  ])('a staged copy of this workspace older than .enc, %s: the start leaves both, the unlock removes the stage and opens .enc', (_case, plantJournal) => {
+    const vp = lockedVault('fmtguard-1027', PW)
+    const staged = staleDatabaseStage(vp, PW, { staged: 3131, current: 6262 })
+    plantJournal(vp, staged)
+    const before = snapshot(vp.root)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    try {
+      expect(snapshot(vp.root)).toEqual(before)
+      ctl.unlock(PW)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(6262)
+      expect(existsSync(staged)).toBe(false)
+      expect(ctl.takeStageOutcome()).toBe('superseded')
+    } finally {
+      ctl.shutdown()
+    }
+  })
+
   it('a create cut short leaves its stage on an empty drive: the start removes it, and a workspace put back later opens', () => {
     const vp = freshVaultPaths('fmtguard-973')
     // 1. A create killed between its stage and its commit: the staged database, and a write temp of an encrypt.
@@ -1037,17 +1064,35 @@ describe('a staged database no rekey journal vouches for (#973)', () => {
   // Review round 2 R2: the start judges an unclean end (#892, a crash with the session's sidecars live) against the
   // `.enc` that is there. With a stage in doubt it cannot know yet which snapshot the unlock opens, so it holds the loss
   // instead of recording it: the unlock records it when it opens `.enc` as it is (the stage foreign), and drops it when
-  // the stage rolls forward (the stage holds that session).
-  it('an unclean end beside a crash leftover: the loss is held at the start, and recorded when the unlock removes the leftover', () => {
+  // the stage rolls forward (the stage holds that session). #1027: a stale staged copy of this workspace's own database
+  // beside an `.enc` that opens under the same key is removed too (`superseded`), so `.enc` opens as it is and the loss is
+  // recorded the same way; it used to roll the stale copy forward and drop the loss.
+  it.each<[string, (vp: FreshVaultPaths, opened: ReturnType<typeof unlockEncryptedVault>) => Buffer]>([
+    ['a crash leftover', () => leftoverStage()],
+    [
+      'a staged copy of this workspace older than .enc (#1027)',
+      (vp, { db, key }) => {
+        updateSettings(db, { contextTokens: 4040 }) // the stage's copy, neither `.enc`'s 5151 nor the session's 9191
+        db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+        const out = join(vp.root, 'stale-stage.bin')
+        encryptFile(vp.dbPath, out, key)
+        const bytes = readFileSync(out)
+        rmSync(out)
+        return bytes
+      }
+    ]
+  ])('an unclean end beside %s: the loss is held at the start, and recorded when the unlock removes it', (_case, stageOf) => {
     const vp = workspaceWithMarker('fmtguard-973')
     backdate(vp.encPath)
-    const { db, key } = unlockEncryptedVault(vp, PW)
+    const opened = unlockEncryptedVault(vp, PW)
+    const { db, key } = opened
+    const stage = stageOf(vp, opened)
     updateSettings(db, { contextTokens: 9191 })
     db.close()
     key.fill(0)
     writeFileSync(`${vp.dbPath}-wal`, 'wal') // the open session's sidecars, left by the crash
     writeFileSync(`${vp.dbPath}-shm`, 'shm')
-    writeFileSync(stagedOf(vp), leftoverStage())
+    writeFileSync(stagedOf(vp), stage)
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()
     try {
@@ -1637,7 +1682,14 @@ describe('staged document and image copies no rekey journal vouches for (#1001)'
     const i2 = await whileUnlocked(vp, (ctl) => retiredCopyAndStage(ctl, vp, 'images', 'i2.png.enc', 'the new copy of i2'))
     const foreignStage = `${copies.documents}${REKEY_SUFFIX}`
     writeFileSync(foreignStage, await foreignCopy('documents'))
-    copyFileSync(vp.encPath, `${vp.encPath}${REKEY_SUFFIX}`) // the database staged under this workspace's own key
+    renameSync(vp.encPath, `${vp.encPath}${REKEY_SUFFIX}`) // the database staged under this workspace's own key
+    // #1027: beside it the old `.enc`, still under the retired key that nothing holds any more, as a change cut short
+    // before its database swap leaves it. (A copy of `.enc` here opens under the data key too: no pending change, but a
+    // stale stage the unlock removes.)
+    const retiredSrc = join(vp.root, 'retired-db.bin')
+    writeFileSync(retiredSrc, 'the database under the retired key')
+    encryptFile(retiredSrc, vp.encPath, randomBytes(32))
+    rmSync(retiredSrc)
     const before = snapshot(vp.root)
     const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
     ctl.init()

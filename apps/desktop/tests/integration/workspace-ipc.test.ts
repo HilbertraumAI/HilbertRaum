@@ -93,6 +93,7 @@ import {
   plantProbeTrap,
   newerVault,
   setFrameMagic,
+  staleDatabaseStage,
   storeCopy,
   tagFailingVault,
   unlockedController,
@@ -1572,9 +1573,22 @@ describe('a workspace failure line names no path (#956)', () => {
 
   // #973: an unlock that removes a staged copy of the database which does not open under the workspace's key (a create's
   // leftover beside a workspace put back) says so once, on the success path, in fixed words: no path, no file name.
-  it('an unlock that removes a staged copy from another key logs one line that names no path (#973)', async () => {
+  // #1027: so does one that removes a staged copy of this workspace's own database that is older than `.enc` (a password
+  // change that could not move its stage into place, then a lock), in its own words.
+  it.each<[string, (vp: VaultPaths) => void, string]>([
+    [
+      'from another key',
+      (vp) => copyFileSync(lockedVault('wsipc-leftover', 'other-password').encPath, `${vp.encPath}.new`),
+      "does not open under this workspace's key"
+    ],
+    [
+      'of this workspace older than the workspace file (#1027)',
+      (vp) => void staleDatabaseStage(vp, PW, { staged: 3131, current: 6262 }),
+      'older than the workspace file'
+    ]
+  ])('an unlock that removes a staged copy %s logs one line that names no path (#973)', async (_case, plant, words) => {
     const vp = lockedVault('wsipc', PW)
-    copyFileSync(lockedVault('wsipc-leftover', 'other-password').encPath, `${vp.encPath}.new`)
+    plant(vp)
     const ctrl = startedOn(vp)
     registerWorkspaceIpc(workspaceIpcCtx(ctrl))
     const marker = mark()
@@ -1583,6 +1597,7 @@ describe('a workspace failure line names no path (#956)', () => {
       expect(existsSync(`${vp.encPath}.new`)).toBe(false)
       const lines = linesAfter(marker, 'removed a staged copy')
       expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain(words)
       expect(namesNoPath(lines[0], vp.root)).toBe(true)
       expect(lines[0]).not.toContain('.enc')
     } finally {
