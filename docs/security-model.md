@@ -2080,7 +2080,10 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   it in when it authenticates under the data key while its stored copy does not (the stored copy of a
   pending change is still under the retired key), deletes it otherwise, and leaves it for the next
   unlock when it or its stored copy cannot be read, or it cannot be swapped in. A stage the journal lists rolls
-  forward at the start, as before.
+  forward at the start, as before; "lists" means an entry the containment below admits (#1014 round 4). With
+  `documents/` itself a junction elsewhere, the scan still finds the stages behind it, but the entries through
+  the link are refused, so those stages are doubts: the start leaves them, and the unlock swaps in only one
+  that authenticates. The scan does not skip a linked store, so a user's own junctioned store loses nothing.
   **What a journal entry may name (#1014).** The journal is plain JSON in the workspace folder,
   read at every start before any password, and its entries are absolute paths: nothing proves
   this app wrote them, or wrote them for this folder (a journal copied or restored onto another
@@ -2089,14 +2092,18 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   no folder between the workspace folder and the entry may be a link (`lstat`; a Windows junction
   reads as one), and the entry's folder, resolved, must still lie in the resolved workspace
   folder (an entry under `documents/J/`, `J` a junction elsewhere, had the start shred and
-  replace the file behind it). The `remove` list is read as a
+  replace the file behind it). A stat that fails for any reason but ENOENT (a hold, a permission)
+  proves nothing: such an entry is neither acted on nor dropped, and the next pass judges it again
+  (round 4; read as "outside", it was dropped, and an out-of-store copy inside the workspace folder,
+  which no scan finds, stayed under the retired key for good). The `remove` list is read as a
   flag for the rotated log (above), never as paths. A stage outside the workspace folder is an
   out-of-store copy's (issue #188's absolute `stored_path`: elsewhere on the drive, or on another
   drive), which nothing at the start can tell from any other path: it waits for the unlock, which
   swaps it in only when the open database lists its stored copy, the stage is a regular file that
   opens under the data key, and the stored copy does not (a current copy is never swapped over).
   A stage it may not judge yet (a link, a folder or a second hard link at either name, a stored
-  copy that already opens, a hold, a newer build's frame) is left, and so is the journal, the only
+  copy that already opens, a hold, a newer build's frame, an `lstat` of either file that fails other
+  than with ENOENT) is left, and so is the journal, the only
   record of that stage, until an unlock settles it. A kept journal vouches only for what still
   waits: once a pass has settled what it can, the journal is rewritten (temp + rename, as it is
   written) to list only the stages still waiting, or cleared when none wait. Kept as written, it
@@ -2105,8 +2112,10 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   A password change, which holds the database,
   still finishes its own out-of-store swaps in one go. Every other entry is left as it is and
   counted in a count-only log line after the start and after each unlock (no path): a refused
-  entry once, by the pass that drops it from the journal; a folder left in place (above) by each
-  pass that meets it. An entry
+  entry once, by the pass that drops it from the journal; a folder left in place (above) and an
+  entry a stat could not judge by each pass that meets them. The unlock's recovery before the
+  password and a password change's passes count too (round 4; a change's count goes with the next
+  unlock's line). An entry
   written under another drive root fails the containment too and loses nothing: the in-store
   stages it named are found by the scan and judged at the unlock as #973 and #1001 doubts (an
   entry is never rebased onto this root, which would let a journal vouch by relative name). A

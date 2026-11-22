@@ -1241,21 +1241,26 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   remove: string[] }`, absolute paths; written atomically by `stageRekey` BEFORE any `<file>.new` is
   staged, cleared by `applyPendingRekey`/`discardPendingRekey` once every entry is accounted for
   (an unreachable entry keeps it; an unparseable or unknown-`version` file is renamed to
-  `rekey-journal.json.corrupt`, never deleted; only `staged` entries ending in `.new` are honoured;
-  staged paths from the scan and the journal are de-duplicated on a folded spelling).
+  `rekey-journal.json.corrupt`, never deleted; only `staged` entries ending in `.enc.new` are honoured,
+  and since #1014 round 4 every string entry is read, so any other is refused and counted, never dropped
+  unseen; staged paths from the scan and the journal are de-duplicated on a folded spelling).
   **What is honoured, and where (#1014):** a `staged` entry is acted on by a recovery before the
   password only when it ends `.enc.new` and lies inside the workspace folder on the disk (no folder
   between the workspace folder and the entry is a link, and the entry's folder, resolved, lies in
   the resolved workspace folder; round 3); one outside it (an
   out-of-store copy's stage) only by the unlock, once the open database lists its stored copy
   (`documents.stored_path`, by the resolver's out-of-store rule) and the stage opens under the
-  data key while the stored copy does not, and by a password change, which holds the database. A
+  data key while the stored copy does not, and by a password change, which holds the database.
+  Round 4: an entry whose containment a stat cannot answer (`lstat` on the way or either `realpath`
+  failing for any reason but ENOENT) is neither acted on nor dropped: each pass keeps it in the
+  journal it settles (a rollback too) and counts it, and the next pass judges it again. A
   `remove` entry is never used as a path: one named `app.1.log.enc` (either path separator)
   removes the rotated log at `<logsPath>/app.1.log.enc`. Every other entry is left as it is. A
   journal with a stage waiting for the unlock is kept until the unlock settles every stage it lists
   (swapped in, already in place, or one that does not open under the data key); a stage it may not
   judge yet (a link, a folder, a second hard link, a current stored copy, a hold, a newer build's
-  frame) keeps it. Round 3: after each pass the journal is rewritten (temp + rename, the same
+  frame, and, round 4, an `lstat` of either file that fails for any reason but ENOENT) keeps it.
+  Round 3: after each pass the journal is rewritten (temp + rename, the same
   format) to list only the entries still waiting (a stage still staged, an out-of-store stage on
   an unreachable location, an outside stage waiting for the database), `remove: []`, or cleared
   when none wait; it never goes on listing the staged database or an in-store stage it settled.
@@ -1263,7 +1268,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `WorkspaceController.takeJournalRefusals(): number` returns the sum since the last call, logged
   as one count-only line after the start and one after each unlock. A refused entry is counted
   once, by the pass that drops it; a folder left in place (at a write temp's name, at a stored
-  copy's name) by each pass that meets it. The file format is unchanged.
+  copy's name) and an unjudged entry (round 4) by each pass that meets them. Round 4: the unlock's
+  recovery before the password and a password change's passes add to the same sum (nothing logs
+  right after a change: its count goes with the next unlock's line). The file format is unchanged.
   `listVaultKeyCiphertexts(vaultPaths, db) → VaultKeyCiphertext[]` = `{ path, kind: 'document' |
   'image' | 'out-of-store' | 'rotated-log', action: 'rekey' | 'delete' }` is the class registry the
   stage journals. The descriptor is unchanged. **Downgrade caveat:** a build older than the #241 fix
@@ -1277,6 +1284,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   its full path, folded as `pathKey` folds it (review round 3: a match by the folder and file names,
   which every workspace shares, let a stale journal vouch for a foreign stage), so an entry written
   under another drive letter or mount point leaves the stage in doubt, for the unlock to authenticate.
+  #1014 round 4: and only an entry the journal's containment admits lists a stage, here and for the
+  #1001 stages below; one it refuses (through a link) or cannot judge vouches for nothing.
   `unlockEncryptedVault(…, onStageInDoubt?)` resolves it
   after the data key is unwrapped: the module-private `authenticatesUnder(path, key) → boolean` (one
   GCM pass, nothing written; false when the tag fails or the file is no `HRAUMEN1` frame, cut short

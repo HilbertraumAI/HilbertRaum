@@ -253,7 +253,10 @@ password recovery — are documented in
   build's frame) it stays staged and the journal stays with it; a change rolled back before its
   commit leaves such a stage, and its write temp `<stage>.tmp`, on the drive (ciphertext under a
   key nothing holds). Journal entries the app cannot vouch for are left on the drive as they are,
-  counted in the log without their paths (a folder left in place is counted at each start again).
+  counted in the log without their paths (a folder left in place is counted at each start again,
+  and so is an entry the app could not check because a stat failed, a hold or a permission: that
+  file waits until a start or an unlock can check it). With `documents/` or `images/` kept behind
+  a link (a junction), the stages there wait for the unlock with the right password, not the start.
 - **Shredding never follows a link, so it cannot reach a file another name shares (#1014).** A
   symbolic link, a junction or a file with more than one hard link at a name the app shreds is
   only unlinked: a plaintext file someone hard-linked keeps its bytes under the other name. Mounts
