@@ -376,6 +376,19 @@ describe('TranslateScreen — translate → stream → copy', () => {
     expect(screen.queryByText(t('en', 'translate.err.startFailed'))).not.toBeInTheDocument()
   })
 
+  // #1012 code review round 4: the engine's files could not be read just now — the "try again in a minute"
+  // banner, not the start-failed or the generic runtime one.
+  it('a filesUnreadable job shows the try-again banner (#1012)', async () => {
+    const s = streamStubs({ jobId: 'x', state: 'failed', error: 'filesUnreadable' })
+    stubApi(translateScreenStubs(s.api))
+    const user = userEvent.setup()
+    render(<TranslateScreen onNavigate={() => {}} />)
+    await user.type(await screen.findByLabelText(t('en', 'translate.input.label')), 'Hallo')
+    await user.click(screen.getByRole('button', { name: t('en', 'translate.action') }))
+    expect(await screen.findByText(t('en', 'main.engine.filesUnreadable'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'translate.err.runtimeFailed'))).not.toBeInTheDocument()
+  })
+
   it('a dismissed error banner clears the store state (does not stick / reappear on remount)', async () => {
     const s = streamStubs({ jobId: 'x', state: 'failed', error: 'runtimeFailed' })
     stubApi(translateScreenStubs(s.api))

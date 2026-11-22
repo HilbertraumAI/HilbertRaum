@@ -1289,7 +1289,8 @@ kind.** The facts:
     the app), and the latch would otherwise hold until a lock/unlock (code review).
 - **One approximation:** a program that fails its pre-spawn integrity check also counts as
   `start`, whose copy points at the model files. It is rare (a tampered engine), and the chat model
-  fails visibly on the same binary.
+  fails visibly on the same binary. (Gone since #1012 code review round 6: a changed engine file is the
+  typed `EngineCannotRunError` with the engine-files verdict, as a missing one is.)
 
 **Tests.** Run against master's `e5.ts`, `engine-failure.ts`, `engine-health.ts` and
 `chat-stream.ts`, all 19 new or changed embedder, row and chat cases below fail; with the fix they

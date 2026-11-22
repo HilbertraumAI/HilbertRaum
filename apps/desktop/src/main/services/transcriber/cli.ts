@@ -13,14 +13,16 @@ import {
   unregisterSidecarChild,
   type ResolveBinOptions
 } from '../runtime/sidecar'
-import { verifyBinaryBeforeSpawn } from '../binary-verifier'
+import { isDamagedFilesVerdict, verifyBinaryBeforeSpawn } from '../binary-verifier'
 import {
   EngineCannotRunError,
+  EngineFilesUnreadableError,
   classifyLoadFailure,
   classifySpawnError,
   clearEngineProblemFor,
   describeLoadFailure,
-  reportEngineProblem
+  reportEngineProblem,
+  reportDamagedEngineFiles
 } from '../runtime/engine-load'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
@@ -372,15 +374,20 @@ export class WhisperCliTranscriber implements Transcriber {
     if (cancelled()) throw new Error('Transcription was cancelled.')
     // #913: the voice model's files first, before the engine gate: the binary is hashed right before the spawn.
     if (this.checkModel) await this.checkBeforeSpawn(this.checkModel, opts.signal, copySignal)
-    // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
-    // packaged-build tamper is refused; the audio import then fails per-file with the
-    // generic failure copy (the raw reason stays in the local log only).
+    // Re-hash whisper-cli's copy against its install marker before spawn (vuln-scan B; since
+    // #1012 every file the marker records). A copy that fails it is refused before the spawn: a changed
+    // or missing file throws `EngineCannotRunError` with the voice engine's `files-damaged` verdict (code
+    // review round 6; a tamper got the generic failure copy before), a file that cannot be read just now
+    // `EngineFilesUnreadableError`.
     // #516: an engine install replacing this folder holds spawns until its swap is over.
     await waitForEngineSpawns('whisper_cpp')
-    if ((await verifyBinaryBeforeSpawn(this.binPath)) === 'mismatch') {
-      throw new Error('whisper-cli failed pre-spawn integrity verification')
-    }
+    const verdict = await verifyBinaryBeforeSpawn(this.binPath)
     if (cancelled()) throw new Error('Transcription was cancelled.')
+    // #1012: a file of the copy is gone or changed (round 6: a changed one too) — the voice engine's own
+    // files are damaged (the verdict the "Install again" offer reads); never started.
+    if (isDamagedFilesVerdict(verdict)) throw reportDamagedEngineFiles('whisper_cpp', this.binPath, this.platform)
+    // #1012 review R-2: a file could not be read just now — not started, nothing recorded; the next call reads again.
+    if (verdict === 'unreadable') throw new EngineFilesUnreadableError('whisper-cli')
     return new Promise((resolve, reject) => {
       let child: ChildProcess
       try {

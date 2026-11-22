@@ -4,6 +4,8 @@ import { createSelectedReranker } from '../../src/main/services/reranker/factory
 import { approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/services/ingestion/chunker'
 import { until, within } from '../helpers/hang-budget'
 import { FakeChild, GatedChild, exitingChild, fakeSpawn, loadingSidecar } from '../helpers/fake-sidecar'
+import { initBinaryVerification } from '../../src/main/services/binary-verifier'
+import { binaryWithMarker, restoreEngineLibrary, verifierInert } from '../helpers/binary-fixtures'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
 // fake-spawn + mocked-loopback-fetch harness (the E5 embedder test pattern). CI never
@@ -264,6 +266,37 @@ describe('LlamaReranker', () => {
     expect(await reranker.rerank('q', ['b'])).toHaveLength(1)
     expect(calls.length).toBe(4)
     await reranker.stop()
+  })
+
+  // #1012 code review: an engine file the pre-spawn check could not read just now (a folder at the
+  // library's recorded path, so the real read fails with EISDIR) is transient like the bind race: no
+  // latch, and no GPU → CPU demotion (it says nothing about the device). The next rerank starts on the GPU.
+  it('a start whose engine files could not be read neither latches nor demotes; the next rerank starts on the GPU (#1012)', async () => {
+    initBinaryVerification(false) // as packaged: the real pre-spawn verifier runs
+    try {
+      const binPath = await binaryWithMarker('llama-server.exe', 'unreadable')
+      const { spawn, calls } = fakeSpawn()
+      const fallbacks: string[] = []
+      const reranker = new LlamaReranker({
+        ...base,
+        binPath,
+        spawn,
+        fetchImpl: rerankFetch([1]),
+        devicePosture: () => 'gpu',
+        onDeviceFallback: (reason: string) => fallbacks.push(reason)
+      })
+      await expect(reranker.rerank('q', ['a'])).rejects.toMatchObject({ name: 'EngineFilesUnreadableError' })
+      expect(calls.length).toBe(0)
+      expect(fallbacks).toEqual([])
+      restoreEngineLibrary(binPath)
+      expect(await reranker.rerank('q', ['a'])).toHaveLength(1)
+      expect(calls.length).toBe(1)
+      expect(calls[0].args).not.toContain('--device') // the GPU posture: never demoted to the processor
+      expect(fallbacks).toEqual([])
+      await reranker.stop()
+    } finally {
+      verifierInert()
+    }
   })
 
   it('a GENUINE load-fault latch still survives suspend — only transient races are forgiven (F7)', async () => {

@@ -4520,7 +4520,9 @@ persisting nothing; a healthy model starts on rung 1.
      stands, and it is logged once ("The device probe gave no answer"). It records no engine verdict:
      the engine ran, and the server may well start a moment later. Only an exit 0 is an answer: the
      parsed devices, or `[]` when it printed none (b11146 writes `(none)` under the header, b9849 the
-     header alone, both captured). A binary the integrity check refuses still reads `[]`.
+     header alone, both captured). A binary the integrity check refuses still reads `[]`. (Changed by
+     #1012 code review round 6: it reads `null`, with the engine-files verdict; `security-model.md`
+     "Re-hash sidecar binaries before spawn".)
      **Rejected:** treating an exit 0 with unparsed lines as unknown. A driver that writes to stdout
      would make every probe on that machine unknown, and the pin-bump case it would catch is already
      caught by the b11146 capture test and the re-capture rule.
@@ -4570,7 +4572,8 @@ persisting nothing; a healthy model starts on rung 1.
     session would close it, against owner call 3's "not cached".
   - The binary verifier reports a transient read failure (an antivirus lock while hashing) as
     `mismatch`, so the probe answers `[]`: "no GPU" for the session. The integrity paths keep `[]` by
-    owner call 3.
+    owner call 3. (Fixed by #1012: a read failure is `unreadable`, and since its code review round 6
+    every integrity path answers `null`.)
 - **Tests:**
   - `runtime-ladder.test.ts`:
     - real b11146 captures for the empty and unknown answers yielding to GPU buffers, the GPU-less
@@ -5824,6 +5827,80 @@ launch: spawn ENOENT`), `gpu.test.ts` (both streams: `null`; an exit 0 after a s
 `unchecked`), `transcriber.test.ts` (both streams: the spawn error), `zim-serve.test.ts` (#787's
 row, now through the guard); `repo-hygiene.test.ts` "#790" (the two rules). Mutations: 21/21 red.
 
+### §13 #1012 amendment — a recorded file missing before the spawn is the same verdict (2026-11-22)
+
+The pre-spawn check re-hashes every file the engine copy's install marker records (`security-model.md`
+"Re-hash sidecar binaries before spawn", #1012). A recorded file that is gone gives the verifier's
+`missing` (the program or a library) or `missing-other` (any other file). That is no tamper, and the
+engines' spawn sites treat both as this record's `files-damaged`, without starting the program
+(`reportDamagedEngineFiles`, `runtime/engine-load.ts`). The verdict's `exit` is `'not started'` and it
+carries no `name`. A recorded file that cannot be read just now is `unreadable` (review R-2): no verdict,
+not cached, and the typed `EngineFilesUnreadableError`, which the ladder counts as no evidence about the
+GPU, the model or the MTP flags (it holds, persists and latches nothing, and names no model when every
+rung ended so).
+
+Since code review round 6 a changed file (`mismatch`) is the same `files-damaged` verdict at the
+engines' sites (`isDamagedFilesVerdict`). With the whole copy hashed, a damaged library (a copy cut
+short) gives `mismatch` just as a tamper does. Before round 6 it was a plain error: rungs that all
+failed so blamed the model, and no reinstall was offered. The start is still refused, and the verifier's
+log line still records a possible tamper.
+- **Why not start anyway.** A start that went ahead and ran would drop the verdict at once (§9, a healthy
+  start clears its reporter), and the #532 offer with it. A missing `ggml-vulkan.dll` runs silently on the
+  processor, and the probe's empty list was persisted as "no graphics card" (#1013).
+- **What each site does.**
+  - `LlamaServer` throws the typed error, so the ladder walks on to the `cpu/` net (§4).
+  - The probe resolves `null`.
+  - `checkProgramLoads` returns `refused`, so "Check again" keeps the verdict while the file is gone or
+    changed. An in-app install clears the verifier's cache (`invalidateBinaryVerification`).
+  - whisper-cli throws the typed error.
+  - The knowledge-pack tools (no verdict family, no repair) refuse `missing` (a missing library would be
+    looked for in the library folder they start in, review R-1), and log the code and start on
+    `missing-other`. A changed file keeps their `integrity` / `verify` kind.
+  - On `unreadable`: the probe resolves `null`, `checkProgramLoads` returns `unchecked`, and `LlamaServer`
+    and whisper-cli throw `EngineFilesUnreadableError`.
+- **What `unreadable` does elsewhere (code review round 3).**
+  - Every other `LlamaServer` user (the embedder, the reranker, translation, vision) rethrows it like a
+    bind race: no `startFailed` latch, no GPU → CPU demotion, no #117 cooldown.
+  - In the ladder, round 4 sets one rule: a walk in which any rung ended `unreadable` latches nothing.
+    That means no `blameModel`, no persisted GPU failure (at a later rung's success or at the end) and no
+    MTP latch (one its rung 1a set is taken back). It only reports:
+    - the model notice (`onModelLoadFailure`, no latch) when a forced-CPU (control) rung failed in a way
+      that is evidence (not a bind race, not an engine refusal; round 6: not a GPU rung, whose control
+      never ran);
+    - else `onEngineFilesUnreadable`, which shows `main.engine.filesUnreadable` beside the demo runtime.
+
+    The reason comes from the last failure that is not `unreadable`. The next start re-walks. Round 6:
+    this branch comes before #530's `onEngineCannotRun`, so a main copy that was only unreadable beside a
+    refused `cpu/` net never reads as "the engine cannot run" (the net's own verdict stands).
+  - The consumers that report a start failure to the user stop at once with `main.engine.filesUnreadable`
+    (round 4):
+    - the translate view (`TranslateErrorCode` `filesUnreadable`);
+    - a document translation task (a friendly task error);
+    - an audio import (a persist-canonical row text, display-mapped);
+    - dictation;
+    - an image question (`VisionErrorCode` `filesUnreadable`, round 5; no #117 cooldown).
+  - The chat's files-unreadable notice carries the `models` target (round 5), so its button opens the AI
+    Model screen. There, "Stop runtime" then "Use this model" restart the model: `RuntimeManager.start` is
+    idempotent for the same model, so choosing it alone keeps the demo runtime.
+  - The knowledge-pack tools report a missing file with their own `files` kind and an unreadable one
+    with `filesUnreadable` (round 5). `ZimService` latches only `files` until the pack set changes.
+    `writeLibraryXml` stops on a `filesUnreadable` kiwix-manage, and (round 6) on a `files` or `verify`
+    one, instead of skipping each pack, which would publish an empty library for the revision.
+  - A folder or another non-regular file at a recorded path is `missing`, not `unreadable` (round 5).
+    Round 6: one `stat` of every recorded file comes before any hash, so a missing program or library
+    ends the check with nothing hashed. A marker that is there but cannot be read is `unreadable`, with
+    no fallback from a `cpu/` net's own marker to the family's.
+- **Tests:**
+  - `binary-verify-spawn.test.ts`: the two "#1012" describes, one row per site and verdict.
+  - `binary-verifier.test.ts` "(#1012)": includes which missing file counts, the early stop and the
+    containment of every key.
+  - `runtime-ladder.test.ts` "#1012": an unreadable rung is no evidence; the notice; the evidence rule; the
+    control rung.
+  - One row each in `e5-embedder`, `reranker`, `translation-runtime` and `vision-runtime`.
+  - Round 6: `runtime-ladder-exit-wiring.test.ts` "#1012" (a changed library through the real ladder and
+    verifier), the kiwix-manage refusals in `zim-service-lifecycle.test.ts`, and the changed-file rows
+    in `binary-verify-spawn.test.ts` and `engine-recheck.test.ts`.
+
 ## In-app engine updates — design record (#516, 2026-10-05)
 
 _A drive set up before a pin bump keeps its engines: after #514 (llama.cpp b9849 → b11146) every
@@ -6273,7 +6350,8 @@ update result):
 gate verifies what a marker records and never requires a full list (no Kit is re-provisioned); #999
 option A; #1000 option R with the async flush, and `beforeReplace` keeps refusing work that started
 during the unpack rather than waiting for it. The pre-spawn re-hash's gap is documented now
-(`security-model.md`), its hardening is a follow-up.
+(`security-model.md`), its hardening is a follow-up. _(Done in #1012, 2026-11-22: the verifier re-hashes
+every key of the copy's own marker before the first spawn of a session; "Engine load failures" §13.)_
 
 **As built** (`runtime-download.ts`, `archive-size.ts`, `assets.ts`, `commercial-drive.ts`,
 `runtime/engine-load.ts`, `fetch-runtime.{ps1,sh}`):

@@ -33,7 +33,7 @@ import {
   type PackDeps
 } from './packs'
 import { computeServedSet, type ServingNameCollision } from './identity'
-import { KiwixServer } from './serve'
+import { KiwixServeStartError, KiwixServer } from './serve'
 import { KiwixManageError, kiwixManageAdd, resolveKiwixManagePath, resolveKiwixServePath } from './tools'
 import { zimErrorClass } from './error-class'
 import type { PlaintextOpKind, PlaintextOpsRegistry } from '../ingestion/plaintext-ops'
@@ -1023,7 +1023,10 @@ export class ZimService {
         // stop can surface a child's own error class (a killed kiwix-manage rejects
         // `KiwixManageError`), and latching THAT would make the next ask after the unlock
         // rethrow it under the unchanged revision (#301 P3b).
-        if (!isAbortError(err) && !(err instanceof StaleBuildError) && !abort.signal.aborted) {
+        // #1012 code review round 5: nor does a kiwix-tools file that could not be read JUST NOW (an
+        // antivirus hold): the next ask reads it again. A MISSING file still latches (no in-app repair; a
+        // pack change clears it).
+        if (!isAbortError(err) && !(err instanceof StaleBuildError) && !abort.signal.aborted && !isPassingFileHold(err)) {
           this.startFailure = {
             revision,
             error: err instanceof Error ? err : new Error(String(err))
@@ -1595,6 +1598,11 @@ function servedLibraryOf(pub: Extract<Published, { kind: 'served' }>): ServedLib
     names: pub.names,
     excluded: pub.excluded
   }
+}
+
+/** #1012 code review round 5: a kiwix-tools file the pre-spawn check could not read just now — no lasting start failure. */
+function isPassingFileHold(err: unknown): boolean {
+  return (err instanceof KiwixServeStartError || err instanceof KiwixManageError) && err.kind === 'filesUnreadable'
 }
 
 function isAbortError(err: unknown): boolean {

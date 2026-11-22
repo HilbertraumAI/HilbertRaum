@@ -634,16 +634,34 @@ export function engineFolderComplete(plan: RuntimeDownloadPlan, dir: string = pl
 
 /** A file a marker records (`markerBinaryKey` form) is there, as a file, inside `dir`; a key that leaves it is not. */
 function markedFilePresent(dir: string, key: string): boolean {
-  const base = resolve(dir)
-  const p = resolve(base, ...key.split('/'))
-  const rel = relative(base, p)
-  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
+  const p = recordedFilePath(dir, key)
+  if (p === null) return false
   try {
     return statSync(p).isFile()
   } catch {
     return false
   }
 }
+
+/**
+ * The absolute path of a file an install marker records (`markerBinaryKey` form) inside the copy's folder
+ * `dir`, or null when the key leaves it (`..`, an absolute or another drive's path) or names the folder
+ * itself. The marker is a file on the drive, so its keys are input: the start's checks (`engineFolderComplete`),
+ * the pre-spawn verifier (#1012) and the sell gate read a key only through this. Pure (no I/O).
+ */
+export function recordedFilePath(dir: string, key: string): string | null {
+  const base = resolve(dir)
+  const p = resolve(base, ...key.split('/'))
+  const rel = relative(base, p)
+  return rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? null : p
+}
+
+/**
+ * The folders an engine copy may hold that are ANOTHER copy (#986): the chat engine's `cpu/` safety net,
+ * and its swap's `cpu.new` / `cpu.old`, each with a marker of its own. A main copy's marker never records
+ * them (`installedFileKeys`), and the pre-spawn verifier leaves a key under one to that copy (#1012).
+ */
+export const NESTED_NET_FOLDERS: readonly string[] = ['cpu', 'cpu.new', 'cpu.old']
 
 // ---- OCR language files (the `ocr:` asset class) ------------------------------------
 
@@ -1264,18 +1282,20 @@ export interface RuntimeInstallMarker {
   os: RuntimeOs
   arch: string
   /**
-   * SHA-256 of each extracted, spawnable binary, keyed by its path RELATIVE to the
-   * extraction dir (posix `/` separators; e.g. `llama-server.exe`, `cpu/llama-server`).
-   * Recorded at install time so the binary can be re-hashed immediately before `spawn`
-   * (the re-hash-before-exec control — see `binary-verifier.ts` / security-model.md).
+   * SHA-256 of each extracted file, keyed by its path RELATIVE to the extraction dir
+   * (posix `/` separators; e.g. `llama-server.exe`, `ggml-vulkan.dll`). Recorded at install
+   * time so the copy can be re-hashed immediately before `spawn` (the re-hash-before-exec
+   * control — see `binary-verifier.ts` / security-model.md). Since #998 every writer records
+   * EVERY file of the copy, and since #1012 the verifier re-hashes every key (a nested `cpu/`
+   * net's are that net's); a marker written before #998 records the executable alone, which
+   * is then all the verifier checks.
    * OPTIONAL: legacy markers (pre-2026-06-21 drives, or those written by an older
    * fetch-runtime) omit it, and the verifier then tolerates the binary (skip + log)
    * rather than refusing to start.
    * A multi-file family (#339 P8-1, kiwix_tools) records EVERY executable it ships
    * (`kiwix-serve.exe`, `kiwix-manage.exe`, `kiwix-search.exe`) plus its required runtime
    * files (`icuuc74.dll`, …) — all-or-nothing, so the verifier and the sell gate never
-   * disagree about one install. The reader/writer contract is unchanged: a reader looks up
-   * the keys it knows and ignores the rest.
+   * disagree about one install.
    */
   binaries?: Record<string, string>
 }
@@ -1305,9 +1325,21 @@ export function markerBinaryKey(extractTo: string, binaryPath: string): string {
 
 /** Read + parse an install marker. Never throws: missing/malformed → null. */
 export function readRuntimeMarker(extractTo: string): RuntimeInstallMarker | null {
-  const path = runtimeMarkerPath(extractTo)
   try {
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    return parseRuntimeMarker(readFileSync(runtimeMarkerPath(extractTo), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parse an install marker's text (#1012 code review round 6: the pre-spawn verifier reads the file itself,
+ * to tell a marker that is not there from one that cannot be read just now). Never throws: malformed →
+ * null.
+ */
+export function parseRuntimeMarker(text: string): RuntimeInstallMarker | null {
+  try {
+    const raw = JSON.parse(text) as Record<string, unknown>
     if (
       typeof raw.version === 'string' &&
       typeof raw.backend === 'string' &&

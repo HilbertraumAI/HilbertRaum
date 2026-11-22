@@ -19,6 +19,8 @@ const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
   engineCannotRun: 'images.err.engineCannotRun',
   // #913: a check found the model's file damaged — download it again, a retry would not help.
   modelDamaged: 'images.err.modelDamaged',
+  // #1012: an engine file could not be read just now — try again in a minute (the engines' own notice).
+  filesUnreadable: 'main.engine.filesUnreadable',
   emptyResponse: 'images.err.emptyResponse',
   emptyQuestion: 'images.err.emptyQuestion',
   timedOut: 'images.err.timedOut',

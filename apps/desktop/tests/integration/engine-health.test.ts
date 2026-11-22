@@ -237,7 +237,7 @@ const LOADER_STDERR =
   '/media/someone/HR/runtime/whisper.cpp/linux/whisper-cli: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
 
 describe('checkProgramLoads (#530)', () => {
-  const verified = async (): Promise<'verified'> => 'verified'
+  const verified = async (): Promise<'ok'> => 'ok' // the real verifier's pass verdict
 
   it('exit 127 with the loader line is refused and recorded as the family verdict', async () => {
     const { spawn } = fakeSpawn((c) => {

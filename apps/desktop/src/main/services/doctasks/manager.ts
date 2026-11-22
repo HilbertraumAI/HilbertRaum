@@ -792,6 +792,8 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.translation.startFailed',
   // #530: the translation handler's copy when the OS refused to start the engine program.
   'main.engine.cannotRun',
+  // #1012: …and when an engine file could not be read just now (try again in a minute).
+  'main.engine.filesUnreadable',
   // #913: …and when the start check found the translation model's file damaged (the Translate
   // screen's own copy: download it again on the AI Model screen).
   'translate.err.modelDamaged',

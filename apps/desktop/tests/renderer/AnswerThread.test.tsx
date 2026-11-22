@@ -59,6 +59,8 @@ describe('AnswerThread — a failed turn names what went wrong', () => {
     ['timedOut', 'images.err.timedOut'],
     ['contextExceeded', 'images.err.contextExceeded'],
     ['modelDamaged', 'images.err.modelDamaged'], // #913: download it again, a retry would not help
+    // #1012: an engine file could not be read just now — try again in a minute, never "pick another model".
+    ['filesUnreadable' as VisionErrorCode, 'main.engine.filesUnreadable'],
     [FROM_A_NEWER_MAIN, 'images.err.runtimeFailed']
   ])('a failed turn with code %s shows %s (unknown codes fall back, #123)', (code, key) => {
     renderThread('', 'failed', code)

@@ -6,7 +6,7 @@ import {
   waitUnlessAborted,
   type LlamaServerOptions
 } from '../runtime/sidecar'
-import { isEngineCannotRunError } from '../runtime/engine-load'
+import { isEngineCannotRunError, isEngineFilesUnreadableError } from '../runtime/engine-load'
 import { RuntimeUnresponsiveError, isRuntimeUnresponsiveError } from '../runtime/llama'
 import { createPlacementParser } from '../runtime/placement'
 import { translationRanOnProcessor } from '../../../shared/runtime-status'
@@ -780,6 +780,9 @@ export class TranslationRuntime {
       // RAW (not a TranslationStartError), so the consumers' transient-retry paths still treat it
       // as the retryable class it is (and the retry re-attempts the SAME device posture).
       if (isBindRaceError(error.message)) throw error
+      // #1012 code review: an engine file the pre-spawn check could not read just now is as transient
+      // as a bind race — rethrown raw, no CPU fallback, no latch; the next translate reads the files again.
+      if (isEngineFilesUnreadableError(error)) throw error
       // #530: the OS refused to start the program — not a device fault (no GPU-fallback latch,
       // no CPU retry: the same program is refused again). Latched like any load fault; the
       // consumers read `engineCannotRun` for the copy, and "Check again" re-arms the slot.
@@ -803,7 +806,7 @@ export class TranslationRuntime {
             const cpuError = cpuErr instanceof Error ? cpuErr : new Error(String(cpuErr))
             // #159 (BE-1): same rule on the CPU rung — an aborted start must not latch.
             if (isStartAbortError(cpuErr) || abort.signal.aborted) throw cpuError
-            if (isBindRaceError(cpuError.message)) throw cpuError
+            if (isBindRaceError(cpuError.message) || isEngineFilesUnreadableError(cpuError)) throw cpuError
             const startError = new TranslationStartError(cpuError)
             this.startFailed = startError
             throw startError

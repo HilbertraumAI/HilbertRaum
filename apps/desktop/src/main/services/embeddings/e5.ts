@@ -10,7 +10,7 @@ import {
   type LlamaServerOptions,
   type UnexpectedExitInfo
 } from '../runtime/sidecar'
-import { isEngineCannotRunError } from '../runtime/engine-load'
+import { isEngineCannotRunError, isEngineFilesUnreadableError } from '../runtime/engine-load'
 import { truncateToContext } from '../runtime/context-budget'
 import { log } from '../logging'
 import type { BoundModelStartCheck } from '../models'
@@ -385,11 +385,16 @@ export class E5Embedder implements Embedder {
           // "check the model files". The raw message, whose stderr tail names the weight file by
           // absolute path, goes to the local log only, once.
           const bindRace = isBindRaceError(error.message)
+          // #1012 code review: an engine file the pre-spawn check could not read just now (an antivirus
+          // holding it) is as transient as a bind race: `failed` (try again), never latched.
+          const unreadable = isEngineFilesUnreadableError(error)
           const typed = isEngineCannotRunError(error)
             ? error
             : bindRace
               ? new EmbedderError('failed', 'The search model lost its port while starting (address already in use)')
-              : startFailure(error)
+              : unreadable
+                ? new EmbedderError('failed', 'The search model was not started: a file of the AI engine could not be read just now')
+                : startFailure(error)
           if (typed !== error) log.warn('The search model could not start', { error: error.message })
           // F4 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch.
           // LlamaServer.start retries a bind race only ONCE (REL-1); losing the port twice during
@@ -398,7 +403,7 @@ export class E5Embedder implements Embedder {
           // silently disabled ALL imports for the session (the embedder has no graceful
           // degradation) until lock/unlock. Leave it null so the next embed() re-attempts a fresh
           // start on a new port — mirroring the GPU ladder's transient treatment of the same class.
-          if (!bindRace) this.startFailed = typed
+          if (!bindRace && !unreadable) this.startFailed = typed
           throw typed
         })
         .finally(() => {

@@ -19,7 +19,7 @@ import { chunkSegments, approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/cli'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
 import { t } from '../../src/shared/i18n'
-import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { EngineCannotRunError, EngineFilesUnreadableError } from '../../src/main/services/runtime/engine-load'
 import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 
 // Phase 36 — the AudioParser with a FAKE transcriber behind the injection seam (the
@@ -274,7 +274,14 @@ describe('AudioParser', () => {
       AUDIO_ENGINE_CANNOT_RUN_MESSAGE,
       'libgomp'
     ],
-    ['#869: a WhisperPathError maps to the model-path copy', () => new WhisperPathError('-m'), AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE, 'whisper-cli']
+    ['#869: a WhisperPathError maps to the model-path copy', () => new WhisperPathError('-m'), AUDIO_MODEL_PATH_UNSUPPORTED_MESSAGE, 'whisper-cli'],
+    // #1012 code review round 4: the voice engine's files could not be read just now — "try again in a minute".
+    [
+      '#1012: an EngineFilesUnreadableError maps to the files-unreadable copy',
+      () => new EngineFilesUnreadableError('whisper-cli'),
+      t('en', 'main.engine.filesUnreadable'),
+      'whisper-cli'
+    ]
   ])('%s, not the generic failure', async (_label, error, message, detail) => {
     const refused: Transcriber = {
       id: 'fake',

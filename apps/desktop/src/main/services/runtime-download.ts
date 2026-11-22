@@ -41,6 +41,7 @@ import {
   verifyDownloadedFile,
   writeRuntimeMarker,
   ENGINE_DOWNLOAD_MAX_BYTES,
+  NESTED_NET_FOLDERS,
   RUNTIME_MARKER_FILE,
   SIDECAR_FAMILY_SPECS,
   type EngineSwapDirs,
@@ -1650,7 +1651,9 @@ export class EngineDownloadManager {
       // CODE-12 (full-audit 2026-07-11): drop the binary-verifier's session-cached verdict for every
       // executable we just replaced — a stale pre-install verdict (the `mismatch` after a tamper
       // repair, or an `ok` hashed from the OLD bytes) must not apply to the new binary until app
-      // restart. The next spawn re-hashes against the fresh marker. Runtime files are never spawned.
+      // restart. The next spawn re-hashes against the fresh marker. The cache is keyed by the spawned
+      // program, and each program's verdict covers every file of its copy (#1012), so the programs are
+      // the whole list: runtime files are never spawned.
       for (const p of plan.binaryPaths) invalidateBinaryVerification(p)
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'
@@ -2383,9 +2386,6 @@ function stagedMemberKey(member: string, flattened: string): string | null {
   const name = parts.join('/')
   return flattened && name.startsWith(`${flattened}/`) ? name.slice(flattened.length + 1) : name
 }
-
-/** The `cpu/` safety net and a net swap left inside an install folder: each carries a marker of its own. */
-const NESTED_NET_FOLDERS: readonly string[] = ['cpu', 'cpu.new', 'cpu.old']
 
 /** What sits at a path an engine marker would record (#998 round 1): a regular file (or a link to one), or not. */
 type RecordedKind = 'file' | 'link-to-other' | 'missing' | 'not-file'

@@ -2756,6 +2756,8 @@ export const pl: UiCatalog<'pl'> = {
     'Model AI widać, czego brakuje.',
   'main.engine.cannotRun':
     'Silnik AI nie może działać na tym komputerze. Na ekranie Model AI widać, czego brakuje.',
+  'main.engine.filesUnreadable':
+    'Silnik AI nie mógł teraz odczytać jednego ze swoich plików. Być może używa go inny program (na przykład skanowanie antywirusowe). Spróbuj ponownie za minutę.',
   'main.noModelRunning':
     'Żaden model AI nie działa. Otwórz ekran Model AI i najpierw uruchom model.',
   'main.modelStarting': 'Model AI się uruchamia. Spróbuj ponownie za chwilę.',

@@ -30,7 +30,7 @@ import { documentsDir } from '../../src/main/services/ingestion'
 import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
 import { t } from '../../src/shared/i18n'
-import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { EngineCannotRunError, EngineFilesUnreadableError } from '../../src/main/services/runtime/engine-load'
 import { WhisperPathError } from '../../src/main/services/transcriber/argv'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
@@ -404,7 +404,19 @@ describe('registerDictationIpc — voice engine refused by the OS (#530)', () =>
 
   // #869: and a speech model whose path has no spelling the engine reads on this Windows command line
   // says so too — renaming the file fixes it, a retry would not.
-  it.each<[string, () => Error, 'main.dictation.engineCannotRun' | 'main.dictation.voiceModelPathUnsupported', string]>([
+  // #1012 code review round 4: the voice engine's files could not be read just now — "try again in a minute".
+  it.each<[
+    string,
+    () => Error,
+    'main.dictation.engineCannotRun' | 'main.dictation.voiceModelPathUnsupported' | 'main.engine.filesUnreadable',
+    string
+  ]>([
+    [
+      'an EngineFilesUnreadableError rejects with the files-unreadable copy (#1012)',
+      () => new EngineFilesUnreadableError('whisper-cli'),
+      'main.engine.filesUnreadable',
+      'whisper-cli'
+    ],
     [
       'an EngineCannotRunError (whisper family) rejects with the engine-cannot-run copy',
       () =>

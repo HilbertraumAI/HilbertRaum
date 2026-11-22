@@ -42,7 +42,7 @@ import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
-import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
+import { EngineCannotRunError, EngineFilesUnreadableError } from '../../src/main/services/runtime/engine-load'
 import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { until } from '../helpers/hang-budget'
 import {
@@ -559,6 +559,27 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
       expect(status.error).toBe(t('en', key))
       expect(calls).toBe(1)
     })
+
+  // #1012 code review round 4: the engine's files could not be read just now. The runtime rethrows it raw (it latches
+  // nothing); the task stops at once with the files-unreadable copy — not N marked windows, not the generic failure.
+  it('a start whose engine files could not be read fails the task with the files-unreadable copy, after one attempt (#1012)', async () => {
+    const docId = await importWords(w, 60)
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'scripted-translator',
+      contextWindow: () => 4096,
+      stop: async () => {},
+      async translate() {
+        calls += 1
+        throw new EngineFilesUnreadableError('llama-server')
+      }
+    }
+    const manager = docTaskManager(w, { getTranslator: () => translator })
+    const status = await waitTerminal(manager, manager.startDocTask(translateReq(docId)).jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(t('en', 'main.engine.filesUnreadable'))
+    expect(calls).toBe(1)
+  })
 
   // #913: the start check found the translation model's file damaged — the Translate screen's "download it again"
   // copy, not the memory one, which would send the user the wrong way.

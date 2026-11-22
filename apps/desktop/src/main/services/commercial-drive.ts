@@ -1,5 +1,5 @@
 import { accessSync, constants as fsConstants, existsSync, lstatSync, opendirSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, join, relative, resolve, sep } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import {
   isKitPlatform,
@@ -18,6 +18,7 @@ import {
   planOcrDownloads,
   planRuntimeDownload,
   readRuntimeMarker,
+  recordedFilePath,
   requiredInstallFiles,
   sidecarFamilySpec,
   type RuntimeDownloadPlan,
@@ -409,14 +410,6 @@ function engineSwapLeftovers(rootPath: string, extractTo: string): string[] {
   return [dirs.staging, dirs.previous].filter(there).map((p) => relative(resolve(rootPath), p).split(sep).join('/'))
 }
 
-/** #998: the file an install marker's key names inside `dir`, or null when the key leaves it (a tampered marker). */
-function recordedFile(dir: string, key: string): string | null {
-  const base = resolve(dir)
-  const p = resolve(base, ...key.split('/'))
-  const rel = relative(base, p)
-  return rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? null : p
-}
-
 /**
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (every weight the Kit ships VERIFIED, at
@@ -698,7 +691,7 @@ export async function assertCommercialDrive(
       const nested = otherExtractDirs(plan.extractTo).map((d) => resolve(d))
       for (const [key, expected] of Object.entries(marker.binaries ?? {})) {
         if (requiredKeys.has(key)) continue
-        const file = recordedFile(plan.extractTo, key)
+        const file = recordedFilePath(plan.extractTo, key)
         if (file === null) {
           fail('hashed', `${label}: the install marker records ${key}, which is not inside ${build.extractTo} — re-run fetch-runtime --commercial`)
           continue

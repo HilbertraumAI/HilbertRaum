@@ -3,7 +3,7 @@ import type { AppContext } from '../context'
 import type { ImageAnalyzeRequest, ImageJob, VisionErrorCode, VisionStatus } from '../../../shared/types'
 import { discoverManifests, mmprojPath, weightPath, type ModelStartVerdict } from '../models'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
-import { isEngineCannotRunError } from '../runtime/engine-load'
+import { isEngineCannotRunError, isEngineFilesUnreadableError } from '../runtime/engine-load'
 import { log } from '../logging'
 import { getVisionStatus } from './status'
 import { VisionRuntime, VisionAnalyzeError } from './runtime'
@@ -319,6 +319,9 @@ export class VisionService {
       // a fresh runtime, so "Try again" can actually succeed.
       // #530: the OS refused to start the engine program — say so, not "pick another model".
       const engineCannotRun = isEngineCannotRunError(err)
+      // #1012 code review round 5: an engine file could not be read just now — try again in a minute. The
+      // runtime does not latch it (`isStartFailed()` stays false), so no cooldown starts either.
+      const filesUnreadable = isEngineFilesUnreadableError(err)
       if (this.runtime?.isStartFailed?.()) {
         this.runtime = null
         this.startFailedAt = Date.now()
@@ -334,7 +337,13 @@ export class VisionService {
       log.warn('Vision analyze failed', { jobId, error: String(err) })
       this.fail(
         jobId,
-        err instanceof VisionAnalyzeError ? err.code : engineCannotRun ? 'engineCannotRun' : 'runtimeFailed',
+        err instanceof VisionAnalyzeError
+          ? err.code
+          : engineCannotRun
+            ? 'engineCannotRun'
+            : filesUnreadable
+              ? 'filesUnreadable'
+              : 'runtimeFailed',
         emit
       )
     } finally {

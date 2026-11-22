@@ -8,16 +8,18 @@ import { join } from 'node:path'
 import net from 'node:net'
 import { log } from '../logging'
 import { perfMark, perfMs } from '../perf'
-import { verifyBinaryBeforeSpawn } from '../binary-verifier'
+import { isDamagedFilesVerdict, verifyBinaryBeforeSpawn } from '../binary-verifier'
 import type { HealthStatus } from './index'
 import {
   EngineCannotRunError,
+  EngineFilesUnreadableError,
   classifyLoadFailure,
   classifySpawnError,
   clearEngineProblemFor,
   describeLoadFailure,
   pathFreeSpawnError,
-  reportEngineProblem
+  reportEngineProblem,
+  reportDamagedEngineFiles
 } from './engine-load'
 
 // Sidecar discovery + lifecycle (spec §6, §7.5). Locates the prebuilt `llama-server`
@@ -193,8 +195,9 @@ function failureLine(message: string): string {
  * drifts between builds, and in which a VRAM allocation failure reads exactly like an
  * unsupported-architecture failure.
  *
- * Covers the four shapes this module throws — `launch` (spawn error), `exit:code N` /
- * `exit:signal S`, `timeout` (the health budget), `integrity` (pre-spawn hash mismatch) — plus
+ * Covers the shapes this module throws — `launch` (spawn error), `exit:code N` /
+ * `exit:signal S`, `timeout` (the health budget) — and `integrity`, the pre-spawn hash-mismatch
+ * message it threw until #1012 round 6 (a mismatch is now the typed engine-files error) — plus
  * the failure line of the captured `— last output:` tail (`failureLine`: the first error-level
  * line, timestamp stripped — #515). Progress lines are deliberately ignored: two loads of the same
  * broken weight print different progress before the same error. Returns null for anything else, and the
@@ -743,16 +746,30 @@ export class LlamaServer {
     const startT0 = performance.now()
     // #159 (BE-1): a teardown may have begun before this start ran at all — don't even spawn.
     this.throwIfStartAborted()
-    // Re-hash the binary against its install marker BEFORE we spawn it (vuln-scan B). A
-    // packaged-build tamper (`mismatch`) throws here, before any port/child is allocated,
-    // so the ladder cleanly falls to the next rung / MockRuntime. Dev + legacy drives
-    // resolve skip-* and proceed. Covers the chat runtime, embedder, reranker, and vision
-    // — every llama-server spawn funnels through this method.
+    // Re-hash the engine copy against its install marker BEFORE we spawn it (vuln-scan B;
+    // since #1012 every file the marker records, not only the program). A packaged-build
+    // tamper (`mismatch`) throws here, before any port/child is allocated, so the ladder
+    // cleanly falls to the next rung / MockRuntime. Dev + legacy drives resolve skip-* and
+    // proceed. Covers the chat runtime, embedder, reranker, and vision — every llama-server
+    // spawn funnels through this method.
     // #516: an engine install replacing this folder holds spawns until its swap is over.
     await waitForEngineSpawns('llama_cpp')
     this.throwIfStartAborted()
-    if ((await verifyBinaryBeforeSpawn(this.opts.binPath)) === 'mismatch') {
-      throw new Error('llama-server failed pre-spawn integrity verification')
+    const verdict = await verifyBinaryBeforeSpawn(this.opts.binPath)
+    if (isDamagedFilesVerdict(verdict)) {
+      // #1012: a file of the copy is gone or changed (code review round 6: a changed one too — a copy cut
+      // short, bit-rot, or a tamper, which the verifier's own log line records) — the engine's own files
+      // are damaged, never the GPU or the model: the typed error the ladder walks on from (a Kit's `cpu/`
+      // net has files of its own), and the verdict the "Install again" offer reads (a reinstall evicts the
+      // cached verdict). A teardown that began meanwhile records none.
+      this.throwIfStartAborted()
+      throw reportDamagedEngineFiles('llama_cpp', this.opts.binPath, this.opts.platform)
+    }
+    if (verdict === 'unreadable') {
+      // #1012 review R-2: a file could not be read just now — no verdict, and no evidence about the GPU
+      // or the model for the ladder (`isEngineFilesUnreadableError`); the next attempt reads again.
+      this.throwIfStartAborted()
+      throw new EngineFilesUnreadableError('llama-server')
     }
     this.spawnError = null
     this.exited = false

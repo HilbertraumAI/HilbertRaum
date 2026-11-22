@@ -337,6 +337,66 @@ password recovery — are documented in
   switched **off** (`REFUSE_HASHLESS_MARKERS_ON_COMMERCIAL_DRIVES` in `binary-verifier.ts`) until the
   owner rules on kits sold before this change (#234). Trust there still rests on drive provisioning +
   filesystem integrity, the same residual already accepted for on-drive sidecars and app skills.
+- **The pre-spawn check covers the files an engine's marker records, nothing more (#1012 — accept +
+  document).** Since #1012 the verifier re-hashes every file the engine copy's own install marker records
+  (the libraries beside the program included) before the first spawn of a session. Three things stay
+  outside it or work less well than one would hope ([`security-model.md`](security-model.md) "What the
+  check does not cover"):
+  1. **Markers written before #998** record the program alone. A Kit or drive built before then keeps a
+     program-only check until the engine is installed again (in-app or with `fetch-runtime`).
+  2. **A file added to the engine folder is not noticed.** llama.cpp's backend loader loads every
+     `ggml-<backend>-*` library it finds to ask for its score, so an added library beside the program can
+     run. Each llama-server spawn also inherits the app's working directory, which is among the folders
+     the loader searches (from llama.cpp's source as remembered; not re-read at b12110). The kiwix
+     children start in the knowledge-pack library's folder. A recorded library missing from their copy
+     is refused (the loader would look for it there), but an unrecorded one is not checked.
+  3. **A library that stays unreadable gets no repair offer** (review R-4). Examples: a security product
+     that denies access and leaves the file, or a wrong file permission. Every start is refused as
+     `unreadable`, and "try again in a minute" keeps coming back, because on Windows a lasting deny-read
+     cannot be told from a passing hold (both read as EPERM or EBUSY). That records no "engine files
+     damaged" verdict (it is not damage), so the in-app reinstall is refused ("nothing to repair") and the
+     chat runs on the demo runtime. The fix is outside the app: allow the file in the security product, or
+     restore its permission. (A folder or another non-regular file at a recorded path is different: it
+     counts as missing, so it gets the "Install again" offer — code review round 5.)
+
+  A follow-up proposes refusing an unrecorded library and starting the engines in their own folder.
+
+  What a missing or changed recorded file does:
+  - **The engines:** any missing file is refused as damaged engine files, with the "Install again" offer.
+    That holds even for a file the engine never loads on this computer (owner decision). Helpers without a
+    `cpu/` rung (search, reranking, images, translation) stop with the chat engine. A changed file gets
+    the same verdict and offer since code review round 6, and its log line still records a possible
+    tamper.
+  - **The knowledge-pack tools:** they have no in-app repair. A missing program or library stops them
+    (with their own "file missing or could not be read" error, not the tamper one); any other missing file
+    (a tool the app never runs) is only logged.
+  - **Cost:** while a file is missing or unreadable, each start attempt checks the copy again, since those
+    verdicts are not cached. A missing program or library, and for the engines any missing file (round
+    7), is found by a `stat` of each file before any is read, so nothing is hashed. A locked file
+    costs the read up to the lock. When only an unused knowledge-pack tool file is missing, the tools
+    still read their whole copy once to check the rest, then keep that verdict for the session (round 7).
+
+  What a file that cannot be read just now does (an antivirus scan holding it):
+  - It refuses that attempt without blaming the GPU, the model or the engine.
+  - The search, reranking, translation and image helpers try again on their next call, with nothing
+    latched.
+  - A translation (on screen or as a document task), an audio import and dictation stop at once and say
+    "try again in a minute".
+  - A chat start in which an attempt ended so latches nothing, not even what its other attempts showed.
+    It runs on the demo runtime, with the usual "this model could not be loaded" notice when an attempt
+    on the processor failed to load the model, else with "try again in a minute" (round 6: also when
+    the card attempt failed, or another copy of the engine was refused).
+  - **Starting the model again:** resending a question is not enough. It gets another simulated answer,
+    because nothing restarts the model, and choosing the same model again keeps the demo runtime running.
+    The notice's button opens the AI Model screen: choose "Stop runtime", then "Use this model". That
+    start walks the ladder again, and so does the next unlock.
+  - When a higher attempt could not read its files but a lower one started, the chat runs lower (on the
+    processor, say) for the session without a notice. Only the log says so; the next start of the model
+    tries the card again.
+  - An image question fails with "try again in a minute" and can be asked again at once (no cooldown).
+  - A knowledge-pack tool file that cannot be read just now does not keep the packs down for the
+    session: the next question that uses a pack tries again. A missing one does, until the pack set
+    changes.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time

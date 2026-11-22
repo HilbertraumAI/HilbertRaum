@@ -129,6 +129,20 @@ until it is dropped, whichever program reports (on a Kit, the `cpu/` net); since
 net the reinstall replaced is a fresh copy too. The shape is unchanged.
 The engine-downloader additions are listed under the downloader below. No new channel, no schema
 change.
+#1012 (`security-model.md` "Re-hash sidecar binaries before spawn"): a `'files-damaged'` verdict can
+also come from the pre-spawn check — a file the engine copy's install marker records is missing, or
+(code review round 6) changed, and the program was never started. Its `exit` is then `'not started'` and it carries no `name`. Same shape,
+same channels, same "Install again" offer. An engine file the check could not read just now
+(`EngineFilesUnreadableError`, no verdict) is reported with the new key `main.engine.filesUnreadable`:
+- `TranslateErrorCode` gained `'filesUnreadable'`;
+- a document translation task fails with that key's text, which is now a friendly task error;
+- `documents.error_message` gained the key's English text as a persist-canonical, exact-match value (an
+  audio import; display-mapped), so that English value is frozen like the other row texts;
+- dictation rejects with it;
+- a chat start shows it as a `runtime:notice` with the `'models'` target (code review round 5: its button
+  opens the AI Model screen, where the model can be started again);
+- `VisionErrorCode` gained `'filesUnreadable'` (round 5; the renderer maps it to the same key, and an
+  unknown code still falls back to `runtimeFailed`).
 #634 (`rag-design.md` §12.4 "#634 amendment"): `documents.error_message` gained three
 persist-canonical English values for a search-model failure — `main.ingest.searchModelTimeout`,
 `…searchModelCannotStart`, `…searchModelFailed` (exact match, display-map translated) — and a lock
@@ -2533,7 +2547,13 @@ whole renderer-visible surface.
   entry per declared file for a multi-file family — every executable plus every `runtimeFiles`
   entry, hashed all-or-nothing. *Since #998 (`architecture.md` "In-app engine updates" §7) every
   writer records EVERY file of the copy, the declared ones first, never the marker or a nested
-  `cpu`, `cpu.new` or `cpu.old`; same shape, so a reader that looks up its own keys is unaffected.* `CommercialGateOptions` (the sell-gate options object) gains
+  `cpu`, `cpu.new` or `cpu.old`; same shape, so a reader that looks up its own keys is unaffected.*
+  *Since #1012 the pre-spawn verifier reads EVERY key too (a nested net folder's keys excepted, that copy's
+  own; `NESTED_NET_FOLDERS` in `assets.ts` is the one list): a key whose file differs blocks the spawn, a
+  key whose file is gone is `missing` (the program or a library: `.dll`, `.so`, `.so.N`, `.dylib`) or
+  `missing-other` (any other file), a key whose file cannot be read is `unreadable`, and a key that
+  leaves the copy's folder (`recordedFilePath`) is refused. Only `ok`, `mismatch`, `skip-*` (and, code review round 7, the knowledge-pack tools' hashed `missing-other`) are
+  cached for the session. Same shape; a marker that records the program alone checks the program alone.* `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two
   grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains
   `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every
