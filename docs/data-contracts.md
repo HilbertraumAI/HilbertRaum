@@ -1268,6 +1268,33 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   `removed` or `left`, drops it on `rolled-forward`, and settles a hold no outcome reached at the
   next successful unlock (recorded while `.enc`'s frame IV is still the one it was judged against,
   dropped otherwise); it is never carried past that unlock, and a create clears it.
+  **Staged sidecars in doubt (#1001):** the same rule per stored copy. A `documents/` or `images/`
+  `*.enc.new` file (found by scan; a folder at such a name is no stage, for any recovery or the format
+  verdict; a journal entry counts only when it names a file, too) that no journal lists by its folded full path, beside a stored copy
+  that is there (any stat answer but ENOENT), is in doubt. `applyPendingRekey(vaultPaths, skip?)`
+  takes an optional set of folded paths it leaves as they are (default: none, so `changePassword`
+  and the direct callers are unchanged); `recoverPendingRekey` (the start, the unlock before the
+  password, #973's R5 re-run) and #973's `rolled-forward` branch pass the sidecars in doubt, and the
+  rest of the set rolls as before. After the data key is unwrapped and the staged database is
+  decided, `unlockEncryptedVault(…, onStageInDoubt?, onSidecarStages?)` judges each one, cheapest first.
+  Before any read, two `lstatSync` calls (a link is never followed): either file no regular file (a
+  symbolic link, a junction, a folder) → `left`; the stage with `nlink > 1` or of another size than the
+  stored copy → only the staged name deleted (`removed`), the stage never read. Then
+  `authenticatesUnder`: true, and the stored copy itself NOT authenticating under the data key
+  (a pending stage's stored copy is under the retired key; one more read), with `nlink` 1 → the stored copy renamed
+  to `<stored>.tmp`, the stage renamed into place, then `<stored>.tmp` shredded (`rolledForward`; a
+  failed rename of the stage renames the stored copy back, `left`; when that fails too, the stored copy
+  stays at `<stored>.tmp` for the session, `setAside`, and the next start shreds it and renames the
+  stage into place); true but the stored copy authenticates (it is current) → only the staged name
+  deleted (`removed`); a stored copy that cannot be read, or that another name shares (`nlink > 1`) →
+  `left`; false (tag fails, or no `HRAUMEN1` frame) → the stage deleted
+  (`removed`); a read that fails with ENOENT → nothing; any other read failure, or a delete or swap
+  that fails → the stage left as it is (`left`), never `VaultRecoveryBlockedError`, judged again at
+  the next unlock. `<stored>.tmp` is a name the start's sweep shreds. `onSidecarStages(outcome: SidecarStageOutcome)` hears
+  `{ rolledForward, removed, left, setAside }` (counts only) once the pass ends, also when a later step of the
+  unlock fails; the pass is timed as the perf mark `vault_sidecar_stage_check` (`files`,
+  `stageBytes`, `checkMs`). A stage whose stored copy is gone (ENOENT) is no doubt and is renamed
+  into place at the start, as before. The loss hold reads the staged database only.
   `WorkspaceController.init()` removes a stray `.enc.new`
   and `.enc.new.tmp` when there is no descriptor file, no `.enc` and no journal (each ENOENT); the
   state stays `uninitialized`. No on-disk shape changes.
@@ -1383,7 +1410,8 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   quarantines a journal it cannot read, so a newer build's uncommitted stage would end up under a key
   that exists nowhere (from #973 on, a journal-less `.enc.new` beside an existing `.enc` is rolled
   forward only once it authenticates under the unwrapped data key, and deleted when its tag fails,
-  but the builds before it remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
+  and from #1001 on the same holds for a journal-less `documents/` or `images/` `*.enc.new` beside
+  its stored copy, but the builds before them remain); `HRAUMEN1` is the only frame shipped builds read (they call any other magic an
   unrecognised header), and a later frame version is one ASCII digit `2`–`9` after `HRAUMEN` (any other byte
   there reads as damage from #845 on).
 - **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: the #845 format verdict
@@ -1401,7 +1429,9 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   below), `takeStageOutcome() → 'removed' | 'left' | null` (#973: the last unlock removed a staged
   `.enc.new` that does not open under the data key, or left one it could neither judge nor remove;
   returned once, for the unlock IPC's one content-free log line on its success and failure paths, no
-  audit type).
+  audit type), `takeSidecarStageOutcome() → { rolledForward, removed, left, setAside } | null` (#1001: what the
+  last unlock did with the staged document and image copies in doubt, counts only, null when it found
+  none; returned once, for the same IPC's one line, logged only when it removed or left any).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
   what is left, drops the key and finishes `locked` at the last good snapshot. From then until the
@@ -2497,7 +2527,9 @@ whole renderer-visible surface.
   into `installed` or `missingFamilies`, and never fetched by the argument-less `downloadEngine`).
   The install marker's `binaries` map (unchanged shape, `Record<string, string>`) now holds one
   entry per declared file for a multi-file family — every executable plus every `runtimeFiles`
-  entry, hashed all-or-nothing. `CommercialGateOptions` (the sell-gate options object) gains
+  entry, hashed all-or-nothing. *Since #998 (`architecture.md` "In-app engine updates" §7) every
+  writer records EVERY file of the copy, the declared ones first, never the marker or a nested
+  `cpu`, `cpu.new` or `cpu.old`; same shape, so a reader that looks up its own keys is unaffected.* `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two
   grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains
   `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every
@@ -2614,6 +2646,28 @@ whole renderer-visible surface.
   rounded to the unit; null for anything it cannot size, Zip64 included). `assertCommercialDrive` fails
   `runtimeCurrent` (or `optionalRuntimesConsistent`) for a leftover `<extract_to>.new` / `.old` beside a
   pinned build, and the Kit gate scripts' pre-flight says so too.
+  **#998 / #999 / #1000 additions (no IPC, no preload, no schema, no copy change; `architecture.md` "In-app
+  engine updates" §7):** the marker's `binaries` records every file of the copy (above). `runtime-download.ts`:
+  `makeTarExtractor({ spawn?, graceMs?, goneBoundMs? })` builds the default extractor (`extractWithTar =
+  makeTarExtractor()`), whose promise settles only once its tar child has exited (or 10 s after SIGKILL,
+  logged); `ExtractFn` gains an optional fourth parameter `log`; `ExtractSpawn`, `TarExtractorOptions`.
+  `StartEngineDownloadOptions.beforeReplace` is now awaited after every copy is staged, with the spawn gate
+  held. **Behaviour change:** a job stages every step (unpacked, member-checked, hashed, flushed, marked in
+  `<live>.new`) before it holds the spawn gate or calls `beforeReplace`, so a download or stage that fails or
+  is cancelled never pauses anything and replaces nothing; the deletes of every copy it staged and did not swap
+  in are queued in a `finally`; a stage whose archive lists a member the copy lacks fails `incomplete`
+  (`main.engine.extractFailed`); the pre-swap check reads the staged marker's keys. `assets.ts`
+  `flushToDeviceAsync(path)` (`FileHandle.sync()`, best-effort). `archive-size.ts` `archiveMembers(path)` (every
+  non-folder member name as written, links included; null for an unreadable, Zip64 or non-ASCII listing).
+  `assertCommercialDrive` fails `runtimeHashed` (or `optionalRuntimesConsistent`) for a further key a marker
+  records that is missing, modified or outside its folder; a marker that records only the required files passes
+  as before. `classifyLoadFailure` reads `no CPU backend found` as `files-damaged`. **Round 1:** each family is
+  all or nothing up to its swaps and the job's other families still install, with the first failure as the
+  job's end; a member or required file that cannot be hashed fails the stage when the archive could be listed
+  (no map only for an unlisted archive); links that are not files and macOS metadata (`archive-size.ts`
+  `isMacMetadataName(path)`: `._*`, `__MACOSX/`, `.DS_Store`) are never recorded nor expected; a job awaits
+  `engineFolderDeletesSettled()` before its recovery, and a staged copy it does not swap in loses its marker at
+  once.
 - **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
   (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
   all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:

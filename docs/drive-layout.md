@@ -286,10 +286,15 @@ build comes from `model-manifests/runtime-sources.yaml`. See
   `fetch-runtime --backend cpu`.
 - **mac is unchanged**: the arm64 Metal build, no `cpu/` subdir.
 - Each extraction dir carries a **`.hilbertraum-runtime.json` install marker**
-  (`{ version, backend, os, arch }`), written by `fetch-runtime` after a verified extraction.
-  Re-runs skip only when the marker matches the pinned version + backend — so bumping the pin or
-  switching a CPU-era drive to the Vulkan default actually re-fetches (mere binary presence is not
-  trusted). Canonical logic: `services/assets.ts` (`runtimeInstallCurrent`, `readRuntimeMarker`).
+  (`{ version, backend, os, arch, binaries }`), written by `fetch-runtime` after a verified extraction
+  (and by the app's in-app install). `binaries` holds the SHA-256 of every file of that copy, keyed by
+  its path relative to the dir with `/` (since #998 every file the archive put there, not only the
+  programs; a nested `cpu/`, `cpu.new` or `cpu.old` has its own marker and is never in it), so the app,
+  the start's recovery and the sell gate judge each copy by its own list.
+  Re-runs skip only when the marker matches the pinned version + backend and every file it records is
+  there — so bumping the pin or switching a CPU-era drive to the Vulkan default actually re-fetches (mere
+  binary presence is not trusted). Canonical logic: `services/assets.ts` (`runtimeInstallCurrent`,
+  `readRuntimeMarker`, `engineFolderComplete`).
 
 Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
 exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).

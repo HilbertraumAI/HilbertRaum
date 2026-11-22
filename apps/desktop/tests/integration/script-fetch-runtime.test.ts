@@ -101,6 +101,15 @@ const winBuild = (exe: string): Buffer =>
     { name: 'llama-server.exe', data: Buffer.from(exe) },
     { name: 'ggml.dll', data: Buffer.from('ggml') }
   ])
+/** #998: what the marker records for `winBuild(exe)`: every file it installs. */
+const winBinaries = (exe: string): Record<string, string> => ({ 'llama-server.exe': sha256Of(exe), 'ggml.dll': sha256Of('ggml') })
+/** #998: what the marker records for `nestedLinuxBuild()`: the server and the library under each of its names. */
+const linuxBinaries = (): Record<string, string> => ({
+  'llama-server': sha256Of(SERVER),
+  'libllama.so': sha256Of(LIB),
+  'libllama.so.0': sha256Of(LIB),
+  'libllama.so.0.0.1': sha256Of(LIB)
+})
 
 // A shell + curl + tar per row: well under a second on Linux, a few seconds under PowerShell or Git Bash on a loaded runner.
 vi.setConfig({ testTimeout: testBudgetMs(90_000) })
@@ -115,7 +124,7 @@ for (const leg of SCRIPT_LEGS) {
     const fetchRuntime = (root: string, args: string[], env = downloadEnv()) =>
       leg.run(`fetch-runtime.${leg.ext}`, [f('Target'), root, ...args], { env, scriptsDir: SCRIPTS_COPY })
 
-    it("a linux tar.gz beside a cpu/ safety net: its own top dir is flattened, a link listed before its target is materialised, the marker hashes the binary, with Windows' own tar (#769, #767)", () => {
+    it("a linux tar.gz beside a cpu/ safety net: its own top dir is flattened, a link listed before its target is materialised, the marker hashes every installed file but the net, with Windows' own tar (#769, #767, #998)", () => {
       const archive = nestedLinuxBuild()
       const root = pinnedDrive(LINUX, serve(`llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz`, archive), sha256Of(archive))
       const dir = join(root, ...LINUX.extractTo.split('/'))
@@ -128,7 +137,8 @@ for (const leg of SCRIPT_LEGS) {
       expect(listing(join(dir, 'cpu'))).toEqual(['llama-server'])
       // A real link where the file system holds one, a copy where it cannot: either way the name opens the library.
       for (const name of ['libllama.so', 'libllama.so.0']) expect(readFileSync(join(dir, name), 'utf8'), name).toBe(LIB)
-      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'linux', arch: 'x64', binaries: { 'llama-server': sha256Of(SERVER) } })
+      // #998: every file the install holds, a link by its own name (its bytes are the library's); never cpu/.
+      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'linux', arch: 'x64', binaries: linuxBinaries() })
     })
 
     it('a Windows zip re-fetched over a stale build: the old files go, the cpu/ safety net stays (#769)', () => {
@@ -143,11 +153,12 @@ for (const leg of SCRIPT_LEGS) {
       expect(listing(dir)).toEqual(['.hilbertraum-runtime.json', 'cpu', 'ggml.dll', 'llama-server.exe'])
       expect(readFileSync(join(dir, 'llama-server.exe'), 'utf8')).toBe('new build')
       expect(readFileSync(join(dir, 'cpu', 'llama-server.exe'), 'utf8')).toBe('cpu build')
-      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: { 'llama-server.exe': sha256Of('new build') } })
+      // #998: every file of the new build; the cpu/ net keeps its own marker and is never recorded here.
+      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: winBinaries('new build') })
     })
 
     // #729: every llama.cpp archive since v0.8.0 carries llama-connect, the `llama-server --connect` tunnel.
-    it('a Windows zip carrying llama-connect.exe: installed without it, the marker records only the server (#729)', () => {
+    it('a Windows zip carrying llama-connect.exe: installed without it, the marker records every file but it (#729, #998)', () => {
       const archive = makeZip([
         { name: 'llama-server.exe', data: Buffer.from('new build') },
         { name: 'llama-connect.exe', data: Buffer.from('tunnel') },
@@ -160,7 +171,49 @@ for (const leg of SCRIPT_LEGS) {
       expect(out).toContain('left out: llama-connect.exe')
       const dir = join(root, ...WIN.extractTo.split('/'))
       expect(listing(dir)).toEqual(['.hilbertraum-runtime.json', 'ggml.dll', 'llama-server.exe'])
-      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: { 'llama-server.exe': sha256Of('new build') } })
+      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: winBinaries('new build') })
+    })
+
+    // #998 round 1: macOS metadata is never an engine file. macOS bsdtar reads an AppleDouble member back into
+    // extended attributes (so on a Mac there is no `._` file; the member is left out of this archive there),
+    // GNU tar and Windows' bsdtar write it as a file; either way the marker does not record it, nor a .DS_Store.
+    it('a linux tar.gz carrying macOS metadata: none of it is recorded (#998)', () => {
+      const archive = nestedLinuxBuild([
+        ...(process.platform === 'darwin' ? [] : [{ name: `llama-${VERSION}/._llama-server`, data: Buffer.from('appledouble') }]),
+        { name: `llama-${VERSION}/.DS_Store`, data: Buffer.from('finder') }
+      ])
+      const root = pinnedDrive(LINUX, serve(`llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz`, archive), sha256Of(archive))
+      const r = fetchRuntime(root, [f('Os'), 'linux'])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      const dir = join(root, ...LINUX.extractTo.split('/'))
+      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'linux', arch: 'x64', binaries: linuxBinaries() })
+    })
+
+    // #998 round 1: a link is recorded only when it resolves to a file; hashing a link to a folder, or a dangling
+    // one, used to drop the whole map. Windows (and an exFAT stick) cannot hold these links, so the row runs where
+    // tar makes real links: the bash leg on macOS and Linux.
+    it.skipIf(process.platform === 'win32')('a linux tar.gz carrying a link to a folder and a dangling link: neither is recorded, the rest is (#998)', () => {
+      const archive = nestedLinuxBuild([
+        { name: `llama-${VERSION}/backends/`, dir: true },
+        { name: `llama-${VERSION}/backends/libggml-cpu.so`, data: Buffer.from('cpu variant') },
+        { name: `llama-${VERSION}/backends-link`, symlink: 'backends' },
+        { name: `llama-${VERSION}/dangling-link`, symlink: 'nowhere' }
+      ])
+      const root = pinnedDrive(LINUX, serve(`llama-${VERSION}-bin-ubuntu-vulkan-x64.tar.gz`, archive), sha256Of(archive))
+      const r = fetchRuntime(root, [f('Os'), 'linux'])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      expect(out).toContain('not recorded (a link that is not a file): backends-link')
+      expect(out).toContain('not recorded (a link that is not a file): dangling-link')
+      const dir = join(root, ...LINUX.extractTo.split('/'))
+      expect(markerOf(dir)).toEqual({
+        version: VERSION,
+        backend: 'vulkan',
+        os: 'linux',
+        arch: 'x64',
+        binaries: { ...linuxBinaries(), 'backends/libggml-cpu.so': sha256Of('cpu variant') }
+      })
     })
 
     it('a nested linux tar.gz carrying llama-connect: it is left out after the flatten, even when the yaml lists it (#729)', () => {
@@ -174,7 +227,31 @@ for (const leg of SCRIPT_LEGS) {
       expect(out).toContain('left out: llama-connect')
       const dir = join(root, ...LINUX.extractTo.split('/'))
       expect(listing(dir)).toEqual(['.hilbertraum-runtime.json', 'libllama.so', 'libllama.so.0', 'libllama.so.0.0.1', 'llama-server'])
-      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'linux', arch: 'x64', binaries: { 'llama-server': sha256Of(SERVER) } })
+      expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'linux', arch: 'x64', binaries: linuxBinaries() })
+    })
+
+    // #998: a file the install's own marker records that is gone (an antivirus took it) is a damaged install,
+    // so a re-run fetches it again instead of skipping; with every recorded file there it still skips.
+    it.each([
+      { name: 'gone', gone: true },
+      { name: 'there', gone: false }
+    ])('a re-run over a current install whose marker records a file that is $name (#998)', ({ gone }) => {
+      const archive = winBuild('new build')
+      const root = pinnedDrive(WIN, serve(`llama-${VERSION}-bin-win-vulkan-x64.zip`, archive), sha256Of(archive))
+      const dir = join(root, ...WIN.extractTo.split('/'))
+      writeDriveFile(dir, 'llama-server.exe', 'current build')
+      if (!gone) writeDriveFile(dir, 'ggml.dll', 'ggml')
+      writeFileSync(
+        join(dir, '.hilbertraum-runtime.json'),
+        JSON.stringify({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: { 'llama-server.exe': sha256Of('current build'), 'ggml.dll': sha256Of('ggml') } })
+      )
+      const r = fetchRuntime(root, [f('Os'), 'win'])
+      const out = outputOf(r)
+      expect(r.status, out).toBe(0)
+      expect(out.includes('a file its install marker records is missing (ggml.dll)')).toBe(gone)
+      expect(out.includes('already installed')).toBe(!gone)
+      expect(readFileSync(join(dir, 'llama-server.exe'), 'utf8')).toBe(gone ? 'new build' : 'current build')
+      if (gone) expect(markerOf(dir)).toEqual({ version: VERSION, backend: 'vulkan', os: 'win', arch: 'x64', binaries: winBinaries('new build') })
     })
 
     // #729: an install already current (made before this rule, or copied by hand) loses its copy on a re-run, which

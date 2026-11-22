@@ -145,6 +145,30 @@ describe('classifyLoadFailure — what it must NOT claim', () => {
   )
 })
 
+describe('classifyLoadFailure — the engine names its own missing files (#998)', () => {
+  // #998 (lane E research, b12110 on Windows, every `ggml-cpu-*.dll` removed): the engine starts, finds no CPU
+  // backend to load and exits 1. That is the engine's own files missing, not the model: without this line both
+  // main rungs failed alike and the ladder latched the model as unloadable. Lines verbatim from the capture.
+  it('reads "no CPU backend found" as damaged engine files, on every system', () => {
+    const stderr = [
+      '0.00.006.624 I load_backend: loaded RPC backend from <dir>\\ggml-rpc.dll',
+      '0.00.156.085 I load_backend: loaded Vulkan backend from <dir>\\ggml-vulkan.dll',
+      '0.00.471.298 E llama_model_load: error loading model: make_cpu_buft_list: no CPU backend found',
+      '0.00.471.307 E llama_model_load_from_file_impl: failed to load model',
+      "0.00.737.506 E cmn  common_init_: failed to load model '<dir>\\multilingual-e5-small-q8.gguf'",
+      '0.00.738.438 E srv  server_run_i: exiting due to model loading error'
+    ].join('\n')
+    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+      expect(classifyLoadFailure({ exitCode: 1, signal: null, stderr, platform, systemDllExists: () => true })).toMatchObject({
+        reason: 'files-damaged',
+        exit: 'exit code 1'
+      })
+    }
+    const stored = `llama-server exited before becoming healthy (code 1) — last output: ${stderr}`
+    expect(classifyLoadFailureMessage(stored, { platform: 'win32', systemDllExists: () => true })).toMatchObject({ reason: 'files-damaged' })
+  })
+})
+
 describe('classifyLoadFailure — Windows (exit codes as Node reports them)', () => {
   const all = (): boolean => true
 

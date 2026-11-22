@@ -2454,7 +2454,9 @@ the fence left out ("to answer the user request below … note every detail the 
 request:` from `userRequestBlock`, then the part). Under **any whole-document skill, bundled or the user's own**,
 `registerRagIpc` sets `wholeDocumentNotesForRequest` unless the question asks for the skill's report:
 `isReportShaped(question)` (`skills/vocabulary.ts`: the report half of the needle veto's deliverable shapes,
-"summar", "minutes", "brief", "review", «Protokoll» and the rest, or a summarize chip) or
+"summar", "minutes", "brief", "review", «Protokoll» and the rest, or a summarize chip; since #997 the words
+"review", "brief", "overall", "gist", "analy", "recap", "the whole", "in short", «durchgehen» and "minutes"
+are word-matched patterns, not substrings, with the exceptions listed in `known-limitations.md`) or
 `asksForSummary(question)` (`analysis/router.ts`, the router's own summary reading, which also catches the split
 German verb of «Fasse alle Beschlüsse zusammen»; the report shapes don't, and #939 had kept it out through the
 same reading). With the flag, the map and fold prompts carry the question under the reduce's own label, `User

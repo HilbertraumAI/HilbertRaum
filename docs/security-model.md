@@ -1415,7 +1415,8 @@ explicitly:
   0.1.60, cut short after its commit), and the staged set rolls forward as before. If its tag fails,
   it is ciphertext under another key: it is deleted, the unlock opens `.enc` as it is, and the rest
   of the staged set (document and image twins, the journal's deletions) gets what the start's
-  recovery would have given it without that file. A file that is no frame of this build's at
+  recovery would have given it without that file. Either way, the document and image stages no
+  journal lists are then judged one by one (#1001, below). A file that is no frame of this build's at
   all (cut short inside its header, another magic; a newer frame is refused earlier, #845) cannot be
   a staged copy of this workspace and is deleted the same way. A read the pass cannot make splits by
   its cause: a file gone since the check is no stage; a folder at the name (EISDIR, ENOTDIR) is no
@@ -1423,7 +1424,10 @@ explicitly:
   other failure (a hold: EBUSY, EPERM, EACCES; an I/O error such as EIO) may hide a stage this
   workspace needs, so it changes nothing and refuses the unlock with the #242 "try again" answer
   (`vault_recovery_blocked`), before the `.recovery` roll-forward could write over `.enc`. A delete
-  that fails leaves the file too, and the unlock opens `.enc`. The unlock logs one content-free
+  that fails leaves the file too, and the unlock opens `.enc`. While a folder stays at the staged
+  database's name, that stage stays in doubt, so every start's recovery leaves the whole staged set
+  as it is: a document or image stage whose stored copy is gone is not renamed into place either, and
+  that document does not open until the folder is removed. The unlock logs one content-free
   line when it deleted or left such a file, also when a later step of that unlock fails (no audit
   type, as #911's). The cost is one read of the staged file, only in this state, timed as the perf
   mark `vault_stage_check` (about 1.5 s for 500 MB on a warm NVMe drive in review; expect 5 to 17 s
@@ -1437,12 +1441,87 @@ explicitly:
   yet, or one it left as a doubt beside a workspace until its next unlock. The start's removal (the
   second rule) also deletes the stage of a create that committed and then lost its key file before
   its rename; such a stage holds only the fresh, empty workspace the create built. It loses data in
-  one double fault only: a v1 → v2 password change by a build before #241 (0.1.50–0.1.59, no
-  journal) cut short between the shred of `.enc` and the rename of its stage, and then the key file
-  removed before the next start (owner decision: the removal stays). Journal-less document and image
-  twins (`documents/*.enc.new`, `images/*.enc.new`) under a v2 descriptor are still rolled forward
-  at the start without any check, as before #973, which can replace a stored copy with a foreign one
-  (a folder merged from a workspace whose migration was cut short); a follow-up issue.
+  one double fault only: a v1 → v2 password change by a build before #241 cut short between the
+  shred of `.enc` and the rename of its stage, and then the key file removed before the next start
+  (owner decision: the removal stays). The builds before #241 are the builds before 0.1.60
+  (v0.1.6–v0.1.59; the public ones 0.1.50–0.1.59). They wrote no journal and never staged `images/`.
+  **A staged document or image copy is never swapped in unchecked either (#1001).** A password
+  change stages each stored copy's new copy beside it, as `documents/<id><ext>.enc.new` or
+  `images/<id><ext>.enc.new`. Every build before #1001 swapped in any such stage at the start, with
+  no key at hand and whether a journal listed it or not, and #973's unlock did the same right after it
+  removed a foreign staged database. So a copy from another workspace (a folder merged or restored), a
+  file planted at the name or a folder there shredded the stored copy and took its place, and that
+  document never opened again. Now a document or image stage (a file; a folder at the name is no
+  stage and is left alone) that no rekey journal lists by its full path, beside a stored copy that is
+  there (any stat answer but ENOENT), is a doubt, judged file by file. The start, and the unlock's
+  recovery before the password check, leave it as it is (a wrong password changes nothing) and swap in
+  the rest of the staged set as before. Once the password verified, the data key is unwrapped and the
+  staged database is decided, the unlock judges each doubtful stage, cheapest checks first. Two `lstat`
+  calls, which never follow a link, come before any read:
+  - a stored copy that is no regular file (a symbolic link, a junction, a folder) is never swapped
+    over, so a swap can never shred through a link into a file outside the workspace: the stage is
+    left;
+  - a stage with more than one link (where the drive counts links: a hard link of the stored copy or
+    of another document's copy), or of another length than the stored copy, is no new copy of that
+    document: only the staged name is deleted, without reading it. A planted file of another length
+    costs a stat, not a read.
+
+  Then the unlock reads the stage under the data key (`authenticatesUnder`), and, if it opens, the
+  stored copy too:
+  - one that authenticates is swapped in only when the stored copy beside it does not open under the
+    data key, and only when it is as long as the stored copy (a re-encryption of the same text is). A
+    legitimate stage only ever sits beside a stored copy still under the retired key: only a v1 to v2
+    change stages copies (a v2 change re-wraps the data key and writes no file). So the unlock reads
+    the stored copy under the data key as well, one more read per such stage. A stored copy whose file
+    another name shares (more than one link) is not swapped over either: the stage is left, so the
+    shred of the old copy never reaches that other name. The swap destroys
+    nothing first: the stored copy moves aside to `<name>.tmp`, the stage is renamed into its place,
+    and only then is the old copy shredded. If the stage cannot be renamed (a program holds it and
+    refuses a delete), the stored copy moves back and the stage is left. If the stored copy cannot be
+    moved back either, it waits at `<name>.tmp` for that session, and the next start shreds it and
+    renames the stage into place (counted and logged as "set aside"). That loses nothing: the stage
+    opens under the data key, and the copy set aside opened under no key the workspace holds;
+  - one that authenticates beside a stored copy that opens under the data key is no new copy of that
+    document: another document of this workspace copied to that name (of any length), or the stored
+    copy itself under a second name (a hard link on a drive that counts no links). Only the staged
+    name is deleted, and the stored copy keeps its own bytes. A stored copy that cannot be read (a
+    hold, an I/O error) is never swapped over: the stage is left;
+  - one whose tag fails, or that is no frame of this build's, is deleted, and the stored copy stays
+    byte for byte (owner decision D-2, the same delete as #973's);
+  - a read the pass cannot make (a hold, an I/O error), or a delete or a swap that fails, leaves the
+    stage and the stored copy as they are, and the workspace opens (owner decision D-1). Unlike the
+    staged database, which decides the snapshot a session opens, a stored copy is written once and read
+    only for its own document: a stage left loses nothing, and the next unlock checks it again. Until
+    then that one document does not open if its stage was the legitimate one.
+
+  A crash in the middle of a swap leaves nothing the next start does not resolve: `<name>.tmp` is a
+  name its sweep shreds, and with the stored copy moved aside and the stage not yet renamed, the stage
+  is the only copy left, which the start renames into place.
+
+  A stage whose stored copy is gone (a swap cut short between its shred and its rename) is the only
+  copy left, and the start renames it into place as before. The unlock logs one content-free line
+  with counts when it deleted or left such a file, also when a later step of that unlock fails. The
+  cost is one read of each doubtful stage that has its stored copy's length and one link, plus one
+  of the stored copy beside a stage that authenticates, only in this state, timed as the perf mark
+  `vault_sidecar_stage_check`: measured at about 1.5 to 2.9 s per GiB on a warm NVMe drive, plus
+  about 3 ms per file; on a USB stick, the stick's read speed (about 27 to 54 s per GiB at 40 to 20
+  MB/s). A legitimate journal-less stage is not expected in practice: only unpublished builds
+  (v0.1.0–v0.1.3) made v1 vaults, the builds that wrote no journal never staged `images/`, and since
+  #241 a change lists every stage it writes, so only a journal that cannot be read, or one that names
+  the files under another drive root, leaves one behind. **Residuals (owner decisions D-3, D-4):** a
+  doubtful stage that this build left at a start, before any unlock, is rolled forward by the next
+  start of an older build on the same Kit, as #973's staged database is. The app-update plan's "Go
+  back" to an older version takes the same path, so it can meet that state too. And a stage left at
+  an unlock whose document is then deleted in the same session comes back at the next start as a
+  stored copy that no document names (the start renames it into the place the delete emptied). It
+  is still encrypted, but if it was that document's own new copy, the deleted document's text stays
+  on the drive under the workspace's key: nothing in the app lists or removes such a file. A
+  doubtful stage in a frame a newer HilbertRaum wrote refuses the whole unlock with the "newer
+  version" answer (#845's rule, which judges every staged file the same way) until that file is gone
+  or a newer build opens the workspace. And a stage that opens under the data key beside a folder at
+  the stored copy's name is left, so each unlock logs it again until the folder is removed.
+  **A journal entry vouches for a file only (#1001).** A folder at a name the rekey journal lists is
+  no stage: the start used to shred the stored copy and rename the folder into its place.
 - **Accepted trade-off (decision): a hard power cut / kill mid-session loses the changes
   since the last successful lock.** Whole-file encryption means the at-rest `.enc` is only
   updated on lock/quit; a mid-session crash leaves a working file with live WAL sidecars,
@@ -1944,7 +2023,9 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
      staged the **journal file** `workspace/rekey-journal.json` is written atomically: every
      `<file>.new` path plus the files to remove at commit. It exists because an out-of-store
      copy lies where no directory scan finds its staged twin at recovery (the DB is closed
-     then); the in-store classes are still found by scan, so a journal-less stage resolves too.
+     then); the in-store classes are still found by scan, so a journal-less stage resolves too
+     (#1001: beside a stored copy that is there, at the unlock, once it authenticates under the
+     data key).
   2. **Commit:** the atomic v2-descriptor replace — the *single* commit point.
   3. **Swap:** delete the journal's remove-list (the rotated log; best-effort, idempotent),
      then shred each old file and rename `<file>.new` into place; clear the journal once every
@@ -1963,12 +2044,22 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   0.1.60 wrote none, and a create stages with none either), beside an `.enc` that is there, waits
   for the unlock, which rolls the staged set forward only when that file authenticates under the
   unwrapped data key, and deletes the file when it does not (see "Crash-safe creation" above).
+  The same holds for each `documents/` and `images/` stage the journal does not list, beside a
+  stored copy that is there (#1001): the start and a wrong password leave it, and the unlock swaps
+  it in when it authenticates under the data key while its stored copy does not (the stored copy of a
+  pending change is still under the retired key), deletes it otherwise, and leaves it for the next
+  unlock when it or its stored copy cannot be read, or it cannot be swapped in. A stage the journal lists rolls
+  forward at the start, as before.
   **Downgrade caveat (on-disk format, #241):** the journal file and the staged `images/` and
   out-of-store twins are new on-disk shapes. A build older than the #241 fix that starts on a
   vault with a *pending* migration rolls the DB and `documents/` forward but never reads the
   journal, so it leaves the other classes staged under the retired key (their `.new` twins
   intact beside them) and the journal file in place; running a current build again finishes
-  the swap. A *completed* migration is a plain v2 vault to any build since Phase 32.
+  the swap. A *completed* migration is a plain v2 vault to any build since Phase 32. A staged
+  copy that #973 or #1001 left in doubt at a start, before any unlock, is rolled forward
+  unchecked by the next start of a build older than that fix, as before: on the same Kit, or
+  after the app-update plan's "Go back" to an older version. After an unlock by this build, only
+  a stage it could neither read nor swap in or remove is still in doubt.
 - **Race guard:** an import/re-index job writes `.enc` sidecars, so `changePassword` refuses
   to start while document work holds a lease (`beginDocumentWork`), and document work refuses
   to start mid-change — both with friendly copy (`VaultBusyError`), never corruption. Image
@@ -3321,7 +3412,21 @@ Each sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe) was
 local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install and the next launch gets
 code-exec at the app's privileges — a TOCTOU deviation from the stated re-hash-before-exec policy. The
 spawns are arg-array (no shell), so the only residual was the missing pre-spawn re-verification, now
-closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the same item.)
+closed for the executable itself; the libraries it loads are not re-verified (corrected 2026-11-22, see
+"The gap" below). (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the
+same item.)
+
+**The gap: only the executable is re-hashed (corrected 2026-11-22, follow-ups wave 7).** The verifier
+re-hashes the one file it spawns. Since llama.cpp b12110 that file, `llama-server.exe`, is a 9.7 KB stub:
+the server's code is in `llama-server-impl.dll` and six more libraries the Windows loader loads beside it
+(26.5 MB with the stub), and the processor and graphics-card backends (`ggml-cpu-*.dll`,
+`ggml-vulkan.dll`) are loaded at run time. None of them is re-hashed before a spawn, so a replaced
+`llama-server-impl.dll` runs without a `mismatch`. The same holds for the shared libraries of the macOS and
+Linux builds and for whisper.cpp's DLLs. Since #998 the install marker records the hash of every file of an
+engine copy, which a hardening can build on (for example, hash the loaded libraries on the first spawn of a
+session); that is a follow-up issue, and its cost is an owner call. Until then this control covers the
+executable only. The sell gate checks every file a marker records, so a Kit ships with its libraries as
+installed; an attacker who can write the runtime folder after that is the residual above.
 
 **The fix rests on three facts the deferral called out, each now addressed:**
 
@@ -3332,7 +3437,9 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
    marker with no valid entry deep-equals the historical `{version,backend,os,arch}` so legacy reads are
    unchanged. The hash is recorded by **all three** marker writers: the in-app installer
    (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
-   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #986
+   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts. Since #998 all
+   three record every file of the copy, the libraries included (the verifier still looks up the
+   executable's key alone; the sell gate and the app's "complete" checks read every key). Since #986
    the in-app installer hashes and marks the copy in its staging folder `<os>.new/` and swaps the
    folder in by rename; the keys are relative to the folder, so they are the install folder's after
    the swap, and the bytes the marker covers are flushed to the device before it is written.
@@ -3378,7 +3485,10 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
 **Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
 carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that
 predates this field, or whose binary was modified after install, **fails the gate** (forcing a rebuild),
-so a sold drive always ships re-verifiable binaries.
+so a sold drive always ships re-verifiable executables. Since #998 it also checks every further file a
+marker records (present, inside its folder, the recorded bytes); a marker that records only the
+executable passes as before. That covers the libraries when the Kit is built, not before each spawn
+(the gap above).
 
 Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
 predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there

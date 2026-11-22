@@ -157,6 +157,26 @@ function Test-StaysInside([string]$Rel) {
   return $true
 }
 
+# #998: every file an install holds, relative to it with `/` (the app's markerBinaryKey form): the files
+# the archive put there and the links that resolve to a file (a link by its own name, never entered; a
+# link to a folder or a dangling one is not recorded, with a line), without the marker, without macOS
+# metadata (`._*`, `__MACOSX`, `.DS_Store`) and, at the top, without the cpu/ safety net or a net swap the
+# app left inside (cpu.new, cpu.old), which carry markers of their own. Mirrors runtime-download.ts
+# installedFileKeys.
+function Get-InstalledFileNames([string]$Dir, [string]$Prefix = '') {
+  foreach ($e in @(Get-ChildItem -LiteralPath $Dir -Force)) {
+    if (-not $Prefix -and @('.hilbertraum-runtime.json', 'cpu', 'cpu.new', 'cpu.old') -ccontains $e.Name) { continue }
+    if (@('__MACOSX', '.DS_Store') -ccontains $e.Name -or $e.Name.StartsWith('._', [StringComparison]::Ordinal)) { continue }
+    $rel = if ($Prefix) { "$Prefix/$($e.Name)" } else { $e.Name }
+    if ($e.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      if (Test-Path -LiteralPath $e.FullName -PathType Leaf) { $rel }
+      else { Write-Host "  not recorded (a link that is not a file): $rel" }
+    }
+    elseif ($e.PSIsContainer) { Get-InstalledFileNames $e.FullName $rel }
+    else { $rel }
+  }
+}
+
 # #873: order two engine release tags of one family the way the app does (assets.ts
 # compareRuntimeVersions): -1 older, 0 equal, 1 newer, $null when either tag has an unknown shape
 # or the two shapes differ. `b<digits>` is a build counter; `v?<digits>(.<digits>)*` a dotted release
@@ -540,7 +560,18 @@ if (Test-Path -LiteralPath $binaryPath) {
         elseif (-not $AllowDowngrade) { $newerKept = [string]$marker.version }
       } elseif ($marker.version -eq $version -and $marker.backend -eq $build.backend) {
         $skip = $true
-        if ($Commercial) {
+        # #998: a file the install's own marker records that is gone (an antivirus took it after the
+        # install) makes it a damaged install: re-fetched, in any mode (the app's engineFolderComplete).
+        $recordedMissing = @()
+        if ($marker.binaries) {
+          foreach ($p in $marker.binaries.PSObject.Properties) {
+            if (-not (Test-Path -LiteralPath (Join-Path $extractTo $p.Name) -PathType Leaf)) { $recordedMissing += $p.Name }
+          }
+        }
+        if ($recordedMissing.Count -gt 0) {
+          $skip = $false
+          $why = 'a file its install marker records is missing (' + ($recordedMissing -join ', ') + ')'
+        } elseif ($Commercial) {
           $allHashedMarker = $true
           foreach ($f in $requiredFileNames) {
             $recorded = $null
@@ -761,22 +792,31 @@ if ($build.os -ne 'win') {
 
 # Record exactly which build is installed (UTF-8 without BOM -- PS 5.1 Set-Content
 # would prepend one and break Node's JSON.parse). Mirrors assets.ts writeRuntimeMarker.
-# `binaries` records every required file's own SHA-256 (keyed exactly like markerBinaryKey --
-# the path relative to the extract dir, posix separators; everything here is flat) so the
-# app can re-hash each executable immediately before spawn (binary-verifier.ts, #234) and the
-# sell gate can check the runtime files too. ALL-OR-NOTHING (#339 P8-3, mirrors
-# runtime-download.ts installOne): only a VERIFIED archive earns hashes at all, and a hashing
-# failure on ANY required file drops the whole map rather than writing a partial one -- the
-# verifier and the sell gate must never disagree about one install.
+# `binaries` records the SHA-256 of EVERY file the install holds (#998: the required ones
+# first, then every other file the archive put here, never cpu/, cpu.new or cpu.old), keyed
+# exactly like markerBinaryKey -- the path relative to the extract dir, posix separators -- so
+# the app can re-hash each executable immediately before spawn (binary-verifier.ts, #234), judge
+# the copy complete by its own list (engineFolderComplete) and the sell gate can check every
+# file. ALL-OR-NOTHING (#339 P8-3, mirrors runtime-download.ts stageEngineInstall): only a
+# VERIFIED archive earns hashes at all, and a hashing failure on ANY file drops the whole map
+# rather than writing a partial one -- the verifier and the sell gate must never disagree about
+# one install.
+$recordNames = New-Object System.Collections.Generic.List[string]
+# Ordinal order, as the app and the bash twin sort (`Sort-Object` follows the culture).
+[string[]]$installedNames = @(Get-InstalledFileNames $extractTo)
+[Array]::Sort($installedNames, [System.StringComparer]::Ordinal)
+foreach ($f in @($requiredFileNames) + @($installedNames)) {
+  if (-not $recordNames.Contains($f)) { $recordNames.Add($f) }
+}
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $markerHead = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '"'
 if ($archiveVerified) {
   $allHashed = $true
   $entries = @()
-  foreach ($f in $requiredFileNames) {
+  foreach ($f in $recordNames) {
     try {
       $h = (Get-FileHash -LiteralPath (Join-Path $extractTo $f) -Algorithm SHA256).Hash.ToLower()
-      $entries += ('"' + $f + '":"' + $h + '"')
+      $entries += ('"' + ($f -replace '\\', '\\' -replace '"', '\"') + '":"' + $h + '"')
     } catch {
       $allHashed = $false
       break
@@ -786,7 +826,7 @@ if ($archiveVerified) {
     $markerJson = $markerHead + ',"binaries":{' + ($entries -join ',') + '}}'
   } else {
     $markerJson = $markerHead + '}'
-    Write-Host "  marker written WITHOUT binary hashes (could not hash every required file) -- the sell gate refuses this install" -ForegroundColor Yellow
+    Write-Host "  marker written WITHOUT binary hashes (could not hash every installed file) -- the sell gate refuses this install" -ForegroundColor Yellow
   }
 } else {
   $markerJson = $markerHead + '}'

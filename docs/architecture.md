@@ -5887,14 +5887,17 @@ cites it as "In-app engine updates"._
   `StartEngineDownloadOptions.beforeReplace` and replace each install (`replaceInstall`). *Amended by
   #986 (§6): between the phases the job checks the free space; each install is then a staged swap
   (extract, flatten, completeness check and marker in `<os>.new/`, then two renames), no longer a
-  pre-clean followed by an extraction in place.*
+  pre-clean followed by an extraction in place.* *Amended by #1000 (§7): three phases. Every copy is
+  also unpacked, checked and marked in its `<os>.new/` BEFORE `beforeReplace`, while the models keep
+  running; only the swaps come after the pause.*
   - A failure or cancel in phase 1 replaces nothing.
   - Archives not yet extracted when the job stops are deleted.
   - **The spawn gate** (`runtime/spawn-gate.ts`, review fix). From `beforeReplace` to the last
     marker, the job holds every spawn of the families it replaces. `LlamaServer` (chat, embedder,
     reranker, vision, translation), the GPU probe, the load check and `whisper-cli` all await
     `waitForEngineSpawns` before they verify and spawn, bounded at 6 minutes (the extractor's
-    deadline plus a margin).
+    deadline plus a margin). *Amended by #1000 (§7): the gate is held from the pause to the last
+    swap only, so the 6 minutes are now a real bound.*
     - Before the gate, a helper restarting by itself (the embedder on a search) or a model start that
       was still hashing its weights when the pause ran could launch a half-extracted binary. On
       Windows it could also hold a file the pre-clean was about to delete.
@@ -5914,7 +5917,9 @@ cites it as "In-app engine updates"._
   - **A job that stops part-way still reports what it replaced** (review fix). If the main build was
     swapped and a later step (the `cpu/` net, the voice engine) failed or was cancelled, `onInstalled`
     fires for the replaced families, so the new binary's consumers are re-armed and the probe
-    refreshed. The job itself still ends failed or cancelled.
+    refreshed. The job itself still ends failed or cancelled. *Since #1000 (§7) a job can stop
+    part-way only in its swaps: a stage that fails or is cancelled comes before every swap, so the
+    job replaces nothing.*
   - **A cancel after the files are complete finishes the install** (review fix). A cancel during the
     extraction kills tar (F-33), so `install()` rejects and the job is cancelled; a half-extracted
     folder surfaces as #530 "files damaged", which the #532 reinstall repairs. A cancel that lands
@@ -5938,7 +5943,8 @@ cites it as "In-app engine updates"._
      - for the voice engine, a live transcription.
   2. **In `beforeReplace`**, after the last archive verified, the same check runs again: work may
      have started during the download. A refusal fails the job with that copy, and the old engine
-     stays.
+     stays. *Since #1000 (§7) this runs after the last copy is staged, so work that started during
+     the unpack refuses the swap too (owner decision G-9: keep refusing, do not wait).*
   3. **The pause itself** remembers the running model and stops the chat runtime. It suspends the
      embedder, reranker and translator (the lock teardown's non-latching `suspend()`), and lets
      vision's idle sidecar go (`VisionService.releaseRuntime()`; review fix: the lock's `stop()`
@@ -6053,9 +6059,10 @@ Tests:
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.
+  *(#1000 rewrote the phase and part-way rows: §7.)*
 - `engine-consent-ipc.test.ts` "#516": pause, swap and resume through the real handler (vision
   released, never purged), resume after a failed swap, six busy refusals, work starting during the
-  download.
+  download. *(#1000 split the failed-swap row: §7.)*
 - `EngineUpdate.test.tsx`: the notice, both engines, `cpu/` only, five no-notice rows, the
   Diagnostics row and report.
 - `ModelsScreen.test.tsx`: the deep-link row.
@@ -6117,7 +6124,10 @@ in place on a read-only drive) stays the app-update plan's.
   the archive; every required file present; chmod; hash every file into the marker; flush every file
   to the device; write the marker LAST, inside `.new`, and flush it (lens F CE-F1: a marker written
   after the move made a quit there reinstall over the kept copy). Phase 1 is unchanged: the archives
-  still download into the install folder, which a first install creates.
+  still download into the install folder, which a first install creates. *Amended by #998 and #1000
+  (§7): the archive's own member list is checked against the copy, "every file" means every file the
+  copy holds (it meant the required ones), the flush runs off the main thread, and every step is
+  staged before the pause.*
 - **Order (review round 1):** phase 2 installs each family's `cpu/` net BEFORE its main build. The net's
   archive downloads into `<os>/cpu/`, inside the main folder: with the main build first, its swap moved
   that archive into `.old/cpu/`, and a refused carry left the net step without it (ENOENT) and the
@@ -6135,7 +6145,9 @@ in place on a read-only drive) stays the app-update plan's.
 - **Cancel:** checked after the extraction, before the swap, and once more inside the swap right before
   its first rename (after a stale `.old` was deleted, which can take seconds). Until the swap's first rename a
   cancel deletes `.new` and replaces nothing (#516's "finish the install" rule had its reason in the
-  old copy being gone, and is retired); after it, the step finishes.
+  old copy being gone, and is retired); after it, the step finishes. *Amended by #999 and #1000 (§7):
+  a cancelled extraction ends only once tar has exited, and a cancel before the swaps never pauses
+  anything.*
 - **Swap** (`swapEngineFolder`): delete a stale `.old`; `<os>` → `<os>.old`; `<os>.new` → `<os>`. Each
   rename goes through `renameWithRetry`: on Windows, EPERM, EACCES and EBUSY are tried again with waits
   of 50 ms doubling to 1 s, 12 s in all; elsewhere the first refusal stands. A refused first rename
@@ -6157,10 +6169,13 @@ in place on a read-only drive) stays the app-update plan's.
   budget (the spawn finds no program, as with no engine), and between the main build's swap and its carry
   the new copy has no net for a moment (review round 3). What a spawn let through early can do is run the old copy, which the swap moves
   to `.old`, where Windows cannot delete it while it runs; the next swap or start deletes it.
+  *Superseded by #1000 (§7): the gate is now held from the pause to the last swap only, so what it
+  covers is a few 12 s retry budgets per step, well inside the 6 minutes; the two gaps stay.*
 - **After the swap:** the main step carries `cpu/`; the verifier's cached verdicts for the replaced
   programs are dropped; `.old` is deleted in the background, marker first, once the job has released
   the spawn gate (a waiting helper starts on the new copy at once). The deletes run one after another
-  (`engineFolderDeletesSettled`), and the next stage and swap wait for them.
+  (`engineFolderDeletesSettled`), and the next stage and swap wait for them. *#1000 (§7): so are the
+  copies the job staged and did not swap in, whatever ended it.*
 - **Start recovery** (`recoverEngineSwaps`, in `index.ts` as soon as the pins are known, before the
   transcriber slot and the engine check resolve a binary): for every family's host build, the main
   build before its net, and only the exact names `<os>.new` and `<os>.old` (never a pattern: frozen in
@@ -6217,6 +6232,184 @@ rows, the part-way rows on `.new`); `engine-consent-ipc.test.ts` (the #532 reins
 carry's regression row); `install-audit.test.ts` (`noSpace` with its byte counts); `fs-retry.test.ts`;
 `archive-size.test.ts`; `assets.test.ts` (the swap folders); `commercial-drive.test.ts` and
 `script-execution.test.ts` (the leftover refusals).
+
+### §7 #998 / #999 / #1000 amendment — complete copies, a cancel that waits for tar, stage before the pause (2026-11-22)
+
+_Three gaps in §6's staged swap that follow-ups wave 6 left open: "complete" meant the one program
+(#998), a cancelled extraction let the job go while tar could still run (#999), and the update paused
+the models for the whole unpack (#1000). Researched in follow-ups wave 7 (lane E) at `c62a45f2`. Code
+cites it as "In-app engine updates" §7._
+
+**The facts it rests on** (DesktopDiT, Windows 11, Node 24; the b12110 copy is wave 6's own in-app
+update result):
+- **The program is a shim.** At b12110 `llama-server.exe` is 9.7 KB and imports
+  `llama-server-impl.dll`, which with six more DLLs (26.5 MB in all, the stub included) is loaded by the OS loader. The
+  CPU variants (14 `ggml-cpu-*.dll`), `ggml-vulkan.dll` and `ggml-rpc.dll` (62.6 MB) are loaded at run
+  time by `ggml.dll`. The marker recorded the program alone, so no check knew the rest.
+- **What a missing file does.** A missing loader import ends the program with 0xC0000135, which #530
+  reports as damaged files and #532 repairs. A missing `ggml-vulkan.dll` is silent: the model runs on
+  the processor, and the empty device list is remembered as "no graphics card". With every CPU variant
+  missing the program prints `no CPU backend found` and exits 1, which was blamed on the model. Every
+  missing whisper.cpp DLL is a loader refusal.
+- **A file list per pin was rejected.** b9849 lacks b12110's `libomp.dll`, so judging an older copy
+  by the current pin's list would make every b9849 chat engine read "missing", and "Install voice
+  engine" would reinstall it (#516's trap). The copy's own marker is the list (§6 review round 2).
+- **tar ends 2–5 ms after the kill on Windows**, and a folder a live process works in resists deletion
+  (EBUSY). The mixed copy #999 feared is not reachable; what was left is a latch that meant "asked to
+  stop", a misleading "files in use" on a quick retry, and no test of the F-33 kill path.
+- **The stage reads and writes no install folder** (only `.new` and the archive's move out), so the
+  models can keep running through it. The synchronous flush blocked the event loop for one block per
+  folder: 64–105 ms for the b12110 copy on NVMe (re-measured 205–268 ms on a loaded machine), seconds
+  on a stick by estimate. `FileHandle.sync()` one file at a time keeps the longest gap at 16 ms (the
+  timer granularity).
+
+**Decisions** (owner, follow-ups wave 7 gate G-9, 2026-11-22): #998 slices b1 and b2 plus the
+`no CPU backend found` classifier line; the "incomplete" status in the UI (b3) is a follow-up; the sell
+gate verifies what a marker records and never requires a full list (no Kit is re-provisioned); #999
+option A; #1000 option R with the async flush, and `beforeReplace` keeps refusing work that started
+during the unpack rather than waiting for it. The pre-spawn re-hash's gap is documented now
+(`security-model.md`), its hardening is a follow-up.
+
+**As built** (`runtime-download.ts`, `archive-size.ts`, `assets.ts`, `commercial-drive.ts`,
+`runtime/engine-load.ts`, `fetch-runtime.{ps1,sh}`):
+- **The extractor waits for tar (#999).** `makeTarExtractor({ spawn, graceMs, goneBoundMs })` builds
+  the default extractor (`extractWithTar = makeTarExtractor()`). A cancel or the deadline kills the
+  child, SIGKILL after 2 s (on Windows both are TerminateProcess), and the extraction rejects only on
+  the child's `exit`, or 10 s after the SIGKILL with a log line ("tar did not exit after it was
+  killed"), so a tar wedged in kernel I/O still cannot pin the job (F-33). A kill that could not be
+  delivered does not count as the exit. The job's status still reads `cancelled` at once; `activeJob()`
+  stays the job until the extractor settles, so the job's own `.new` delete never races tar, and a
+  retry in that window reads "already downloading". `ExtractFn` gained an optional `log`.
+- **Three phases (#1000).** `run()`:
+  1. the job's recovery, then download and verify every archive (unchanged);
+  2. the room check (§6), then the leftover guard of EVERY step, before any step stages (so a net the
+     job staged in `<os>/cpu.new` is never taken for a leftover), then `stageStep` per step in
+     `installOrder`, with the models running and the gate open; a cancel is checked between stages
+     and once after the last; the job then waits for queued deletes, outside the gate;
+  3. `holdEngineSpawns`, `beforeReplace` (the update's busy re-check, the pause, the in-use check), a
+     cancel check, then `swapStep` per step: the staged copy checked again, the swap (a cancel is
+     honoured until its first rename), the carry, the verdicts dropped.
+
+  A `finally` releases the gate and queues the deletes of the replaced copies and of every copy the job
+  staged and did not swap in (a failure, a cancel, a refused pause, a stop part-way, an unexpected
+  throw); a copy the swap kept as the only whole one is not on that list. So a download or unpack that
+  fails or is cancelled (or hangs on a failing stick until the extractor's 5-minute deadline) never
+  pauses a model and never holds the gate. Each FAMILY is all or nothing up to its swaps (round 1, below):
+  a failed stage swaps nothing of its family (the `cpu/` net with its main build), while the other families
+  still install. The gate now covers the pause, a stale `.old`'s delete, two renames, a move
+  back and the carry, a few 12 s retry budgets per step, so its 6-minute bound is a real one
+  (`spawn-gate.ts`). The statuses are unchanged ("Unpacking the AI engine…" while the model answers),
+  and the "few seconds" the update notes promise are now true.
+- **The stage's flush is asynchronous (#1000).** `flushToDeviceAsync` (`assets.ts`) opens each file r+,
+  `FileHandle.sync()`, closes it; `flushFolder` awaits it file by file before the marker is written,
+  and the marker after. No `fsyncSync` runs in the stage.
+- **The archive's own list (#998 b1).** `archiveMembers(path)` (`archive-size.ts`) lists every member
+  that is not a folder, files, links and hard links, from the same readers that size the archive (the
+  zip central directory, the tar.gz headers). A listing that names a member in anything but plain ASCII
+  is not used (how tar spells such a name on the disk is not knowable here), nor one that cannot be
+  read (Zip64, an unknown format): the stage then skips the check with a log line ("could not be
+  listed"). The stage reads the list before the extraction and, after the flatten, the left-out
+  executables and the SEC-2 sweep, checks that every listed member is in `.new`: under the release
+  folder the flatten emptied it lies at the root, a left-out one (llama-connect) is not expected (names
+  compared without case), and an absolute name or a `..` step is never expected (tar refuses those). A
+  member that is gone fails the step `incomplete` with `main.engine.extractFailed`: the installed
+  engine stays.
+- **Every file in the marker (#998 b1).** The stage hashes the required files and then every file the
+  copy holds (`installedFileKeys`: files and links, a link by its own name, never followed; without the
+  marker and the nested net folders `cpu`, `cpu.new`, `cpu.old`, which carry markers of their own; round
+  1 below says what a failed hash does). A real b12110
+  Windows copy records 52 keys (the archive's 53rd member is llama-connect, left out), a marker of
+  4,689 bytes instead of 162; hashing the 94.5 MB took 0.85 s here, now outside the pause. The verifier
+  still looks up the program's key alone.
+- **Each copy judged by its own marker (#998 b2).** The check right before the swap reads the staged
+  copy's marker: every key it records must be a file in the copy (`engineFolderComplete`); a marker with
+  no map falls back to the required files; a copy whose marker went fails. The sell gate verifies every
+  key a marker records on top of the required names: inside the install folder, a file, the recorded
+  bytes (`runtimeHashed`); a key under another build's own folder (the `cpu/` net under `<os>/`) is that
+  build's to report. A marker that records only the program, as every Kit's does today, passes as
+  before. Both `fetch-runtime` twins record every file of the install the same way (the marker, `cpu/`,
+  `cpu.new` and `cpu.old` left out; `script-drift.test.ts` holds the twins to one list), and a re-run
+  re-fetches an install whose marker records a file that is gone, in any mode, so the gate's "re-run
+  fetch-runtime" advice works for a missing file.
+- **`no CPU backend found` is damaged files.** `classifyLoadFailure` (`engine-load.ts`) reads that line
+  in a program's output as `files-damaged`, so the ladder stops blaming the model and the #532 repair
+  is offered.
+- **Kept:** the exact `<os>.new` / `<os>.old` names, the marker's name and its `binaries` shape
+  (`Record<string, string>`), and the start recovery's exact-name rule, which release 1 freezes (the
+  app-update plan's W-67; W-30's install into a folder of its own reuses `stageEngineInstall` and so
+  inherits the member check, the full marker and the waiting extractor). The status and the planner
+  predicates did not change (`engineStatus` stays the bare program test, the default selection
+  `runtimeBinaryPresent`), so "Install voice engine" still never reinstalls a chat engine. Older apps
+  read a longer map: v0.1.65 and earlier ignore the extra keys; v0.1.66's recovery and leftover guard
+  read it as a stricter "complete".
+
+**Residuals.** A file a scanner takes days after the install is not shown in the status (b3, a
+follow-up: it needs copy in ten catalogs and an answer to "stop the model first" for a repair while a
+model runs on the processor). The pre-spawn re-hash covers the program only (`security-model.md`, a
+follow-up). The model downloader still flushes its weights synchronously (a follow-up). The job's own
+recovery, before its download, renames without the gate (it needs leftovers to act; a non-goal). An
+archive whose list cannot be read installs without the member check. A marker written before this
+change gains nothing until a reinstall, an update or a `fetch-runtime` run rewrites it. A plain install
+or reinstall checks the in-use flags at its start only, so a helper started during the longer unpack
+window runs the old copy, which the swap then moves to `.old` (the "let through early" residual of §6).
+Work started during the unpack refuses the update (`main.engine.updateBusy`), after a full download and
+unpack. The unpack can contend for the stick with a model the user starts meanwhile. A USB-stick walk
+of the outage gain is owed with the exFAT walk (T8.5c).
+
+**Round 1 (review, 2026-11-22).** `/code-review` and an adversarial review found five gaps, all closed:
+- **A scanner after the member check.** A file taken right after its check was simply not walked, and one
+  taken while the copy was hashed dropped the whole map, so the swap's check fell back to the program; both
+  copies were swapped in. Now the hashed keys are the archive's members AND what the folder holds; when the
+  archive could be listed, a member or a required file that cannot be hashed fails the stage `incomplete`
+  (`main.engine.extractFailed`), and the no-map fallback stays for a listing that could not be read. What
+  the marker records is checked once more after the flush, right before it is written. The member check also
+  needs a file or a link where the archive lists one (a folder in its place fails).
+- **macOS metadata.** macOS bsdtar reads AppleDouble members (`._name`, `__MACOSX/`) back into extended
+  attributes, so they never land on the disk there, and the member check would have failed every macOS
+  install. `isMacMetadataName` (`archive-size.ts`) leaves them and a Finder `.DS_Store` out of the member
+  list and the marker, and both `fetch-runtime` twins skip the same names. Whether the pinned macOS tarballs
+  carry `._` members is unverified: none is on the build machine (owed on a Mac).
+- **Links.** A link to a folder or a dangling link is not recorded (logged), in the app and in both twins;
+  hashing one used to drop the whole map. Only a required file that cannot be hashed still does, and only
+  for an archive that could not be listed.
+- **A queued delete.** A job's staged copy that is not swapped in (its family failed) is whole and marked,
+  and its delete waited in the queue while the next job's recovery could move it in without the gate or the
+  pause. A job now waits for the queued deletes before its recovery, and such a copy loses its marker at
+  once (`unmarkEngineFolder`), so a refused delete leaves nothing to roll in either.
+- **Per-family atomicity.** "Install the AI engine" on a bare drive fetches the chat and the voice engine;
+  a voice engine that could not be unpacked kept the chat engine from installing (before #1000 the chat
+  engine was swapped first). Now a step that fails (its leftover guard, stage or swap) fails its family,
+  the other families still stage, pause (`beforeReplace` runs only when a family is left to swap) and swap,
+  and the first failure is the job's, reported once at the end as for a job stopped part-way.
+
+Accepted (no code): a `FileHandle.sync()` that hangs on a failing stick keeps the job busy until a restart
+(the models keep running; before #1000 the pause stayed instead). A helper spawned during a reinstall's
+unpack (no pause there) holds the old copy: Windows then refuses the swap's rename (`filesInUse`), POSIX
+swaps under it and the helper runs the old copy from `.old` until it stops. The pre-swap check's copy
+`main.engine.binaryMissing` ("the archive layout may have changed") reads wrong for a file a scanner took;
+rewording it is a follow-up.
+
+Tests: `extract-child.test.ts` (a cancel waits for the exit; a child that never exits: SIGKILL at the
+grace, given up on after the bound; the deadline; an undelivered kill; the controls);
+`engine-download.test.ts` (a cancelled job stays busy until its tar has exited, through the default
+extractor; three phases: staged copies at the pause and none after a refused one; the models keep
+running while the archives unpack; a failed main stage swaps nothing and never pauses; a cancel during
+the unpack never pauses; part-way through a refused swap, for the main build and for the voice engine
+after a net-only reinstall; the marker records every file but llama-connect); `engine-swap.test.ts`
+(the gate held from the pause to the last swap only; a recorded file gone at the swap; with the OS
+tar: a listed member gone after the extraction, and every member checked through the flatten with
+every file recorded); `engine-stage-flush.test.ts` (`FileHandle.sync()` for every staged file before
+the marker, the marker after, no `fsyncSync`); `engine-consent-ipc.test.ts` (a failed unpack never stops
+the model; a failed swap still brings it back); `install-audit.test.ts` (no staged copy left after an
+unexpected throw at the gate); `archive-size.test.ts` (`archiveMembers`); `commercial-drive.test.ts` (a
+recorded file missing, modified or outside its folder); `script-fetch-runtime.test.ts` (both twins:
+every file recorded, never `cpu/`; a recorded file gone re-fetches); `script-drift.test.ts` (one skip
+list); `engine-load.test.ts` (the classifier line). Round 1: `engine-stage-checks.test.ts` (a listed DLL taken
+right after its check, while hashed, while flushed; a folder in a file's place; macOS metadata; links that are
+not files); `engine-download.test.ts` (each family installs when the other cannot be unpacked);
+`engine-swap.test.ts` (a job waits for the queued deletes; an unswapped copy is un-marked at once);
+`archive-size.test.ts` (metadata left out); `script-fetch-runtime.test.ts` (metadata, links on POSIX);
+`script-drift.test.ts` (the twins' metadata, link and order rules).
 
 
 ## Internationalization — design record (Phases 39–42)

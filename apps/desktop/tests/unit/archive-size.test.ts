@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { extractedArchiveBytes } from '../../src/main/services/archive-size'
+import { archiveMembers, extractedArchiveBytes } from '../../src/main/services/archive-size'
 import { makeSizeOnlyZip, makeTarGz, makeZip } from '../helpers/archives'
 
 // #986: the engine installer refuses a job the drive has no room to unpack, before anything is
@@ -119,5 +119,59 @@ describe('extractedArchiveBytes (#986)', () => {
 
   it('is null for a file that does not exist', async () => {
     expect(await extractedArchiveBytes(join(dir, 'missing.zip'), 4096)).toBeNull()
+  })
+})
+
+// #998: the engine install checks that every member the verified archive lists is in the unpacked copy (a
+// scanner can take a fresh file before the copy is marked). The same readers list the names: files and links,
+// never folders, as the archive writes them. A listing that could name a file wrongly is null (no check).
+describe('archiveMembers (#998)', () => {
+  it('lists every zip member that is not a folder, in archive order', async () => {
+    const zip = archive(
+      makeZip([
+        { name: 'llama-server.exe', data: data(5) },
+        { name: 'Release/', data: data(0) },
+        { name: 'Release/ggml.dll', data: data(1) },
+        { name: 'empty.txt', data: data(0) }
+      ])
+    )
+    expect(await archiveMembers(zip)).toEqual(['llama-server.exe', 'Release/ggml.dll', 'empty.txt'])
+  })
+
+  it('lists a tar.gz member by its name, links and hard links included, folders left out', async () => {
+    const tgz = archive(
+      makeTarGz([
+        { name: './build/', dir: true },
+        { name: './build/llama-server', data: data(5), mode: 0o755 },
+        { name: './build/libllama.so', symlink: 'libllama.so.0' },
+        { name: './build/libllama.so.0', data: data(10) }
+      ])
+    )
+    expect((await archiveMembers(tgz))?.sort()).toEqual(['./build/libllama.so', './build/libllama.so.0', './build/llama-server'])
+  })
+
+  // #998 round 1: macOS bsdtar reads AppleDouble members back into extended attributes, so they never land
+  // on the disk there; listed, they would fail every macOS install. A Finder .DS_Store is never an engine file.
+  it('leaves macOS metadata out: AppleDouble files, a __MACOSX folder, .DS_Store', async () => {
+    const zip = archive(
+      makeZip([
+        { name: 'llama-server', data: data(5) },
+        { name: '._llama-server', data: data(1) },
+        { name: '__MACOSX/._llama-server', data: data(1) },
+        { name: 'lib/._libllama.dylib', data: data(1) },
+        { name: 'lib/libllama.dylib', data: data(1) },
+        { name: '.DS_Store', data: data(1) }
+      ])
+    )
+    expect(await archiveMembers(zip)).toEqual(['llama-server', 'lib/libllama.dylib'])
+  })
+
+  it.each([
+    ['a zip member named outside plain ASCII', makeZip([{ name: 'ok.dll', data: data(1) }, { name: 'caf\u00e9.dll', data: data(1) }])],
+    ['neither a zip nor a gzip', Buffer.from('llama-server-release-archive-bytes')],
+    ['a gzip that is not a whole tar', gzipSync(Buffer.concat([Buffer.alloc(512, 0x31), data(100)]))],
+    ['a Zip64 archive', makeSizeOnlyZip(1, 0xffffffff)]
+  ])('is null for %s (the install then skips its check)', async (_label, bytes) => {
+    expect(await archiveMembers(archive(bytes))).toBeNull()
   })
 })
