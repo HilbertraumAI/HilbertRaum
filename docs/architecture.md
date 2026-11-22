@@ -1225,8 +1225,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   **Since 2026-09-21 (#498)** the badge names no cause at all — it reads just "Reply cut off" — because
   the grounded paths DO flag their own pinned cap (they pin 1024 per pass and continue, §15.8/#491) and
   the "raise the context size" remedy is wrong for those. The cause rides per message instead, as
-  `Message.truncatedCause` (`'context' | 'cap'`, persisted `messages.truncated_cause`, NULL on a legacy
-  row ⇒ read as `'context'`), and the renderer picks the tooltip from it. Decided by the pure
+  `Message.truncatedCause` (`'context' | 'cap'`, plus `'repeat'` since #994 for a whole-document answer the
+  repetition guard stopped; persisted `messages.truncated_cause`, NULL on a legacy row ⇒ read as
+  `'context'`), and the renderer picks the tooltip from it. Decided by the pure
   `truncationCause(finishReason, sentCap, timings)` (`rag/whole-doc-tree.ts`): not `'length'` ⇒ no cause;
   no cap sent ⇒ `'context'`; the server generated FEWER tokens than the cap it was given ⇒ `'context'`
   (only the window explains stopping short); otherwise `'cap'`. On the continuation engine the window
@@ -1595,7 +1596,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         no longer pre-empts the external lane or stamps `lastPreemptedAt`.
       - **`persistAssistantMessage`** stamps `endedEarly: 'model'` from that reason. It is a new
         nullable column, `messages.ended_early`, because an older app reads an unknown
-        `truncated_cause` as "raise the context size", while it ignores a new column. The column is
+        `truncated_cause` as "raise the context size", while it ignores a new column (#994's
+        `'repeat'` cause accepts that older-app reading on purpose for a rare answer; see
+        `docs/data-contracts.md` `messages.truncated_cause`). The column is
         carried through `DeletedMessage`, read tolerantly, and its values `user`/`lock` are
         reserved for #612 (written since the #612 amendment below).
       - **`withRegenerateGuard`** now holds the model-stop rules for every turn:

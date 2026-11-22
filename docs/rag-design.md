@@ -3143,8 +3143,9 @@ context size."* All four observations were real seams:
   **Amended 2026-09-21 (#498):** that "no longer flagged" rule is PLAIN CHAT only. The grounded paths pin
   their own 1024-token cap per pass and still flag a reply it ended (#491), so the fix there is to stop
   NAMING a cause in the badge: the label is now just "Reply cut off", and the per-message
-  `Message.truncatedCause` (`'context' | 'cap'`, persisted `messages.truncated_cause`; NULL on a legacy
-  row ⇒ `'context'`) picks the tooltip, so "raise the context size" is offered only when the window really
+  `Message.truncatedCause` (`'context' | 'cap'`, and `'repeat'` since #994, set by the repetition guard
+  (§14.10), not by `truncationCause`; persisted `messages.truncated_cause`; NULL on a legacy row ⇒
+  `'context'`) picks the tooltip, so "raise the context size" is offered only when the window really
   was the reason. The shared pure `truncationCause(finishReason, sentCap, timings)` decides it — no cap
   sent ⇒ `'context'`; `timings.predicted_n` short of the cap ⇒ `'context'` (the server stopped before the
   cap it was given); else `'cap'` — and `continueUntilComplete` additionally reports `'context'` when the
