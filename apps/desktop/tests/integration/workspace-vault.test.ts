@@ -42,6 +42,7 @@ import {
   shredFileWithin,
   rewrapVaultKey,
   stageRekey,
+  applyPendingRekey,
   REKEY_SUFFIX,
   RECOVERY_SUFFIX,
   PlaintextNotAllowedError,
@@ -531,6 +532,73 @@ describe('secure delete never writes through a link (#1014)', () => {
       expect(() => lstatSync(name)).toThrow()
       expect(readFileSync(other).equals(bytes)).toBe(true)
     }
+  )
+})
+
+// #1014 round 6: the rekey journal's rewrite (round 3's settle) opened its write temp with 'w', which follows a link at
+// that name: a hard or symbolic link there had the journal's JSON written into the file it reaches, elsewhere on the
+// drive, and a junction made every rewrite fail, so the journal went on listing what that pass had already settled. The
+// write now removes whatever is at the temp name first (a link by `unlink`) and creates it fresh ('wx').
+describe("the rekey journal's write temp is never written through a link (#1014)", () => {
+  type LinkAtTemp = (temp: string, root: string) => () => void
+  const plantedAs: Array<[string, LinkAtTemp]> = [
+    [
+      'a hard link to a file elsewhere',
+      (temp, root) => {
+        const other = join(root, 'elsewhere.txt')
+        writeFileSync(other, 'a file elsewhere')
+        linkSync(other, temp)
+        return () => expect(readFileSync(other, 'utf8')).toBe('a file elsewhere')
+      }
+    ],
+    [
+      'a junction to a folder elsewhere',
+      (temp, root) => {
+        const other = join(root, 'elsewhere')
+        mkdirSync(other)
+        writeFileSync(join(other, 'kept.txt'), 'kept')
+        symlinkSync(other, temp, 'junction')
+        return () => expect(readdirSync(other).map((name) => [name, readFileSync(join(other, name), 'utf8')])).toEqual([['kept.txt', 'kept']])
+      }
+    ]
+  ]
+  const symbolic: Array<[string, LinkAtTemp]> = [
+    [
+      'a symbolic link to a file elsewhere',
+      (temp, root) => {
+        const other = join(root, 'elsewhere.txt')
+        writeFileSync(other, 'a file elsewhere')
+        symlinkSync(other, temp, 'file')
+        return () => expect(readFileSync(other, 'utf8')).toBe('a file elsewhere')
+      }
+    ]
+  ]
+
+  /** A recovery pass whose journal must be rewritten: it swaps the one in-store stage in and keeps the entry outside
+   *  the workspace folder for the unlock, with `plant` at the journal's write temp. */
+  function rewriteWithLinkAtTemp(plant: LinkAtTemp): void {
+    const vp = freshVaultPaths('vault-journal-temp')
+    const docs = join(dirname(vp.dbPath), 'documents')
+    mkdirSync(docs, { recursive: true })
+    writeFileSync(join(docs, 'a.enc'), 'OLD-A')
+    writeFileSync(join(docs, `a.enc${REKEY_SUFFIX}`), 'NEW-A')
+    const outside = join(vp.root, 'legacy', `x.enc${REKEY_SUFFIX}`)
+    const journal = join(dirname(vp.dbPath), 'rekey-journal.json')
+    writeFileSync(journal, JSON.stringify({ version: 1, staged: [join(docs, `a.enc${REKEY_SUFFIX}`), outside], remove: [] }))
+    const untouched = plant(`${journal}.tmp`, vp.root)
+    applyPendingRekey(vp)
+    untouched()
+    expect(readFileSync(join(docs, 'a.enc'), 'utf8')).toBe('NEW-A')
+    expect(JSON.parse(readFileSync(journal, 'utf8')).staged, 'the journal lists only what waits').toEqual([outside])
+    expect(lstatSync(journal).isFile() && lstatSync(journal).nlink <= 1).toBe(true)
+  }
+
+  it.each(plantedAs)('%s at the write temp: the rewrite goes on, and the file or folder it reaches keeps its bytes', (_case, plant) =>
+    rewriteWithLinkAtTemp(plant)
+  )
+
+  it.runIf(canSymlink).each(symbolic)('%s at the write temp: the rewrite goes on, and the file it reaches keeps its bytes', (_case, plant) =>
+    rewriteWithLinkAtTemp(plant)
   )
 })
 

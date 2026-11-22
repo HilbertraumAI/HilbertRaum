@@ -136,6 +136,9 @@ const failures = vi.hoisted(() => ({
   lstatThrow: null as { path: string; code: string } | null,
   /** #1014 round 4: realpathSync throws this error code for exactly this path while set. */
   realpathThrow: null as { path: string; code: string } | null,
+  /** #1014 round 6: rmSync throws this error code for exactly this path while set: a file another program holds without
+   *  delete sharing (the rotated log, the journal itself). */
+  rmThrowFor: null as { path: string; code: string } | null,
   /** #1001 review round 3: the descriptors opened on a staged document or image copy, and the bytes read through them:
    *  what the unlock's pass actually reads of a stage. */
   stagedSidecarFds: new Set<number>(),
@@ -272,6 +275,10 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.rmSync += 1
         throw errnoError('EPERM', 'EPERM: operation not permitted, unlink (held .recovery)')
       }
+      if (failures.rmThrowFor !== null && String(path) === failures.rmThrowFor.path) {
+        failures.hits.rmSync += 1
+        throw errnoError(failures.rmThrowFor.code, `${failures.rmThrowFor.code}: unlink (a held file)`)
+      }
       return actual.rmSync(path, options)
     }),
     writeSync: vi.fn((fd: number, ...rest: unknown[]) => {
@@ -394,6 +401,7 @@ beforeEach(() => {
   failures.lstatReportsNoLinkCount = null
   failures.lstatThrow = null
   failures.realpathThrow = null
+  failures.rmThrowFor = null
   failures.stagedSidecarFds.clear()
   failures.stageBytesRead = 0
   failures.hits = {
@@ -1519,9 +1527,12 @@ describe('a staged document copy the unlock cannot read (#1001)', () => {
 
 /** A locked workspace under `pw` whose stored copy `documents/d2.pdf.enc` is still under a retired key, with its new
  *  copy ('the new copy') staged beside it under the data key: a v1 → v2 password change cut short after its commit.
- *  With the bytes of both. (Function declarations are hoisted: the #1001 rows above use it too.) */
-async function retiredCopyBesideStage(): Promise<{ vp: FreshVaultPaths; target: string; staged: string; before: Buffer[] }> {
-  const vp = lockedVault('recovery-guards-1001', 'pw')
+ *  With the bytes of both. (Function declarations are hoisted: the #1001 rows above use it too.) `logs` gives the paths
+ *  a `logs/` folder, for the rotated log. */
+async function retiredCopyBesideStage(
+  opts: { logs?: boolean } = {}
+): Promise<{ vp: FreshVaultPaths; target: string; staged: string; before: Buffer[] }> {
+  const vp = lockedVault('recovery-guards-1001', 'pw', opts)
   const target = join(dirname(vp.dbPath), 'documents', 'd2.pdf.enc')
   const seed = unlockedController(vp, 'pw')
   const staged = await storeCopy(seed, vp.root, `${target}.new`, 'the new copy') // under the data key
@@ -1655,6 +1666,57 @@ describe("a staged copy the journal lists that the start cannot swap in (#1015)"
     expect(existsSync(stagedDb)).toBe(false)
     expect(await readStoredCopy(next, vp.root, target)).toBe('the new copy')
     next.shutdown()
+  })
+
+  // Round 6: the rewritten journal used to drop the `remove` list (`remove: []`). When the swap could not remove the
+  // rotated log (another program held it), that was the last record of it, and the log stayed on the drive under the
+  // retired key for good. Now the rewrite keeps asking for it while it is still there, and the next start removes it.
+  it('a rotated log the swap could not remove, beside a held stage: the rewritten journal still asks for it, and the next start removes it', async () => {
+    const { vp, target, staged } = await retiredCopyBesideStage({ logs: true })
+    const rotated = join(vp.logsPath!, 'app.1.log.enc')
+    writeFileSync(rotated, 'a log under the retired key')
+    const journal = join(dirname(vp.dbPath), REKEY_JOURNAL_NAME)
+    writeFileSync(journal, JSON.stringify({ version: 1, staged: [staged], remove: [rotated] }))
+    const first = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.rmThrowFor = { path: rotated, code: 'EBUSY' }
+    failures.renameThrowForStage = staged
+    try {
+      expect(() => first.init()).not.toThrow()
+    } finally {
+      failures.rmThrowFor = null
+      failures.renameThrowForStage = null
+    }
+    expect(failures.hits.rmSync).toBeGreaterThan(0)
+    expect(first.isRecoveryBlocked()).toBe(true)
+    expect(readFileSync(rotated, 'utf8'), 'the held log').toBe('a log under the retired key')
+    expect(JSON.parse(readFileSync(journal, 'utf8'))).toEqual({ version: 1, staged: [staged], remove: ['app.1.log.enc'] })
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(existsSync(rotated), 'the log, once it is free').toBe(false)
+    expect(existsSync(journal)).toBe(false)
+    next.unlock('pw')
+    expect(await readStoredCopy(next, vp.root, target)).toBe('the new copy')
+    next.shutdown()
+  })
+
+  // Round 6: what a pass counted reaches the log however the pass ends. A journal the pass could not remove (another
+  // program held it) threw out of the settle before the count was reported, so the refused entry left no trace.
+  it.each<[string, boolean]>([
+    ['the roll-forward (a v2 descriptor)', false],
+    ['the rollback (a v1 descriptor)', true]
+  ])('a journal %s cannot remove: the start is blocked, and the entry it refused is still counted', (_pass, legacyV1) => {
+    const vp = lockedVault('recovery-guards-1014', 'pw', { legacyV1 })
+    const journal = journalListing(vp, [join(vp.root, 'notes.txt')]) // no stage at all: refused
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.rmThrowFor = { path: journal, code: 'EBUSY' }
+    try {
+      expect(() => ctl.init()).not.toThrow()
+    } finally {
+      failures.rmThrowFor = null
+    }
+    expect(failures.hits.rmSync).toBeGreaterThan(0)
+    expect(ctl.isRecoveryBlocked()).toBe(true)
+    expect(ctl.takeJournalRefusals()).toBe(1)
   })
 
   // Review V F-2 (probe P1, on the unlock path), moved here from workspace-vault.test.ts: the start's steps judge the
@@ -1908,6 +1970,76 @@ describe('a rekey journal entry a failed stat cannot judge (#1014 round 4)', () 
     expect(existsSync(journal)).toBe(false)
     next.unlock('next-password')
     expect(await readStoredCopy(next, vp.root, target)).toBe(OUT_OF_STORE_TEXT)
+    next.shutdown()
+  })
+
+  // Round 6: an entry a pass could not judge stayed in the journal even after that pass swapped its stage in (the
+  // staged database and the scanned in-store stages are found without the journal). The next start judged the entry
+  // inside again, so a stray `.enc.new` at that name was "listed" and rolled over `.enc` with no #973 key check. Now an
+  // entry a pass did not admit stays only while its stage is still there, or while a stat cannot tell.
+  it('a staged database swapped in while a failed realpath left its entry unjudged: the journal no longer names it, and a stray staged database later is a doubt', () => {
+    const vp = lockedVault('recovery-guards-1014', 'pw')
+    const stagedDb = `${vp.encPath}${REKEY_SUFFIX}`
+    copyFileSync(vp.encPath, stagedDb) // the database, staged under this workspace's own key
+    const journal = journalListing(vp, [stagedDb])
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.realpathThrow = { path: dirname(vp.dbPath), code: 'EBUSY' }
+    try {
+      ctl.init() // a doubt while its entry cannot be judged: left for the unlock
+      ctl.unlock('pw') // it opens under the data key: rolled forward by a pass that still cannot judge the entry
+    } finally {
+      failures.realpathThrow = null
+    }
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    expect(existsSync(stagedDb), 'the staged database, swapped in').toBe(false)
+    expect(existsSync(journal), 'the journal').toBe(false)
+    ctl.lock()
+    writeFileSync(stagedDb, readFileSync(lockedVault('recovery-guards-stray', 'other-password').encPath))
+    const enc = readFileSync(vp.encPath)
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(readFileSync(vp.encPath).equals(enc), '.enc after the next start').toBe(true)
+    next.unlock('pw')
+    expect(next.takeStageOutcome()).toBe('removed')
+    next.shutdown()
+  })
+
+  // The same at the unlock's out-of-store pass, which settles the journal after the #1001 pass has judged the document
+  // stages: one it swapped in while its entry was unjudged is no longer named, so a stray copy at that name later is a
+  // doubt again, and the unlock removes it instead of the start rolling it over the stored copy.
+  it('a document stage the unlock swapped in while a failed realpath left its entry unjudged: the journal no longer names it, and a stray copy there later is a doubt', async () => {
+    const { vp, target, staged } = await retiredCopyBesideStage()
+    const outside = join(vp.root, 'elsewhere', `x.txt.enc${REKEY_SUFFIX}`) // deferred: keeps the out-of-store pass running
+    const journal = journalListing(vp, [staged, outside])
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.realpathThrow = { path: dirname(vp.dbPath), code: 'EBUSY' }
+    try {
+      ctl.init()
+      ctl.unlock('pw')
+    } finally {
+      failures.realpathThrow = null
+    }
+    expect(failures.hits.statThrow).toBeGreaterThan(0)
+    expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 1, removed: 0, left: 0, setAside: 0 })
+    expect(existsSync(journal), 'the journal').toBe(false)
+    ctl.lock()
+    const stray = await (async () => {
+      const other = lockedVault('recovery-guards-stray', 'other-password')
+      const seed = unlockedController(other, 'other-password')
+      try {
+        return readFileSync(await storeCopy(seed, other.root, join(dirname(other.dbPath), 'documents', 'd2.pdf.enc'), 'the new copy'))
+      } finally {
+        seed.lock()
+      }
+    })()
+    writeFileSync(staged, stray)
+    const stored = readFileSync(target)
+    const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    next.init()
+    expect(readFileSync(target).equals(stored), 'the stored copy after the next start').toBe(true)
+    next.unlock('pw')
+    expect(next.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    expect(await readStoredCopy(next, vp.root, target)).toBe('the new copy')
     next.shutdown()
   })
 })

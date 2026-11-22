@@ -1769,11 +1769,16 @@ function pathKey(path: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
 
-/** Atomic (temp + fsync + rename), like the descriptor: recovery must never read half a journal. */
+/** Atomic (temp + fsync + rename), like the descriptor: recovery must never read half a journal.
+ *  #1014 round 6 (review V8-6): never through a link at the temp name. 'w' followed one: a hard or symbolic link there
+ *  had the journal written into the file it reaches, elsewhere on the drive, and a junction failed every rewrite. Now
+ *  whatever is at that name is removed first ({@link removeTempName}: a link by `unlink`) and the temp is created anew
+ *  ('wx'), so one planted in between makes the write fail instead. A folder there is left, and the write fails. */
 function writeRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournal): void {
   const path = rekeyJournalPath(vaultPaths)
   const tmp = `${path}.tmp`
-  const fd = openSync(tmp, 'w')
+  removeTempName(tmp)
+  const fd = openSync(tmp, 'wx')
   try {
     writeSync(fd, Buffer.from(JSON.stringify(journal, null, 2), 'utf8'))
     fsyncSync(fd)
@@ -1803,6 +1808,10 @@ function clearRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | n
  * swapped in, so a stray `.enc.new` that turned up later was "listed" and rolled over `.enc` without the #973 key check.
  * Left as it is when it already lists exactly that; a rewrite that cannot be made (a folder at the journal's temp name)
  * leaves it as it was, which loses nothing.
+ * Round 6 (review V8-1): a rewrite keeps the rotated log's flag (its file name, as {@link planRekeyJournal} reads it)
+ * while that log is still at the path the app computes for it. Rewritten with `remove: []`, a journal kept for a stage
+ * held at the commit dropped it, and a log the swap could not remove (held too) stayed under the retired key for good.
+ * A journal with nothing left waiting is cleared as before.
  */
 function settleRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | null, waiting: readonly string[]): void {
   if (waiting.length === 0) {
@@ -1810,10 +1819,18 @@ function settleRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | 
     return
   }
   if (journal === null || journal.corrupt) return // nothing it lists can be judged: kept (or quarantined) as it is
+  const logsPath = vaultPaths.logsPath
+  const logStays =
+    logsPath !== undefined &&
+    logsPath !== '' &&
+    journal.remove.some(namesRotatedLog) &&
+    !statSaysAbsent(join(logsPath, ROTATED_ENCRYPTED_LOG_NAME))
+  const remove = logStays ? [ROTATED_ENCRYPTED_LOG_NAME] : []
   const keys = (list: readonly string[]): string => [...new Set(list.map(pathKey))].sort().join('\n')
-  if (journal.remove.length === 0 && keys(journal.staged) === keys(waiting)) return
+  const sameRemove = journal.remove.length === remove.length && journal.remove.every((entry, i) => entry === remove[i])
+  if (sameRemove && keys(journal.staged) === keys(waiting)) return
   try {
-    writeRekeyJournal(vaultPaths, { version: REKEY_JOURNAL_VERSION, staged: [...waiting], remove: [] })
+    writeRekeyJournal(vaultPaths, { version: REKEY_JOURNAL_VERSION, staged: [...waiting], remove })
   } catch {
     /* the journal as it was: it still lists everything that waits */
   }
@@ -1920,6 +1937,15 @@ function stillWaiting(vaultPaths: VaultPaths, staged: string): boolean {
   )
 }
 
+/** #1014 round 6 (review V8-2): does an entry a pass did not admit (`unknown`, or deferred to the unlock) still wait?
+ *  As {@link stillWaiting} reads an admitted one, and also while a stat of its stage cannot tell (anything but ENOENT).
+ *  Kept unfiltered, such an entry stayed after the pass had swapped its stage in (the staged database and the scanned
+ *  in-store stages are found without the journal), and the next pass, judging the entry inside again, read a stray
+ *  `.enc.new` at that name as listed and rolled it over its stored copy with no key check (#973, #1001). */
+function notAdmittedStillWaits(vaultPaths: VaultPaths, staged: string): boolean {
+  return stillWaiting(vaultPaths, staged) || !statSaysAbsent(staged)
+}
+
 /**
  * #1014: what a recovery may act on in a rekey journal. The journal is plain JSON in the workspace folder, read at every
  * start before any password, and its entries are absolute paths: nothing proves the app wrote them, or wrote them for
@@ -1971,14 +1997,18 @@ function planRekeyJournal(vaultPaths: VaultPaths, journal: RekeyJournalRead | nu
     else if (where === 'unknown') plan.unknown.push(entry) // round 4: judged again by the next pass
     else plan.deferred.push(entry) // outside it, or (round 5) inside by its text but through a link
   }
-  // `win32.basename` splits at `\` and `/` alike, so a journal a Kit's Windows app wrote names the log for its Linux or
-  // macOS app too.
-  const fold = (name: string): string => (process.platform === 'win32' ? name.toLowerCase() : name)
   for (const entry of journal?.remove ?? []) {
-    if (vaultPaths.logsPath && fold(win32.basename(entry)) === fold(ROTATED_ENCRYPTED_LOG_NAME)) plan.removeRotatedLog = true
+    if (vaultPaths.logsPath && namesRotatedLog(entry)) plan.removeRotatedLog = true
     else plan.refused += 1
   }
   return plan
+}
+
+/** #1014: does a `remove` entry name the rotated log? By its file name alone: `win32.basename` splits at `\` and `/`
+ *  alike, so a journal a Kit's Windows app wrote names the log for its Linux or macOS app too. */
+function namesRotatedLog(entry: string): boolean {
+  const fold = (name: string): string => (process.platform === 'win32' ? name.toLowerCase() : name)
+  return fold(win32.basename(entry)) === fold(ROTATED_ENCRYPTED_LOG_NAME)
 }
 
 /** #1014: the rotated diagnostics log, at the path the app computes for it (best-effort, idempotent: nothing reads it). */
@@ -2204,11 +2234,11 @@ export function applyPendingRekey(
   // recovery can still finish that swap; clear it once every entry is accounted for.
   // #1014: the entries this pass admitted; a stage still waiting for the database keeps it too. Round 3: and the journal
   // is rewritten to list only those ({@link stillWaiting}), so it vouches for nothing this pass settled. Round 4: and the
-  // entries a failed stat left unjudged, for the next pass.
+  // entries a failed stat left unjudged, for the next pass. Round 6: those and the deferred ones only while their stage
+  // may still be there ({@link notAdmittedStillWaits}).
   const waiting = [
     ...accepted.filter((staged) => stillWaiting(vaultPaths, staged)),
-    ...plan.unknown,
-    ...(outOfStore ? [] : plan.deferred)
+    ...[...plan.unknown, ...(outOfStore ? [] : plan.deferred)].filter((staged) => notAdmittedStillWaits(vaultPaths, staged))
   ]
   // Anything still unswapped (a persistently locked file) is left staged for recoverPendingRekey
   // on the next unlock; surface the failure so the caller logs it (the swap is old-or-new per
@@ -2226,8 +2256,13 @@ export function applyPendingRekey(
     onRefused?.(left)
     throw lastErr instanceof Error ? lastErr : new Error('applyPendingRekey: incomplete swap')
   }
-  settleRekeyJournal(vaultPaths, journal, waiting)
-  onRefused?.(left)
+  // Round 6 (review V8-8): the count is reported however the settle ends; a journal another program holds threw out of
+  // the clear before it was heard.
+  try {
+    settleRekeyJournal(vaultPaths, journal, waiting)
+  } finally {
+    onRefused?.(left)
+  }
 }
 
 /** Roll back an uncommitted rekey: delete the staged files and the journal. Plain delete
@@ -2256,8 +2291,13 @@ export function discardPendingRekey(
   for (const staged of [...plan.staged, ...listed]) {
     if (pathKey(staged) !== stagedDb && removeTempName(`${staged}.tmp`)) left += 1
   }
-  settleRekeyJournal(vaultPaths, journal, plan.unknown)
-  onRefused?.(left)
+  // Round 6: an unjudged entry only while its stage may still be there (review V8-2), and the count reported however
+  // the settle ends (review V8-8: a journal another program holds threw out of the clear before the count was heard).
+  try {
+    settleRekeyJournal(vaultPaths, journal, plan.unknown.filter((staged) => notAdmittedStillWaits(vaultPaths, staged)))
+  } finally {
+    onRefused?.(left)
+  }
 }
 
 /**
@@ -2399,13 +2439,17 @@ function finishOutOfStoreStages(
   }
   // Round 3: rewritten to what still waits (an in-workspace entry still staged or unreachable, an outside stage not
   // settled), or cleared; the refused outside stages are dropped, so no later pass counts them again. Round 4: an
-  // in-workspace entry a failed stat left unjudged stays too, for the next pass.
-  settleRekeyJournal(vaultPaths, journal, [
-    ...plan.staged.filter((staged) => stillWaiting(vaultPaths, staged)),
-    ...plan.unknown,
-    ...unsettled
-  ])
-  onRefused?.(left + unsettled.length) // round 5: and the stages kept unsettled
+  // in-workspace entry a failed stat left unjudged stays too, for the next pass; round 6, only while its stage may still
+  // be there (review V8-2), and the count is reported however the settle ends (review V8-8).
+  try {
+    settleRekeyJournal(vaultPaths, journal, [
+      ...plan.staged.filter((staged) => stillWaiting(vaultPaths, staged)),
+      ...plan.unknown.filter((staged) => notAdmittedStillWaits(vaultPaths, staged)),
+      ...unsettled
+    ])
+  } finally {
+    onRefused?.(left + unsettled.length) // round 5: and the stages kept unsettled
+  }
 }
 
 /**
