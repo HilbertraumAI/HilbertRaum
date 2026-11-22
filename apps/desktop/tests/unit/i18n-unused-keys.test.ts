@@ -473,6 +473,22 @@ const PAIR_LITERAL_EXCEPTIONS: readonly PairLiteralException[] = [
     reason: "the question's detected language in the expansion result (content language, not the interface language)"
   },
   {
+    file: 'main/services/rag/cross-language.ts',
+    text: "detectQuestionLanguage(question) !== 'de'",
+    reason:
+      'the cross-language gate (#1003): the question must read as German, the one source language the translation ships for (content language, owner call 2026-11-22)'
+  },
+  {
+    file: 'main/services/rag/cross-language.ts',
+    text: "language === 'de'",
+    reason: 'the same gate: no top passage may read as German (content language, not the interface language)'
+  },
+  {
+    file: 'main/services/rag/cross-language.ts',
+    text: "language === 'en'",
+    reason: 'the same gate: most top passages must read as English, the target language (content language, not the interface language)'
+  },
+  {
     file: 'main/services/ingestion/index.ts',
     text: "v.targetLang === 'de'",
     reason: 'legacy translation-provenance rows, persisted before the type field, translated only to de/en'

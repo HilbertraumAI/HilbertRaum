@@ -28,6 +28,18 @@
  * English question as German only misses a chance to fire it, which costs nothing beyond the
  * gain the mechanism would otherwise have bought. The detector is biased toward the
  * recoverable mistake.
+ *
+ * Second caller (#1003, follow-ups wave 7, `docs/rag-design.md` §20): the cross-language passage
+ * search (`rag/cross-language.ts`) reads the question with this function and each top fused passage
+ * with `detectPassageLanguage` below (the same count, no umlaut tie-break). It translates the
+ * question only when the question reads as German, no passage as German and a strict majority of
+ * the passages as English (a passage it cannot read does not block, but it is not English, so it
+ * counts against that majority). On chunk text the count read all 16 documents of the bilingual
+ * eval corpus and all 19 chunks of a long English lease correctly. The question-side bias is the
+ * safe one there: a question it cannot read keeps today's search. It costs one thing the other
+ * way: an English question with a German-looking word ("Who was Hans Müller?": "was" counts as
+ * German, the umlaut breaks the tie) reads as German and pays one translation call; when the
+ * model hands it back unchanged, the search stays as it was.
  */
 
 /** Common German function words the detector counts. Frozen; never re-tuned. */
@@ -57,16 +69,36 @@ const UMLAUT_RE = /[äöüßÄÖÜ]/
  * for the method, its provenance and its deliberate asymmetry.
  */
 export function detectQuestionLanguage(question: string): 'de' | 'en' | null {
-  const normalised = question.normalize('NFC').toLowerCase()
-  const tokens = normalised.split(/[^\p{L}]+/u).filter((t) => t.length > 0)
+  const { deCount, enCount } = countStopWords(question)
+  if (deCount > enCount) return 'de'
+  if (enCount > deCount) return 'en'
+  if (UMLAUT_RE.test(question)) return 'de'
+  return null
+}
+
+/**
+ * The same count for a PASSAGE (#1003 review round 2, the cross-language gate), without the umlaut
+ * tie-break: German only when it holds more German than English function words, English only the
+ * other way round, `null` on a tie. The tie-break suits a question; on a passage it read a German
+ * address or letterhead in an English lease («Müller Bau GmbH, Königstraße 5») as German and closed
+ * the gate for that lease. `detectQuestionLanguage` (the question side, and the pack planner) is
+ * unchanged.
+ */
+export function detectPassageLanguage(passage: string): ReturnType<typeof detectQuestionLanguage> {
+  const { deCount, enCount } = countStopWords(passage)
+  if (deCount > enCount) return 'de'
+  if (enCount > deCount) return 'en'
+  return null
+}
+
+/** NFC-normalise, lower-case, split on runs of non-letters, and count each list's words (the method above). */
+function countStopWords(text: string): { deCount: number; enCount: number } {
+  const tokens = text.normalize('NFC').toLowerCase().split(/[^\p{L}]+/u).filter((t) => t.length > 0)
   let deCount = 0
   let enCount = 0
   for (const token of tokens) {
     if (GERMAN_STOP_WORDS.has(token)) deCount++
     if (ENGLISH_STOP_WORDS.has(token)) enCount++
   }
-  if (deCount > enCount) return 'de'
-  if (enCount > deCount) return 'en'
-  if (UMLAUT_RE.test(question)) return 'de'
-  return null
+  return { deCount, enCount }
 }

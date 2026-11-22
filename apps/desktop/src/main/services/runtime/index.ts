@@ -110,6 +110,12 @@ export interface RuntimeChatOptions {
    */
   responseSchema?: JsonSchema
   responseSchemaName?: string
+  /**
+   * #39 / #1003: a helper call inside a turn (the cross-language translation), not the turn's answer.
+   * It streams as usual but does not mark the runtime warm, so the first-answer warm-up hint still
+   * covers the answer's own cold prefill. The request body is the same.
+   */
+  auxiliary?: boolean
 }
 
 export interface RuntimeStartOptions {

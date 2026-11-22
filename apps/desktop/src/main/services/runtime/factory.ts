@@ -921,7 +921,7 @@ class LadderRuntime implements ModelRuntime {
     // that arrives before any answer token — proves the one-time prefill is done, so the
     // Chat warm-up hint must stop claiming the model is still warming up. Mark on either.
     const markServed = (): void => {
-      this.served = true
+      if (!options?.auxiliary) this.served = true // a helper call is no first answer (#1003)
     }
     const inner = this.inner.chatStream(
       messages,
