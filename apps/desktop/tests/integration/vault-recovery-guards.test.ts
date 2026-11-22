@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { existsSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { existsSync, linkSync, lstatSync, writeFileSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { basename, dirname, join } from 'node:path'
 import {
   unlockEncryptedVault,
   lockEncryptedVault,
   decryptFile,
+  encryptFile,
   WorkspaceController,
   RECOVERY_SUFFIX,
   VaultLockError,
@@ -25,8 +27,11 @@ import {
   failedLockState,
   freshVaultPaths,
   lockedVault,
+  readStoredCopy,
+  storeCopy,
   unlockedController,
-  workspaceIpcCtx
+  workspaceIpcCtx,
+  type FreshVaultPaths
 } from '../helpers/vault-fixtures'
 
 // full-audit 2026-07-12 REL-1 / REL-2 — forced-failure guards on the `.recovery` salvage path,
@@ -91,6 +96,33 @@ const failures = vi.hoisted(() => ({
    *  for an antivirus or indexer hold on the file the unlock must read under the data key, `ENOENT` for a file gone since
    *  the check, `EIO` for a failing drive. Its existence still reads true. */
   openThrowOnStagedEnc: null as string | null,
+  /** #1001: openSync throws this error code for a staged document or image copy (a `documents/` or `images/`
+   *  `….enc.new`) while set: `EBUSY` for an antivirus or indexer hold on the file the unlock must read under the data
+   *  key, `EIO` for a failing drive. */
+  openThrowOnStagedSidecar: null as string | null,
+  /** #1001: this stored copy reads as a delete-pending file on Windows while set: `statSync` throws EPERM for it and
+   *  `existsSync`, which swallows the error, answers false. */
+  sidecarTargetDeletePending: null as string | null,
+  /** #1001 review round 1: renameSync throws this error code for a staged document or image copy renamed onto its stored
+   *  copy's name while set: a stage an antivirus or indexer holds without delete sharing (it reads, it cannot move). */
+  renameThrowOnStagedSidecar: null as string | null,
+  /** #1001 review round 2: renameSync throws this error code for a stored copy the unlock moved aside (`….enc.tmp` under
+   *  `documents/` or `images/`) moved back onto its own name while set: the move back after a failed swap fails too. */
+  renameThrowOnAsideRestore: null as string | null,
+  /** #1001 review round 2: statSync (and, round 3, lstatSync) reports inode 0 and one link for every path under
+   *  `documents/` or `images/` while set, as some network (SMB) and FUSE mounts do: a hard link is then not told from two
+   *  files by its ids. */
+  statReportsNoInode: false,
+  /** #1001 review round 3: lstatSync reports a symbolic link for exactly this path while set: the stand-in for a link at
+   *  the stored copy's name where this machine may not create one (a Windows account without the symlink privilege). */
+  lstatReportsSymlink: null as string | null,
+  /** #1001 review round 3: the descriptors opened on a staged document or image copy, and the bytes read through them:
+   *  what the unlock's pass actually reads of a stage. */
+  stagedSidecarFds: new Set<number>(),
+  stageBytesRead: 0,
+  /** #1001 review round 2: openSync throws EBUSY for exactly this stored copy while set: a hold on the stored copy the
+   *  unlock reads before it swaps a stage in. */
+  openThrowOnSidecarTarget: null as string | null,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
   hits: {
@@ -104,7 +136,13 @@ const failures = vi.hoisted(() => ({
     openSyncWorking: 0,
     renameStagedEnc: 0,
     putBackOnStage: 0,
-    openSyncStaged: 0
+    openSyncStaged: 0,
+    openSyncStagedSidecar: 0,
+    sidecarTargetStat: 0,
+    renameStagedSidecar: 0,
+    renameAsideRestore: 0,
+    statNoInode: 0,
+    openSyncSidecarTarget: 0
   }
 }))
 
@@ -117,11 +155,20 @@ vi.mock('node:fs', async (importOriginal) => {
   }
   const isRecovery = (p: unknown): boolean => String(p).endsWith('.recovery')
   const isEnc = (p: unknown): boolean => String(p).endsWith('.sqlite.enc')
+  const isStagedSidecar = (p: unknown): boolean => /[\\/](documents|images)[\\/][^\\/]+\.enc\.new$/.test(String(p))
+  const isAsideCopy = (p: unknown): boolean => /[\\/](documents|images)[\\/][^\\/]+\.enc\.tmp$/.test(String(p))
+  const inStore = (p: unknown): boolean => /[\\/](documents|images)[\\/]/.test(String(p))
+  const isPendingSidecarTarget = (p: unknown): boolean =>
+    failures.sidecarTargetDeletePending !== null && String(p) === failures.sidecarTargetDeletePending
   const mocked = {
     ...actual,
     existsSync: vi.fn((path: Parameters<typeof actual.existsSync>[0]) => {
       if (failures.encDeletePending && isEnc(path)) {
         failures.hits.encStat += 1
+        return false
+      }
+      if (isPendingSidecarTarget(path)) {
+        failures.hits.sidecarTargetStat += 1
         return false
       }
       return actual.existsSync(path)
@@ -130,6 +177,16 @@ vi.mock('node:fs', async (importOriginal) => {
       if (failures.renameThrowOnExistingRecoveryTarget && isRecovery(to) && actual.existsSync(to)) {
         failures.hits.renameSync += 1
         throw errnoError('EPERM', 'EPERM: operation not permitted, rename (held .recovery target)')
+      }
+      const heldStage = failures.renameThrowOnStagedSidecar
+      if (heldStage !== null && isStagedSidecar(from) && String(to) === String(from).slice(0, -'.new'.length)) {
+        failures.hits.renameStagedSidecar += 1
+        throw errnoError(heldStage, `${heldStage}: rename (a held staged document copy)`)
+      }
+      const heldAside = failures.renameThrowOnAsideRestore
+      if (heldAside !== null && isAsideCopy(from) && String(to) === String(from).slice(0, -'.tmp'.length)) {
+        failures.hits.renameAsideRestore += 1
+        throw errnoError(heldAside, `${heldAside}: rename (a stored copy moved aside)`)
       }
       if (failures.renameThrowOnStagedEnc && String(from).endsWith('.enc.new') && isEnc(to)) {
         failures.hits.renameStagedEnc += 1
@@ -167,8 +224,18 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.openSyncStaged += 1
         throw errnoError(stagedCode, `${stagedCode}: open (the staged database)`)
       }
+      if (failures.openThrowOnSidecarTarget !== null && String(path) === failures.openThrowOnSidecarTarget) {
+        failures.hits.openSyncSidecarTarget += 1
+        throw errnoError('EBUSY', 'EBUSY: open (a held stored copy)')
+      }
+      const sidecarCode = failures.openThrowOnStagedSidecar
+      if (sidecarCode !== null && isStagedSidecar(path)) {
+        failures.hits.openSyncStagedSidecar += 1
+        throw errnoError(sidecarCode, `${sidecarCode}: open (a staged document copy)`)
+      }
       const fd = actual.openSync(path, flags, mode)
       if (failures.enospcOnEncTmpWrite && String(path).endsWith('.enc.tmp')) failures.encTmpFds.add(fd)
+      if (isStagedSidecar(path)) failures.stagedSidecarFds.add(fd)
       return fd
     }),
     rmSync: vi.fn((path: Parameters<typeof actual.rmSync>[0], options?: Parameters<typeof actual.rmSync>[1]) => {
@@ -187,7 +254,30 @@ vi.mock('node:fs', async (importOriginal) => {
     }),
     closeSync: vi.fn((fd: number) => {
       failures.encTmpFds.delete(fd)
+      failures.stagedSidecarFds.delete(fd)
       return actual.closeSync(fd)
+    }),
+    readSync: vi.fn((fd: number, ...rest: unknown[]) => {
+      const read = (actual.readSync as unknown as (...args: unknown[]) => number)(fd, ...rest)
+      if (failures.stagedSidecarFds.has(fd)) failures.stageBytesRead += read
+      return read
+    }),
+    lstatSync: vi.fn((...args: unknown[]) => {
+      const stats = (actual.lstatSync as unknown as (...a: unknown[]) => unknown)(...args)
+      if (stats === undefined) return stats
+      if (failures.lstatReportsSymlink !== null && String(args[0]) === failures.lstatReportsSymlink) {
+        return Object.assign(Object.create(Object.getPrototypeOf(stats) as object) as object, stats, {
+          isFile: () => false,
+          isSymbolicLink: () => true
+        })
+      }
+      if (failures.statReportsNoInode && inStore(args[0])) {
+        failures.hits.statNoInode += 1
+        const real = stats as { ino: number | bigint }
+        const blank = typeof real.ino === 'bigint' ? { ino: 0n, nlink: 1n } : { ino: 0, nlink: 1 }
+        return Object.assign(Object.create(Object.getPrototypeOf(stats) as object) as object, stats, blank)
+      }
+      return stats
     }),
     statSync: vi.fn((...args: unknown[]) => {
       if (failures.statThrowOnWorkingFile && String(args[0]).endsWith('hilbertraum.sqlite')) {
@@ -198,7 +288,18 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.encStat += 1
         throw errnoError('EPERM', 'EPERM: operation not permitted, stat (a delete-pending .enc)')
       }
-      return (actual.statSync as unknown as (...a: unknown[]) => unknown)(...args)
+      if (isPendingSidecarTarget(args[0])) {
+        failures.hits.sidecarTargetStat += 1
+        throw errnoError('EPERM', 'EPERM: operation not permitted, stat (a delete-pending stored copy)')
+      }
+      const stats = (actual.statSync as unknown as (...a: unknown[]) => unknown)(...args)
+      if (failures.statReportsNoInode && inStore(args[0]) && stats !== undefined) {
+        failures.hits.statNoInode += 1
+        const real = stats as { ino: number | bigint }
+        const blank = typeof real.ino === 'bigint' ? { ino: 0n, nlink: 1n } : { ino: 0, nlink: 1 }
+        return Object.assign(Object.create(Object.getPrototypeOf(stats) as object) as object, stats, blank)
+      }
+      return stats
     })
   }
   return { ...mocked, default: mocked }
@@ -233,6 +334,15 @@ beforeEach(() => {
   failures.renameThrowOnStagedEnc = false
   failures.putBackDescriptorOnStage = null
   failures.openThrowOnStagedEnc = null
+  failures.openThrowOnStagedSidecar = null
+  failures.sidecarTargetDeletePending = null
+  failures.renameThrowOnStagedSidecar = null
+  failures.renameThrowOnAsideRestore = null
+  failures.statReportsNoInode = false
+  failures.openThrowOnSidecarTarget = null
+  failures.lstatReportsSymlink = null
+  failures.stagedSidecarFds.clear()
+  failures.stageBytesRead = 0
   failures.hits = {
     renameSync: 0,
     openSync: 0,
@@ -244,7 +354,13 @@ beforeEach(() => {
     openSyncWorking: 0,
     renameStagedEnc: 0,
     putBackOnStage: 0,
-    openSyncStaged: 0
+    openSyncStaged: 0,
+    openSyncStagedSidecar: 0,
+    sidecarTargetStat: 0,
+    renameStagedSidecar: 0,
+    renameAsideRestore: 0,
+    statNoInode: 0,
+    openSyncSidecarTarget: 0
   }
   ipcState.handlers.clear()
 })
@@ -462,7 +578,13 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       openSyncWorking: 0,
       renameStagedEnc: 0,
       putBackOnStage: 0,
-      openSyncStaged: 0
+      openSyncStaged: 0,
+      openSyncStagedSidecar: 0,
+      sidecarTargetStat: 0,
+      renameStagedSidecar: 0,
+      renameAsideRestore: 0,
+      statNoInode: 0,
+      openSyncSidecarTarget: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -1036,6 +1158,306 @@ describe('a staged database the unlock cannot read (#973)', () => {
     ctl.unlock('pw')
     expect(getSettings(ctl.requireDb()).contextTokens).toBe(5151)
     expect(existsSync(staged)).toBe(false)
+    ctl.shutdown()
+  })
+})
+
+// #1001: the unlock judges a staged document or image copy that no journal lists, beside a stored copy that is there,
+// by reading it under the data key. A read it cannot make (an antivirus or indexer hold, a failing drive) leaves the
+// stage and the stored copy as they are and opens the workspace (owner decision D-1): a stored copy is written once, so
+// a stage left loses nothing, and one file never locks the user out of the whole workspace. The next unlock judges it
+// again.
+describe('a staged document copy the unlock cannot read (#1001)', () => {
+  /** A stored document copy in `vp`, written while it is unlocked under `password`; its text names the password. */
+  async function storedDocument(vp: FreshVaultPaths, password: string): Promise<string> {
+    const ctl = unlockedController(vp, password)
+    try {
+      return await storeCopy(ctl, vp.root, join(dirname(vp.dbPath), 'documents', 'd1.pdf.enc'), `the copy under ${password}`)
+    } finally {
+      ctl.lock()
+    }
+  }
+
+  /** A locked workspace under `pw` with a stored document copy, and the same copy of another workspace at its staged
+   *  name; the bytes of both. The other workspace's password (`qq`) has the length of `pw`, so the two copies have the
+   *  same length and the unlock reads the stage (one of another length is removed after a stat, round 3). */
+  async function documentBesideForeignStage(): Promise<{ vp: FreshVaultPaths; target: string; staged: string; before: Buffer[] }> {
+    const vp = lockedVault('recovery-guards-1001', 'pw')
+    const target = await storedDocument(vp, 'pw')
+    const staged = `${target}.new`
+    writeFileSync(staged, readFileSync(await storedDocument(lockedVault('recovery-guards-1001-other', 'qq'), 'qq')))
+    return { vp, target, staged, before: [readFileSync(target), readFileSync(staged)] }
+  }
+
+  it.each<[string]>([['EBUSY'], ['EIO']])(
+    'a staged document copy that fails to read with %s: the workspace opens, both files byte for byte, one line logged; the next unlock removes it',
+    async (code) => {
+      const { vp, target, staged, before } = await documentBesideForeignStage()
+      const unchanged = (): void => {
+        expect(readFileSync(target).equals(before[0]), 'the stored copy').toBe(true)
+        expect(readFileSync(staged).equals(before[1]), 'the stage').toBe(true)
+      }
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      unchanged() // the start leaves both
+      registerWorkspaceIpc(workspaceIpcCtx(ctl))
+      const linesBefore = readLogTail(100_000).length
+      failures.openThrowOnStagedSidecar = code
+      let result: unknown
+      try {
+        result = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+      } finally {
+        failures.openThrowOnStagedSidecar = null
+      }
+      expect(failures.hits.openSyncStagedSidecar).toBeGreaterThan(0)
+      expect(result).toMatchObject({ ok: true })
+      unchanged()
+      expect(await readStoredCopy(ctl, vp.root, target)).toBe('the copy under pw')
+      const logged = readLogTail(100_000)
+        .slice(linesBefore)
+        .filter((line) => line.includes('(#1001)'))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain('"left":1')
+      ctl.lock()
+      ctl.unlock('pw') // the hold is gone: judged again, and removed
+      expect(existsSync(staged)).toBe(false)
+      expect(readFileSync(target).equals(before[0])).toBe(true)
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+      ctl.shutdown()
+    }
+  )
+
+  // The doubt needs the stored copy proven present only by a stat that does not say ENOENT (the #911 rule, as #973's for
+  // `.enc`): one that fails otherwise (a delete-pending file on Windows, which `existsSync` reads as gone) is doubt too,
+  // and the start swaps nothing over it.
+  it('a stat of the stored copy that fails with EPERM at the start: the stage beside it is left, and the unlock removes it once the copy reads again', async () => {
+    const { vp, target, staged, before } = await documentBesideForeignStage()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.sidecarTargetDeletePending = target
+    try {
+      ctl.init()
+    } finally {
+      failures.sidecarTargetDeletePending = null
+    }
+    expect(failures.hits.sidecarTargetStat).toBeGreaterThan(0)
+    expect(readFileSync(target).equals(before[0]), 'the stored copy').toBe(true)
+    expect(readFileSync(staged).equals(before[1]), 'the stage').toBe(true)
+    ctl.unlock('pw')
+    expect(existsSync(staged)).toBe(false)
+    expect(await readStoredCopy(ctl, vp.root, target)).toBe('the copy under pw')
+    ctl.shutdown()
+  })
+
+  // Review round 1: the swap never destroys the stored copy before the stage is in its place. A stage that opens under
+  // the data key but cannot be moved (a hold that lets it be read and refuses a delete) used to cost the stored copy,
+  // shredded first; the stage then counted as the only copy left, and every later start and unlock threw the raw rename
+  // error. Now the stored copy goes back to its name, the workspace opens, and later starts and unlocks leave the stage
+  // for an unlock that can move it.
+  /** A locked workspace under `pw` whose stored copy `documents/d2.pdf.enc` is still under a retired key, with its new
+   *  copy ('the new copy') staged beside it under the data key: a v1 → v2 password change cut short after its commit.
+   *  With the bytes of both. */
+  async function retiredCopyBesideStage(): Promise<{ vp: FreshVaultPaths; target: string; staged: string; before: Buffer[] }> {
+    const vp = lockedVault('recovery-guards-1001', 'pw')
+    const target = join(dirname(vp.dbPath), 'documents', 'd2.pdf.enc')
+    const seed = unlockedController(vp, 'pw')
+    const staged = await storeCopy(seed, vp.root, `${target}.new`, 'the new copy') // under the data key
+    seed.lock()
+    const src = join(vp.root, 'retired-src.txt')
+    writeFileSync(src, 'the new copy')
+    encryptFile(src, target, randomBytes(32)) // the stored copy, still under the retired key
+    rmSync(src)
+    return { vp, target, staged, before: [readFileSync(target), readFileSync(staged)] }
+  }
+
+  it('a stage that opens under the data key but cannot be renamed into place: the stored copy stays, nothing throws later, and the retry swaps it in', async () => {
+    const { vp, target, staged, before } = await retiredCopyBesideStage()
+    const unchanged = (): void => {
+      expect(existsSync(target), 'the stored copy is there').toBe(true)
+      expect(readFileSync(target).equals(before[0]), 'the stored copy').toBe(true)
+      expect(readFileSync(staged).equals(before[1]), 'the stage').toBe(true)
+      expect(existsSync(`${target}.tmp`), 'nothing left aside').toBe(false)
+    }
+    failures.renameThrowOnStagedSidecar = 'EBUSY'
+    try {
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      ctl.init()
+      expect(ctl.unlock('pw').state).toBe('unlocked')
+      expect(failures.hits.renameStagedSidecar).toBeGreaterThan(0)
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 1, setAside: 0 })
+      unchanged()
+      ctl.lock()
+      expect(ctl.unlock('pw').state).toBe('unlocked') // the next unlock, the hold still there
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 1, setAside: 0 })
+      unchanged()
+      ctl.shutdown()
+      const next = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      next.init() // a fresh start, the hold still there
+      unchanged()
+      next.shutdown()
+    } finally {
+      failures.renameThrowOnStagedSidecar = null
+    }
+    const again = unlockedController(vp, 'pw') // the hold is gone
+    try {
+      expect(existsSync(staged)).toBe(false)
+      expect(await readStoredCopy(again, vp.root, target)).toBe('the new copy')
+      expect(again.takeSidecarStageOutcome()).toEqual({ rolledForward: 1, removed: 0, left: 0, setAside: 0 })
+    } finally {
+      again.shutdown()
+    }
+  })
+
+  // Review round 2: before a swap the unlock also reads the stored copy under the data key (one that opens is current,
+  // and is never swapped over). A stored copy it cannot read (a hold, an I/O error) is never swapped over either: the
+  // stage stays a doubt, both stay byte for byte, and the retry swaps it in.
+  it('a stage that opens under the data key beside a stored copy that cannot be read: both left as they are, the retry swaps it in', async () => {
+    const { vp, target, staged, before } = await retiredCopyBesideStage()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    failures.openThrowOnSidecarTarget = target
+    try {
+      expect(ctl.unlock('pw').state).toBe('unlocked')
+    } finally {
+      failures.openThrowOnSidecarTarget = null
+    }
+    expect(readFileSync(target).equals(before[0]), 'the stored copy').toBe(true)
+    expect(readFileSync(staged).equals(before[1]), 'the stage').toBe(true)
+    expect(failures.hits.openSyncSidecarTarget).toBeGreaterThan(0)
+    expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 1, setAside: 0 })
+    ctl.lock()
+    ctl.unlock('pw') // the hold is gone
+    expect(existsSync(staged)).toBe(false)
+    expect(await readStoredCopy(ctl, vp.root, target)).toBe('the new copy')
+    ctl.shutdown()
+  })
+
+  // Review round 2: when the stage cannot be moved in AND the stored copy cannot be moved back, the stored copy waits at
+  // `<stored copy>.tmp` for the session. That is no "left, judged again": the next start's sweep shreds it and renames
+  // the stage into place, which loses nothing (the stage opens under the data key, and the copy set aside opened under
+  // no key this workspace holds). It is counted apart, and the one log line says what the next start does.
+  it('a stage that cannot be moved in, beside a stored copy that cannot be moved back: set aside, said in one line, finished by the next start', async () => {
+    const { vp, target, staged, before } = await retiredCopyBesideStage()
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    registerWorkspaceIpc(workspaceIpcCtx(ctl))
+    const linesBefore = readLogTail(100_000).length
+    failures.renameThrowOnStagedSidecar = 'EBUSY'
+    failures.renameThrowOnAsideRestore = 'EBUSY'
+    let result: unknown
+    try {
+      result = (await invoke(handlers, IPC.unlockWorkspace, 'pw')).result
+    } finally {
+      failures.renameThrowOnStagedSidecar = null
+      failures.renameThrowOnAsideRestore = null
+    }
+    expect(failures.hits.renameAsideRestore).toBeGreaterThan(0)
+    expect(result).toMatchObject({ ok: true })
+    expect(existsSync(target)).toBe(false)
+    expect(readFileSync(`${target}.tmp`).equals(before[0]), 'the stored copy, set aside').toBe(true)
+    expect(readFileSync(staged).equals(before[1]), 'the stage').toBe(true)
+    const logged = readLogTail(100_000)
+      .slice(linesBefore)
+      .filter((line) => line.includes('(#1001)'))
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain('"setAside":1')
+    expect(logged[0]).toContain('the next start')
+    ctl.shutdown()
+    const next = unlockedController(vp, 'pw') // the next start: the copy set aside is shredded, the stage put in place
+    try {
+      expect(existsSync(`${target}.tmp`)).toBe(false)
+      expect(existsSync(staged)).toBe(false)
+      expect(readFileSync(target).equals(before[1])).toBe(true)
+      expect(await readStoredCopy(next, vp.root, target)).toBe('the new copy')
+    } finally {
+      next.shutdown()
+    }
+  })
+
+  // Review round 2: some network (SMB) and FUSE mounts report inode 0 and one link for every file, so a hard link of the
+  // stored copy at the staged name is not told from two files by its ids. Its stored copy opens under the data key,
+  // which a legitimate stage's never does (that one is under the retired key): only the staged name is removed.
+  it('a hard link of the stored copy at the staged name, on a mount that reports no inode numbers: the document survives', async () => {
+    const vp = lockedVault('recovery-guards-1001', 'pw')
+    const target = await storedDocument(vp, 'pw')
+    const staged = `${target}.new`
+    linkSync(target, staged)
+    const before = readFileSync(target)
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    failures.statReportsNoInode = true
+    try {
+      ctl.init()
+      ctl.unlock('pw')
+    } finally {
+      failures.statReportsNoInode = false
+    }
+    expect(failures.hits.statNoInode).toBeGreaterThan(0)
+    expect(existsSync(staged)).toBe(false)
+    expect(readFileSync(target).equals(before), 'the stored copy').toBe(true)
+    expect(await readStoredCopy(ctl, vp.root, target)).toBe('the copy under pw')
+    expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
+    ctl.shutdown()
+  })
+
+  // Review round 3: the stored copy is judged by `lstat`, which never follows a link. A link at the stored copy's name
+  // whose file sits outside the workspace used to pass as a regular file; the swap then moved the link aside and shred
+  // it, writing random bytes THROUGH it into that outside file. A hard link to such a file does the same through its
+  // other name. Now a stored copy that is no regular file, or whose file another name shares, is never swapped over: the
+  // stage is left, and the outside file stays byte for byte. (A symbolic link needs a privilege some Windows accounts
+  // lack; there the row stands the link in with `lstatSync` reporting one.)
+  it.each<[string]>([['a symbolic link'], ['a hard link']])(
+    "%s at the stored copy's name, to a file outside the workspace: the stage is left, the outside file byte for byte",
+    async (kind) => {
+      const { vp, target, staged, before } = await retiredCopyBesideStage()
+      const outside = join(vp.root, 'outside.bin')
+      writeFileSync(outside, before[0])
+      rmSync(target)
+      let standIn = false
+      if (kind === 'a hard link') linkSync(outside, target)
+      else {
+        try {
+          symlinkSync(outside, target, 'file')
+        } catch {
+          standIn = true
+          writeFileSync(target, before[0])
+          failures.lstatReportsSymlink = target
+        }
+      }
+      const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+      try {
+        ctl.init()
+        expect(ctl.unlock('pw').state).toBe('unlocked')
+      } finally {
+        failures.lstatReportsSymlink = null
+      }
+      expect(readFileSync(outside).equals(before[0]), 'the outside file').toBe(true)
+      expect(readFileSync(target).equals(before[0]), "what the stored copy's name reads").toBe(true)
+      expect(readFileSync(staged).equals(before[1]), 'the stage').toBe(true)
+      if (kind === 'a symbolic link' && !standIn) expect(lstatSync(target).isSymbolicLink()).toBe(true)
+      expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 0, left: 1, setAside: 0 })
+      ctl.shutdown()
+    }
+  )
+
+  // Review round 3: the cheap checks run before the stage is read. A planted stage of another length than the stored
+  // copy (here a large frame from another workspace, which a read would stream through the decipher to its end) is
+  // removed after a stat: the pass reads none of it (the format verdict at the unlock's head reads its 8-byte magic).
+  it('a planted stage of another length is removed without being read', async () => {
+    const vp = lockedVault('recovery-guards-1001', 'pw')
+    const target = await storedDocument(vp, 'pw')
+    const staged = `${target}.new`
+    const other = lockedVault('recovery-guards-1001-other', 'other-pw')
+    const seed = unlockedController(other, 'other-pw')
+    const large = await storeCopy(seed, other.root, join(dirname(other.dbPath), 'documents', 'big.pdf.enc'), 'x'.repeat(256 * 1024))
+    seed.lock()
+    writeFileSync(staged, readFileSync(large))
+    const ctl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctl.init()
+    failures.stageBytesRead = 0
+    ctl.unlock('pw')
+    expect(existsSync(staged)).toBe(false)
+    expect(failures.stageBytesRead).toBeLessThanOrEqual(8) // the format verdict's magic, and nothing of the frame
+    expect(await readStoredCopy(ctl, vp.root, target)).toBe('the copy under pw')
+    expect(ctl.takeSidecarStageOutcome()).toEqual({ rolledForward: 0, removed: 1, left: 0, setAside: 0 })
     ctl.shutdown()
   })
 })

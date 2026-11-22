@@ -917,6 +917,9 @@ export const de: Record<keyof typeof en, string> = {
   'analysis.wholeReadSumHint':
     '**Hinweis:** Summen rechnet das Modell selbst aus und kann dabei Posten übersehen oder sich ' +
     'verrechnen. Prüfe jede Summe anhand der Quellen.',
+  'analysis.wholeDocBeginningOnly':
+    '**Hinweis:** Das Dokument war zu lang, um es ganz zu lesen, daher deckt diese Antwort nur ' +
+    'seinen Anfang ab. Wenn du etwas aus dem späteren Teil suchst, frag direkt nach diesem Detail.',
 
   // ---- Kontoauszug-Auswertung (full-doc-skills Plan §3.1, Phase 2) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der

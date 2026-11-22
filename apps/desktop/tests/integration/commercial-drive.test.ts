@@ -1060,6 +1060,61 @@ describe('assertCommercialDrive', () => {
       expect(res.problems.some((p) => /does not match the SHA-256 recorded/.test(p))).toBe(true)
     })
 
+    // #998: an install since #998 records every file it unpacked, so a Kit whose engine lost or changed a DLL
+    // (an antivirus took it, a hand edit) is caught before it ships. It used to pass: the gate looked at the
+    // program alone. What is recorded is verified; a marker that records only the program passes as before.
+    it.each([
+      { name: 'missing', damage: (dll: string) => rmSync(dll), reported: /ggml\.dll is recorded in the install marker but missing/ },
+      { name: 'modified', damage: (dll: string) => writeFileSync(dll, 'TAMPERED'), reported: /ggml\.dll does not match the SHA-256 recorded/ }
+    ])('fails when a further file the marker records is $name (#998)', async ({ damage, reported }) => {
+      const root = tempDir('hilbertraum-commercial-rt-recorded-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      provisionApp(root)
+      const win = join(root, 'runtime', 'llama.cpp', 'win')
+      writeFileSync(join(win, 'ggml.dll'), 'ggml')
+      const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
+      writeRuntimeMarker(win, {
+        version: 'b9585',
+        backend: 'vulkan',
+        os: 'win',
+        arch: 'x64',
+        binaries: { 'llama-server.exe': sha('fake-binary'), 'ggml.dll': sha('ggml') }
+      })
+      expect((await assertCommercialDrive(root, [chat], sources(), null, null, kit())).ok).toBe(true)
+      damage(join(win, 'ggml.dll'))
+      const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(true)
+      expect(res.checks.runtimeHashed).toBe(false)
+      expect(res.problems.filter((p) => reported.test(p))).toEqual([expect.stringContaining('build win/x64 vulkan: ')])
+    })
+
+    it('fails when the marker records a file outside its install folder (#998)', async () => {
+      const root = tempDir('hilbertraum-commercial-rt-outside-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      provisionLicenseArtifacts(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      provisionApp(root)
+      const win = join(root, 'runtime', 'llama.cpp', 'win')
+      writeRuntimeMarker(win, {
+        version: 'b9585',
+        backend: 'vulkan',
+        os: 'win',
+        arch: 'x64',
+        binaries: { 'llama-server.exe': createHash('sha256').update('fake-binary').digest('hex'), '../../../README.md': 'a'.repeat(64) }
+      })
+      const res = await assertCommercialDrive(root, [chat], sources(), null, null, kit())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeHashed).toBe(false)
+      expect(res.problems.some((p) => /records \.\.\/\.\.\/\.\.\/README\.md, which is not inside runtime\/llama\.cpp\/win/.test(p))).toBe(true)
+    })
+
     it('skips the marker check when no runtimeSources are passed (runtimeCurrent stays true)', async () => {
       const root = tempDir('hilbertraum-commercial-rt-skip-')
       writePolicy(root, buildPolicyJson())

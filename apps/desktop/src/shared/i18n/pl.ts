@@ -922,6 +922,10 @@ export const pl: UiCatalog<'pl'> = {
   'analysis.wholeReadSumHint':
     '**Uwaga:** model sam oblicza sumy i może pominąć lub źle policzyć niektóre pozycje. ' +
     'Porównaj każdą sumę ze źródłami.',
+  'analysis.wholeDocBeginningOnly':
+    '**Uwaga:** ten dokument był zbyt długi, by przeczytać go w całości, więc ta odpowiedź obejmuje ' +
+    'tylko jego początek. Aby sprawdzić coś z dalszej części dokumentu, zapytaj bezpośrednio o ten ' +
+    'szczegół.',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Transakcje odczytane z całego wyciągu: **{count}**.',
   'skills.bankAnalysis.countPartial':

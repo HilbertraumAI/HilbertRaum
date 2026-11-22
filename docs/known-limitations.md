@@ -1468,7 +1468,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   pages) and `SUMMARY_MAP_CALL_HARD_CEILING` (~24 windows, ~100 pages) is no longer dropped: every mapped
   window's notes are **condensed** down through bounded fenced intermediate reduces (a hierarchical fold, cap
   `MAX_FOLD_DEPTH`) until they fit one final reduce, so the whole document is covered (`truncated:false`).
-  Only **beyond** the hard ceiling (~100 pages) does the tail stay honestly beginning-only (`truncated:true`)
+  Only **beyond** the hard ceiling (~100 pages) does the tail stay honestly beginning-only (`truncated:true`;
+  since #996 the answer's first line says so too)
   — that is deep-index **tree** territory (the tree auto-builds at ~this size and is the designed rescue; the
   fold is a bounded query-time lever, deliberately not unbounded — the dominant cost is one map call per
   window on CPU, covered by the progress notice in (b)); (b) a mid-size analysis
@@ -1493,10 +1494,22 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   whole-doc capped read — is now finished the same way (re-sending the whole grounded prompt + a resume
   anchor), so a mid-word grounded reply no longer persists as if complete. **New residual:** a deliverable
   long enough to STILL be cut after the 2-continuation cap keeps an honest **OUTPUT**-truncated badge
-  (`Message.truncated`, "Answer truncated — model context limit reached") — this is distinct from
+  (`Message.truncated`, "Reply cut off") — this is distinct from
   `coverage.truncated` and never conflated with it (the whole document can be covered while the deliverable is
-  output-cut). Guarantee unchanged: `prompt + output ≤ n_ctx` at every context size (no HTTP 400 "exceeds
-  context size").
+  output-cut). **Since #996** the same badge also marks an answer that was cut, continued, and then ended
+  cleanly in the middle of a sentence: a 4B Contract Brief stopped at "… unless the lease provides otherwise
+  or" after a continuation of about 700 tokens, and was stored as complete. Its tooltip offers the remedy of the
+  pass that was cut. Only the last line is judged, against the answer's own style: a last line that ends in a
+  word reads as cut only when most of the answer's earlier long lines end with a full stop or another
+  terminator, and one that ends with a comma, a colon or an open bracket always does (a dash or a slash is
+  judged like a word, since it can end a URL or a "not stated" value such as "Renewal option: —"). So a table row, a
+  heading, a code block, a short list item, a signature, a URL or a list written without full stops reads as
+  complete; over 413 stored real answers the check flagged 4, all genuinely cut. Some cuts keep no badge (the
+  accepted misses): a cut right after an abbreviation such as "e.g.", a cut inside a table row, a short last
+  item or line, and a cut in an answer written without full stops. An answer whose first pass ended cleanly is
+  never judged this way, so a model that stops
+  mid-sentence on its own still carries no badge. Guarantee unchanged: `prompt + output ≤ n_ctx` at every
+  context size (no HTTP 400 "exceeds context size").
   **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
   (budget split size-aware across them, `capped` coverage — `truncated` when either overflowed) and
@@ -1515,7 +1528,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   totals. The tree map-reduce, which formerly "lied at the margin" (hard-truncated its notes while
   stamping `truncated:false`), now flips to the honest `truncated`/"covers the beginning" badge and a
   softened reduce prompt when it hits the **12-call map ceiling** (`SUMMARY_MAP_CALL_CEILING`) or clamps
-  its joined notes to the reduce budget. **Open follow-up (deferred by W1):** auto-building (or one-click
+  its joined notes to the reduce budget. The softened prompt asks the model to say that it covers only the
+  beginning, and a 4B model did so in 0 of 8 such answers, so since #996 the answer leads with the app's own
+  line instead (design-guidelines §11.25); the answer's copy and its export carry it.
+  **Open follow-up (deferred by W1):** auto-building (or one-click
   offering) the deep index when a whole-doc turn truncates (the routing of lookup-shaped questions to top-k
   on truncation was since **done by A3** — the needle-vs-deliverable downgrade below).
   **W2 (audit §2.1/§3.4/§4.5) killed the silent doc-count fallthrough and added a document-plausibility
@@ -1715,12 +1731,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   search can miss the one that holds the answer: «Wann müssen wir kündigen?» over an English lease found the preamble and
   Art. 7, not the notice clause in Art. 34 (two runs, the 4B), and the answer then said the lease does not state when to give
   notice, while "When must they give notice?" found Art. 34 and the date. When an answer says something is not in a document
-  written in another language, ask again in the document's language. **Not covered:** the «liste» substring is master's, so it still vetoes inside "listed",
-  "listener", "listening", "blister" and the German plural «Listen» (a pre-existing false veto that cannot be told from
-  "listen"); a report word inside another word ("registration" holds «gist», "briefing" holds «brief») still makes the question
-  a report; "Somewhen is fine" still reads as a lookup through "when is"; "Who's the tenant?" and "When's the deadline?" are no
-  lookups (no contraction forms). A report shape that
-  holds a lookup word ("When is the rent review?": "review" is a report word) stays a report.
+  written in another language, ask again in the document's language. **#997 (wave 7) made the report and list words words:** «liste» is the German noun as a word or the end of a compound
+  («Liste», «Listen», «Checkliste»), no longer a piece of "listed", "listener", "blister" or «gelistet»; "review",
+  "brief", "overall", "gist", "analy", "recap", "the whole", "in short" and «durchgehen» no longer match inside
+  "preview", «Briefkasten», "registration", "analyst", "recapture", "wholesale", "in shortage" or «durchgehend». Three
+  phrases are lookups too: "rent review" and, after a determiner ("the", "a", "next", "this", ...), "review date/period/clause/mechanism/notice" (a lease term; "review clause by clause" stays a request), "brief answer/reply/response", and
+  "overall" before an amount ("overall rent", "overall liability cap", unless "picture/assessment/structure" follows); «Listenform» and "briefing(s)" (also «Vorstandsbriefing») stay report and list words; "minutes" after a short number or "how many" is a
+  time. **Not covered:** drafting requests that hold an exception phrase ("Draft a brief reply", "Prepare a rent review report") read as lookup-shaped words, not reports; German «briefen» (a verb, and the plural of «Brief») matches nothing; "When is the debrief?" stays a report as on master; English "listen" is spelled like the German plural «Listen» and still vetoes; the lookup stems
+  stay substrings ("Somewhen is fine" still reads as a lookup through "when is", and "Nowhere is it stated?" depends on it:
+  narrowing them would lose a lookup master had); a whole word with another meaning still makes a report ("minutes" not
+  after those words, "purpose of", "conclusion", «Protokoll» and «Vergleich» compounds, and the bare word «Brief», a letter); "Who's the tenant?" and
+  "When's the deadline?" are no lookups (no contraction forms).
   **A4 (audit §3.2/§3.3) tuned this composition (SKA-8/SKA-12/SKA-23):**
   **(SKA-8)** the `intends()` predicate — the **W2 count-mismatch routing** gate, consulted only at the
   wrong doc count — was decoupled from `applies()` and made **vocabulary-shaped** (`routeMatch`) for the
@@ -1826,7 +1847,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   worse, so the prompt stays as it is. A 4B model's notes on a long document copy the skill's report format
   into every part, and its answers can loop or invent details; a shorter map prompt cut the copying but did
   not improve the answers, so that stays too ([`rag-design.md`](rag-design.md) §14.10.1); and when the
-  notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
+  notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that
+  (since #996 such an answer leads with a line saying that it covers only the beginning of the document).
   The answer still says it read the whole document, which is true of what it read, not of what the notes
   kept.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —

@@ -13,9 +13,9 @@ import { describe, it, expect } from 'vitest'
 //   - a Stop before the first reduce token yields an empty message and NO capped second pass,
 //   - the share-safe scan block rides in the reduce USER turn (never the system prompt).
 
-import { ANALYSIS_RESPONSE_RESERVE_TOKENS, CHAT_RESPONSE_RESERVE_TOKENS } from '../../src/main/services/chat'
-import { retrieveWholeDocument, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
-import type { ChatMessage } from '../../src/main/services/runtime'
+import { ANALYSIS_RESPONSE_RESERVE_TOKENS, CHAT_RESPONSE_RESERVE_TOKENS, listMessages } from '../../src/main/services/chat'
+import { retrieveWholeDocument, wholeDocumentFitBudgetTokens, type GroundedAnswerOptions } from '../../src/main/services/rag'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { buildSkillFence } from '../../src/main/services/skills/prompt'
 import { finishScriptedRuntime, recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import {
@@ -204,6 +204,140 @@ describe('whole-document chunk map-reduce — adaptive reduce output reserve (Ph
   })
 })
 
+// #996 A (follow-ups wave 7, owner call G-7): the reduce prompt above asks the model to say that its answer covers
+// only the beginning, and a 4B model never did (0 of 8 such answers in wave 6). So an answer whose notes had to be
+// cut leads with the app's own line (design-guidelines §11.25), after the scope notice and the sum hint
+// (`answerPrefix`). It rides the first reduce token, so it never streams or persists without model text, and every
+// prompt stays byte for byte as it was. The IPC rows (registerRagIpc sets the line) are in rag-skill-analysis.test.ts
+// and rag-whole-read.test.ts; the tree path's in rag-whole-doc-tree.test.ts.
+describe('whole-document chunk map-reduce — the beginning-only line (#996 A)', () => {
+  const PREFIX = 'Scope notice.\n\nSum hint.\n\n'
+  const LINE = '**Heads-up:** this answer covers only the beginning.'
+  // Long map notes overflow the reduce budget at 4096 (the floored case above), so the notes are cut.
+  const LONG_NOTE = `${'Detailpunkt '.repeat(1000)}`.trim()
+
+  /** Map and fold calls yield `note`; the reduce (its user turn ends "Answer:") yields `reduceReply`, or a user
+   *  Stop before its first token when `reduceReply` is null. */
+  function reduceScriptRuntime(note: string, reduceReply: string | null): ModelRuntime & { reduceCalls: number } {
+    const rt = {
+      modelId: 'mock',
+      reduceCalls: 0,
+      contextWindow: () => CTX,
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(messages: ChatMessage[]) {
+        if (!userTurnOf(messages).endsWith('\n\nAnswer:')) {
+          yield note
+          return
+        }
+        rt.reduceCalls++
+        if (reduceReply === null) {
+          const err = new Error('aborted')
+          err.name = 'AbortError'
+          throw err
+        }
+        yield reduceReply
+      }
+    }
+    return rt
+  }
+
+  async function run(runtime: ModelRuntime, extra: GroundedAnswerOptions) {
+    const h = await makeHarness(280)
+    const tokens: string[] = []
+    const msg = await answerWholeDoc(h, runtime, { onToken: (token) => tokens.push(token), ...extra })
+    const assistantRows = listMessages(h.db, h.conversationId).filter((m) => m.role === 'assistant')
+    return { tokens, msg, assistantRows }
+  }
+
+  it('a cut document: the line follows the prefix, rides the first reduce token, and is persisted', async () => {
+    const { tokens, msg } = await run(mapReduceRuntime(LONG_NOTE), { answerPrefix: PREFIX, beginningNotice: LINE })
+    expect(msg.coverage?.truncated).toBe(true) // precondition: the notes were cut
+    expect(tokens).toEqual([PREFIX, `${LINE}\n\n${LONG_NOTE}`])
+    expect(msg.content).toBe(`${PREFIX}${LINE}\n\n${LONG_NOTE}`)
+  })
+
+  it('a cut document: every model call is byte for byte the one made without the line', async () => {
+    const withLine = mapReduceRuntime(LONG_NOTE)
+    const without = mapReduceRuntime(LONG_NOTE)
+    await run(withLine, { answerPrefix: PREFIX, beginningNotice: LINE })
+    const plain = await run(without, { answerPrefix: PREFIX })
+    expect(withLine.calls).toBeGreaterThan(1) // map steps + the reduce
+    expect(withLine.turns).toEqual(without.turns)
+    expect(withLine.options.map((o) => o?.maxTokens)).toEqual(without.options.map((o) => o?.maxTokens))
+    expect(plain.msg.content).toBe(`${PREFIX}${LONG_NOTE}`) // without the input, the answer is as before
+  })
+
+  it('a whole document: no line, even with one passed in', async () => {
+    const { tokens, msg } = await run(mapReduceRuntime('Notiz zum Abschnitt.', 8192), { answerPrefix: PREFIX, beginningNotice: LINE })
+    expect(msg.coverage?.truncated).toBe(false) // precondition: the whole document was read
+    expect(tokens).toEqual([PREFIX, 'Notiz zum Abschnitt.'])
+    expect(msg.content).toBe(`${PREFIX}Notiz zum Abschnitt.`)
+  })
+
+  it('a Stop before the first reduce token on a cut document streams no line and persists nothing', async () => {
+    const runtime = reduceScriptRuntime(LONG_NOTE, null)
+    const { tokens, msg, assistantRows } = await run(runtime, { answerPrefix: PREFIX, beginningNotice: LINE })
+    expect(runtime.reduceCalls).toBe(1) // the map steps ran; the Stop came at the reduce
+    expect(tokens).toEqual([PREFIX]) // the prefix streams before the map steps, as before; the line never does
+    expect(msg.content).toBe('')
+    expect(msg.coverage).toBeUndefined()
+    expect(assistantRows).toHaveLength(0)
+  })
+
+  it('a think-only reduce reply on a cut document persists nothing: the line alone is no answer', async () => {
+    const runtime = reduceScriptRuntime(LONG_NOTE, '<think>weighing the notes</think>')
+    const { msg, assistantRows } = await run(runtime, { beginningNotice: LINE })
+    expect(runtime.reduceCalls).toBe(1)
+    expect(msg.content).toBe('')
+    expect(assistantRows).toHaveLength(0)
+  })
+
+  /** Map and fold calls yield `note`; the reduce and its continuations (user turns ending "Answer:" or
+   *  "Continuation:") take `steps` in order. Each yields its reply (nothing when empty: a pass a thinking model
+   *  spent reasoning) and fires its finish reason; `stepTurns` records their user turns. */
+  function reduceStepsRuntime(note: string, steps: Array<{ reply: string; finish: string }>): ModelRuntime & { stepTurns: string[] } {
+    const rt = {
+      modelId: 'mock',
+      stepTurns: [] as string[],
+      contextWindow: () => CTX,
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+        const user = userTurnOf(messages)
+        if (!user.endsWith('\n\nAnswer:') && !user.endsWith('\n\nContinuation:')) {
+          yield note
+          return
+        }
+        const step = steps[Math.min(rt.stepTurns.length, steps.length - 1)]!
+        rt.stepTurns.push(user)
+        if (step.reply) yield step.reply
+        options?.onFinish?.(step.finish)
+      }
+    }
+    return rt
+  }
+
+  // Code review round 2: a reduce that writes no text (its reasoning fills the cap, finish 'length') used to drop
+  // the line, because only the reduce loop carried it; the continuation then wrote the whole answer without it.
+  it('a cut document whose reduce wrote no text still leads with the line, on the first continuation text', async () => {
+    const runtime = reduceStepsRuntime(LONG_NOTE, [
+      { reply: '', finish: 'length' },
+      { reply: 'Antwort aus der Fortsetzung.', finish: 'stop' }
+    ])
+    const { tokens, msg } = await run(runtime, { answerPrefix: PREFIX, beginningNotice: LINE })
+    expect(runtime.stepTurns).toHaveLength(2) // the reduce and one continuation
+    expect(msg.coverage?.truncated).toBe(true)
+    expect(tokens).toEqual([PREFIX, `${LINE}\n\nAntwort aus der Fortsetzung.`])
+    expect(msg.content).toBe(`${PREFIX}${LINE}\n\nAntwort aus der Fortsetzung.`)
+    // The continuation's prompt is the one it gets without the line: its anchor holds only the prefix.
+    expect(runtime.stepTurns[1]).not.toContain(LINE)
+    expect(runtime.stepTurns[1].endsWith(`${PREFIX}\n\nContinuation:`)).toBe(true)
+  })
+})
+
 // Phase 3 — progress affordance (wholedoc-truncation-fix-plan §5). A multi-window whole-doc turn runs
 // SILENT map calls before the first streamed reduce token; the shared core fires the ephemeral 'analysis'
 // progress notice ("Reading the whole document…") so that gap doesn't read as a hang. It fires ONLY when
@@ -308,6 +442,54 @@ describe('whole-document chunk map-reduce — continue-generation for an over-ca
     expect(runtime.calls).toBe(1) // the reduce finished cleanly ⇒ zero continuation passes
     expect(msg.content).toBe('Eine vollständige Antwort.')
     expect(msg.truncated).toBeUndefined()
+  })
+
+  // #996 B (follow-ups wave 7): the stamp read only the LAST pass's finish reason, so a cut reduce whose
+  // continuation ended 'stop' in the middle of a sentence was stored as complete. The real case (wave 6, 4B
+  // Contract Brief): 22 long items ending with a full stop, then "… unless the lease provides otherwise or".
+  const items = Array.from(
+    { length: 22 },
+    (_, i) => `- Clause ${i + 1}: the tenant keeps the premises in good repair and returns them clean.`
+  ).join('\n')
+  const cutItem = '- Costs: the costs incurred by a party in connection with these provisions are borne by that party'
+
+  it('#996 B: a continuation that ends stop mid-sentence is stamped cut, with the cause of the pass that was cut', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptedRuntime([
+      { reply: `${items}\n${cutItem}`, finish: 'length' },
+      { reply: ' unless the lease provides otherwise or', finish: 'stop' }
+    ], CTX)
+    const msg = await answerWholeDoc(h, runtime)
+
+    expect(runtime.calls).toBe(2) // the reduce + one continuation, which ended 'stop'
+    expect(msg.content.endsWith(`${cutItem} unless the lease provides otherwise or`)).toBe(true)
+    expect(msg.truncated).toBe(true)
+    // The reduce reached its own cap (no timings ⇒ the cap fired), so the remedy is "ask it to continue".
+    expect(msg.truncatedCause).toBe('cap')
+    expect(msg.coverage?.truncated).toBe(false) // INPUT coverage is untouched
+  })
+
+  it('#996 B: a first reduce that ends stop mid-sentence is not judged: no continuation ran, no stamp', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptedRuntime([{ reply: `${items}\n${cutItem} unless`, finish: 'stop' }], CTX)
+    const msg = await answerWholeDoc(h, runtime)
+
+    expect(runtime.calls).toBe(1)
+    expect(msg.content.endsWith(`${cutItem} unless`)).toBe(true)
+    expect(msg.truncated).toBeUndefined()
+  })
+
+  it('#996 B: a user Stop mid-continuation is never judged, even when the answer stops mid-sentence', async () => {
+    const h = await makeHarness(90)
+    const runtime = finishScriptedRuntime([
+      { reply: `${items}\n${cutItem}`, finish: 'length' },
+      { reply: ' unless the lease provides otherwise or', abort: true }
+    ], CTX)
+    const msg = await answerWholeDoc(h, runtime)
+
+    expect(runtime.calls).toBe(2)
+    expect(msg.content.endsWith(`${cutItem} unless the lease provides otherwise or`)).toBe(true)
+    expect(msg.truncated).toBeUndefined() // a Stop is the user's choice, not a cut
   })
 })
 

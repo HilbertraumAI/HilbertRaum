@@ -1,5 +1,5 @@
 import { accessSync, constants as fsConstants, existsSync, lstatSync, opendirSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
-import { basename, join, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import {
   isKitPlatform,
@@ -237,7 +237,9 @@ export interface CommercialAssertion {
     /**
      * Every pinned runtime build's marker records the binary's SHA-256 AND the on-disk
      * bytes still match it (#234). Opt-in like `runtimeCurrent`. A hashless (legacy)
-     * marker fails here, not in `runtimeCurrent`.
+     * marker fails here, not in `runtimeCurrent`. #998: so does any further file the marker
+     * records (an install since #998 records every file) that is missing, modified or
+     * outside its folder; a marker that records only the required files passes as before.
      */
     runtimeHashed: boolean
     /**
@@ -405,6 +407,14 @@ function engineSwapLeftovers(rootPath: string, extractTo: string): string[] {
     }
   }
   return [dirs.staging, dirs.previous].filter(there).map((p) => relative(resolve(rootPath), p).split(sep).join('/'))
+}
+
+/** #998: the file an install marker's key names inside `dir`, or null when the key leaves it (a tampered marker). */
+function recordedFile(dir: string, key: string): string | null {
+  const base = resolve(dir)
+  const p = resolve(base, ...key.split('/'))
+  const rel = relative(base, p)
+  return rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? null : p
 }
 
 /**
@@ -676,6 +686,37 @@ export async function assertCommercialDrive(
             'hashed',
             `${label}: ${name} does not match the SHA-256 recorded in the install ` +
               'marker — the binary or the marker was modified after install; re-run fetch-runtime --commercial'
+          )
+        }
+      }
+      // #998: every further file the copy's own marker records (installs since #998 record every file the
+      // archive put there: the DLLs and the backends loaded at run time) must still be there, inside the
+      // install folder, with the bytes recorded. A marker that records only the required files passes as
+      // before: what is recorded is verified, a full list is never required. A key under another build's own
+      // folder (the `cpu/` net under `<os>/`) is that build's to report.
+      const requiredKeys = new Set(required.map((p) => markerBinaryKey(plan.extractTo, p)))
+      const nested = otherExtractDirs(plan.extractTo).map((d) => resolve(d))
+      for (const [key, expected] of Object.entries(marker.binaries ?? {})) {
+        if (requiredKeys.has(key)) continue
+        const file = recordedFile(plan.extractTo, key)
+        if (file === null) {
+          fail('hashed', `${label}: the install marker records ${key}, which is not inside ${build.extractTo} — re-run fetch-runtime --commercial`)
+          continue
+        }
+        if (nested.some((d) => file === d || file.startsWith(`${d}${sep}`))) continue
+        let isFile = false
+        try {
+          isFile = statSync(file).isFile()
+        } catch {
+          isFile = false
+        }
+        if (!isFile) {
+          fail('hashed', `${label}: ${key} is recorded in the install marker but missing under ${build.extractTo} — re-run fetch-runtime --commercial`)
+        } else if ((await sha256File(file)).toLowerCase() !== expected.toLowerCase()) {
+          fail(
+            'hashed',
+            `${label}: ${key} does not match the SHA-256 recorded in the install marker — the file or the ` +
+              'marker was modified after install; re-run fetch-runtime --commercial'
           )
         }
       }

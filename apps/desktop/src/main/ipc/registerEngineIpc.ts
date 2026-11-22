@@ -341,11 +341,13 @@ export function registerEngineIpc(
   }
 
   /**
-   * #516 "Update the AI engine": download and verify the pinned build(s) while everything keeps
-   * running, then — in the manager's `beforeReplace`, after the last archive verified — refuse if
-   * work started meanwhile, pause what runs from the folders being replaced, check that nothing
-   * still does, and let the swap happen. Whatever happens next, the model comes back (the install
-   * hook on success, the settle listener otherwise).
+   * #516 "Update the AI engine": download, verify and (#1000) unpack the pinned build(s) into their
+   * staging folders while everything keeps running, then — in the manager's `beforeReplace`, after the
+   * last copy is staged — refuse if work started meanwhile (during the download or the unpack), pause
+   * what runs from the folders being replaced, check that nothing still does, and let the swap happen.
+   * A download or unpack that fails or is cancelled never reaches the pause, so nothing stops for it.
+   * Whatever happens after the pause, the model comes back (the install hook on success, the settle
+   * listener otherwise).
    */
   const startEngineUpdate = async (families: EngineFamily[]): Promise<EngineDownloadJob> => {
     if (engineUpdateBusy(ctx, families)) throw new Error(tMain('main.engine.updateBusy'))

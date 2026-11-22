@@ -15,15 +15,65 @@ import { createGunzip } from 'node:zlib'
 // bytes. Each folder costs one unit. The answer is null, and the caller skips the check, when the
 // archive is neither format or cannot be read to the end; a Zip64 archive (none of the pinned ones is
 // one) is not read either.
+//
+// The same two readers list the archive's members (#998): every name that is not a folder, files and
+// links alike, so the engine install can check that what the archive holds is what the extraction left
+// (an antivirus can take a fresh file before the install is marked). A name that is not plain ASCII is
+// not listed: how tar spells it on the disk (code page, normalisation) cannot be known here, and a
+// listing that might name a file wrongly would refuse a good install. None of the pinned archives has one.
+
+/** What one read of an archive found: its unpacked room, and its non-folder member names as written. */
+interface ArchiveListing {
+  bytes: number
+  members: string[]
+  /** False when a member name is not plain ASCII (the listing is then not used, `archiveMembers`). */
+  plainNames: boolean
+}
 
 /** The room the archive at `path` takes unpacked on a volume with `clusterBytes` units, or null. */
 export async function extractedArchiveBytes(path: string, clusterBytes: number): Promise<number | null> {
   const unit = Number.isFinite(clusterBytes) && clusterBytes > 0 ? clusterBytes : 4096
+  return (await readArchive(path, unit))?.bytes ?? null
+}
+
+/**
+ * Every member of the archive at `path` that is not a folder (#998): files, links and hard links, by the
+ * name the archive gives them (`/` separators; a leading `./` and the release folder a flatten strips are
+ * the caller's to map), without macOS metadata (`isMacMetadataName`). Null when the archive is neither
+ * format, cannot be read to the end, is a Zip64 archive, or names a member in anything but plain ASCII: the
+ * caller then skips its check.
+ */
+export async function archiveMembers(path: string): Promise<string[] | null> {
+  const listing = await readArchive(path, 4096)
+  return listing && listing.plainNames ? listing.members : null
+}
+
+async function readArchive(path: string, unit: number): Promise<ArchiveListing | null> {
   const head = await readHead(path)
   if (head === null) return null
-  if (head[0] === 0x50 && head[1] === 0x4b) return zipExtractedBytes(path, unit)
-  if (head[0] === 0x1f && head[1] === 0x8b) return tarGzExtractedBytes(path, unit)
+  if (head[0] === 0x50 && head[1] === 0x4b) return zipListing(path, unit)
+  if (head[0] === 0x1f && head[1] === 0x8b) return tarGzListing(path, unit)
   return null
+}
+
+/** Printable ASCII only: a name whose spelling on the disk this code can be sure of. */
+const PLAIN_NAME = /^[\x20-\x7e]+$/
+
+/**
+ * macOS metadata, never an engine file (#998 round 1): an AppleDouble file (`._name`), anything under a
+ * `__MACOSX/` folder, a Finder `.DS_Store`. macOS bsdtar reads the first two back into extended attributes
+ * by default, so they never land on the disk there; elsewhere they do. Neither the member list nor a
+ * marker counts them (the fetch-runtime twins skip the same names).
+ */
+export function isMacMetadataName(path: string): boolean {
+  const parts = path.split(/[\\/]/).filter((p) => p !== '' && p !== '.')
+  return parts.some((p) => p === '__MACOSX' || p.startsWith('._')) || parts[parts.length - 1] === '.DS_Store'
+}
+
+/** The listing of `names` (files and links), with the room `bytes` they take. */
+function listing(bytes: number, names: string[]): ArchiveListing {
+  const members = names.filter((n) => !isMacMetadataName(n))
+  return { bytes, members, plainNames: members.every((n) => PLAIN_NAME.test(n)) }
 }
 
 const roundUp = (bytes: number, unit: number): number => Math.ceil(bytes / unit) * unit
@@ -63,7 +113,7 @@ const ZIP64_LOCATOR_SIG = 0x07064b50
 const CENTRAL_SIG = 0x02014b50
 
 /** The zip's members from its central directory (EOCD at the end, within its 64 KiB comment). */
-async function zipExtractedBytes(path: string, unit: number): Promise<number | null> {
+async function zipListing(path: string, unit: number): Promise<ArchiveListing | null> {
   let fh
   try {
     fh = await open(path, 'r')
@@ -102,7 +152,7 @@ async function zipExtractedBytes(path: string, unit: number): Promise<number | n
       const nameLen = cd.readUInt16LE(at + 28)
       const extraLen = cd.readUInt16LE(at + 30)
       const commentLen = cd.readUInt16LE(at + 32)
-      // Separators as tar writes them; the names only count folders, nothing is opened by them.
+      // Separators as tar writes them; the names count folders and are listed (#998), nothing is opened by them.
       const name = cd.toString('latin1', at + 46, at + 46 + nameLen).replace(/\\/g, '/')
       if (name.endsWith('/')) dirs.push(name)
       else {
@@ -111,7 +161,7 @@ async function zipExtractedBytes(path: string, unit: number): Promise<number | n
       }
       at += 46 + nameLen + extraLen + commentLen
     }
-    return total + folderCount(names, dirs) * unit
+    return listing(total + folderCount(names, dirs) * unit, names)
   } catch {
     return null
   } finally {
@@ -135,11 +185,13 @@ function tarNumber(field: Buffer): number {
  * header (`x`, its `path` and `size`) names the member after it; a long link name (`K`) and a global
  * pax header (`g`) are passed over.
  */
-function tarGzExtractedBytes(path: string, unit: number): Promise<number | null> {
+function tarGzListing(path: string, unit: number): Promise<ArchiveListing | null> {
   return new Promise((resolvePromise) => {
     let total = 0
     const names: string[] = []
     const dirs: string[] = []
+    /** #998: links and hard links: members of their own, taking no room. */
+    const links: string[] = []
     let pending: Buffer = Buffer.alloc(0)
     /** Data bytes (block-padded) still to pass over. */
     let skip = 0
@@ -152,14 +204,14 @@ function tarGzExtractedBytes(path: string, unit: number): Promise<number | null>
 
     const source = createReadStream(path)
     const gunzip = createGunzip()
-    const finish = (value: number | null): void => {
+    const finish = (value: ArchiveListing | null): void => {
       if (done) return
       done = true
       source.destroy()
       gunzip.destroy()
       resolvePromise(value)
     }
-    const sum = (): number => total + folderCount(names, dirs) * unit
+    const sum = (): ArchiveListing => listing(total + folderCount(names, dirs) * unit, [...names, ...links])
 
     const takeHeader = (h: Buffer): void => {
       if (h.every((b) => b === 0)) {
@@ -182,6 +234,8 @@ function tarGzExtractedBytes(path: string, unit: number): Promise<number | null>
         total += roundUp(size, unit)
       } else if (type === '5') {
         dirs.push(name)
+      } else if (type === '1' || type === '2') {
+        links.push(name)
       }
       // Links and devices take no room of their own.
       next = {}

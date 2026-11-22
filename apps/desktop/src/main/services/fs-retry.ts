@@ -16,10 +16,11 @@ const HELD_HANDLE_CODES: ReadonlySet<string> = new Set(['EPERM', 'EACCES', 'EBUS
 /**
  * The total wait across the retries of ONE rename, about 12 s. A scan of a freshly written file ends
  * well within it. An engine install step makes several renames (the archive's move, the flatten, the
- * swap's two, a move back, the `cpu/` carry), so its worst case is several of these budgets on top of
- * the extractor's 5-minute deadline, and can outlast the spawn gate's 6-minute bound: a spawn that
- * waited that long goes ahead, which since #986 meets a complete copy, except between the swap's two
- * renames, when the install folder does not exist for up to one such budget (`runtime/spawn-gate.ts`).
+ * swap's two, a move back, the `cpu/` carry), so its worst case is several of these budgets. Since
+ * #1000 only the swap's renames, the move back and the carry run under the spawn gate (the unpack and
+ * its renames come before it), well inside the gate's 6-minute bound; a spawn waits for them, except
+ * that between the swap's two renames the install folder does not exist for up to one such budget
+ * (`runtime/spawn-gate.ts`).
  */
 export const RENAME_RETRY_BUDGET_MS = 12_000
 const FIRST_WAIT_MS = 50

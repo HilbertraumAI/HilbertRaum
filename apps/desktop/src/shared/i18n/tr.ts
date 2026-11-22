@@ -803,6 +803,9 @@ export const tr: UiCatalog<'tr'> = {
   'analysis.wholeReadSumHint':
     '**Not:** toplamları model kendisi hesaplar ve bazı öğeleri atlayabilir veya yanlış ' +
     'sayabilir. Her toplamı kaynaklarla karşılaştırarak kontrol edin.',
+  'analysis.wholeDocBeginningOnly':
+    '**Not:** bu belge tamamı okunamayacak kadar uzundu; bu yüzden bu yanıt yalnızca belgenin başını ' +
+    'kapsıyor. Belgenin ilerleyen kısmındaki bir şeyi kontrol etmek için doğrudan o ayrıntıyı sorun.',
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   'skills.bankAnalysis.count': 'Hesap özetinin tamamında **{count}** işlem okudum.',
   'skills.bankAnalysis.countPartial':

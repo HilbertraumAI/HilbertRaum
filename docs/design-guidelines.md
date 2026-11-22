@@ -2400,6 +2400,46 @@ invoice?").
 table and the plausibility fall-through table), `rag-whole-doc-skill.test.ts`, `rag-whole-doc-compare.test.ts`,
 `rag-whole-read.test.ts` (a list ask read whole carries none).
 
+### 11.25 An answer that covers only the beginning of a document — design record (IMPLEMENTED 2026-11-22, #996)
+
+_What a whole-document answer says when the document was too long to read in full. Engineering record:
+`rag-design.md` §14.10 "#996". Code cites this section as **§11.25**._
+
+**The problem.** A document too long for one call is read in parts: notes on each part, then the answer from
+the notes. When the notes are still too long for the answer's call, the app cuts them, and the answer covers
+only the beginning; past about 100 pages the parts themselves stop there. The badge says "covers the
+beginning", and the prompt asks the model to say so too. In the wave-6 real-model session,
+qwen3-4b-instruct-q4 said it in 0 of 8 such answers; one copied "Beginning of the document" into every row's
+source column instead. So the answer's text, which is what gets copied, exported and reviewed, read as
+complete, and the conversation export carries no badge at all.
+
+**Decision** (owner, 2026-11-22, follow-ups wave 7, G-7 option A1). The app writes the line itself, and the
+prompt stays as it was:
+*"**Heads-up:** this document was too long to read in full, so this answer covers only its beginning. To
+check something later in the document, ask about that detail directly."* (DE *„**Hinweis:** Das Dokument war
+zu lang, um es ganz zu lesen, daher deckt diese Antwort nur seinen Anfang ab. Wenn du etwas aus dem späteren
+Teil suchst, frag direkt nach diesem Detail."*). Each language uses the heads-up word its other notices use.
+- **The §11.24 shape.** Bold "Heads-up:", one sentence of fact, one of action. The action promises no
+  mechanism: a question about one detail usually searches the passages, but a question under a whole-document
+  skill can still take the whole read, so the line says only what to ask. It streams first and is persisted
+  with the answer. The order is the scope notice, the sum hint (§11.24), this line, then the model's text.
+- **Only on a proven cut.** It appears only when the answer's coverage is the beginning (`coverage.truncated`
+  on a map-reduce answer, over the deep index or the raw sections). A whole read never carries it.
+- **Never on its own.** It rides the first token of the model's answer. A Stop before that token, or a reply
+  that is only reasoning, stores nothing, as with the scope notice.
+- **The model sees nothing new in the turn.** Every prompt is byte for byte the same. A later turn sees the
+  line in the history, like the scope notice.
+- **Where it travels.** Copy and the conversation export carry it. Review shows it as one more paragraph
+  block, like the scope notice. Regenerate works it out again. The answer keeps the language it was asked in.
+- **Left out.** The last-resort capped read (both map-reduce paths declined, which only a document without
+  section text reaches) and the two-document compare, which prints its own notice per document.
+
+**Copy:** `analysis.wholeDocBeginningOnly` (all ten languages; the owner reads the German). **Tests:**
+`rag-whole-doc-mapreduce.test.ts` (the #996 A describe: the line rides the first reduce token, the prompts
+stay byte for byte, a whole read gets none, a Stop or a reasoning-only reply stores nothing),
+`rag-whole-doc-tree.test.ts`, `rag-skill-analysis.test.ts` (after the scope notice, through `askDocuments`),
+`rag-whole-read.test.ts` (a summary over the deep index).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

@@ -93,11 +93,13 @@ import {
   plantProbeTrap,
   newerVault,
   setFrameMagic,
+  storeCopy,
   tagFailingVault,
   unlockedController,
   upgradeBlockedVault,
   workspaceIpcCtx,
   writeNewerSchema,
+  type FreshVaultPaths,
   type WorkspaceIpcCtxOptions
 } from '../helpers/vault-fixtures'
 import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
@@ -1542,6 +1544,63 @@ describe('a workspace failure line names no path (#956)', () => {
     expect(existsSync(`${vp.encPath}.new`)).toBe(false)
     const lines = linesAfter(marker, 'removed a staged copy')
     expect(lines).toHaveLength(1)
+    expect(namesNoPath(lines[0], vp.root)).toBe(true)
+  })
+
+  /** #1001: a stored document copy and a stored image copy in `vp`, written while it is unlocked under `password`. */
+  async function storedCopies(vp: FreshVaultPaths, password: string): Promise<string[]> {
+    const ctl = unlockedController(vp, password)
+    try {
+      const ws = dirname(vp.dbPath)
+      return [
+        await storeCopy(ctl, vp.root, join(ws, 'documents', 'd1.pdf.enc'), 'a document'),
+        await storeCopy(ctl, vp.root, join(ws, 'images', 'i1.png.enc'), 'an image')
+      ]
+    } finally {
+      ctl.lock()
+    }
+  }
+
+  /** #1001: a locked workspace under `PW` with a stored document copy and image copy, and another workspace's two copies
+   *  at their staged names (a copied or restored folder). */
+  async function besideForeignCopies(): Promise<FreshVaultPaths> {
+    const vp = lockedVault('wsipc', PW)
+    const own = await storedCopies(vp, PW)
+    const foreign = await storedCopies(lockedVault('wsipc-other', 'other-password'), 'other-password')
+    own.forEach((path, i) => copyFileSync(foreign[i], `${path}.new`))
+    return vp
+  }
+
+  // #1001: an unlock that removes staged document or image copies which do not open under the workspace's key says so in
+  // one line, with counts only: no path, no file name.
+  it('an unlock that removes staged document or image copies from another key logs one line with counts and no path (#1001)', async () => {
+    const vp = await besideForeignCopies()
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    try {
+      expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: true })
+      const lines = linesAfter(marker, '(#1001)')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toContain('"removed":2')
+      expect(namesNoPath(lines[0], vp.root)).toBe(true)
+      expect(lines[0]).not.toContain('.enc')
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // As #973's F4 row: the removals are facts on disk as soon as they happen, so they are logged even when a later step of
+  // the same unlock fails (here `.enc` itself fails its tag: "damaged").
+  it('an unlock that removes staged document or image copies and then fails still logs them once, with no path (#1001)', async () => {
+    const vp = tagFailingVault(await besideForeignCopies())
+    const ctrl = startedOn(vp)
+    registerWorkspaceIpc(workspaceIpcCtx(ctrl))
+    const marker = mark()
+    expect((await invoke(handlers, IPC.unlockWorkspace, PW)).result).toMatchObject({ ok: false, reason: 'vault_damaged' })
+    const lines = linesAfter(marker, '(#1001)')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('"removed":2')
     expect(namesNoPath(lines[0], vp.root)).toBe(true)
   })
 
