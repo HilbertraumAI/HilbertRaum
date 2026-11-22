@@ -1461,7 +1461,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   pages) and `SUMMARY_MAP_CALL_HARD_CEILING` (~24 windows, ~100 pages) is no longer dropped: every mapped
   window's notes are **condensed** down through bounded fenced intermediate reduces (a hierarchical fold, cap
   `MAX_FOLD_DEPTH`) until they fit one final reduce, so the whole document is covered (`truncated:false`).
-  Only **beyond** the hard ceiling (~100 pages) does the tail stay honestly beginning-only (`truncated:true`)
+  Only **beyond** the hard ceiling (~100 pages) does the tail stay honestly beginning-only (`truncated:true`;
+  since #996 the answer's first line says so too)
   — that is deep-index **tree** territory (the tree auto-builds at ~this size and is the designed rescue; the
   fold is a bounded query-time lever, deliberately not unbounded — the dominant cost is one map call per
   window on CPU, covered by the progress notice in (b)); (b) a mid-size analysis
@@ -1486,10 +1487,21 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   whole-doc capped read — is now finished the same way (re-sending the whole grounded prompt + a resume
   anchor), so a mid-word grounded reply no longer persists as if complete. **New residual:** a deliverable
   long enough to STILL be cut after the 2-continuation cap keeps an honest **OUTPUT**-truncated badge
-  (`Message.truncated`, "Answer truncated — model context limit reached") — this is distinct from
+  (`Message.truncated`, "Reply cut off") — this is distinct from
   `coverage.truncated` and never conflated with it (the whole document can be covered while the deliverable is
-  output-cut). Guarantee unchanged: `prompt + output ≤ n_ctx` at every context size (no HTTP 400 "exceeds
-  context size").
+  output-cut). **Since #996** the same badge also marks an answer that was cut, continued, and then ended
+  cleanly in the middle of a sentence: a 4B Contract Brief stopped at "… unless the lease provides otherwise
+  or" after a continuation of about 700 tokens, and was stored as complete. Its tooltip offers the remedy of the
+  pass that was cut. Only the last line is judged, against the answer's own style: a last line that ends in a
+  word reads as cut only when most of the answer's earlier long lines end with a full stop or another
+  terminator, and one that ends with a comma, a colon or an open bracket always does. So a table row, a
+  heading, a code block, a short list item, a signature, a URL or a list written without full stops reads as
+  complete; over 413 stored real answers the check flagged 4, all genuinely cut. Some cuts keep no badge (the
+  accepted misses): a cut right after an abbreviation such as "e.g.", a cut inside a table row, a short last
+  item or line, and a cut in an answer written without full stops. An answer whose first pass ended cleanly is
+  never judged this way, so a model that stops
+  mid-sentence on its own still carries no badge. Guarantee unchanged: `prompt + output ≤ n_ctx` at every
+  context size (no HTTP 400 "exceeds context size").
   **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
   (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
   (budget split size-aware across them, `capped` coverage — `truncated` when either overflowed) and
@@ -1508,7 +1520,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   totals. The tree map-reduce, which formerly "lied at the margin" (hard-truncated its notes while
   stamping `truncated:false`), now flips to the honest `truncated`/"covers the beginning" badge and a
   softened reduce prompt when it hits the **12-call map ceiling** (`SUMMARY_MAP_CALL_CEILING`) or clamps
-  its joined notes to the reduce budget. **Open follow-up (deferred by W1):** auto-building (or one-click
+  its joined notes to the reduce budget. The softened prompt asks the model to say that it covers only the
+  beginning, and a 4B model did so in 0 of 8 such answers, so since #996 the answer leads with the app's own
+  line instead (design-guidelines §11.25); the answer's copy and its export carry it.
+  **Open follow-up (deferred by W1):** auto-building (or one-click
   offering) the deep index when a whole-doc turn truncates (the routing of lookup-shaped questions to top-k
   on truncation was since **done by A3** — the needle-vs-deliverable downgrade below).
   **W2 (audit §2.1/§3.4/§4.5) killed the silent doc-count fallthrough and added a document-plausibility
@@ -1819,7 +1834,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   worse, so the prompt stays as it is. A 4B model's notes on a long document copy the skill's report format
   into every part, and its answers can loop or invent details; a shorter map prompt cut the copying but did
   not improve the answers, so that stays too ([`rag-design.md`](rag-design.md) §14.10.1); and when the
-  notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that.
+  notes had to be cut to fit, a 4B answer can still say something is absent although its prompt forbids that
+  (since #996 such an answer leads with a line saying that it covers only the beginning of the document).
   The answer still says it read the whole document, which is true of what it read, not of what the notes
   kept.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —

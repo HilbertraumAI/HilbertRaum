@@ -25,7 +25,12 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- An answer about a document too long to read in full now says in its first line that it covers only the
+  beginning of the document. Before, only the badge said so, and a copied or exported answer read as complete.
+  A long answer that HilbertRaum had to continue, and that then stopped in the middle of a sentence, now shows
+  "Reply cut off" instead of looking finished (#996).
 
 ## [0.1.66] — 2026-11-21
 
