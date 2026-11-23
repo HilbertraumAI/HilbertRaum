@@ -50,7 +50,7 @@
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
-    "@testing-library/user-event": "^14.6.8",
+    "@testing-library/user-event": "^14.6.12",
     "@types/node": "^24.19.2",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^18.3.5",
@@ -62,7 +62,7 @@
     "electron-vite": "^3.1.0",
     "jsdom": "^29.1.1",
     "typescript": "^5.5.4",
-    "vite": "^6.4.5",
+    "vite": "^6.4.6",
     "vitest": "^4.1.12"
   }
 }
