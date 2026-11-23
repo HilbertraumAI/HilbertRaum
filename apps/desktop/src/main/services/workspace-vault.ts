@@ -2132,11 +2132,22 @@ function checkpointOpenDatabase(vaultPaths: VaultPaths, db: Db, refusal: string,
  * database since the stage, so `.enc` then holds what the stage holds, and the session ends as any other does from here
  * on: a failed lock's working file is kept (CODE-1b), a kill is reported (#892). `encryptFile` replaces whatever is at the
  * name by its atomic rename: nothing (the swap shredded it), noise (the shred overwrote a held file it could not unlink),
- * or the old v1 file (a pass that threw before it reached the database), whose blocks are then freed, not overwritten, as
- * every lock frees the previous `.enc`. It never shreds first: a save that then failed would leave `.enc` missing.
+ * or the old v1 file (another program held it through the swap, so its shred could not touch it). Code review CR1-1: that
+ * old file is under the retired, password-derived key, which the swap shreds before its rename, so a regular file at
+ * `.enc` that does not open under the new data key is shredded first here too, as the swap does (the same window: `.enc`
+ * missing while the stage, the snapshot of the change, is still there). One that opens under the key is never shredded,
+ * and one that cannot be read just now (still held) is not judged: the rename below (or, when that fails too, the next
+ * lock's) replaces it unshredded, its blocks freed rather than overwritten, as every lock frees the previous `.enc`.
  */
 function saveOpenDatabase(vaultPaths: VaultPaths, db: Db, key: Buffer, onProbeFallback?: ProbeFallbackNote): void {
   checkpointOpenDatabase(vaultPaths, db, 'Refusing to save the workspace after the password change', onProbeFallback)
+  let retired = false
+  try {
+    retired = shredNameOf(lstatOrNull(vaultPaths.encPath)).kind === 'file' && !authenticatesUnder(vaultPaths.encPath, key)
+  } catch {
+    /* cannot be read now (a hold, an I/O error, a newer build's frame): never shredded unjudged (see above) */
+  }
+  if (retired) shredFile(vaultPaths.encPath)
   encryptFile(vaultPaths.dbPath, vaultPaths.encPath, key)
 }
 
@@ -3690,8 +3701,8 @@ export class WorkspaceController {
    * what is left after the process ends is judged by the next unlock under the data key (#973, #1027).
    */
   private _staleDatabaseStage: { unlisted: boolean; encCurrent: boolean } | null = null
-  /** #1027: the last password change could not move its staged database into place: the error's code, and whether the
-   *  change saved `.enc` itself, for the IPC's one log line ({@link takeDatabaseSwapFailure}). */
+  /** #1027: the last password change could not move its staged database into place: the code of the swap pass's last
+   *  error, and whether the change saved `.enc` itself, for the IPC's one log line ({@link takeDatabaseSwapFailure}). */
   private _databaseSwapFailure: { code: string | null; saved: boolean } | null = null
   /** #973 (review round 3 F2): a successful unlock settles a loss still held, because this unlock did not judge the stage
    *  (it was gone by then, or a journal now lists it). Recorded while `.enc` is still the snapshot it was judged against
@@ -4152,9 +4163,10 @@ export class WorkspaceController {
     return outcome
   }
 
-  /** #1027: whether the last password change could not move its staged database into place (the swap error's code, no
-   *  path; `saved`: the change wrote `.enc` from the open database itself, else the next lock does). Returns it once, for
-   *  the IPC's one content-free log line after the change; null otherwise. */
+  /** #1027: whether the last password change could not move its staged database into place (`code`: the code of the
+   *  last error the swap pass met, no path; code review CR1-4: not necessarily the database's own, another file's step
+   *  may have failed after it; `saved`: the change wrote `.enc` from the open database itself, else the next lock does).
+   *  Returns it once, for the IPC's one content-free log line after the change; null otherwise. */
   takeDatabaseSwapFailure(): { code: string | null; saved: boolean } | null {
     const failure = this._databaseSwapFailure
     this._databaseSwapFailure = null
@@ -4269,7 +4281,10 @@ export class WorkspaceController {
     // (A folder at the name is left too, and no file to delete.) Review F2: not marked unlisted. A stage in doubt is one
     // no admitted entry names, but the journal may still name it in an entry a failed stat left unjudged; the lock drops
     // that too (J finds nothing to do when nothing names it), or a later start that can judge the entry rolls the stage.
-    if (this._stageLeftByUnlock && isFileAt(`${this.vaultPaths.encPath}${REKEY_SUFFIX}`)) {
+    // Code review CR1-2: "still there" unless a stat says ENOENT (one that fails otherwise proves nothing); a folder at
+    // the name is no file to delete.
+    const leftStage = `${this.vaultPaths.encPath}${REKEY_SUFFIX}`
+    if (this._stageLeftByUnlock && !statSaysAbsent(leftStage) && lstatOrNull(leftStage)?.isDirectory() !== true) {
       this._staleDatabaseStage = { unlisted: false, encCurrent: true }
     }
     // (#858: `unlockEncryptedVault` re-stamped `workspaceMode`, inside its failure guard.)
@@ -4458,7 +4473,9 @@ export class WorkspaceController {
           // `.enc` the shred could neither overwrite nor remove, which leaves the old v1 file in place; a temp the pass
           // could not remove before it reached the database), a staged database still there means the database's swap
           // did not happen, so the trigger is the stage alone, never "`.enc` is missing" (review F4).
-          if (isFileAt(`${this.vaultPaths.encPath}${REKEY_SUFFIX}`)) this.supersedeDatabaseStage(err)
+          // Code review CR1-2: only a stat that says ENOENT proves the stage went into place; one that fails otherwise
+          // (EIO, EACCES, a hold) is no proof, and the stage may still be there.
+          if (!statSaysAbsent(`${this.vaultPaths.encPath}${REKEY_SUFFIX}`)) this.supersedeDatabaseStage(err)
         }
       }
       return this.getState()

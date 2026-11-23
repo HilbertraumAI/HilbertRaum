@@ -2102,9 +2102,17 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
      deletes the stage once `.enc` is the session's own, never while `.enc` may still be
      missing. A stage still there at the next unlock is removed there (below). One content-free
      log line after the change names the swap error's code and whether `.enc` was saved.
-     `.enc` is replaced by an atomic rename, never shredded first; where a pass threw before it
-     reached the database, the old v1 `.enc`'s blocks are therefore freed, not overwritten, as
-     every lock frees the previous `.enc`.
+     The change supersedes the stage whatever made the swap fail, as long as a stat of the stage
+     does not say ENOENT: any other failed stat proves nothing (code review CR1-2). When another
+     program held the old v1 `.enc` through the swap, so that its shred could not touch it, that
+     file is still under the retired, password-derived key. The change then shreds a regular file
+     at `.enc` that does not open under the new data key before it writes its own, as the swap
+     does (code review CR1-1). The window is the swap's own: `.enc` is missing while the stage,
+     the snapshot of the change, is still there. An `.enc` that opens under the key is never
+     shredded. **Residual:** an `.enc` the change cannot even read because the hold lasts is not
+     judged, so it is not shredded. Its rename, or the next lock's when that fails too, replaces
+     it, and its blocks are freed rather than overwritten, as every lock frees the previous
+     `.enc` (shredding on flash is best-effort anyway, "Secure erase").
      A change that fails before its commit rolls back by deleting what it staged; a delete that
      fails (a held stage or journal) no longer replaces the change's own error or skips zeroing
      the new data key (#1027): nothing committed, so every recovery under the v1 key file

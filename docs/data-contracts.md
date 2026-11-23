@@ -1514,9 +1514,14 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   last unlock did with the staged document and image copies in doubt, counts only, null when it found
   none; returned once, for the same IPC's one line, logged only when it removed or left any),
   `takeDatabaseSwapFailure() → { code: string | null; saved: boolean } | null` (#1027: the last password
-  change committed but could not move its staged database into place; `code` is the swap error's code only,
-  `saved` whether the change wrote `.enc` from the open database itself, else the next lock does; returned
-  once, for the change IPC's one content-free warning line).
+  change committed but could not move its staged database into place; `code` is the code of the last error
+  the swap pass met, and only that: not necessarily the database's own, as another file's step may have failed
+  after it (code review CR1-4). `saved` says whether the change wrote `.enc` from the open database itself, else
+  the next lock does. Returned once, for the change IPC's one content-free warning line, which logs it as
+  `swapLastErrorCode` with words that follow `saved`). "A staged database still there" is any stat answer but
+  ENOENT, after the swap and at the unlock's `left` (code review CR1-2). `takeStageOutcome()`'s `left` covers a
+  staged database the unlock could not read and one it judged older than `.enc` but could not delete yet; the
+  unlock IPC's line says both (code review CR1-5).
 - **Working copy lost (#855, #875):** a lock that finds the working file gone or no longer a
   database (`probeDatabaseFile`: `gone`, `not-database` or `damaged`) while `.enc` is there shreds
   what is left, drops the key and finishes `locked` at the last good snapshot. From then until the

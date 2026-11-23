@@ -156,6 +156,13 @@ const failures = vi.hoisted(() => ({
    *  journal and its removal throw EBUSY (it still reads); `exclusive` (review F1): its read throws EBUSY as well (a hold
    *  with no read sharing). */
   holdJournalAfterStagedEnc: false as false | 'write' | 'exclusive',
+  /** #1027 code review CR1-1: `.enc` itself is held with no write or delete sharing (openSync and rmSync throw EBUSY for
+   *  it) while set, until the staged database's rename has been refused twice (the swap and its retry): a hold that
+   *  outlasts the swap and ends before the change saves `.enc`. */
+  holdEncUntilSwapGivesUp: false,
+  /** #1027 code review CR1-2: once the staged database's rename has been refused twice, statSync throws this code for
+   *  exactly this path while set (a failing drive under the stage). Counted in `hits.statThrow`. */
+  statThrowAfterSwap: null as { path: string; code: string } | null,
   /** How often each armed wrapper actually refused — an injection that was never reached
    *  proves nothing, so the tests assert these. */
   hits: {
@@ -178,7 +185,8 @@ const failures = vi.hoisted(() => ({
     openSyncSidecarTarget: 0,
     statThrow: 0,
     openThrowFor: 0,
-    journalHeld: 0
+    journalHeld: 0,
+    encHeld: 0
   }
 }))
 
@@ -275,6 +283,10 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.openThrowFor += 1
         throw errnoError(openFor.code, `${openFor.code}: open (a held or refused file)`)
       }
+      if (failures.holdEncUntilSwapGivesUp && failures.hits.renameStagedEnc < 2 && isEnc(path)) {
+        failures.hits.encHeld += 1
+        throw errnoError('EBUSY', 'EBUSY: open (a held .enc)')
+      }
       if (failures.openThrowOnRecoveryPath && isRecovery(path)) {
         failures.hits.openSync += 1
         throw errnoError('EBUSY', 'EBUSY: resource busy or locked, open (held .recovery)')
@@ -315,6 +327,10 @@ vi.mock('node:fs', async (importOriginal) => {
       if (failures.rmThrowFor !== null && String(path) === failures.rmThrowFor.path) {
         failures.hits.rmSync += 1
         throw errnoError(failures.rmThrowFor.code, `${failures.rmThrowFor.code}: unlink (a held file)`)
+      }
+      if (failures.holdEncUntilSwapGivesUp && failures.hits.renameStagedEnc < 2 && isEnc(path)) {
+        failures.hits.encHeld += 1
+        throw errnoError('EBUSY', 'EBUSY: unlink (a held .enc)')
       }
       if (failures.holdJournalAfterStagedEnc && failures.hits.renameStagedEnc > 0 && String(path).endsWith('rekey-journal.json')) {
         failures.hits.journalHeld += 1
@@ -389,6 +405,11 @@ vi.mock('node:fs', async (importOriginal) => {
         failures.hits.sidecarTargetStat += 1
         throw errnoError('EPERM', 'EPERM: operation not permitted, stat (a delete-pending stored copy)')
       }
+      const afterSwap = failures.statThrowAfterSwap
+      if (afterSwap !== null && failures.hits.renameStagedEnc >= 2 && String(args[0]) === afterSwap.path) {
+        failures.hits.statThrow += 1
+        throw errnoError(afterSwap.code, `${afterSwap.code}: stat (a failing drive under the stage)`)
+      }
       const stats = (actual.statSync as unknown as (...a: unknown[]) => unknown)(...args)
       if (failures.statReportsNoInode && inStore(args[0]) && stats !== undefined) {
         failures.hits.statNoInode += 1
@@ -456,6 +477,8 @@ beforeEach(() => {
   failures.rmThrowFor = null
   failures.openThrowFor = null
   failures.holdJournalAfterStagedEnc = false
+  failures.holdEncUntilSwapGivesUp = false
+  failures.statThrowAfterSwap = null
   dataKeys.generated = []
   failures.stagedSidecarFds.clear()
   failures.stageBytesRead = 0
@@ -479,7 +502,8 @@ beforeEach(() => {
     openSyncSidecarTarget: 0,
     statThrow: 0,
     openThrowFor: 0,
-    journalHeld: 0
+    journalHeld: 0,
+    encHeld: 0
   }
   ipcState.handlers.clear()
 })
@@ -706,7 +730,8 @@ describe('a held .recovery: the startup salvage refuses to sweep instead of losi
       openSyncSidecarTarget: 0,
       statThrow: 0,
       openThrowFor: 0,
-      journalHeld: 0
+      journalHeld: 0,
+      encHeld: 0
     })
     // The spent leftover was pre-shredded and the working file moved onto its name.
     expect(existsSync(vp.dbPath)).toBe(false)
@@ -2385,6 +2410,68 @@ describe('a password change whose staged database cannot be moved into place (#1
     expect(ctl.takeDatabaseSwapFailure()).toMatchObject({ saved: true })
     updateSettings(ctl.requireDb(), { contextTokens: 7777 })
     ctl.lock()
+    const next = unlockedController(vp, 'next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    next.shutdown()
+  })
+
+  // Code review CR1-1: the old v1 `.enc` is under the retired key, the old password's, which the swap shreds before its
+  // rename. Here a hold kept that shred from touching it through the swap's two tries and ended before the change saves
+  // `.enc` itself. Renamed over, the old frame's blocks used to stay on the drive unshredded; now the change shreds an
+  // `.enc` that does not open under the new data key first, as the swap would have. The bytes at the old frame's own file,
+  // read through a descriptor opened before the change, are no longer the frame. (A held `.enc` the change cannot read
+  // either is replaced by the rename unshredded: the row above, the residual.)
+  it('a swap that leaves the old v1 .enc in place, held until it gives up: the change overwrites the old frame before it saves .enc', () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 4100 })
+    const v1Enc = readFileSync(vp.encPath)
+    const view = openSync(vp.encPath, 'r') // the old frame's own file, still readable after its name is gone
+    try {
+      holdStage(`${vp.encPath}${REKEY_SUFFIX}`, false)
+      failures.holdEncUntilSwapGivesUp = true
+      try {
+        expect(ctl.changePassword('pw', 'next-password', FAST_ARGON).state).toBe('unlocked')
+      } finally {
+        releaseHolds()
+        failures.holdEncUntilSwapGivesUp = false
+      }
+      expect(failures.hits.encHeld, 'the hold on .enc was reached by the swap').toBeGreaterThan(0)
+      const after = Buffer.alloc(v1Enc.length)
+      expect(readSync(view, after, 0, after.length, 0)).toBe(v1Enc.length)
+      expect(after.equals(v1Enc), 'the old v1 frame, read at its own file after the change').toBe(false)
+    } finally {
+      closeSync(view)
+    }
+    expect(ctl.takeDatabaseSwapFailure()).toMatchObject({ saved: true })
+    updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+    ctl.lock()
+    const next = unlockedController(vp, 'next-password')
+    expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
+    next.shutdown()
+  })
+
+  // Code review CR1-2: only a stat that says ENOENT proves the staged database went into place. One that fails for
+  // another reason (here EIO, a failing drive, right after the refused renames) read as "no stage", so the change did not
+  // supersede it and `.enc` stayed missing beside it through the session.
+  it('a stat of the stage that fails with EIO after the refused renames: the change still saves .enc, and the next lock deletes the stage', () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    updateSettings(ctl.requireDb(), { contextTokens: 4100 })
+    const staged = `${vp.encPath}${REKEY_SUFFIX}`
+    holdStage(staged, false)
+    failures.statThrowAfterSwap = { path: staged, code: 'EIO' }
+    try {
+      expect(ctl.changePassword('pw', 'next-password', FAST_ARGON).state).toBe('unlocked')
+    } finally {
+      releaseHolds()
+      failures.statThrowAfterSwap = null
+    }
+    expect(failures.hits.statThrow, 'the failing stat was reached').toBeGreaterThan(0)
+    expect(existsSync(vp.encPath), '.enc after the change').toBe(true)
+    updateSettings(ctl.requireDb(), { contextTokens: 7777 })
+    ctl.lock()
+    expect(existsSync(staged), 'the stage after the lock').toBe(false)
     const next = unlockedController(vp, 'next-password')
     expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
     next.shutdown()
