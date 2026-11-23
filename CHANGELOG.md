@@ -99,6 +99,8 @@ from its first public `1.0.0` release onward.
   when to give notice. On the smallest model at its default size the answering passage can still land just outside
   the two passages it reads (that question's clause now comes third). The translation adds about half a second to a second on a graphics card, and a few seconds on
   the processor alone, to these questions only. English questions about German documents work as before (#1003).
+- On Windows, an engine install or reinstall that starts right after the app checked the same engine no longer
+  fails now and then with "files in use": the check could still be holding one of the engine's files (#1033).
 
 ### Security
 

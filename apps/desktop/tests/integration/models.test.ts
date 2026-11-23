@@ -1813,6 +1813,7 @@ describe('cancellable verification (#420)', () => {
 
   // ---- the loops, not only the stream --------------------------------------------------
   it('a cancel between two weights stops the pass immediately — the next model never hashes', async () => {
+    const readLog = armPerfLog()
     const root = tempRoot('root')
     const h1 = writeDriveFile(root, 'models/chat/a.gguf', 'AAAA')
     const h2 = writeDriveFile(root, 'models/chat/b.gguf', 'BBBBBBBB')
@@ -1836,6 +1837,10 @@ describe('cancellable verification (#420)', () => {
       }
     })
     // Exactly ONE physical hash: the abort lands in the first file's final progress, the waiter rejects, the pass goes calm, and 'b' never opens.
+    expect(startMarks(readLog)).toHaveLength(1)
+    // The finished read of 'a' still counts, once its file is closed (#1033): after the cancelled pass returned.
+    await until(() => doneMarks(readLog, 'a').length > 0, 'the first weight’s read closing')
+    expect(doneMarks(readLog, 'a')).toEqual([expect.objectContaining({ ok: true })])
     expect(checksumCacheStats.computed).toBe(before + 1)
     expect(manifestErrors).toEqual([])
     // The list is still complete and honest: what was reached is verified, the rest is

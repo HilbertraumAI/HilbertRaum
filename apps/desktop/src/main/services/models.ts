@@ -344,6 +344,10 @@ function isHashAborted(err: unknown): boolean {
  * per `PROGRESS_CHUNK_BYTES` (so the 64 KB read chunks of a multi-GB weight don't flood
  * IPC) — plus a final exact-total call. Used to drive the first-run verification bar.
  *
+ * It settles only once the stream has CLOSED the file (#1033): a resolved hash means the file is no longer held
+ * open, so a caller may rename or delete it, or its folder, right away (Windows refuses a folder rename while a file
+ * inside is open). A close that fails rejects.
+ *
  * `signal` (#420) stops the read. The promise then REJECTS with `HashAbortedError`; it must
  * never simply stop settling, because `computeInstallState`, `buildModelList`, the
  * `listModels` handler and the renderer's busy flag all park on it. That is why the abort
@@ -370,8 +374,12 @@ export function sha256File(
     let hashed = 0
     let lastReported = 0
     let settled = false
+    /** Taken at `end`, handed over on `close` (#1033). */
+    let digest: string | null = null
     const onAbort = (): void => {
-      stream.destroy(new HashAbortedError(filePath))
+      // Once the whole file is read (an abort from the final progress call, or while the file closes) it is too
+      // late to stop anything: the finished hash stands, as when it resolved at `end`.
+      if (digest === null) stream.destroy(new HashAbortedError(filePath))
     }
     /** Settle exactly once and drop the signal listener — one pass hashes many files off
      *  ONE signal, so an un-removed listener per file would pile up on it. */
@@ -391,20 +399,23 @@ export function sha256File(
         onProgress(hashed)
       }
     })
+    // #1033: the digest is taken at `end`, but handed over only on `close`. The stream closes its file after
+    // `end`, on libuv's thread pool, so under load a caller that renamed the file's folder right after the hash
+    // still found the file open: Windows refuses that rename (EPERM). A close that fails reports `error` first.
     stream.on('end', () => {
-      settle(() => {
-        if (onProgress && hashed !== lastReported) onProgress(hashed)
-        resolve(hash.digest('hex'))
-      })
+      digest = hash.digest('hex')
+      if (onProgress && hashed !== lastReported) onProgress(hashed)
     })
     stream.on('close', () =>
-      settle(() =>
-        reject(
-          signal?.aborted
-            ? new HashAbortedError(filePath)
-            : new Error(`Read stream for ${filePath} closed before it finished`)
-        )
-      )
+      settle(() => {
+        if (digest !== null) resolve(digest)
+        else
+          reject(
+            signal?.aborted
+              ? new HashAbortedError(filePath)
+              : new Error(`Read stream for ${filePath} closed before it finished`)
+          )
+      })
     )
   })
 }

@@ -879,7 +879,9 @@ describe('registerModelIpc', () => {
       const result = await pass
 
       expect(cancelled()).toBe(true)
-      // ONE weight hashed: the cancel, fired from the first file's progress, stopped the pass before a second.
+      // ONE weight hashed: the cancel, fired from the first file's progress, stopped the pass before a second. That
+      // finished read counts once its file is closed (#1033), which can be just after the cancelled pass returned.
+      await until(() => checksumCacheStats.computed > before, 'the first weight’s read closing')
       expect(checksumCacheStats.computed).toBe(before + 1)
       // The list is still complete and calm — a cancelled pass is an ordinary result, never
       // a rejection: what finished is verified, the rest is simply unchecked.
@@ -904,6 +906,7 @@ describe('registerModelIpc', () => {
       reg(cancelCtx())
       const before = checksumCacheStats.computed
       await passCancelledOnFirstProgress('run-gate').pass
+      await until(() => checksumCacheStats.computed > before, 'the first weight’s read closing') // #1033, as above
       expect(checksumCacheStats.computed).toBe(before + 1) // one of the two weights stayed unhashed
 
       // The start gate passes NO signal, so a cancelled display pass can never reach it: the
