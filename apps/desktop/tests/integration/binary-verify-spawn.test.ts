@@ -369,7 +369,7 @@ describe('#1012 — spawn seams and a copy missing a file its marker records, th
     await expect(server.ensureStarted({ libraryXmlPath: join(tmpdir(), 'library.1.xml') })).rejects.toMatchObject({
       name: 'KiwixServeStartError',
       kind: 'files',
-      message: 'kiwix-serve was not started: a file of its install is missing'
+      message: 'kiwix-serve was not started: a file of its install is missing, or its install record is damaged'
     })
     expect(calls).toHaveLength(0)
     expect(ports).toBe(0)
@@ -508,5 +508,81 @@ describe('#1012 — spawn seams and a recorded file that cannot be read, through
     })
     expect(engineProblemFor('whisper_cpp')).toBeNull()
     expect(spawned).toBe(false)
+  })
+})
+
+// #1028: an install marker that is there but cut short (an interrupted copy) used to read as no marker at all — a
+// hand-placed bundle, `skip-legacy` — and every seam started the program unchecked. The verifier now answers
+// `marker-damaged`. The engines refuse it through the same `isDamagedFilesVerdict` as a missing file (the rows above
+// hold the probe, whisper-cli and "Check again" to that helper), so one engine row stands for them; the knowledge-pack
+// tools test each verdict by name, so each of their two seams has its own row (owner call 2026-11-23: refused like a
+// missing program or library, with their `files` kind).
+describe('#1028 — spawn seams and an install marker cut short, through the REAL verifier', () => {
+  it('LlamaServer.start REFUSES it with the engine-files verdict that offers "Install again" (no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('llama-server.exe', 'marker-cut-short')
+    const { spawn, calls } = recordingLlamaSpawn()
+    const server = new LlamaServer({
+      binPath: bin,
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl: healthyFetch(),
+      findPort: async () => 51006,
+      healthIntervalMs: 1
+    })
+    await expect(server.start()).rejects.toMatchObject({
+      name: 'EngineCannotRunError',
+      problem: { family: 'llama_cpp', reason: 'files-damaged', exit: 'not started' }
+    })
+    const problem = engineProblemFor('llama_cpp')
+    expect(problem !== null && engineProblemOffersReinstall(problem)).toBe(true)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('KiwixServer.ensureStarted REFUSES it with its files kind (no port, no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('kiwix-serve.exe', 'marker-cut-short')
+    const { spawn, calls } = recordingLlamaSpawn()
+    let ports = 0
+    const server = new KiwixServer({
+      binPath: bin,
+      spawn,
+      findPort: async () => {
+        ports++
+        return 51007
+      },
+      probe: async () => true,
+      allocateGeneration: () => 1,
+      healthIntervalMs: 1
+    })
+    await expect(server.ensureStarted({ libraryXmlPath: join(tmpdir(), 'library.1.xml') })).rejects.toMatchObject({
+      name: 'KiwixServeStartError',
+      kind: 'files',
+      message: 'kiwix-serve was not started: a file of its install is missing, or its install record is damaged'
+    })
+    expect(calls).toHaveLength(0)
+    expect(ports).toBe(0)
+  })
+
+  it('kiwixManageAdd REFUSES it with its files kind (not spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = await binaryWithMarker('kiwix-manage.exe', 'marker-cut-short')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('exit', 0, null)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    await expect(
+      kiwixManageAdd(bin, join(tmpdir(), 'library.xml'), join(tmpdir(), 'pack.zim'), spawn, { timeoutMs: 200 })
+    ).rejects.toMatchObject({
+      name: 'KiwixManageError',
+      kind: 'files',
+      childState: 'not-spawned',
+      message: 'kiwix-manage was not started: a file of its install is missing, or its install record is damaged'
+    })
+    expect(calls).toHaveLength(0)
   })
 })

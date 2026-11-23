@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { markerBinaryKey, writeRuntimeMarker } from '../../src/main/services/assets'
+import { markerBinaryKey, runtimeMarkerPath, writeRuntimeMarker } from '../../src/main/services/assets'
 import { initBinaryVerification, setBinaryVerificationPosture } from '../../src/main/services/binary-verifier'
 import { sha256File } from '../../src/main/services/models'
 import { tempRoot } from './db-fixtures'
@@ -16,10 +16,12 @@ import { tempRoot } from './db-fixtures'
  *  library that is there but refuses to be read (`unreadable`, see `denyReading`), the binary
  *  itself gone from the disk (`program-gone`), a library whose bytes differ from the recorded ones
  *  (`library-changed`: a corrupted or replaced DLL), or both of the last two kinds of damage at once
- *  (`missing-other-library-changed`: an unused program gone AND a library changed). The real verifier
- *  answers each by its own name; `legacy` is `skip-legacy`, `program-gone` is `missing` and
- *  `library-changed` is `mismatch`. `missing-other-library-changed` is `mismatch` for a caller that
- *  starts on `missing-other` (the knowledge-pack tools), `missing-other` for the engines. */
+ *  (`missing-other-library-changed`: an unused program gone AND a library changed), or (#1028) a
+ *  marker cut to half its length, as an interrupted copy leaves it (`marker-cut-short`). The real
+ *  verifier answers each by its own name; `legacy` is `skip-legacy`, `program-gone` is `missing`,
+ *  `library-changed` is `mismatch` and `marker-cut-short` is `marker-damaged`.
+ *  `missing-other-library-changed` is `mismatch` for a caller that starts on `missing-other` (the
+ *  knowledge-pack tools), `missing-other` for the engines. */
 export type MarkerVerdict =
   | 'ok'
   | 'mismatch'
@@ -30,6 +32,7 @@ export type MarkerVerdict =
   | 'program-gone'
   | 'library-changed'
   | 'missing-other-library-changed'
+  | 'marker-cut-short'
 
 /** The bytes the marker records for `engine-library.dll` (#1012), so a test can put the library back. */
 const LIBRARY_NAME = 'engine-library.dll'
@@ -107,6 +110,10 @@ export async function binaryWithMarker(name: string, verdict: MarkerVerdict): Pr
     }
     writeRuntimeMarker(dir, { ...marker, binaries: { [markerBinaryKey(dir, bin)]: hash, ...extra } })
     if (verdict === 'program-gone') rmSync(bin)
+    if (verdict === 'marker-cut-short') {
+      const whole = readFileSync(runtimeMarkerPath(dir), 'utf8')
+      writeFileSync(runtimeMarkerPath(dir), whole.slice(0, Math.floor(whole.length / 2)))
+    }
   }
   return bin
 }

@@ -859,7 +859,8 @@ file a marker records (#998: an engine copy that lost a DLL fails; a marker that
 canonical gate is `assertCommercialDrive(...)`, and since PR #271 both scripts **call it** (through the
 built `apps/desktop/out/tools/assert-commercial-drive.mjs`; `npm run build` produces it, `node` runs it):
 `SELLABLE` is printed only from its verdict, the scripts' own native checks are a pre-flight, not a
-second gate. Run by hand, the tool takes `--target <root> --platforms <list> --app-version <v> [--json]`
+second gate. (#1028: their marker pre-flight reads only the version and backend, loosely, and can pass a
+marker that is cut short or damaged; the canonical gate refuses it and is the authority.) Run by hand, the tool takes `--target <root> --platforms <list> --app-version <v> [--json]`
 and exits 0 (sellable, or `--help`), 1 (not sellable) or 2 (a usage error, an unknown platform
 included); `--json` prints the verdict as one `{ ok, problems, checks }` line on stdout and sends any
 log line to stderr (#767). **"Every

@@ -1291,7 +1291,10 @@ export interface RuntimeInstallMarker {
    * is then all the verifier checks.
    * OPTIONAL: legacy markers (pre-2026-06-21 drives, or those written by an older
    * fetch-runtime) omit it, and the verifier then tolerates the binary (skip + log)
-   * rather than refusing to start.
+   * rather than refusing to start. When it is there it is a plain object whose every value
+   * is a lower-case SHA-256 in hex, or the marker is damaged (#1028, `readRuntimeMarkerState`).
+   * FROZEN for every later writer (release 1 reads it so for life): this field keeps that
+   * shape, and anything new goes into a new top-level field (data-contracts.md, #1028).
    * A multi-file family (#339 P8-1, kiwix_tools) records EVERY executable it ships
    * (`kiwix-serve.exe`, `kiwix-manage.exe`, `kiwix-search.exe`) plus its required runtime
    * files (`icuuc74.dll`, …) — all-or-nothing, so the verifier and the sell gate never
@@ -1323,52 +1326,130 @@ export function markerBinaryKey(extractTo: string, binaryPath: string): string {
   return posix.relative(toPosix(extractTo), toPosix(binaryPath))
 }
 
-/** Read + parse an install marker. Never throws: missing/malformed → null. */
+/**
+ * Read + parse an install marker: the marker, or null when there is none this app can read — no file, a file
+ * that cannot be read just now, or one that is there but damaged (`readRuntimeMarkerState`, #1028). Never throws.
+ * The readers that only need "which build is installed" (the version relation, the install skip, the status, the
+ * swap's "complete" check, Diagnostics) take all three as "no marker", which is safe for each; the pre-spawn check
+ * and the sell gate tell them apart.
+ */
 export function readRuntimeMarker(extractTo: string): RuntimeInstallMarker | null {
-  try {
-    return parseRuntimeMarker(readFileSync(runtimeMarkerPath(extractTo), 'utf8'))
-  } catch {
-    return null
-  }
+  const state = readRuntimeMarkerState(extractTo)
+  return state.kind === 'marker' ? state.marker : null
 }
 
 /**
- * Parse an install marker's text (#1012 code review round 6: the pre-spawn verifier reads the file itself,
- * to tell a marker that is not there from one that cannot be read just now). Never throws: malformed →
- * null.
+ * Why a marker that is there is no marker this app can read (#1028): something other than a regular file sits at its
+ * path (a folder, a pipe, a link to a folder), it is larger than any writer writes, its text is not JSON, its JSON is
+ * not an object, `version`, `backend`, `os` or `arch` is missing or not a string, or `binaries` is not a plain object
+ * whose every value is a SHA-256 (64 hex digits).
  */
-export function parseRuntimeMarker(text: string): RuntimeInstallMarker | null {
+export type RuntimeMarkerFault = 'not-a-file' | 'too-large' | 'not-json' | 'not-an-object' | 'field' | 'binaries'
+
+/**
+ * What is at an engine copy's install-marker path (#1028), the one reading every reader shares:
+ *  - `absent`: no marker (ENOENT, ENOTDIR) — a bundle placed by hand (#339), or a drive older than the marker;
+ *  - `unreadable`: it is there, but the read failed just now (an antivirus hold, a denied read — #1012 round 6);
+ *    `code` is the errno code, validated as one, never the message (which names the path);
+ *  - `damaged`: it is there but is no marker this app can read (cut short by an interrupted copy, garbled);
+ *  - `marker`: a marker. Fields this app does not know are ignored, whatever they hold: a later writer may add one
+ *    (an engine signature, G-28), and this reader must keep accepting it.
+ */
+export type RuntimeMarkerState =
+  | { kind: 'absent' }
+  | { kind: 'unreadable'; code: string | null }
+  | { kind: 'damaged'; fault: RuntimeMarkerFault }
+  | { kind: 'marker'; marker: RuntimeInstallMarker }
+
+/**
+ * The largest marker this app reads (#1028): the b12110 Windows copy's records 52 files in about 5 KB, so 1 MiB
+ * leaves room for ten thousand. A larger file is damaged, so no reader takes an arbitrary file into memory on the
+ * main thread.
+ */
+const RUNTIME_MARKER_MAX_BYTES = 1024 * 1024
+
+/** A recorded file's hash: SHA-256 in hex. Writers record lower case; upper case reads as the same hash. */
+const MARKER_SHA256 = /^[0-9a-f]{64}$/i
+
+/** The errno code of a failed read (`ENOENT`, `EBUSY`, …), validated as one — never the message, which names the path. */
+export function fileErrorCode(err: unknown): string | null {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : null
+}
+
+/** A failed `stat` or read of the marker: not there at all (`absent`), or there but not readable just now. */
+function markerReadFailure(err: unknown): RuntimeMarkerState {
+  const code = fileErrorCode(err)
+  return code === 'ENOENT' || code === 'ENOTDIR' ? { kind: 'absent' } : { kind: 'unreadable', code }
+}
+
+/**
+ * Read the install marker of the copy in `extractTo` and say what it is (`RuntimeMarkerState`, #1028). Never throws.
+ * One `stat` first: a folder, a pipe or any other non-regular file at the path is damaged, not a read that failed
+ * just now — it never heals by waiting (#1012 round 5's rule for recorded files), and reading a pipe would block the
+ * main thread. The installer's delete removes whatever sits at the marker's name, so a reinstall repairs it.
+ */
+export function readRuntimeMarkerState(extractTo: string): RuntimeMarkerState {
+  const path = runtimeMarkerPath(extractTo)
   try {
-    const raw = JSON.parse(text) as Record<string, unknown>
-    if (
-      typeof raw.version === 'string' &&
-      typeof raw.backend === 'string' &&
-      typeof raw.os === 'string' &&
-      typeof raw.arch === 'string'
-    ) {
-      const marker: RuntimeInstallMarker = {
-        version: raw.version,
-        backend: raw.backend,
-        os: raw.os as RuntimeOs,
-        arch: raw.arch
-      }
-      // `binaries` is optional (legacy markers omit it). Accept only a plain object of
-      // string→string hashes; drop anything malformed so a tampered marker can't crash
-      // the read. Only attach the field when at least one valid entry survives, so a
-      // hash-less marker still deep-equals the historical { version, backend, os, arch }.
-      if (raw.binaries && typeof raw.binaries === 'object' && !Array.isArray(raw.binaries)) {
-        const binaries: Record<string, string> = {}
-        for (const [key, value] of Object.entries(raw.binaries as Record<string, unknown>)) {
-          if (typeof value === 'string') binaries[key] = value
-        }
-        if (Object.keys(binaries).length > 0) marker.binaries = binaries
-      }
-      return marker
-    }
-    return null
-  } catch {
-    return null
+    const info = statSync(path)
+    if (!info.isFile()) return { kind: 'damaged', fault: 'not-a-file' }
+    if (info.size > RUNTIME_MARKER_MAX_BYTES) return { kind: 'damaged', fault: 'too-large' }
+  } catch (err) {
+    return markerReadFailure(err)
   }
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (err) {
+    return markerReadFailure(err)
+  }
+  const parsed = parseRuntimeMarkerText(text)
+  return typeof parsed === 'string' ? { kind: 'damaged', fault: parsed } : { kind: 'marker', marker: parsed }
+}
+
+/**
+ * Parse an install marker's text: the marker, or why it is none (#1028). Never throws. One leading UTF-8 byte-order
+ * mark is read past: no writer writes one, but an editor may, and both fetch-runtime twins read past it too.
+ * Before #1028 a `binaries` entry that was not a string was dropped and the marker read on without it, so the file it
+ * named went unchecked, and a `binaries` that was no object read as no map (a hash-less marker): both are damage now.
+ * A map that records nothing is the hash-less marker it always was, so such a marker still deep-equals the historical
+ * `{ version, backend, os, arch }`. Unknown top-level fields are ignored.
+ */
+function parseRuntimeMarkerText(text: string): RuntimeInstallMarker | RuntimeMarkerFault {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
+  } catch {
+    return 'not-json'
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'not-an-object'
+  const fields = raw as Record<string, unknown>
+  if (
+    typeof fields.version !== 'string' ||
+    typeof fields.backend !== 'string' ||
+    typeof fields.os !== 'string' ||
+    typeof fields.arch !== 'string'
+  ) {
+    return 'field'
+  }
+  const marker: RuntimeInstallMarker = {
+    version: fields.version,
+    backend: fields.backend,
+    os: fields.os as RuntimeOs,
+    arch: fields.arch
+  }
+  // `binaries` is optional (legacy markers omit it). When it is there, it is a plain object of SHA-256 hashes, or
+  // the marker is damaged. `fromEntries` keeps every key as the marker's own (a `__proto__` key too), so a recorded
+  // name is never lost on the way in.
+  if (fields.binaries !== undefined) {
+    const map = fields.binaries
+    if (typeof map !== 'object' || map === null || Array.isArray(map)) return 'binaries'
+    const entries = Object.entries(map)
+    if (entries.some(([, hash]) => typeof hash !== 'string' || !MARKER_SHA256.test(hash))) return 'binaries'
+    if (entries.length > 0) marker.binaries = Object.fromEntries(entries) as Record<string, string>
+  }
+  return marker
 }
 
 /** Write the install marker after a successful extraction (UTF-8, single line). */

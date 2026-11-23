@@ -22,6 +22,7 @@ import {
 import {
   CREATE_FAILURE_KEYS,
   UNLOCK_FAILURE_KEYS,
+  startFailureKey,
   type WorkspaceFailureReason
 } from '@shared/workspace-failure-keys'
 
@@ -128,6 +129,29 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
   // the field and `!canSubmit` disables the submit button focus was sitting on, dead-ending
   // keyboard users (autoFocus fires only at mount). The retry path re-focuses the field.
   const unlockInputRef = useRef<HTMLInputElement>(null)
+  // #1024: a back-end start that threw. The card's text goes into the always-mounted alert region two animation frames
+  // AFTER the card has mounted, so the empty region is painted first and assistive tech hears the text as a change
+  // inside a region that was already there (M-U1, #436); a region inserted already holding its text is missed. An
+  // effect alone was not enough: measured in the dev app, the region and its text still landed in the same frame.
+  const startFailed = state.state === 'start_failed'
+  const startFailureText = startFailed ? t(startFailureKey(state.startFailure)) : null
+  const [startError, setStartError] = useState<string | null>(null)
+  useEffect(() => {
+    if (startFailureText === null) {
+      setStartError(null)
+      return
+    }
+    let second = 0
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setStartError(startFailureText))
+    })
+    return () => {
+      cancelAnimationFrame(first)
+      cancelAnimationFrame(second)
+    }
+  }, [startFailureText])
+  // What "Copy details for support" did, for the status line under it (the gate has no toast host).
+  const [copyStatus, setCopyStatus] = useState<string | null>(null)
   useEffect(() => {
     if (!creating) return // the UNLOCK path focuses its own field via autoFocus — don't disturb it.
     if (phase === 'password') passwordInputRef.current?.focus()
@@ -263,6 +287,58 @@ export function WorkspaceGate({ state, onUnlocked, onStateChange }: Props): JSX.
       <span className="gate-brand-edition" lang="en">HilbertRaum Lite</span>
     </div>
   )
+
+  // ---- #1024: the back end could not start ------------------------------------------
+  //
+  // Nothing can be unlocked or created in this run: no password field and no primary action (starting the app again is
+  // the retry). The cause's text says what helps (a drive that can be written, free space), the code sits on a quiet
+  // line (Diagnostics, where codes belong (guidelines §7), cannot be reached from here), and "Copy details for support"
+  // copies the session's log lines, the one way they survive the quit of an encrypted workspace. The update plan adds
+  // its "Install update from a file…" inside the banner (W-4) for the causes an update can fix.
+
+  // #1024 CR-5: a live region announces a change, and the same text set again is none, so a second press was silent.
+  // Each press empties the status first and sets its text two animation frames later, as the banner does: the empty
+  // region is painted in between, and every press is heard.
+  async function copyDetails(): Promise<void> {
+    setCopyStatus(null)
+    let status: string
+    try {
+      const lines = await window.api.getLogTail()
+      // Final round: no lines, nothing for support: "Copied" would be untrue, so the clipboard is left as it is.
+      const ok = lines.length > 0 && (await window.api.copyToClipboard(lines.join('\n')))
+      status = t(ok ? 'diag.copied' : 'diag.copyFailed')
+    } catch {
+      status = t('diag.copyFailed')
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => setCopyStatus(status)))
+  }
+
+  if (startFailed) {
+    const code = state.startFailure?.code ?? null
+    return (
+      <div className="gate-shell">
+        <div className="gate-card card">
+          {brand}
+          <h1>{t('app.fatal.title')}</h1>
+          {/* SH-2 (#145): always mounted; the text arrives after the mount (the effect above). */}
+          <ErrorBanner message={startError} t={t} />
+          <p className="hint">{t('gate.startFailed.help')}</p>
+          {code !== null && (
+            <p className="hint">
+              <code>{t('gate.startFailed.code', { code })}</code>
+            </p>
+          )}
+          <div className="gate-start-failed-actions">
+            <Button onClick={() => void copyDetails()}>{t('gate.startFailed.copyDetails')}</Button>
+            {/* Always mounted, so its first message is announced too. */}
+            <p className="hint" role="status">
+              {copyStatus ?? ''}
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // ---- Create: the first run's welcome, finishing and starter steps ------------
 

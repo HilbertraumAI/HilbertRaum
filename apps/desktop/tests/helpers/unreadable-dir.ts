@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmdirSync } from 'node:fs'
+import { join } from 'node:path'
 
 // A folder its owner cannot list, for the rows where the sell gate must refuse what it cannot look into (#893). POSIX: a
 // mode without the read bit (`traverse` keeps the execute bit, so a file inside still opens by its path while the folder
@@ -27,4 +28,31 @@ export function makeUnreadable(dir: string, opts: { traverse?: boolean } = {}): 
   }
   chmodSync(dir, opts.traverse ? 0o111 : 0o000)
   return () => chmodSync(dir, 0o755)
+}
+
+/**
+ * #1024: takes the right to create a folder inside `dir` away and returns the undo (run it in `finally`). Windows: a deny
+ * entry for Everyone on "Create folders / append data" (AD), which icacls sets without admin rights on a folder the user
+ * owns, as an access rule on a drive does; a folder already inside still opens. POSIX: mode r-x. Then it tries a folder
+ * itself, and throws when the folder still takes one (POSIX root ignores the mode), so a row can never pass on a drive
+ * that was never refused.
+ */
+export function denyNewFolders(dir: string): () => void {
+  let undo: () => void
+  if (process.platform === 'win32') {
+    icacls([dir, '/deny', `${EVERYONE}:(AD)`])
+    undo = () => icacls([dir, '/remove:d', EVERYONE])
+  } else {
+    chmodSync(dir, 0o555)
+    undo = () => chmodSync(dir, 0o755)
+  }
+  const probe = join(dir, `.deny-new-folders-${process.pid}`)
+  try {
+    mkdirSync(probe)
+  } catch {
+    return undo // refused, as the row needs
+  }
+  rmdirSync(probe)
+  undo()
+  throw new Error(`denyNewFolders: ${dir} still takes a new folder (POSIX root ignores the mode); run as a normal user`)
 }

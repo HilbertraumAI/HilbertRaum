@@ -347,6 +347,47 @@ describe('the gate at start (#875)', () => {
     expect(screen.getByText('workspace config unreadable')).toBeInTheDocument()
     expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Password')).not.toBeInTheDocument()
+    // #1024: what helps, and the troubleshooting guide; never `logs/app.log`, which an encrypted workspace does not
+    // write before an unlock.
+    expect(screen.getByText(t('en', 'gate.startFailed.other'))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'gate.startFailed.help'))).toBeInTheDocument()
+    expect(screen.queryByText(/app\.log/)).not.toBeInTheDocument()
+  })
+
+  // #1024: main's failure state (a back-end start that threw) is the gate's to show, not the shell's: the card with the
+  // cause and its code, no navigation, no password field. The launch-to-password-prompt mark is not set: there is no
+  // prompt. Review L-4: the bridge here is strict, exactly what main serves in that state (`getWorkspaceState`) plus the
+  // listeners and the engine-problems read, which main refuses (no handler), as in the app; any other call the renderer
+  // makes in this state, which main would refuse, fails the row.
+  it('shows the start-failure card when main answers start_failed, and calls nothing else', async () => {
+    const perfMark = vi.fn()
+    stubApi({
+      getWorkspaceState: vi.fn(
+        async (): Promise<WorkspaceStateInfo> => ({
+          state: 'start_failed',
+          mode: null,
+          plaintextAllowed: false,
+          encryptionRequired: true,
+          startFailure: { cause: 'drive_not_writable', code: 'EPERM' }
+        })
+      ),
+      getAppStatus: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'app:getAppStatus': Error: No handler registered")
+      }),
+      onRuntimeNotice: vi.fn(() => () => {}),
+      onEngineProblemsChanged: vi.fn(() => () => {}),
+      perfMark
+    })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: t('en', 'app.fatal.title') })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(t('en', 'gate.startFailed.notWritable')))
+    expect(screen.getByText(t('en', 'gate.startFailed.code', { code: 'EPERM' }))).toBeInTheDocument()
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Password')).not.toBeInTheDocument()
+    expect(perfMark).not.toHaveBeenCalledWith('gate_visible')
+    expect(() => assertNoUnexpectedApiCalls()).not.toThrow()
   })
 })
 

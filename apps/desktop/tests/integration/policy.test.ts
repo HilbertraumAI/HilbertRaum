@@ -20,6 +20,7 @@ import {
   isLoopbackHost,
   installOfflineNetworkGuard,
   assertOfflinePosture,
+  offlineGuardInstalled,
   type OfflinePosture
 } from '../../src/main/services/offlineGuard'
 import type { PrivacyPolicy } from '../../src/shared/types'
@@ -523,6 +524,35 @@ describe('offline self-check', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('remote connection attempt'), { host: 'example.com' })
     expect(onViolation).toHaveBeenCalledOnce()
     expect(onViolation).toHaveBeenCalledWith('example.com')
+  })
+
+  // #1024 final round: a start that threw installs the tripwire itself (main/index.ts), unless `initBackend` got as far
+  // as installing it: two guards would log every remote connect twice. `offlineGuardInstalled` is what it asks.
+  it('offlineGuardInstalled says whether a tripwire is in place; its uninstaller takes it back once (#1024)', () => {
+    expect(offlineGuardInstalled()).toBe(false)
+    const uninstall = assertOfflinePosture({
+      readPosture: () => ({ offlineMode: true, networkAllowed: false }),
+      log: vi.fn(),
+      warn: vi.fn()
+    })
+    try {
+      expect(offlineGuardInstalled()).toBe(true)
+    } finally {
+      uninstall()
+    }
+    expect(offlineGuardInstalled()).toBe(false)
+    uninstall() // a second call takes nothing back: the next install still counts
+    expect(offlineGuardInstalled()).toBe(false)
+    const again = assertOfflinePosture({
+      readPosture: () => ({ offlineMode: true, networkAllowed: false }),
+      log: vi.fn(),
+      warn: vi.fn()
+    })
+    try {
+      expect(offlineGuardInstalled()).toBe(true)
+    } finally {
+      again()
+    }
   })
 })
 

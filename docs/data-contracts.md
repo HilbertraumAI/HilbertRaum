@@ -1698,10 +1698,11 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   way, or document work in progress: `VaultBusyError`, whose message is `tMain` text since #807), `error` (anything else, #845's refusals
   included: the current password still works). Registered in `initBackend()`; exposed on preload `api` +
   `PreloadApi`.
-- **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
-  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice? }`
+- **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked|start_failed`; the last, #1024,
+  only from the start-failure state below, never from the controller),
+  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired, lockNotice?, startFailure? }`
   (`lockNotice`: `working_copy_lost` | `session_not_closed` | `session_not_closed_full`, #892;
-  `encrypted_file_missing`, #911),
+  `encrypted_file_missing`, #911; `startFailure`: `BackendStartFailure`, #1024),
   `WorkspaceActionResult`.
 ✅ **`AppContext.db` is now a getter** over `workspace.requireDb()` (throws while locked) +
   `AppContext.workspace: WorkspaceController`. `main/index.ts` builds the controller from
@@ -1713,6 +1714,40 @@ re-reads them. An older app ignores both keys and keeps rule C on the derived es
   vs plaintext choice when policy allows, confirm + strength hint, wrong-password error). `App.tsx`
   fetches `getWorkspaceState()` on mount and renders the gate until `unlocked`; sidebar **Lock now**
   button (encrypted only) calls `lockWorkspace`. The Settings workspace card reflects the real mode.
+✅ **Start failure (#1024)** — `main/backend-start.ts` `runBackendStart(initBackend, …)`. A back-end start that throws
+  (`initBackend` registers every channel at its end) logs one line, `Backend initialization failed` with
+  `safeFailureForLog` (a file error's code and bare system call, never its message; `{ "error": "unreadable" }` for a
+  value it cannot read, and then the failure is `{ cause: 'other', code: null }`), removes every handler the partial
+  start registered (`releaseGuardedHandlers`, `ipc/guarded-handle.ts`; their count is logged when there were any; a
+  channel registered before the start began, `guardedChannels`, stays), and registers the failure state
+  (`ipc/registerStartFailureIpc.ts`, which takes a `StartFailureContext { trustedSenders, failure, paths, isDev }` and no
+  `AppContext`):
+  - `getWorkspaceState` → `{ state: 'start_failed', mode: null, plaintextAllowed: false, encryptionRequired: true,
+    startFailure }`, with `startFailure: BackendStartFailure { cause, code }` (`services/start-failure.ts`): `cause` is
+    `drive_not_writable` (`EROFS`, `EPERM`, `EACCES` from a write: `mkdir`, `rename`, `write`, `unlink`, `rmdir`,
+    `copyfile`, `symlink`, or from no system call; not `open`, whose flags are not on the error and which the start
+    mostly uses to read; SQLite 8 READONLY) |
+    `drive_full` (`ENOSPC`, `EDQUOT`, SQLite 13 FULL) | `other` (deliberately also SQLite 14 CANTOPEN: a folder at the
+    database's name, a missing folder or lock file, not proof of a read-only drive); `code` is an errno code, a Node `ERR_…` code, `SQLITE_<n>`, or null, never free text (a `code`
+    property of any other shape, or longer than 40 characters, reads as null). No message, no path.
+  - `getLogTail` and `writeClipboard`: "Copy details for support", the same pair Diagnostics' Copy uses
+    (`ipc/log-copy.ts`), with the same #975 redaction.
+  - Every other `handle` channel has no handler: Electron refuses the invoke ("No handler registered for '<channel>'",
+    the channel only). The renderer calls nothing else in this state (the engine-problems read takes the refusal).
+  The gate (`WorkspaceGate.tsx`) shows the card for `start_failed`: the cause's text from `START_FAILURE_KEYS`
+  (`shared/workspace-failure-keys.ts`, own-property read; an unknown cause reads as `other`), "Error code: {code}" when
+  there is one, and the copy button. `index.ts` installs the offline tripwire after a failed start, always offline.
+  **Constraint for the update plan (W-82, P6 task T6.3):** F-14's update channels (and P7's hand-off channel) are
+  registered inside `registerStartFailureIpc`, so a release that cannot start can still take the update that repairs
+  it. Their registrar takes a narrow context built from `StartFailureContext` (the senders, the drive root from
+  `paths`, `isDev`, the app version), **never the full `AppContext`**: that context does not exist in this state, and
+  the same registrar call serves the normal start. P3's `update.log` line (W-14) goes in `runBackendStart`'s catch,
+  `failure.cause` and `failure.code` only.
+  **After the back end (review M-2):** the app protocol, the menu and the window start inside `runWindowStart`
+  (`main/backend-start.ts`). A throw there logs `App start failed after the back end` (`safeFailureForLog`), shows
+  `dialog.showErrorBox(tMain('app.fatal.title'), tMain('gate.startFailed.other') + '\n\n' + tMain('gate.startFailed.help'))`
+  (fixed text, never the error), runs the emergency lock and `app.exit(1)`: no windowless process keeps the
+  single-instance lock.
 
 ### Real runtime + embedder (Phase 10 live)
 ✅ **`services/runtime/sidecar.ts`** — discovery + `LlamaServer` lifecycle.
@@ -2629,7 +2664,55 @@ whole renderer-visible surface.
   key whose file is gone is `missing` (the program or a library: `.dll`, `.so`, `.so.N`, `.dylib`) or
   `missing-other` (any other file), a key whose file cannot be read is `unreadable`, and a key that
   leaves the copy's folder (`recordedFilePath`) is refused. Only `ok`, `mismatch`, `skip-*` (and, code review round 7, the knowledge-pack tools' hashed `missing-other`) are
-  cached for the session. Same shape; a marker that records the program alone checks the program alone.* `CommercialGateOptions` (the sell-gate options object) gains
+  cached for the session. Same shape; a marker that records the program alone checks the program alone.*
+  **#1028 — how every reader reads the marker, and what every later writer keeps (2026-11-23).** One
+  reading, `readRuntimeMarkerState` (`assets.ts`), for every reader in the app; the `fetch-runtime` twins
+  (`$ReadInstallMarker` in the `.ps1`, `marker_readable` in the `.sh`, each a small RFC 8259 reader since review
+  round 2, neither `ConvertFrom-Json` nor `sed`) mirror it and, on a doubt, say "damaged" (a needless download); they
+  read at most 64 KiB, and the `.sh` reader runs under `LC_ALL=C` (final review). The marker at a copy's
+  `.hilbertraum-runtime.json` is one of four things:
+  - **absent** — ENOENT or ENOTDIR: a bundle placed by hand, or a drive older than the marker;
+  - **unreadable** — there, but the `stat` or the read failed just now (an antivirus hold, a denied read);
+  - **damaged** — there, but no marker: a non-regular file at the path; more than 1 MiB; text that is not
+    JSON; JSON that is not an object; `version`, `backend`, `os` or `arch` missing or not a string; or a
+    `binaries` that is not a plain object whose every value is a SHA-256 (64 hex digits, either case);
+  - **a marker** — anything else. One leading UTF-8 byte-order mark is read past. **Top-level fields the
+    reader does not know are ignored, whatever they hold.** `binaries: {}` is a hash-less marker.
+
+  What each reader makes of it: the pre-spawn check walks from the program's folder to the one above
+  and stops at the first marker file that is not absent — `unreadable` is its own verdict, damaged is the
+  new `BinaryVerifyResult` **`marker-damaged`** (never cached; the engines refuse it as `'files-damaged'`,
+  the same `EngineProblem` and "Install again" offer as #1012, so no new channel or shape; the
+  knowledge-pack tools refuse it with their `files` kind). A map that records files of the copy but not
+  the program asked about is `marker-damaged` as well (`fault: 'program-unrecorded'`). The version
+  relation, the install skip, the status, Diagnostics and the swap's "complete" check read every state but
+  a marker as "no marker" (`readRuntimeMarker` → `null`: relation `unknown`, never updated). The sell gate
+  fails a damaged or unreadable marker with its own line, and only an absent one lets an optional family
+  count as absent. No reader writes anything new to the drive: an older build reads the same files.
+  **Frozen for every later writer** (release 1 reads markers this way for life, the in-field update plan's
+  F-24; a writer that breaks a rule gets its copy refused by release 1 as damaged engine files):
+  - `binaries` stays a map from the file's path relative to the copy (`markerBinaryKey`: `/` separators)
+    to that file's **lower-case SHA-256 in hex**, and it records every file of the copy, the program
+    first. A value never becomes an object, a list or another digest;
+  - **anything new goes into a new top-level field** (an engine signature, G-28; a second digest): never
+    inside `binaries`, and never a new meaning for `version`, `backend`, `os` or `arch`, which stay strings
+    (`version` keeps the upstream tag shapes, F-24);
+  - the file stays **under 64 KiB, or release 1's scripts re-download it** (final review: the app reads markers
+    up to 1 MiB, but both `fetch-runtime` twins refuse a larger one at once, since the `.sh` reader is plain bash and
+    slow on a large text; today's markers are about 5 KB for 52 files);
+  - the file stays one line of UTF-8 JSON without a byte-order mark and without blanks between its tokens,
+    with no `{`, `}`, `"`, `,` or `\` inside a key or a value, and **no key named `version`,
+    `backend`, `os`, `arch` or `binaries` anywhere but the top level** (review round 2, L-2; code review CR-4).
+    Both twins read the whole object with a JSON reader of their own and judge only the top-level fields, and
+    the `.sh` skip decision takes the version and backend from that reader (CR-4), so a nested one is no
+    problem for them; but the `.sh` twin still finds the recorded names and hashes with `sed`, which takes the
+    last `"binaries":{` on the line and splits the map at its commas, and the builders' native pre-flight
+    (`build-commercial-drive.{sh,ps1}`, left to the update plan's P3) still takes the last `"version"` and
+    `"backend"` on the line. A later writer that breaks one of these rules is not refused by the app, but
+    release 1's `fetch-runtime` then fetches that engine again on every run (the safe side), and the builder's
+    pre-flight may report a mismatch the canonical gate does not.
+
+  `CommercialGateOptions` (the sell-gate options object) gains
   `families?: Partial<Record<RuntimeFamily, RuntimeSources | null>>` for families beyond the two
   grandfathered positional params (`platforms`, `appVersion`); the gate's `checks` record gains
   `optionalRuntimesConsistent: boolean` (an optional family is either fully provisioned — every

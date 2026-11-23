@@ -24,7 +24,8 @@ import { kiwixCommand, planKiwixManageAdd } from './argv'
 // `.hilbertraum-runtime.json` marker with a hash for BOTH executables, so the pre-spawn
 // verifier below answers `ok` / `mismatch` for each of them. A bundle placed by hand is still
 // supported and has no marker: it resolves `skip-legacy` (one logged warning per binary per
-// process) — the legacy-drive path that verdict is named for. Absence stays a first-class
+// process) — the legacy-drive path that verdict is named for. (#1028: a marker that is there but
+// damaged no longer reads as that; it is `marker-damaged`, refused like a missing file.) Absence stays a first-class
 // state: every consumer reports "kiwix-tools not installed" instead of failing. The consent
 // surface that requests the install is P8-2; the drive scripts follow in P8-3.
 
@@ -201,8 +202,14 @@ export async function kiwixManageAdd(
   }
   // (Code review round 3: its own kinds — a missing or locked file is no tamper. Round 5: a file that
   // cannot be read JUST NOW is a kind of its own, which the library build and the service never latch.)
-  if (verdict === 'missing') {
-    throw new KiwixManageError('kiwix-manage was not started: a file of its install is missing', 'files', 'not-spawned')
+  // #1028 (owner call 2026-11-23): an install marker that is there but cannot be read as one is refused like a
+  // missing file. With the record gone nothing can say that no library is missing — the case review R-1 refuses.
+  if (verdict === 'missing' || verdict === 'marker-damaged') {
+    throw new KiwixManageError(
+      'kiwix-manage was not started: a file of its install is missing, or its install record is damaged',
+      'files',
+      'not-spawned'
+    )
   }
   if (verdict === 'unreadable') {
     throw new KiwixManageError(

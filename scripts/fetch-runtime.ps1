@@ -487,6 +487,145 @@ if ($build.extract_to -match '\.\.' -or $build.extract_to -match '^[/\\]' -or $b
 }
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
+# #1028: read the install marker at $path as the app reads it (assets.ts readRuntimeMarkerState): the marker, or $null
+# when it is no marker the app can read. The app refuses a marker that is there but is no marker -- cut short by an
+# interrupted copy, garbled -- as damaged engine files, so a re-run must fetch the engine again, never skip it. The rule:
+#  - at most 64 KiB here (the app: 1 MiB; see below), its bytes read as UTF-8 (never UTF-16 by a byte-order mark, as
+#    the app reads them);
+#  - after one leading byte-order mark, exactly ONE JSON object (RFC 8259), checked by the small reader below, not by
+#    ConvertFrom-Json, which takes single quotes, comments and trailing commas, and matches names in any case: nothing
+#    before or after it but blanks, no raw control character inside a string, only JSON's escapes, numbers in JSON's
+#    form;
+#  - its own (top-level) version, backend, os and arch, by their exact names, are strings, and its own `binaries`, when
+#    there, is an object whose every value is a SHA-256 (64 hex digits). As in JavaScript, the last of two same-named
+#    fields counts. Any other field, nested objects and arrays included, is read past (a later release may add one).
+# On any doubt it says no: a needless download is the safe side. Such cases, all never written: a name written with an
+# escape, a map naming one file twice, a DEL character, two names that differ only in case (ConvertFrom-Json refuses
+# them). Only then is the text handed to ConvertFrom-Json, for the values the skip block reads. Mirrors fetch-runtime.sh
+# marker_readable, step for step.
+$ReadInstallMarker = {
+  param($path)
+  # The size before the read (final review), so an oversized file is never taken into memory. 64 KiB here, as in the
+  # .sh twin: the app reads up to 1 MiB, but no writer writes more than a few KB (the b12110 Windows copy records 52
+  # files in about 5 KB), and this reader is plain PowerShell; a larger marker is fetched again at once.
+  if ((New-Object System.IO.FileInfo $path).Length -gt 65536) { return $null }
+  $bytes = [System.IO.File]::ReadAllBytes($path)
+  $text = (New-Object System.Text.UTF8Encoding($false)).GetString($bytes)
+  if ($text.Length -gt 0 -and [int]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+  $n = $text.Length
+  $i = 0
+  $state = 'value'
+  $stack = ''
+  $key = ''
+  $str = ''
+  $inMap = $false
+  $map = 'absent'
+  $object = $false
+  $fields = @{ version = $false; backend = $false; os = $false; arch = $false }
+  while ($i -lt $n) {
+    $c = [int]$text[$i]
+    if ($c -eq 0x20 -or $c -eq 0x09 -or $c -eq 0x0A -or $c -eq 0x0D) { $i++; continue }
+    if ($state -eq 'value' -or $state -eq 'value-or-close') {
+      if ($state -eq 'value-or-close' -and $c -eq 0x5D) {
+        $stack = $stack.Substring(0, $stack.Length - 1); $state = 'after'; $i++; continue
+      }
+      # Where this value sits: one of the object's own fields (top), an entry of its own map (map), or deeper.
+      $where = ''
+      if ($stack -ceq '{') { $where = 'top' }
+      elseif ($stack -ceq '{{' -and $inMap) { $where = 'map' }
+      elseif ($stack.Length -eq 0 -and $c -ne 0x7B) { return $null }
+      $isString = $false
+      if ($c -eq 0x7B) {
+        if ($stack.Length -eq 0) { $object = $true }
+        $stack += '{'; $state = 'key-or-close'; $i++
+      } elseif ($c -eq 0x5B) {
+        $stack += '['; $state = 'value-or-close'; $i++
+      } elseif ($c -eq 0x22) {
+        $i++
+        $str = ''
+        while ($true) {
+          $j = $text.IndexOfAny([char[]]@([char]0x22, [char]0x5C), $i)
+          if ($j -lt 0) { return $null }
+          $run = $text.Substring($i, $j - $i)
+          if ($run -cmatch '[\x00-\x1F\x7F]') { return $null }
+          $str += $run
+          $i = $j
+          if ([int]$text[$i] -eq 0x22) { $i++; break }
+          if ($i + 1 -ge $n) { return $null }
+          $e = [int]$text[$i + 1]
+          if ($e -eq 0x22 -or $e -eq 0x5C -or $e -eq 0x2F -or $e -eq 0x62 -or $e -eq 0x66 -or $e -eq 0x6E -or $e -eq 0x72 -or $e -eq 0x74) {
+            $str += $text.Substring($i, 2); $i += 2
+          } elseif ($e -eq 0x75 -and $i + 6 -le $n -and $text.Substring($i + 2, 4) -cmatch '^[0-9a-fA-F]{4}\z') {
+            $str += $text.Substring($i, 6); $i += 6
+          } else { return $null }
+        }
+        $isString = $true; $state = 'after'
+      } elseif ($c -eq 0x74 -or $c -eq 0x66 -or $c -eq 0x6E) {
+        $word = if ($c -eq 0x74) { 'true' } elseif ($c -eq 0x66) { 'false' } else { 'null' }
+        if ($i + $word.Length -gt $n -or -not ($text.Substring($i, $word.Length) -ceq $word)) { return $null }
+        $i += $word.Length; $state = 'after'
+      } elseif ($c -eq 0x2D -or ($c -ge 0x30 -and $c -le 0x39)) {
+        # A JSON number: -? then 0 or a digit run without a leading zero, an optional fraction, an optional exponent.
+        $m = [regex]::Match($text.Substring($i), '\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
+        if (-not $m.Success -or $m.Length -eq 0) { return $null }
+        $i += $m.Length; $state = 'after'
+      } else { return $null }
+      if ($where -ceq 'top') {
+        if ($key -ceq 'version' -or $key -ceq 'backend' -or $key -ceq 'os' -or $key -ceq 'arch') { $fields[$key] = $isString }
+        elseif ($key -ceq 'binaries') {
+          if ($c -eq 0x7B) { $map = 'ok'; $inMap = $true } else { $map = 'bad' }
+        }
+      } elseif ($where -ceq 'map') {
+        if (-not $isString -or -not ($str -cmatch '^[0-9a-fA-F]{64}\z')) { $map = 'bad' }
+      }
+    } elseif ($state -eq 'key' -or $state -eq 'key-or-close') {
+      if ($state -eq 'key-or-close' -and $c -eq 0x7D) {
+        if ($stack -ceq '{{' -and $inMap) { $inMap = $false }
+        $stack = $stack.Substring(0, $stack.Length - 1); $state = 'after'; $i++; continue
+      }
+      if ($c -ne 0x22) { return $null }
+      $i++
+      $str = ''
+      while ($true) {
+        $j = $text.IndexOfAny([char[]]@([char]0x22, [char]0x5C), $i)
+        if ($j -lt 0) { return $null }
+        $run = $text.Substring($i, $j - $i)
+        if ($run -cmatch '[\x00-\x1F\x7F]') { return $null }
+        $str += $run
+        $i = $j
+        if ([int]$text[$i] -eq 0x22) { $i++; break }
+        if ($i + 1 -ge $n) { return $null }
+        $e = [int]$text[$i + 1]
+        if ($e -eq 0x22 -or $e -eq 0x5C -or $e -eq 0x2F -or $e -eq 0x62 -or $e -eq 0x66 -or $e -eq 0x6E -or $e -eq 0x72 -or $e -eq 0x74) {
+          $str += $text.Substring($i, 2); $i += 2
+        } elseif ($e -eq 0x75 -and $i + 6 -le $n -and $text.Substring($i + 2, 4) -cmatch '^[0-9a-fA-F]{4}\z') {
+          $str += $text.Substring($i, 6); $i += 6
+        } else { return $null }
+      }
+      $key = $str
+      $state = 'colon'
+    } elseif ($state -eq 'colon') {
+      if ($c -ne 0x3A) { return $null }
+      $state = 'value'; $i++
+    } else {
+      # after a value: a comma, or the close of the object or array it sits in; nothing after the marker's own close.
+      if ($stack.Length -eq 0) { return $null }
+      $top = [int]$stack[$stack.Length - 1]
+      if ($c -eq 0x2C) {
+        $state = if ($top -eq 0x7B) { 'key' } else { 'value' }
+      } elseif ($c -eq 0x7D -and $top -eq 0x7B) {
+        if ($stack -ceq '{{' -and $inMap) { $inMap = $false }
+        $stack = $stack.Substring(0, $stack.Length - 1)
+      } elseif ($c -eq 0x5D -and $top -eq 0x5B) {
+        $stack = $stack.Substring(0, $stack.Length - 1)
+      } else { return $null }
+      $i++
+    }
+  }
+  if (-not $object -or $stack.Length -ne 0 -or $state -ne 'after') { return $null }
+  if (-not ($fields['version'] -and $fields['backend'] -and $fields['os'] -and $fields['arch']) -or $map -ceq 'bad') { return $null }
+  return ($text | ConvertFrom-Json)
+}
 $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::DirectorySeparatorChar)
 # #339 P8-3: EXECUTABLE LIST per family (mirrors assets.ts SIDECAR_FAMILY_SPECS +
 # planRuntimeDownload) -- the primary base name per family, plus the yaml's family-level
@@ -553,7 +692,9 @@ if (Test-Path -LiteralPath $binaryPath) {
     $why = 'one or more required files are missing'
   } elseif (Test-Path -LiteralPath $markerPath) {
     try {
-      $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+      # #1028: a marker the app cannot read is as good as none: fetched again, never skipped or kept as newer.
+      $marker = & $ReadInstallMarker $markerPath
+      if ($null -eq $marker) { throw 'the install marker cannot be read as one' }
       if ((Compare-RuntimeVersion ([string]$marker.version) $version) -eq 1) {
         # Whatever its backend: the app's relation ignores the backend too (runtimeInstallRelation).
         if ($Commercial) { $newerReplaced = [string]$marker.version }
