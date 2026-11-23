@@ -146,6 +146,10 @@ from its first public `1.0.0` release onward.
   refuse certificates from the eMudhra intermediates that were revoked in November, as browsers do.
   The Chromium and Node.js versions are unchanged, workspaces open exactly as before, and the
   minimum operating systems are unchanged (#1038).
+- **A crafted spreadsheet file (CSV) can no longer keep an import busy for hours.** HilbertRaum reads CSV
+  files with the papaparse library. Before its version 5.7.1, a file built around quoted values made the
+  work grow with the square of the file's size: a file at the 64 MB import limit could keep the processor
+  busy for hours. Version 5.7.1 removes that slowdown; ordinary CSV files are read exactly as before (#1037).
 
 ## [0.1.66] — 2026-11-21
 
