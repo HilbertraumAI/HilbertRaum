@@ -2138,14 +2138,17 @@ function checkpointOpenDatabase(vaultPaths: VaultPaths, db: Db, refusal: string,
  * missing while the stage, the snapshot of the change, is still there). One that opens under the key is never shredded,
  * and one that cannot be read just now (still held) is not judged: the rename below (or, when that fails too, the next
  * lock's) replaces it unshredded, its blocks freed rather than overwritten, as every lock frees the previous `.enc`.
+ * Code review N1 (#845): a frame a newer build wrote at `.enc` is never written over: its `VaultNewerError` passes, so
+ * nothing is saved (the change stays committed, the save counts as not done).
  */
 function saveOpenDatabase(vaultPaths: VaultPaths, db: Db, key: Buffer, onProbeFallback?: ProbeFallbackNote): void {
   checkpointOpenDatabase(vaultPaths, db, 'Refusing to save the workspace after the password change', onProbeFallback)
   let retired = false
   try {
     retired = shredNameOf(lstatOrNull(vaultPaths.encPath)).kind === 'file' && !authenticatesUnder(vaultPaths.encPath, key)
-  } catch {
-    /* cannot be read now (a hold, an I/O error, a newer build's frame): never shredded unjudged (see above) */
+  } catch (err) {
+    if (isVaultNewerError(err)) throw err
+    /* cannot be read now (a hold, an I/O error): never shredded unjudged (see above) */
   }
   if (retired) shredFile(vaultPaths.encPath)
   encryptFile(vaultPaths.dbPath, vaultPaths.encPath, key)

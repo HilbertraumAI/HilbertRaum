@@ -28,9 +28,11 @@ import { updateSettings } from '../../src/main/services/settings'
 import {
   REKEY_SUFFIX,
   WorkspaceController,
+  cleanSidecars,
   createEncryptedVaultOnDisk,
   encryptFile,
   lockEncryptedVault,
+  shredFile,
   unlockEncryptedVault,
   vaultPathsFrom,
   type VaultPaths
@@ -171,6 +173,7 @@ export function endedUnlocked(vp: VaultPaths, marker: number, password = 'pw'): 
  */
 export function staleDatabaseStage(vp: VaultPaths, password: string, markers: { staged: number; current: number }): string {
   const { db, key } = unlockEncryptedVault(vp, password)
+  let locked = false
   try {
     updateSettings(db, { contextTokens: markers.staged })
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
@@ -178,8 +181,19 @@ export function staleDatabaseStage(vp: VaultPaths, password: string, markers: { 
     encryptFile(vp.dbPath, staged, key)
     updateSettings(db, { contextTokens: markers.current })
     lockEncryptedVault(vp, db, key)
+    locked = true
     return staged
   } finally {
+    // A step that failed before the lock finished leaves neither an open handle (#460) nor the plaintext working file.
+    if (!locked) {
+      try {
+        db.close()
+      } catch {
+        /* the lock closed it before it failed */
+      }
+      shredFile(vp.dbPath)
+      cleanSidecars(vp.dbPath)
+    }
     key.fill(0)
   }
 }

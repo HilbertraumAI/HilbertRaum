@@ -36,6 +36,7 @@ import {
   leaveAsKilled,
   lockedVault,
   readStoredCopy,
+  setFrameMagic,
   staleDatabaseStage,
   storeCopy,
   unlockedController,
@@ -2449,6 +2450,29 @@ describe('a password change whose staged database cannot be moved into place (#1
     const next = unlockedController(vp, 'next-password')
     expect(getSettings(next.requireDb()).contextTokens).toBe(7777)
     next.shutdown()
+  })
+
+  // Code review N1 (#845): a frame a newer HilbertRaum wrote is never written over. Here `.enc` carries one (written while
+  // this session ran, after the unlock's format verdict) and a hold kept the swap's shred from it. The change used to
+  // read that frame's refusal as "cannot be read now" and rename its own `.enc` over it; now it does not save at all:
+  // the change stays committed, the save counts as not done, and `.enc` is left byte for byte.
+  it("a swap that leaves a newer build's frame at .enc: the change does not save over it, and counts the save as not done", () => {
+    const vp = lockedVault('recovery-guards-1027', 'pw', { legacyV1: true })
+    const ctl = unlockedController(vp, 'pw')
+    setFrameMagic(vp.encPath, 'HRAUMEN2') // a newer build's frame
+    const newer = readFileSync(vp.encPath)
+    holdStage(`${vp.encPath}${REKEY_SUFFIX}`, false)
+    failures.holdEncUntilSwapGivesUp = true
+    try {
+      expect(ctl.changePassword('pw', 'next-password', FAST_ARGON).state).toBe('unlocked')
+    } finally {
+      releaseHolds()
+      failures.holdEncUntilSwapGivesUp = false
+    }
+    expect(failures.hits.encHeld, 'the hold on .enc was reached by the swap').toBeGreaterThan(0)
+    expect(readFileSync(vp.encPath).equals(newer), "the newer build's .enc after the change").toBe(true)
+    expect(ctl.takeDatabaseSwapFailure()).toMatchObject({ saved: false })
+    ctl.shutdown()
   })
 
   // Code review CR1-2: only a stat that says ENOENT proves the staged database went into place. One that fails for

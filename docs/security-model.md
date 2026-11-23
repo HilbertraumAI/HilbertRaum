@@ -2109,7 +2109,8 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
      at `.enc` that does not open under the new data key before it writes its own, as the swap
      does (code review CR1-1). The window is the swap's own: `.enc` is missing while the stage,
      the snapshot of the change, is still there. An `.enc` that opens under the key is never
-     shredded. **Residual:** an `.enc` the change cannot even read because the hold lasts is not
+     shredded, and one in a frame a newer build wrote is neither shredded nor written over: the
+     change saves nothing then, and the save counts as not done (#845; code review N1). **Residual:** an `.enc` the change cannot even read because the hold lasts is not
      judged, so it is not shredded. Its rename, or the next lock's when that fails too, replaces
      it, and its blocks are freed rather than overwritten, as every lock frees the previous
      `.enc` (shredding on flash is best-effort anyway, "Secure erase").
