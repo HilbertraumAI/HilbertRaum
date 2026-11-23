@@ -141,6 +141,11 @@ from its first public `1.0.0` release onward.
   new run of the drive script repairs it. The drive scripts now read that record the way the app does and
   fetch an engine with a damaged one again instead of skipping it; should a script still say the engine is
   already installed, delete the engine's folder and run it again (#1028).
+- **Electron 43.8.7 → 43.8.10**, the browser engine the app runs on, with the Chromium security
+  fixes released since 43.8.7. Downloads of models, the AI engine and text recognition now also
+  refuse certificates from the eMudhra intermediates that were revoked in November, as browsers do.
+  The Chromium and Node.js versions are unchanged, workspaces open exactly as before, and the
+  minimum operating systems are unchanged (#1038).
 
 ## [0.1.66] — 2026-11-21
 
